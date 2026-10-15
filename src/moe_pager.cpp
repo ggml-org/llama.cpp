@@ -541,14 +541,6 @@ void * moe_pager::worker_stream() {
 }
 
 
-void moe_pager::dma_table_int(struct ggml_tensor * table, int e, int32_t v) {
-    if (!table || !table->data) return;
-    cudaStream_t ws = (cudaStream_t) worker_stream();
-    if (!ws) return;
-    cudaMemcpyAsync((char *) table->data + (size_t) e * sizeof(int32_t), &v, sizeof(int32_t),
-                    cudaMemcpyHostToDevice, ws);
-    cudaStreamSynchronize(ws);
-}
 
 bool moe_pager::fetch(int il, int e, void * dst_gate, size_t gate_bytes,
                                 void * dst_up,     size_t up_bytes,
@@ -556,3 +548,6 @@ bool moe_pager::fetch(int il, int e, void * dst_gate, size_t gate_bytes,
     std::lock_guard<std::mutex> lock(mtx_);
     return commit_locked(il, e, dst_gate, gate_bytes, dst_up, up_bytes, dst_down, down_bytes);
 }
+
+
+

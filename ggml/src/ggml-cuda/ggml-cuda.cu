@@ -2658,6 +2658,10 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             }
         }
 
+        if (node->op == GGML_OP_MOE_SLOT_RESOLVE) {
+            use_cuda_graph = false;
+        }
+
         if (!use_cuda_graph) {
             break;
         }

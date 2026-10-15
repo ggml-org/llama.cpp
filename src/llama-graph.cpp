@@ -1523,7 +1523,6 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     moe_gate_up        (params.moe_gate_up),
     moe_down           (params.moe_down),
     moe_table          (params.moe_table),
-    moe_prefill_tables (params.moe_prefill_tables),
     moe_n_layer        (params.moe_n_layer),
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
@@ -2201,15 +2200,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
     }
     if (moe_use_pool) {
-        // one-shot proof that the batched path is engaged for this layer width
-        {
-            static int moe_logged = 0;
-            if (++moe_logged <= 3) {
-                LLAMA_LOG_INFO("%s: MoE pool ACTIVE l=%d n_tok=%lld gate_up=%p\n",
-                               __func__, il, (long long) n_tokens, (const void *) gate_up_exps);
-            }
-        }
-        gate_up_exps = nullptr; // separate gate/up path; fused tensor is absent or virtual
+        gate_up_exps = nullptr;
         gate_exps = (ggml_tensor *) moe_gate[il];
         up_exps   = (ggml_tensor *) moe_up[il];
         down_exps = (ggml_tensor *) moe_down[il];
@@ -2218,9 +2209,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             const char * e = getenv("MOE_DOORBELL");
             doorbell = (!e || atoi(e) != 0) ? 1 : 0;
         }
-        if (doorbell == 1 && n_tokens == 1 && n_expert_used * n_tokens <= 16) {
+        if (doorbell == 1 && n_tokens >= 1 && n_expert_used * n_tokens <= 80) {
             const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
-            slot_ids = ggml_moe_slot_resolve(ctx0, selected_experts,
+            ggml_tensor * sel_c = ggml_cont(ctx0, selected_experts);
+            slot_ids = ggml_moe_slot_resolve(ctx0, sel_c,
                 (ggml_tensor *) moe_table[il], (int32_t) il, sentinel);
             cb(slot_ids, "ffn_moe_slot_ids", il);
         } else {
@@ -2276,98 +2268,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_build_forward_expand(gf, weights);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
-
-    // Chunked prefill for large batches with moe direct IO. Splits the expert
-    // space into 8 ranges of 64. Each range fits the pool, out of range pairs
-    // read the zero sentinel. Summing the 8 partials equals the full output.
-    // Gated by MOE_PREFILL_CHUNKED=1, decode never enters (n_tokens == 1).
-    {
-        static int chunked_on = -1;
-        if (chunked_on < 0) {
-            const char * e = getenv("MOE_PREFILL_CHUNKED");
-            chunked_on = (e && atoi(e) != 0) ? 1 : 0;
-        }
-        bool do_chunked = false;
-        if (chunked_on == 1 && n_tokens > 32 && n_tokens <= 1024 && cparams.moe_direct_io &&
-            moe_n_layer > il && il >= 0 && moe_gate && moe_up && moe_down && moe_table &&
-            moe_prefill_tables &&
-            moe_gate[il] && moe_up[il] && moe_down[il] && moe_table[il] &&
-            moe_prefill_tables[(size_t) il * 8 + 7] &&
-            ((const ggml_tensor *) moe_up[il])->ne[2] >= 65 &&
-            !weight_before_ffn && type_op == LLM_FFN_SILU && gate_exps &&
-            (gate_up_exps == nullptr || gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1]) &&
-            !up_exps_b && !gate_exps_b && !down_exps_b) {
-            const float clim = il >= 0 ? hparams.swiglu_clamp_exp[il] : 0.0f;
-            if (!(clim > 1e-6f)) do_chunked = true;
-        }
-        if (do_chunked) {
-            static int chunked_logged = 0;
-            if (++chunked_logged <= 3) {
-                LLAMA_LOG_INFO("%s: MoE chunked prefill ACTIVE l=%d n_tok=%lld\n",
-                               __func__, il, (long long) n_tokens);
-            }
-            ggml_tensor * p_gate = (ggml_tensor *) moe_gate[il];
-            ggml_tensor * p_up   = (ggml_tensor *) moe_up[il];
-            ggml_tensor * p_down = (ggml_tensor *) moe_down[il];
-            ggml_tensor * sel_c = selected_experts;
-            if (!ggml_is_contiguous(sel_c)) sel_c = ggml_cont(ctx0, sel_c);
-            ggml_tensor * ids_flat = ggml_reshape_1d(ctx0, sel_c, n_expert_used * n_tokens);
-            static const char * slot_nm[8] = {
-                "ffn_moe_slot_ids_c0", "ffn_moe_slot_ids_c1",
-                "ffn_moe_slot_ids_c2", "ffn_moe_slot_ids_c3",
-                "ffn_moe_slot_ids_c4", "ffn_moe_slot_ids_c5",
-                "ffn_moe_slot_ids_c6", "ffn_moe_slot_ids_c7",
-            };
-            static const char * act_nm[8] = {
-                "ffn_moe_swiglu_c0", "ffn_moe_swiglu_c1",
-                "ffn_moe_swiglu_c2", "ffn_moe_swiglu_c3",
-                "ffn_moe_swiglu_c4", "ffn_moe_swiglu_c5",
-                "ffn_moe_swiglu_c6", "ffn_moe_swiglu_c7",
-            };
-            static const char * wt_nm[8] = {
-                "ffn_moe_weighted_c0", "ffn_moe_weighted_c1",
-                "ffn_moe_weighted_c2", "ffn_moe_weighted_c3",
-                "ffn_moe_weighted_c4", "ffn_moe_weighted_c5",
-                "ffn_moe_weighted_c6", "ffn_moe_weighted_c7",
-            };
-            ggml_tensor * chunked = nullptr;
-            for (int r = 0; r < 8; r++) {
-                ggml_tensor * stable = (ggml_tensor *) moe_prefill_tables[(size_t) il * 8 + r];
-                ggml_tensor * s_flat = ggml_get_rows(ctx0, stable, ids_flat);
-                ggml_tensor * s_ids = ggml_reshape_2d(ctx0, s_flat, n_expert_used, n_tokens);
-                cb(s_ids, slot_nm[r], il);
-                ggml_tensor * u_r = build_lora_mm_id(p_up, cur, s_ids, up_exps_s);
-                ggml_tensor * g_r = build_lora_mm_id(p_gate, cur, s_ids, gate_exps_s);
-                ggml_tensor * a_r = ggml_swiglu_split(ctx0, g_r, u_r);
-                cb(a_r, act_nm[r], il);
-                ggml_tensor * d_r = build_lora_mm_id(p_down, a_r, s_ids, down_exps_s);
-                ggml_tensor * w_r = ggml_mul(ctx0, d_r, weights);
-                cb(w_r, wt_nm[r], il);
-                ggml_build_forward_expand(gf, w_r);
-                if (chunked == nullptr) {
-                    chunked = w_r;
-                } else {
-                    chunked = ggml_add(ctx0, chunked, w_r);
-                    ggml_build_forward_expand(gf, chunked);
-                }
-            }
-            cb(chunked, "ffn_moe_weighted_sum", il);
-            const uint32_t n_used_il = hparams.n_expert_used(il);
-            ggml_tensor * cur_experts_c[LLAMA_MAX_EXPERTS] = { nullptr };
-            for (uint32_t i = 0; i < n_used_il; ++i) {
-                cur_experts_c[i] = ggml_view_2d(ctx0, chunked, n_embd, n_tokens, chunked->nb[2], i*chunked->nb[1]);
-                ggml_build_forward_expand(gf, cur_experts_c[i]);
-            }
-            ggml_tensor * out_c = cur_experts_c[0];
-            for (uint32_t i = 1; i < n_used_il; ++i) {
-                out_c = ggml_add(ctx0, out_c, cur_experts_c[i]);
-                ggml_build_forward_expand(gf, out_c);
-            }
-            if (n_used_il == 1) out_c = ggml_cont(ctx0, out_c);
-            cb(out_c, "ffn_moe_out", il);
-            return out_c;
-        }
-    }
 
     if (weight_before_ffn) {
         // repeat cur to [n_embd, n_expert_used, n_tokens]

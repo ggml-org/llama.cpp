@@ -106,7 +106,6 @@ public:
     // completed prefetch reads still unconsumed when a demand commit for the
     // same expert arrived (prefetch hit); cumulative
     long stats_pf_hit()   const { return n_pf_hit_; }
-    void dma_table_int(struct ggml_tensor * table, int e, int32_t v);
     static void * worker_stream();
 
 private:

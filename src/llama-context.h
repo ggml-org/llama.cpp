@@ -267,9 +267,6 @@ public:
         ggml_backend_buffer_t buf = nullptr;
         size_t               buf_bytes = 0;
         std::vector<ggml_tensor *> pool_gate, pool_up, pool_gate_up, pool_down, slot_table;
-        ggml_tensor * prefill_stage[2] = {nullptr, nullptr};
-        size_t prefill_stage_bytes = 0;
-        std::vector<ggml_tensor *> prefill_tables;
         std::vector<int32_t> slot_of, slot_key;
         // per-slot demand count, for LFU eviction. A routing trace of this
         // model shows the top 104 experts per layer cover 66% of all router
@@ -280,8 +277,6 @@ public:
         int n_slots = 0;   // s_per_layer plus the sentinel slot when armed
         long n_hit = 0, n_miss = 0, n_page_fail = 0;
         long prefill_resident = 0, prefill_miss = 0;
-        std::vector<std::vector<int32_t>> prefill_topk;
-        std::vector<int> prefill_nw;
         // previous decode step's top-k per layer, for the recency predictor
         // (moe_step_sel[il*n_used+k]); empty until the first decode step
         std::vector<int32_t> step_sel;
@@ -306,11 +301,9 @@ public:
     bool      moe_ready = false;
     bool moe_enabled() const { return moe_ready; }
     int  moe_page(int il, int e);
-    int  moe_page_pinned(int il, int e, const bool * pinned, bool update_table = true);
+    int  moe_page_pinned(int il, int e, const bool * pinned);
     void moe_page_batch(int il, const int32_t * sel, int n);
     void moe_page_batch_sorted(int il, const int32_t * sel, int n);
-    void moe_page_prefill_range(int il, int range);
-    bool moe_serve_doorbell();
     // queue async reads for experts the next layer(s) will likely need.
     // never blocks; admission-controlled inside.
     void moe_prefetch_ahead(int il, const int32_t * sel, int n);
