@@ -15,6 +15,7 @@ from pathlib import Path
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, Sequence, TypeVar, cast
 from itertools import chain
+from math import prod
 from transformers import AutoConfig
 
 import numpy as np
@@ -543,7 +544,7 @@ class ModelBase:
                             scale = s()
                             block_size = None
                             is_channel_scale = scale.ndim >= 1 and scale.ndim <= weight.ndim and scale.shape[0] == weight.shape[0] and all(size == 1 for size in scale.shape[1:])
-                            if scale.numel() != 1 and not is_channel_scale:
+                            if prod(scale.shape) != 1 and not is_channel_scale:
                                 block_configs = [c for c in fp8_configs if c.get("strategy") == "block"]
                                 if not block_configs or any(not c.get("block_structure") or c.get("group_size") is not None for c in block_configs):
                                     raise ValueError(f"FP8 weight {weight_name!r} with scale shape {list(scale.shape)} requires a block layout")
@@ -648,12 +649,12 @@ class ModelBase:
                 continue
 
             scaled_weights.add(weight_name)
-            weight = LazyTorchTensor.to_eager(self.model_tensors[weight_name]())
+            weight = self.model_tensors[weight_name]()
             if weight.dtype != torch.float8_e4m3fn or weight.ndim < 2:
                 continue
 
-            scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]()).float().flatten()
-            if scale.numel() != 1:
+            scale = self.model_tensors[scale_name]()
+            if prod(scale.shape) != 1:
                 continue
 
             merged_name = re.sub(r"(\.experts)\.\d+\.", r"\1.", weight_name)
@@ -688,6 +689,7 @@ class ModelBase:
 
         for weight_name, (scale_name, scale) in candidates.items():
             weight = self.model_tensors[weight_name]()
+            scale = LazyTorchTensor.to_eager(scale).float().flatten()
             scale = self._transform_fp8_scale(weight_name, scale)
 
             weight_prefix = weight_name.removesuffix(".weight")
@@ -701,9 +703,10 @@ class ModelBase:
             ) if name in self.model_tensors), None)
             input_scale = None
             if input_scale_name is not None:
-                input_scale = LazyTorchTensor.to_eager(self.model_tensors[input_scale_name]()).float().flatten()
-                if input_scale.numel() != 1:
+                input_scale = self.model_tensors[input_scale_name]()
+                if prod(input_scale.shape) != 1:
                     raise ValueError(f"FP8 input scale {input_scale_name!r} must be a scalar")
+                input_scale = LazyTorchTensor.to_eager(input_scale).float().flatten()
                 consumed.append(input_scale_name)
 
             consumed.append(scale_name)
@@ -1245,9 +1248,8 @@ class ModelBase:
             input_scale_name = name.replace(".weight", ".input_scale")
             if scale_name not in self.model_tensors:
                 continue
-            # Force eager materialization of lazy tensors
-            weight = LazyTorchTensor.to_eager(self.model_tensors[name]())
-            scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
+            weight = self.model_tensors[name]()
+            scale = self.model_tensors[scale_name]()
 
             # Leave FP8 weights and their scales for _prepare_fp8_e4m3_tensors.
             if weight.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) or scale.ndim < 2:
@@ -1255,6 +1257,8 @@ class ModelBase:
             if weight.ndim != 2 or scale.shape[0] != weight.shape[0] or scale.shape[1] * 8 != weight.shape[1]:
                 raise ValueError(f"NVFP4 weight {name!r} has incompatible shapes: weight {list(weight.shape)}, scale {list(scale.shape)}")
 
+            weight = LazyTorchTensor.to_eager(weight)
+            scale = LazyTorchTensor.to_eager(scale)
             scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
             input_scale = LazyTorchTensor.to_eager(self.model_tensors.get(input_scale_name, lambda: torch.tensor(1.0))())
 
@@ -1430,7 +1434,6 @@ class ModelBase:
             preserve_fp8_e4m3 = not self._fp8_as_q8 and data_torch.dtype == torch.float8_e4m3fn
             if preserve_fp8_e4m3:
                 self._fp8_e4m3_preserved.add(name)
-                data_torch = LazyTorchTensor.to_eager(data_torch)
 
             old_dtype = data_torch.dtype
 
