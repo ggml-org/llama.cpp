@@ -761,6 +761,31 @@ void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary
     }
 }
 
+/* fused add + softplus + mul (the gate of a gated delta net) */
+
+static __global__ void add_softplus_mul_f32(const float * x, const float * bias, const float * scale, float * dst,
+                                            const int64_t k, const int64_t ncols) {
+    const int64_t i = (int64_t) blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    const int64_t c = i % ncols;
+    dst[i] = op_softplus(x[i] + bias[c]) * scale[c];
+}
+
+void ggml_cuda_op_add_softplus_mul(ggml_backend_cuda_context & ctx, ggml_tensor * add_node, ggml_tensor * unary_node, ggml_tensor * mul_node) {
+    const ggml_tensor * x     = add_node->src[0];
+    const ggml_tensor * bias  = add_node->src[1];
+    const ggml_tensor * scale = (mul_node->src[0] == unary_node) ? mul_node->src[1] : mul_node->src[0];
+
+    const int64_t k     = ggml_nelements(mul_node);
+    const int64_t ncols = x->ne[0];
+    const int     num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    add_softplus_mul_f32<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>(
+        (const float *) x->data, (const float *) bias->data, (const float *) scale->data, (float *) mul_node->data, k, ncols);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 /* fused relu + sqr */
 
 void ggml_cuda_op_relu_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * relu_node, ggml_tensor * sqr_node) {
