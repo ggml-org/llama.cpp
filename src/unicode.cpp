@@ -42,6 +42,9 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x1f) << 6) | (utf8[offset + 1] & 0x3f);
+        if (result < 0x80) {
+            throw std::invalid_argument("invalid character");
+        }
         offset += 2;
         return result;
     }
@@ -50,6 +53,9 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x0f) << 12) | ((utf8[offset + 1] & 0x3f) << 6) | (utf8[offset + 2] & 0x3f);
+        if (result < 0x800) {
+            throw std::invalid_argument("invalid character");
+        }
         offset += 3;
         return result;
     }
@@ -58,6 +64,9 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x07) << 18) | ((utf8[offset + 1] & 0x3f) << 12) | ((utf8[offset + 2] & 0x3f) << 6) | (utf8[offset + 3] & 0x3f);
+        if (result < 0x10000 || result > 0x10ffff) {
+            throw std::invalid_argument("invalid character");
+        }
         offset += 4;
         return result;
     }
