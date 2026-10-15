@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Sequence, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -89,19 +89,22 @@ class LiLiCorrDraftModel(DFlashModel):
         self.gguf_writer.add_lilicorr_vector_eps(float(dflash_config["lilicorr_vector_eps"]))
         self.gguf_writer.add_lilicorr_logit_scale(float(dflash_config["lilicorr_logit_scale"]))
 
+    def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
+        if name.startswith("model.lilicorr.layers."):
+            parts = name.split(".", 4)
+            if not parts[4].startswith("attn.in_proj."):
+                parts[3] = str(self.block_count + int(parts[3]))
+            name = ".".join(parts)
+        elif name.startswith("model.lilicorr.feature_norm."):
+            feature_bid = self.block_count + self.lilicorr_geometry["num_layers"]
+            name = name.replace("model.lilicorr.feature_norm.", f"model.lilicorr.feature_mlp.{feature_bid}.norm.")
+        elif name.startswith("model.lilicorr.feature_mlp."):
+            feature_bid = self.block_count + self.lilicorr_geometry["num_layers"]
+            name = name.replace("model.lilicorr.feature_mlp.", f"model.lilicorr.feature_mlp.{feature_bid}.")
+        return super().map_tensor_name(name, try_suffixes)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("model.lilicorr."):
-            if name.startswith("model.lilicorr.layers."):
-                parts = name.split(".", 4)
-                if not parts[4].startswith("attn.in_proj."):
-                    parts[3] = str(self.block_count + int(parts[3]))
-                name = ".".join(parts)
-            elif name.startswith("model.lilicorr.feature_norm."):
-                feature_bid = self.block_count + self.lilicorr_geometry["num_layers"]
-                name = name.replace("model.lilicorr.feature_norm.", f"model.lilicorr.feature_mlp.{feature_bid}.norm.")
-            elif name.startswith("model.lilicorr.feature_mlp."):
-                feature_bid = self.block_count + self.lilicorr_geometry["num_layers"]
-                name = name.replace("model.lilicorr.feature_mlp.", f"model.lilicorr.feature_mlp.{feature_bid}.")
             yield self.map_tensor_name(name), data_torch
             return
         yield from super().modify_tensors(data_torch, name, bid)
@@ -251,6 +254,113 @@ class NemotronNanoV2VLModel(MmprojModel):
             yield mapped_name, tensor
 
 
+@ModelBase.register("NemotronH_Omni_Reasoning_V3")
+class NemotronOmniVLModel(NemotronNanoV2VLModel):
+    _omni_tensor_prefixes = (
+        "vision_model.embeddings.",
+        "vision_model.encoder.layer.",
+        "vision_projector.mlp1.",
+    )
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        vision_config = dict(self.global_config["vision_config"])
+        vision_config["intermediate_size"] = int(vision_config["hidden_size"] * vision_config["mlp_ratio"])
+        vision_config["image_size"] = 512  # warmup only; the full position table is resized at runtime
+        return vision_config
+
+    def set_gguf_parameters(self):
+        preprocessor_config = self.preprocessor_config
+
+        preprocessor_config["image_mean"] = preprocessor_config["norm_mean"]
+        preprocessor_config["image_std"] = preprocessor_config["norm_std"]
+
+        MmprojModel.set_gguf_parameters(self)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.NEMOTRON_OMNI)
+        self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
+        self.gguf_writer.add_vision_use_gelu(True)
+        downsample_ratio = self.global_config.get("downsample_ratio", 0.5)
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+        patch_area = self.hparams["patch_size"] ** 2
+        self.gguf_writer.add_vision_min_pixels(preprocessor_config["min_num_patches"] * patch_area)
+        self.gguf_writer.add_vision_max_pixels(preprocessor_config["max_num_patches"] * patch_area)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Transformers can rename RADIO and projector tensors in Omni checkpoints.
+        # Accept both checkpoint layouts.
+        if name == "vision_model.summary_idxs":
+            # This buffer is only used by RadioModel.summary. The multimodal
+            # projector consumes RadioModel.features for both images and video.
+            return None
+        if name.startswith(cls._omni_tensor_prefixes):
+            return name, gen
+
+        if "radio_model.model.patch_generator.video_embedder" in name or name.startswith("vision_projector.vision_final_layernorm."):
+            return MmprojModel.filter_tensors((name, gen))
+
+        return super().filter_tensors(item)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if new_name in ("v.position_embd.weight", "v.class_embd"):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith(self._omni_tensor_prefixes):
+            if name == "vision_model.embeddings.video_patch_projection.weight":
+                data_torch = data_torch.reshape(
+                    self.hparams["hidden_size"],
+                    6,
+                    self.hparams["patch_size"],
+                    self.hparams["patch_size"],
+                )
+                yield gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch
+                return
+
+            if name.startswith("vision_projector.mlp1."):
+                projector_mapping = {
+                    "vision_projector.mlp1.norm.weight": "mlp1.0.weight",
+                    "vision_projector.mlp1.linear1.weight": "mlp1.1.weight",
+                    "vision_projector.mlp1.linear2.weight": "mlp1.3.weight",
+                }
+                name = projector_mapping[name]
+            elif name == "vision_model.embeddings.patch_projection.weight":
+                data_torch = data_torch.reshape(
+                    self.hparams["hidden_size"],
+                    3,
+                    self.hparams["patch_size"],
+                    self.hparams["patch_size"],
+                )
+            elif name == "vision_model.embeddings.position_embedding":
+                data_torch = data_torch.squeeze(0)
+                name += ".weight"
+            elif ".layer_scale" in name and name.endswith(".lambda1"):
+                name = name.removesuffix("lambda1") + "weight"
+
+            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
+            return
+
+        if "patch_generator.pos_embed" in name:
+            # Keep the full table for runtime interpolation.
+            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
+            return
+
+        if "patch_generator.video_embedder" in name:
+            patch_size = self.hparams["patch_size"]
+            n_embd = self.hparams["hidden_size"]
+            temporal_patch_size = self.global_config["video_temporal_patch_size"]
+            if temporal_patch_size != 2:
+                raise ValueError("Current implementation only supports a temporal patch size of 2")
+            data_torch = data_torch.reshape(n_embd, temporal_patch_size * 3, patch_size, patch_size)
+            new_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1"
+            yield new_name, data_torch
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("NemotronForCausalLM")
 @ModelBase.example("nvidia/Minitron-4B-Base")
 class NemotronModel(TextModel):
@@ -382,6 +492,8 @@ class NemotronHModel(GraniteHybridModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
+        if name.startswith("language_model."):
+            name = name[len("language_model."):]
         if name.startswith("mtp."):
             # --no-mtp: drop the MTP head entirely
             if cls.no_mtp:
@@ -530,6 +642,14 @@ class NemotronHModel(GraniteHybridModel):
         "mtp.layers.1.norm.weight":            "model.layers.{bid}.post_attention_layernorm.weight",
         "mtp.layers.1.final_layernorm.weight": "model.layers.{bid}.shared_head.norm.weight",
     }
+
+    def _generate_nvfp4_tensors(self):
+        if self._mtp_bid is not None:
+            for name in list(self.model_tensors):
+                if name.startswith("mtp.layers.1.mixer"):
+                    new_name = f"backbone.layers.{self._mtp_bid}.{name.split('.', 3)[3]}"
+                    self.model_tensors[new_name] = self.model_tensors.pop(name)
+        super()._generate_nvfp4_tensors()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         #   mtp.layers.0: NextN input fusion + attention

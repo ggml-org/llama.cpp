@@ -930,7 +930,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     res->t_inp_tokens = inp_tokens;
 
     ggml_tensor * inp_anchor = nullptr;
-    if (model.lilicorr_pass_hidden_proj && ubatch.embd_state) {
+    if (model.lilicorr_pass_hidden_proj && ubatch.embd_state && n_tokens == (int64_t) hparams.dflash_block_size * ubatch.n_seqs_unq) {
         // LiliCorr sets inp_anchor to pass the context features to the lattice scorer
         auto inp = std::make_unique<llm_graph_input_embd_h>(n_embd, n_embd);
         inp->tokens = inp_tokens;
@@ -1100,7 +1100,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     if (model.dflash_selector_hidden) {
         build_dflash2_selector(*this, model, inp_tokens);
-    } else if (model.lilicorr_pass_hidden_proj && ubatch.embd_state) {
+    } else if (model.lilicorr_pass_hidden_proj && ubatch.embd_state && n_tokens == (int64_t) hparams.dflash_block_size * ubatch.n_seqs_unq) {
         build_lilicorr_scores(*this, model, tok_embd, inp_anchor);
     }
 }

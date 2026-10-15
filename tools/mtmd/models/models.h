@@ -109,6 +109,12 @@ struct clip_graph_nemotron_v2_vl : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_nemotron_omni : clip_graph {
+    clip_graph_nemotron_omni(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+    ggml_tensor * build_inp_with_temporal_merge();
+};
+
 struct clip_graph_llama4 : clip_graph {
     clip_graph_llama4(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
