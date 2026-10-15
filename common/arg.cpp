@@ -3806,7 +3806,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_FINETUNE}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
     add_opt(common_arg(
         {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
         string_format(
@@ -3818,7 +3818,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = read_file(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_FINETUNE}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
         {"--skip-chat-parsing"},
         {"--no-skip-chat-parsing"},
@@ -4598,6 +4598,71 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
             }
         }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--lr-scheduler"}, "constant|cosine|linear",
+        string_format("learning rate schedule over the training steps, cosine and linear decay from -lr to -lr-min (default: %s)", params.lr_schedule.c_str()),
+        [](common_params & params, const std::string & value) {
+            if (value != "constant" && value != "cosine" && value != "linear") {
+                throw std::invalid_argument("invalid --lr-scheduler, valid options: constant, cosine, linear");
+            }
+            params.lr_schedule = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--warmup-steps"}, "N",
+        string_format("linear learning rate warmup over the first N steps (default: %d)", params.lr_warmup_steps),
+        [](common_params & params, int value) { params.lr_warmup_steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--warmup-ratio"}, "FRACTION",
+        string_format("linear learning rate warmup over this fraction of all steps, ignored when --warmup-steps is set (default: %.2g)", (double) params.lr_warmup_ratio),
+        [](common_params & params, const std::string & value) { params.lr_warmup_ratio = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--lora-rank"}, "N",
+        string_format("rank of the LoRA adapter to train (default: %d)", params.lora_rank),
+        [](common_params & params, int value) { params.lora_rank = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--lora-alpha"}, "ALPHA",
+        string_format("scaling factor of the LoRA adapter to train (default: %.1f)", (double) params.lora_alpha),
+        [](common_params & params, const std::string & value) { params.lora_alpha = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--lora-modules"}, "MODULES",
+        string_format("comma-separated list of the modules to train: attn_q, attn_k, attn_v, attn_o, ffn_gate, ffn_up, ffn_down, output, all (default: %s)", params.lora_modules.c_str()),
+        [](common_params & params, const std::string & value) { params.lora_modules = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--lora-seed"}, "N",
+        string_format("seed for the LoRA adapter initialization, 0 = non-deterministic (default: %u)", params.lora_seed),
+        [](common_params & params, int value) { params.lora_seed = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--assistant-loss-only"},
+        "read the data as JSONL chat conversations and train on the assistant tokens only",
+        [](common_params & params) { params.assistant_loss_only = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--checkpoint-save-steps"}, "N",
+        string_format("save a training checkpoint every N steps, 0 = off (default: %d)", params.checkpoint_save_steps),
+        [](common_params & params, int value) { params.checkpoint_save_steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--checkpoint-save-dir"}, "PATH",
+        string_format("directory for the training checkpoints (default: %s)", params.checkpoint_save_dir.c_str()),
+        [](common_params & params, const std::string & value) { params.checkpoint_save_dir = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--resume-from"}, "PATH",
+        "checkpoint directory to resume training from",
+        [](common_params & params, const std::string & value) { params.resume_from = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--auto-resume"},
+        "resume training from the latest checkpoint in the checkpoint directory",
+        [](common_params & params) { params.auto_resume = true; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
     add_opt(common_arg(
         {"--check"},

@@ -622,6 +622,20 @@ struct common_params {
     enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
     float val_split = 0.05f; // fraction of the data used for the validation set
 
+    // finetune-lora
+    int32_t     lora_rank    = 8;
+    float       lora_alpha   = 16.0f;
+    std::string lora_modules = "attn_q,attn_k,attn_v,attn_o"; // comma-separated list of the modules to train
+    uint32_t    lora_seed    = 42;                            // seed for the adapter initialization, 0 = non-deterministic
+    std::string lr_schedule  = "constant";                    // learning rate over the steps of the run: constant, cosine or linear
+    int32_t     lr_warmup_steps = 0;                          // linear learning rate warmup over the first n steps
+    float       lr_warmup_ratio = 0.0f;                       // warmup steps as a fraction of all steps, used when lr_warmup_steps is 0
+    bool        assistant_loss_only   = false;                // JSONL chat data, train on the assistant tokens only
+    int32_t     checkpoint_save_steps = 100;                  // save a checkpoint every n steps, 0 = off
+    std::string checkpoint_save_dir   = "./checkpoints";
+    std::string resume_from;                                  // checkpoint directory to resume from
+    bool        auto_resume = false;                          // resume from the latest checkpoint in checkpoint_save_dir
+
     // embedding
     bool embedding         = false; // get only sentence embedding
     int32_t embd_normalize = 2;     // normalisation for embeddings (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
