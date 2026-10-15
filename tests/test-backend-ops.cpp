@@ -4147,6 +4147,61 @@ struct test_add_rms_norm : public test_case {
     }
 };
 
+// GGML_OP_RMS_NORM on rows of at most 256 columns, then MUL(w) ("mul": per-head q/k norms), SCALE ("scale": the
+// gated delta net's l2 norm, on strided views of the conv output) or MUL(w) and a silu-gated MUL ("mul_silu": its
+// gated output norm); the CUDA backend runs them one wave per row from 4096 rows (norm-rows.cu)
+struct test_rms_norm_rows : public test_case {
+    const std::array<int64_t, 4> ne;
+    const std::string mode;
+    const bool strided; // x a view into wider rows
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_ROWS";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, mode, strided);
+    }
+
+    test_rms_norm_rows(std::array<int64_t, 4> ne = {128, 48, 4, 1}, std::string mode = "mul_silu", bool strided = false)
+        : ne(ne), mode(std::move(mode)), strided(strided) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x;
+        if (strided) {
+            ggml_tensor * wide = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3*ne[0]*ne[1], ne[2]*ne[3]);
+            ggml_set_name(wide, "wide");
+            x = ggml_view_4d(ctx, wide, ne[0], ne[1], ne[2], ne[3], ne[0]*sizeof(float), wide->nb[1],
+                             wide->nb[1]*ne[2], ne[0]*ne[1]*sizeof(float));
+        } else {
+            x = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        }
+        ggml_set_name(x, "x");
+
+        const float eps = 1e-6f;
+        ggml_tensor * out;
+        if (mode == "scale") {
+            out = ggml_scale(ctx, ggml_rms_norm(ctx, x, eps/ne[0]), 1.0f/sqrtf((float) ne[0]));
+        } else {
+            ggml_tensor * w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+            ggml_set_name(w, "w");
+            out = ggml_mul(ctx, ggml_rms_norm(ctx, x, eps), w);
+            if (mode == "mul_silu") {
+                ggml_tensor * z = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+                ggml_set_name(z, "z");
+                out = ggml_mul(ctx, out, ggml_silu(ctx, z));
+            } else {
+                GGML_ASSERT(mode == "mul");
+            }
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_ADD + GGML_OP_RMS_NORM + GGML_OP_MUL (the residual add before a layer's norm, fused operation): the sum
 // and the product are both checked. With type_mat, two matmuls read the product, as a layer's projections do, and
 // their results are checked instead: the fused add + norm may hand them its own q8_1 copy of the product.
@@ -11311,6 +11366,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
     }
+
+    // per-head norms: decode and verify batches (the stock kernels), and prefill ubatches (one wave per row)
+    for (const char * mode : {"mul", "scale", "mul_silu"}) {
+        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
+                {128, 48, 1, 1}, {128, 48, 4, 1}, {128, 16, 4, 1}, {256, 8, 4, 1}, {128, 48, 512, 1}}) {
+            test_cases.emplace_back(new test_rms_norm_rows(ne, mode));
+        }
+    }
+    test_cases.emplace_back(new test_rms_norm_rows({128, 16, 4, 1}, "scale", true));
+    test_cases.emplace_back(new test_rms_norm_rows({128, 16, 512, 1}, "scale", true));
 
     // the residual add before a layer's norm: both block sizes of the norm, a verify batch and a prefill ubatch
     for (int64_t ncols : {1000, 5120}) {

@@ -104,6 +104,7 @@ static bool norm_rows_shape_ok(const ggml_tensor * x, const ggml_tensor * out) {
     if (x->ne[0] < 1 || x->ne[0] > 256 || x->nb[0] != sizeof(float)) {
         return false;
     }
+    // with fewer rows one wave per row is slower than the stock norm (176 per-head norms of a 4-token verify: 617 vs 339 us)
     if (x->ne[1]*x->ne[2]*x->ne[3] < 4096) {
         return false;
     }
