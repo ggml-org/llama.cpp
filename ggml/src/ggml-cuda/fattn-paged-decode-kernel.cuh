@@ -17,7 +17,8 @@
 // Rows are (query token, GQA head) pairs, packed into one or two 16-row WMMA tiles (nb * 6 <= 32).
 //
 // Per chunk:
-//   1. raw Q8_0 K rows and Q4_0 V rows go to LDS (coalesced 16 B loads; the next chunk is prefetched into registers);
+//   1. raw Q8_0 K rows and Q4_0 V rows go to LDS (coalesced 16 B loads; the next chunk is prefetched into registers),
+//      the V scales also to a token-contiguous array;
 //   2. S = Q K^T with WMMA, K dequantized to f16 while building the B fragments; wave w owns 16 tokens of one m-tile;
 //   3. online softmax by row through LDS (P stored as f16, per-row rescale factor);
 //   4. O += P V with WMMA, V dequantized while gathering B fragments; wave w owns 32 output dims.
@@ -137,6 +138,7 @@ static __global__ void pd_partial(
 
     __shared__ __align__(16) char      Kr[PD_CHUNK * PD_K_ROW];
     __shared__ __align__(16) char      Vr[PD_CHUNK * PD_V_ROW];
+    __shared__ __align__(16) half      Vs[PD_D / PD_QK * PD_CHUNK]; // V scales by block, then token
     __shared__ __align__(16) float     Ss[R * PD_CHUNK];
     __shared__ __align__(16) _Float16  Ps[R * PD_CHUNK];
     __shared__                float    alpha_s[R];
@@ -251,7 +253,16 @@ static __global__ void pd_partial(
 #pragma unroll
         for (int j = 0; j < PD_V_LOADS; ++j) {
             const int i = tid + j * PD_NWARPS * 32;
-            if (i < PD_CHUNK * PD_V_VEC) ((uint4 *) Vr)[i] = vreg[j];
+            if (i < PD_CHUNK * PD_V_VEC) {
+                ((uint4 *) Vr)[i] = vreg[j];
+                // 16 B piece v of a row holds the scale of block v at byte 2 * v (v < 8; piece 8 holds none)
+                const int r = i / PD_V_VEC, v = i % PD_V_VEC;
+                if (v < PD_D / PD_QK) {
+                    const uint32_t w = v < 2 ? vreg[j].x : v < 4 ? vreg[j].y : v < 6 ? vreg[j].z : vreg[j].w;
+                    const uint16_t s = (uint16_t) (v % 2 ? w >> 16 : w);
+                    Vs[v * PD_CHUNK + r] = *(const half *) &s;
+                }
+            }
         }
 #pragma unroll
         for (int j = 0; j < M_LOADS; ++j) {
@@ -269,16 +280,20 @@ static __global__ void pd_partial(
             const char * krow = Kr + n * PD_K_ROW;
 #pragma unroll
             for (int ks = 0; ks < PD_D / 16; ++ks) {
-                const int d0 = ks * 16 + 8 * (lane / 16);
-                const char * blk = krow + (d0 / PD_QK) * PD_Q8_BLK;
-                const half d = *(const half *) blk;
+                // The fragment's 8 quants (dims ks * 16 + 8 * (lane / 16) + 0..7, block ks / 2) start at an even byte o of
+                // the row; o % 8 depends on the block alone, so they come from the two aligned 8-byte words at o - o % 8
+                // with a constant shift instead of four 2-byte reads.
+                const int blk = ks / 2;
+                const int sh  = (blk * PD_Q8_BLK + 2) % 8;
+                const uint64_t * w = (const uint64_t *) (krow + blk * PD_Q8_BLK + 2 - sh + 16 * (ks % 2) + 8 * (lane / 16));
+                const uint64_t q8 = sh == 0 ? w[0] : (w[0] >> (8 * sh)) | (w[1] << (64 - 8 * sh));
+                const half d = *(const half *) (krow + blk * PD_Q8_BLK);
                 const half2 d2 = __halves2half2(d, d);
-                const uint16_t * qs = (const uint16_t *) (blk + 2 + d0 % PD_QK);
                 half2 b2[4];
 #pragma unroll
                 for (int j = 0; j < 4; ++j) {
-                    const uint32_t w = qs[j];
-                    b2[j] = __hmul2(pd_i8x2(w, w >> 8), d2);
+                    const uint32_t w2 = (uint32_t) (q8 >> (16 * j));
+                    b2[j] = __hmul2(pd_i8x2(w2, w2 >> 8), d2);
                 }
                 acc = pd_wmma(Qa[ks], *(const pd_half8 *) b2, acc);
             }
@@ -345,19 +360,26 @@ static __global__ void pd_partial(
             for (int mt = 0; mt < M_TILES; ++mt) {
                 a[mt] = *(const pd_half8 *) (Ps + (mt * 16 + lane % 16) * PD_CHUNK + k0);
             }
+            // The wave's 32 dims are block `warp`: byte lane % 16 holds dims lane % 16 (low nibble, dt 0) and lane % 16 + 16
+            // (high nibble, dt 1). The scales of the 8 tokens are one read of Vs.
+            uint32_t xb[4];
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const char * blk0 = Vr + (k0 + 2*j + 0) * PD_V_ROW + warp * PD_Q4_BLK;
+                const char * blk1 = Vr + (k0 + 2*j + 1) * PD_V_ROW + warp * PD_Q4_BLK;
+                xb[j] = (uint32_t) (uint8_t) blk0[2 + lane % 16] | ((uint32_t) (uint8_t) blk1[2 + lane % 16] << 8);
+            }
+            const uint4 sv = *(const uint4 *) (Vs + warp * PD_CHUNK + k0);
+            const half2 s2[4] = { *(const half2 *) &sv.x, *(const half2 *) &sv.y, *(const half2 *) &sv.z, *(const half2 *) &sv.w };
 #pragma unroll
             for (int dt = 0; dt < 2; ++dt) {
-                const int dim = warp * 32 + dt * 16 + lane % 16;
-                const int boff = (dim / PD_QK) * PD_Q4_BLK;
-                const int shift = (dim % PD_QK) < 16 ? 0 : 4;
+                const int shift = dt * 4;
                 half2 b2[4];
 #pragma unroll
                 for (int j = 0; j < 4; ++j) {
-                    const char * blk0 = Vr + (k0 + 2*j + 0) * PD_V_ROW + boff;
-                    const char * blk1 = Vr + (k0 + 2*j + 1) * PD_V_ROW + boff;
-                    const uint32_t q0 = ((uint8_t) blk0[2 + dim % 16] >> shift) & 0x0F;
-                    const uint32_t q1 = ((uint8_t) blk1[2 + dim % 16] >> shift) & 0x0F;
-                    b2[j] = __hmul2(pd_u4x2(q0, q1), __halves2half2(*(const half *) blk0, *(const half *) blk1));
+                    const uint32_t q0 = (xb[j] >> shift) & 0x0F;
+                    const uint32_t q1 = (xb[j] >> (8 + shift)) & 0x0F;
+                    b2[j] = __hmul2(pd_u4x2(q0, q1), s2[j]);
                 }
 #pragma unroll
                 for (int mt = 0; mt < M_TILES; ++mt) {
