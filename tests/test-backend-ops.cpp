@@ -4260,6 +4260,66 @@ struct test_add_rms_norm_mul : public test_case {
     }
 };
 
+// GGML_OP_GLU + GGML_OP_MUL_MAT (an FFN's gated activation and its down projection): the matmul may read a q8_1 copy
+// of the activation that the GLU writes, or quantize the SWIGLU itself (larger batches), which then leaves the GLU
+// output unwritten. So the GLU output is checked for small batches only, the matmul result always.
+struct test_glu_mul_mat : public test_case {
+    const ggml_glu_op op;
+    const std::array<int64_t, 4> ne; // the GLU output
+    const bool      split;
+    const ggml_type type_mat;
+
+    std::vector<ggml_tensor *> checked;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GLU_MUL_MAT";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return checked; }
+
+    double max_nmse_err() override { return 5e-4; }
+
+    std::string vars() override {
+        return "op=" + std::string(ggml_glu_op_name(op)) + "," + VARS_TO_STR3(ne, split, type_mat);
+    }
+
+    test_glu_mul_mat(ggml_glu_op op = GGML_GLU_OP_SWIGLU, std::array<int64_t, 4> ne = {1024, 4, 1, 1},
+            bool split = true, ggml_type type_mat = GGML_TYPE_Q4_K)
+        : op(op), ne(ne), split(split), type_mat(type_mat) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * act;
+        if (split) {
+            ggml_tensor * gate = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+            ggml_set_name(gate, "gate");
+            ggml_tensor * up = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+            ggml_set_name(up, "up");
+            act = ggml_glu_split(ctx, gate, up, op);
+        } else {
+            std::array<int64_t, 4> ne_a = ne;
+            ne_a[0] *= 2;
+            ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_a.data());
+            ggml_set_name(a, "a");
+            act = ggml_glu(ctx, a, op, false);
+        }
+        ggml_set_name(act, "act");
+
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, type_mat, ne[0], 64);
+        ggml_set_name(w, "w");
+        ggml_tensor * out = ggml_mul_mat(ctx, w, act);
+        ggml_set_name(out, "out");
+
+        checked = { out };
+        if (ggml_nrows(act) <= 8) {
+            checked.push_back(act);
+        }
+        return out;
+    }
+};
+
 // GGML_OP_UNARY(RELU) + GGML_OP_SQR (fused operation)
 struct test_relu_sqr : public test_case {
     const ggml_type type;
@@ -11395,6 +11455,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_add_rms_norm_mul({1024, 4, 1, 1}, false, GGML_TYPE_Q4_K));
+
+    // an FFN's gated activation and its down projection: batches mmvq multiplies (the GLU writes their q8_1
+    // activations), one it does not, a prefill ubatch, and rows the copy does not take (not a multiple of 512)
+    for (ggml_type type_mat : {GGML_TYPE_Q4_K, GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0}) {
+        for (int64_t nrows : {1, 4, 8, 9, 64}) {
+            test_cases.emplace_back(new test_glu_mul_mat(GGML_GLU_OP_SWIGLU, {1024, nrows, 1, 1}, true, type_mat));
+        }
+    }
+    for (bool split : {false, true}) {
+        test_cases.emplace_back(new test_glu_mul_mat(GGML_GLU_OP_GEGLU, {1024, 4, 1, 1}, split));
+    }
+    test_cases.emplace_back(new test_glu_mul_mat(GGML_GLU_OP_SWIGLU, {1024, 4, 1, 1}, false));
+    test_cases.emplace_back(new test_glu_mul_mat(GGML_GLU_OP_SWIGLU, {768, 4, 1, 1}));
 
     // linear-attention conv input with its rollback snapshots: verify batches (T < K included) and a prefill ubatch
     for (int64_t T : {1, 2, 3, 4, 16, 256}) {

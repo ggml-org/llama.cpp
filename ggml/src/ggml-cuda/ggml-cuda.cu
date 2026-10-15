@@ -4993,6 +4993,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 }
                 GGML_ASSERT(ok);
                 cuda_ctx->mmvq_q8_1.written(node);
+                cuda_ctx->mmvq_q8_1.apply_pending();
 
                 if (!is_concurrent_event_active) {
                     try_launch_concurrent_event(node);

@@ -1545,8 +1545,8 @@ struct ggml_cuda_mmvq_q8_1_cache {
         return buf != nullptr && size <= buf_size ? buf : nullptr;
     }
 
-    // A fused op that writes its output and a q8_1 copy of it into buf: the copy becomes valid once the evaluator has
-    // run written() over the fused nodes, as the output may be where an elided node's result would have been.
+    // An op that writes its output and a q8_1 copy of it into buf: the copy becomes valid once the evaluator has run
+    // written() over the op's nodes, as the output of a fused op may be where an elided node's result would have been.
     const ggml_tensor * pending = nullptr;
 
     void set_pending(const ggml_tensor * t) {
