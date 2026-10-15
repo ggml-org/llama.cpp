@@ -102,6 +102,14 @@ __device__ __forceinline__ float ggml_cuda_op_silu_single(float x) {
     return x / (1.0f + expf(-x));
 }
 
+__device__ __forceinline__ float ggml_cuda_op_sigmoid_single(float x) {
+    return 1.0f / (1.0f + expf(-x));
+}
+
+__device__ __forceinline__ float ggml_cuda_op_softplus_single(float x) {
+    return (x > 20.0f) ? x : logf(1.0f + expf(x));
+}
+
 __device__ __forceinline__ float ggml_cuda_op_gelu_single(float x) {
     const float GELU_COEF_A    = 0.044715f;
     const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;

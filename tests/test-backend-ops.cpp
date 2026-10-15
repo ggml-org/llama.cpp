@@ -4320,6 +4320,63 @@ struct test_glu_mul_mat : public test_case {
     }
 };
 
+// The gate and beta of a gated delta net (qwen35): MUL_MAT -> RESHAPE -> ADD(dt) -> SOFTPLUS -> MUL(a) -> RESHAPE and
+// MUL_MAT -> RESHAPE -> SIGMOID on the same activations, in the model's node order. The CUDA backend runs them as one
+// kernel for Q8_0 weights and 2-8 tokens.
+struct test_gdn_gate_beta : public test_case {
+    const ggml_type type;
+    const int64_t   n_embd;
+    const int64_t   n_heads;
+    const int64_t   n_tokens;
+
+    std::vector<ggml_tensor *> checked;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GDN_GATE_BETA";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return checked; }
+
+    double max_nmse_err() override { return 5e-4; }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, n_embd, n_heads, n_tokens);
+    }
+
+    test_gdn_gate_beta(ggml_type type = GGML_TYPE_Q8_0, int64_t n_embd = 5120, int64_t n_heads = 48, int64_t n_tokens = 4)
+        : type(type), n_embd(n_embd), n_heads(n_heads), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
+        ggml_set_name(x, "x");
+        ggml_tensor * w_alpha = ggml_new_tensor_2d(ctx, type, n_embd, n_heads);
+        ggml_set_name(w_alpha, "w_alpha");
+        ggml_tensor * w_beta = ggml_new_tensor_2d(ctx, type, n_embd, n_heads);
+        ggml_set_name(w_beta, "w_beta");
+        ggml_tensor * dt = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_heads);
+        ggml_set_name(dt, "dt");
+        ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_heads);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * alpha = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, w_alpha, x), n_heads, n_tokens, 1);
+        ggml_tensor * gate  = ggml_mul(ctx, ggml_softplus(ctx, ggml_add(ctx, alpha, dt)), a);
+        ggml_set_name(gate, "gate");
+
+        ggml_tensor * beta = ggml_reshape_4d(ctx, ggml_mul_mat(ctx, w_beta, x), 1, n_heads, n_tokens, 1);
+        beta = ggml_sigmoid(ctx, beta);
+        ggml_set_name(beta, "beta");
+
+        ggml_tensor * out = ggml_add(ctx, ggml_reshape_4d(ctx, gate, 1, n_heads, n_tokens, 1), beta);
+        ggml_set_name(out, "out");
+
+        checked = { gate, beta };
+        return out;
+    }
+};
+
 // GGML_OP_UNARY(RELU) + GGML_OP_SQR (fused operation)
 struct test_relu_sqr : public test_case {
     const ggml_type type;
@@ -11468,6 +11525,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     test_cases.emplace_back(new test_glu_mul_mat(GGML_GLU_OP_SWIGLU, {1024, 4, 1, 1}, false));
     test_cases.emplace_back(new test_glu_mul_mat(GGML_GLU_OP_SWIGLU, {768, 4, 1, 1}));
+
+    // a gated delta net's gate and beta: decode, the batches the CUDA backend fuses (Q8_0), one past them, another type
+    for (int64_t n_tokens : {1, 2, 4, 8, 9}) {
+        test_cases.emplace_back(new test_gdn_gate_beta(GGML_TYPE_Q8_0, 5120, 48, n_tokens));
+    }
+    test_cases.emplace_back(new test_gdn_gate_beta(GGML_TYPE_Q8_0, 256, 16, 3));
+    test_cases.emplace_back(new test_gdn_gate_beta(GGML_TYPE_Q4_0, 5120, 48, 4));
 
     // linear-attention conv input with its rollback snapshots: verify batches (T < K included) and a prefill ubatch
     for (int64_t T : {1, 2, 3, 4, 16, 256}) {
