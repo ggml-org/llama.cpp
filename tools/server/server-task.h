@@ -300,6 +300,11 @@ struct server_task {
     bool is_child() const {
         return id_parent != -1;
     }
+
+    // embedding and rerank tasks always process their whole prompt, their state is never reused
+    bool is_stateless() const {
+        return type == SERVER_TASK_TYPE_EMBEDDING || type == SERVER_TASK_TYPE_RERANK;
+    }
 };
 
 struct result_prompt_progress {

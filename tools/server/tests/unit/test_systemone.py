@@ -158,6 +158,32 @@ def test_systemone_shared_prompt():
     assert abs(res.body["answers"]["angry"]["noul"] - res_single.body["answers"]["angry"]["noul"]) < 0.01
 
 
+@pytest.mark.parametrize("cache_ram", [None, 100])
+def test_systemone_prompt_cache(cache_ram, tmp_path):
+    global server
+    server.n_slots = 1
+    server.cache_ram = cache_ram
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    # the third request comes back to the state of the first one
+    for state in ["Ticket A: " + TEST_STATE, "Ticket B: " + TEST_STATE * 2, "Ticket A: " + TEST_STATE]:
+        res = server.make_request("POST", "/v1/systemone", data={
+            "state": state,
+            "questions": TEST_QUESTIONS,
+        })
+        assert res.status_code == 200
+
+    server.stop()
+
+    with open(server.log_path) as f:
+        log = f.read()
+    # the prompt cache is opt-in for decision models, and restores their states once enabled
+    assert ("__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__" in log) == (cache_ram is not None)
+    assert ("found better prompt" in log) == (cache_ram is not None)
+
+
 def test_systemone_images():
     global server
     server = ServerPreset.tinyopenjev()

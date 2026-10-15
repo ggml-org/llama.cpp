@@ -594,7 +594,8 @@ struct server_slot {
             state = SLOT_STATE_IDLE;
 
             // do not keep context of the child slots - the parent's context is enough
-            if (task->is_child()) {
+            // nor of the stateless slots - no task ever reuses it
+            if (task->is_child() || task->is_stateless()) {
                 prompt_clear();
             }
 
@@ -1489,6 +1490,13 @@ private:
             batch.init(ctx_tgt, std::max(n_batch, params_base.n_parallel), n_embd);
         }
 
+        // decision requests rarely repeat a state, the prompt cache is opt-in for decision models
+        if (decision.type != COMMON_DECISION_TYPE_NONE && !params_base.cache_ram_explicit) {
+            SRV_INF("%s", "decision model: prompt cache disabled by default, use `--cache-ram N` to enable it\n");
+            params_base.cache_ram_mib    = 0;
+            params_base.cache_idle_slots = false;
+        }
+
         if (params_base.cache_ram_mib != 0) {
             if (params_base.cache_ram_mib < 0) {
                 SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
@@ -1782,8 +1790,8 @@ private:
         if (ret) {
             update_cache = update_cache && prompt_cache;
 
-            // cache prompts only for completion tasks
-            update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
+            // cache prompts only for the tasks that reuse them
+            update_cache = update_cache && !task.is_stateless();
 
             if (update_cache) {
                 SRV_TRC("%s", "updating prompt cache\n");
@@ -3597,9 +3605,7 @@ private:
                                 return;
                             }
 
-                            const bool is_stateless_task = slot.task->type == SERVER_TASK_TYPE_EMBEDDING || slot.task->type == SERVER_TASK_TYPE_RERANK;
-
-                            if (slot.task->params.cache_prompt && !is_stateless_task) {
+                            if (slot.task->params.cache_prompt && !slot.task->is_stateless()) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 

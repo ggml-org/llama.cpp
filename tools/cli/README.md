@@ -148,7 +148,7 @@
 | `--display-prompt, --no-display-prompt` | whether to print prompt at generation (default: true) |
 | `-co, --color [on\|off\|auto]` | Colorize output to distinguish prompt and user input from generations ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal |
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
-| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
+| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, 0 for decision models, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
 | `-sys, --system-prompt PROMPT` | system prompt to use with model (if applicable, depending on chat template) |
 | `--show-timings, --no-show-timings` | whether to show timing information after each response (default: true)<br/>(env: LLAMA_ARG_SHOW_TIMINGS) |
