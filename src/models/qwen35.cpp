@@ -248,6 +248,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
 
     ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
     cb(z, "z", il);
+    // z next to qkv rather than where it is used, after the delta net: a backend can overlap matmuls of the same
+    // activations that run back to back (ggml-cuda on HIP)
+    ggml_build_forward_expand(gf, qkv_mixed);
+    ggml_build_forward_expand(gf, z);
 
     return { qkv_mixed, z };
 }
@@ -283,6 +287,11 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
     cb(Qcur_full, "Qcur_full", il);
     cb(Kcur, "Kcur", il);
     cb(Vcur, "Vcur", il);
+    // the three projections back to back, before Q's norm and RoPE: a backend can overlap matmuls of the same
+    // activations that run back to back (ggml-cuda on HIP)
+    ggml_build_forward_expand(gf, Qcur_full);
+    ggml_build_forward_expand(gf, Kcur);
+    ggml_build_forward_expand(gf, Vcur);
 
     ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
         ggml_element_size(Qcur_full) * n_embd_head * 2,
