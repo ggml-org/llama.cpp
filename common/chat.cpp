@@ -1110,6 +1110,12 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_gpt_oss;
     }
 
+    // Muse Spark shares the Muse recipient protocol and adds a commentary recipient.
+    if (src.find("to=commentary") != std::string::npos && src.find("<|eom|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Muse Spark\n");
+        return common_chat_params_init_muse_spark;
+    }
+
     // Muse Glimmer format using " to=<recipient>" recipients and <|eom|>/<|eot|> message terminators.
     if (src.find("<atem:function_calls>") != std::string::npos && src.find("<|eom|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Muse Glimmer\n");

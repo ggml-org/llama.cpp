@@ -189,6 +189,8 @@ pre_computed_hashes = [
     {"name": "qwen2",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B", "chkhsh": "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c"},
     {"name": "qwen35",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openbmb/MiniCPM-V-4_6", "chkhsh": "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f"},
     {"name": "grok-2",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/alvarobartt/grok-2-tokenizer", "chkhsh": "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273"},
+    # muse-spark uses the l4_202k tokenizer, whose pre-tokenizer regex is gpt-4o's
+    {"name": "gpt-4o",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B", "chkhsh": "f5c965e4198da6e7525072d87d1ecf4c51d981fd486c7c4ec728ef9cec7e03fc"},
     # jina-v2-de variants
     {"name": "jina-v2-de", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/aari1995/German_Semantic_V3", "chkhsh": "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df"},
     {"name": "gpt-2", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/evilfreelancer/ruGPT3XL", "chkhsh": "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4"},

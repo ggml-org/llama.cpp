@@ -141,6 +141,9 @@ struct llama_hparams {
     float f_norm_rms_eps;
     float f_norm_group_eps;
 
+    // post norms use their own epsilon
+    float f_post_norm_eps = 0.0f;
+
     float f_attn_logit_softcapping   = 50.0f;
     float f_router_logit_softcapping = 30.0f;
     float f_final_logit_softcapping  = 30.0f;

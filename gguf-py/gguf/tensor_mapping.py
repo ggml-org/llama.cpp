@@ -530,6 +530,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.FFN_EXP_PROBS_B: (
             "model.layers.{bid}.mlp.gate.e_score_correction",               # deepseek-v3 dots1
+            "model.layers.{bid}.mlp.gate.e_score_correction_bias",          # muse-spark
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
             "model.layers.{bid}.mlp.expert_bias",                           # afmoe
@@ -674,10 +675,20 @@ class TensorNameMap:
 
         MODEL_TENSOR.MOE_LATENT_DOWN: (
             "backbone.layers.{bid}.mixer.fc1_latent_proj",                 # nemotron 3 super
+            "model.layers.{bid}.mlp.pre_expert_proj",                      # muse-spark
         ),
 
         MODEL_TENSOR.MOE_LATENT_UP: (
             "backbone.layers.{bid}.mixer.fc2_latent_proj",                 # nemotron 3 super
+            "model.layers.{bid}.mlp.post_expert_proj",                     # muse-spark
+        ),
+
+        MODEL_TENSOR.FFN_PRE_EXP_NORM: (
+            "model.layers.{bid}.mlp.pre_expert_norm",                      # muse-spark
+        ),
+
+        MODEL_TENSOR.FFN_POST_EXP_NORM: (
+            "model.layers.{bid}.mlp.experts.post_expert_norm",             # muse-spark
         ),
 
         # Feed-forward down

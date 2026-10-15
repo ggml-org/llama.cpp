@@ -3029,6 +3029,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             if (false
                     || t.first == "<|eot_id|>"
+                    || t.first == "<|eot|>"    // muse-spark
                     || t.first == "<|im_end|>"
                     || t.first == "<|end|>"
                     || t.first == "<|return|>" // o200k_harmony

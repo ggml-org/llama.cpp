@@ -188,6 +188,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_olmoe(params);
         case LLM_ARCH_MUSE_GLIMMER:
             return new llama_model_muse_glimmer(params);
+        case LLM_ARCH_MUSE_SPARK:
+            return new llama_model_muse_spark(params);
         case LLM_ARCH_OPENELM:
             return new llama_model_openelm(params);
         case LLM_ARCH_GPTNEOX:
@@ -991,6 +993,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_16x3_8B:       return "16x3.8B";
         case LLM_TYPE_10B_128x3_66B: return "10B+128x3.66B";
         case LLM_TYPE_57B_A14B:      return "57B.A14B";
+        case LLM_TYPE_816B_A42B:     return "816B.A42B";
         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
         case LLM_TYPE_A13B:          return "A13B";
@@ -3492,6 +3495,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DEEPSEEK32:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_MUSE_GLIMMER:
+        case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GRANITE:

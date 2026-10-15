@@ -1059,6 +1059,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_whisper_enc>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+            {
+                builder = std::make_unique<clip_graph_muse_spark_audio>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_KIMIVL:
             {
                 builder = std::make_unique<clip_graph_kimivl>(ctx, img);
@@ -1775,6 +1779,33 @@ struct clip_model_loader {
                         hparams.set_limit_image_tokens(8, 576);
                         hparams.set_warmup_n_tokens(16*16);
                     } break;
+                case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+                    {
+                        hparams.audio_sample_rate = 24000; // mono waveform, no frontend
+                        get_u32(KEY_A_CONV_KERNEL_SIZE, hparams.audio_conv_kernel_size, true);
+                        get_arr_int(KEY_A_HIDDEN_SIZES, hparams.audio_hidden_sizes, true);
+                        get_arr_int(KEY_A_PATCH_SIZES,  hparams.audio_patch_sizes,  true);
+                        get_arr_int(KEY_A_DEPTHS,       hparams.audio_depths,       true);
+
+                        // the graph indexes the three arrays by stage and model.layers by the running depth sum
+                        const size_t n_stage = hparams.audio_patch_sizes.size();
+                        GGML_ASSERT(n_stage > 0);
+                        GGML_ASSERT(hparams.audio_hidden_sizes.size() == n_stage);
+                        GGML_ASSERT(hparams.audio_depths.size() == n_stage);
+                        GGML_ASSERT(hparams.n_mel_bins == 1);
+                        GGML_ASSERT(hparams.audio_conv_kernel_size >= 1);
+
+                        int64_t n_blocks = 0;
+                        for (size_t i = 0; i < n_stage; ++i) {
+                            GGML_ASSERT(hparams.audio_hidden_sizes[i] >= 1);
+                            GGML_ASSERT(hparams.audio_depths[i] >= 0);
+                            n_blocks += hparams.audio_depths[i];
+                        }
+                        if (n_blocks != hparams.n_layer) {
+                            throw std::runtime_error(string_format("%s: sum of audio depths (%" PRId64 ") does not match n_layer (%d)\n", __func__, n_blocks, hparams.n_layer));
+                        }
+                        hparams.warmup_audio_size = hparams.audio_samples_per_token();
+                    } break;
                 case PROJECTOR_TYPE_MUSE_GLIMMER:
                     {
                         hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
@@ -2187,7 +2218,9 @@ struct clip_model_loader {
                 // GEMMA4UA is encoder-free: it uses n_mel_bins as a raw-waveform frame size (640) and has no FFT/filterbank, so the mel-range and FFT
                 // checks below do not apply to it.
                 // pocket-tts is encoder-free in the same sense: mimi convolves the raw waveform
+                // Muse Spark is encoder-free in the same sense: its conv pyramid reads the raw waveform, one channel takes the place of the mel bins
                 const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
+                                       model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC;
 
                 // Validate audio hparams loaded from GGUF metadata
@@ -2348,7 +2381,8 @@ struct clip_model_loader {
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
-            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN);
+            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
+            model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO);
 
         // layers
         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
@@ -2618,6 +2652,38 @@ struct clip_model_loader {
                     model.mm_merger_fc1_b = get_tensor(string_format(TN_MM_MERGER_FC1, "bias"));
                     model.mm_merger_fc2_w = get_tensor(string_format(TN_MM_MERGER_FC2, "weight"));
                     model.mm_merger_fc2_b = get_tensor(string_format(TN_MM_MERGER_FC2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+                {
+                    model.layers.resize(hparams.n_layer);
+                    model.a_patches.resize(hparams.audio_patch_sizes.size());
+                    for (size_t i = 0; i < model.a_patches.size(); ++i) {
+                        auto & pe = model.a_patches[i];
+                        pe.proj_w = get_tensor(string_format(TN_A_PATCH,      (int) i, "weight"));
+                        pe.proj_b = get_tensor(string_format(TN_A_PATCH,      (int) i, "bias"));
+                        pe.norm_w = get_tensor(string_format(TN_A_PATCH_NORM, (int) i, "weight"));
+                        if (pe.proj_w->ne[1] != hparams.audio_hidden_sizes[i]) {
+                            throw std::runtime_error(string_format("%s: audio stage %zu projection has width %" PRId64 ", expected %d\n", __func__, i, pe.proj_w->ne[1], hparams.audio_hidden_sizes[i]));
+                        }
+                    }
+
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & layer = model.layers[il];
+                        layer.conv_w      = get_tensor(string_format(TN_CONV1D, il, "weight"));
+                        layer.conv_b      = get_tensor(string_format(TN_CONV1D, il, "bias"));
+                        layer.conv_norm_w = get_tensor(string_format(TN_A_CONV1D_NORM, il, "weight"));
+                        layer.ff_up_w     = get_tensor(string_format(TN_FFN_UP,   "a", il, "weight"));
+                        layer.ff_up_b     = get_tensor(string_format(TN_FFN_UP,   "a", il, "bias"));
+                        layer.ff_down_w   = get_tensor(string_format(TN_FFN_DOWN, "a", il, "weight"));
+                        layer.ff_down_b   = get_tensor(string_format(TN_FFN_DOWN, "a", il, "bias"));
+                    }
+
+                    // pre_ln and post_ln come from the generic path above, where they are optional
+                    if (!model.pre_ln_w || !model.post_ln_w) {
+                        throw std::runtime_error(string_format("%s: missing pre_ln or post_ln weight\n", __func__));
+                    }
+                    model.mm_fc_w   = get_tensor(string_format(TN_MM_AUDIO_FC, "weight"));
+                    model.mm_fc_b   = get_tensor(string_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
@@ -4393,6 +4459,11 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                     n_patches = n_patches_y * n_patches_x;
                 }
             } break;
+        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+            {
+                const int64_t fold = ctx->model.hparams.audio_samples_per_token();
+                n_patches = (int) ((img->nx() + fold - 1) / fold);
+            } break;
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_QWEN2A:
@@ -5459,6 +5530,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         case PROJECTOR_TYPE_COGVLM:
         case PROJECTOR_TYPE_YASA2:
         case PROJECTOR_TYPE_GEMMA4UA:
+        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             {
                 // do nothing
@@ -6157,6 +6229,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GEMMA4UA:
             return ctx->model.mm_input_proj_w->ne[1];
         case PROJECTOR_TYPE_IDEFICS3:
+        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:

@@ -6661,6 +6661,50 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Muse Spark format tests
+    {
+        auto tst = peg_tester("models/templates/muse-spark.jinja", detailed_debug);
+
+        const std::string call_markup =
+            "<atem:function_calls>\n"
+            "<atem:invoke name=\"special_function\">\n"
+            "<atem:parameter name=\"arg1\">1</atem:parameter>\n"
+            "</atem:invoke>\n"
+            "</atem:function_calls>";
+
+        // A plain answer behaves as it does for Muse Glimmer
+        tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eot|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        // A commentary message is user facing content, not reasoning
+        tst.test(" to=commentary<|message|>Hello, world!\nWhat's up?<|eom|>"
+                 "<|start|>assistant to=user<|message|>Done!<|eot|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_content("Hello, world!\nWhat's up?Done!")
+            .run();
+
+        // Commentary announces the work, then the tool call follows in the same generation
+        tst.test(" to=commentary<|message|>Let me look that up.<|eom|>"
+                 "<|start|>assistant to=special_function<|message|>" +
+                 call_markup)
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_with_content_and_tool_call("Let me look that up.", "special_function",
+                                                       "{\"arg1\":1}"))
+            .run();
+
+        // Reasoning still reaches the reasoning channel with commentary in the picture
+        tst.test(" to=self<|message|>Thinking.<|eom|>"
+                 "<|start|>assistant to=commentary<|message|>Working on it.<|eom|>"
+                 "<|start|>assistant to=user<|message|>Hello!<|eot|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("Thinking.")
+            .expect_content("Working on it.Hello!")
+            .run();
+    }
+
     // GPT-OSS format tests
     {
         auto tst = peg_tester("models/templates/openai-gpt-oss-120b.jinja", detailed_debug);

@@ -1009,6 +1009,12 @@ struct mtmd_context {
                     aud_end = "<|audio_eos|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+                {
+                    aud_beg = "<|soft_audio_start|>";
+                    aud_end = "<|soft_audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_muse_spark_audio>(ctx_a);
+                } break;
             case PROJECTOR_TYPE_QWEN3A:
                 {
                     aud_beg = "<|audio_start|>";

@@ -31,9 +31,11 @@ enum class tensor_category {
     ATTENTION_QKV,
     ATTENTION_KV_B,
     ATTENTION_OUTPUT,
+    ATTENTION_GATE,
     FFN_UP,
     FFN_GATE,
     FFN_DOWN,
+    FFN_LATENT,
     OUTPUT,
     OTHER
 };
@@ -146,6 +148,12 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
     }
     if (tensor_name.find("ffn_gate") != std::string::npos) {
         return tensor_category::FFN_GATE;
+    }
+    if (tensor_name.find("ffn_latent") != std::string::npos) {
+        return tensor_category::FFN_LATENT;
+    }
+    if (tensor_name.find("attn_gate.weight") != std::string::npos) {
+        return tensor_category::ATTENTION_GATE;
     }
     if (tensor_name.find("ffn_down") != std::string::npos) {
         return tensor_category::FFN_DOWN;
@@ -487,6 +495,19 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 break;
             default:
                 return GGML_TYPE_Q8_0;
+        }
+    }
+
+    // bumping to q8_0 is preferred since these tensors are not really big
+    // TODO: nemotron 3 super shares ffn_latent and afmoe, bailingmoe3, dots3note, hy-v4, kimi-k3 and laguna share attn_gate.
+    //       Widening the guard is likely a win there too, but it changes their files, so it wants a perplexity comparison per architecture first.
+    if (arch == LLM_ARCH_MUSE_SPARK &&
+        (category == tensor_category::FFN_LATENT || category == tensor_category::ATTENTION_GATE)) {
+        auto bits_per_weight = [](ggml_type t) {
+            return 8.0 * ggml_type_size(t) / ggml_blck_size(t);
+        };
+        if (ggml_is_quantized(new_type) && bits_per_weight(new_type) < bits_per_weight(GGML_TYPE_Q8_0)) {
+            new_type = GGML_TYPE_Q8_0;
         }
     }
 

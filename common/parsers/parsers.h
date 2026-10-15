@@ -79,6 +79,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
 common_chat_params common_chat_params_init_ministral_3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_muse_glimmer(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+common_chat_params common_chat_params_init_muse_spark(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_qwen3_coder(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 

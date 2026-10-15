@@ -2093,7 +2093,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         ggml_tensor * post_exp_norm,
+               float   post_exp_norm_eps) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -2114,7 +2116,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         up_exps_s,
         gate_exps_s,
         down_exps_s,
-        selected_experts_in
+        selected_experts_in,
+        post_exp_norm,
+        post_exp_norm_eps
     );
 }
 
@@ -2142,7 +2146,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         ggml_tensor * post_exp_norm,
+               float   post_exp_norm_eps) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -2446,6 +2452,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     if (down_exps_b) {
         experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
         cb(experts, "ffn_moe_down_biased", il);
+    }
+
+    // an expert output can be scaled by a norm weight, then normalized, before the router weights apply
+    if (post_exp_norm) {
+        experts = ggml_mul(ctx0, experts, post_exp_norm);
+        experts = ggml_rms_norm(ctx0, experts, post_exp_norm_eps);
+        cb(experts, "ffn_moe_post_exp_norm", il);
     }
 
     if (!weight_before_ffn) {

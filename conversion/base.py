@@ -1869,6 +1869,9 @@ class TextModel(ModelBase):
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
+        if chkhsh == "f5c965e4198da6e7525072d87d1ecf4c51d981fd486c7c4ec728ef9cec7e03fc":
+            # ref: https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B
+            res = "gpt-4o"
         if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
             # ref: https://huggingface.co/aari1995/German_Semantic_V3
             res = "jina-v2-de"

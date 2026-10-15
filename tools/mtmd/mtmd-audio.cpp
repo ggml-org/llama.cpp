@@ -1596,3 +1596,23 @@ bool mtmd_audio_preprocessor_pockettts::preprocess(const float *                
     output.push_back(std::move(out));
     return true;
 }
+
+// Muse Spark reads the raw waveform: pass the samples through, zero padded to a whole number of embeddings
+bool mtmd_audio_preprocessor_muse_spark_audio::preprocess(
+        const float * samples,
+        size_t n_samples,
+        std::vector<mtmd_audio_mel> & output) const {
+    const int64_t fold     = hparams.audio_samples_per_token();
+    const int64_t n_padded = ((int64_t) n_samples + fold - 1) / fold * fold;
+
+    mtmd_audio_mel mel;
+    mel.n_len     = n_padded;
+    mel.n_len_org = (int64_t) n_samples;
+    mel.n_mel     = 1;
+    mel.data.assign((size_t) n_padded, 0.0f);
+    std::copy(samples, samples + n_samples, mel.data.begin());
+
+    output.clear();
+    output.push_back(std::move(mel));
+    return true;
+}

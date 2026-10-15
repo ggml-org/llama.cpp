@@ -19,6 +19,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/minimax-m3.cpp
     ${CMAKE_CURRENT_LIST_DIR}/ministral3.cpp
     ${CMAKE_CURRENT_LIST_DIR}/muse-glimmer.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/muse-spark.cpp
     ${CMAKE_CURRENT_LIST_DIR}/qwen3-coder.cpp
     ${CMAKE_CURRENT_LIST_DIR}/translate-gemma.cpp
 )

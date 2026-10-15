@@ -134,6 +134,20 @@ struct clip_hparams {
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
 
+    // audio pyramid (muse-spark): widths, folded samples and blocks per stage
+    std::vector<int32_t> audio_hidden_sizes;
+    std::vector<int32_t> audio_patch_sizes;
+    std::vector<int32_t> audio_depths;
+
+    int32_t audio_samples_per_token() const {
+        int64_t n = 1;
+        for (int32_t p : audio_patch_sizes) {
+            n *= p;
+            GGML_ASSERT(n >= 1 && n <= (1 << 20));
+        }
+        return (int32_t) n;
+    }
+
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
     int32_t audio_sample_rate = -1;
@@ -282,6 +296,10 @@ struct clip_layer {
     ggml_tensor * ln_2_b = nullptr;
 
     ggml_tensor * ff_post_norm_w = nullptr;
+
+    // depthwise causal conv block (muse-spark audio), conv_norm_w is declared below
+    ggml_tensor * conv_w = nullptr;
+    ggml_tensor * conv_b = nullptr;
 
     // layer scale (no bias)
     ggml_tensor * ls_1_w   = nullptr;
@@ -584,6 +602,14 @@ struct clip_model {
     ggml_tensor * pre_ln_b = nullptr;
 
     std::vector<clip_layer> layers;
+
+    // one patch embedder per audio pyramid stage (muse-spark)
+    struct audio_patch {
+        ggml_tensor * proj_w = nullptr;
+        ggml_tensor * proj_b = nullptr;
+        ggml_tensor * norm_w = nullptr;
+    };
+    std::vector<audio_patch> a_patches;
 
     int32_t n_deepstack_layers = 0; // used by Qwen3-VL, calculated from clip_layer
 

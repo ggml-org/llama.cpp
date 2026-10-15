@@ -85,6 +85,9 @@
 #define KEY_A_PROJ_STACK_FACTOR    "clip.audio.projector.stack_factor"
 #define KEY_A_CHUNK_SIZE           "clip.audio.chunk_size"
 #define KEY_A_CONV_KERNEL_SIZE     "clip.audio.conv_kernel_size"
+#define KEY_A_HIDDEN_SIZES         "clip.audio.hidden_sizes"
+#define KEY_A_PATCH_SIZES          "clip.audio.patch_sizes"
+#define KEY_A_DEPTHS               "clip.audio.depths"
 #define KEY_A_MAX_POS_EMB          "clip.audio.max_pos_emb"
 #define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
 #define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
@@ -369,6 +372,8 @@
 #define TN_A_INP_PROJ        "a.input_projection.%s"
 #define TN_A_CONV1D          "a.conv1d.%d.%s"
 #define TN_A_CONV1D_NORM     "a.conv1d.%d.norm.%s"
+#define TN_A_PATCH           "a.patch.%d.%s"
+#define TN_A_PATCH_NORM      "a.patch.%d.norm.%s"
 #define TN_A_OUT_PROJ        "a.pre_encode.out.%s"
 #define TN_A_ATTN_PRE_NORM   "%s.blk.%d.attn_pre_norm.%s"
 #define TN_A_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s"
@@ -515,6 +520,7 @@ enum projector_type {
     PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_COHERE2V,
+    PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -587,6 +593,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
+    { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

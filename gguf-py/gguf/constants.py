@@ -132,6 +132,7 @@ class Keys:
         EXPERTS_PER_GROUP                 = "{arch}.experts_per_group"
         MOE_EVERY_N_LAYERS                = "{arch}.moe_every_n_layers"
         MOE_LATENT_SIZE                   = "{arch}.moe_latent_size"
+        POST_NORM_EPS                     = "{arch}.post_norm_epsilon"
         NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         NUM_DEEPSTACK_LAYERS              = "{arch}.n_deepstack_layers"
         DEEPSTACK_MAPPING                 = "{arch}.deepstack_mapping"
@@ -466,6 +467,9 @@ class Keys:
         SUBSAMPLING_FACTOR  = "clip.audio.subsampling_factor"
         CHUNK_SIZE          = "clip.audio.chunk_size"
         CONV_KERNEL_SIZE    = "clip.audio.conv_kernel_size"
+        HIDDEN_SIZES        = "clip.audio.hidden_sizes"   # muse-spark, per stage
+        PATCH_SIZES         = "clip.audio.patch_sizes"    # muse-spark, per stage
+        DEPTHS              = "clip.audio.depths"         # muse-spark, per stage
         MAX_POS_EMB         = "clip.audio.max_pos_emb"
         FEATURE_LAYERS      = "clip.audio.feature_layer" # Granite Speech Plus
         RVQ_NUM_QUANTIZERS  = "clip.audio.rvq.num_quantizers"
@@ -611,6 +615,7 @@ class MODEL_ARCH(IntEnum):
     OLMO2            = auto()
     OLMOE            = auto()
     MUSE_GLIMMER     = auto()
+    MUSE_SPARK       = auto()
     OPENELM          = auto()
     ARCTIC           = auto()
     DEEPSEEK         = auto()
@@ -743,6 +748,8 @@ class MODEL_TENSOR(IntEnum):
     ATTN_ROT_EMBD        = auto()
     ATTN_SINKS           = auto()
     ATTN_GATE            = auto()
+    ATTN_RESID_ALPHA     = auto()
+    ATTN_RESID_BETA      = auto()
     FFN_GATE_INP         = auto()
     FFN_GATE_INP_SHEXP   = auto()
     FFN_NORM             = auto()
@@ -771,6 +778,10 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_TID2EID     = auto()
     MOE_LATENT_DOWN      = auto() # nemotron 3 super
     MOE_LATENT_UP        = auto() # nemotron 3 super
+    FFN_RESID_ALPHA      = auto()
+    FFN_RESID_BETA       = auto()
+    FFN_PRE_EXP_NORM     = auto()
+    FFN_POST_EXP_NORM    = auto()
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
     LAYER_OUT_NORM       = auto()
@@ -1121,6 +1132,8 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_EMBD_TO_LOGITS  = auto() # lfm2
     A_ENC_INP_PROJ        = auto() # gemma4
     A_ENC_CONV1D          = auto()
+    A_ENC_PATCH_PROJ      = auto() # muse-spark
+    A_ENC_PATCH_NORM      = auto() # muse-spark
     A_ENC_CONV1D_NORM     = auto() # gemma3n
     A_ENC_CONV2D          = auto()
     A_ENC_CONV_OUT        = auto()
@@ -1415,6 +1428,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.OLMO2:            "olmo2",
     MODEL_ARCH.OLMOE:            "olmoe",
     MODEL_ARCH.MUSE_GLIMMER:     "muse-glimmer",
+    MODEL_ARCH.MUSE_SPARK:       "muse-spark",
     MODEL_ARCH.OPENELM:          "openelm",
     MODEL_ARCH.ARCTIC:           "arctic",
     MODEL_ARCH.DEEPSEEK:         "deepseek",
@@ -1544,6 +1558,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_ROT_EMBD:             "blk.{bid}.attn_rot_embd",
     MODEL_TENSOR.ATTN_SINKS:                "blk.{bid}.attn_sinks",
     MODEL_TENSOR.ATTN_GATE:                 "blk.{bid}.attn_gate",
+    MODEL_TENSOR.ATTN_RESID_ALPHA:          "blk.{bid}.attn_resid_alpha",
+    MODEL_TENSOR.ATTN_RESID_BETA:           "blk.{bid}.attn_resid_beta",
     MODEL_TENSOR.ATTN_Q_NORM:               "blk.{bid}.attn_q_norm",
     MODEL_TENSOR.ATTN_K_NORM:               "blk.{bid}.attn_k_norm",
     MODEL_TENSOR.ATTN_OUT_NORM:             "blk.{bid}.attn_output_norm",
@@ -1576,6 +1592,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_TID2EID:          "blk.{bid}.ffn_gate_tid2eid",
     MODEL_TENSOR.MOE_LATENT_DOWN:           "blk.{bid}.ffn_latent_down",      # nemotron 3 super
     MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
+    MODEL_TENSOR.FFN_RESID_ALPHA:           "blk.{bid}.ffn_resid_alpha",
+    MODEL_TENSOR.FFN_RESID_BETA:            "blk.{bid}.ffn_resid_beta",
+    MODEL_TENSOR.FFN_PRE_EXP_NORM:          "blk.{bid}.ffn_pre_exp_norm",
+    MODEL_TENSOR.FFN_POST_EXP_NORM:         "blk.{bid}.ffn_post_exp_norm",
     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
     MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
     MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
@@ -1921,6 +1941,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS:      "a.embd_to_logits",
     MODEL_TENSOR.A_ENC_INP_PROJ:            "a.input_projection",
     MODEL_TENSOR.A_ENC_CONV1D:              "a.conv1d.{bid}",
+    MODEL_TENSOR.A_ENC_PATCH_PROJ:          "a.patch.{bid}",
+    MODEL_TENSOR.A_ENC_PATCH_NORM:          "a.patch.{bid}.norm",
     MODEL_TENSOR.A_ENC_CONV2D:              "a.conv2d.{bid}",
     MODEL_TENSOR.A_ENC_CONV_OUT:            "a.conv_out",
     MODEL_TENSOR.A_ENC_CONV1D_NORM:         "a.conv1d.{bid}.norm",
@@ -2273,6 +2295,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS,
         MODEL_TENSOR.A_ENC_INP_PROJ,
         MODEL_TENSOR.A_ENC_CONV1D,
+        MODEL_TENSOR.A_ENC_PATCH_PROJ,
+        MODEL_TENSOR.A_ENC_PATCH_NORM,
         MODEL_TENSOR.A_ENC_CONV2D,
         MODEL_TENSOR.A_ENC_CONV_OUT,
         MODEL_TENSOR.A_ENC_CONV1D_NORM,
@@ -3978,6 +4002,34 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.FFN_PRE_NORM,
         MODEL_TENSOR.FFN_POST_NORM,
+    ],
+    MODEL_ARCH.MUSE_SPARK: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_RESID_ALPHA,
+        MODEL_TENSOR.ATTN_RESID_BETA,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_RESID_ALPHA,
+        MODEL_TENSOR.FFN_RESID_BETA,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.MOE_LATENT_DOWN,
+        MODEL_TENSOR.FFN_PRE_EXP_NORM,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_POST_EXP_NORM,
+        MODEL_TENSOR.MOE_LATENT_UP,
     ],
     MODEL_ARCH.OPENELM: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -6283,6 +6335,7 @@ class VisionProjectorType:
     COHERE2V       = "cohere2v"
     D1OMNI_V       = "d1omni_v"  # lfm2 vision, without separator tokens
     D1OMNI_A       = "d1omni_a"  # lfm2a audio, with a residual block after the projector
+    MUSE_SPARK_AUDIO = "muse-spark-audio"
 
 
 # Items here are (block size, type size)

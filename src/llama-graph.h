@@ -1178,7 +1178,9 @@ struct llm_graph_context {
              ggml_tensor * up_exps_s = nullptr,
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr,
-             ggml_tensor * selected_experts_in = nullptr) const;
+             ggml_tensor * selected_experts_in = nullptr,
+             ggml_tensor * post_exp_norm = nullptr,
+                   float   post_exp_norm_eps = 1e-5f) const;
 
     ggml_tensor * build_moe_ffn(
              ggml_tensor * cur,
@@ -1204,7 +1206,9 @@ struct llm_graph_context {
              ggml_tensor * up_exps_s = nullptr,
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr,
-             ggml_tensor * selected_experts_in = nullptr) const;
+             ggml_tensor * selected_experts_in = nullptr,
+             ggml_tensor * post_exp_norm = nullptr,
+                   float   post_exp_norm_eps = 1e-5f) const;
 
     // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
     ggml_tensor * build_moe_cache_slots(

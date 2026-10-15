@@ -114,6 +114,7 @@ enum llm_type {
     LLM_TYPE_16x3_8B,
     LLM_TYPE_10B_128x3_66B,
     LLM_TYPE_57B_A14B,
+    LLM_TYPE_816B_A42B,
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
     LLM_TYPE_A13B,
@@ -360,6 +361,16 @@ struct llama_layer {
     // ff MoE latent proj
     struct ggml_tensor * ffn_latent_down = nullptr;
     struct ggml_tensor * ffn_latent_up   = nullptr;
+
+    // ff MoE norms around the experts, in latent space
+    struct ggml_tensor * ffn_pre_exp_norm  = nullptr;
+    struct ggml_tensor * ffn_post_exp_norm = nullptr;
+
+    // norm preserving residual coefficients
+    struct ggml_tensor * attn_resid_alpha = nullptr;
+    struct ggml_tensor * attn_resid_beta  = nullptr;
+    struct ggml_tensor * ffn_resid_alpha  = nullptr;
+    struct ggml_tensor * ffn_resid_beta   = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
