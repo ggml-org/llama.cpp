@@ -183,6 +183,12 @@
               # the first prompt batch and made long prefills at full context run out of memory. No measured cost.
               export GPU_MAX_HW_QUEUES="''${GPU_MAX_HW_QUEUES:-2}"
 
+              # HIP graphs replay the overlapping launches of matmuls on the same activations (ggml_cuda_mm_siblings)
+              # without a barrier only in CLR's single-queue async mode: +2.9% decode on reasoning at 8k (76.3 -> 78.5
+              # t/s), +0.9% on copies. Otherwise a captured graph does not fork them (ggml checks these two).
+              export DEBUG_HIP_FORCE_ASYNC_QUEUE="''${DEBUG_HIP_FORCE_ASYNC_QUEUE:-1}"
+              export DEBUG_HIP_FORCE_GRAPH_QUEUES="''${DEBUG_HIP_FORCE_GRAPH_QUEUES:-1}"
+
               host="''${LLAMA_ARG_HOST:-127.0.0.1}"
               port="''${LLAMA_ARG_PORT:-8080}"
               ctx_size="''${LLAMA_ARG_CTX_SIZE:-262144}"
@@ -220,6 +226,9 @@
                 echo " Tuning env:  GPU_MAX_HW_QUEUES=''${GPU_MAX_HW_QUEUES:-default}" \
                   "ROC_ACTIVE_WAIT_TIMEOUT=''${ROC_ACTIVE_WAIT_TIMEOUT:-default}" \
                   "GGML_CUDA_DISABLE_GRAPHS=''${GGML_CUDA_DISABLE_GRAPHS:-unset}"
+                echo "              DEBUG_HIP_FORCE_ASYNC_QUEUE=$DEBUG_HIP_FORCE_ASYNC_QUEUE" \
+                  "DEBUG_HIP_FORCE_GRAPH_QUEUES=$DEBUG_HIP_FORCE_GRAPH_QUEUES" \
+                  "GGML_CUDA_DISABLE_ANY_ORDER=''${GGML_CUDA_DISABLE_ANY_ORDER:-unset}"
                 echo "=========================================================="
               } >&2
 
