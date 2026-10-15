@@ -1565,12 +1565,46 @@ void ggml_cuda_mul_mat_vec_q(
     }
 
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
-    {
+    const size_t  q8_1_size   = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1;
+
+    // the q8_1 copy of src1: the previous mmvq's if it quantized the same activations, else quantized into the
+    // context's persistent buffer (see ggml_cuda_mmvq_q8_1_cache), or into the pool when that cannot take it
+    ggml_cuda_mmvq_q8_1_cache & cache = ctx.mmvq_q8_1;
+    const bool cacheable = !ids && ctx.curr_stream_no == 0;
+    ggml_cuda_pool_alloc<char> src1_q8_1_pool(ctx.pool());
+    const void * src1_q8_1 = nullptr;
+    if (cacheable && cache.matches(src1)) {
+        src1_q8_1 = cache.buf;
+    } else {
+        void * q = nullptr;
+        if (cacheable) {
+            if (cache.buf == nullptr) {
+                bool capturing = false;
+#ifdef USE_CUDA_GRAPH
+                cudaStreamCaptureStatus capture_status;
+                CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
+                capturing = capture_status != cudaStreamCaptureStatusNone;
+#endif // USE_CUDA_GRAPH
+                if (!capturing) {
+                    cache.buf_size = std::max<size_t>(q8_1_size, 1 << 20);
+                    CUDA_CHECK(cudaMalloc(&cache.buf, cache.buf_size));
+                }
+            }
+            if (cache.buf != nullptr && q8_1_size <= cache.buf_size) {
+                q = cache.buf;
+            }
+        }
+        if (q == nullptr) {
+            q = src1_q8_1_pool.alloc(q8_1_size);
+        }
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
-        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        quantize_row_q8_1_cuda(src1_d, nullptr, q, src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        if (q == cache.buf) {
+            cache.set(src1);
+        }
+        src1_q8_1 = q;
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;
@@ -1596,7 +1630,7 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
     mul_mat_vec_q_switch_type(
-        src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+        src0->data, src0->type, src1_q8_1, ids_d, fusion_local, dst_d, ne00,
         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
         ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);

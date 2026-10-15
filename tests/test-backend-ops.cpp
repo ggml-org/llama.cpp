@@ -5463,6 +5463,58 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT of several weights on the same activations (sibling projections), with another node between them: a
+// backend may quantize the activations once for all of them, and must not when a node rewrote them in between (inplace)
+struct test_mul_mat_siblings : public test_case {
+    const ggml_type type_a;
+    const ggml_type type_b;
+    const int64_t n;
+    const bool inplace;
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_a, type_b, n, inplace);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    // one evaluation of the whole graph: node by node, nothing could be reused across the matmuls
+    bool run_whole_graph() override { return true; }
+
+    test_mul_mat_siblings(ggml_type type_a = GGML_TYPE_Q4_K, ggml_type type_b = GGML_TYPE_Q8_0, int64_t n = 4, bool inplace = false)
+        : type_a(type_a), type_b(type_b), n(n), inplace(inplace) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t k = 512;
+
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(x, "x");
+        ggml_tensor * wa = ggml_new_tensor_2d(ctx, type_a, k, 64);
+        ggml_set_name(wa, "wa");
+        ggml_tensor * wb = ggml_new_tensor_2d(ctx, type_b, k, 32);
+        ggml_set_name(wb, "wb");
+        ggml_tensor * wc = ggml_new_tensor_2d(ctx, type_a, k, 64);
+        ggml_set_name(wc, "wc");
+
+        // activations computed in the graph, as a norm's output is
+        ggml_tensor * act = ggml_scale(ctx, x, 0.5f);
+        ggml_set_name(act, "act");
+
+        ggml_tensor * ya  = ggml_mul_mat(ctx, wa, act);
+        ggml_tensor * mid = ggml_sigmoid(ctx, ya);
+        ggml_tensor * yb  = ggml_mul_mat(ctx, wb, act);
+
+        ggml_tensor * act_c = inplace ? ggml_scale_inplace(ctx, act, 2.0f) : act;
+        ggml_tensor * yc    = ggml_mul_mat(ctx, wc, act_c);
+
+        ggml_tensor * out = ggml_concat(ctx, ggml_concat(ctx, mid, yb, 0), yc, 0);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -12344,6 +12396,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
     test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, {10, 5, 4, 3}));
+
+    // sibling matmuls on the same activations (decode and speculative verify batches)
+    for (ggml_type type_a : {GGML_TYPE_Q4_K, GGML_TYPE_IQ4_XS}) {
+        for (int64_t n : {1, 4, 8}) {
+            for (bool inplace : {false, true}) {
+                test_cases.emplace_back(new test_mul_mat_siblings(type_a, GGML_TYPE_Q8_0, n, inplace));
+            }
+        }
+    }
 
     for (ggml_type type : base_types) {
         for (bool with_gate : {false, true}) {

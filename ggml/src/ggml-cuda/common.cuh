@@ -1445,10 +1445,66 @@ struct ggml_cuda_stream_context {
     }
 };
 
+// whether the data of a and b share memory (a tensor without data shares none)
+static inline bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    const char * a0 = (const char *) a->data;
+    const char * b0 = (const char *) b->data;
+    return a0 && b0 && a0 < b0 + ggml_nbytes(b) && b0 < a0 + ggml_nbytes(a);
+}
+
+// mmvq quantizes its activations (src1) to q8_1 whatever the weight type: the matrix-vector products that follow on
+// the same activations (sibling projections such as q/k/v or gate/up) read that copy instead of quantizing again.
+// The copy is valid until a node writes over the activations; the graph evaluation invalidates it then, and at the
+// start of every graph. With CUDA graphs the reuse is captured, so the buffer is persistent (allocated once, outside a
+// capture).
+struct ggml_cuda_mmvq_q8_1_cache {
+    void *       buf      = nullptr;
+    size_t       buf_size = 0;
+    const char * src      = nullptr; // data of the activations in buf, nullptr: no valid copy
+    size_t       src_size = 0;
+    int64_t      ne[GGML_MAX_DIMS] = {};
+    size_t       nb[GGML_MAX_DIMS] = {};
+
+    bool matches(const ggml_tensor * t) const {
+        if (!src || (const char *) t->data != src) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (t->ne[i] != ne[i] || t->nb[i] != nb[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void set(const ggml_tensor * t) {
+        src      = (const char *) t->data;
+        src_size = ggml_nbytes(t);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            ne[i] = t->ne[i];
+            nb[i] = t->nb[i];
+        }
+    }
+
+    void invalidate() {
+        src = nullptr;
+    }
+
+    // a node wrote dst: the copy is stale if dst overlaps the activations it was made from
+    void written(const ggml_tensor * dst) {
+        const char * d = (const char *) dst->data;
+        if (src && d && d < src + src_size && src < d + ggml_nbytes(dst)) {
+            src = nullptr;
+        }
+    }
+};
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
     cudaEvent_t copy_event = nullptr;
+
+    ggml_cuda_mmvq_q8_1_cache mmvq_q8_1;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};

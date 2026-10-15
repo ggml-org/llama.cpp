@@ -767,6 +767,10 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
+    if (mmvq_q8_1.buf != nullptr) {
+        ggml_cuda_set_device(device);
+        CUDA_CHECK(cudaFree(mmvq_q8_1.buf));
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
@@ -4756,9 +4760,14 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
+            // the activations an earlier graph quantized may hold other data now
+            cuda_ctx->mmvq_q8_1.invalidate();
+
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
                 if (is_concurrent_event_active) {
+                    // nodes on other streams run in no order relative to the host's
+                    cuda_ctx->mmvq_q8_1.invalidate();
                     GGML_ASSERT(concurrent_event);
 
                     if (node == concurrent_event->join_node) {
@@ -4807,6 +4816,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                             nodes_to_skip + 1, ggml_op_name(node->op), node->name,
                             ggml_op_name(cgraph->nodes[last_fused]->op), cgraph->nodes[last_fused]->name);
 #endif
+                    for (int j = i; j <= i + nodes_to_skip; ++j) {
+                        cuda_ctx->mmvq_q8_1.written(cgraph->nodes[j]);
+                    }
                     i += nodes_to_skip;
                     continue;
                 }
@@ -4832,6 +4844,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
                 GGML_ASSERT(ok);
+                cuda_ctx->mmvq_q8_1.written(node);
 
                 if (!is_concurrent_event_active) {
                     try_launch_concurrent_event(node);
