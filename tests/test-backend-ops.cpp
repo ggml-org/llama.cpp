@@ -5351,6 +5351,103 @@ struct test_gated_delta_net_cache_fusion : public test_case {
     }
 };
 
+// GGML_OP_GET_ROWS + GGML_OP_GATED_DELTA_NET + GGML_OP_CPY as build_rs and build_recurrent_attn build them for one
+// sequence: the state is gathered from a row of the recurrent cache, and the snapshots go back into the same cache
+// (row i holds snapshot slot i). The CUDA backend reads the state from the cache itself, so src_row 0 is the row the
+// newest snapshot overwrites.
+struct test_gated_delta_net_state_rows : public test_case {
+    const int64_t head_count;
+    const int64_t head_size;
+    const int64_t n_seq_tokens;
+    const int64_t K;       // snapshot slots, one cache row each
+    const int32_t src_row; // the cache row the state is gathered from
+
+    std::vector<ggml_tensor *> checked;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GATED_DELTA_NET_STATE_ROWS";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return checked; }
+
+    std::string vars() override {
+        return VARS_TO_STR5(head_count, head_size, n_seq_tokens, K, src_row);
+    }
+
+    test_gated_delta_net_state_rows(int64_t head_count = 4, int64_t head_size = 128, int64_t n_seq_tokens = 4,
+            int64_t K = 4, int32_t src_row = 0)
+        : head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), K(K), src_row(src_row) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t S_v       = head_size;
+        const int64_t H         = head_count;
+        const int64_t D         = S_v * S_v * H;
+        const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+
+        ggml_tensor * q    = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S_v, H, n_seq_tokens, 1);
+        ggml_tensor * k    = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S_v, H, n_seq_tokens, 1);
+        ggml_tensor * v    = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S_v, H, n_seq_tokens, 1);
+        ggml_tensor * g    = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, H, n_seq_tokens, 1);
+        ggml_tensor * beta = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, H, n_seq_tokens, 1);
+        ggml_set_name(q, "q");
+        ggml_set_name(k, "k");
+        ggml_set_name(v, "v");
+        ggml_set_name(g, "g");
+        ggml_set_name(beta, "beta");
+        q = ggml_l2_norm(ctx, q, 1e-6f);
+        k = ggml_l2_norm(ctx, k, 1e-6f);
+
+        ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, D, K);
+        ggml_set_name(cache, "cache");
+        ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+        ggml_set_name(ids, "ids");
+
+        ggml_tensor * rows  = ggml_get_rows(ctx, cache, ids);
+        ggml_tensor * state = ggml_reshape_4d(ctx, ggml_view_2d(ctx, rows, D, 1, rows->nb[1], 0), S_v, S_v, H, 1);
+
+        ggml_tensor * gdn_out = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, K);
+        ggml_set_name(gdn_out, "gdn_out");
+
+        ggml_tensor * attn = ggml_view_4d(ctx, gdn_out, S_v, H, n_seq_tokens, 1,
+                ggml_row_size(gdn_out->type, S_v),
+                ggml_row_size(gdn_out->type, S_v * H),
+                ggml_row_size(gdn_out->type, S_v * H * n_seq_tokens), 0);
+        ggml_set_name(attn, "attn");
+        ggml_tensor * snaps = ggml_view_3d(ctx, gdn_out, D, 1, n_written,
+                ggml_row_size(gdn_out->type, D),
+                ggml_row_size(gdn_out->type, D),
+                ggml_row_size(gdn_out->type, S_v * H * n_seq_tokens));
+        ggml_tensor * dst = ggml_view_3d(ctx, cache, D, 1, n_written, cache->nb[1], cache->nb[1], 0);
+        ggml_tensor * cpy = ggml_cpy(ctx, snaps, dst);
+        ggml_set_name(cpy, "gdn_cache_cpy");
+
+        checked = { attn, cpy };
+        // the copy first: the snapshot fusion needs it right after the GDN
+        return ggml_add(ctx, ggml_sum(ctx, cpy), ggml_sum(ctx, attn));
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) { continue; }
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int32_t> data(ggml_nelements(t), src_row);
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int32_t));
+            } else if (strcmp(t->name, "g") == 0) {
+                init_tensor_uniform(t, -20.0f, -1e-4f);
+            } else if (strcmp(t->name, "beta") == 0) {
+                init_tensor_uniform(t, 0.0f, 1.0f);
+            } else if (strcmp(t->name, "v") == 0) {
+                init_tensor_uniform(t, -0.3f, 5.0f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_GATED_LINEAR_ATTN
 struct test_gla : public test_case {
     const ggml_type type;
@@ -12710,6 +12807,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 32,   4, 1, 4));
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 8, 32,   4, 2, 4));
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 32,   8, 1, 4));
+
+    // ... with the state gathered from the same cache: verify sizes read it in place (src_row 0 is overwritten by the
+    // newest snapshot), 5 tokens is a candidate of the MMA path and keeps the gather
+    for (int64_t n_seq_tokens : {1, 2, 4, 5}) {
+        for (int32_t src_row : {0, 3}) {
+            test_cases.emplace_back(new test_gated_delta_net_state_rows(4, 128, n_seq_tokens, 4, src_row));
+        }
+    }
+    test_cases.emplace_back(new test_gated_delta_net_state_rows(4, 32, 4, 4, 1));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
