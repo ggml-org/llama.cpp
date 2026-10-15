@@ -781,6 +781,12 @@ struct vk_device_struct {
     bool xe_mmvq;          // Q2_K/Q3_K decode matvec from mul_mat_vecq_xe.comp
     uint32_t xe_mmvq_rows; // rows per workgroup for it
     uint32_t xe_mmvq_mode; // diagnostic mode for it, 0 = normal
+    uint32_t fa_split_wgs; // FA split_k: split the KV range until this many workgroups run, 0 = 2 per shader core
+    uint32_t fa_gqa_rows;  // scalar FA: group up to this many query heads of one KV head per workgroup, 0 = block_rows
+    uint32_t fa_subgroup;  // scalar FA on Intel: subgroup size for the reductions, 0 = shared memory only
+    bool fa_dec_xe;           // single-token Q8_0 flash attention from flash_attn_dec_xe.comp
+    uint32_t fa_dec_xe_chunk; // KV positions per workgroup for it
+    uint32_t fa_dec_xe_diag;  // timing experiments only (wrong results): GGML_VK_FA_DEC_XE_DIAG
 
     bool subgroup_size_control;
     uint32_t subgroup_min_size;
@@ -1028,6 +1034,7 @@ struct vk_device_struct {
     std::map<std::pair<uint32_t, uint32_t>, vk_pipeline> pipeline_fa_mask_opt;
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
+    vk_pipeline pipeline_fa_dec_xe[2]; // [has mask]
     vk_pipeline pipeline_count_experts;
 
     // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
@@ -3503,8 +3510,9 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     if (device->vendor_id == VK_VENDOR_ID_INTEL) {
         // Disable subgroup use due to performance issues when enforcing subgroup sizes
-        result.subgroup_size = 32;
-        result.disable_subgroups = true;
+        // (GGML_VK_FA_SUBGROUP turns it back on with the given size)
+        result.subgroup_size = device->fa_subgroup ? device->fa_subgroup : 32;
+        result.disable_subgroups = device->fa_subgroup == 0;
     } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
         result.subgroup_size = n_rows < 4 ? 32 : device->subgroup_size;
     } else {
@@ -5245,6 +5253,13 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     ggml_vk_create_pipeline(device, device->pipeline_matmul_split_k_reduce, "split_k_reduce", split_k_reduce_len, split_k_reduce_data, "main", 2, 2 * sizeof(uint32_t), {256 * 4, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+    if (device->fa_dec_xe) {
+        for (uint32_t m = 0; m < 2; ++m) {
+            ggml_vk_create_pipeline(device, device->pipeline_fa_dec_xe[m], m ? "fa_dec_xe_q8_0_mask" : "fa_dec_xe_q8_0", fa_dec_xe_q8_0_len, fa_dec_xe_q8_0_data, "main", 7, sizeof(vk_flash_attn_push_constants), {1, 1, 1}, {128, device->fa_dec_xe_chunk, m, device->fa_dec_xe_diag}, 1, true, true, 16);
+        }
+    }
+#endif
 
     for (auto &it : device->pipeline_fa_mask_opt) {
         auto BrBc = it.first;
@@ -6804,6 +6819,41 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->xe_mmvq_mode = 0;
         if (const char * s = getenv("GGML_VK_XE_MODE")) {
             device->xe_mmvq_mode = atoi(s);
+        }
+
+        // Flash attention tuning (0 = upstream behaviour): GGML_VK_FA_SPLIT_WGS, GGML_VK_FA_GQA_ROWS,
+        // GGML_VK_FA_SUBGROUP, see the fields.
+        device->fa_split_wgs = 0;
+        if (const char * s = getenv("GGML_VK_FA_SPLIT_WGS")) {
+            device->fa_split_wgs = std::max(0, atoi(s));
+        }
+        device->fa_gqa_rows = 0;
+        if (const char * s = getenv("GGML_VK_FA_GQA_ROWS")) {
+            device->fa_gqa_rows = std::min(32, std::max(0, atoi(s)));
+        }
+        device->fa_subgroup = 0;
+        if (const char * s = getenv("GGML_VK_FA_SUBGROUP")) {
+            const uint32_t sg = std::max(0, atoi(s));
+            device->fa_subgroup = sg >= device->subgroup_min_size && sg <= device->subgroup_max_size ? sg : 0;
+        }
+
+        // Single-token flash attention over a Q8_0 cache with head size 128 and 16 query heads per KV
+        // head (flash_attn_dec_xe.comp), on the same devices as the Xe matvec: GGML_VK_FA_DEC_XE=0 turns
+        // it off, GGML_VK_FA_DEC_XE_CHUNK sets the KV positions per workgroup (32, 64 or 128).
+        device->fa_dec_xe = device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE2 &&
+                            device->integer_dot_product && device->subgroup_size_control && device->subgroup_require_full_support &&
+                            device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16;
+        if (const char * s = getenv("GGML_VK_FA_DEC_XE")) {
+            device->fa_dec_xe = device->fa_dec_xe && atoi(s) != 0;
+        }
+        device->fa_dec_xe_chunk = 128;
+        if (const char * s = getenv("GGML_VK_FA_DEC_XE_CHUNK")) {
+            const int ch = atoi(s);
+            device->fa_dec_xe_chunk = ch <= 32 ? 32 : ch <= 64 ? 64 : 128;
+        }
+        device->fa_dec_xe_diag = 0;
+        if (const char * s = getenv("GGML_VK_FA_DEC_XE_DIAG")) {
+            device->fa_dec_xe_diag = (uint32_t) atoi(s) & 3;
         }
 
         ggml_vk_load_shaders(device);
@@ -10536,6 +10586,71 @@ static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, co
     return supported;
 }
 
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+// Single-token attention with flash_attn_dec_xe.comp: one workgroup per (KV chunk, KV head) for all 16
+// query heads of the KV head, always followed by the split-k reduce (which also applies the sinks).
+// ggml_vk_flash_attn has checked the shapes, types and strides.
+static void ggml_vk_flash_attn_dec_xe(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * v, const ggml_tensor * mask, const ggml_tensor * sinks, ggml_tensor * dst) {
+    const uint32_t HSV   = 128;
+    const uint32_t CH    = ctx->device->fa_dec_xe_chunk;
+    const uint32_t KV    = (uint32_t) k->ne[1];
+    const uint32_t k_num = CEIL_DIV(KV, CH);
+    const uint32_t ne1   = (uint32_t) dst->ne[1];
+    const uint32_t ne2   = (uint32_t) dst->ne[2];
+    const uint32_t ne3   = (uint32_t) dst->ne[3];
+
+    float scale;
+    memcpy(&scale, (const float *) dst->op_params + 0, sizeof(float));
+
+    const uint64_t split_k_size = (HSV * ne1 * sizeof(float) + ne1 * sizeof(float) * 2) * k_num * ne2 * ne3;
+    if (split_k_size > ctx->device->properties.limits.maxStorageBufferRange) {
+        GGML_ABORT("Requested preallocation size is too large");
+    }
+    if (ctx->prealloc_size_split_k < split_k_size) {
+        ctx->prealloc_size_split_k = split_k_size;
+        ggml_vk_preallocate_buffers(ctx, subctx);
+    }
+
+    vk_pipeline pipeline = ctx->device->pipeline_fa_dec_xe[mask ? 1 : 0];
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
+
+    vk_subbuffer q_buf       = ggml_vk_tensor_subbuffer(ctx, q);
+    vk_subbuffer k_buf       = ggml_vk_tensor_subbuffer(ctx, k);
+    vk_subbuffer v_buf       = ggml_vk_tensor_subbuffer(ctx, v);
+    vk_subbuffer dst_buf     = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer mask_buf    = mask ? ggml_vk_tensor_subbuffer(ctx, mask) : q_buf;
+    vk_subbuffer sinks_buf   = sinks ? ggml_vk_tensor_subbuffer(ctx, sinks) : q_buf;
+    vk_subbuffer split_k_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_split_k, 0);
+
+    const vk_flash_attn_push_constants pc = { 1, KV, ne1, ne2, ne3,
+                                              (uint32_t) q->ne[2], (uint32_t) q->ne[3],
+                                              (uint32_t) k->ne[2], (uint32_t) k->ne[3],
+                                              (uint32_t) v->ne[2], (uint32_t) v->ne[3],
+                                              mask ? (uint32_t) mask->ne[1] : 0, mask ? (uint32_t) mask->ne[2] : 0, mask ? (uint32_t) mask->ne[3] : 0,
+                                              (uint32_t) (q->nb[1] / sizeof(float)), (uint32_t) q->nb[2], (uint32_t) q->nb[3],
+                                              (uint32_t) (k->nb[1] / ggml_type_size(k->type)), (uint32_t) k->nb[2], (uint32_t) k->nb[3],
+                                              (uint32_t) (v->nb[1] / ggml_type_size(v->type)), (uint32_t) v->nb[2], (uint32_t) v->nb[3],
+                                              scale, 0.0f, 0.0f,
+                                              0, 0.0f, 0.0f,
+                                              16, CH, k_num };
+
+    if (ctx->prealloc_split_k_need_sync) {
+        ggml_vk_sync_buffers(ctx, subctx);
+    }
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+                              {q_buf, k_buf, v_buf, mask_buf, sinks_buf, split_k_buf, q_buf},
+                              pc, { k_num, (uint32_t) k->ne[2], (uint32_t) q->ne[3] });
+
+    ggml_vk_sync_buffers(ctx, subctx);
+    const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, ne1, ne2, ne3, k_num, (sinks != nullptr) };
+    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_flash_attn_split_k_reduce,
+                              {split_k_buf, sinks_buf, dst_buf},
+                              pc2, { ne1, HSV, ne2 * ne3 });
+    ctx->prealloc_split_k_need_sync = true;
+}
+#endif
+
 static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * v, const ggml_tensor * mask, const ggml_tensor * sinks, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_vk_flash_attn((" << q << ", name=" << q->name << ", type=" << q->type << ", ne0=" << q->ne[0] << ", ne1=" << q->ne[1] << ", ne2=" << q->ne[2] << ", ne3=" << q->ne[3] << ", nb0=" << q->nb[0] << ", nb1=" << q->nb[1] << ", nb2=" << q->nb[2] << ", nb3=" << q->nb[3];
     std::cerr << "), (" << k << ", name=" << k->name << ", type=" << k->type << ", ne0=" << k->ne[0] << ", ne1=" << k->ne[1] << ", ne2=" << k->ne[2] << ", ne3=" << k->ne[3] << ", nb0=" << k->nb[0] << ", nb1=" << k->nb[1] << ", nb2=" << k->nb[2] << ", nb3=" << k->nb[3];
@@ -10587,6 +10702,20 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     assert(dst->type == GGML_TYPE_F32);
     assert(q->type == GGML_TYPE_F32);
+
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+    if (ctx->device->fa_dec_xe && N == 1 && HSK == 128 && HSV == 128 &&
+        k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0 &&
+        nek2 == nev2 && neq2 == 16 * nek2 && nek3 == nev3 && neq3 % nek3 == 0 &&
+        (!mask || (nem2 == 1 && nem3 == 1)) &&
+        ((const float *) dst->op_params)[1] == 0.0f && ((const float *) dst->op_params)[2] == 0.0f &&
+        nbq2 % 16 == 0 && nbq3 % 16 == 0 &&
+        nbk1 % 8 == 0 && nbk2 % 8 == 0 && nbk3 % 8 == 0 && nbv1 % 4 == 0 && nbv2 % 4 == 0 && nbv3 % 4 == 0) {
+        ggml_vk_flash_attn_dec_xe(ctx, subctx, q, k, v, mask, sinks, dst);
+        return;
+    }
+#endif
+
     uint32_t gqa_ratio = 1;
     uint32_t qk_ratio = neq2 / nek2;
     uint32_t workgroups_x = (uint32_t)neq1;
@@ -10598,7 +10727,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k->type, v->type, f32acc);
-    const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
+    const uint32_t max_gqa = std::min(std::max(tuning_params.block_rows, ctx->device->fa_gqa_rows), 32u);
 
     if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
         qk_ratio * nek2 == neq2 && nek2 == nev2 && nem2 <= 1) {
@@ -10611,6 +10740,11 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     }
 
     tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k->type, v->type, f32acc);
+
+    // A group wider than the tuned block (GGML_VK_FA_GQA_ROWS) still takes one workgroup per KV head.
+    if (gqa_ratio > tuning_params.block_rows && tuning_params.path == FA_SCALAR) {
+        tuning_params.block_rows = gqa_ratio;
+    }
 
     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
@@ -10685,12 +10819,13 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     const uint32_t Tr = CEIL_DIV(N, Br);
 
     // Try to use split_k when KV is large enough to be worth the overhead.
+    const uint32_t split_wgs = ctx->device->fa_split_wgs ? ctx->device->fa_split_wgs : shader_core_count * 2;
     if (gqa_ratio > 1 && workgroups_x <= Br) {
-        split_k = shader_core_count * 2 / (workgroups_x * workgroups_y * workgroups_z);
+        split_k = split_wgs / (workgroups_x * workgroups_y * workgroups_z);
     } else if (gqa_ratio <= 1) {
         uint32_t total_wgs_no_split = Tr * workgroups_y * workgroups_z;
-        if (total_wgs_no_split < shader_core_count * 2) {
-            split_k = shader_core_count * 2 / total_wgs_no_split;
+        if (total_wgs_no_split < split_wgs) {
+            split_k = split_wgs / total_wgs_no_split;
         }
     }
 

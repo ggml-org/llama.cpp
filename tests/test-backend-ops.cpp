@@ -9055,6 +9055,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // and its single-token flash attention: 2 kv heads of 16 q heads each, so the 16 q heads of a
+    // kv head can share one workgroup; kv 1000 is not a multiple of any block size
+    for (ggml_type kv_type : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        for (int64_t kv : {256, 1000, 1024, 2048}) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, kv, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, kv_type, kv_type));
+        }
+    }
+    // the Intel decode kernel's other paths on that shape: 1 and 4 kv heads (3 and 1 nodes), sinks,
+    // no mask, a second sequence, fewer positions than one chunk, and the K/V cache's own layout
+    // (positions of all kv heads interleaved)
+    for (int64_t nh : {1, 4}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, nh, {16, 1}, 1000, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1000, 1, true,  true,  0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1000, 1, false, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 2}, 1000, 1, false, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1},   40, 1, true,  false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1000, 1, true,  false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}));
+
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
             for (int n : {1, 16}) {
@@ -10043,7 +10062,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {1, 1}));   // attn_v, 2 kv heads
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32, 128, 1, 4096, {1, 1}, {1, 1}));   // ffn_gate_inp (router)
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 75968, 1, 4096, {1, 1}, {1, 1})); // output, half the vocab
-    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1024, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    for (ggml_type kv_type : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) { // flash attention, 2 kv heads of 16 q heads each
+        for (int64_t kv : {1024, 2048, 4096}) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, kv, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, kv_type, kv_type));
+        }
+    }
 
     return test_cases;
 }

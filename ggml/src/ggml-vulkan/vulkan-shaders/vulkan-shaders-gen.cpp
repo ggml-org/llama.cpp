@@ -870,6 +870,10 @@ void process_shaders() {
 
     string_to_spv("split_k_reduce", "mul_mat_split_k_reduce.comp", {});
     string_to_spv("fa_split_k_reduce", "flash_attn_split_k_reduce.comp", {});
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+    // Intel Xe2/Xe3 single-token attention over a Q8_0 cache
+    string_to_spv("fa_dec_xe_q8_0", "flash_attn_dec_xe.comp", {});
+#endif
 
     string_to_spv("fa_mask_opt", "flash_attn_mask_opt.comp", {});
 

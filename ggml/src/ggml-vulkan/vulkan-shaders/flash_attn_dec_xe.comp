@@ -1,0 +1,343 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_integer_dot_product : require
+
+// Single-token flash attention for Intel Xe2/Xe3 iGPUs: Q8_0 K and V of head size 128, 16 query
+// heads per KV head (Qwen3-235B-A22B and models of the same attention shape).
+//
+// The generic scalar shader either gives each query head its own workgroup, so every K and V row
+// is loaded and dequantized 16 times, or, with the heads grouped, needs more registers than the
+// Intel compiler has and spills. Here one workgroup takes CH consecutive KV positions of one KV
+// head for all 16 of its query heads, in three steps that share nothing but shared memory:
+//   1. scores: each thread dots one K row against HPT query heads with the int8 dot product
+//      (Q is quantized to 8 bits per 32 values on entry, as the generic MMQ path does);
+//   2. the max of each head over the chunk (a tree in shared memory), then the exponentials;
+//   3. P x V: four streams each walk a quarter of the chunk, a thread owning 4 values of the head
+//      dimension for all 16 heads; the streams are added up in shared memory.
+// The result is always the split-k partial (unnormalized O, row sum L, row max M) that
+// fa_split_k_reduce combines, so sinks and the division by L happen there.
+//
+// A Q8_0 row of 128 values is 136 bytes: blocks (2-byte scale + 32 int8) at bytes 0, 34, 68, 102.
+// K rows are read as 8-byte pairs and V as dwords (the host checks the alignment): each pair of blocks is 17 dwords,
+// the even block's scale is the low half of dword 0 and its quants start mid-dword, the odd
+// block's scale is the high half of dword 8 and its quants are dwords 9..16.
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (constant_id = 0) const uint WG = 128;      // threads; phase 3 needs exactly 128
+layout (constant_id = 1) const uint CH = 128;      // KV positions per workgroup: 32, 64 or 128
+layout (constant_id = 2) const uint HAS_MASK = 1;
+layout (constant_id = 3) const uint DIAG = 0;      // timing only, wrong results: 1 skips the K dot products, 2 the P x V loop
+
+const uint D   = 128;            // head size of K and V
+const uint G   = 16;             // query heads per KV head
+const uint NC  = G / 4;          // columns of 4 heads
+const uint HPT = G * CH / WG;    // heads per thread in step 1
+const uint PP  = CH * NC / WG;   // positions per thread in the first step of the max
+
+layout (push_constant) uniform parameter {
+    uint32_t N;
+    uint32_t KV;
+
+    uint32_t ne1;
+    uint32_t ne2;
+    uint32_t ne3;
+
+    uint32_t neq2;
+    uint32_t neq3;
+    uint32_t nek2;
+    uint32_t nek3;
+    uint32_t nev2;
+    uint32_t nev3;
+    uint32_t nem1;
+    uint32_t nem2;
+    uint32_t nem3;
+
+    uint32_t nb01;
+    uint32_t nb02;
+    uint32_t nb03;
+    uint32_t nb11;
+    uint32_t nb12;
+    uint32_t nb13;
+    uint32_t nb21;
+    uint32_t nb22;
+    uint32_t nb23;
+
+    float scale;
+    float max_bias;
+    float logit_softcap;
+
+    uint32_t mask_n_head_log2;
+    float m0;
+    float m1;
+
+    uint32_t gqa_ratio;
+    uint32_t split_kv;
+    uint32_t k_num;
+} p;
+
+layout (binding = 0) readonly buffer Q {vec4 data_qv4[];};
+layout (binding = 1) readonly buffer K {uvec2 data_k2[];};
+layout (binding = 2) readonly buffer V {uint data_v[];};
+layout (binding = 3) readonly buffer M {float16_t data_m[];};
+layout (binding = 5) writeonly buffer O {float data_o[];};
+layout (binding = 5) writeonly buffer OV4 {vec4 data_ov4[];};
+
+shared ivec4 qq[G * D / 16];     // Q as int8: head h, block b at [h * 8 + b * 2 + 0..1]
+shared float qdsh[G * D / 32];   // Q scales: head h, block b at [h * 4 + b]
+shared vec4  psh[CH * NC];       // scores, then exp(score - max): position j, heads 4c..4c+3 at [j * NC + c]
+shared vec4  red[WG];             // column maxes
+shared vec4  redl[WG];            // column sums
+shared vec4  comb[2 * G * 32];    // partial O of two streams: [stream][head][lane]
+
+#define NEG_FLT_MAX_OVER_2 uintBitsToFloat(0xFEFFFFFF)
+#define NEG_INF uintBitsToFloat(0xFF800000)
+
+void main() {
+    const uint tid   = gl_LocalInvocationID.x;
+    const uint chunk = gl_WorkGroupID.x;
+    const uint ik2   = gl_WorkGroupID.y;            // KV head
+    const uint iq3   = gl_WorkGroupID.z;
+    const uint iq2   = ik2 * G;                     // its first query head
+    const uint ik3   = iq3 / (p.neq3 / p.nek3);
+    const uint iv3   = iq3 / (p.neq3 / p.nev3);
+
+    const uint j0 = chunk * CH;
+    const uint nj = min(CH, p.KV - j0);
+
+    // 0. Q times the softmax scale as int8, one 32-value block per thread
+    if (tid < G * D / 32) {
+        const uint h = tid / (D / 32);
+        const uint b = tid % (D / 32);
+        const uint qb = ((iq2 + h) * p.nb02 + iq3 * p.nb03) / 16 + b * 8;
+        vec4 x[8];
+        float amax = 0.0;
+        [[unroll]] for (uint i = 0; i < 8; ++i) {
+            x[i] = data_qv4[qb + i] * p.scale;
+            const vec4 a = abs(x[i]);
+            amax = max(amax, max(max(a.x, a.y), max(a.z, a.w)));
+        }
+        const float d = amax / 127.0;
+        const float id = d != 0.0 ? 1.0 / d : 0.0;
+        [[unroll]] for (uint i = 0; i < 2; ++i) {
+            qq[h * 8 + b * 2 + i] = ivec4(pack32(i8vec4(round(x[i * 4 + 0] * id))),
+                                          pack32(i8vec4(round(x[i * 4 + 1] * id))),
+                                          pack32(i8vec4(round(x[i * 4 + 2] * id))),
+                                          pack32(i8vec4(round(x[i * 4 + 3] * id))));
+        }
+        qdsh[h * 4 + b] = d;
+    }
+    barrier();
+
+    // 1. scores of position jl for heads h0 .. h0 + HPT - 1
+    const uint jl = tid % CH;
+    const uint h0 = (tid / CH) * HPT;
+    float s[HPT];
+    if (jl < nj) {
+        [[unroll]] for (uint h = 0; h < HPT; ++h) {
+            s[h] = 0.0;
+        }
+        if ((DIAG & 1) == 0) {
+        const uint kw = (ik2 * p.nb12 + ik3 * p.nb13 + (j0 + jl) * p.nb11 * 34) / 8;
+        uint wr[34];
+        [[unroll]] for (uint i = 0; i < 17; ++i) {
+            const uvec2 t = data_k2[kw + i];
+            wr[2 * i] = t.x;
+            wr[2 * i + 1] = t.y;
+        }
+        [[unroll]] for (uint pr = 0; pr < 2; ++pr) {
+            int ke[8], ko[8];
+            [[unroll]] for (uint i = 0; i < 8; ++i) {
+                ke[i] = int((wr[pr * 17 + i] >> 16) | (wr[pr * 17 + i + 1] << 16));
+                ko[i] = int(wr[pr * 17 + 9 + i]);
+            }
+            const float de = unpackHalf2x16(wr[pr * 17]).x;
+            const float dd = unpackHalf2x16(wr[pr * 17 + 8]).y;
+            [[unroll]] for (uint h = 0; h < HPT; ++h) {
+                const uint qi = (h0 + h) * 8 + pr * 4;
+                const ivec4 a0 = qq[qi + 0];
+                const ivec4 a1 = qq[qi + 1];
+                const ivec4 b0 = qq[qi + 2];
+                const ivec4 b1 = qq[qi + 3];
+                int ae = dotPacked4x8EXT(a0.x, ke[0]);
+                ae    += dotPacked4x8EXT(a0.y, ke[1]);
+                ae    += dotPacked4x8EXT(a0.z, ke[2]);
+                ae    += dotPacked4x8EXT(a0.w, ke[3]);
+                ae    += dotPacked4x8EXT(a1.x, ke[4]);
+                ae    += dotPacked4x8EXT(a1.y, ke[5]);
+                ae    += dotPacked4x8EXT(a1.z, ke[6]);
+                ae    += dotPacked4x8EXT(a1.w, ke[7]);
+                int ao = dotPacked4x8EXT(b0.x, ko[0]);
+                ao    += dotPacked4x8EXT(b0.y, ko[1]);
+                ao    += dotPacked4x8EXT(b0.z, ko[2]);
+                ao    += dotPacked4x8EXT(b0.w, ko[3]);
+                ao    += dotPacked4x8EXT(b1.x, ko[4]);
+                ao    += dotPacked4x8EXT(b1.y, ko[5]);
+                ao    += dotPacked4x8EXT(b1.z, ko[6]);
+                ao    += dotPacked4x8EXT(b1.w, ko[7]);
+                const uint di = (h0 + h) * 4 + pr * 2;
+                s[h] += float(ae) * (qdsh[di] * de) + float(ao) * (qdsh[di + 1] * dd);
+            }
+        }
+        }
+        if (HAS_MASK != 0) {
+            const float m = float(data_m[j0 + jl]);
+            [[unroll]] for (uint h = 0; h < HPT; ++h) {
+                s[h] += m;
+            }
+        }
+    } else {
+        [[unroll]] for (uint h = 0; h < HPT; ++h) {
+            s[h] = NEG_INF;
+        }
+    }
+    [[unroll]] for (uint c = 0; c < HPT / 4; ++c) {
+        psh[jl * NC + h0 / 4 + c] = vec4(s[c * 4 + 0], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]);
+    }
+    barrier();
+
+    // 2. max of each head over the chunk, then the exponentials
+    {
+        const uint c = tid % NC;
+        const uint jp = (tid / NC) * PP;
+        vec4 m = psh[jp * NC + c];
+        [[unroll]] for (uint i = 1; i < PP; ++i) {
+            m = max(m, psh[(jp + i) * NC + c]);
+        }
+        red[tid] = m;
+    }
+    barrier();
+    [[unroll]] for (uint st = WG / 2; st >= NC; st >>= 1) {
+        if (tid < st) {
+            red[tid] = max(red[tid], red[tid + st]);
+        }
+        barrier();
+    }
+    // red[c] now holds the max of column c; the floor keeps exp() finite in a fully masked chunk
+    bool any_live = false;
+    [[unroll]] for (uint c = 0; c < NC; ++c) {
+        any_live = any_live || any(greaterThan(red[c], vec4(NEG_FLT_MAX_OVER_2)));
+    }
+    [[unroll]] for (uint c = 0; c < HPT / 4; ++c) {
+        const vec4 mc = max(red[h0 / 4 + c], vec4(NEG_FLT_MAX_OVER_2));
+        psh[jl * NC + h0 / 4 + c] = exp(vec4(s[c * 4 + 0], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]) - mc);
+    }
+    barrier();
+
+    // row sums of the exponentials, the same way as the max
+    {
+        const uint c = tid % NC;
+        const uint jp = (tid / NC) * PP;
+        vec4 sm = psh[jp * NC + c];
+        [[unroll]] for (uint i = 1; i < PP; ++i) {
+            sm += psh[(jp + i) * NC + c];
+        }
+        redl[tid] = sm;
+    }
+    barrier();
+    [[unroll]] for (uint st = WG / 2; st >= NC; st >>= 1) {
+        if (tid < st) {
+            redl[tid] += redl[tid + st];
+        }
+        barrier();
+    }
+
+    // 3. O = P x V. Four streams of 32 threads each take a quarter of the chunk; in a stream, lane l
+    // owns values 4g..4g+3 of all 16 heads. Within 16 lanes all blocks have the same parity: lanes
+    // 0-7 block 0, 8-15 block 2, 16-23 block 1, 24-31 block 3.
+    const uint l   = tid % 32;
+    const uint sid = tid / 32;
+    const uint blk = ((l >> 3) & 1) * 2 + (l >> 4);
+    const uint qi  = l & 7;
+    const uint g   = blk * 8 + qi;
+    const bool odd = (blk & 1) != 0;
+    const uint pw  = (blk >> 1) * 17;
+    const uint wq0 = pw + (odd ? 9 + qi : qi);
+    const uint wq1 = odd ? wq0 : wq0 + 1;
+    const uint wd  = pw + (odd ? 8 : 0);
+
+    vec4 o[G];
+    [[unroll]] for (uint h = 0; h < G; ++h) {
+        o[h] = vec4(0.0);
+    }
+    const uint jn = (DIAG & 2) != 0 ? 0 : any_live ? nj : 0;
+    const uint ja = sid * (CH / 4);
+    const uint jb = min(ja + CH / 4, jn);
+    const uint vstride = p.nb21 * 34 / 4;
+    uint vw = (ik2 * p.nb22 + iv3 * p.nb23 + (j0 + ja) * p.nb21 * 34) / 4;
+    // U positions per iteration, all loads first, so that each thread has several in flight
+    const uint U = 2;
+    uint j = ja;
+    for (; j + U <= jb; j += U, vw += U * vstride) {
+        uint w0[U], w1[U], wdv[U];
+        [[unroll]] for (uint u = 0; u < U; ++u) {
+            w0[u]  = data_v[vw + u * vstride + wq0];
+            w1[u]  = data_v[vw + u * vstride + wq1];
+            wdv[u] = data_v[vw + u * vstride + wd];
+        }
+        [[unroll]] for (uint u = 0; u < U; ++u) {
+            const vec2 dv = unpackHalf2x16(wdv[u]);
+            const uint qv = odd ? w0[u] : ((w0[u] >> 16) | (w1[u] << 16));
+            const vec4 vf = vec4(unpack8(int32_t(qv)));
+            const float d = odd ? dv.y : dv.x;
+            [[unroll]] for (uint c = 0; c < NC; ++c) {
+                const vec4 pd = psh[(j + u) * NC + c] * d;
+                o[c * 4 + 0] += pd.x * vf;
+                o[c * 4 + 1] += pd.y * vf;
+                o[c * 4 + 2] += pd.z * vf;
+                o[c * 4 + 3] += pd.w * vf;
+            }
+        }
+    }
+    for (; j < jb; ++j, vw += vstride) {
+        const uint w0 = data_v[vw + wq0];
+        const uint w1 = data_v[vw + wq1];
+        const vec2 dv = unpackHalf2x16(data_v[vw + wd]);
+        const uint qv = odd ? w0 : ((w0 >> 16) | (w1 << 16));
+        const vec4 vf = vec4(unpack8(int32_t(qv)));
+        const float d = odd ? dv.y : dv.x;
+        [[unroll]] for (uint c = 0; c < NC; ++c) {
+            const vec4 pd = psh[j * NC + c] * d;
+            o[c * 4 + 0] += pd.x * vf;
+            o[c * 4 + 1] += pd.y * vf;
+            o[c * 4 + 2] += pd.z * vf;
+            o[c * 4 + 3] += pd.w * vf;
+        }
+    }
+
+    // add up the four streams: 3 and 2 into 1 and 0, then 1 into 0
+    if (sid >= 2) {
+        [[unroll]] for (uint h = 0; h < G; ++h) {
+            comb[((sid - 2) * G + h) * 32 + l] = o[h];
+        }
+    }
+    barrier();
+    if (sid < 2) {
+        [[unroll]] for (uint h = 0; h < G; ++h) {
+            o[h] += comb[(sid * G + h) * 32 + l];
+        }
+    }
+    barrier();
+    if (sid == 1) {
+        [[unroll]] for (uint h = 0; h < G; ++h) {
+            comb[h * 32 + l] = o[h];
+        }
+    }
+    barrier();
+    if (sid == 0) {
+        // split-k partials, laid out as fa_split_k_reduce reads them
+        const uint ob = (D * p.ne1 * (chunk + p.k_num * p.ne2 * iq3)) / 4;
+        [[unroll]] for (uint h = 0; h < G; ++h) {
+            data_ov4[ob + (iq2 + h) * (D / 4) + g] = o[h] + comb[h * 32 + l];
+        }
+        if (l < G) {
+            const uint lm = D * p.ne1 * p.ne2 * p.ne3 * p.k_num + p.ne1 * 2 * (chunk + p.k_num * p.ne2 * iq3);
+            data_o[lm + iq2 + l] = redl[l / 4][l % 4];
+            data_o[lm + p.ne1 + iq2 + l] = max(red[l / 4][l % 4], NEG_FLT_MAX_OVER_2);
+        }
+    }
+}
