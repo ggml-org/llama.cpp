@@ -207,7 +207,6 @@ llama_context::llama_context(
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
-    cparams.warmup                  = false;
 
     // +1: id n_layer() taps the output of the last layer ("input" of the head)
     cparams.embeddings_layer_inp.resize(hparams.n_layer() + 1, false);
@@ -1697,14 +1696,6 @@ void llama_context::set_causal_attn(bool value) {
 
 bool llama_context::get_causal_attn() const {
     return cparams.causal_attn;
-}
-
-void llama_context::set_warmup(bool value) {
-    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
-
-    // no scheduler reserve needed because warmups are usually with small batches
-
-    cparams.warmup = value;
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -4693,10 +4684,6 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 bool llama_get_causal_attn(const llama_context * ctx) {
     return ctx->get_causal_attn();
-}
-
-void llama_set_warmup(llama_context * ctx, bool warmup) {
-    ctx->set_warmup(warmup);
 }
 
 void llama_synchronize(llama_context * ctx) {
