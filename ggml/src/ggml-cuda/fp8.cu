@@ -178,6 +178,8 @@ bool ggml_cuda_mul_mat_fp8(
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&b_desc, CUDA_R_8F_E4M3, ne10, ne11, ne10));
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, ne0, ne1, ne0));
 
+    // TODO: Allow workspace in the heuristic search for potential performance gains.
+    // cuBLASLt takes caller-owned workspace per matmul call.
     cublasLtMatmulPreference_t preference;
     CUBLAS_CHECK(cublasLtMatmulPreferenceCreate(&preference));
     cublasLtMatmulHeuristicResult_t heuristic;
