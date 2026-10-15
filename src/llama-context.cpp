@@ -19,6 +19,7 @@
 
 #include <cinttypes>
 #include <chrono>
+#include <algorithm>
 #include <map>
 #include <string>
 
@@ -473,7 +474,7 @@ llama_context::llama_context(
                     }
                 }
                 ggml_init_params ip = {
-                    ggml_tensor_overhead()*(size_t)(n_layer*4 + 8) + ggml_graph_overhead(),
+                    ggml_tensor_overhead()*(size_t)(n_layer*4 + 16) + ggml_graph_overhead(),
                     nullptr, /*no_alloc=*/true };
                 moe.ctx = ggml_init(ip);
                 moe.pool_gate.resize(n_layer); moe.pool_up.resize(n_layer);
@@ -523,6 +524,22 @@ llama_context::llama_context(
                 if (!pool_ok) {
                     LLAMA_LOG_ERROR("%s: pool incomplete -> moe_direct_io OFF\n", __func__);
                 } else {
+                // Two 64-expert prefill staging buffers for the sequential sweep.
+                // Sized by the largest per-expert footprint across layers so any
+                // layer chunk fits. Shares the pool buffer, no extra alloc.
+                size_t max_expert = 0;
+                for (int il = 0; il < n_layer; il++) {
+                    const int s_pl_il = moe_get_layer_slots(il, n_layer);
+                    const size_t gb = ggml_nbytes(moe.pool_gate[il]) / (size_t) (s_pl_il + 1);
+                    const size_t ub = ggml_nbytes(moe.pool_up[il])   / (size_t) (s_pl_il + 1);
+                    const size_t db = ggml_nbytes(moe.pool_down[il]) / (size_t) (s_pl_il + 1);
+                    max_expert = std::max(max_expert, gb + ub + db);
+                }
+                const size_t stage_bytes = (size_t) 64 * max_expert;
+                moe.prefill_stage[0] = ggml_new_tensor_1d(moe.ctx, GGML_TYPE_I8, (int64_t) stage_bytes);
+                moe.prefill_stage[1] = ggml_new_tensor_1d(moe.ctx, GGML_TYPE_I8, (int64_t) stage_bytes);
+                moe.prefill_stage_bytes = stage_bytes;
+                expect += 2 * ggml_nbytes(moe.prefill_stage[0]);
 
                 ggml_backend_t pool_be = nullptr;
                 for (auto & b : backends) {
@@ -590,6 +607,8 @@ llama_context::llama_context(
                             LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers, %d total slots\n",
                                            __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
                                            n_layer, total_slots);
+                            LLAMA_LOG_INFO("%s: prefill staging 2x64 experts, %zu bytes each (%.2f MiB total)\n",
+                                           __func__, moe.prefill_stage_bytes, 2.0*moe.prefill_stage_bytes/1048576.0);
                             moe_seed_hot();
                             const char * p_bin = getenv("MOE_PREDICTOR_BIN");
                             std::string pred_bin = p_bin ? p_bin : "/home/zyxciss/llama.cpp/data/router_predictor_v2.bin";
@@ -4923,6 +4942,46 @@ void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
     }
 }
 
+// Sorted variant for prefill micro-chunks and decode: dedup the batch, count
+// resident hits for the zero-I/O fast path, then page misses in ascending
+// expert order. Ascending order is monotonic in experts.bin, so the pager
+// issues sequential reads at full bandwidth instead of random seeks.
+void llama_context::moe_page_batch_sorted(int il, const int32_t * sel, int n) {
+    if (!moe_ready || il < 0 || il >= moe.n_layer) return;
+    const int n_exp = moe.n_expert;
+    const int s_pl = moe_get_layer_slots(il, moe.n_layer);
+    const int base = moe_get_layer_base_slot(il, moe.n_layer);
+    std::vector<char> seen((size_t) n_exp, 0);
+    std::vector<int32_t> uniq;
+    uniq.reserve((size_t) n > 64 ? 64 : (size_t) n);
+    for (int k = 0; k < n; k++) {
+        const int32_t e = sel[k];
+        if (e < 0 || e >= n_exp) continue;
+        if (seen[(size_t) e]) continue;
+        seen[(size_t) e] = 1;
+        uniq.push_back(e);
+    }
+    std::vector<char> pinned((size_t) s_pl, 0);
+    for (size_t k = 0; k < uniq.size(); k++) {
+        const int cur = moe.slot_of[(size_t) il * n_exp + uniq[k]];
+        if (cur >= 0 && cur >= base && cur < base + s_pl) {
+            pinned[(size_t) cur - (size_t) base] = 1;
+            moe.prefill_resident++;
+        }
+    }
+    std::sort(uniq.begin(), uniq.end());
+    for (size_t k = 0; k < uniq.size(); k++) {
+        const int32_t e = uniq[k];
+        if (moe.slot_of[(size_t) il * n_exp + e] >= 0) continue;
+        moe.prefill_miss++;
+        const int got = moe_page_pinned(il, e, (const bool *) pinned.data());
+        if (got >= 0) {
+            const int local = got - base;
+            if (local >= 0 && local < s_pl) pinned[(size_t) local] = 1;
+        }
+    }
+}
+
 // Seed every layer's slots with the offline hot profile so the first decode
 // step starts warm. Runs synchronously inside pool setup; each page is a
 // normal demand fetch through the pager, failures tolerated (slot stays -1).
@@ -5447,12 +5506,13 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     std::vector<int32_t> ids((size_t) nw * ntok);
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
     if (ntok == 1 || (ntok > 1 && ntok <= ctx->get_cparams().moe_chunk_max)) {
-        // decode, or prefill micro-chunk the graph routed through the pool:
-        // page each row through the pinned batch path. the row union fits
-        // the slots (measured worst case 59 < 72), so rows do not evict
-        // each other mid-chunk and the mapping stays consistent.
-        for (int64_t j = 0; j < ntok; j++) {
-            ctx->moe_page_batch(il, ids.data() + (size_t) j * nw, (int) nw);
+        // decode, or prefill micro-chunk the graph routed through the pool.
+        // sorted path dedups the whole chunk and pages misses in ascending
+        // expert order for sequential NVMe reads. resident hits need no I/O.
+        if (ntok == 1) {
+            ctx->moe_page_batch_sorted(il, ids.data(), (int) nw);
+        } else {
+            ctx->moe_page_batch_sorted(il, ids.data(), (int) (nw * ntok));
         }
     }
     // else: large prefill batch runs on the full tensors; skip paging so no
@@ -5498,13 +5558,13 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     }
     {
         // prefetch telemetry: hit rate of demand commits against in-flight
-        // prefetches, plus demand hit/miss totals
+        // prefetches, plus demand hit/miss totals and prefill fast-path rate
         static int n_rep = 0;
         if ((++n_rep % 200) == 0) {
-            LLAMA_LOG_INFO("%s: pf issued=%ld hit=%ld demand hit=%ld miss=%ld fail=%ld iofail=%ld\n",
+            LLAMA_LOG_INFO("%s: pf issued=%ld hit=%ld demand hit=%ld miss=%ld fail=%ld iofail=%ld prefill resident=%ld miss=%ld\n",
                 __func__, ctx->pager.stats_pf_issued(), ctx->pager.stats_pf_hit(),
                 ctx->moe.n_hit, ctx->moe.n_miss, ctx->moe.n_page_fail,
-                ctx->pager.stats_io_fail());
+                ctx->pager.stats_io_fail(), ctx->moe.prefill_resident, ctx->moe.prefill_miss);
         }
     }
     return true;   // MUST return true in the data phase (per cb_eval contract)
