@@ -2308,6 +2308,12 @@ struct test_swiglu_oai : public test_case {
             init_tensor_uniform(t, -150.f, 150.f);
         }
     }
+
+    double max_nmse_err() override {
+        // F16 epsilon ~ 9.7e-4: relax tolerance vs the F32 default to absorb the
+        // natural roundoff drift from the exp()/clamp() chain computed in F16.
+        return type == GGML_TYPE_F16 ? 5e-6 : 1e-7;
+    }
 };
 
 struct test_swiglu_clamp : public test_case {
@@ -2364,6 +2370,12 @@ struct test_swiglu_clamp : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             init_tensor_uniform(t, -150.f, 150.f);
         }
+    }
+
+    double max_nmse_err() override {
+        // F16 epsilon ~ 9.7e-4: relax tolerance vs the F32 default to absorb the
+        // natural roundoff drift from the sigmoid()/clamp() chain computed in F16.
+        return type == GGML_TYPE_F16 ? 5e-6 : 1e-7;
     }
 };
 
@@ -9747,10 +9759,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (int v : {0, 1}) {
-        for (float alpha : {.5f, 1.702f}) {
-            for (float limit : {2.0f, 7.0f}) {
-                test_cases.emplace_back(new test_swiglu_oai(GGML_TYPE_F32, { 128, 2, 2, 2 }, v, alpha, limit));
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (int v : {0, 1}) {
+            for (float alpha : {.5f, 1.702f}) {
+                for (float limit : {2.0f, 7.0f}) {
+                    test_cases.emplace_back(new test_swiglu_oai(type, { 128, 2, 2, 2 }, v, alpha, limit));
+                }
             }
         }
     }
