@@ -132,6 +132,55 @@ def test_slot_restore_legacy_token_list():
     assert res.body["timings"]["prompt_n"] == 6  # only the different part is processed
 
 
+# the slot file carries the live draft state: a restored slot drafts like a slot that was never saved
+def test_slot_restore_draft_state():
+    global server
+    server.model_draft_hf_repo = server.model_hf_repo
+    server.spec_type = "draft-simple"
+    server.start()
+
+    prompt = "What is the capital of France?"
+    turn = {}
+    for id_slot in [0, 1]:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 16,
+            "id_slot": id_slot,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        turn[id_slot] = res.body["content"]
+    assert turn[0] == turn[1]
+
+    res = server.make_request("POST", "/slots/0?action=save", data={
+        "filename": "draft_slot0.bin",
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/0?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "draft_slot0.bin",
+    })
+    assert res.status_code == 200
+
+    timings = {}
+    for id_slot in [0, 1]:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt + turn[id_slot] + " And",
+            "n_predict": 32,
+            "id_slot": id_slot,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        timings[id_slot] = res.body["timings"]
+
+    assert timings[0]["prompt_n"] == timings[1]["prompt_n"]
+    assert timings[0]["draft_n_accepted"] > 0
+    assert timings[0]["draft_n"]          == timings[1]["draft_n"]
+    assert timings[0]["draft_n_accepted"] == timings[1]["draft_n_accepted"]
+
 
 def test_slot_erase():
     global server

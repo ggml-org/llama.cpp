@@ -2736,6 +2736,87 @@ private:
         return n_read;
     }
 
+    // the live draft state follows the checkpoints: the full draft context and the speculative state
+    // the llama state payload holds the target context only
+    static constexpr uint32_t SLOT_DRAFT_MAGIC   = 0x54464453; // "SDFT"
+    static constexpr uint32_t SLOT_DRAFT_VERSION = 1;
+
+    // returns false if the draft state could not be written completely
+    bool save_slot_draft(const std::string & filepath, const server_slot & slot, size_t & n_written) const {
+        n_written = 0;
+        std::vector<uint8_t> data_dft;
+        std::vector<uint8_t> data_spec;
+        if (ctx_dft != nullptr) {
+            data_dft.resize(llama_state_seq_get_size_ext(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE));
+            llama_state_seq_get_data_ext(ctx_dft, data_dft.data(), data_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        }
+        common_speculative_get_state(spec.get(), slot.id, data_spec);
+        if (data_dft.empty() && data_spec.empty()) {
+            return true;
+        }
+        std::ofstream ofs(std::filesystem::u8path(filepath), std::ios::binary | std::ios::app);
+        if (!ofs) {
+            SLT_WRN(slot, "failed to append the draft state to '%s'\n", filepath.c_str());
+            return false;
+        }
+        const uint32_t magic   = SLOT_DRAFT_MAGIC;
+        const uint32_t version = SLOT_DRAFT_VERSION;
+        ckpt_write(ofs, &magic,   sizeof(magic),   n_written);
+        ckpt_write(ofs, &version, sizeof(version), n_written);
+        ckpt_write_buf(ofs, data_dft,  n_written);
+        ckpt_write_buf(ofs, data_spec, n_written);
+        ofs.flush();
+        if (!ofs) {
+            SLT_WRN(slot, "failed to append the draft state to '%s' - the draft state is incomplete\n", filepath.c_str());
+            return false;
+        }
+        SLT_INF(slot, "appended the draft state (%.3f MiB) to '%s'\n", (float) n_written / 1024 / 1024, filepath.c_str());
+        return true;
+    }
+
+    // returns the number of bytes consumed, 0 if there is no usable draft state
+    // the draft starts empty unless the file holds a draft state that fits the draft context
+    size_t load_slot_draft(const std::string & filepath, size_t offset, server_slot & slot) const {
+        if (ctx_dft != nullptr) {
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
+        }
+        std::ifstream ifs(std::filesystem::u8path(filepath), std::ios::binary | std::ios::ate);
+        const size_t file_size = ifs ? (size_t) ifs.tellg() : 0;
+        if (!ifs || file_size < offset || !ifs.seekg(offset)) {
+            return 0;
+        }
+        const size_t n_avail = file_size - offset;
+        size_t n_read = 0;
+        uint32_t magic   = 0;
+        uint32_t version = 0;
+        if (!ckpt_read(ifs, &magic, sizeof(magic), n_read) || magic != SLOT_DRAFT_MAGIC) {
+            return 0;
+        }
+        std::vector<uint8_t> data_dft;
+        std::vector<uint8_t> data_spec;
+        if (!ckpt_read(ifs, &version, sizeof(version), n_read) || version != SLOT_DRAFT_VERSION ||
+            !ckpt_read_buf(ifs, data_dft,  n_avail, n_read) ||
+            !ckpt_read_buf(ifs, data_spec, n_avail, n_read)) {
+            SLT_WRN(slot, "invalid draft state in '%s' - ignored\n", filepath.c_str());
+            return 0;
+        }
+        if (!data_dft.empty()) {
+            if (ctx_dft == nullptr ||
+                llama_state_seq_set_data_ext(ctx_dft, data_dft.data(), data_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE) != data_dft.size()) {
+                if (ctx_dft != nullptr) {
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
+                }
+                SLT_WRN(slot, "draft state in '%s' does not match the draft context - dropped\n", filepath.c_str());
+                return n_read;
+            }
+        }
+        if (!data_spec.empty()) {
+            common_speculative_set_state(spec.get(), slot.id, data_spec);
+        }
+        SLT_INF(slot, "restored the draft state (%.3f MiB) from '%s'\n", (float) n_read / 1024 / 1024, filepath.c_str());
+        return n_read;
+    }
+
     // returns false to decline the task, it is offered again after the decode is done
     bool process_single_task(server_task && task, bool is_yielding) {
         // while yielding, an encode / decode is running and only reading the server state is safe
@@ -2951,6 +3032,12 @@ private:
                         break;
                     }
 
+                    size_t nwrite_dft = 0;
+                    if (!save_slot_draft(filepath, *slot, nwrite_dft)) {
+                        send_error(task, "Unable to save slot: incomplete draft state", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 
@@ -2960,7 +3047,7 @@ private:
                     res->filename = filename;
                     res->is_save  = true;
                     res->n_tokens = slot->prompt.tokens.size();
-                    res->n_bytes  = nwrite + nwrite_ckpt;
+                    res->n_bytes  = nwrite + nwrite_ckpt + nwrite_dft;
                     res->t_ms     = t_save_ms;
                     queue_results.send(std::move(res));
                 } break;
@@ -3018,6 +3105,7 @@ private:
 
                     // nread is the end offset of the llama state payload within the file
                     const size_t nread_ckpt = load_slot_checkpoints(filepath, nread, *slot);
+                    const size_t nread_dft  = load_slot_draft(filepath, nread + nread_ckpt, *slot);
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -3028,7 +3116,7 @@ private:
                     res->filename = filename;
                     res->is_save  = false;
                     res->n_tokens = slot->prompt.tokens.size();
-                    res->n_bytes  = nread + nread_ckpt;
+                    res->n_bytes  = nread + nread_ckpt + nread_dft;
                     res->t_ms     = t_restore_ms;
                     queue_results.send(std::move(res));
                 } break;
