@@ -459,7 +459,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_MAION_CODER) {
         ms.add_kv(LLM_KV_MOE_LATENT_SIZE, n_embd / 2);
-        ms.add_kv(LLM_KV_EXPERT_COUNT, uint32_t(4));
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{n_ff, n_ff / 2, n_ff, n_ff});
     }
 
