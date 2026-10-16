@@ -1993,6 +1993,16 @@ size_t llama_model::size() const {
     return pimpl->n_bytes;
 }
 
+size_t llama_model::drop_mmap_cache() const {
+    size_t total = 0;
+    for (auto & m : pimpl->mappings) {
+        if (!m) continue;
+        total += m->size();
+        m->drop_cache();
+    }
+    return total;
+}
+
 size_t llama_model::n_tensors() const {
     return tensors_by_name.size();
 }

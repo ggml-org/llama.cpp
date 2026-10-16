@@ -271,12 +271,9 @@ public:
         size_t               buf_bytes = 0;
         std::vector<ggml_tensor *> pool_gate, pool_up, pool_gate_up, pool_down, slot_table;
         std::vector<int32_t> slot_of, slot_key;
-        // per-slot demand count, for LFU eviction. A routing trace of this
-        // model shows the top 104 experts per layer cover 66% of all router
-        // hits, while recency carries almost none of it (11% one-step reuse),
-        // so frequency is the only metric that makes a 6.7 GiB pool pay off.
         std::vector<uint32_t> slot_freq;
         std::vector<uint32_t> dec_freq;   // n_layer*n_expert: decode-only routing counts
+        moe_lru lru;
         std::vector<uint16_t> pred16;     // n_layer*16: predictor candidates for the next step
         long pred_hit = 0, pred_fresh = 0;
         int n_layer = 0, n_expert = 0, n_used = 0, s_per_layer = 0;
@@ -324,6 +321,11 @@ public:
     std::atomic<bool> or_run{false};
     std::mutex or_mtx;
     std::vector<uint32_t> or_q;
+    std::vector<uint16_t> coact;      // (n_layer-1)*n_expert*4: learned L+1 candidates
+    std::vector<uint16_t> coact_cnt;
+    std::vector<uint32_t> co_hint;    // n_layer*n_expert: token stamp of last hint
+    uint32_t co_tok = 0;
+    long co_push = 0, co_need = 0, co_cover = 0;
     int  hot_k = 0;
     int  hot_pos = 0;
     bool hot_cycles = false;

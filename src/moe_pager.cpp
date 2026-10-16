@@ -56,12 +56,13 @@ void moe_lru::hit(size_t s) {
     if (s < last.size()) last[s] = tick;
 }
 
-size_t moe_lru::victim(const std::vector<char> & pinned, size_t base, size_t n) const {
-    size_t best = n;
+size_t moe_lru::victim(const char * pinned_or_null, size_t base, size_t n) const {
+    size_t best = (size_t) -1;
     uint64_t coldest = std::numeric_limits<uint64_t>::max();
     for (size_t t = 0; t < n; t++) {
-        if (t < pinned.size() && pinned[base + t]) continue;
-        if (last[base + t] < coldest) { coldest = last[base + t]; best = t; }
+        if (pinned_or_null && pinned_or_null[t]) continue;
+        const uint64_t v = (base + t) < last.size() ? last[base + t] : 0;
+        if (v < coldest) { coldest = v; best = base + t; }
     }
     return best;
 }

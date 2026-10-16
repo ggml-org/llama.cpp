@@ -34,7 +34,7 @@ struct moe_lru {
     uint64_t tick = 1;
     void init(size_t n, uint64_t v = 1);
     void hit(size_t s);
-    size_t victim(const std::vector<char> & pinned, size_t base, size_t n) const;
+    size_t victim(const char * pinned_or_null, size_t base, size_t n) const;
     void miss(size_t s);
     void prefill_miss(size_t s);
 };

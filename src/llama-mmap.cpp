@@ -6,6 +6,7 @@
 
 #include <cstring>
 #include <climits>
+#include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <cerrno>
@@ -684,6 +685,20 @@ size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
+
+void llama_mmap::drop_cache() const {
+#ifdef _POSIX_MAPPED_FILES
+    void * base = pimpl->addr;
+    size_t len = pimpl->size;
+    if (!base || !len) return;
+    const size_t ps = (size_t) sysconf(_SC_PAGESIZE);
+    uintptr_t p0 = ((uintptr_t) base + ps - 1) & ~(ps - 1);
+    uintptr_t p1 = ((uintptr_t) base + len) & ~(ps - 1);
+    if (p1 > p0) madvise((void *) p0, p1 - p0, MADV_DONTNEED);
+#else
+    (void) 0;
+#endif
+}
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;

@@ -760,8 +760,8 @@ struct llama_model {
     llama_ftype ftype() const;
 
     size_t size() const; // file size
-    size_t n_tensors() const;
-    size_t n_devices() const;
+    size_t drop_mmap_cache() const;
+    size_t n_tensors() const;    size_t n_devices() const;
     const float * tensor_split() const;
 
     uint32_t n_gpu_layers() const;
