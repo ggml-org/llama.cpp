@@ -436,19 +436,13 @@ static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_f8_e4m3(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     static_assert(ne == 2 || ne == 4, "bad ne");
-    uint8_t tmp[ne];
-    ggml_cuda_memcpy_1<ne>(tmp, (const uint8_t *) vx + i0);
+    static_assert(std::is_same_v<T, half> || std::is_same_v<T, float>, "unsupported type");
+    ggml_fp8_e4m3_t tmp[ne];
+    ggml_cuda_memcpy_1<sizeof(tmp)>(tmp, (const ggml_fp8_e4m3_t *) vx + i0);
 
 #pragma unroll
     for (int l = 0; l < ne; ++l) {
-        const float value = ggml_cuda_f8_e4m3_to_fp32(tmp[l]);
-        if constexpr (std::is_same_v<T, half>) {
-            ((half *) dst)[l] = __float2half(value);
-        } else if constexpr (std::is_same_v<T, float>) {
-            ((float *) dst)[l] = value;
-        } else {
-            static_assert(std::is_same_v<T, void>, "unsupported type");
-        }
+        ((T *) dst)[l] = ggml_cuda_cast<T>(tmp[l]);
     }
 }
 
