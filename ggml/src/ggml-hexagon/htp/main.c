@@ -28,8 +28,8 @@
 #include "ggml-common.h"
 #include "hex-bitmap.h"
 #include "htp-ctx.h"
+#include "htp-dcache.h"
 #include "htp-ops.h"
-#include "htp-tensor.h"
 #include "htp_iface.h"
 #include "work-queue.h"
 #include "hex-profile.h"
@@ -835,7 +835,7 @@ static int op_fence(struct htp_ops_context * octx) {
     atomic_uint * sync_fence = (atomic_uint *) (uintptr_t) sync->data;
 
     if (mode == 1) {
-        htp_flush_dirty_ranges(ctx);
+        htp_dcache_flush_dirty_ranges(ctx);
 
         htp_mdev_group_barrier(octx);
 
@@ -1211,7 +1211,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
             src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
-    htp_tensor_flush_all(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
+    htp_dcache_flush_dirty_tensors(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
 
     // Prep output tensors
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
@@ -1227,7 +1227,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
-    htp_tensor_dirty_all(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
+    htp_dcache_mark_dirty_tensors(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
 
     htp_mdev_group_barrier(octx);
 

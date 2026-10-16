@@ -134,6 +134,18 @@ Writing high-performance operators for Hexagon requires following specific guide
 - **Distinction**: `octx->src[N]` pointers *can* be NULL by design and must be checked when optional.
   Examples include attention masks, optional bias or weights in fused kernels, and frequency factors.
 
+### `supports_op` Independence from Buffer and Repack State
+
+- `supports_op` (and op-specific checkers such as `supported_mul_mat()`, `supported_get_rows()`) runs during GGML graph scheduling **before** buffers are allocated and before tensor data is populated.
+- **Never check buffer usage or repacking state in `supports_op`**:
+  - `t->buffer` may be NULL or uninitialized.
+  - `t->data` may be NULL.
+  - `buffer->usage` is unknown at scheduling time.
+  - `is_tiled` or `extra->flags & GGML_HEXAGON_TENSOR_TILED` is not set yet.
+- Operator support decisions must depend strictly on static tensor properties: operand types (`t->type`), shapes (`t->ne`), strides (`t->nb`), and operation parameters.
+- Repacking (converting weights to tiled layout) is an internal optimization applied during `set_tensor()` or rt-repack. Non-weight tensors or test harness tensors with the same type remain in flat layout.
+- Therefore, any supported type (such as BF16, F16, quantized types) must be supported both when repacked into tiles and when stored flat in memory.
+
 ### Multiline Macro Formatting
 
 - Keep trailing backslashes in multiline `#define` macros cleanly aligned to a consistent column.
@@ -190,7 +202,7 @@ sessions.
 Common partitioning logic is factored into reusable inline helpers in
 [`htp-tensor.h`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h):
 
-1. [`htp_tensor_mdev_rows_per_chunk`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L71):
+1. [`htp_tensor_mdev_rows_per_chunk`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L104):
    Determines the minimum number of rows per chunk so that the chunk byte size is a multiple of 128 bytes:
 
    ```
@@ -201,7 +213,7 @@ Common partitioning logic is factored into reusable inline helpers in
    Returns `false` if the tensor cannot be safely row-partitioned (such as unaligned base pointer, permuted layout,
    or non-128-byte aligned outer strides).
 
-2. [`htp_tensor_mdev_partition`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L98):
+2. [`htp_tensor_mdev_partition`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L131):
    Calculates the per-device work range `struct htp_tensor_mdev_range { uint32_t start; uint32_t count; }` given
    `total_units`, `units_per_chunk`, `mdev_idx`, `mdev_count`, and the precomputed `mdev_count_div`.
    Handles chunk distribution across devices, assigns remainder units to the last device, and automatically triggers
@@ -240,11 +252,11 @@ if (nrows == 0) {
 For flat element-wise operations that write directly to DDR:
 - Partition total linear elements N = ne0 * ne1 * ne2 * ne3 in 128-byte cache line chunks (`elems_per_line = (elem_size == 4) ? 32 : 64`).
 - Requires strict 1D contiguity:
-  [`htp_tensor_is_contiguous(dst, elem_size)`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L32)
+  [`htp_tensor_is_contiguous(dst, elem_size)`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L65)
   and 128-byte aligned destination pointer
-  [`htp_tensor_mdev_data_aligned(dst)`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L51).
+  [`htp_tensor_mdev_data_aligned(dst)`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L84).
 - If contiguous and aligned, pass `elems_per_line` to
-  [`htp_tensor_mdev_partition`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L98);
+  [`htp_tensor_mdev_partition`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L131);
   otherwise pass 0 to trigger Device 0 fallback.
 
 ### Single-Device Fallback (Device 0)
@@ -312,7 +324,7 @@ Multi-device execution synchronizes worker sessions through atomic fence slots a
   (Output Slice 0)                             (Output Slice 1)
        |                                            |
   Tensor Cache Flush                           Tensor Cache Flush
-  (htp_tensor_flush_all)                       (htp_tensor_flush_all)
+  (htp_dcache_flush_dirty_tensors)             (htp_dcache_flush_dirty_tensors)
        |                                            |
   Post-Op/Batch Barrier ---------------------- Post-Op/Batch Barrier
   (htp_mdev_group_barrier)                     (htp_mdev_group_barrier)
@@ -350,8 +362,8 @@ Multi-device execution synchronizes worker sessions through atomic fence slots a
 ### Tensor Cache Flush and Pipeline Completion
 
 - In the kernel, ensure all pushed DMA operations have been popped in strict FIFO order to drain the queue.
-- Use [`htp_tensor_flush_all()`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h) to flush specific dirty tensors back to DDR:
-  - [`htp_tensor_flush_all()`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h) flushes modified tensor address ranges, or the
+- Use [`htp_dcache_flush_dirty_tensors()`](../../../ggml/src/ggml-hexagon/htp/htp-dcache.h) to flush specific dirty tensors back to DDR:
+  - [`htp_dcache_flush_dirty_tensors()`](../../../ggml/src/ggml-hexagon/htp/htp-dcache.h) flushes modified tensor address ranges, or the
     full D-cache when their total size exceeds the flush threshold, ensuring peer devices and the host CPU observe consistent
     data in DDR.
 - Never signal completion before all DMA transfers are drained and dirty tensor flushes have completed.

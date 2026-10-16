@@ -14,11 +14,15 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
 
 // --- tiled format dequantizers ---
 
-typedef struct {
+typedef struct tiled_dequantize_state tiled_dequantize_state_t;
+typedef void (*tiled_dequant_task_fn_t)(const tiled_dequantize_state_t * state, uint32_t start_tile, uint32_t end_tile);
+
+struct tiled_dequantize_state {
     struct htp_context      * ctx;
     struct htp_thread_trace * traces;
     __fp16                  * dst;
     const uint8_t           * src;
+    tiled_dequant_task_fn_t   task_fn;
 
     struct fastdiv_values     n_k_tiles_div;
     uint32_t                  n_k_tiles;
@@ -31,7 +35,7 @@ typedef struct {
     uint32_t                  k_block;
     size_t                    row_stride;
     uint32_t                  weight_type;
-} tiled_dequantize_state_t;
+};
 
 // Dequantize a single tile from tiled weight data (already in VTCM) to tile-major FP16.
 static void dequantize_tiled_weight_to_fp16_task_q4_0(
@@ -611,7 +615,7 @@ static void dequantize_tiled_weight_to_fp16_task_q5_k(
     }
 }
 
-// Q6_K stores 6-bit weights and one fp16 scale per 16 k, see HTP_MM_WEIGHT_TILE_SIZE_Q6_K.
+// Q6_K stores 6-bit weights and one fp16 scale per 16 k, see HTP_TENSOR_TILE_SIZE_Q6_K.
 // A k-group holds 4 k per row, the HMX tile holds 2, so each group is dealt into two tiles.
 static void dequantize_tiled_weight_to_fp16_task_q6_k(
         const tiled_dequantize_state_t *state,
@@ -669,7 +673,7 @@ static void dequantize_tiled_weight_to_fp16_task_q6_k(
     }
 }
 
-// Q3_K stores 3-bit weights and one fp16 scale per 16 k, see HTP_MM_WEIGHT_TILE_SIZE_Q3_K.
+// Q3_K stores 3-bit weights and one fp16 scale per 16 k, see HTP_TENSOR_TILE_SIZE_Q3_K.
 static void dequantize_tiled_weight_to_fp16_task_q3_k(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
@@ -701,7 +705,7 @@ static void dequantize_tiled_weight_to_fp16_task_q3_k(
     }
 }
 
-// Q2_K stores 2-bit weights, the ggml scale bytes and d / -dmin per super-block, see HTP_MM_WEIGHT_TILE_SIZE_Q2_K.
+// Q2_K stores 2-bit weights, the ggml scale bytes and d / -dmin per super-block, see HTP_TENSOR_TILE_SIZE_Q2_K.
 static void dequantize_tiled_weight_to_fp16_task_q2_k(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
@@ -822,6 +826,56 @@ void quantize_f32_weight_to_fp16_tiles_task(
 
                 HVX_Vector v0_f32 = (row0 < state->n_cols) ? hvx_vmem((const float *)(r0 + byte_off)) : Q6_V_vzero();
                 HVX_Vector v1_f32 = (row1 < state->n_cols) ? hvx_vmem((const float *)(r1 + byte_off)) : Q6_V_vzero();
+
+                HVX_Vector v_out = hvx_vec_f32_to_f16(v0_f32, v1_f32);
+
+                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HTP_MM_HMX_TILE_SIZE - 1, v_off, v_out);
+                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+
+                HVX_Vector v_out_hi = Q6_V_vror_VR(v_out, 64);
+                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HTP_MM_HMX_TILE_SIZE - 1, v_off, v_out_hi);
+                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+            }
+        }
+        ++t; ++kt;
+    }
+}
+
+static __attribute__((noinline))
+void convert_bf16_weight_to_fp16_tiles_task(
+        const tiled_dequantize_state_t *state,
+        uint32_t start_tile, uint32_t end_tile) {
+
+    const uint32_t n_k_tiles = state->n_k_tiles;
+    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
+
+    const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
+    const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);
+    const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);
+
+    unsigned ct = fastdiv((unsigned)start_tile, &n_k_tiles_div);
+    unsigned kt = fastmodulo((unsigned)start_tile, n_k_tiles, &n_k_tiles_div);
+
+    for (unsigned t = start_tile; t < (unsigned)end_tile; ) {
+        if (kt >= (unsigned)n_k_tiles) { kt = 0; ct++; }
+
+        __fp16 *tile_base = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
+        {
+            uint32_t byte_off = kt * 32 * sizeof(uint16_t);
+
+            HVX_Vector v_off = v_scat_base;
+            for (uint32_t r = 0; r < HTP_MM_HMX_TILE_N_ROWS; r += 2) {
+                uint32_t row0 = ct * HTP_MM_HMX_TILE_N_COLS + r;
+                uint32_t row1 = row0 + 1;
+
+                const uint8_t *r0 = state->src + row0 * state->row_stride;
+                const uint8_t *r1 = state->src + row1 * state->row_stride;
+
+                HVX_Vector v0_raw = (row0 < state->n_cols) ? hvx_vmemu((const void *)(r0 + byte_off)) : Q6_V_vzero();
+                HVX_Vector v1_raw = (row1 < state->n_cols) ? hvx_vmemu((const void *)(r1 + byte_off)) : Q6_V_vzero();
+
+                HVX_Vector v0_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(Q6_Ww_vunpack_Vh(v0_raw)), 16);
+                HVX_Vector v1_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(Q6_Ww_vunpack_Vh(v1_raw)), 16);
 
                 HVX_Vector v_out = hvx_vec_f32_to_f16(v0_f32, v1_f32);
 

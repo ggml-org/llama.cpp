@@ -3,6 +3,7 @@
 
 #include "dma-queue.h"
 #include "hmx-queue.h"
+#include "htp-dcache.h"
 #include "htp-ops.h"
 #include "hex-profile.h"
 #include "work-queue.h"
@@ -18,8 +19,7 @@
 #define HTP_MAX_NTHREADS 10
 #endif
 
-#define HTP_MAX_MMAPS        64
-#define HTP_MAX_DIRTY_RANGES 64
+#define HTP_MAX_MMAPS 64
 
 // Memory mapping
 struct htp_mmap {
@@ -27,11 +27,6 @@ struct htp_mmap {
     uint64_t base;
     uint32_t fd;
     uint32_t flags;
-};
-
-struct htp_dirty_range {
-    uint32_t start;
-    uint32_t end;
 };
 
 // Scratchpad state

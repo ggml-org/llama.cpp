@@ -361,7 +361,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, ir);
                 for (uint32_t r = 0; r < current_block_size; ++r) {
                     __fp16 * row_k = (__fp16 *)(k_base + r * factx->size_k_row_padded);
-                    hvx_dequantize_row_q8_0_f16(row_k, row_k, DK);
+                    hvx_dequantize_row_flat_q8_0_f16(row_k, row_k, DK);
                 }
                 htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, ir);
             }
@@ -369,7 +369,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, ir);
                 for (uint32_t r = 0; r < current_block_size; ++r) {
                     __fp16 * row_v = (__fp16 *)(v_base + r * factx->size_v_row_padded);
-                    hvx_dequantize_row_q8_0_f16(row_v, row_v, DV);
+                    hvx_dequantize_row_flat_q8_0_f16(row_v, row_v, DV);
                 }
                 htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, ir);
             }
@@ -625,7 +625,7 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
     if (factx->k->type == HTP_TYPE_Q8_0) {
         for (uint32_t r = start; r < end; ++r) {
             __fp16 * row_k = (__fp16 *)((char *)args->curr_k + r * args->src_stride * sizeof(__fp16));
-            hvx_dequantize_row_q8_0_f16(row_k, row_k, factx->DK);
+            hvx_dequantize_row_flat_q8_0_f16(row_k, row_k, factx->DK);
         }
     }
     hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles[args->buf_idx], (const __fp16 *) args->curr_k, total_rows, factx->DK_pad,
@@ -679,7 +679,7 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
     if (factx->v->type == HTP_TYPE_Q8_0) {
         for (uint32_t r = start; r < end; ++r) {
             __fp16 * row_v = (__fp16 *)((char *)args->v_src + r * args->src_stride * sizeof(__fp16));
-            hvx_dequantize_row_q8_0_f16(row_v, row_v, factx->DV);
+            hvx_dequantize_row_flat_q8_0_f16(row_v, row_v, factx->DV);
         }
     }
     hmx_interleave_cols_to_tiles(v_tiles_dst, (const __fp16 *) args->v_src, total_rows, factx->DV_pad,

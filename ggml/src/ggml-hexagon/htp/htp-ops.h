@@ -30,21 +30,14 @@ enum htp_data_type {
     HTP_TYPE_IQ4_NL = 20,
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
+    HTP_TYPE_BF16   = 30,
     HTP_TYPE_MXFP4  = 39,
-
-    // types used internally for repack, dyn.quant, etc
-    HTP_TYPE_Q4_0_TILED = 200,
-    HTP_TYPE_Q4_1_TILED,
-    HTP_TYPE_Q8_0_TILED,
-    HTP_TYPE_MXFP4_TILED,
 
     HTP_TYPE_INVALID
 };
 
-// Constats for internal types
-#define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
+// Constants for internal types
 #define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
-#define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
 
 
 
@@ -141,7 +134,7 @@ enum htp_op_code {
 
 enum htp_tensor_flags {
     HTP_TENSOR_WEIGHT  = (1U << 0), // Tensor buffer model weight data (not compute)
-    HTP_TENSOR_REPACK  = (1U << 1), // Tensor is in repacked tiled format
+    HTP_TENSOR_TILED   = (1U << 1), // Tensor is in tiled format
     HTP_TENSOR_FENCE   = (1U << 2)  // Tensor is synchronization fence (explicitly managed)
 };
 

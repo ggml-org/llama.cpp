@@ -1,4 +1,4 @@
-#include "htp-tensor.h"
+#include "htp-dcache.h"
 
 #include <qurt.h>
 #include <qurt_memory.h>
@@ -94,7 +94,7 @@ static void merge_dirty_ranges(struct htp_context * ctx) {
     }
 }
 
-void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
+void htp_dcache_mark_dirty_tensors(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
     const struct htp_tensor * pending[HTP_OP_MAX_OUTPUTS];
     uint32_t n_pending = 0;
 
@@ -301,7 +301,7 @@ static void flush_dirty_ranges(struct htp_context * ctx, const struct htp_dirty_
     }
 }
 
-void htp_flush_dirty_ranges(struct htp_context * ctx) {
+void htp_dcache_flush_dirty_ranges(struct htp_context * ctx) {
     struct htp_dirty_range ranges[HTP_MAX_DIRTY_RANGES];
     uint32_t n_ranges = 0;
     uint64_t total_dirty = 0;
@@ -328,7 +328,7 @@ void htp_flush_dirty_ranges(struct htp_context * ctx) {
     memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
 }
 
-void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
+void htp_dcache_flush_dirty_tensors(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
     const struct htp_tensor * dirty_tensors[HTP_OP_MAX_INPUTS];
     struct htp_dirty_range ranges[HTP_OP_MAX_INPUTS];
     uint32_t n_dirty = 0;

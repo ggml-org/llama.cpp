@@ -8,25 +8,57 @@
 #include "hex-common.h"
 #include "hex-fastdiv.h"
 
-enum {
-    HTP_TENSOR_MDEV_LINE_SIZE = 128,
-};
+#define HTP_TENSOR_MDEV_LINE_SIZE   128
+
+// Currently HMX requires 32x32 tile formats (do not change)
+#define HTP_TENSOR_TILE_N_COLS      32
+#define HTP_TENSOR_TILE_N_ROWS      32
+
+#define HTP_TENSOR_TILE_SIZE_F16    2048
+#define HTP_TENSOR_TILE_SIZE_Q4_0   576
+#define HTP_TENSOR_TILE_SIZE_Q4_1   640
+#define HTP_TENSOR_TILE_SIZE_Q8_0   1088
+#define HTP_TENSOR_TILE_SIZE_IQ4_NL 576
+#define HTP_TENSOR_TILE_SIZE_MXFP4  544
+#define HTP_TENSOR_TILE_SIZE_Q4_K   640
+#define HTP_TENSOR_TILE_SIZE_Q5_K   768
+#define HTP_TENSOR_TILE_SIZE_Q6_K   896
+#define HTP_TENSOR_TILE_SIZE_Q3_K   512
+#define HTP_TENSOR_TILE_SIZE_Q2_K   336
+
+// Q2_K, Q3_K, Q6_K use vrmpy byte order within each 128B HVX vector:
+//   k = 0..31 is split into 8 groups g = k/4 of 4 k each; byte 4*r + (k%4) holds row r
+//
+// Q2_K (336B, lossless tiling with same size as block_q2_K):
+//   bytes   0..255 (vec 0..1): unsigned 2-bit quants, vec m holds groups 4m..4m+3 at bit offsets 0,2,4,6
+//   bytes 256..319:            raw scales[] bytes (min << 4 | sc): [0..31] for k 0..15, [32..63] for k 16..31
+//   bytes 320..335:            8 fp16 in tile j (0..7) of super-block: d (j < 4) or -dmin (j >= 4) for rows 8*(j%4)..8*(j%4)+7
+//
+// Q3_K (512B):
+//   bytes   0..255 (vec 0..1): low 2 bits, vec m holds groups 4m..4m+3 at bit offsets 0,2,4,6
+//   bytes 256..383 (vec 2):    sign mask, bit g set when hmask is 0 (quant = low2 - 4)
+//   bytes 384..511 (vec 3):    fp16 scales d * (scales[] - 32): fp16[0..31] for k 0..15, fp16[32..63] for k 16..31
+//
+// Q4_K (640B, same layout as Q4_1 tile; each 256-k super-block splits into 8 tiles of 32 k):
+//   bytes   0..511 (vec 0..3): 4-bit quants, byte 32*cp + r holds k = 2*cp (low nibble) and 2*cp + 1 (high nibble)
+//   bytes 512..639 (vec 4):    32x2 fp16 per row: (d * sc, -dmin * m)
+//
+// Q5_K (768B):
+//   bytes   0..639 (vec 0..4): Q4_K tile (low 4 bits + fp16 scale/min pairs)
+//   bytes 640..767 (vec 5):    5th-bit plane; byte l holds the 8 high bits for lane l across vec i = 0..3 (bit 2i = lo, 2i+1 = hi)
+//
+// Q6_K (896B):
+//   bytes   0..511 (vec 0..3): low 4 bits, vec i holds group 2i (low nibble) and 2i+1 (high nibble)
+//   bytes 512..767 (vec 4..5): high 2 bits, vec 4+m holds groups 4m..4m+3 at bit offsets 0,2,4,6
+//   bytes 768..895 (vec 6):    fp16 scales d * scales[]: fp16[0..31] for k 0..15, fp16[32..63] for k 16..31
 
 struct htp_tensor_mdev_range {
     uint32_t start;
     uint32_t count;
 };
 
-static inline void * htp_tensor_data(const struct htp_tensor * t) {
-    return (void *) (uintptr_t) t->data;
-}
-
 static inline bool htp_tensor_is_extended(const struct htp_tensor * t) {
     return t && (t->data >> 32) != 0;
-}
-
-static inline uint32_t * htp_tensor_flags(const struct htp_tensor * t) {
-    return (uint32_t *) &t->flags;
 }
 
 static inline bool htp_tensor_is_contiguous(const struct htp_tensor * t, uint32_t type_size) {
@@ -125,19 +157,50 @@ static inline struct htp_tensor_mdev_range htp_tensor_mdev_partition(uint32_t to
     return range;
 }
 
-static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
+static inline uint32_t htp_tensor_get_tile_size(int type) {
     switch (type) {
-        case HTP_TYPE_F32:  return ne00 * 4;
-        case HTP_TYPE_F16:  return ne00 * 2;
-        case HTP_TYPE_Q8_0: return (ne00 / 32) * 34;
-        case HTP_TYPE_I32:  return ne00 * 4;
-        default:            return 0;
+        case HTP_TYPE_Q4_0:   return HTP_TENSOR_TILE_SIZE_Q4_0;
+        case HTP_TYPE_IQ4_NL: return HTP_TENSOR_TILE_SIZE_IQ4_NL;
+        case HTP_TYPE_Q4_1:   return HTP_TENSOR_TILE_SIZE_Q4_1;
+        case HTP_TYPE_Q4_K:   return HTP_TENSOR_TILE_SIZE_Q4_K;
+        case HTP_TYPE_Q8_0:   return HTP_TENSOR_TILE_SIZE_Q8_0;
+        case HTP_TYPE_Q5_K:   return HTP_TENSOR_TILE_SIZE_Q5_K;
+        case HTP_TYPE_Q6_K:   return HTP_TENSOR_TILE_SIZE_Q6_K;
+        case HTP_TYPE_Q3_K:   return HTP_TENSOR_TILE_SIZE_Q3_K;
+        case HTP_TYPE_Q2_K:   return HTP_TENSOR_TILE_SIZE_Q2_K;
+        case HTP_TYPE_MXFP4:  return HTP_TENSOR_TILE_SIZE_MXFP4;
+        case HTP_TYPE_F16:    return HTP_TENSOR_TILE_SIZE_F16;
+        default:              return 0;
     }
 }
 
-struct htp_context;
-void htp_flush_dirty_ranges(struct htp_context * ctx);
-void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n);
-void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n);
+static inline uint32_t htp_tensor_get_tile_padded_size(int type) {
+    return (htp_tensor_get_tile_size(type) + 127u) & ~127u;
+}
+
+static inline bool htp_tensor_is_tiled(const struct htp_tensor * t) {
+    return t && (t->flags & HTP_TENSOR_TILED) != 0;
+}
+
+static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
+    switch (type) {
+        case HTP_TYPE_F32:    return ne00 * 4;
+        case HTP_TYPE_F16:
+        case HTP_TYPE_BF16:   return ne00 * 2;
+        case HTP_TYPE_Q8_0:   return (ne00 / 32) * 34;
+        case HTP_TYPE_Q4_0:
+        case HTP_TYPE_IQ4_NL: return (ne00 / 32) * 18;
+        case HTP_TYPE_Q4_1:   return (ne00 / 32) * 20;
+        case HTP_TYPE_MXFP4:  return (ne00 / 32) * 17;
+        case HTP_TYPE_Q2_K:   return (ne00 / 256) * 84;
+        case HTP_TYPE_Q3_K:   return (ne00 / 256) * 110;
+        case HTP_TYPE_Q4_K:   return (ne00 / 256) * 144;
+        case HTP_TYPE_Q5_K:   return (ne00 / 256) * 176;
+        case HTP_TYPE_Q6_K:   return (ne00 / 256) * 210;
+        case HTP_TYPE_I32:    return ne00 * 4;
+        case HTP_TYPE_I64:    return ne00 * 8;
+        default:              return 0;
+    }
+}
 
 #endif // HTP_TENSOR_H
