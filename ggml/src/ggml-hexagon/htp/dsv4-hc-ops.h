@@ -6,6 +6,7 @@
 
 #define HTP_DSV4_HC_CHUNK_ELEMS 32
 #define HTP_DSV4_HC_DMA_CHUNKS 128
+#define HTP_DSV4_HC_PRE_DMA_ROWS 9
 
 struct htp_dsv4_hc_pre_kernel_params {
     uint32_t n_threads;
@@ -16,7 +17,6 @@ struct htp_dsv4_hc_pre_kernel_params {
     uint32_t dma_block_chunks;
     uint32_t dma_row_stride;
     uint32_t dma_buffer_size;
-    uint32_t dma_input_size;
     uint32_t dma_vtcm_size;
     uint32_t dma_eligible;
 

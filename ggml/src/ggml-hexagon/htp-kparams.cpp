@@ -4193,9 +4193,8 @@ static bool htp_kparams_solve_dsv4_hc_pre(
 
     kparams->dma_block_chunks = (std::min)((uint32_t) HTP_DSV4_HC_DMA_CHUNKS, kparams->n_chunks);
     kparams->dma_row_stride   = kparams->dma_block_chunks * 128;
-    kparams->dma_buffer_size  = 4*kparams->dma_row_stride;
-    kparams->dma_input_size   = 2*kparams->dma_buffer_size*kparams->n_threads;
-    kparams->dma_vtcm_size    = 2*kparams->dma_input_size;
+    kparams->dma_buffer_size  = HTP_DSV4_HC_PRE_DMA_ROWS * kparams->dma_row_stride;
+    kparams->dma_vtcm_size    = 2 * kparams->dma_buffer_size * kparams->n_threads;
 
     kparams->dma_eligible = gated &&
                             x->ne[1] == 4 &&
