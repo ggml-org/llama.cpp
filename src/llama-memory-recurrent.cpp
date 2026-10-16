@@ -629,7 +629,7 @@ bool llama_memory_recurrent::staged_publication_enabled() const noexcept {
 
 bool llama_memory_recurrent::begin_spill_capture(uint32_t tokens) {
     if (!staged_publication_enabled()) return true;
-    if (!complete_spill() || spill_epoch == UINT64_MAX) return false;
+    if (!complete_spill() || !complete_restore_spill() || spill_epoch == UINT64_MAX) return false;
     return spill->begin_staged_capture({spill_cache_id,0,spill_epoch+1},tokens);
 }
 
@@ -673,14 +673,6 @@ uint64_t llama_memory_recurrent::spill_generation() const noexcept { return spil
 bool llama_memory_recurrent_context::spill_enabled() const { return mem && mem->spill_enabled(); }
 bool llama_memory_recurrent_context::staged_publication_enabled() const {
     return mem && mem->spill_bank() && mem->spill_bank()->staged_publication_enabled();
-}
-ggml_tensor * llama_memory_recurrent_context::restore_dependency(ggml_context * ctx, ggml_tensor * current) const {
-    if (!staged_publication_enabled()) return current;
-    for (size_t layer=0;layer<mem->r_l.size();++layer) {
-        for (bool value : {false,true}) if ((value ? mem->s_l[layer] : mem->r_l[layer]) == current)
-            return mem->spill_bank()->restore_dependency(ctx,layer,value,current);
-    }
-    return current;
 }
 bool llama_memory_recurrent_context::publish_staged(ggml_context * ctx, ggml_cgraph * graph,
         size_t layer, bool value, const std::vector<ggml_tensor *> & copies) const {

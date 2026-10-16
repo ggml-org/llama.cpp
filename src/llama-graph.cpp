@@ -3794,8 +3794,6 @@ ggml_tensor * llm_graph_context::build_rs(
             int32_t   n_seqs,
         const llm_graph_get_rows_fn & get_state_rows) const {
     const auto * kv_state = inp->mctx;
-    s=kv_state->restore_dependency(ctx0,s);
-    GGML_ASSERT(s);
 
     // a custom getter reads the states of the ubatch straight from the cache, so the gather skips the first
     // state: it still holds the n_rs - n_seqs extra states and copies no state of a single sequence ubatch
