@@ -94,13 +94,36 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, con
 #endif
 }
 
+// b (0-255) in all 4 bytes
+static __device__ __forceinline__ uint32_t ggml_cuda_bcast_u8(const uint32_t b) {
+#if defined(GGML_USE_HIP)
+    return __builtin_amdgcn_perm(0, b, 0); // a multiply is quarter rate on RDNA
+#else
+    return b * 0x01010101;
+#endif // defined(GGML_USE_HIP)
+}
+
 static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
     // v is a 7 bit int, with the 8th sign being encodable as popcnt
     // with xor we can "correct" the bit instead of having to mask
     const uint32_t p = __popc(v) & 1;
     const uint32_t s = v ^ p << 7;
     // broadcast over uint to allow for 0x08040201 / 0x80402010 as selectors
-    return s * 0x01010101;
+    return ggml_cuda_bcast_u8(s);
+}
+
+// The bytes of grid, each negated where its sign bit is set: s holds a byte of signs in all 4 bytes; sel picks one bit
+// per byte, 0x08040201 for signs 0-3 and 0x80402010 for 4-7. HIP has no byte-wise SIMD compare or subtract. There m
+// is 1 in the negated bytes and (m << 8) - m is 0xFF there; -g = (g ^ 0xFF) + 1 does not carry into the next byte as
+// the grid bytes of all types that use this are nonzero.
+static __device__ __forceinline__ int ggml_cuda_apply_signs(const int grid, const uint32_t s, const uint32_t sel) {
+#if defined(GGML_USE_HIP)
+    const uint32_t m = (((s & sel) + 0x7F7F7F7Fu) >> 7) & 0x01010101u;
+    return (grid ^ ((m << 8) - m)) + m;
+#else
+    const int mask = __vcmpne4(s & sel, 0);
+    return __vsub4(grid ^ mask, mask);
+#endif // defined(GGML_USE_HIP)
 }
 
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
@@ -1123,13 +1146,11 @@ static __device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(
         const uint2 grid_pos = ((const uint2*)iq2xxs_grid)[aux8[k0/2]];
         const uint32_t signs = unpack_ksigns(aux32 >> (7 * k0 / 2));
 
-        const int signs0 = __vcmpne4(signs & 0x08040201, 0);
-        const int grid0 = __vsub4(grid_pos.x ^ signs0, signs0);
+        const int grid0 = ggml_cuda_apply_signs(grid_pos.x, signs, 0x08040201);
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, k0 + 0);
         sumi = ggml_cuda_dp4a(grid0, u0, sumi);
 
-        const int signs1 = __vcmpne4(signs & 0x80402010, 0);
-        const int grid1 = __vsub4(grid_pos.y ^ signs1, signs1);
+        const int grid1 = ggml_cuda_apply_signs(grid_pos.y, signs, 0x80402010);
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, k0 + 1);
         sumi = ggml_cuda_dp4a(grid1, u1, sumi);
     }
@@ -1160,12 +1181,10 @@ static __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(
         const uint2 grid_pos = ((const uint2*)iq2xs_grid)[q2[l0/2] & 0x1FF];
         const uint32_t signs = unpack_ksigns(q2[l0/2] >> 9);
 
-        const int signs0 = __vcmpne4(signs & 0x08040201, 0);
-        const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
+        const int grid_l = ggml_cuda_apply_signs(grid_pos.x, signs, 0x08040201);
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, l0 + 0);
 
-        const int signs1 = __vcmpne4(signs & 0x80402010, 0);
-        const int grid_h = __vsub4(grid_pos.y ^ signs1, signs1);
+        const int grid_h = ggml_cuda_apply_signs(grid_pos.y, signs, 0x80402010);
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, l0 + 1);
 
         if (l0 < 4) {
@@ -1206,11 +1225,9 @@ static __device__ __forceinline__ float vec_dot_iq2_s_q8_1(
     for (int l0 = 0; l0 < 8; l0 += 2) {
         const int * grid_pos = (const int *)(iq2s_grid + (qs[l0/2] | ((qh << (8-l0)) & 0x300)));
 
-        const int signs0 = __vcmpne4(((signs_packed_8[l0/2] & 0x03) << 7) | ((signs_packed_8[l0/2] & 0x0C) << 21), 0x00000000);
-        const int signs1 = __vcmpne4(((signs_packed_8[l0/2] & 0x30) << 3) | ((signs_packed_8[l0/2] & 0xC0) << 17), 0x00000000);
-
-        const int grid_l = __vsub4(grid_pos[0] ^ signs0, signs0);
-        const int grid_h = __vsub4(grid_pos[1] ^ signs1, signs1);
+        const uint32_t signs = ggml_cuda_bcast_u8(signs_packed_8[l0/2]);
+        const int grid_l = ggml_cuda_apply_signs(grid_pos[0], signs, 0x08040201);
+        const int grid_h = ggml_cuda_apply_signs(grid_pos[1], signs, 0x80402010);
 
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, l0 + 0);
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, l0 + 1);
@@ -1247,13 +1264,11 @@ static __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(
         const int2 grid_pos = make_int2(iq3xxs_grid[q3[l0 + 0]], iq3xxs_grid[q3[l0 + 1]]);
         const uint32_t signs = unpack_ksigns(aux32 >> (7*l0/2));
 
-        const int signs0 = __vcmpne4(signs & 0x08040201, 0);
-        const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
+        const int grid_l = ggml_cuda_apply_signs(grid_pos.x, signs, 0x08040201);
 
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, l0 + 0);
 
-        const int signs1 = __vcmpne4(signs & 0x80402010, 0);
-        const int grid_h = __vsub4(grid_pos.y ^ signs1, signs1);
+        const int grid_h = ggml_cuda_apply_signs(grid_pos.y, signs, 0x80402010);
 
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, l0 + 1);
 
@@ -1291,11 +1306,9 @@ static __device__ __forceinline__ float vec_dot_iq3_s_q8_1(
             iq3s_grid[qs[l0 + 0] | ((qh << (8 - l0)) & 0x100)],
             iq3s_grid[qs[l0 + 1] | ((qh << (7 - l0)) & 0x100)]);
 
-        const int signs0 = __vcmpne4(((signs_packed_8[l0/2] & 0x03) << 7) | ((signs_packed_8[l0/2] & 0x0C) << 21), 0x00000000);
-        const int signs1 = __vcmpne4(((signs_packed_8[l0/2] & 0x30) << 3) | ((signs_packed_8[l0/2] & 0xC0) << 17), 0x00000000);
-
-        const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
-        const int grid_h = __vsub4(grid_pos.y ^ signs1, signs1);
+        const uint32_t signs = ggml_cuda_bcast_u8(signs_packed_8[l0/2]);
+        const int grid_l = ggml_cuda_apply_signs(grid_pos.x, signs, 0x08040201);
+        const int grid_h = ggml_cuda_apply_signs(grid_pos.y, signs, 0x80402010);
 
         const int u0 = get_int_b4(bq8_1[iqs/2].qs, l0 + 0);
         const int u1 = get_int_b4(bq8_1[iqs/2].qs, l0 + 1);
