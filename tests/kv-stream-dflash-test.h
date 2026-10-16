@@ -37,11 +37,13 @@ static std::vector<uint32_t> dflash_exact_lattice(const float * data,size_t rows
 }
 
 // Match the same block execution and force decisions independently of sampler acceptance.
-static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const char * sidecar,bool lifecycle=false) {
+static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const char * sidecar,bool lifecycle=false,bool context_end=false,bool sustained_rejection=false) {
     const auto vocabulary=llama_model_get_vocab(model);
     const auto vocab=llama_vocab_n_tokens(vocabulary);
     const auto seed=common_tokenize(vocabulary,"A controlled comparison of windowed drafting and target recovery. ",true);
-    const std::vector<std::array<size_t,3>> profiles=lifecycle ?
+    const std::vector<std::array<size_t,3>> profiles=sustained_rejection ?
+        std::vector<std::array<size_t,3>>{{7,8176,8448}} : context_end ?
+        std::vector<std::array<size_t,3>>{{1,8176,8192},{3,8176,8192},{7,8176,8192}} : lifecycle ?
         std::vector<std::array<size_t,3>>{{7,2047,16384},{7,2048,16384},{7,2049,16384},{7,2304,16384},{7,16000,16384}} :
         std::vector<std::array<size_t,3>>{{1,2304,8192},{3,2304,8192},{7,2304,8192},{7,16000,16384}};
     for (const auto profile : profiles) {
@@ -55,7 +57,7 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
                 cp.n_seq_max=1; cp.n_rs_seq=uint32_t(profile[0]); cp.n_outputs_max=uint32_t(profile[0]+1);
                 cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
                 cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
-                if (streaming) cp.shared_device_memory_bytes=512u*1024u*1024u;
+                if (streaming) cp.shared_device_memory_bytes=(context_end ? 224u : 512u)*1024u*1024u;
                 context_ptr target(llama_init_from_model(model,cp),llama_free);
                 if (!t.assert_true(bool(target))) return;
                 common_params base;
@@ -108,6 +110,45 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
                     submit("prefill",part,false,false); history.insert(history.end(),part.begin(),part.end());
                 }
                 llama_token anchor=seed[0];
+                if (context_end) {
+                    while (position <= profile[2]) {
+                        const size_t remaining=profile[2]-position;
+                        const size_t expected=remaining ? std::min(profile[0],remaining-1) : 0;
+                        const auto first=position;
+                        llama_tokens proposed;
+                        auto & dp=common_speculative_get_draft_params(spec.get(),0);
+                        dp.drafting=true; dp.n_max=-1; dp.pos0=int(position); dp.id_last=anchor;
+                        dp.prompt=&history; dp.result=&proposed;
+                        common_speculative_draft(spec.get());
+                        llama_synchronize(draft->context());
+                        if (!t.assert_equal(expected,proposed.size())) return;
+                        const auto name="context_end/"+std::to_string(remaining);
+                        if (!proposed.empty()) oracle.bytes(name+"/proposals",proposed.data(),proposed.size()*sizeof(llama_token));
+                        if (!remaining) break;
+                        if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(draft->context()),0,llama_pos(first),-1))) return;
+                        llama_tokens verified{anchor};
+                        verified.insert(verified.end(),proposed.begin(),proposed.end());
+                        submit(name,verified,true,true);
+                        // Force rejection while approaching the boundary one accepted row at a time.
+                        position=first+1;
+                        if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(target.get()),0,llama_pos(position),-1) &&
+                                llama_memory_seq_rm(llama_get_memory(draft->context()),0,llama_pos(position),-1))) return;
+                        history.push_back(anchor);
+                        anchor=seed[position%seed.size()];
+                    }
+                    kv_stream_exact_kv(oracle,"context_end/target_KV",hybrid->get_mem_attn(),position-8,8);
+                    kv_stream_exact_kv(oracle,"context_end/draft_KV",window->get_swa(),position-8,8);
+                    kv_stream_exact_state state;
+                    hybrid->get_mem_recr()->state_write(state,0,0);
+                    state.compare_with(oracle,"context_end/recurrent");
+                    if (streaming) {
+                        if (!t.assert_true(observed_streaming)) return;
+                        oracle.finish();
+                    }
+                    t.out << "DFlash context end D=" << profile[0] << " quant=" << quantized
+                          << " streamed=" << streaming << " forced_rejections=" << profile[2]-profile[1] << '\n';
+                    continue;
+                }
                 if (lifecycle) {
                     const size_t saved_position=position;
                     const auto saved_history=history;

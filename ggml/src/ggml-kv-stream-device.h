@@ -61,6 +61,7 @@ struct ggml_kv_stream_partial_ops {
     bool (*mma_workspace)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
             uint32_t kv_heads, size_t tokens, size_t spans, size_t & bytes) = nullptr;
     // Version 10: bound every admitted serial decode family before phase grants or graph capture.
+    // Prepare required executable variants before pool sizing; driver loading can consume device memory.
     bool (*decode_workspace)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
             uint32_t kv_heads, uint32_t max_queries, size_t tokens, size_t & bytes) = nullptr;
     // Version 11: consume up to three physical intervals in one ordered resume wave, without releasing sources.

@@ -508,13 +508,22 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         const uint32_t decode_rows = std::min(2u,config.max_batch_rows);
         s->config.resume_decode = resume_capable &&
             (plan_resume(decode_rows) || (decode_rows == 2 && plan_resume(1)));
-        if (config.max_decode_rows > 4 && !s->config.resume_decode) return {};
+        if (config.max_decode_rows > 4 && !s->config.resume_decode) {
+            LLAMA_LOG_ERROR("%s: no supported resumable KV attention for K=%s, V=%s, decode widths 1-%u; check compiled streamed kernels and device resources\n",
+                __func__,ggml_type_name(ggml_type(config.host.shape.type_k)),ggml_type_name(ggml_type(config.host.shape.type_v)),config.max_decode_rows);
+            return {};
+        }
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
         if (s->config.resume_decode && partial_ops->version >= 10 && partial_ops->decode_workspace) {
             size_t bytes=0;
             if (!partial_ops->decode_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
                     config.query_heads,config.host.shape.heads,std::min(config.max_decode_rows,config.max_batch_rows),
-                    s->host->layout().tokens,bytes)) return {};
+                    s->host->layout().tokens,bytes)) {
+                LLAMA_LOG_ERROR("%s: unsupported decode KV attention workspace for K=%s, V=%s, maximum query width=%u; check compiled streamed kernels and device resources\n",
+                    __func__,ggml_type_name(ggml_type(config.host.shape.type_k)),ggml_type_name(ggml_type(config.host.shape.type_v)),
+                    std::min(config.max_decode_rows,config.max_batch_rows));
+                return {};
+            }
             s->span_bytes=bytes; s->decode_bytes=std::max(s->decode_bytes,bytes);
         } else if (s->config.resume_decode && get()->version >= 9 && get()->mma_workspace) {
             size_t mma_bytes=0;

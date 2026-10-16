@@ -213,6 +213,42 @@ struct native_attention_probe {
     ~native_attention_probe() { dev->iface.supports_op = original; active = nullptr; }
 };
 
+// Keep ordinary attention available while denying one private streamed capability.
+struct streamed_admission_probe {
+    inline static streamed_admission_probe * active = nullptr;
+    ggml_backend_reg_t reg;
+    decltype(ggml_backend_reg_i::get_proc_address) original;
+    ggml_kv_stream_partial_ops ops;
+    ggml_log_callback previous_log = nullptr;
+    void * previous_data = nullptr;
+    std::string log;
+    streamed_admission_probe(ggml_backend_dev_t dev,bool deny_resume) :
+        reg(ggml_backend_dev_backend_reg(dev)),original(reg->iface.get_proc_address) {
+        GGML_ASSERT(!active);
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(original(reg,"ggml_backend_kv_stream_partial_ops"));
+        GGML_ASSERT(get && get() && get()->version >= 10);
+        ops=*get(); active=this;
+        if (deny_resume) ops.resume_plan=[](ggml_backend_t,int32_t,int32_t,uint32_t,uint32_t,uint32_t,size_t,
+                ggml_kv_stream_resume_plan &) { return false; };
+        else ops.decode_workspace=[](ggml_backend_t,int32_t,int32_t,uint32_t,uint32_t,uint32_t,size_t,size_t &) { return false; };
+        reg->iface.get_proc_address=[](ggml_backend_reg_t reg,const char * name) -> void * {
+            if (!std::strcmp(name,"ggml_backend_kv_stream_partial_ops"))
+                return reinterpret_cast<void *>(+[]() -> const ggml_kv_stream_partial_ops * { return &active->ops; });
+            return active->original(reg,name);
+        };
+        llama_log_get(&previous_log,&previous_data);
+        llama_log_set([](ggml_log_level,const char * text,void * data) {
+            static_cast<streamed_admission_probe *>(data)->log+=text;
+        },this);
+    }
+    ~streamed_admission_probe() {
+        llama_log_set(previous_log,previous_data);
+        reg->iface.get_proc_address=original; active=nullptr;
+    }
+    streamed_admission_probe(const streamed_admission_probe &) = delete;
+    streamed_admission_probe & operator=(const streamed_admission_probe &) = delete;
+};
+
 struct kv_allocation_probe {
     using factory = ggml_backend_buffer_t (*)(ggml_backend_buffer_type_t,size_t);
     inline static kv_allocation_probe * active = nullptr;
@@ -312,6 +348,20 @@ int main(int argc,char ** argv) {
                 t.assert_equal(expected,native.queries[expected-1]);
             t.assert_true(std::all_of(native.queries.begin(),native.queries.end(),[&](uint32_t rows) { return rows <= maximum; }));
             t.assert_true(std::all_of(native.padded_tokens.begin(),native.padded_tokens.end(),[](int64_t tokens) { return tokens == 768; }));
+        }
+    });
+    t.test("native_attention_admission_reports_missing_streamed_capability_without_claiming_oom", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        for (bool resume : {false,true}) {
+            streamed_admission_probe probe(dev,resume);
+            llama_kv_stream_model_config config{backend.get(),f.host->config(),f.policy.pool_bytes,256,4};
+            config.max_decode_rows=8;
+            uint32_t unavailable=99;
+            const auto model=llama_kv_stream_model::create(config,&unavailable);
+            t.assert_true(!model);
+            t.assert_equal(uint32_t(0),unavailable);
+            t.assert_true(probe.log.find(resume ? "resumable KV attention" : "decode KV attention workspace") != std::string::npos);
+            t.assert_true(probe.log.find("out of memory") == std::string::npos);
         }
     });
     t.test("auxiliary_prefill_quote_covers_legacy_mtp_gather", [&](testing & t) {

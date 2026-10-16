@@ -83,6 +83,10 @@ python benchmarks/run_dflash_controls.py \
   --output benchmarks/results/dflash-comparison
 ```
 
+The same harness can collect target-only controls with `--spec-mode none --depths 0`, or embedded MTP controls with `--spec-mode mtp --depths 3`; choose a separate output directory for each mode. It still audits the pinned comparison artifacts, but loads the separate draft model only for DFlash. Keep `--prompt-headroom 15` and the same context/prompt settings for matched comparisons. A fixed arena compares equal parent sizes, not equal total VRAM; `--auto-max-arena` finds each mode's own physically fitting parent.
+
+For focused server recovery checks, add `--lifecycle`. This disables context shifting and, by default, RAM prompt caching, then tests cached/changed requests, slot save/restore, an oversized prompt, client disconnect, context exhaustion and recovery. Add `--lifecycle-cache-mib 512` to also exercise RAM prompt caching. The context must be at least 2048. It uses `nvidia-smi` to record process VRAM after requests. These additional requests are separate from the initial throughput measurement; a failed lifecycle check rejects the point.
+
 Use the same prompt headroom to compare target-only and embedded MTP on identical article prefixes:
 
 ```sh

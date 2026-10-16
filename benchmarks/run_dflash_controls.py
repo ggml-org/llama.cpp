@@ -8,11 +8,14 @@ import importlib.util
 import json
 import math
 import os
+import re
 import signal
 import struct
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,8 +96,10 @@ def auto_arena_for_point(args, context, depth, token_cache):
 
 
 def server_command(args, context, depth):
-    if depth not in (1, 3, 7) or not 512 <= context <= 262144:
-        raise ValueError("ordinary control requires D=1,3,7 and a valid context")
+    spec_mode = getattr(args, "spec_mode", "dflash")
+    admitted = {"dflash": (1, 3, 7), "none": (0,), "mtp": (1, 2, 3)}
+    if spec_mode not in admitted or depth not in admitted[spec_mode] or not 512 <= context <= 262144:
+        raise ValueError("unsupported speculation mode/depth or context")
     batch = getattr(args,"batch_size",256)
     ubatch = getattr(args,"ubatch_size",256)
     key = getattr(args,"target_k","q8_0")
@@ -102,15 +107,19 @@ def server_command(args, context, depth):
     effective_microbatch(args,context)
     if any(t not in KV_TYPES for t in (key,value,args.draft_k,args.draft_v)):
         raise ValueError("unknown KV type")
-    command = [str(args.server), "--model", str(args.target), "--model-draft", str(args.draft),
-            "--spec-type", "draft-dflash", "--spec-draft-n-max", str(depth),
-            "--spec-draft-n-min", "0", "--spec-draft-p-min", "0",
+    command = [str(args.server), "--model", str(args.target),
             "--ctx-size", str(context), "--batch-size", str(batch), "--ubatch-size", str(ubatch),
-            "--parallel", "1", "--n-gpu-layers", "999", "--spec-draft-ngl", "999",
+            "--parallel", "1", "--n-gpu-layers", "999",
             "--flash-attn", "on", "--cache-type-k", key, "--cache-type-v", value,
-            "--spec-draft-type-k", args.draft_k, "--spec-draft-type-v", args.draft_v,
             "--fit", "off", "--no-mmproj", "--host", "127.0.0.1", "--port", str(args.port),
             "--threads", "8", "--threads-batch", "8", "-lv", str(getattr(args,"verbosity",3))]
+    if spec_mode != "none":
+        command += ["--spec-type", "draft-dflash" if spec_mode == "dflash" else "draft-mtp",
+                    "--spec-draft-n-max", str(depth), "--spec-draft-n-min", "0", "--spec-draft-p-min", "0",
+                    "--spec-draft-ngl", "999", "--spec-draft-type-k", args.draft_k,
+                    "--spec-draft-type-v", args.draft_v]
+    if spec_mode == "dflash":
+        command += ["--model-draft", str(args.draft)]
     arena = getattr(args, "arena_mib", 0)
     if arena < 0:
         raise ValueError("negative arena size")
@@ -119,17 +128,110 @@ def server_command(args, context, depth):
     return command
 
 
-def validate_result(result, prompt_tokens, decode_tokens):
+def validate_result(result, prompt_tokens, decode_tokens, speculative=True):
     timing = result.get("timings", {})
     if (timing.get("prompt_n") != prompt_tokens or timing.get("predicted_n") != decode_tokens
             or len(result.get("tokens", [])) != decode_tokens):
         raise ValueError("incomplete ordinary control response")
-    if type(timing.get("draft_n")) is not int or timing["draft_n"] <= 0:
-        raise ValueError("DFlash control completed without generating drafts")
+    if speculative and (type(timing.get("draft_n")) is not int or timing["draft_n"] <= 0):
+        raise ValueError("speculative control completed without generating drafts")
+    if not speculative and any(timing.get(field) not in (None, 0) for field in ("draft_n", "draft_n_accepted")):
+        raise ValueError("target-only control unexpectedly generated drafts")
     for name in ("prompt_per_second", "predicted_per_second"):
         value = timing.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"invalid ordinary control timing: {name}")
+
+
+def validate_recovery(result, expected):
+    if len(result.get("tokens", [])) != expected or result.get("timings", {}).get("predicted_n") != expected:
+        raise ValueError("incomplete lifecycle recovery response")
+
+
+def validate_context_end(result, prompt_tokens, context, requested):
+    count = result.get("timings", {}).get("predicted_n")
+    if (type(count) is not int or not 1 <= count <= min(requested, context-prompt_tokens)
+            or len(result.get("tokens", [])) != count or result.get("stop_type") != "limit"):
+        raise ValueError("invalid context-end completion")
+
+
+def lifecycle_checks(args, url, tokens, evidence):
+    payload = {"temperature": 0, "seed": 123, "ignore_eos": True, "cache_prompt": False,
+               "stream": True, "return_tokens": True, "id_slot": 0}
+    def recovery(label, prompt, cached=False):
+        result = stream_completion(url+"/completion", {**payload, "prompt": prompt,
+            "cache_prompt": cached, "n_predict": 16}, timeout=args.request_timeout)
+        validate_recovery(result, 16)
+        sample = subprocess.check_output(["nvidia-smi", "--query-compute-apps=pid,used_memory",
+            "--format=csv,noheader,nounits"], text=True)
+        memory = [int(line.split(",")[1].strip()) for line in sample.splitlines()
+                  if line.split(",")[0].strip() == str(args.lifecycle_pid)]
+        evidence.append({"case": label, "result": result, "process_gpu_mib": memory})
+    recovery("cold", tokens[:512])
+    recovery("cached_append", tokens[:640], True)
+    saved = request_json(url+"/slots/0?action=save", {"filename": "lifecycle.bin"}, timeout=args.request_timeout)
+    evidence.append({"case": "slot_save", "result": saved})
+    recovery("changed_prompt", tokens[1024:1536])
+    recovery("shorter_prompt", tokens[:256])
+    restored = request_json(url+"/slots/0?action=restore", {"filename": "lifecycle.bin"}, timeout=args.request_timeout)
+    evidence.append({"case": "slot_restore", "result": restored})
+    recovery("after_slot_restore", tokens[:640], True)
+    body = json.dumps({**payload, "prompt": tokens[:args.lifecycle_context+1], "n_predict": 16}).encode()
+    request = urllib.request.Request(url+"/completion", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=args.request_timeout) as response:
+            raise ValueError(f"oversized prompt was accepted: HTTP {response.status}")
+    except urllib.error.HTTPError as error:
+        if error.code != 400:
+            raise
+        evidence.append({"case": "oversized_prompt", "status": error.code,
+                         "response": error.read().decode(errors="replace")})
+    recovery("after_oversized_prompt", tokens[:256])
+    body = json.dumps({**payload, "prompt": tokens[:512], "n_predict": 512}).encode()
+    request = urllib.request.Request(url+"/completion", data=body, headers={"Content-Type": "application/json"})
+    received = False
+    with urllib.request.urlopen(request, timeout=args.request_timeout) as response:
+        for raw in response:
+            if not raw.startswith(b"data:") or raw[5:].strip() == b"[DONE]":
+                continue
+            event = json.loads(raw[5:])
+            if "error" in event:
+                raise ValueError(f"cancellation request failed: {event}")
+            if event.get("tokens"):
+                received = True
+                break
+    if not received:
+        raise ValueError("cancellation request returned no tokens")
+    evidence.append({"case": "disconnect_after_token", "received": received})
+    recovery("after_disconnect", tokens[:256])
+    near_end = args.lifecycle_context-10
+    result = stream_completion(url+"/completion", {**payload, "prompt": tokens[:near_end],
+        "n_predict": 16}, timeout=args.request_timeout)
+    validate_context_end(result, near_end, args.lifecycle_context, 16)
+    evidence.append({"case": "context_end", "result": result})
+    recovery("after_context_end", tokens[:256])
+    request_json(url+"/slots/0?action=erase", {}, timeout=args.request_timeout)
+    recovery("after_erase", tokens[:256])
+    for repeat in range(4):
+        recovery(f"settled_repeat_{repeat}", tokens[:512] if repeat%2 else tokens[1024:1280])
+    return evidence
+
+
+def validate_control_log(text, evidence):
+    expected = []
+    for item in evidence:
+        if item.get("case") == "oversized_prompt" and item.get("status") == 400:
+            expected.append(json.loads(item["response"])["error"]["message"])
+    kept = []
+    for line in text.splitlines():
+        if (" E " in line and "send_error:" in line and ", error: " in line
+                and line.split(", error: ", 1)[1] in expected):
+            expected.remove(line.split(", error: ", 1)[1])
+            continue
+        if re.search(r"\b(?:draft|process):?\s+(?:llama_process returned|llama_process\(ctx_dft\) failed)", line):
+            raise RuntimeError(f"draft execution failed: {line.strip()}")
+        kept.append(line)
+    SWEEP.validate_execution_log("\n".join(kept))
 
 
 def failure_kind(text):
@@ -339,6 +441,9 @@ def run_point(args, context, depth, token_cache, mode):
     directory.mkdir()
     log_path = directory / "server.log"
     command = server_command(args, context, depth)
+    if getattr(args, "lifecycle", False):
+        command += ["--no-context-shift", "--cache-ram", str(getattr(args, "lifecycle_cache_mib", 0)),
+                    "--slot-save-path", str(directory)]
     env = SWEEP.server_environment(getattr(args,"uvm",False))
     # An inherited profiler would invalidate the uninstrumented control.
     env.pop("LD_PRELOAD", None)
@@ -358,6 +463,7 @@ def run_point(args, context, depth, token_cache, mode):
                    "--cuda-graph-trace=node",
                    "--cuda-memory-usage=true", "--output", str(directory / "native"), *command]
     row = {"status": "failed", "context": context, "depth": depth, "mode": mode,"arena_mib":args.arena_mib,
+           "spec_mode": getattr(args, "spec_mode", "dflash"),
            "command": command, "uvm": getattr(args,"uvm",False),
            "numerical_control_only":getattr(args,"uvm",False),"log": str(log_path), "directory": str(directory)}
     process = None
@@ -376,9 +482,16 @@ def run_point(args, context, depth, token_cache, mode):
             result = stream_completion(url+"/completion", {"prompt": token_cache["tokens"][:count],
                 "n_predict": args.decode_tokens, "temperature": 0, "seed": 123, "ignore_eos": True,
                 "cache_prompt": False, "stream": True, "return_tokens": True}, timeout=args.request_timeout)
-            validate_result(result, count, args.decode_tokens)
+            validate_result(result, count, args.decode_tokens, row["spec_mode"] != "none")
             row.update(status="ok", prompt_tokens=count, decode_tokens=args.decode_tokens, result=result)
+            if getattr(args, "lifecycle", False):
+                config = copy.copy(args)
+                config.lifecycle_context = context
+                config.lifecycle_pid = process.pid
+                row["lifecycle"] = []
+                lifecycle_checks(config, url, token_cache["tokens"], row["lifecycle"])
         except Exception as error:
+            row["status"] = "failed"
             row["error"] = str(error)
         finally:
             if process is not None:
@@ -386,7 +499,7 @@ def run_point(args, context, depth, token_cache, mode):
     log_text=log_path.read_text(errors="replace")
     if row["status"] == "ok":
         try:
-            SWEEP.validate_execution_log(log_text)
+            validate_control_log(log_text, row.get("lifecycle", []))
         except RuntimeError as error:
             row.update(status="failed",error=str(error))
     if row["status"] != "ok":
@@ -411,6 +524,8 @@ def main():
         parser.add_argument("--"+name, type=Path, required=True)
     parser.add_argument("--contexts", default="4096")
     parser.add_argument("--depths", default="1,3,7")
+    parser.add_argument("--spec-mode", choices=("dflash", "none", "mtp"), default="dflash",
+                        help="matched comparison mode; none needs --depths 0, MTP supports depths 1-3")
     parser.add_argument("--prompt-tokens", type=int, default=2304)
     parser.add_argument("--decode-tokens", type=int, default=64)
     parser.add_argument("--prompt-headroom",type=int,
@@ -440,6 +555,10 @@ def main():
                         help="use the same two-slot staged rollback in the native control to keep it physically fitting")
     parser.add_argument("--request-timeout", type=float, default=1800,
                         help="completion timeout in seconds, including long-context prefill")
+    parser.add_argument("--lifecycle", action="store_true",
+                        help="after timing, test serial reuse, oversized prompt, disconnect, context end and recovery")
+    parser.add_argument("--lifecycle-cache-mib", type=int, default=0,
+                        help="RAM prompt cache for lifecycle tests, in MiB (default: disabled)")
     args = parser.parse_args()
     contexts = [int(value) for value in args.contexts.split(",")]
     depths = [int(value) for value in args.depths.split(",")]
@@ -450,10 +569,16 @@ def main():
         parser.error("UVM is only allowed for independent native numerical controls")
     if args.compare_numerical_only and not args.compare_to:
         parser.error("--compare-numerical-only needs --compare-to")
+    if args.spec_mode != "dflash" and (args.trace_library or args.compare_to or args.nsys):
+        parser.error("DFlash-specific capture/trace comparisons require --spec-mode dflash")
+    if not 0 <= args.lifecycle_cache_mib <= 2**31-1 or (args.lifecycle_cache_mib and not args.lifecycle):
+        parser.error("--lifecycle-cache-mib needs --lifecycle and a nonnegative int32 size")
     if (args.arena_mib < 0 or args.decode_tokens < 8 or args.prompt_tokens < 256 or not 1 <= args.port <= 65535
             or not math.isfinite(args.request_timeout) or not 1 <= args.request_timeout <= 43200):
         parser.error("invalid token or port bounds")
     for context in contexts:
+        if args.lifecycle and context < 2048:
+            parser.error("lifecycle requests require a context of at least 2048")
         for depth in depths:
             server_command(args, context, depth)
             prompt_count(args,context,depth)

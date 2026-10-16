@@ -700,7 +700,9 @@ static bool mma_span_launch_make(
         return false;
     }
     cudaFuncAttributes attributes{};
-    if (cudaFuncGetAttributes(&attributes,spanned) != cudaSuccess) {
+    const auto attributes_status=cudaFuncGetAttributes(&attributes,spanned);
+    if (attributes_status != cudaSuccess) {
+        GGML_LOG_WARN("%s: failed to prepare CUDA span kernel: %s\n",__func__,cudaGetErrorString(attributes_status));
         if (failure) *failure=status::unsupported_launch_resources;
         (void) cudaGetLastError(); return false;
     }

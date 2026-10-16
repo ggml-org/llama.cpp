@@ -832,7 +832,19 @@ static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32
         return false;
 #endif
     }
-    const size_t required=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
+    size_t required=0;
+    // Load both layouts before the arena fills VRAM; short verification batches can select either kernel.
+    for (bool token_major : {false,true}) {
+        for (auto * tensor : {&k,&v}) {
+            const size_t row=ggml_row_size(tensor->type,256);
+            tensor->nb[1]=token_major ? row*kv_heads : row;
+            tensor->nb[2]=token_major ? row : row*tokens;
+        }
+        ggml_cuda_kv_stream_workspace_requirements spanned, resumed;
+        if (!ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(ctx,&op,spans,spanned) ||
+                !ggml_cuda_flash_attn_ext_mma_f16_resume_requirements(ctx,&op,resumed)) return false;
+        required=std::max(required,spanned.scratch_bytes);
+    }
     if (!required) return false;
     bytes=required;
     return true;
@@ -1174,6 +1186,11 @@ const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
                 ggml_kv_stream_resume_plan plan;
                 if (resume_plan(backend,key,value,heads,kv_heads,queries,tokens,plan)) {
                     required=std::max(required,plan.bytes);
+                    if (plan.kernel_config[0] == 2) {
+                        size_t mma=0;
+                        if (!mma_workspace_for_queries(backend,key,value,heads,kv_heads,queries,tokens,3,mma)) return false;
+                        required=std::max(required,mma);
+                    }
                     // MTP can end inside a vector tile even when the context capacity is page-aligned.
                     if (queries == 1 && !plan.kernel_config[0]) {
                         ggml_kv_stream_layout tail;

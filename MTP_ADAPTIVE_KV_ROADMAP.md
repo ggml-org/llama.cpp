@@ -363,6 +363,24 @@ After the initial configuration is correct and useful:
 - evaluate parallel slots, multiple devices, and split-mode layer placement;
 - generalize retained logical-layer leases for paged attention and other cache policies.
 
+### Deferred: phase-scoped recurrent publication staging (2026-10-14)
+
+Status: planned only; implementation is deferred at the user's request. This is not a prerequisite for extending the attached-MTP draft length, provided its external staging remains explicitly budgeted.
+
+The attached-MTP two-slot recurrent publication stage currently uses a separate device allocation. DFlash can bind that stage through `reserve_staging()` inside the shared parent, but that API reserves a fixed persistent region in every phase. Moving MTP to that API alone would improve arena accounting without enabling cross-phase reuse.
+
+The intended common design makes the two device staging slots phase-scoped arena resources. Current recurrent state stays persistent, and authoritative pinned host snapshots survive until acceptance/recovery no longer needs them. Releasing device staging must not discard either kind of state.
+
+Implementation plan:
+
+1. Quote exact staging bytes from the requested rollback depth, model geometry and backend alignment. Include them in the declared arena budget for every phase that actually produces snapshots; do not assume all prefill paths can omit staging.
+2. Adapt the common spill bank to borrow phase-scoped leases without retaining a second device backing allocation. Keep prepared copy queues/events reusable across lease changes and preserve backend-neutral ownership.
+3. At phase boundaries, complete outstanding staging reads, retire graphs referencing old staging addresses, and release the lease before another consumer reuses the region. Reacquire/rebind staging and rebuild affected graph bindings before publication resumes. Avoid per-layer allocation or phase replanning.
+4. Let phases without publication requirements reuse the released bytes for workspace or KV storage. Expose active staging and effective KV bytes in phase diagnostics, including preflight requirements.
+5. Qualify pending D2H, stale graph/lease generations, cancellation, rejection recovery, repeated phase changes, exact-fit/undersized budgets and failed rebinds with CPU/CUDA tests and sanitizers. Compare stock-matched outputs and unprofiled throughput before acceptance.
+
+Memory accounting: with an unchanged arena size, staging becomes part of that budget rather than an additional external allocation. This does not automatically enlarge decode KV; benefits depend on phase overlap and on whether the total device budget permits increasing the arena after removing external staging. For the current Qwen geometry, two-slot staging is 18.703125 MiB at depth three and 43.640625 MiB at depth seven; current recurrent state and host snapshot storage are separate.
+
 ## Cross-cutting correctness rules
 
 1. Host KV remains authoritative whenever a device layout can be rebuilt.

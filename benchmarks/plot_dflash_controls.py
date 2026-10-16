@@ -21,8 +21,10 @@ def load_series(directory):
             raise ValueError("performance plot requires accepted non-UVM timing points")
         context=row["context_capacity"] if target_control else row["context"]
         depth=row["mtp_length"] if target_control else row["depth"]
-        spec_type="mtp" if target_control and depth else "none" if target_control else "dflash"
-        if type(context) is not int or context <= 0 or type(depth) is not int or depth < (0 if target_control else 1):
+        spec_type=("mtp" if depth else "none") if target_control else row.get("spec_mode","dflash")
+        if (spec_type not in ("none","mtp","dflash") or type(context) is not int or context <= 0
+                or type(depth) is not int or depth < (0 if spec_type == "none" else 1)
+                or (spec_type == "none" and depth != 0)):
             raise ValueError("invalid context or draft depth")
         identity=(context,spec_type,depth)
         if identity in seen:

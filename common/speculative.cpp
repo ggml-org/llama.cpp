@@ -1271,7 +1271,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             const int32_t n = (int32_t) dp.pos0;
 
-            const int32_t n_draft = params.n_max;
+            int32_t n_draft = params.n_max;
+            if (is_dflash2) {
+                const uint32_t capacity = llama_n_ctx_seq(ctx_dft);
+                if (dp.pos0 < 0 || uint64_t(dp.pos0) >= capacity) continue;
+                const uint32_t remaining = capacity-uint32_t(dp.pos0);
+                if (remaining <= 1) continue;
+                n_draft = std::min(n_draft, int32_t(remaining-1));
+            }
 
             const int32_t n_block_tokens = n_draft + (is_dspark && sample_from_anchor ? 0 : 1);
             i_block_beg[seq_id] = batch.size();

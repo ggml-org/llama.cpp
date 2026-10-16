@@ -337,6 +337,83 @@ class OrdinaryControls(unittest.TestCase):
         self.controls = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.controls)
 
+    def test_comparison_modes_preserve_budget_and_do_not_load_an_unused_sidecar(self):
+        from types import SimpleNamespace
+        for mode, depth in (("none", 0), ("mtp", 3), ("dflash", 7)):
+            args = SimpleNamespace(server=Path("server"), target=Path("target"), draft=Path("draft"),
+                port=12351, draft_k="q8_0", draft_v="q4_0", arena_mib=1024, spec_mode=mode)
+            command = self.controls.server_command(args, 8192, depth)
+            self.assertEqual(command[command.index("--kv-stream-arena-mib")+1], "1024")
+            self.assertEqual("--model-draft" in command, mode == "dflash")
+            self.assertEqual("--spec-type" in command, mode != "none")
+            if mode == "mtp":
+                self.assertEqual(command[command.index("--spec-type")+1], "draft-mtp")
+                self.assertEqual(command[command.index("--spec-draft-type-k")+1], "q8_0")
+                self.assertEqual(command[command.index("--spec-draft-type-v")+1], "q4_0")
+
+    def test_invalid_comparison_mode_depth_pairs_fail_before_launch(self):
+        from types import SimpleNamespace
+        for mode, depth in (("none", 3), ("mtp", 7), ("dflash", 0), ("unknown", 3)):
+            args = SimpleNamespace(server=Path("server"), target=Path("target"), draft=Path("draft"),
+                port=12351, draft_k="q8_0", draft_v="q4_0", spec_mode=mode)
+            with self.subTest(mode=mode, depth=depth), self.assertRaises(ValueError):
+                self.controls.server_command(args, 8192, depth)
+
+    def test_target_only_result_does_not_require_fictitious_draft_counts(self):
+        result = {"tokens": list(range(8)), "timings": {"prompt_n": 256, "predicted_n": 8,
+                  "prompt_per_second": 100.0, "predicted_per_second": 20.0}}
+        self.controls.validate_result(result, 256, 8, speculative=False)
+        with self.assertRaises(ValueError):
+            self.controls.validate_result(result, 256, 8)
+        for field in ("draft_n", "draft_n_accepted"):
+            with self.assertRaises(ValueError):
+                self.controls.validate_result({**result, "timings": {**result["timings"], field: 1}},
+                                              256, 8, speculative=False)
+
+    def test_context_end_validation_accepts_only_bounded_completed_responses(self):
+        result = {"tokens": [1, 2], "stop_type": "limit", "timings": {"predicted_n": 2}}
+        self.controls.validate_context_end(result, 8190, 8192, 16)
+        for changed in ({"tokens": [1]}, {"stop_type": "error"},
+                        {"tokens": [1, 2, 3], "timings": {"predicted_n": 3}},
+                        {"tokens": [], "timings": {"predicted_n": 0}}):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                self.controls.validate_context_end({**result, **changed}, 8190, 8192, 16)
+
+    def test_lifecycle_refuses_an_incomplete_recovery_response(self):
+        self.controls.validate_recovery({"tokens": [1]*16, "timings": {"predicted_n": 16}}, 16)
+        for changed in ({"tokens": []}, {"timings": {"predicted_n": 15}}):
+            with self.assertRaises(ValueError):
+                self.controls.validate_recovery({"tokens": [1]*16, "timings": {"predicted_n": 16}, **changed}, 16)
+
+    def test_only_the_observed_oversized_prompt_diagnostic_is_allowed(self):
+        message = "request (8193 tokens) exceeds the available context size (8192 tokens)"
+        evidence = [{"case": "oversized_prompt", "status": 400,
+                     "response": json.dumps({"error": {"message": message}})}]
+        line = "0.01.000 E srv    send_error: task id = 3, error: " + message
+        self.controls.validate_control_log(line, evidence)
+        for invalid in (line + "\n0.01.001 E CUDA: execution failed", "0.01.001 W draft: llama_process returned 1"):
+            with self.assertRaises(RuntimeError):
+                self.controls.validate_control_log(invalid, evidence)
+        with self.assertRaises(RuntimeError):
+            self.controls.validate_control_log(line, [])
+
+    def test_lifecycle_failure_cannot_leave_an_accepted_timing_result(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(output=Path(directory), arena_mib=512, port=12351,
+                prompt_tokens=256, decode_tokens=8, request_timeout=60, lifecycle=True)
+            completed = {"tokens": [1]*8, "timings": {"prompt_n": 256, "predicted_n": 8,
+                "draft_n": 7, "prompt_per_second": 100.0, "predicted_per_second": 20.0}}
+            with patch.object(self.controls, "server_command", return_value=["server"]), \
+                    patch.object(self.controls.subprocess, "Popen", return_value=SimpleNamespace(pid=123)), \
+                    patch.object(self.controls, "wait_for_health"), \
+                    patch.object(self.controls, "stop_process"), \
+                    patch.object(self.controls, "stream_completion", return_value=completed), \
+                    patch.object(self.controls, "lifecycle_checks", side_effect=ValueError("lifecycle mismatch")):
+                row = self.controls.run_point(args, 8192, 7, {"tokens": list(range(1024))}, "timing")
+            self.assertEqual(row["status"], "failed")
+            self.assertEqual(row["error"], "lifecycle mismatch")
+
     def test_configurable_batches_and_target_kv_are_not_rewritten(self):
         from types import SimpleNamespace
         args = SimpleNamespace(server=Path("server"),target=Path("target"),draft=Path("draft"),
@@ -459,7 +536,7 @@ class OrdinaryControls(unittest.TestCase):
             self.controls.validate_result(result,2304,32)
 
     def test_trace_requires_all_three_workloads(self):
-        rows = [{"event": "process", "role": "target", "kind": "tokens", "rows": 4, "ret": 0},
+        rows: list[dict[str, Any]] = [{"event": "process", "role": "target", "kind": "tokens", "rows": 4, "ret": 0},
                 {"event": "process", "role": "draft", "kind": "features", "rows": 256, "ret": 0,
                  "feature_width": 25600},
                 {"event": "process", "role": "draft", "kind": "tokens", "rows": 4, "ret": 0},
@@ -571,8 +648,25 @@ class OrdinaryControls(unittest.TestCase):
 
 
 class DflashPlotTests(unittest.TestCase):
+    def test_unified_control_rows_keep_target_mtp_and_dflash_distinct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root/"server.log"
+            log.write_text("memory_phase: phase=decode kv_pool=104857600\n")
+            rows = []
+            for mode, depth in (("none", 0), ("mtp", 3), ("dflash", 3)):
+                timing = {"prompt_per_second": 100.0, "predicted_per_second": 20.0}
+                if depth:
+                    timing.update(draft_n=10, draft_n_accepted=5)
+                rows.append({"status": "ok", "mode": "timing", "context": 8192,
+                    "spec_mode": mode, "depth": depth, "log": str(log), "result": {"timings": timing}})
+            (root/"results.jsonl").write_text("\n".join(map(json.dumps, rows)))
+            points = self.plot.load_series(root)
+            self.assertEqual({p["spec_type"] for p in points}, {"none", "mtp", "dflash"})
+
     def setUp(self):
         spec=importlib.util.spec_from_file_location("dflash_plot",SCRIPT.parent/"plot_dflash_controls.py")
+        assert spec is not None and spec.loader is not None
         self.plot=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.plot)
 
     def test_target_mtp_controls_keep_modes_and_no_speculation_has_no_acceptance(self):
@@ -621,6 +715,7 @@ class DflashPlotTests(unittest.TestCase):
 class ProfileAnalysisTests(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location("dflash_profile", SCRIPT.parent / "analyze_dflash_profile.py")
+        assert spec is not None and spec.loader is not None
         self.profile = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.profile)
 

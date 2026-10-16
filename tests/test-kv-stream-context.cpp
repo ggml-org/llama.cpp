@@ -683,6 +683,8 @@ int main(int argc,char ** argv) {
         if (!std::strcmp(argv[i], "--dflash-shared-workspace")) dflash_shared_workspace_control = true;
         if (!std::strcmp(argv[i], "--dflash-bit-exact")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-lifecycle")) dflash_exact_control = true;
+        if (!std::strcmp(argv[i], "--dflash-context-end")) dflash_exact_control = true;
+        if (!std::strcmp(argv[i], "--dflash-rejection-long")) dflash_exact_control = true;
         f16_control = f16_control || !std::strcmp(argv[i],"--f16");
         resident_control = resident_control || !std::strcmp(argv[i],"--resident");
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
@@ -738,7 +740,9 @@ int main(int argc,char ** argv) {
     if (dflash_exact_control) {
         if (!t.assert_true(dflash_native_model != nullptr)) return t.summary();
         const bool lifecycle=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-lifecycle"); });
-        t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) { test_kv_stream_dflash_exact(t,model.get(),dflash_native_model,lifecycle); });
+        const bool context_end=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-context-end"); });
+        const bool sustained=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-rejection-long"); });
+        t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) { test_kv_stream_dflash_exact(t,model.get(),dflash_native_model,lifecycle,context_end || sustained,sustained); });
         return t.summary();
     }
     if (wide_rollback_control) {

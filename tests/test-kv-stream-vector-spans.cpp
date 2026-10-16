@@ -355,6 +355,51 @@ int main(int argc, char ** argv) {
     }
     if (argc > 1 && !std::strcmp(argv[1], "--bench")) return benchmark_spans();
     testing t;
+    if (argc > 1 && (!std::strcmp(argv[1],"--cuda-prepared-decode") || !std::strcmp(argv[1],"--cuda")))
+        t.test("decode_preflight_covers_shortened_token_major_mma_batches", [](testing & t) {
+            ggml_backend_load_all();
+            auto * device=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(device != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(device,nullptr));
+            if (!t.assert_true(bool(backend))) return;
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(device),"ggml_backend_kv_stream_partial_ops"));
+            const auto * ops=get ? get() : nullptr;
+            if (!t.assert_true(ops && ops->decode_workspace && ops->spans_workspace && ops->spans)) return;
+            for (auto pair : {std::make_pair(GGML_TYPE_Q8_0,GGML_TYPE_Q4_0),std::make_pair(GGML_TYPE_F16,GGML_TYPE_F16)}) {
+                size_t bytes=0;
+                if (!t.assert_true(ops->decode_workspace(backend.get(),pair.first,pair.second,24,4,8,8192,bytes))) return;
+                fixture f(backend.get(),true,pair.first,pair.second,8192,false,2,4,80);
+                if (!t.assert_true(f.attach())) return;
+                auto pin=f.binding->acquire();
+                if (!t.assert_true(bool(pin))) return;
+                block_workspace workspace(f,bytes,605);
+                for (uint32_t queries : {3u,4u,5u,6u,7u,8u}) {
+                    block_inputs input(f,8191,queries,false,24);
+                    const auto expected=stock_attention(f,input,0);
+                    for (bool wrapped : {false,true}) {
+                        auto storage=span_storage::create(f,0,input.padded,queries,
+                            wrapped ? std::vector<size_t>{0,256,768,input.padded} : std::vector<size_t>{0,input.padded},wrapped);
+                        if (!t.assert_true(storage && storage->plan)) return;
+                        ggml_context_ptr context(ggml_init({65536,nullptr,true}));
+                        auto * node=f.resident->attention(context.get(),0,input.q,input.mask,input.active,1.0f/16);
+                        if (!t.assert_true(node != nullptr)) return;
+                        ggml_tensor op=*node;
+                        op.buffer=input.output->buffer; op.data=input.output->data;
+                        for (bool stock_conversion : {false,true}) {
+                            ggml_backend_execution_set_stock_conversion(&op,stock_conversion);
+                            size_t needed=0;
+                            if (!t.assert_true(ops->spans_workspace(backend.get(),&op,storage->plan,needed))) return;
+                            t.assert_true(needed <= bytes);
+                            if (!t.assert_true(ops->spans(backend.get(),&op,storage->plan,
+                                    ggml_backend_memory_lease_buffer(workspace.lease.get())))) return;
+                            ggml_backend_synchronize(backend.get());
+                            t.assert_true(same_float_bits(expected,input.read()));
+                        }
+                    }
+                }
+            }
+        });
     if (argc > 1 && (!std::strcmp(argv[1], "--cuda-wide-spans") || !std::strcmp(argv[1], "--cuda")))
         t.test("wide_mma_dispatch_matches_stock_for_resident_and_wrapped_spans", [](testing & t) {
             ggml_backend_load_all();
