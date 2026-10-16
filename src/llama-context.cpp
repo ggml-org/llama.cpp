@@ -813,10 +813,19 @@ void llama_context::sched_reserve(bool quiet) {
 
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
+    // keep the arenas of an unchanged node budget (phase switches): a new one zero-fills its graph metadata
     for (auto & res : gf_res_prev) {
-        res.reset();
+        if (res && res->get_max_nodes() == (int64_t) max_nodes) {
+            res->reset();
+        } else {
+            res.reset();
+        }
     }
-    gf_res_reserve.reset(new llm_graph_result(max_nodes));
+    if (gf_res_reserve && gf_res_reserve->get_max_nodes() == (int64_t) max_nodes) {
+        gf_res_reserve->reset();
+    } else {
+        gf_res_reserve.reset(new llm_graph_result(max_nodes));
+    }
     gf_res_prev_active = nullptr;
 
     sched_new(max_nodes, cparams.pipeline_parallel);
