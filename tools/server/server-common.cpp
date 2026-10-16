@@ -161,6 +161,8 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_LFM2_D1:
         case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
             return {"decisions"};
+        case COMMON_DECISION_TYPE_GRANITE_SWITCH:
+            return {"text", "decisions"};
         default:
             // fallback when there is no decision type or the metadata is bad
             return {"text"};

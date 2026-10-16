@@ -87,7 +87,7 @@ void server_decision_context::init(const llama_model * model) {
         bias[level] = std::strtof(val, nullptr);
     }
 
-    if (model_type == COMMON_DECISION_TYPE_OPENJEV) {
+    if (model_type == COMMON_DECISION_TYPE_OPENJEV || model_type == COMMON_DECISION_TYPE_GRANITE_SWITCH) {
         // one letter per option, each must be a single token
         const std::string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
         for (const char c : letters) {
@@ -753,7 +753,7 @@ void server_decision_context::fill_task(
 
     const std::string prompt = render(state, questions, question, variant, files.size());
 
-    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_VLLM_D3) {
+    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_GRANITE_SWITCH || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_VLLM_D3) {
         // lev reads the ratings of a noul question at its first labels, not at the digits
         task.decision.labels.assign(labels.begin(), labels.begin() + n_outputs(question));
     }

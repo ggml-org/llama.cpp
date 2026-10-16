@@ -8,7 +8,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, gguf, logger
+from .base import MmprojModel, ModelBase, gguf, jinja_str_or_json, logger
 
 from .llama import LlamaModel
 from .mamba import Mamba2Model
@@ -284,9 +284,38 @@ class GraniteSwitchModel(GraniteMoeModel):
         self.gguf_writer.add_adapter_lora_rank(self._max_lora_rank)
         self.gguf_writer.add_adapter_token_ids_activate(self.hparams["adapter_token_ids"])
         self.gguf_writer.add_adapter_token_ids_substitute(self.hparams["adapter_substitute_token_ids"])
+        if self._has_decision_adapter():
+            self.gguf_writer.add_decision_type(gguf.DecisionType.GRANITE_SWITCH)
         router_gain = float(self.hparams.get("control_token_gain", 15.0))
         self.gguf_writer.add_adapter_router_gain(router_gain)
         logger.info("gguf: (graniteswitch) num_adapters=%s max_lora_rank=%s n_slots=%s router_gain=%s", self._n_adapters, self._max_lora_rank, self._n_slots, router_gain)
+
+    def _has_decision_adapter(self) -> bool:
+        return "decision" in self.hparams.get("adapter_names", [])
+
+    def set_vocab(self):
+        super().set_vocab()
+        if self._has_decision_adapter():
+            self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    def _systemone_template(self) -> str:
+        # prompt of the decision aLoRA: a state turn, then a question turn that opens with the control token
+        # (it replaces the first token of "### DECISION"), the answer is the label token that comes next
+        description = jinja_str_or_json("o.description")
+        option = (
+            "{% if type != 'noul' %}{{ letters[loop.index0] }}: {% if o.description %}" + description + "{% endif %}"
+            "{% elif o.key == 'true' %}A: {% if o.description %}" + description + "{% else %}The statement is true.{% endif %}"
+            "{% else %}B: {% if o.description %}" + description + "{% else %}The statement is false.{% endif %}{% endif %}"
+        )
+        return (
+            "{% set letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz' %}"
+            "<|start_of_role|>user<|end_of_role|>State:\n" + jinja_str_or_json("state") + "<|end_of_text|>\n"
+            "<|start_of_role|>user<|end_of_role|><|decision|> DECISION\nQuestion:\n" + jinja_str_or_json("instructions")
+            + "{% if type == 'score' %} Rate along the ordered levels below (lowest first).{% endif %}"
+            "{{ '\n\nOptions:\n' }}"
+            "{% for o in options %}" + option + "{{ '\n' }}{% endfor %}"
+            "{{ '\nReply with exactly one option label.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>' }}"
+        )
 
     def _lora_a(self, data: Tensor) -> Tensor:
         # on-disk A: [n_adapters, 1, max_rank, in] -> [n_adapters+1, max_rank, in]

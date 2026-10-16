@@ -39,6 +39,7 @@ struct server_decision_context {
     bool can_share_prompt() const {
         switch (type) {
             case COMMON_DECISION_TYPE_OPENJEV:
+            case COMMON_DECISION_TYPE_GRANITE_SWITCH:
             case COMMON_DECISION_TYPE_LEV:
             case COMMON_DECISION_TYPE_KEV:
             case COMMON_DECISION_TYPE_NIMBLE:

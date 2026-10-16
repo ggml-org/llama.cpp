@@ -6283,6 +6283,7 @@ class DecisionType:
     VLLM_D3 = "vllm-d3"  # same as pplx-decider, non-causal attention
     LFM2_D1 = "lfm2-d1"  # same as openjev, the labels depend on the question type
     LFM2_D1_OMNI = "lfm2-d1-omni"  # same head as laya on a bidirectional LFM2 trunk, other prompt layout
+    GRANITE_SWITCH = "granite-switch"  # same as openjev, run by the decision aLoRA of granite switch
 
 
 class VisionProjectorType:
