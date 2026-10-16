@@ -9824,7 +9824,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 (pipeline == ctx->device->pipeline_concat_transpose_i8 ||
                  pipeline == ctx->device->pipeline_concat_transpose_i16 ||
                  pipeline == ctx->device->pipeline_concat_transpose_i32)) {
-                elements = { (uint32_t)src1->ne[1], (uint32_t)src1->ne[0], 1 };
+                elements = { (uint32_t)src1->ne[1], (uint32_t)dst->ne[0], 1 };
                 break;
             }
             uint32_t ne = ggml_nelements(dst);
