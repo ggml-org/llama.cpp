@@ -1,3 +1,143 @@
+# llama.cpp (Adaptive KV Streaming & RDNA 4 ROCm Optimizations)
+
+This fork adds **Adaptive KV Streaming** and **RDNA 4 (gfx1201) / ROCm optimizations** to `llama.cpp`. It allows consumer GPUs with 16 GB VRAM (such as the AMD Radeon RX 9070 XT) to execute models like **Qwen3.8-27B** (`IQ4_XS` model weights, `Q8_0` K / `Q4_0` V cache) across their full **262,144-token context window** without running out of memory, delivering **80+ t/s** decode generation and **1,400+ t/s** prefill throughput.
+
+---
+
+## Improvements
+
+- **Adaptive KV Streaming**:
+  - Automatically pages and streams the KV cache between host RAM and GPU VRAM.
+  - Active VRAM residency is fixed and bounded within dedicated prefill and decode working sets.
+  - Dedicated asynchronous copy engine streams KV pages via PCIe SDMA alongside compute streams.
+  - Enables full 262,144-token context depth on a single 16 GB GPU with 100% recall and zero allocation crashes.
+- **RDNA 4 (gfx1201) and ROCm Kernel Optimizations**:
+  - Multi-column `mmvq` with 4 rows per block tuned for RDNA 4 wave dispatch.
+  - Kernel fusions: fused residual add + RMS norm, fused SwiGLU + quantized activation copies for `mmvq`, and fused gated delta net (GDN) recurrent kernels.
+  - Sibling matmul activation reuse across parallel projections.
+  - Aligned LDS reads for K fragments and compact V scales in paged decode attention.
+  - Vectorized 16-byte reads per call for Q4_K and Q5_K `mmvq`.
+- **Probabilistic Rejection-Sampled Speculative Pipeline**:
+  - Multi-Token Prediction (MTP) drafts are sampled probabilistically at request temperature and verified by rejection sampling instead of naive greedy matching, preserving model output distribution.
+  - Single-head MTP decodes verify catch-up in its first draft step.
+  - Stacks opportunistic n-gram drafting with MTP, delivering up to 16-token speculative bursts on repetitive context and code editing.
+- **HIP Runtime and Graph Tuning**:
+  - Tuned for ROCm 7.2.3 and HIP graphs with single-queue async mode to prevent launch bubbles.
+  - Constrains hardware queue allocations to prevent preemption save area VRAM blowups during long prefills.
+
+This work builds on concepts from [RaymondHuang210129/llama.cpp-adaptive-kv-streaming](https://github.com/RaymondHuang210129/llama.cpp-adaptive-kv-streaming) and [stew675/llama-cpp-rdna-boosts](https://github.com/stew675/llama-cpp-rdna-boosts), re-implemented specifically for RDNA 4 hardware targets in ROCm/HIP.
+
+---
+
+## Setup
+
+The configurations and benchmarks in this repository use **Qwen3.8-27B** (ASCII-condensed `IQ4_XS`, 12.63 GiB): [bsaleh03/Qwen3.8-27B-ASCII-Condensed](https://huggingface.co/bsaleh03/Qwen3.8-27B-ASCII-Condensed). Another option would be [troed/Qwen3.8-27B-ASCII-Condensed](https://huggingface.co/troed/Qwen3.8-27B-ASCII-Condensed).
+
+### System Requirements
+
+- **GPU**: AMD Radeon RX 9070 XT (`gfx1201`, RDNA 4) or compatible ROCm GPU with >= 16 GB VRAM.
+- **Host Bus**: PCIe 5.0 x16 recommended for optimal streaming throughput at > 80k context (PCIe 4.0 supported).
+- **Host RAM**: >= 32 GB RAM (~7.4 GB host memory allocated for 262,144 context; dual-channel DDR5 recommended).
+- **ROCm Toolchain**: ROCm 7.2.3 or later on Linux.
+
+### NixOS
+
+```bash
+nix run .#serve-openai -- -m /path/to/Qwen3.8-27B-ASCII-Condensed-UD-IQ4_XS.gguf
+```
+
+### Other Linux Distributions
+
+Follow official documentation to install AMD ROCm for your distribution.
+
+```bash
+# Build
+cmake -B build-rocm -G Ninja \
+  -DCMAKE_C_COMPILER=hipcc \
+  -DCMAKE_CXX_COMPILER=hipcc \
+  -DGGML_HIP=ON \
+  -DAMDGPU_TARGETS=gfx1201 \
+  -DGGML_HIP_NO_VMM=ON \
+  -DGGML_CUDA_FA_QUANTS="q4_0-q4_0,q8_0-q8_0,f16-f16,bf16-bf16,q8_0-q4_0" \
+  -DGGML_BACKEND_DL=OFF
+
+cmake --build build-rocm --config Release -j$(nproc)
+```
+
+```bash
+# Launch server
+export ROCR_VISIBLE_DEVICES=0
+export GPU_MAX_HW_QUEUES=2
+export DEBUG_HIP_FORCE_ASYNC_QUEUE=1
+export DEBUG_HIP_FORCE_GRAPH_QUEUES=1
+
+./build-rocm/bin/llama-server \
+  -m /path/to/Qwen3.8-27B-ASCII-Condensed-UD-IQ4_XS.gguf \
+  --host 127.0.0.1 --port 8080 \
+  -c 262144 -np 1 -dev ROCm0 -fa on -fit off \
+  -ctk q8_0 -ctv q4_0 -ctkd q8_0 -ctvd q4_0 \
+  --kv-stream \
+  --kv-resident-mib 450 \
+  --kv-resident-mib-decode 2100 \
+  --spec-type draft-mtp,ngram-mod \
+  --spec-ngram-mod-n-max 16 \
+  --spec-ngram-mod-n-min 12 \
+  --spec-ngram-mod-n-match 24 \
+  --spec-draft-sampling probabilistic \
+  -b 2048 -ub 512
+```
+
+---
+
+## Benchmark
+
+- **Hardware**: AMD Radeon RX 9070 XT (`gfx1201`), PCIe 5.0 x16, ROCm 7.2.3.
+- **Fork Build**: Commit `bd063a49a` (`feature/adaptive-kv-stream-rocm`).
+- **Upstream Build**: Commit `23f7aabc1` (`upstream/master`), compiled with identical ROCm flags.
+- **Workload**: Real SQLite amalgamation C source code (`sqlite3.c`) scaled to context ladder depths (`1k`, `4k`, `16k`, `64k`, `128k`, `256k`), prompting a standard helper function implementation (`sqlite3_custom_column_hash`).
+- **Generation**: 128 output tokens at greedy temperature 0.0 (deterministic token path).
+- **Metrics**: Prompt processing throughput (prefill t/s) and token generation throughput (decode t/s) reported directly by the server `/completion` JSON timings.
+
+![Benchmark Matrix Summary](docs/benchmark_matrix_summary.png)
+
+### Decode Throughput (tokens/second)
+
+| Context Depth | Stock llama.cpp | Stock + MTP | This Fork | This Fork + MTP |
+| :--- | :--- | :--- | :--- | :--- |
+| **1,024 tokens** | 33.87 t/s | 65.83 t/s | **36.53 t/s** (+7.8%) | **71.83 t/s** (+9.1%) |
+| **4,096 tokens** | 33.46 t/s | 66.00 t/s | **36.22 t/s** (+8.2%) | **86.51 t/s** (+31.1%) |
+| **16,384 tokens** | 30.27 t/s | 59.58 t/s | **35.54 t/s** (+17.4%) | **81.11 t/s** (+36.1%) |
+| **65,536 tokens** | 21.33 t/s | 37.87 t/s | **32.13 t/s** (+50.6%) | **72.89 t/s** (+92.5%) |
+| **131,072 tokens** | **OOM** | **OOM** | **26.96 t/s** | **78.60 t/s** |
+| **262,144 tokens** | **OOM** | **OOM** | **9.50 t/s** | **31.08 t/s** (+227.2%) |
+
+### Prefill Throughput (tokens/second)
+
+| Context Depth | Stock llama.cpp | This Fork |
+| :--- | :--- | :--- |
+| **1,024 tokens** | 1,287.9 t/s | 1,368.4 t/s |
+| **4,096 tokens** | 1,464.2 t/s | 1,517.0 t/s |
+| **16,384 tokens** | 1,402.5 t/s | 1,443.7 t/s |
+| **65,536 tokens** | 1,096.1 t/s | 1,120.3 t/s |
+| **131,072 tokens** | **OOM** | **863.0 t/s** |
+| **262,144 tokens** | **OOM** | **585.8 t/s** |
+
+---
+
+## Multi-Turn Agent Performance
+
+I have been using this setup for multi-turn agentic coding sessions. Here are the aggregated results from these sessions:
+
+![Real-World Agent Workload Performance Profile](docs/agentic_workload_performance.png)
+
+While the measurements above were taken at 300W TDP, operating with a 231W power limit (-24% power reduction relative to 304W default TDP) incurs only a 3.6% prefill latency and exhibits virtually identical decode throughput, providing significant power and thermal savings for real-world workloads.
+
+---
+
+*(Original upstream llama.cpp documentation follows below)*
+
+---
+
 # llama.cpp
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
