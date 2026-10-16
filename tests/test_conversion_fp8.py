@@ -1,16 +1,23 @@
+"""Test FP8 conversion with small synthetic checkpoints; no GPU or model downloads required.
+
+Install dependencies and run from the repository root:
+    python -m pip install -r requirements/requirements-convert_hf_to_gguf.txt
+    python -m pip install -e ./gguf-py
+    python -m unittest discover -s tests -p 'test_conversion_fp8.py' -v
+
+Use unittest discovery so the repository root is available for imports.
+"""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 
 import numpy as np
 import torch
 from safetensors.torch import save_file
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
