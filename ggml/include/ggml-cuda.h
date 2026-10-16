@@ -52,6 +52,10 @@ typedef void (*ggml_cuda_moe_slot_resolve_fn_t)(
     size_t table_nb0,
     size_t out_nb0,
     size_t out_nb1,
+    const int32_t * full,
+    int64_t fnk,
+    int64_t fnt,
+    size_t full_nb1,
     int32_t il,
     int32_t n_exp,
     int32_t sentinel);

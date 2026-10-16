@@ -277,6 +277,19 @@ public:
         int n_slots = 0;   // s_per_layer plus the sentinel slot when armed
         long n_hit = 0, n_miss = 0, n_page_fail = 0;
         long prefill_resident = 0, prefill_miss = 0;
+        long host_hit = 0, host_miss = 0;
+        // zero-copy pinned host pool: flat array of H uniform slots holding
+        // whole experts (gate|up|down compact). served with plain H2D on the
+        // compute stream, no staging copy and no extra stream.
+        char * host_pool = nullptr;
+        size_t host_slot_bytes = 0;
+        int    host_nslots = 0;
+        std::vector<int32_t> host_of;   // n_layer*n_expert -> host slot or -1
+        std::vector<int32_t> host_key;  // host slot -> global key or -1
+        std::vector<uint32_t> host_freq;
+        int host_clock = 0;
+        // per-layer compact role sizes within a host slot
+        std::vector<size_t> host_gate, host_up, host_down;
         // previous decode step's top-k per layer, for the recency predictor
         // (moe_step_sel[il*n_used+k]); empty until the first decode step
         std::vector<int32_t> step_sel;
@@ -304,6 +317,10 @@ public:
     int  moe_page_pinned(int il, int e, const bool * pinned);
     void moe_page_batch(int il, const int32_t * sel, int n);
     void moe_page_batch_sorted(int il, const int32_t * sel, int n);
+    // pipelined host-pool paging for one resolve batch: returns false only
+    // when the host pool is unavailable (caller falls back to pager fetch)
+    bool moe_page_host_batch(int il, const int32_t * uniq, size_t nunq,
+        std::vector<char> & pinned, int base, int s_pl, void * stream);
     // queue async reads for experts the next layer(s) will likely need.
     // never blocks; admission-controlled inside.
     void moe_prefetch_ahead(int il, const int32_t * sel, int n);

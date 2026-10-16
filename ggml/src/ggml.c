@@ -6623,6 +6623,7 @@ struct ggml_tensor * ggml_moe_slot_resolve(
         struct ggml_context * ctx,
         struct ggml_tensor  * topk,
         struct ggml_tensor  * table,
+        struct ggml_tensor  * full,
         int32_t               il,
         int32_t               sentinel) {
     GGML_ASSERT(topk->type == GGML_TYPE_I32);
@@ -6636,6 +6637,7 @@ struct ggml_tensor * ggml_moe_slot_resolve(
     result->op     = GGML_OP_MOE_SLOT_RESOLVE;
     result->src[0] = topk;
     result->src[1] = table;
+    result->src[2] = full;
 
     return result;
 }

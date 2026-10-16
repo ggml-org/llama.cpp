@@ -96,6 +96,7 @@ public:
     // native_experts.txt gives each layer's base offset and blob_bytes.
     bool use_pack(const char * experts_bin, const char * index_txt, std::string & err);
     bool pack_mode() const { return pack_mode_; }
+    int pack_fd() const { return fd_pack_; }
     long stats_gguf_reads() const { return n_gguf_reads_; }
     long stats_pack_reads() const { return n_pack_reads_; }
 

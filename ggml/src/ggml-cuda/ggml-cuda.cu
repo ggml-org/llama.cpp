@@ -1947,9 +1947,13 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
         return true;
     }
 
-    if (dst->ne[2] <= MMVQ_MAX_BATCH_SIZE) {
+    if (dst->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc)) {
         if (ggml_is_quantized(src0->type)) {
-            return false;
+            // compact MoE slot pools bypass mmvq for multi-token batches
+            const bool pool_multitok = dst->src[2] && dst->ne[2] > 1 && src0->ne[2] < 512;
+            if (!pool_multitok) {
+                return false;
+            }
         } else if (GGML_CUDA_CC_IS_AMD(cc)) {
             return false;
         }
@@ -1981,8 +1985,10 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
-        if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
-            if (ggml_is_quantized(src0->type)) {
+        if (ne2 <= get_mmvq_mmid_max_batch(src0->type, cc)) {
+            // compact MoE slot pools bypass mmvq for multi-token batches
+            const bool pool_multitok = ids && dst->ne[2] > 1 && src0->ne[2] < 512;
+            if (ggml_is_quantized(src0->type) && !pool_multitok) {
                 ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
                 return;
             } else {
@@ -2463,9 +2469,13 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 GGML_ASSERT(ggml_cuda_moe_slot_resolve_fn != nullptr);
                 const ggml_tensor * topk  = dst->src[0];
                 const ggml_tensor * table = dst->src[1];
+                const ggml_tensor * full  = dst->src[2];
                 ggml_cuda_moe_slot_resolve_fn(ctx.stream(),
                     (const int32_t *) topk->data, (const int32_t *) table->data, (int32_t *) dst->data,
                     topk->ne[0], topk->ne[1], topk->nb[0], topk->nb[1], table->nb[0], dst->nb[0], dst->nb[1],
+                    full ? (const int32_t *) full->data : nullptr,
+                    full ? full->ne[0] : 0, full ? full->ne[1] : 0,
+                    full ? full->nb[1] : 0,
                     ggml_get_op_params_i32(dst, 0), (int32_t) (table->ne[0] * table->ne[1]),
                     ggml_get_op_params_i32(dst, 1));
             } break;

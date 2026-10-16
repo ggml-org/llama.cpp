@@ -17,6 +17,7 @@
 #include "llama-memory-recurrent.h"
 
 #include <cassert>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <numeric>
@@ -2179,6 +2180,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // callback uses the same ceiling, so both sides always agree
     const int64_t moe_chunk_max = cparams.moe_chunk_max;
     bool moe_use_pool = false;
+    static int moe_slicing_on = -1;
+    if (moe_slicing_on < 0) {
+        const char * e = getenv("MOE_SLICING");
+        moe_slicing_on = (!e || atoi(e) != 0) ? 1 : 0;
+    }
+    // with intra-layer 8-token slicing the op pages each slice separately,
+    // so batches up to 64 tokens are safe despite exceeding the legacy
+    // callback ceiling
+    const int64_t pool_max = (moe_slicing_on == 1) ? 64 : moe_chunk_max;
     if (cparams.moe_direct_io && moe_n_layer > il && il >= 0 &&
         moe_gate && moe_up && moe_down && moe_table &&
         moe_gate[il] && moe_up[il] && moe_down[il] && moe_table[il] &&
@@ -2191,12 +2201,16 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         // rather than abort graph build.
         if (n_tokens == 1) {
             moe_use_pool = true;
-        } else if (n_tokens > 1 && n_tokens <= moe_chunk_max &&
-                   ggml_is_contiguous(selected_experts)) {
+        } else if (n_tokens > 1 && n_tokens <= pool_max) {
+            if (moe_slicing_on == 1 && n_tokens <= 64) {
+                selected_experts = ggml_cont(ctx0, selected_experts);
+                moe_use_pool = true;
+            } else if (ggml_is_contiguous(selected_experts)) {
             // prefill micro-chunk: the callback pages every row before its
             // split runs, so the mapping is consistent by compute time.
             // chunk<=8 keeps the row union inside the slots (worst 59<72).
             moe_use_pool = true;
+            }
         }
     }
     if (moe_use_pool) {
@@ -2213,7 +2227,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
             ggml_tensor * sel_c = ggml_cont(ctx0, selected_experts);
             slot_ids = ggml_moe_slot_resolve(ctx0, sel_c,
-                (ggml_tensor *) moe_table[il], (int32_t) il, sentinel);
+                (ggml_tensor *) moe_table[il], sel_c, (int32_t) il, sentinel);
             cb(slot_ids, "ffn_moe_slot_ids", il);
         } else {
             // slot_table is [1, n_expert]; gather through a flattened index so
@@ -2268,6 +2282,68 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_build_forward_expand(gf, weights);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
+
+    {
+        static int slicing = -1;
+        if (slicing < 0) {
+            const char * e = getenv("MOE_SLICING");
+            slicing = (!e || atoi(e) != 0) ? 1 : 0;
+        }
+        bool do_slice = false;
+        float slice_clim = 0.0f;
+        if (slicing == 1 && moe_use_pool && n_tokens > 8 && n_tokens <= 64 &&
+            !weight_before_ffn && type_op == LLM_FFN_SILU && gate_exps &&
+            (gate_up_exps == nullptr || gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1]) &&
+            !up_exps_b && !gate_exps_b && !down_exps_b) {
+            slice_clim = il >= 0 ? hparams.swiglu_clamp_exp[il] : 0.0f;
+            do_slice = true;
+        }
+        if (do_slice) {
+            ggml_tensor * p_gate = (ggml_tensor *) moe_gate[il];
+            ggml_tensor * p_up   = (ggml_tensor *) moe_up[il];
+            ggml_tensor * p_down = (ggml_tensor *) moe_down[il];
+            ggml_tensor * sel_c = ggml_cont(ctx0, selected_experts);
+            const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
+            ggml_tensor * acc = nullptr;
+            const uint32_t n_used_il = hparams.n_expert_used(il);
+            for (int64_t t0 = 0; t0 < n_tokens; t0 += 8) {
+                const int64_t chunk = std::min<int64_t>(8, n_tokens - t0);
+                ggml_tensor * cur_s = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd, 1, chunk,
+                    cur->nb[1], cur->nb[2], t0 * cur->nb[2]));
+                ggml_tensor * topk_s = ggml_cont(ctx0, ggml_view_2d(ctx0, sel_c, n_expert_used, chunk,
+                    sel_c->nb[1], t0 * sel_c->nb[1]));
+                ggml_tensor * w_s = ggml_cont(ctx0, ggml_view_3d(ctx0, weights, 1, n_expert_used, chunk,
+                    weights->nb[1], weights->nb[2], t0 * weights->nb[2]));
+                ggml_tensor * s_ids = ggml_moe_slot_resolve(ctx0, topk_s,
+                    (ggml_tensor *) moe_table[il], sel_c, (int32_t) il, sentinel);
+                cb(s_ids, "ffn_moe_slot_ids", il);
+                ggml_tensor * u_r = build_lora_mm_id(p_up, cur_s, s_ids, up_exps_s);
+                ggml_tensor * g_r = build_lora_mm_id(p_gate, cur_s, s_ids, gate_exps_s);
+                ggml_tensor * a_r = nullptr;
+                if (slice_clim > 1e-6f) {
+                    u_r = ggml_clamp(ctx0, u_r, -slice_clim, slice_clim);
+                    ggml_tensor * ga_r = ggml_silu(ctx0, g_r);
+                    ga_r = ggml_clamp(ctx0, ga_r, -INFINITY, slice_clim);
+                    a_r = ggml_mul(ctx0, ga_r, u_r);
+                } else {
+                    a_r = ggml_swiglu_split(ctx0, g_r, u_r);
+                }
+                ggml_tensor * d_r = build_lora_mm_id(p_down, a_r, s_ids, down_exps_s);
+                ggml_tensor * w_r = ggml_mul(ctx0, d_r, w_s);
+                ggml_tensor * part = nullptr;
+                for (uint32_t i = 0; i < n_used_il; ++i) {
+                    ggml_tensor * v = ggml_view_2d(ctx0, w_r, n_embd, chunk, w_r->nb[2], i * w_r->nb[1]);
+                    ggml_build_forward_expand(gf, v);
+                    part = part ? ggml_add(ctx0, part, v) : v;
+                    if (i) ggml_build_forward_expand(gf, part);
+                }
+                acc = acc ? ggml_concat(ctx0, acc, part, 1) : part;
+                if (t0) ggml_build_forward_expand(gf, acc);
+            }
+            cb(acc, "ffn_moe_out", il);
+            return acc;
+        }
+    }
 
     if (weight_before_ffn) {
         // repeat cur to [n_embd, n_expert_used, n_tokens]

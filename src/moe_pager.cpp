@@ -548,6 +548,3 @@ bool moe_pager::fetch(int il, int e, void * dst_gate, size_t gate_bytes,
     std::lock_guard<std::mutex> lock(mtx_);
     return commit_locked(il, e, dst_gate, gate_bytes, dst_up, up_bytes, dst_down, down_bytes);
 }
-
-
-

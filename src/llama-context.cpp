@@ -67,6 +67,10 @@ static void moe_slot_resolve_sync(
     size_t table_nb0,
     size_t out_nb0,
     size_t out_nb1,
+    const int32_t * full,
+    int64_t fnk,
+    int64_t fnt,
+    size_t full_nb1,
     int32_t il,
     int32_t n_exp,
     int32_t sentinel);
@@ -88,17 +92,25 @@ static void moe_slot_resolve_sync(
     size_t table_nb0,
     size_t out_nb0,
     size_t out_nb1,
+    const int32_t * full,
+    int64_t fnk,
+    int64_t fnt,
+    size_t full_nb1,
     int32_t il,
     int32_t n_exp,
     int32_t sentinel) {
     (void) table;
     (void) table_nb0;
+    (void) out_nb0;
+    (void) out_nb1;
     llama_context * ctx = g_moe_resolve_ctx;
     const int64_t total = nk * nt;
     if (!ctx || !ctx->moe_enabled() || il < 0 || il >= ctx->moe.n_layer || total <= 0 || total > 80) {
         return;
     }
+    (void) full; (void) fnk; (void) fnt; (void) full_nb1;
     cudaStream_t st = (cudaStream_t) stream;
+    cudaStreamSynchronize(st);
     std::vector<int32_t> ids((size_t) total);
     if (topk_nb0 == sizeof(int32_t) && topk_nb1 == (size_t) nk * sizeof(int32_t)) {
         cudaMemcpy(ids.data(), topk, (size_t) total * sizeof(int32_t), cudaMemcpyDeviceToHost);
@@ -112,6 +124,7 @@ static void moe_slot_resolve_sync(
     const int n_layer = ctx->moe.n_layer;
     const int s_pl = moe_get_layer_slots(il, n_layer);
     const int base = moe_get_layer_base_slot(il, n_layer);
+
     std::vector<int32_t> slot_of((size_t) total, sentinel);
     std::vector<char> pinned((size_t) s_pl, 0);
     std::vector<int32_t> uniq;
@@ -136,9 +149,34 @@ static void moe_slot_resolve_sync(
         }
     }
     std::sort(uniq.begin(), uniq.end());
-    for (size_t i = 0; i < uniq.size(); i++) {
-        const int got = ctx->moe_page_pinned(il, uniq[i], (const bool *) pinned.data());
-        if (got >= base && got < base + s_pl) pinned[(size_t) got - (size_t) base] = 1;
+    static long s_nres = 0, s_nmiss = 0;
+    static double s_tres = 0.0, s_tpg = 0.0;
+    auto t_res0 = std::chrono::high_resolution_clock::now();
+    bool host_ok = ctx->moe_page_host_batch(il, uniq.data(), uniq.size(), pinned, base, s_pl, st);
+    if (!host_ok) {
+        for (size_t i = 0; i < uniq.size(); i++) {
+            ctx->pager.prefetch(il, uniq[i]);
+        }
+        for (size_t i = 0; i < uniq.size(); i++) {
+            auto t_pg0 = std::chrono::high_resolution_clock::now();
+            const int got = ctx->moe_page_pinned(il, uniq[i], (const bool *) pinned.data());
+            s_tpg += std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - t_pg0).count();
+            if (got >= base && got < base + s_pl) pinned[(size_t) got - (size_t) base] = 1;
+        }
+    }
+    s_tres += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t_res0).count();
+    s_nres++;
+    s_nmiss += (long) uniq.size();
+    if (!uniq.empty()) {
+        cudaStream_t ws = (cudaStream_t) moe_pager::worker_stream();
+        if (ws && ws != st) {
+            thread_local cudaEvent_t s_ev = nullptr;
+            if (!s_ev) cudaEventCreateWithFlags(&s_ev, cudaEventDisableTiming);
+            cudaEventRecord(s_ev, ws);
+            cudaStreamWaitEvent(st, s_ev, 0);
+        }
     }
     for (int64_t i = 0; i < total; i++) {
         const int32_t e = ids[(size_t) i];
@@ -147,7 +185,7 @@ static void moe_slot_resolve_sync(
         if (cur >= base && cur < base + s_pl) slot_of[(size_t) i] = cur - base;
     }
     cudaMemcpyAsync(out, slot_of.data(), (size_t) total * sizeof(int32_t), cudaMemcpyHostToDevice, st);
-    cudaStreamSynchronize(st);
+
 }
 
 
@@ -428,6 +466,9 @@ llama_context::llama_context(
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
+    if (params.moe_direct_io) {
+        cparams.n_ubatch = std::min(cparams.n_ubatch, 64u);
+    }
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
@@ -687,6 +728,42 @@ llama_context::llama_context(
                             LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers, %d total slots\n",
                                            __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
                                            n_layer, total_slots);
+                            {
+                                size_t per = 0;
+                                moe.host_gate.assign(n_layer, 0);
+                                moe.host_up.assign(n_layer, 0);
+                                moe.host_down.assign(n_layer, 0);
+                                for (int il = 0; il < n_layer; il++) {
+                                    const int s_pl_il = moe_get_layer_slots(il, n_layer);
+                                    const size_t gb = ggml_nbytes(moe.pool_gate[il]) / (size_t) (s_pl_il + 1);
+                                    const size_t ub = ggml_nbytes(moe.pool_up[il])   / (size_t) (s_pl_il + 1);
+                                    const size_t db = ggml_nbytes(moe.pool_down[il]) / (size_t) (s_pl_il + 1);
+                                    moe.host_gate[il] = gb; moe.host_up[il] = ub; moe.host_down[il] = db;
+                                    per = std::max(per, gb + ub + db);
+                                }
+                                size_t blobmax = 0;
+                                for (int il = 0; il < n_layer; il++) {
+                                    for (int e = 0; e < n_exp; e++) {
+                                        blobmax = std::max(blobmax, (size_t) pager.slices(il, e)->len);
+                                    }
+                                }
+                                per = std::max(per, blobmax);
+                                const char * he = getenv("MOE_HOST_SLOTS");
+                                int hslots = (he && atoi(he) > 0) ? atoi(he) : 2300;
+                                moe.host_slot_bytes = per;
+                                if (cudaHostAlloc((void **) &moe.host_pool,
+                                        (size_t) hslots * per, cudaHostAllocPortable) == cudaSuccess) {
+                                    moe.host_nslots = hslots;
+                                    moe.host_of.assign((size_t) n_layer * n_exp, -1);
+                                    moe.host_key.assign((size_t) hslots, -1);
+                                    moe.host_freq.assign((size_t) hslots, 0);
+                                    LLAMA_LOG_INFO("%s: moe host pool %d slots x %zu bytes (%.2f MiB)\n",
+                                                   __func__, hslots, per, (double) hslots * per / 1048576.0);
+                                } else {
+                                    moe.host_pool = nullptr;
+                                    LLAMA_LOG_WARN("%s: moe host pool unavailable, NVMe direct only\n", __func__);
+                                }
+                            }
                             moe_seed_hot();
                             const char * p_bin = getenv("MOE_PREDICTOR_BIN");
                             std::string pred_bin = p_bin ? p_bin : "/home/zyxciss/llama.cpp/data/router_predictor_v2.bin";
@@ -834,6 +911,7 @@ llama_context::~llama_context() {
     }
     // release the sparse-MoE slot pool (fit-probe contexts must not leak VRAM)
     if (moe.buf) { ggml_backend_buffer_free(moe.buf); moe.buf = nullptr; }
+    if (moe.host_pool) { cudaFreeHost(moe.host_pool); moe.host_pool = nullptr; moe.host_nslots = 0; }
     if (moe.ctx) { ggml_free(moe.ctx); moe.ctx = nullptr; }
     if (moe_predictor_is_ready()) {
         moe_predictor_free();
@@ -4991,6 +5069,7 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
     moe.slot_freq[(size_t) slot]++;
     moe_publish(il, e, slot);
     moe.n_miss++;
+
     return slot;
 }
 
@@ -5030,6 +5109,123 @@ void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
 // resident hits for the zero-I/O fast path, then page misses in ascending
 // expert order. Ascending order is monotonic in experts.bin, so the pager
 // issues sequential reads at full bandwidth instead of random seeks.
+bool llama_context::moe_page_host_batch(int il, const int32_t * uniq, size_t nunq,
+        std::vector<char> & pinned, int base, int s_pl, void * stream) {
+    if (!moe_ready || !moe.host_pool || moe.host_nslots <= 0) return false;
+    if (!pager.pack_mode() || pager.pack_fd() < 0) return false;
+    const int n_exp = moe.n_expert;
+    cudaStream_t st = (cudaStream_t) stream;
+    const size_t gb = moe.host_gate[il], ub = moe.host_up[il], db = moe.host_down[il];
+    const size_t stride = moe.host_slot_bytes;
+    struct Job { int32_t e; int vslot; int hslot; bool host_hit; bool need_read; };
+    std::vector<Job> jobs;
+    jobs.reserve(nunq);
+    std::vector<char> claimed((size_t) std::max(0, moe.host_nslots), 0);
+    for (size_t i = 0; i < nunq; i++) {
+        const int32_t e = uniq[i];
+        if (e < 0 || e >= n_exp) continue;
+        const int key = il * n_exp + e;
+        int vslot = -1;
+        {
+            const int start = moe.host_clock % std::max(1, s_pl);
+            uint32_t coldest = UINT32_MAX;
+            for (int t = 0; t < s_pl; t++) {
+                const int c = (start + t) % s_pl;
+                if (pinned[(size_t) c]) continue;
+                const uint32_t f = moe.slot_freq[(size_t) base + c];
+                if (f < coldest) { coldest = f; vslot = base + c; }
+            }
+            moe.host_clock++;
+        }
+        if (vslot < 0) continue;
+        pinned[(size_t) vslot - (size_t) base] = 1;
+        int hslot = moe.host_of[(size_t) key];
+        bool hit = (hslot >= 0 && hslot < moe.host_nslots);
+        bool need_read = false;
+        if (!hit) {
+            int best = -1;
+            uint32_t bestf = UINT32_MAX;
+            for (int c = 0; c < moe.host_nslots; c++) {
+                if (claimed[(size_t) c]) continue;
+                const int old = moe.host_key[(size_t) c];
+                if (old >= 0) {
+                    bool pinneed = false;
+                    for (size_t j = 0; j < nunq; j++) {
+                        if (uniq[j] >= 0 && uniq[j] < n_exp && il * n_exp + uniq[j] == old) { pinneed = true; break; }
+                    }
+                    if (pinneed) continue;
+                }
+                if (moe.host_freq[(size_t) c] < bestf) { bestf = moe.host_freq[(size_t) c]; best = c; }
+                if (bestf == 0 && old < 0) break;
+            }
+            if (best < 0) continue;
+            const int c = best;
+            const int old = moe.host_key[(size_t) c];
+            if (old >= 0) moe.host_of[(size_t) old] = -1;
+            hslot = c;
+            claimed[(size_t) c] = 1;
+            moe.host_freq[(size_t) c] = 1;
+            need_read = true;
+            moe.host_of[(size_t) key] = hslot;
+            moe.host_key[(size_t) hslot] = key;
+        } else {
+            moe.host_freq[(size_t) hslot]++;
+        }
+        jobs.push_back({e, vslot, hslot, hit, need_read});
+    }
+    const int pfd = pager.pack_fd();
+    std::vector<std::thread> workers;
+    std::atomic<long> io_fail{0};
+    const size_t NTH = 16;
+    size_t per = (jobs.size() + NTH - 1) / NTH;
+    for (size_t w = 0; w < NTH && w * per < jobs.size(); w++) {
+        workers.emplace_back([&, w]() {
+            for (size_t i = w * per; i < std::min(jobs.size(), (w + 1) * per); i++) {
+                if (!jobs[i].need_read) continue;
+                const moe_expert_slice * s = pager.slices(il, jobs[i].e);
+                char * dst = moe.host_pool + (size_t) jobs[i].hslot * stride;
+                size_t left = s->len, done = 0;
+                while (left > 0) {
+                    ssize_t r = pread(pfd, dst + done, left, (off_t) (s->off + done));
+                    if (r <= 0) break;
+                    done += (size_t) r;
+                    left -= (size_t) r;
+                }
+                if (done != s->len) io_fail++;
+            }
+        });
+    }
+    for (auto & th : workers) th.join();
+    if (io_fail > 0) return false;
+
+    for (size_t i = 0; i < jobs.size(); i++) {
+        const int local = jobs[i].vslot - base;
+        const size_t vg = ggml_nbytes(moe.pool_gate[il]) / (size_t) (s_pl + 1);
+        const size_t vu = ggml_nbytes(moe.pool_up[il])   / (size_t) (s_pl + 1);
+        const size_t vd = ggml_nbytes(moe.pool_down[il]) / (size_t) (s_pl + 1);
+        const char * src = moe.host_pool + (size_t) jobs[i].hslot * stride;
+        const size_t pre = pager.slices(il, jobs[i].e)->pre;
+        cudaMemcpyAsync((char *) moe.pool_gate[il]->data + (size_t) local * vg, src + pre,
+                        std::min(vg, gb), cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync((char *) moe.pool_up[il]->data + (size_t) local * vu, src + pre + gb,
+                        std::min(vu, ub), cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync((char *) moe.pool_down[il]->data + (size_t) local * vd, src + pre + gb + ub,
+                        std::min(vd, db), cudaMemcpyHostToDevice, st);
+        const int key = il * n_exp + jobs[i].e;
+        const int old = moe.slot_key[(size_t) jobs[i].vslot];
+        if (old >= 0 && old != key) moe.slot_of[(size_t) old] = -1;
+        const int prev = moe.slot_of[(size_t) key];
+        if (prev >= 0 && prev != jobs[i].vslot) moe.slot_key[(size_t) prev] = -1;
+        moe.slot_key[(size_t) jobs[i].vslot] = key;
+        moe.slot_of[(size_t) key] = jobs[i].vslot;
+        moe.slot_freq[(size_t) jobs[i].vslot]++;
+        moe.n_miss++;
+        if (jobs[i].host_hit) moe.host_hit++; else moe.host_miss++;
+        moe_adapt_note(il, jobs[i].e);
+    }
+    return true;
+}
+
 void llama_context::moe_page_batch_sorted(int il, const int32_t * sel, int n) {
     if (!moe_ready || il < 0 || il >= moe.n_layer) return;
     const int n_exp = moe.n_expert;
@@ -5545,6 +5741,7 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     if (!ctx || !ctx->moe_enabled()) {
         return false;
     }
+
     if (strncmp(nm, "ffn_moe_topk-", 13) != 0) {
         return false;
     }
@@ -5552,8 +5749,7 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     if (il < 0 || il >= ctx->moe.n_layer) {
         return false;
     }
-    if (moe_doorbell_on(ctx) && t->ne[1] >= 1 && t->ne[1] <= 8 &&
-        t->ne[0] * t->ne[1] <= 80) {
+    if (moe_doorbell_on(ctx)) {
         return false;
     }
     if (ask) {
@@ -5593,7 +5789,7 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     const int64_t nw = t->ne[0];
     std::vector<int32_t> ids((size_t) nw * ntok);
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
-    if (moe_doorbell_on(ctx) && ntok >= 1 && ntok <= 8 && nw * ntok <= 80) {
+    if (moe_doorbell_on(ctx)) {
         return true;
     }
     if (ntok == 1 || (ntok > 1 && ntok <= ctx->get_cparams().moe_chunk_max)) {
