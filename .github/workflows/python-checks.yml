@@ -47,3 +47,5 @@ jobs:
             ty check --exit-zero-on-warning --output-format=github
       - name: Test FP8 conversion
         run: python -m unittest discover -s tests -p 'test_conversion_fp8.py' -v
+      - name: Test KV cache scales
+        run: python tests/test-kv-cache-scales.py -v
