@@ -120,6 +120,9 @@ public:
     ggml_tensor * staging_tensor(size_t layer, bool value, uint32_t snapshot) const noexcept;
     // Order a current-state read after its own queued restore without draining later layers.
     ggml_tensor * restore_dependency(ggml_context * ctx, size_t layer, bool value, ggml_tensor * current) const;
+    // Publish a complete produced plane with one boundary when its physical rows are packed.
+    bool publish_staged(ggml_context * ctx, ggml_cgraph * graph, size_t layer, bool value,
+            const std::vector<ggml_tensor *> & copies) const;
     bool begin_staged_capture(llama_recurrent_spill_identity identity, uint32_t tokens);
     bool stage_ready();
 

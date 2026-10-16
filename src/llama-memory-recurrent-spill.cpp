@@ -280,6 +280,7 @@ struct spill_publication_state {
     bool restore_pending = false;
     std::vector<uint8_t> slot_busy;
     std::vector<ggml_tensor *> destinations;
+    std::vector<ggml_tensor *> planes;
     ggml_backend_t producer = nullptr;
     uint32_t expected_s = 0;
     uint32_t expected_per_layer = 0;
@@ -341,6 +342,25 @@ struct llama_recurrent_spill_bank::implementation {
         return (layer*layout.depth+slot-1)*2+size_t(value);
     }
     bool publish_node(ggml_backend_t producer, ggml_tensor * op);
+    bool publish_snapshot(ggml_backend_t producer, size_t layer, bool value, uint32_t snapshot, const ggml_tensor * source);
+    bool publish_plane(ggml_backend_t producer, ggml_tensor * op) {
+        const auto * root=op->src[1]->view_src;
+        const auto found=std::find(publication->planes.begin(),publication->planes.end(),root);
+        if (!root || found == publication->planes.end()) return false;
+        const size_t plane=size_t(found-publication->planes.begin()),layer=plane/2;
+        const bool value=plane%2;
+        const uint32_t count=value ? publication->expected_s : layout.depth;
+        auto * stage=publication->stage->plane_span(layer,value,publication->layer_slots[layer]);
+        size_t offset=0,row=0,bytes=0;
+        if (!count || !stage || !region(layer,value,1,offset,row) || !multiply(row,count,bytes) ||
+                op->src[0]->view_src != stage || op->src[0]->view_offs || op->src[1]->view_offs ||
+                op->src[0]->type != GGML_TYPE_I8 || op->src[1]->type != GGML_TYPE_I8 ||
+                ggml_nbytes(op->src[0]) != bytes || ggml_nbytes(op->src[1]) != bytes) return false;
+        for (uint32_t snapshot=1;snapshot<=count;++snapshot)
+            if (!publish_snapshot(producer,layer,value,snapshot,
+                    publication->stage->tensor(layer,value,snapshot,publication->layer_slots[layer]))) return false;
+        return true;
+    }
     bool restore_node(ggml_backend_t consumer, ggml_tensor * op) {
         auto & p=*publication;
         const auto found=std::find(p.destinations.begin(),p.destinations.end(),op->src[0]);
@@ -392,14 +412,21 @@ bool llama_recurrent_spill_bank::implementation::publish_node(
     const size_t part=index_value%(size_t(layout.depth)*2);
     const uint32_t snapshot=uint32_t(part/2)+1;
     const bool value=(part%2) != 0;
+    return publish_snapshot(producer,layer,value,snapshot,op->src[0]);
+}
+
+bool llama_recurrent_spill_bank::implementation::publish_snapshot(
+        ggml_backend_t producer, size_t layer, bool value, uint32_t snapshot, const ggml_tensor * input) {
+    if (!publication || !publication->active || submission_failed || state != spill_transfer_state::capturing) return false;
+    auto & p=*publication;
     if (layer >= layout.layers.size() || !layout.layers[layer].enabled ||
             (value && snapshot > p.expected_s) ||
             touched[index(layer,value,snapshot)] ||
             (p.producer && p.producer != producer) ||
             ggml_backend_get_device(producer) != ggml_backend_get_device(p.copy_backend)) return false;
     auto * stage_tensor=p.stage->tensor(layer,value,snapshot,p.layer_slots[layer]);
-    if (!stage_tensor || (op->src[0] != stage_tensor && op->src[0]->view_src != stage_tensor) ||
-            ggml_nbytes(op->src[0]) != ggml_nbytes(stage_tensor)) return false;
+    if (!stage_tensor || (input != stage_tensor && input->view_src != stage_tensor) ||
+            ggml_nbytes(input) != ggml_nbytes(stage_tensor)) return false;
     if (p.current_layer != layer) {
         if (p.remaining || (p.current_layer != SIZE_MAX && layer <= p.current_layer)) return false;
         p.current_slot=p.layer_slots[layer];
@@ -419,7 +446,7 @@ bool llama_recurrent_spill_bank::implementation::publish_node(
     // Submission may fail after the destination was modified; cancellation must invalidate it.
     touched[index(layer,value,snapshot)]=1;
     ++submitted;
-    const auto * source=op->src[0];
+    const auto * source=input;
     bool ready_to_copy=true;
     if (auto * span=p.stage->plane_span(layer,value,p.current_slot)) {
         const uint32_t count=value ? p.expected_s : layout.depth;
@@ -517,13 +544,16 @@ bool llama_recurrent_spill_bank::enable_publication(
                 const auto * pub=state.publication.get();
                 return pub && op && op->op == GGML_OP_CPY && op->src[0] && op->src[1] &&
                     (std::find(pub->destinations.begin(),pub->destinations.end(),op->src[1]) != pub->destinations.end() ||
-                     std::find(pub->destinations.begin(),pub->destinations.end(),op->src[0]) != pub->destinations.end());
+                     std::find(pub->destinations.begin(),pub->destinations.end(),op->src[0]) != pub->destinations.end() ||
+                     (op->src[1]->view_src && std::find(pub->planes.begin(),pub->planes.end(),op->src[1]->view_src) != pub->planes.end()));
             },
             [](void * context,ggml_backend_t backend,ggml_tensor * op) {
                 auto & state=*static_cast<implementation *>(context);
                 const bool restore=std::find(state.publication->destinations.begin(),
                     state.publication->destinations.end(),op->src[0]) != state.publication->destinations.end();
-                return (restore ? state.restore_node(backend,op) : state.publish_node(backend,op))
+                const bool plane=op->src[1]->view_src && std::find(state.publication->planes.begin(),
+                    state.publication->planes.end(),op->src[1]->view_src) != state.publication->planes.end();
+                return (restore ? state.restore_node(backend,op) : plane ? state.publish_plane(backend,op) : state.publish_node(backend,op))
                     ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
             },
             [](void *) { return false; },
@@ -532,14 +562,16 @@ bool llama_recurrent_spill_bank::enable_publication(
         };
         next->execution=ggml_backend_execution_buffer_new(device,s.host,ops,&s);
         if (!next->execution) return false;
-        size_t count=0,metadata_bytes=0;
+        size_t count=0,metadata_bytes=0,plane_count=0,total_count=0;
         if (!multiply(s.layout.layers.size(),s.layout.depth,count) ||
                 !multiply(count,2,count) ||
-                !multiply(count,ggml_tensor_overhead(),metadata_bytes) ||
+                !multiply(s.layout.layers.size(),2,plane_count) || !add(count,plane_count,total_count) ||
+                !multiply(total_count,ggml_tensor_overhead(),metadata_bytes) ||
                 !add(metadata_bytes,4096,metadata_bytes)) return false;
         next->ctx=ggml_init({metadata_bytes,nullptr,true});
         if (!next->ctx) return false;
         next->destinations.resize(count,nullptr);
+        next->planes.resize(plane_count,nullptr);
         auto * base=static_cast<uint8_t *>(ggml_backend_buffer_get_base(next->execution));
         for (size_t layer=0;layer<s.layout.layers.size();++layer) {
             if (!s.layout.layers[layer].enabled) continue;
@@ -557,6 +589,13 @@ bool llama_recurrent_spill_bank::enable_publication(
                     }
                     next->destinations[next->index(layer,value,snapshot,s.layout.depth)]=tensor;
                 }
+            }
+            for (bool value : {false,true}) {
+                size_t offset=0,row=0,bytes=0;
+                if (!s.region(layer,value,1,offset,row) || !multiply(row,s.layout.depth,bytes) || bytes > size_t(INT64_MAX)) return false;
+                auto * plane=ggml_new_tensor_1d(next->ctx,GGML_TYPE_I8,int64_t(bytes));
+                if (ggml_backend_tensor_alloc(next->execution,plane,base+offset) != GGML_STATUS_SUCCESS) return false;
+                next->planes[layer*2+size_t(value)]=plane;
             }
         }
         next->slot_events.resize(slots,nullptr);
@@ -650,6 +689,38 @@ ggml_tensor * llama_recurrent_spill_bank::restore_dependency(
     auto * source=publication_tensor(layer,value,1);
     if (!ctx || !current || !source || current->type != source->type || !ggml_are_same_shape(current,source)) return nullptr;
     return ggml_cpy(ctx,source,current);
+}
+
+bool llama_recurrent_spill_bank::publish_staged(ggml_context * ctx, ggml_cgraph * graph,
+        size_t layer, bool value, const std::vector<ggml_tensor *> & copies) const {
+    const auto & s=*impl;
+    if (!ctx || !graph || !s.publication || layer >= s.layout.layers.size() || !s.layout.layers[layer].enabled ||
+            copies.size() > s.layout.depth) return false;
+    if (copies.empty()) return true;
+    std::vector<uint32_t> snapshots;
+    for (auto * copy : copies) {
+        if (!copy || copy->op != GGML_OP_CPY) return false;
+        uint32_t snapshot=1;
+        while (snapshot <= copies.size() && staging_tensor(layer,value,snapshot) != copy->src[1]) ++snapshot;
+        if (snapshot > copies.size() || std::find(snapshots.begin(),snapshots.end(),snapshot) != snapshots.end()) return false;
+        snapshots.push_back(snapshot);
+    }
+    const auto & p=*s.publication;
+    auto * source=p.stage->plane_span(layer,value,p.layer_slots[layer]);
+    auto * destination=p.planes[layer*2+size_t(value)];
+    if (source && destination) {
+        size_t offset=0,row=0,bytes=0;
+        if (!s.region(layer,value,1,offset,row) || !multiply(row,copies.size(),bytes) ||
+                bytes > ggml_nbytes(source) || bytes > ggml_nbytes(destination)) return false;
+        for (auto * copy : copies) ggml_build_forward_expand(graph,copy);
+        auto * from=ggml_view_1d(ctx,source,int64_t(bytes),0);
+        auto * to=ggml_view_1d(ctx,destination,int64_t(bytes),0);
+        ggml_build_forward_expand(graph,ggml_cpy(ctx,from,to));
+    } else {
+        for (size_t i=0;i<copies.size();++i)
+            ggml_build_forward_expand(graph,ggml_cpy(ctx,copies[i],publication_tensor(layer,value,snapshots[i])));
+    }
+    return true;
 }
 
 

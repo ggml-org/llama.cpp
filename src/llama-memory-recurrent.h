@@ -190,6 +190,8 @@ public:
 
     bool staged_publication_enabled() const;
     ggml_tensor * restore_dependency(ggml_context * ctx, ggml_tensor * current) const;
+    bool publish_staged(ggml_context * ctx, ggml_cgraph * graph, size_t layer, bool value,
+            const std::vector<ggml_tensor *> & copies) const;
     ggml_tensor * staging_tensor(size_t layer, bool value, uint32_t snapshot) const;
     ggml_tensor * publication_tensor(size_t layer, bool value, uint32_t snapshot) const;
 

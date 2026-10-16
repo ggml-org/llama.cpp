@@ -682,6 +682,10 @@ ggml_tensor * llama_memory_recurrent_context::restore_dependency(ggml_context * 
     }
     return current;
 }
+bool llama_memory_recurrent_context::publish_staged(ggml_context * ctx, ggml_cgraph * graph,
+        size_t layer, bool value, const std::vector<ggml_tensor *> & copies) const {
+    return mem && mem->spill_bank() && mem->spill_bank()->publish_staged(ctx,graph,layer,value,copies);
+}
 ggml_tensor * llama_memory_recurrent_context::staging_tensor(
         size_t layer, bool value, uint32_t snapshot) const {
     return mem && mem->spill_bank() ? mem->spill_bank()->staging_tensor(layer,value,snapshot) : nullptr;
