@@ -77,12 +77,11 @@ void main() {
     if (tid == 0) {
         const float amax = sh[0];
         float scale = 1.0f;
-        // src1 already inf/nan is not ours to fix - keep the scale at 1.0
         if (!isinf(amax) && !isnan(amax) && amax > 32768.0f) {
             scale = exp2(ceil(log2(amax)) - 15.0f);
         }
-        data_d[0] = 1.0f / scale; // s1_inv, exact: scale is a power of two
-        data_d[1] = scale;        // s1_scale
+        data_d[0] = 1.0f / scale; // exact: scale is a power of two
+        data_d[1] = scale;
     }
 }
 #endif
