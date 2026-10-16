@@ -1419,6 +1419,8 @@ class MODEL_TENSOR(IntEnum):
     DSPARK_CONF_PROJ       = auto()  # confidence head
     DSPARK_JOINT_PROJ      = auto()  # rnn markov head
     DSPARK_MASK_EMBD       = auto()  # per-slot mask embeddings
+    DSPARK_LOG_SNR_FC1     = auto()
+    DSPARK_LOG_SNR_FC2     = auto()
     ENGRAM_KV              = auto()
     ENGRAM_GATE            = auto()
     DFLASH_ATTN_CONV_BASE  = auto()
@@ -2368,6 +2370,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DSPARK_CONF_PROJ:          "conf_proj",
     MODEL_TENSOR.DSPARK_JOINT_PROJ:         "joint_proj",
     MODEL_TENSOR.DSPARK_MASK_EMBD:          "mask_embd",
+    MODEL_TENSOR.DSPARK_LOG_SNR_FC1:        "log_snr_fc1",
+    MODEL_TENSOR.DSPARK_LOG_SNR_FC2:        "log_snr_fc2",
     MODEL_TENSOR.ENGRAM_KV:                 "blk.{bid}.engram_kv",
     MODEL_TENSOR.ENGRAM_GATE:               "blk.{bid}.engram_gate",
     MODEL_TENSOR.DFLASH_ATTN_CONV_BASE:     "blk.{bid}.attn_conv_base",
