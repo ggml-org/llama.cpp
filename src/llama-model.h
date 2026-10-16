@@ -18,6 +18,7 @@ struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
 struct llama_model;
+struct llama_moe_predictor;
 
 // available models
 enum llm_type {
@@ -834,6 +835,12 @@ struct llama_model {
 
     // which tensors can be prefetched - driven by TENSOR_READ_LAZY
     std::unordered_set<const ggml_tensor *> can_prefetch;
+
+    // tensors read lazily from the file mapping (TENSOR_READ_LAZY): their uploads to a device are streamed
+    std::unordered_set<const ggml_tensor *> lazy_tensors;
+
+    // next-layer expert prediction for lazy experts (LLAMA_MOE_PREDICT), null when disabled
+    std::unique_ptr<llama_moe_predictor> moe_predictor;
 
     // statically allocated context for assigning
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;

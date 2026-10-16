@@ -1071,6 +1071,12 @@ struct llm_graph_context {
     llm_graph_context(const llm_graph_params & params);
     virtual ~llm_graph_context() = default;
 
+    // called by build_moe_ffn once the experts of layer il are selected, before their matmuls are added to the graph
+    virtual void on_moe_selected(ggml_tensor * selected_experts, int il) const {
+        GGML_UNUSED(selected_experts);
+        GGML_UNUSED(il);
+    }
+
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
     // true when the last layer must be narrowed to the output rows before the nextn hidden state is captured

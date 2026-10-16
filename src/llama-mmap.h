@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -88,5 +89,19 @@ using llama_memory_ranges = std::vector<llama_memory_range>;
 
 // Prefetch the host pages covering these memory ranges.
 void llama_prefetch(llama_memory_ranges mr);
+
+// Copy byte ranges of a host buffer that may be a lazily read file mapping: `copy(offs, size)` is called for
+// each run in order, split into chunks, while the pages of the following chunks are hinted to the kernel
+// (POSIX_MADV_WILLNEED, in pieces no larger than the kernel's per-call readahead cap) so that the reads from disk
+// overlap the copy instead of faulting in one page at a time. The hints cover the chunk being copied and
+// `lookahead` bytes beyond it, across run boundaries. With `prefetch` false the runs are copied unchanged.
+struct llama_byte_range {
+    size_t offs;
+    size_t size;
+};
+// `hint(offs, size)` issues one hint piece; nullptr means llama_prefetch (tests record the order of hints and copies)
+void llama_copy_ranges_prefetched(const void * base, const std::vector<llama_byte_range> & runs, bool prefetch,
+        size_t chunk, size_t lookahead, const std::function<void(size_t offs, size_t size)> & copy,
+        const std::function<void(size_t offs, size_t size)> * hint = nullptr);
 
 size_t llama_path_max();

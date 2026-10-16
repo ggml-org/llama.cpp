@@ -178,6 +178,18 @@ llama_context::llama_context(
     //     may need to be backend-dependent
     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
 
+    {
+        // the same switch as the CPU backend's expert prefetch: both hint experts that are read from disk
+        const char * env = getenv("GGML_CPU_MOE_PREFETCH");
+        copy_prefetch = env != nullptr && atoi(env) == 1;
+        if (const char * mb = getenv("LLAMA_COPY_PREFETCH_MB"); mb != nullptr && atoi(mb) > 0) {
+            copy_prefetch_lookahead = (size_t) atoi(mb) << 20;
+        }
+        if (copy_prefetch) {
+            LLAMA_LOG_INFO("%s: expert uploads are prefetched %zu MiB ahead\n", __func__, copy_prefetch_lookahead >> 20);
+        }
+    }
+
     t_start_us = model.t_start_us;
     t_load_us  = model.t_load_us;
 
@@ -2774,14 +2786,33 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         return false;
     }
     const ggml_tensor * node = ggml_graph_node(graph, 0);
+
+    // uploads of lazily mapped experts are streamed from disk ahead of the copy (GGML_CPU_MOE_PREFETCH)
+    const bool prefetch = lctx->copy_prefetch && lctx->model.lazy_tensors.count(src) > 0;
+    if (prefetch && !lctx->copy_prefetch_logged) {
+        lctx->copy_prefetch_logged = true;
+        LLAMA_LOG_INFO("%s: expert upload prefetch active (first tensor: %s)\n", __func__, ggml_get_name(src));
+    }
+
     if (node->op != GGML_OP_MUL_MAT_ID || node->src[0] != dst) {
-        return false;
+        if (!prefetch) {
+            return false;
+        }
+        // not the first node of its split: the whole tensor is uploaded, but still streamed
+        llama_copy_ranges_prefetched(src->data, { { 0, ggml_nbytes(src) } }, true, 64u*1024*1024,
+                lctx->copy_prefetch_lookahead, [&](size_t offs, size_t size) {
+            ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offs, offs, size);
+        });
+        return true;
     }
 
     const ggml_tensor * ids = node->src[2];
     if (ggml_nelements(ids) == 0) {
         return true;
     }
+
+    // the runs of used experts of this tensor, uploaded in order with the reads from disk running ahead
+    std::vector<llama_byte_range> runs;
 
     const int64_t n_expert    = src->ne[2];
     const size_t  expert_size = src->nb[2];
@@ -2834,11 +2865,16 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         const size_t padding = last < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
         const size_t size    = (last + 1 - next)*expert_size + padding;
         if (size > 0) {
-            ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
+            runs.push_back({ offset, size });
         }
 
         first = last + 1;
     }
+
+    llama_copy_ranges_prefetched(src->data, runs, prefetch, 64u*1024*1024, lctx->copy_prefetch_lookahead,
+            [&](size_t offs, size_t size) {
+        ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offs, offs, size);
+    });
 
     return true;
 }

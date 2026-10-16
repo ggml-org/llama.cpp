@@ -187,6 +187,11 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-integration.cpp)
     llama_build_and_test(test-llama-grammar.cpp LINK llama)
     llama_build_and_test(test-batch-alloc.cpp LINK llama)
+    llama_build_and_test(test-moe-predict.cpp LINK llama)
+    if (NOT WIN32)
+        llama_build_and_test(test-copy-prefetch.cpp LINK llama)
+        set_tests_properties(test-copy-prefetch PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
     llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
@@ -332,6 +337,20 @@ if (NOT GGML_BACKEND_DL AND GGML_CPU)
     llama_build_and_test(test-rope.cpp LINK ggml)
     llama_build_and_test(test-col2im-1d.cpp LINK ggml)
     llama_build_and_test(test-conv-1d.cpp LINK ggml)
+endif()
+
+if (GGML_CPU AND NOT WIN32)
+    # MUL_MAT_ID on mmap'ed weights, with and without the expert prefetch hint
+    llama_build_and_test(test-moe-prefetch.cpp LINK ggml)
+    llama_test(test-moe-prefetch NAME test-moe-prefetch-on)
+    set_tests_properties(test-moe-prefetch-on PROPERTIES ENVIRONMENT "GGML_CPU_MOE_PREFETCH=1" SKIP_RETURN_CODE 77)
+    # windowed prefetch: window smaller than one expert slice, and between one slice and all used experts
+    llama_test(test-moe-prefetch NAME test-moe-prefetch-window-small)
+    set_tests_properties(test-moe-prefetch-window-small PROPERTIES
+        ENVIRONMENT "GGML_CPU_MOE_PREFETCH=1;GGML_CPU_MOE_PREFETCH_WINDOW_MB=2" SKIP_RETURN_CODE 77)
+    llama_test(test-moe-prefetch NAME test-moe-prefetch-window)
+    set_tests_properties(test-moe-prefetch-window PROPERTIES
+        ENVIRONMENT "GGML_CPU_MOE_PREFETCH=1;GGML_CPU_MOE_PREFETCH_WINDOW_MB=4" SKIP_RETURN_CODE 77)
 endif()
 
 # libmtmd

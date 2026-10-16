@@ -1,7 +1,9 @@
 #include "models.h"
 
 #include <algorithm>
+#include <atomic>
 #include "llama-memory-recurrent.h"
+#include "llama-moe-predict.h"
 
 //
 // Kimi-K3 text model: hybrid KDA (linear) + MLA (full) attention, as in kimi-linear.
@@ -50,7 +52,7 @@ void llama_model_kimi_k3::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
+void llama_model_kimi_k3::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t n_embd_latent = hparams.n_expert_latent > 0 ? hparams.n_expert_latent : n_embd;
@@ -147,9 +149,12 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, 0);
 
             // routed experts live in the latent space
-            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd_latent, n_ff_exp, n_expert}, 0);
-            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd_latent, n_expert}, 0);
-            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd_latent, n_ff_exp, n_expert}, 0);
+            // --lazy-mode on: keep them on disk and fault in only the selected experts (model >> RAM);
+            // not under AUTO, as each tensor exceeds its size threshold and would lose GPU offload by default
+            const int exps_flags = ml.lazy.mode == LLAMA_LAZY_MODE_ON ? TENSOR_READ_LAZY : 0;
+            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd_latent, n_ff_exp, n_expert}, exps_flags);
+            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd_latent, n_expert}, exps_flags);
+            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd_latent, n_ff_exp, n_expert}, exps_flags);
 
             if (hparams.n_expert_latent > 0) {
                 layer.ffn_routed_down = create_tensor(tn(LLM_TENSOR_FFN_ROUTED_DOWN, "weight", i), {n_embd, n_embd_latent}, 0);
@@ -346,6 +351,80 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
+
+    if (!moe_hints.empty() && model.moe_predictor->mode() == llama_moe_predictor::MODE_OBSERVE) {
+        check_moe_hint_order();
+    }
+}
+
+// next-layer expert prediction: hint op between the selection of layer il and its expert matmuls
+void llama_model_kimi_k3::graph::on_moe_selected(ggml_tensor * selected_experts, int il) const {
+    llama_moe_predictor * mp = model.moe_predictor.get();
+    // with the MoE cache (--moe-cache-mib) the experts come from GPU slots instead of the mapping
+    if (mp == nullptr || moe_cache != nullptr || n_tokens > 4 || moe_router_in == nullptr || moe_router_il != il) {
+        return;
+    }
+
+    const auto & layer = model.layers[il];
+
+    int il_next = -1;
+    if (il + 1 < (int) n_layer && model.layers[il + 1].ffn_gate_inp && model.layers[il + 1].ffn_up_exps) {
+        il_next = il + 1;
+    }
+
+    // src[0]: a lazy expert tensor, always in a CPU buffer, so the op is scheduled on the CPU backend
+    ggml_tensor * args[4];
+    int n_args = 0;
+    args[n_args++] = layer.ffn_up_exps;
+    args[n_args++] = selected_experts;
+    if (il_next >= 0) {
+        // the next layer's router applied to this layer's router input
+        args[n_args++] = ggml_mul_mat(ctx0, model.layers[il_next].ffn_gate_inp, moe_router_in);
+        if (model.layers[il_next].ffn_exp_probs_b) {
+            args[n_args++] = model.layers[il_next].ffn_exp_probs_b;
+        }
+    }
+
+    ggml_tensor * hint = ggml_custom_4d(ctx0, GGML_TYPE_F32, 1, 1, 1, 1, args, n_args,
+            llama_moe_predictor_hint_op, 1, mp->get_hint_ud(il, il_next));
+    ggml_format_name(hint, "moe_hint-%d", il);
+    ggml_build_forward_expand(gf, hint);
+
+    moe_hints.emplace_back(hint, selected_experts);
+}
+
+// the hints only help if they run before the expert matmuls of their layer
+void llama_model_kimi_k3::graph::check_moe_hint_order() {
+    static std::atomic<bool> checked = false;
+    if (checked.exchange(true)) {
+        return;
+    }
+
+    ggml_build_forward_expand(gf, res->t_logits);
+
+    const int n_nodes = ggml_graph_n_nodes(gf);
+    int n_ok = 0;
+    for (const auto & [hint, sel] : moe_hints) {
+        int i_hint = -1;
+        int n_mm   = 0;
+        bool after = true;
+        for (int i = 0; i < n_nodes; ++i) {
+            ggml_tensor * node = ggml_graph_node(gf, i);
+            if (node == hint) {
+                i_hint = i;
+            } else if (node->op == GGML_OP_MUL_MAT_ID && node->src[2] == sel) {
+                n_mm++;
+                after = after && i_hint >= 0;
+            }
+        }
+        // up, gate and down (2 when gate and up are merged)
+        if (i_hint < 0 || n_mm < 2 || !after) {
+            GGML_ABORT("MoE hint order: layer hint %s at %d, %d expert matmuls, all after: %d",
+                    ggml_get_name(hint), i_hint, n_mm, after);
+        }
+        n_ok++;
+    }
+    LLAMA_LOG_INFO("%s: MoE hint order OK for %d layers\n", __func__, n_ok);
 }
 
 //
@@ -579,6 +658,10 @@ ggml_tensor * llama_model_kimi_k3::graph::build_latent_moe(
     ggml_tensor * logits = ggml_mul_mat(ctx0, layer.ffn_gate_inp, identity);
     cb(logits, "ffn_moe_logits", il);
 
+    // read by on_moe_selected: the next layer's router is applied to this layer's router input
+    moe_router_in = identity;
+    moe_router_il = il;
+
     ggml_tensor * moe_out = build_moe_ffn(routed_in,
         nullptr, // gate_inp unused: the logits above are passed instead
         layer.ffn_up_exps,
@@ -593,6 +676,9 @@ ggml_tensor * llama_model_kimi_k3::graph::build_latent_moe(
         il,
         logits);
     cb(moe_out, "ffn_moe_out", il);
+
+    moe_router_in = nullptr;
+    moe_router_il = -1;
 
     if (layer.ffn_routed_norm) {
         moe_out = build_norm(moe_out, layer.ffn_routed_norm, NULL, LLM_NORM_RMS, il);

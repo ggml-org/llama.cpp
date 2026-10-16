@@ -7,6 +7,7 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-moe-predict.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -1330,6 +1331,9 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
 }
 
 llama_model::~llama_model() {
+    // its worker hints addresses in the mappings and saves the learned state: stop it before they go away
+    moe_predictor.reset();
+
     for (auto * lora : loras) {
         delete lora;
     }
@@ -1867,6 +1871,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
+            if (ml.lazy.has(cur)) {
+                lazy_tensors.insert(cur);
+            }
         }
     }
 
@@ -2022,6 +2029,60 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     load_tensors_hadamard();
+
+    // next-layer expert prediction, for streamed (lazy) experts only
+    if (const char * env = getenv("LLAMA_MOE_PREDICT"); env != nullptr && (atoi(env) == 1 || atoi(env) == 2)) {
+        if (arch != LLM_ARCH_KIMI_K3) {
+            LLAMA_LOG_WARN("%s: LLAMA_MOE_PREDICT is only implemented for Kimi-K3, ignored\n", __func__);
+        } else if (!ml.lazy.any()) {
+            LLAMA_LOG_WARN("%s: LLAMA_MOE_PREDICT needs lazy experts (--lazy-mode on), ignored\n", __func__);
+        } else if (hparams.n_expert_groups > 1) {
+            LLAMA_LOG_WARN("%s: LLAMA_MOE_PREDICT does not support expert groups, ignored\n", __func__);
+        } else {
+            auto env_int = [](const char * name, int def) {
+                const char * v = getenv(name);
+                return v != nullptr && *v ? atoi(v) : def;
+            };
+            auto env_float = [](const char * name, float def) {
+                const char * v = getenv(name);
+                return v != nullptr && *v ? (float) atof(v) : def;
+            };
+
+            llama_moe_predictor::params mp;
+            mp.mode      = atoi(env);
+            mp.n_layer   = (int) hparams.n_layer();
+            mp.n_expert  = (int) hparams.n_expert;
+            mp.n_used    = (int) hparams.n_expert_used();
+            mp.n_workers = env_int  ("LLAMA_MOE_PREDICT_WORKERS", 1);
+            mp.grow      = env_float("LLAMA_MOE_PREDICT_GROW",    0.5f);
+            mp.shrink    = env_float("LLAMA_MOE_PREDICT_SHRINK",  0.3f);
+            mp.cap       = env_int  ("LLAMA_MOE_PREDICT_CAP",     32);
+            if (const char * path = getenv("LLAMA_MOE_PREDICT_STATS")) {
+                mp.stats_path = path;
+            }
+            // the saved state belongs to this exact model
+            uint64_t id = 1469598103934665603ull;
+            auto mix = [&id](uint64_t v) { id = (id ^ v) * 1099511628211ull; };
+            mix(mp.n_layer);
+            mix(mp.n_expert);
+            mix(mp.n_used);
+            for (const auto & file : ml.files) {
+                mix(file->size());
+            }
+            mp.model_id = id;
+
+            std::vector<llama_moe_predictor::layer_tensors> lt(mp.n_layer);
+            for (int il = 0; il < mp.n_layer; ++il) {
+                const auto & layer = layers[il];
+                if (layer.ffn_up_exps && layer.ffn_gate_exps && layer.ffn_down_exps && ml.lazy.has(layer.ffn_up_exps)) {
+                    lt[il].exps[0] = layer.ffn_gate_exps;
+                    lt[il].exps[1] = layer.ffn_up_exps;
+                    lt[il].exps[2] = layer.ffn_down_exps;
+                }
+            }
+            moe_predictor = std::make_unique<llama_moe_predictor>(mp, std::move(lt));
+        }
+    }
 
     return true;
 }

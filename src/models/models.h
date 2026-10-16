@@ -2787,6 +2787,16 @@ struct llama_model_kimi_k3 : public llama_model_base {
 
         ggml_tensor * build_latent_moe(ggml_tensor * cur, const llama_layer & layer,
                                        int64_t n_embd_latent, int il);
+
+        // next-layer expert prediction (LLAMA_MOE_PREDICT): the router input of the layer being built, and the
+        // hint ops with the selection they read, for the order check
+        // note: the graph is built in this class's constructor, so the override is the one called
+        ggml_tensor * moe_router_in = nullptr;
+        int           moe_router_il = -1;
+        mutable std::vector<std::pair<ggml_tensor *, ggml_tensor *>> moe_hints;
+
+        void on_moe_selected(ggml_tensor * selected_experts, int il) const override;
+        void check_moe_hint_order();
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

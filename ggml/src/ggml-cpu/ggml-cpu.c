@@ -199,6 +199,11 @@ typedef void * thread_ret_t;
 #include <sys/stat.h>
 #include <unistd.h>
 
+#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+#include <sys/mman.h>
+#define GGML_CPU_HAVE_POSIX_MADVISE
+#endif
+
 #endif
 
 typedef pthread_t ggml_thread_t;
@@ -1551,6 +1556,89 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     return ptr;
 }
 
+// GGML_CPU_MOE_PREFETCH=1: hint the kernel to read the selected experts of mmap-backed weights ahead of use
+// initialized once in ggml_cpu_init(), read-only afterwards
+#if defined(GGML_CPU_HAVE_POSIX_MADVISE)
+static bool   ggml_cpu_moe_prefetch        = false;
+static size_t ggml_cpu_page_size           = 0;
+static size_t ggml_cpu_moe_prefetch_window = 512u*1024*1024; // GGML_CPU_MOE_PREFETCH_WINDOW_MB
+
+#define GGML_CPU_MOE_PREFETCH_PIECE ((size_t) 2*1024*1024)
+
+// the whole nb02 stride of each used expert is hinted; for the usual contiguous expert tensors this is exactly
+// the expert's matrix, for a strided view it also covers the unread gap, which is harmless for a hint
+static void ggml_cpu_moe_prefetch_piece(const struct ggml_tensor * src0, int64_t a, size_t off) {
+    const size_t    page = ggml_cpu_page_size;
+    const size_t    nb02 = src0->nb[2];
+    const uintptr_t p    = (uintptr_t) src0->data + (uintptr_t) a*nb02 + off;
+    const uintptr_t n    = MIN(GGML_CPU_MOE_PREFETCH_PIECE, nb02 - off);
+    const uintptr_t beg  = p & ~(uintptr_t)(page - 1);
+    const uintptr_t end  = (p + n + page - 1) & ~(uintptr_t)(page - 1);
+    // a pure hint: errors (e.g. memory that is not file-backed) are ignored
+    (void) posix_madvise((void *) beg, end - beg, POSIX_MADV_WILLNEED);
+}
+
+// split the used expert slices into pieces and issue POSIX_MADV_WILLNEED for this thread's share,
+// so that the reads of all selected experts are in flight at once instead of faulting in serially
+static void ggml_cpu_mul_mat_id_prefetch(const struct ggml_tensor * src0, const int64_t * matrix_row_counts, int ith, int nth) {
+    const int64_t n_as = src0->ne[2];
+    const size_t  nb02 = src0->nb[2];
+
+    int64_t k = 0; // piece index over all used experts, in ascending expert order
+    for (int64_t a = 0; a < n_as; ++a) {
+        if (matrix_row_counts[a] == 0) {
+            continue;
+        }
+        for (size_t off = 0; off < nb02; off += GGML_CPU_MOE_PREFETCH_PIECE, ++k) {
+            if (k % nth == ith) {
+                ggml_cpu_moe_prefetch_piece(src0, a, off);
+            }
+        }
+    }
+}
+
+// when the used experts exceed the window (large batches use nearly all experts), hinting them all at once
+// overflows the page cache before compute gets there; instead keep about one window ahead of the compute,
+// which walks the used experts in ascending order = ascending file offset, so this becomes a sequential stream
+// the pieces of the used experts form one sequence; `issued` counts how many of them any thread has hinted
+struct ggml_cpu_moe_window {
+    atomic_int * issued;   // shared; a 32-bit counter, as 64-bit atomics would need libatomic on some 32-bit targets
+    int64_t total;         // pieces of all used experts
+    int64_t ppe;           // pieces per expert
+    int64_t map_rank;      // this thread's last mapping of used-expert rank to expert index
+    int64_t map_a;
+};
+
+// pieces to have issued when compute begins the used expert of rank `rank`: all of it, plus one window
+static int64_t ggml_cpu_moe_window_target(const struct ggml_cpu_moe_window * w, size_t nb02, int64_t rank) {
+    const size_t  bytes = (size_t) (rank + 1)*nb02 + ggml_cpu_moe_prefetch_window;
+    const int64_t full  = (int64_t) (bytes / nb02);
+    const size_t  rem   = bytes % nb02;
+    return MIN(w->total, full*w->ppe + (int64_t) ((rem + GGML_CPU_MOE_PREFETCH_PIECE - 1) / GGML_CPU_MOE_PREFETCH_PIECE));
+}
+
+// claim and hint pieces until `target` have been issued; never waits for other threads
+static void ggml_cpu_moe_window_issue(struct ggml_cpu_moe_window * w, const struct ggml_tensor * src0,
+        const int64_t * matrix_row_counts, int64_t target) {
+    int q = atomic_load_explicit(w->issued, memory_order_relaxed);
+    while (q < target) {
+        if (!atomic_compare_exchange_weak_explicit(w->issued, &q, q + 1, memory_order_relaxed, memory_order_relaxed)) {
+            continue; // q now holds the current value
+        }
+        // a thread claims increasing pieces, so its rank -> expert mapping only moves forward
+        const int64_t rank = q / w->ppe;
+        while (w->map_rank < rank) {
+            do {
+                w->map_a++;
+            } while (matrix_row_counts[w->map_a] == 0);
+            w->map_rank++;
+        }
+        ggml_cpu_moe_prefetch_piece(src0, w->map_a, (size_t) (q % w->ppe)*GGML_CPU_MOE_PREFETCH_PIECE);
+        q++;
+    }
+}
+#endif // GGML_CPU_HAVE_POSIX_MADVISE
+
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1599,6 +1687,10 @@ static void ggml_compute_forward_mul_mat_id(
 
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
         incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
+
+    // pieces issued by the windowed expert prefetch, see ggml_cpu_moe_window
+    char (*pf_issued)[CACHE_LINE_SIZE] =
+        incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE, CACHE_LINE_SIZE);
 
     // Tiled matmul (see tiled.h); per-thread work buffers, 0 bytes when disabled. The
     // reservation is unconditional, the per expert eligibility is decided at dispatch time
@@ -1666,7 +1758,50 @@ static void ggml_compute_forward_mul_mat_id(
         *current_chunk_ctr = nth;
     }
 
+#if defined(GGML_CPU_HAVE_POSIX_MADVISE)
+    if (ith == 0) {
+        atomic_store_explicit((atomic_int *) pf_issued, 0, memory_order_relaxed);
+    }
+#else
+    GGML_UNUSED(pf_issued);
+#endif
+
     ggml_barrier(params->threadpool);
+
+#if defined(GGML_CPU_HAVE_POSIX_MADVISE)
+    bool use_window = false;
+    struct ggml_cpu_moe_window window = { (atomic_int *) pf_issued, 0, 0, 0, 0 };
+
+    if (ggml_cpu_moe_prefetch) {
+        // logged on first use rather than in ggml_cpu_init(), which runs before applications set up logging
+        static atomic_flag logged = ATOMIC_FLAG_INIT;
+        if (ith == 0 && !atomic_flag_test_and_set(&logged)) {
+            GGML_LOG_INFO("%s: CPU MoE expert prefetch enabled\n", __func__);
+        }
+
+        int64_t n_used = 0;
+        int64_t first  = -1;
+        for (int64_t a = 0; a < n_as; ++a) {
+            if (matrix_row_counts[a] > 0) {
+                first = first < 0 ? a : first;
+                n_used++;
+            }
+        }
+
+        const int64_t ppe = (int64_t) ((nb02 + GGML_CPU_MOE_PREFETCH_PIECE - 1) / GGML_CPU_MOE_PREFETCH_PIECE);
+
+        // (the piece count limit only matters for > 4 PB of used experts)
+        if ((size_t) n_used*nb02 <= ggml_cpu_moe_prefetch_window || n_used*ppe > INT_MAX) {
+            ggml_cpu_mul_mat_id_prefetch(src0, matrix_row_counts, ith, nth);
+        } else {
+            use_window   = true;
+            window.ppe   = ppe;
+            window.total = n_used*ppe;
+            window.map_a = first;
+        }
+    }
+    int64_t used_rank = 0; // rank of cur_a among the used experts
+#endif
 
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
@@ -1674,6 +1809,14 @@ static void ggml_compute_forward_mul_mat_id(
         if (cne1 == 0) {
             continue;
         }
+
+#if defined(GGML_CPU_HAVE_POSIX_MADVISE)
+        // before any compute path (incl. tiled) touches this expert: all of it and one window beyond is in flight
+        if (use_window) {
+            ggml_cpu_moe_window_issue(&window, src0, matrix_row_counts, ggml_cpu_moe_window_target(&window, nb02, used_rank));
+        }
+        used_rank++;
+#endif
 
         // tiled takes over if profitable for this expert (see tiled.h)
         if (ggml_compute_forward_mul_mat_id_tiled(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0), tiled_scratch)) {
@@ -2908,6 +3051,8 @@ struct ggml_cplan ggml_graph_plan(
                         cur += n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping) + sizeof(int64_t);
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
+                        // pf_issued
+                        cur += CACHE_LINE_SIZE + CACHE_LINE_SIZE;
                         // Workspace for tiled (see tiled.h)
                         cur = GGML_PAD(cur, 64);
                         cur += ggml_tiled_wdata_size(n_tasks, node);
@@ -3934,6 +4079,27 @@ void ggml_cpu_init(void) {
             const char * env = getenv("GGML_CPU_DISABLE_FUSION");
             ggml_cpu_disable_fusion = (env != NULL && atoi(env) == 1);
         }
+
+#if defined(GGML_CPU_HAVE_POSIX_MADVISE)
+        {
+            const char * env = getenv("GGML_CPU_MOE_PREFETCH");
+            const long page = sysconf(_SC_PAGESIZE);
+            ggml_cpu_moe_prefetch = (env != NULL && atoi(env) == 1 && page > 0);
+            ggml_cpu_page_size    = page > 0 ? (size_t) page : 0;
+
+            // missing, unparsable or <= 0: default
+            const char * wenv = getenv("GGML_CPU_MOE_PREFETCH_WINDOW_MB");
+            long long mb = wenv != NULL ? strtoll(wenv, NULL, 10) : 0;
+            if (mb <= 0) {
+                mb = 512;
+            }
+            mb = MAX(2, MIN(mb, 1LL << 20));
+            if ((unsigned long long) mb > (unsigned long long) (SIZE_MAX >> 20)) {
+                mb = (long long) (SIZE_MAX >> 20);
+            }
+            ggml_cpu_moe_prefetch_window = (size_t) mb << 20;
+        }
+#endif
 
         is_first_call = false;
     }

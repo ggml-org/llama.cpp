@@ -483,9 +483,22 @@ struct llama_mmap::impl {
         size = file->size();
         int fd = file->file_id();
         int flags = MAP_SHARED;
+        // prefetch == 0 from the caller: the non-lazy tensors are read() from this fd instead of mapped
+        const bool read_load = prefetch == 0;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
-        if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
+        if (read_load && !lazy_ranges.empty()) {
+            // sequential readahead of the read() tensors would spill into the neighbouring lazy ranges
+            static bool logged = false;
+            if (!logged) {
+                LLAMA_LOG_INFO("%s: lazy tensors with read() loading: using POSIX_FADV_RANDOM\n", __func__);
+                logged = true;
+            }
+            if (posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM)) {
+                LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_RANDOM) failed: %s\n",
+                        strerror(errno));
+            }
+        } else if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
             LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
                     strerror(errno));
         }
@@ -909,6 +922,55 @@ void llama_prefetch(llama_memory_ranges mr) {
 #else
     GGML_UNUSED(mr);
 #endif
+}
+
+void llama_copy_ranges_prefetched(const void * base, const std::vector<llama_byte_range> & runs, bool prefetch,
+        size_t chunk, size_t lookahead, const std::function<void(size_t offs, size_t size)> & copy,
+        const std::function<void(size_t offs, size_t size)> * hint) {
+    if (!prefetch || chunk == 0) {
+        for (const auto & r : runs) {
+            if (r.size > 0) {
+                copy(r.offs, r.size);
+            }
+        }
+        return;
+    }
+
+    // the hints are issued in pieces: one madvise call is capped by the kernel at the device readahead size
+    constexpr size_t piece = 2u*1024*1024;
+
+    struct piece_t { size_t offs, size; };
+    std::vector<piece_t> pieces;
+    for (const auto & r : runs) {
+        for (size_t off = 0; off < r.size; off += piece) {
+            pieces.push_back({ r.offs + off, std::min(piece, r.size - off) });
+        }
+    }
+
+    size_t issued = 0;       // pieces hinted so far
+    size_t issued_bytes = 0;
+    auto issue_until = [&](size_t bytes) {
+        while (issued < pieces.size() && issued_bytes < bytes) {
+            if (hint) {
+                (*hint)(pieces[issued].offs, pieces[issued].size);
+            } else {
+                llama_prefetch({ { (const char *) base + pieces[issued].offs, pieces[issued].size } });
+            }
+            issued_bytes += pieces[issued].size;
+            issued++;
+        }
+    };
+
+    size_t copied = 0; // bytes copied so far, in the same sequence as the pieces
+    for (const auto & r : runs) {
+        for (size_t off = 0; off < r.size; off += chunk) {
+            const size_t n = std::min(chunk, r.size - off);
+            // the chunk being copied and `lookahead` bytes beyond it are in flight before the copy starts
+            issue_until(copied + n + lookahead);
+            copy(r.offs + off, n);
+            copied += n;
+        }
+    }
 }
 
 size_t llama_path_max() {

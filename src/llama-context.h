@@ -387,6 +387,12 @@ private:
 
     copy_experts_info copy_experts;
 
+    // GGML_CPU_MOE_PREFETCH=1: hint the pages of lazily mapped experts ahead of their upload to a device
+    // (op offload of large batches), so the copy streams from disk instead of faulting page by page
+    bool   copy_prefetch           = false;
+    bool   copy_prefetch_logged    = false;
+    size_t copy_prefetch_lookahead = 256u*1024*1024;
+
     // graph reallocations during inference where the backend assignments did not change, split by whether the
     // graph size is the same as the previously scheduled one (unexpected) or different
     int32_t n_reallocs_same = 0;
