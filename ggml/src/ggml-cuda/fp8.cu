@@ -113,8 +113,7 @@ static __global__ void quantize_fp8_e4m3(
     const int64_t i3 = tmp / ne2;
 
     const float d = *amax > 0.0f ? *amax / 448.0f : 1.0f;
-    const __nv_fp8_e4m3 q(x[i0 + i1*s1 + i2*s2 + i3*s3] / d);
-    y[i] = q.__x;
+    y[i] = ggml_cuda_fp32_to_f8_e4m3(x[i0 + i1*s1 + i2*s2 + i3*s3] / d);
     if (i == 0) {
         *scale = d;
     }
