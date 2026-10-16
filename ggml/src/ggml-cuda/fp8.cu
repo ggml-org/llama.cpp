@@ -81,7 +81,8 @@ static void fp8_destroy_matmul(
 }
 
 bool ggml_cuda_mul_mat_fp8(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const ggml_tensor * weight_scale) {
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     if (!fp8_mma_hardware_available(cc) || src0->type != GGML_TYPE_F8_E4M3 || src1->type != GGML_TYPE_F32 ||
             dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst) || src0->ne[0] % 16 != 0 || src0->ne[1] % 16 != 0 ||
@@ -89,6 +90,8 @@ bool ggml_cuda_mul_mat_fp8(
             !ggml_cuda_is_aligned(src0, 16) || !ggml_cuda_is_aligned(dst, 16)) {
         return false;
     }
+
+    GGML_ASSERT(!weight_scale || (weight_scale->type == GGML_TYPE_F32 && ggml_is_contiguous(weight_scale) && ggml_nelements(weight_scale) == 1));
 
     GGML_TENSOR_BINARY_OP_LOCALS
     GGML_ASSERT(ne10 == ne00);
@@ -125,6 +128,11 @@ bool ggml_cuda_mul_mat_fp8(
     CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &trans_a, sizeof(trans_a)));
     CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
         op_desc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &src1_scale.ptr, sizeof(src1_scale.ptr)));
+    if (weight_scale) {
+        const float * scale_ptr = (const float *) weight_scale->data;
+        CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
+            op_desc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &scale_ptr, sizeof(scale_ptr)));
+    }
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&a_desc, CUDA_R_8F_E4M3, ne00, ne01, ne00));
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&b_desc, CUDA_R_8F_E4M3, ne10, ne11, ne10));
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, ne0, ne1, ne0));
@@ -164,8 +172,9 @@ bool ggml_cuda_mul_mat_fp8(
 #else
 
 bool ggml_cuda_mul_mat_fp8(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_UNUSED_VARS(ctx, src0, src1, dst);
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const ggml_tensor * weight_scale) {
+    GGML_UNUSED_VARS(ctx, src0, src1, dst, weight_scale);
     return false;
 }
 
