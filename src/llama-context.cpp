@@ -2270,7 +2270,21 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
-                ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
+                if (masked && n_rows < (int64_t) ubatch.n_tokens && t_h_nextn->ne[1] == (int64_t) ubatch.n_tokens) {
+                    // the graph captured the state before narrowing it to the output rows (some MTP heads): copy
+                    // those rows, in the order of the logits
+                    int64_t k = 0;
+                    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                        if (ubatch.output[i]) {
+                            ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out + k*n_embd,
+                                    i*t_h_nextn->nb[1], n_embd*sizeof(float));
+                            k++;
+                        }
+                    }
+                    GGML_ASSERT(k == n_rows);
+                } else {
+                    ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
+                }
                 extract_all_idxs = extract_all_idxs || !masked;
             }
         }
