@@ -1044,6 +1044,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_DSV4_HC_PRE:
             return op_dsv4_hc_pre(octx);
 
+        case HTP_OP_DSV4_HC_POST:
+            return op_dsv4_hc_post(octx);
+
         case HTP_OP_CONCAT:
             return op_concat(octx);
 

@@ -190,6 +190,10 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const auto * kparams = node.kparams<htp_dsv4_hc_pre_kernel_params>();
         snprintf(str, max_size, "%s nth %u vtcm %u", kparams->dma_eligible ? "dma" : "l2",
                  (unsigned int) kparams->n_threads, (unsigned int) kparams->dma_vtcm_size);
+    } else if (node.opcode == HTP_OP_DSV4_HC_POST) {
+        const auto * kparams = node.kparams<htp_dsv4_hc_post_kernel_params>();
+        snprintf(str, max_size, "%s %s nth %u vtcm %u", kparams->has_comb ? "comb" : "identity",
+                 kparams->dma_eligible ? "dma" : "l2", (unsigned int) kparams->n_threads, (unsigned int) kparams->dma_vtcm_size);
     } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
         const auto * kparams = node.kparams<htp_binary_kernel_params>();
