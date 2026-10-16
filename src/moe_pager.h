@@ -29,6 +29,16 @@ struct moe_expert_slice {
     uint32_t pre;   // leading pad bytes before the true expert data (off + pre = true offset)
 };
 
+struct moe_lru {
+    std::vector<uint64_t> last;
+    uint64_t tick = 1;
+    void init(size_t n, uint64_t v = 1);
+    void hit(size_t s);
+    size_t victim(const std::vector<char> & pinned, size_t base, size_t n) const;
+    void miss(size_t s);
+    void prefill_miss(size_t s);
+};
+
 class moe_pager {
 public:
     ~moe_pager();
@@ -100,6 +110,8 @@ public:
     int pack_fd_buf();
     long stats_gguf_reads() const { return n_gguf_reads_; }
     long stats_pack_reads() const { return n_pack_reads_; }
+    bool drop_gguf_pages();
+    long warm_pack_ranges(const uint64_t * offs, const size_t * lens, size_t n);
 
     long stats_io_ops()   const { return io_ops_; }
     long stats_io_bytes() const { return io_bytes_; }

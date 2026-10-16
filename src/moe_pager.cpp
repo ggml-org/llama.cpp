@@ -47,6 +47,65 @@ int moe_pager::pack_fd_buf() {
     return fd_pack_buf_;
 }
 
+void moe_lru::init(size_t n, uint64_t v) {
+    last.assign(n, v);
+    tick = v > 0 ? v : 1;
+}
+
+void moe_lru::hit(size_t s) {
+    if (s < last.size()) last[s] = tick;
+}
+
+size_t moe_lru::victim(const std::vector<char> & pinned, size_t base, size_t n) const {
+    size_t best = n;
+    uint64_t coldest = std::numeric_limits<uint64_t>::max();
+    for (size_t t = 0; t < n; t++) {
+        if (t < pinned.size() && pinned[base + t]) continue;
+        if (last[base + t] < coldest) { coldest = last[base + t]; best = t; }
+    }
+    return best;
+}
+
+void moe_lru::miss(size_t s) {
+    if (s < last.size()) last[s] = tick;
+}
+
+void moe_lru::prefill_miss(size_t s) {
+    if (s < last.size()) last[s] = 0;
+}
+
+bool moe_pager::drop_gguf_pages() {
+    const char * paths[2] = { path_.c_str(), pack_path_.c_str() };
+    bool ok = false;
+    for (int i = 0; i < 2; i++) {
+        if (!paths[i] || !paths[i][0]) continue;
+        int fd = open(paths[i], O_RDONLY);
+        if (fd < 0) continue;
+        off_t sz = lseek(fd, 0, SEEK_END);
+        if (sz > 0) ok |= (posix_fadvise(fd, 0, sz, POSIX_FADV_DONTNEED) == 0);
+        close(fd);
+    }
+    return ok;
+}
+
+long moe_pager::warm_pack_ranges(const uint64_t * offs, const size_t * lens, size_t n) {
+    if (!offs || !lens || n == 0 || pack_path_.empty()) return 0;
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; i++) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return offs[a] < offs[b]; });
+    int fd = open(pack_path_.c_str(), O_RDONLY);
+    if (fd < 0) return 0;
+    posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+    long done = 0;
+    for (size_t k = 0; k < n; k++) {
+        const size_t i = order[k];
+        if (lens[i] == 0) continue;
+        if (posix_fadvise(fd, (off_t) offs[i], (off_t) lens[i], POSIX_FADV_WILLNEED) == 0) done++;
+    }
+    close(fd);
+    return done;
+}
+
 bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_used, std::string & err) {
     path_ = gguf_path;
     n_layer_ = n_layer; n_expert_ = n_expert; n_used_ = n_used;

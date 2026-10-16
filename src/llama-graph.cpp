@@ -2291,7 +2291,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
         bool do_slice = false;
         float slice_clim = 0.0f;
-        if (slicing == 1 && moe_use_pool && n_tokens > 8 && n_tokens <= 64 &&
+        if (slicing == 1 && moe_use_pool && n_tokens > 7 && n_tokens <= 64 &&
             !weight_before_ffn && type_op == LLM_FFN_SILU && gate_exps &&
             (gate_up_exps == nullptr || gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1]) &&
             !up_exps_b && !gate_exps_b && !down_exps_b) {
@@ -2306,8 +2306,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
             ggml_tensor * acc = nullptr;
             const uint32_t n_used_il = hparams.n_expert_used(il);
-            for (int64_t t0 = 0; t0 < n_tokens; t0 += 8) {
-                const int64_t chunk = std::min<int64_t>(8, n_tokens - t0);
+            for (int64_t t0 = 0; t0 < n_tokens; t0 += 7) {
+                const int64_t chunk = std::min<int64_t>(7, n_tokens - t0);
                 ggml_tensor * cur_s = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd, 1, chunk,
                     cur->nb[1], cur->nb[2], t0 * cur->nb[2]));
                 ggml_tensor * topk_s = ggml_cont(ctx0, ggml_view_2d(ctx0, sel_c, n_expert_used, chunk,
