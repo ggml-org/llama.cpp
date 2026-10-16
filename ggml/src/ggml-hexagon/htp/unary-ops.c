@@ -690,22 +690,48 @@ static void tri_f32(const void * restrict src,
     }
 }
 
+// softplus(x) = log(1 + exp(x))
+// Match CPU reference: return x for x > 20 to avoid overflow.
+static inline void hvx_softplus_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+
+    const HVX_Vector twenty = hvx_vec_splat_f32(20.0f);
+    const HVX_Vector one    = hvx_vec_splat_f32(1.0f);
+
+    const uint32_t nvec = n / VLEN_FP32;
+    const uint32_t nloe = n % VLEN_FP32;
+
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nvec; i++) {
+        HVX_Vector x              = v_src[i];
+        HVX_VectorPred pred_gt20  = Q6_Q_vcmp_gt_VsfVsf(x, twenty);
+        HVX_Vector expx           = hvx_vec_exp_f32(x);
+        HVX_Vector logv           = hvx_vec_log_f32(hvx_vec_add_f32_f32(one, expx));
+        v_dst[i]                  = Q6_V_vmux_QVV(pred_gt20, x, logv);
+    }
+
+    if (nloe > 0) {
+        HVX_Vector x             = v_src[nvec];
+        HVX_VectorPred pred_gt20 = Q6_Q_vcmp_gt_VsfVsf(x, twenty);
+        HVX_Vector expx          = hvx_vec_exp_f32(x);
+        HVX_Vector logv          = hvx_vec_log_f32(hvx_vec_add_f32_f32(one, expx));
+        HVX_Vector sp            = Q6_V_vmux_QVV(pred_gt20, x, logv);
+        hvx_vec_store_a((void *) &v_dst[nvec], nloe * sizeof(float), sp);
+    }
+}
+
 static void softplus_f32(const void * restrict src,
                          void * restrict dst,
                          const uint32_t num_rows,
                          const struct htp_unary_context * uctx) {
     htp_unary_op_preamble;
-    // softplus(x) = log(1 + exp(x))
-    // Match CPU reference: ggml_compute_softplus_f32() in ggml-impl.h
-    for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const float * restrict src_f = (const float *)((const uint8_t *)src + (ir * src0_row_size_aligned));
-        float * restrict dst_f       = (float *)((uint8_t *)dst + (ir * dst_row_size_aligned));
 
-        for (uint32_t i = 0; i < ne0; i++) {
-            float x = src_f[i];
-            // For x > 20: softplus(x) ~ x (avoids exp overflow)
-            dst_f[i] = (x > 20.0f) ? x : logf(1.0f + expf(x));
-        }
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_softplus_f32_aa(dst_local, src_local, ne0);
     }
 }
 
@@ -866,12 +892,7 @@ static void tile_gelu_erf_f32(void * restrict dst, const void * restrict src, ui
 
 static void tile_softplus_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
     (void) uctx;
-    const float * restrict sf = (const float *) src;
-    float * restrict df       = (float *) dst;
-    for (uint32_t i = 0; i < tw; i++) {
-        float x = sf[i];
-        df[i] = (x > 20.0f) ? x : logf(1.0f + expf(x));
-    }
+    hvx_softplus_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
 }
 
 static void tile_tanh_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
