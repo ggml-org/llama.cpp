@@ -118,6 +118,8 @@ public:
     bool bind_publication_stage(ggml_backend_memory_lease_t lease);
     ggml_tensor * publication_tensor(size_t layer, bool value, uint32_t snapshot) const noexcept;
     ggml_tensor * staging_tensor(size_t layer, bool value, uint32_t snapshot) const noexcept;
+    // Order a current-state read after its own queued restore without draining later layers.
+    ggml_tensor * restore_dependency(ggml_context * ctx, size_t layer, bool value, ggml_tensor * current) const;
     bool begin_staged_capture(llama_recurrent_spill_identity identity, uint32_t tokens);
     bool stage_ready();
 

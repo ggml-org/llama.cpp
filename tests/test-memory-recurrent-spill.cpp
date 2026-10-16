@@ -99,8 +99,130 @@ struct recurrent_copy_backend_probe {
     }
 };
 
+// Delay uploads until a dependency or cancellation drains the copy queue.
+struct recurrent_restore_queue {
+    inline static recurrent_restore_queue * active=nullptr;
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::set_tensor_async) set;
+    decltype(ggml_backend_i::synchronize) sync;
+    struct upload { ggml_tensor * tensor; const void * data; size_t offset, bytes; };
+    std::vector<upload> pending;
+    explicit recurrent_restore_queue(ggml_backend_t backend) : backend(backend),
+        set(backend->iface.set_tensor_async),sync(backend->iface.synchronize) {
+        GGML_ASSERT(!active); active=this;
+        backend->iface.set_tensor_async=[](ggml_backend_t,ggml_tensor * t,const void * data,size_t offset,size_t bytes) {
+            active->pending.push_back({t,data,offset,bytes});
+        };
+        backend->iface.synchronize=[](ggml_backend_t) { active->flush(); };
+    }
+    void flush() {
+        for (auto & u : pending) ggml_backend_tensor_set(u.tensor,u.data,u.offset,u.bytes);
+        pending.clear();
+    }
+    ~recurrent_restore_queue() {
+        flush(); backend->iface.set_tensor_async=set; backend->iface.synchronize=sync; active=nullptr;
+    }
+};
+
 int main(int argc, char ** argv) {
     testing t;
+    t.test("layer_dependencies_restore_selected_rows_before_reads_and_preserve_capture", [](testing & t) {
+        ggml_backend_ptr producer(ggml_backend_cpu_init());
+        auto * device=ggml_backend_get_device(producer.get());
+        llama_recurrent_spill_layout layout;
+        if (!t.assert_true(llama_recurrent_spill_layout_make(
+                std::vector<llama_recurrent_spill_layer>(3,{GGML_TYPE_F32,GGML_TYPE_F32,32,64,true}),1,3,layout))) return;
+        auto bank=llama_recurrent_spill_bank::create(layout,ggml_backend_cpu_buffer_type(),103,0);
+        recurrent_copy_backend_probe probe(device);
+        if (!t.assert_true(bank && bank->enable_publication(device,ggml_backend_cpu_buffer_type(),2))) return;
+        ggml_context_ptr ctx(ggml_init({1024*1024,nullptr,true}));
+        std::vector<ggml_tensor *> current;
+        for (size_t i=0;i<6;++i) current.push_back(ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,i%2 ? 64 : 32,1));
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),producer.get()));
+        if (!t.assert_true(bool(buffer) && bank->begin_capture({103,0,1}))) return;
+        for (uint32_t snapshot=1;snapshot<=3;++snapshot) for (size_t i=0;i<6;++i) {
+            ggml_backend_tensor_memset(current[i],uint8_t(snapshot*16+i),0,ggml_nbytes(current[i]));
+            if (!t.assert_true(bank->capture(producer.get(),i/2,i%2,snapshot,current[i],0))) return;
+        }
+        if (!t.assert_true(bank->publish_capture() && bank->complete_capture())) return;
+        recurrent_restore_queue queue(probe.copy);
+        if (!t.assert_true(bank->begin_restore({103,0,1},2))) return;
+        for (size_t i=0;i<6;++i) {
+            ggml_backend_tensor_memset(current[i],0,0,ggml_nbytes(current[i]));
+            if (!t.assert_true(bank->restore(producer.get(),i/2,i%2,current[i],0))) return;
+        }
+        if (!t.assert_true(bank->publish_restore() && bank->begin_staged_capture({103,0,2},4))) return;
+        t.assert_equal(size_t(6),queue.pending.size());
+        t.assert_true(!bank->restore_dependency(ctx.get(),9,false,current[0]));
+        auto * graph=ggml_new_graph_custom(ctx.get(),256,false);
+        for (size_t layer=0;layer<3;++layer) for (bool value : {false,true}) {
+            auto * ready=bank->restore_dependency(ctx.get(),layer,value,current[layer*2+size_t(value)]);
+            if (!t.assert_true(ready != nullptr)) return;
+            for (uint32_t snapshot=1;snapshot<=3;++snapshot) {
+                auto * staged=ggml_cpy(ctx.get(),ready,bank->staging_tensor(layer,value,snapshot));
+                ggml_build_forward_expand(graph,ggml_cpy(ctx.get(),staged,bank->publication_tensor(layer,value,snapshot)));
+            }
+        }
+        if (!t.assert_true(ggml_backend_graph_compute(producer.get(),graph)==GGML_STATUS_SUCCESS &&
+                bank->complete_restore() && bank->publish_capture() && bank->complete_capture())) return;
+        t.assert_true(queue.pending.empty());
+        for (size_t i=0;i<6;++i) for (uint32_t snapshot=1;snapshot<=3;++snapshot) {
+            const auto * bytes=static_cast<const uint8_t *>(bank->snapshot_data(i/2,i%2,snapshot,2));
+            t.assert_true(bytes && std::all_of(bytes,bytes+ggml_nbytes(current[i]),[&](uint8_t b) { return b==32+i; }));
+        }
+        // Cancellation must drain a restore even when a new capture has not published anything yet.
+        if (!t.assert_true(bank->begin_restore({103,0,2},1))) return;
+        for (size_t i=0;i<6;++i) if (!t.assert_true(bank->restore(producer.get(),i/2,i%2,current[i],0))) return;
+        if (!t.assert_true(bank->publish_restore() && bank->begin_staged_capture({103,0,3},4))) return;
+        bank->cancel();
+        t.assert_true(queue.pending.empty());
+        t.assert_true(!bank->begin_capture({103,0,3}));
+        bank->reset(true);
+        t.assert_true(bank->begin_capture({103,0,3}));
+        bank->cancel();
+    });
+    t.test("staged_capture_can_follow_pending_restore_without_reusing_its_completion", [&](testing & t) {
+        const bool gpu=argc > 1 && !std::strcmp(argv[1],"--cuda");
+        ggml_backend_load_all();
+        auto * device=ggml_backend_dev_by_name(gpu ? "CUDA0" : "CPU");
+        if (!t.assert_true(device != nullptr)) return;
+        ggml_backend_ptr producer(ggml_backend_dev_init(device,nullptr));
+        auto * host=ggml_backend_dev_host_buffer_type(device);
+        if (!host) host=ggml_backend_cpu_buffer_type();
+        llama_recurrent_spill_layout layout;
+        if (!t.assert_true(llama_recurrent_spill_layout_make(
+                {{GGML_TYPE_F32,GGML_TYPE_F32,32,64,true}},1,3,layout))) return;
+        auto bank=llama_recurrent_spill_bank::create(layout,host,101,0);
+        if (!t.assert_true(bank && bank->enable_publication(device,ggml_backend_dev_buffer_type(device),2))) return;
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * r=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,32,1);
+        auto * s=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,64,1);
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),producer.get()));
+        if (!t.assert_true(bool(buffer))) return;
+        ggml_backend_tensor_memset(r,0x11,0,ggml_nbytes(r));
+        ggml_backend_tensor_memset(s,0x22,0,ggml_nbytes(s));
+        if (!t.assert_true(bank->begin_capture({101,0,1}))) return;
+        for (bool value : {false,true}) for (uint32_t snapshot=1;snapshot<=3;++snapshot)
+            if (!t.assert_true(bank->capture(producer.get(),0,value,snapshot,value ? s : r,0))) return;
+        if (!t.assert_true(bank->publish_capture() && bank->complete_capture() &&
+                bank->begin_restore({101,0,1},2) && bank->restore(producer.get(),0,false,r,0) &&
+                bank->restore(producer.get(),0,true,s,0) && bank->publish_restore())) return;
+        if (!t.assert_true(bank->begin_staged_capture({101,0,2},4))) return;
+        // Completing the old restore must not finish or invalidate the new capture.
+        if (!t.assert_true(bank->complete_restore())) return;
+        auto * graph=ggml_new_graph_custom(ctx.get(),64,false);
+        for (bool value : {false,true}) for (uint32_t snapshot=1;snapshot<=3;++snapshot) {
+            auto * staged=ggml_cpy(ctx.get(),value ? s : r,bank->staging_tensor(0,value,snapshot));
+            ggml_build_forward_expand(graph,ggml_cpy(ctx.get(),staged,bank->publication_tensor(0,value,snapshot)));
+        }
+        if (!t.assert_true(ggml_backend_graph_compute(producer.get(),graph)==GGML_STATUS_SUCCESS &&
+                bank->publish_capture() && bank->complete_capture())) return;
+        for (bool value : {false,true}) for (uint32_t snapshot=1;snapshot<=3;++snapshot) {
+            const auto * data=static_cast<const uint8_t *>(bank->snapshot_data(0,value,snapshot,2));
+            const size_t bytes=ggml_nbytes(value ? s : r);
+            t.assert_true(data && std::all_of(data,data+bytes,[&](uint8_t byte) { return byte==(value ? 0x22 : 0x11); }));
+        }
+    });
     t.test("contiguous_snapshot_planes_batch_without_copying_padding_or_untouched_rows", [&](testing & t) {
         const bool gpu=argc > 1 && !std::strcmp(argv[1],"--cuda");
         ggml_backend_load_all();
