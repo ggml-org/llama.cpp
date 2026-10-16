@@ -19,7 +19,8 @@
 // is removed once per group. Q3_K blocks (110 bytes) start on a 2-byte boundary every other
 // block, so they are read as aligned dwords and realigned only when they need it. Rows are
 // assigned so that, for each of a lane's rows, all 16 lanes see blocks of the same alignment,
-// which keeps that branch uniform.
+// which keeps that branch uniform. A Q3_K value is q2 - 4 * (1 - h): the inverted high bits are
+// dotted directly, so Q3_K needs no activation sums.
 
 #define MMQ
 #define B_TYPE block_q8_1_x4
@@ -73,7 +74,6 @@ void compute_outputs(const uint first_row, const uint num_rows) {
     const uint qs_word  = 8 + qn * 8 + qh * 4;
     const uint hm_word  = qh * 4;
     const uint sc_shift = qh * 8 + qn * 4;
-    const uint hm_base  = 0x01010101u << (qn * 4);
 #endif
 
     for (uint ib = 0; ib < nblocks; ++ib) {
@@ -147,6 +147,7 @@ void compute_outputs(const uint first_row, const uint num_rows) {
             continue;
         }
 
+#if defined(DATA_A_Q2_K)
         // Per-group activation sums, shared by all rows
         int bsum[NUM_COLS][4];
         [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
@@ -156,7 +157,6 @@ void compute_outputs(const uint first_row, const uint num_rows) {
             }
         }
 
-#if defined(DATA_A_Q2_K)
         // d part scaled by 4^-s for the in-place mask, m part needs only the sums
         float bdq[NUM_COLS][4];
         float bdm[NUM_COLS][4];
@@ -213,6 +213,11 @@ void compute_outputs(const uint first_row, const uint num_rows) {
                 S1 = sc[i][1];
                 S2 = sc[i][2];
             }
+            // Inverted high bits, moved down to bits 0-3 of each byte so the plane masks and
+            // shifts below are the same in every lane
+            [[unroll]] for (uint k = 0; k < 4; ++k) {
+                H[k] = (~H[k]) >> (qn * 4);
+            }
 
             float accf[NUM_COLS];
             [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
@@ -225,7 +230,7 @@ void compute_outputs(const uint first_row, const uint num_rows) {
                 const int scale = int(bitfieldInsert(bitfieldExtract(s < 2 ? S0 : S1, int(sh), 4),
                                                      bitfieldExtract(S2, int(sh + 2 * (s >> 1)), 2), 4, 2)) - 32;
                 const uint qmask = 0x03030303u << (2 * s);
-                const uint hmask = hm_base << s;
+                const uint hmask = 0x01010101u << s;
                 [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
                     int dq = dotPacked4x8EXT(bq[j][s].x, L[0] & qmask);
                     int dh = dotPacked4x8EXT(bq[j][s].x, H[0] & hmask);
@@ -235,9 +240,10 @@ void compute_outputs(const uint first_row, const uint num_rows) {
                     dh += dotPacked4x8EXT(bq[j][s].z, H[2] & hmask);
                     dq += dotPacked4x8EXT(bq[j][s].w, L[3] & qmask);
                     dh += dotPacked4x8EXT(bq[j][s].w, H[3] & hmask);
-                    // value = q2 + 4*hbit - 4
-                    const int sum = (dq >> (2 * s)) + ((dh >> (qn * 4 + s)) << 2) - 4 * bsum[j][s];
-                    accf[j] += float(sum * scale) * bd[j][s];
+                    // dq = 4^s * sum(a * q2), dh = 2^s * sum(a * (1 - h))
+                    const int hs = int(s) - 2;
+                    const int sum = (dq >> (2 * s)) - (hs >= 0 ? (dh >> hs) : (dh << (-hs)));
+                    accf[j] += float(sum) * (float(scale) * bd[j][s]);
                 }
             }
             [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
