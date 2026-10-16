@@ -122,6 +122,12 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DUMP_IR",
         "GGML_OPENVINO_DEBUG_INPUT",
         "GGML_OPENVINO_DEBUG_OUTPUT",
+        // NPUW dump options require an OpenVINO developer build (NPU_PLUGIN_DEVELOPER_BUILD).
+        // DUMP_SUBS accepts YES, MIN (unique function bodies), last, or indices such as 0,2.
+        "GGML_OPENVINO_NPUW_DUMP_SUBS",
+        "GGML_OPENVINO_NPUW_DUMP_SUBS_DIR",
+        "GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL",
+        "GGML_OPENVINO_NPUW_DUMP_IO",
         // Force the static (NPU-shape) compute path on any device, e.g. GGML_OPENVINO_DEVICE=CPU,
         // to test the static-shape translation without NPUW/real NPU hardware in the loop.
         "GGML_OPENVINO_FORCE_STATIC",
@@ -183,6 +189,22 @@ void ggml_openvino_device_config::init() {
             ggml_openvino_getenv_str("GGML_OPENVINO_NPU_COMPILE_CONFIG");
         if (compilation_mode_params && strlen(compilation_mode_params) > 0) {
             compile_config["NPU_COMPILATION_MODE_PARAMS"] = compilation_mode_params;
+        }
+        const char * ggml_npuw_dump_subs = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_SUBS");
+        if (ggml_npuw_dump_subs && strlen(ggml_npuw_dump_subs) > 0) {
+            compile_config["NPUW_DUMP_SUBS"] = ggml_npuw_dump_subs;
+        }
+        const char * ggml_npuw_dump_subs_dir = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_SUBS_DIR");
+        if (ggml_npuw_dump_subs_dir && strlen(ggml_npuw_dump_subs_dir) > 0) {
+            compile_config["NPUW_DUMP_SUBS_DIR"] = ggml_npuw_dump_subs_dir;
+        }
+        const char * ggml_npuw_dump_subs_on_fail = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL");
+        if (ggml_npuw_dump_subs_on_fail && strlen(ggml_npuw_dump_subs_on_fail) > 0) {
+            compile_config["NPUW_DUMP_SUBS_ON_FAIL"] = ggml_npuw_dump_subs_on_fail;
+        }
+        const char * ggml_npuw_dump_io = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_IO");
+        if (ggml_npuw_dump_io && strlen(ggml_npuw_dump_io) > 0) {
+            compile_config["NPUW_DUMP_IO"] = ggml_npuw_dump_io;
         }
     } else if (cache_dir && strlen(cache_dir) > 0) {
         compile_config.insert(ov::cache_dir(cache_dir));
