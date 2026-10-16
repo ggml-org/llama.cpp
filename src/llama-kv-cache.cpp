@@ -1626,7 +1626,8 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size, bool decode, uint32_
         const uint32_t n_need    = std::min(n_pages, kv_stream_pages_next(n_tokens) + kv_stream_headroom_pages);
         const size_t   page_pool = bytes_per_cell*llama_kv_stream::page_size;
         const size_t   page_ring = stream->ring_page_size();
-        if (resident_size >= (size_t) n_need*page_pool + page_ring) {
+        // n_need - 1 pool pages and a ring of one hold them all; with less the ring takes at least 2
+        if (resident_size >= (size_t) (n_need - 1)*page_pool + page_ring) {
             n_slots = std::min(n_pages, (uint32_t) ((resident_size - page_ring)/page_pool));
             n_ring  = 1;
         } else if (resident_size > (size_t) n_need*page_ring) {
