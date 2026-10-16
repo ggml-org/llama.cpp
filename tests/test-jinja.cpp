@@ -2011,6 +2011,12 @@ static void test_object_methods(testing & t) {
         "a b "
     );
 
+    test_template(t, "object | list",
+        "{{ (obj | list) == ['b', 'a'] }} {{ obj | list | join(',') }}",
+        {{"obj", {{"b", 1}, {"a", 2}}}},
+        "True b,a"
+    );
+
     test_template(t, "object.values()",
         "{% for v in obj.values() %}{{ v }} {% endfor %}",
         {{"obj", {{"a", 1}, {"b", 2}}}},

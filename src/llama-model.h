@@ -310,6 +310,7 @@ struct llama_layer {
     struct ggml_tensor * wv_enc    = nullptr;
     struct ggml_tensor * wo_enc    = nullptr;
     struct ggml_tensor * wqkv_gate = nullptr;
+    struct ggml_tensor * wqkv_gate_b = nullptr;
     // K2 Horizon MoVA
     struct ggml_tensor * attn_v_gate   = nullptr;
     struct ggml_tensor * attn_v_gate_b = nullptr;

@@ -3142,9 +3142,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // gemma4 and plamo have a normal </s> token, unlike paddleocr
+        // gemma4, plamo and beam have a normal </s> token, unlike paddleocr
         {
-            bool has_normal_s_marker = false;
+            // beam's tool call marker is not an EOG token, so it is looked up in the whole vocab
+            bool has_normal_s_marker = token_to_id.count("<rfl:parameter name=\"") > 0;
             bool has_s = false;
 
             llama_token s_id = LLAMA_TOKEN_NULL;

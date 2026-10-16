@@ -280,6 +280,8 @@ struct llama_hparams {
     uint32_t n_attn_temp_floor_scale = 0;
     float    f_attn_temp_scale       = 0.0f;
     float    f_attn_temp_offset      = 0.0f; // offset position index
+    // use (1 + (pos + offset) / floor_scale) ^ scale instead of the llama4 log form
+    bool     attn_temp_pow           = false;
 
     // realtime models: number of tokens the output lags behind the audio input
     uint32_t n_tokens_delay          = 0;

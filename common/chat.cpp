@@ -1104,6 +1104,13 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_llm_jp_harmony;
     }
 
+    // Harmony XML tool calls, checked before the GPT-OSS JSON calls
+    if (src.find("<|channel|>") != std::string::npos && src.find("<|constrain|>xml") != std::string::npos &&
+        src.find("rfl:parameter") != std::string::npos) {
+        LOG_DBG("Using specialized template: Harmony XML\n");
+        return common_chat_params_init_harmony_xml;
+    }
+
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
     if (src.find("<|channel|>") != std::string::npos) {
         LOG_DBG("Using specialized template: GPT-OSS\n");

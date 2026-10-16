@@ -24,6 +24,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ArcticForCausalLM": "arctic",
     "AudioFlamingo3ForConditionalGeneration": "qwen",
     "BaiChuanForCausalLM": "baichuan",
+    "BeamForCausalLM": "beam",
     "BaichuanForCausalLM": "baichuan",
     "BailingMoeForCausalLM": "bailingmoe",
     "BailingMoeV2ForCausalLM": "bailingmoe",
