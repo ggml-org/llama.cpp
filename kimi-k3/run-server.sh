@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Run Kimi-K3 (MXFP4, 1.5 TB) with routed experts streamed from NVMe, dense layers 0..GPU_LAYERS-1 on the GPU.
+# Run Kimi-K3 (IQ1_S-XS 540 GB by default, or MXFP4 1.5 TB) with routed experts streamed from NVMe, dense layers 0..GPU_LAYERS-1 on the GPU.
 #
 #   ./run-server.sh [extra llama-server args]
 #
 # env:
-#   MODEL       first shard of the GGUF          (default: /mnt/k3/kimi-k3/MXFP4_MOE/...-00001-of-00031.gguf)
+#   MODEL       first shard of the GGUF          (default: the IQ1_S-XS model, /mnt/k3/kimi-k3-iq1/...-00001-of-00034.gguf;
+#               the MXFP4 model /mnt/k3/kimi-k3/MXFP4_MOE/...-00001-of-00031.gguf is the accuracy-preserving one)
 #   PORT        listen port                      (default: 18090)
-#   GPU_LAYERS  layers whose dense weights go to CUDA0, from layer 0 (default: 19 for an IQ1 model file,
-#               8 otherwise; measured on the 12 GB card with the UBATCH 2048 compute buffer (~2 GB):
-#               MXFP4 10 layers left ~20 MB free, IQ1 19 layers leave ~500 MB, 24 do not start)
+#   GPU_LAYERS  layers whose dense weights go to CUDA0, from layer 0 (default: IQ1 model file 11 with
+#               OFFLOAD=1 / 19 with OFFLOAD=0, 8 otherwise; measured on the 12 GB card: MXFP4 10 layers left
+#               ~20 MB free; IQ1 19 layers leave ~500 MB without offload, with it 12 leave ~490 MB and 16 OOM)
 #   CTX         context size                     (default: 8192)
 #   THREADS     CPU threads, physical cores      (default: 14)
 #   UBATCH      prompt batch size (-b = -ub); every batch reads nearly all experts once (default: 2048)
@@ -32,11 +33,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${BIN:-$HERE/../build/bin/llama-server}"
-MODEL="${MODEL:-/mnt/k3/kimi-k3/MXFP4_MOE/Kimi-K3-Abliterated-V1-MXFP4_MOE-00001-of-00031.gguf}"
+MODEL="${MODEL:-/mnt/k3/kimi-k3-iq1/Kimi-K3-abliterated-IQ1_S-XS-00001-of-00034.gguf}"
 PORT="${PORT:-18090}"
 if [[ "$(basename "$MODEL")" == *IQ1* ]]; then
-    GPU_LAYERS="${GPU_LAYERS:-19}"
     OFFLOAD="${OFFLOAD:-1}"
+    # the offload staging buffer takes ~2.3 GB more GPU memory: 11 dense layers with it (12 left < 500 MiB), 19 without
+    if [[ "$OFFLOAD" == 1 ]]; then
+        GPU_LAYERS="${GPU_LAYERS:-11}"
+    else
+        GPU_LAYERS="${GPU_LAYERS:-19}"
+    fi
 else
     GPU_LAYERS="${GPU_LAYERS:-8}"
     OFFLOAD="${OFFLOAD:-0}"

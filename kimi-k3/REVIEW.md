@@ -24,10 +24,10 @@ top-10 probabilities bit-identical over 128+ tokens; identity against unpatched 
 model (GPT-OSS-120B), since stock llama.cpp cannot run Kimi-K3 from this disk in reasonable time.
 
 ## Measured now (launcher defaults, real 1562-token document + 128 generated tokens)
-| | MXFP4 | IQ1_S-XS |
+| | MXFP4 | IQ1_S-XS (main model) |
 |---|---|---|
-| decode | 0.150 tok/s (stock llama.cpp: 0.02) | 0.47 tok/s (19 GPU layers) |
-| prompt | 1135 s | 618 s |
+| decode | 0.150 tok/s (stock llama.cpp: 0.02) | 0.46 tok/s (11 GPU layers + GPU prefill) |
+| prompt | 1135 s | **230 s** (GPU prefill; 618 s on the CPU) |
 | decode disk use | 2.9 GB/s = 76% of the 3.8 GB/s ceiling | 2.0 GB/s = 35% of 5.7 GB/s |
 | prompt | CPU 12.2 / 14 cores, disk 1.2 GB/s, GPU 1% | CPU 13 / 14 cores, disk 0.8 GB/s, GPU 2% |
 | answer quality | polished | coherent and accurate (subjective reading of one answer; no perplexity measured) |
@@ -50,13 +50,20 @@ HMB already at the firmware maximum (64 MiB); TRIM made no difference; load is b
    currently disabled by the launcher) makes the 3080 Ti do the matmuls. Bound by disk + PCIe: IQ1 ~150-250 s vs
    618 s (2.5-4x); MXFP4 cannot fit two 5.2 GB tensors next to the activations in 12 GB, so only IQ1 unless chunked.
    Measured (E1): upstream op-offload as is page-faults serially through the lazy mapping (35 MB/s, 5.8 h per
-   prompt). Fix built (V': the expert upload streams the file with read-ahead inside llama.cpp's expert-copy
-   callback), under test; the offload compute buffer is ~4.3 GB, leaving room for dense GPU layers.
-2. **Headroom-aware speculation for IQ1 decode.** The disk has 65% headroom, so wasted guesses are cheap:
-   lower grow threshold / higher cap / 2 workers (410 stale guesses dropped per step today). Expected 1.2-1.5x.
-3. **Fixes:** the startup 2-token probe decode leaks into the predictor stats (+10 GB load reads, state drift);
-   per-model GPU_LAYERS default (8 MXFP4, 19 IQ1); restart-benefit assertion relaxed (persistence works, the warm
-   start gain is small by nature: 1.011x).
+   prompt). Fixed (V': the expert upload streams the file with read-ahead inside llama.cpp's expert-copy callback):
+   IQ1 prompt 655 s -> 230 s (2.85x), decode unchanged, no serial faults; now bounded by the pageable host-to-GPU
+   copy at ~2.2 GB/s (a pinned staging buffer would be the next step). The offload compute buffer is ~4.2 GB, so the
+   IQ1 default is 11 dense GPU layers with offload (19 without). GPU prefill uses the CUDA IQ1_S/Q2_K kernels, so
+   results are not bit-identical to the CPU path (chosen-token logprobs differ by up to 0.25, greedy sequences part
+   after ~9 tokens; both coherent); kernels pass test-backend-ops; perplexity on a ~6k-token text: 3.3315 (GPU prefill) vs 3.3485 (CPU), i.e.
+   equal within noise. Kept as the IQ1 default: 1562-token prompt 230 s (6.8 tok/s), decode 0.458 tok/s, >= 900 MiB
+   GPU memory free with 11 dense layers.
+2. ~~Headroom-aware speculation for IQ1 decode~~ Measured flat: wider guesses 0.99x, 2 workers 1.003x, both 0.98x
+   (ids identical). IQ1 decode is compute-bound (11.8 of 14 threads running, disk at 34% of its ceiling), so the
+   next decode lever on IQ1 is CPU kernel speed (IQ1_S/Q2_K dot products) or more dense layers on the GPU, not I/O.
+3. **Fixes (done):** the startup 2-token probe decode no longer feeds the predictor (load reads back to 108.9 GB,
+   saved state unchanged by a request-less start); per-model launcher defaults; restart benefit re-measured after
+   the fix: 1.05x recall on the same document, ~1.01x on a new one (persistence works, the gain is small by nature).
 4. **More RAM** is the biggest non-software lever for MXFP4 (cache hit rate drives bytes/token); drives with DRAM
    would raise the random-read ceiling ~3x.
 

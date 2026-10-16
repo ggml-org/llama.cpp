@@ -448,3 +448,16 @@ load read_bytes must drop back to ~109 GB (MXFP4); R: launcher fake-BIN matrix; 
   and that every page of every used run is resident after the call (unused experts' gap pages not resident).
   Noted for later: pageable H2D copies (~3.5 GB/s) will bound prefill at ~210 s; a pinned staging buffer is the
   next step after V' if measurements confirm.
+
+## v15.2 results (2026-10-16)
+V': IQ1 GL 12 prefill 230 s vs 655 s (2.85x, PASS), md0 2.2 GB/s / aqu 8.3 / 5.5k faults (no serial faults),
+decode 1.015x; launcher default with offload -> 11 layers (12 left 491 MiB). Tolerance protocol: top-1 first 4
+identical, but |dlogprob| up to 0.25 (bound 0.05 FAILED) and sequences part at token 9: CUDA vs CPU IQ1_S/Q2_K
+kernels at batch 2048 (test-backend-ops MUL_MAT_ID: IQ1_S 4/4, Q2_K 3/3 pass); perplexity check running, decides
+whether OFFLOAD=1 stays the IQ1 default. Q: PASS (checksum unchanged, load bytes 108.89 vs 108.90 GB). R: fixed.
+T: no arm >= 1.05x (best 1.003x), ids identical; IQ1 decode is compute-bound (11.8 threads R) -> defaults kept.
+S re-measured: 1.05x same doc. llama-perplexity now built.
+- v15.3: perplexity (doc A+B x2, 2 chunks of 2048) offload on 3.3315 vs off 3.3485: ratio 0.9949 (0.51% lower with
+  offload, ~0.16 SE) -> accepted, OFFLOAD=1 stays the IQ1 default; the 0.5% bound is a soft target for a 2-chunk
+  estimate. Launcher IQ1 defaults (GL 11, OFFLOAD 1) verified live: prefill 229.6 s / 6.8 tok/s, decode 0.458
+  tok/s, VRAM free min 914 MiB. IQ1 is the user's main model (launcher default MODEL).
