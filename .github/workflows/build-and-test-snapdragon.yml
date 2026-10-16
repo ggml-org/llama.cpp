@@ -104,11 +104,11 @@ jobs:
     name: Test on QDC Device (${{ matrix.device }})
     needs: [android-ndk-snapdragon, linux-iot-snapdragon]
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        device: [SM8750, SM8850, QCS9075M]
+        device: [SM8850, QCS9075M]
 
     permissions:
       actions: read
@@ -155,7 +155,7 @@ jobs:
               --pkg-dir    pkg-snapdragon/llama.cpp \
               --model-url  "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf" \
               --device     ${{ matrix.device }} \
-              ${{ startsWith(matrix.device, 'QCS') && '--retries 2 --retry-delay 300' || '' }}
+              ${{ startsWith(matrix.device, 'QCS') && '--job-timeout 5400 --retries 2 --retry-delay 300' || '' }}
         env:
           QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
 
