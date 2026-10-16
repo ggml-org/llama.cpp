@@ -381,6 +381,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DECISION_BLOCK_COUNT,         "%s.decision.block_count"         },
     { LLM_KV_DECISION_ROUTING_BLOCK_COUNT, "%s.decision.routing_block_count" },
     { LLM_KV_DECISION_HEAD_COUNT,          "%s.decision.head_count"          },
+    { LLM_KV_DECISION_LABELS,              "%s.decision.labels"              },
 
     { LLM_KV_TARGET_LAYERS,         "%s.target_layers"        },
     { LLM_KV_TARGET_HIDDEN_SIZE,    "%s.target_hidden_size"   },
