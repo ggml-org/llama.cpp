@@ -889,7 +889,7 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
 }
 
 static __host__ __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
-#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     __nv_fp8_e4m3 xf;
     xf.__x = x;
     return static_cast<float>(xf);
@@ -908,12 +908,15 @@ static __host__ __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8
         value = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
     }
     return x & 0x80 ? -value : value;
-#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
-static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
-#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
+static __host__ __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     return __nv_cvt_float_to_fp8(x, __NV_SATFINITE, __NV_E4M3);
+#elif !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) && !defined(__MUSA_ARCH__)
+    // ggml_cuda_cast also runs on the host, where __float2int_rn is not available.
+    return ggml_fp32_to_f8_e4m3(x);
 #else
     const uint8_t sign = signbit(x) ? 0x80 : 0;
     x = fabsf(x);
@@ -943,7 +946,7 @@ static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
         return sign | 0x7E;
     }
     return sign | (uint8_t) (encoded_exp << 3) | (uint8_t) encoded_man;
-#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
