@@ -11070,7 +11070,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 4, false, 16, 10, 256));
     }
 
-    // test src1 f16 overflow (GGML_PREC_F32 src1 rescale)
+    // test src1 f16 overflow
     for (int n : {1, 8, 16, 32, 64}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 8,   2, false, 512,  n, 256,  1e5f));
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 4, false, 4096, n, 2048, 1e5f));
