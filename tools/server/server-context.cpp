@@ -2537,7 +2537,7 @@ private:
         // checkpoints past the common prefix were already erased, so an existing one at the same
         // position holds the same state - keep it instead of copying the state again
         for (auto & cur : slot.prompt.checkpoints) {
-            if (cur.n_tokens == slot.prompt.n_tokens() - n_tokens_cur && cur.pos_min == pos_min && cur.pos_max == pos_max) {
+            if (cur.id_task != -1 && cur.n_tokens == slot.prompt.n_tokens() - n_tokens_cur && cur.pos_min == pos_min && cur.pos_max == pos_max) {
                 SLT_TRC(slot, "reusing context checkpoint at n_tokens = %" PRId64 "\n", cur.n_tokens);
                 cur.id_task = id_task;
                 return;
