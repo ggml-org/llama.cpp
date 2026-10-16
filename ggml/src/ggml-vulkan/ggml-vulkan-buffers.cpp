@@ -1,6 +1,5 @@
 #include "ggml-vulkan-common.h"
 
-#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
@@ -363,21 +362,16 @@ void ggml_vk_host_get(const vk_device& device, const void * ptr, vk_buffer& buf,
     vk_host_allocation & entry = vk_instance.host_allocations[index];
 
     if (entry.views[device->idx] == nullptr) {
-        if (!vk_instance.multi_device) {
+        const uint32_t bit = 1u << device->idx;
+        if (!vk_instance.multi_device || !vk_instance.device_host_buffer_import[device->idx] || (vk_instance.host_import_failed & bit)) {
             return;
         }
-        if (!device->external_memory_host) {
-            static std::atomic<uint32_t> warned_mask{0};
-            const uint32_t bit = 1u << device->idx;
-            if (!(warned_mask.fetch_or(bit) & bit)) {
-                GGML_LOG_WARN("ggml_vulkan: %s does not support VK_EXT_external_memory_host; host memory "
-                    "will be staged, not pinned, on this device\n", device->name.c_str());
-            }
-            return;
-        }
+        GGML_ASSERT(device->external_memory_host);
         // const only propagates from the const context; the pointee is mutable
         entry.views[device->idx] = ggml_vk_buffer_from_host_ptr(const_cast<vk_device&>(device), entry.base, entry.size);
         if (entry.views[device->idx] == nullptr) {
+            vk_instance.host_import_failed |= bit;
+            GGML_LOG_WARN("ggml_vulkan: %s: host memory import failed, using staging\n", device->name.c_str());
             return;
         }
     }
