@@ -2016,10 +2016,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (src0->type == GGML_TYPE_F8_E4M3) {
-        if (!ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst)) {
-            ggml_cuda_mul_mat_fp8_fallback(ctx, src0, src1, dst);
-        }
+    if (src0->type == GGML_TYPE_F8_E4M3 && ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst)) {
         return;
     }
     ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
