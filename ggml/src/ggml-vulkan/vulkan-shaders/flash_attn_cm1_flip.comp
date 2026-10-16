@@ -21,14 +21,16 @@
 
 layout (binding = 0) readonly buffer QV4 {vec4 data_qv4[];};
 layout (binding = 1) readonly buffer KU {uvec4 data_ku[];};
+layout (binding = 1) readonly buffer KF4 {FLOAT_TYPEV4 data_kf4[];};
 layout (binding = 2) readonly buffer VU {uvec4 data_vu[];};
+layout (binding = 2) readonly buffer VF4 {FLOAT_TYPEV4 data_vf4[];};
 layout (binding = 3) readonly buffer M {float16_t data_m[];};
 
 const uint32_t D_pad = HSK_pad > HSV_pad ? HSK_pad : HSV_pad;
 
-// Flipped coopmat1 FA: each subgroup owns 16 Q rows and the full head dim, the workgroup
-// shares one K/V tile staged in LDS. Requires gqa_ratio == 1, aligned KV, f16/bf16 K/V,
-// HSK/HSV multiples of 16, Br == row_split * 16.
+// Flipped coopmat1 FA: each subgroup owns 16 Q rows and the full head dim. K/V tiles are either
+// staged once per workgroup in LDS or, with FLIP_DIRECT, loaded by each subgroup from global memory.
+// Requires gqa_ratio == 1, aligned KV, f16/bf16 K/V, HSK/HSV multiples of 16, Br == row_split * 16.
 
 const uint32_t FL_LPR = SubGroupSize / 16;
 const uint32_t FL_CPL = Bc / FL_LPR;
@@ -46,7 +48,7 @@ const uint32_t fl_kstride = D_pad / 4 + 2;
 const uint32_t fl_vtstride = Bc / 4 + 2;
 const uint32_t fl_vtsize = FL_VT ? HSV_pad * fl_vtstride : 0;
 const uint32_t fl_kvbuf = fl_vtsize > Bc * fl_kstride ? fl_vtsize : Bc * fl_kstride;
-shared uvec2 kvshf[(FLIP_KVSEP ? 2 : 1) * fl_kvbuf];
+shared uvec2 kvshf[FLIP_DIRECT ? 1 : 2 * fl_kvbuf];
 
 #if defined(ACC_TYPE_MAX)
 const uint32_t fl_sstride = Bc / 4 + 2;
@@ -283,10 +285,8 @@ void main() {
         fl_mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
     }
 
-    const uint32_t vbase = FLIP_KVSEP ? fl_kvbuf : 0;
-
     uint32_t j = fl_next_tile(start_j);
-    if (j < end_j) {
+    if (!FLIP_DIRECT && j < end_j) {
         fl_load_k(j, k_offset);
         fl_load_v(j, v_offset);
     }
@@ -296,15 +296,13 @@ void main() {
         const uint32_t jn = fl_next_tile(j + 1);
         const uint32_t mask_bits = fl_mask_bits(j);
 
-        barrier();
-        fl_store_k();
-        if (FLIP_KVSEP) {
-            fl_store_v(vbase);
-        }
-        barrier();
-        if (jn < end_j) {
-            fl_load_k(jn, k_offset);
-            if (FLIP_KVSEP) {
+        if (!FLIP_DIRECT) {
+            barrier();
+            fl_store_k();
+            fl_store_v(fl_kvbuf);
+            barrier();
+            if (jn < end_j) {
+                fl_load_k(jn, k_offset);
                 fl_load_v(jn, v_offset);
             }
         }
@@ -316,7 +314,11 @@ void main() {
         [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
             [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
                 coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> Kb;
-                coopMatLoad(Kb, kvshf, c * 16 * fl_kstride + d * 4, fl_kstride, gl_CooperativeMatrixLayoutColumnMajor);
+                if (FLIP_DIRECT) {
+                    coopMatLoad(Kb, data_kf4, (k_offset + (j * Bc + c * 16) * k_stride) / 4 + d * 4, k_stride / 4, gl_CooperativeMatrixLayoutColumnMajor);
+                } else {
+                    coopMatLoad(Kb, kvshf, c * 16 * fl_kstride + d * 4, fl_kstride, gl_CooperativeMatrixLayoutColumnMajor);
+                }
                 Sacc[c] = coopMatMulAdd(Qa[d], Kb, Sacc[c]);
             }
         }
@@ -378,22 +380,15 @@ void main() {
             fl_load_a(Pa[c], a_base + c * (4 / FL_PACK));
         }
 
-        if (!FLIP_KVSEP) {
-            barrier();
-            fl_store_v(0);
-            barrier();
-            if (jn < end_j) {
-                fl_load_v(jn, v_offset);
-            }
-        }
-
         [[unroll]] for (uint32_t t = 0; t < HSV_pad / 16; ++t) {
             [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
                 coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> Vb;
-                if (FL_VT) {
-                    coopMatLoad(Vb, kvshf, vbase + t * 16 * fl_vtstride + c * 4, fl_vtstride, gl_CooperativeMatrixLayoutColumnMajor);
+                if (FLIP_DIRECT) {
+                    coopMatLoad(Vb, data_vf4, (v_offset + (j * Bc + c * 16) * v_stride) / 4 + t * 4, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                } else if (FL_VT) {
+                    coopMatLoad(Vb, kvshf, fl_kvbuf + t * 16 * fl_vtstride + c * 4, fl_vtstride, gl_CooperativeMatrixLayoutColumnMajor);
                 } else {
-                    coopMatLoad(Vb, kvshf, vbase + c * 16 * fl_kstride + t * 4, fl_kstride, gl_CooperativeMatrixLayoutRowMajor);
+                    coopMatLoad(Vb, kvshf, fl_kvbuf + c * 16 * fl_kstride + t * 4, fl_kstride, gl_CooperativeMatrixLayoutRowMajor);
                 }
                 Oacc[t] = coopMatMulAdd(Pa[c], Vb, Oacc[t]);
             }

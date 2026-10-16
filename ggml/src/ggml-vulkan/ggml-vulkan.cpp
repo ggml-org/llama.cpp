@@ -1306,8 +1306,8 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     // Br=32 spills registers, only prefill benefits
     result.q_in_regs = result.block_rows == coopmat_block_rows && device->vendor_id == VK_VENDOR_ID_AMD && n_rows >= 64;
 
-    // Flipped ownership: each subgroup owns 16 Q rows, the K/V tile is staged once per workgroup.
-    // uma: separate K/V buffers (fewer barriers); discrete: shared buffer within 32 KB, both prefetched a tile ahead.
+    // Flipped ownership: each subgroup owns 16 Q rows.
+    // uma: K/V tiles staged in separate LDS buffers; discrete: K/V loaded directly from global memory.
     static const bool disable_flip = getenv("GGML_VK_DISABLE_FA_FLIP") != nullptr;
     static const char * force_flip = getenv("GGML_VK_FORCE_FA_FLIP");
     const bool flip_arch = force_flip != nullptr || (device->vendor_id == VK_VENDOR_ID_AMD &&
@@ -1317,14 +1317,14 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
         hsk % 16 == 0 && hsv % 16 == 0 && hsk <= 256 && hsv <= 256 &&
         k_type == v_type && (k_type == GGML_TYPE_F16 || k_type == GGML_TYPE_BF16)) {
         result.flip = true;
-        result.flip_kvsep = device->uma;
+        result.flip_direct = !device->uma;
         if (force_flip != nullptr && strcmp(force_flip, "kvsep") == 0) {
-            result.flip_kvsep = true;
-        } else if (force_flip != nullptr && strcmp(force_flip, "pf2") == 0) {
-            result.flip_kvsep = false;
+            result.flip_direct = false;
+        } else if (force_flip != nullptr && strcmp(force_flip, "direct") == 0) {
+            result.flip_direct = true;
         }
         result.block_rows = num_subgroups * coopmat_block_rows;
-        result.block_cols = 32;
+        result.block_cols = (device->uma && (hsk >= 256 || hsv >= 256)) ? 16 : 32;
         result.q_in_regs = false;
         result.shmem_staging = 0;
     }
@@ -1421,7 +1421,7 @@ vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_
                      (use_sparse        ? 16 : 0) |
                      (params.q_in_regs  ? 32 : 0) |
                      (params.flip       ? 64 : 0) |
-                     (params.flip_kvsep ? 128 : 0);
+                     (params.flip_direct ? 128 : 0);
 
     const uint32_t subgroup_size = params.disable_subgroups ? 0 : params.subgroup_size;
 
@@ -8163,7 +8163,7 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
         const uint32_t vld = CEIL_DIV(Bc * hsv_pad / 8, wg);
         const bool vt = vld % 4 == 0 && wg % (hsv_pad / 8) == 0 && vld * (wg / (hsv_pad / 8)) == Bc;
         const uint32_t kvbuf = std::max(Bc * (d_pad / 4 + 2), vt ? hsv_pad * (Bc / 4 + 2) : 0u) * 8;
-        const uint32_t kvshf = (params.flip_kvsep ? 2 : 1) * kvbuf;
+        const uint32_t kvshf = params.flip_direct ? 8 : 2 * kvbuf;
         const uint32_t sshf = params.row_split * 16 * (Bc / 4 + (f32acc ? 1 : 2)) * 4 * acctype;
         // f16/quant K/V stage P and Q through the S slab; only bf16 keeps a separate pshf.
         const bool p_in_sshf = k_type != GGML_TYPE_BF16;
