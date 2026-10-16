@@ -38,11 +38,9 @@ template<typename dst_t, typename src_t>
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     } else if constexpr (std::is_same_v<dst_t, ggml_fp8_e4m3_t>) {
         return { __nv_fp8_e4m3(ggml_cuda_cast<float>(x)).__x };
-    } else if constexpr (std::is_same_v<src_t, ggml_fp8_e4m3_t>) {
-        __nv_fp8_e4m3 value;
-        value.__x = x.bits;
-        return ggml_cuda_cast<dst_t>(float(value));
 #endif
+    } else if constexpr (std::is_same_v<src_t, ggml_fp8_e4m3_t>) {
+        return ggml_cuda_cast<dst_t>(ggml_cuda_f8_e4m3_to_fp32(x.bits));
     } else if constexpr(std::is_same_v<dst_t, nv_bfloat16>) {
         return __float2bfloat16(float(x));
     } else if constexpr(std::is_same_v<src_t, nv_bfloat16>) {
