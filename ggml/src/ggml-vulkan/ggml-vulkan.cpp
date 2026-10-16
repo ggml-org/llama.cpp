@@ -6014,14 +6014,38 @@ void ggml_vk_matmul(
     ctx->prealloc_split_k_need_sync = true;
 }
 
-static bool ggml_vk_src1_prec_allows_q8(ggml_prec prec) {
-    return prec == GGML_PREC_UNDEFINED || prec >= GGML_PREC_Q8;
+static bool ggml_vk_src1_prec_allows_q8(const ggml_tensor * dst) {
+    switch (ggml_prec_get_src(dst, 1)) {
+        case GGML_PREC_UNDEFINED:
+        case GGML_PREC_Q8:
+        case GGML_PREC_Q4:
+            return true;
+        case GGML_PREC_F32:
+        case GGML_PREC_BF16:
+        case GGML_PREC_F16:
+            return false;
+    }
+    return false;
+}
+
+static bool ggml_vk_prec_allows_f16acc(ggml_prec prec) {
+    switch (prec) {
+        case GGML_PREC_F32:
+        case GGML_PREC_BF16:
+            return false;
+        case GGML_PREC_UNDEFINED:
+        case GGML_PREC_F16:
+        case GGML_PREC_Q8:
+        case GGML_PREC_Q4:
+            return true;
+    }
+    return true;
 }
 
 static bool ggml_vk_get_mul_mat_mat_f16acc(ggml_backend_vk_context * ctx, ggml_type src0_type, ggml_type src1_type, ggml_prec prec) {
     if (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_BF16) return false;
     if (src1_type == GGML_TYPE_Q8_1) return false;
-    const bool prec_allows_f16 = prec == GGML_PREC_UNDEFINED || prec == GGML_PREC_F16;
+    const bool prec_allows_f16 = ggml_vk_prec_allows_f16acc(prec);
     if (src0_type == GGML_TYPE_F16) {
         return prec_allows_f16 && ctx->device->fp16 && !(ctx->device->coopmat_support && !ctx->device->coopmat_acc_f16_support);
     }
@@ -6434,21 +6458,21 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     const bool prefer_f16_b = is_coopmat && ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32;
 
     const ggml_type y_kernel_type = ggml_vk_mul_mat_b_type(ctx, src0->type, src1, f16_type,
-                                        (ggml_prec)dst->op_params[0], false, can_quantize_y, prefer_f16_b);
+                                        ggml_prec_get_acc(dst), false, can_quantize_y, prefer_f16_b);
 
     const bool quantize_y       = y_kernel_type == GGML_TYPE_Q8_1;
     const bool y_f32_kernel     = y_kernel_type == GGML_TYPE_F32;
     const bool y_needs_reformat = !quantize_y && (!ggml_vk_dim01_contiguous(src1) || y_kernel_type != src1->type);
 
     const std::vector<vk_matmul_pipeline_pair>* mmp_map =
-        ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_kernel_type, (ggml_prec)dst->op_params[0]);
+        ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_kernel_type, ggml_prec_get_acc(dst));
 
     const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;
     const bool qy_needs_dequant = y_needs_reformat;
 
     if (qx_needs_dequant) {
         // dequant src0 to f16
-        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, f16_type, y_kernel_type, (ggml_prec)dst->op_params[0]);
+        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, f16_type, y_kernel_type, ggml_prec_get_acc(dst));
     }
 
     GGML_ASSERT(mmp_map != nullptr);
@@ -7478,16 +7502,16 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     const bool y_decode_vector_staging = false;
 #endif
     const bool can_quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 &&
-                                ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8((ggml_prec)dst->op_params[3]);
+                                ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8(dst);
     // Intel coopmat1 matrix cores prefer f16 activations for quantized weights
     const bool prefer_f16_b = ctx->device->coopmat_support && !ctx->device->coopmat2 &&
                               ctx->device->vendor_id == VK_VENDOR_ID_INTEL &&
                               ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32;
 
     // rescale src1 to avoid f16 overflow
-    const bool use_amax = dst->op_params[3] == GGML_PREC_F32 && ctx->device->fp16 && src1->type == GGML_TYPE_F32 &&
+    const bool use_amax = ggml_prec_get_src(dst, 1) == GGML_PREC_F32 && ctx->device->fp16 && src1->type == GGML_TYPE_F32 &&
                           (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_vk_mm_id_amax_backend_supported(ctx->device);
-    const ggml_prec mm_prec = use_amax ? GGML_PREC_F32 : (ggml_prec)dst->op_params[0];
+    const ggml_prec mm_prec = use_amax ? GGML_PREC_F32 : ggml_prec_get_acc(dst);
 
     const ggml_type y_kernel_type = ggml_vk_mul_mat_b_type(ctx, src0->type, src1, f16_type,
                                         mm_prec, true, can_quantize_y, prefer_f16_b || use_amax);
@@ -7814,7 +7838,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     const bool y_non_contig = !ggml_vk_dim01_contiguous(src1);
 
     const bool f16_f32_kernel = src1->type == GGML_TYPE_F32;
-    bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8((ggml_prec)dst->op_params[3]) && ggml_vk_should_use_mmvq(ctx->device, ne01, ne12, ne10, src0->type);
+    bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8(dst) && ggml_vk_should_use_mmvq(ctx->device, ne01, ne12, ne10, src0->type);
 
     vk_pipeline to_fp16_vk_0 = nullptr;
     vk_pipeline to_fp16_vk_1 = nullptr;
@@ -8193,7 +8217,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     uint32_t workgroups_y = (uint32_t)neq2;
     uint32_t workgroups_z = (uint32_t)neq3;
 
-    const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32 || dst->op_params[3] == GGML_PREC_BF16 || k->type == GGML_TYPE_BF16;
+    const bool f32acc = !ctx->device->fp16 || !ggml_vk_prec_allows_f16acc(ggml_prec_get_acc(dst)) || k->type == GGML_TYPE_BF16;
 
     // dequant K/V once into an f16 scratch, reordered KV layout so FA can read without a stride
     auto is_dense_kv_cache = [](const ggml_tensor * t) {
@@ -15586,7 +15610,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         return false;
                     }
                     const bool src1_rescale_ok = (src0_type == GGML_TYPE_F16 || ggml_is_quantized(src0_type)) && ggml_vk_mm_id_amax_backend_supported(device);
-                    if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32 && op->src[1]->type == GGML_TYPE_F32 && device->fp16 &&
+                    if (ggml_prec_get_src(op, 1) == GGML_PREC_F32 && op->src[1]->type == GGML_TYPE_F32 && device->fp16 &&
                         src0_type != GGML_TYPE_BF16 && !src1_rescale_ok) {
                         return false;
                     }
