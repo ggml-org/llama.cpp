@@ -208,6 +208,11 @@
               # Its decode buffers take ~40 MiB more VRAM; measured without a desktop session (peak 16,140 of 16,304
               # MiB at 71k). LLAMA_SPEC_TYPE=draft-mtp turns n-gram drafts off.
               # (Not LLAMA_ARG_SPEC_TYPE: the server reads that too, and --spec-type adds to the list.)
+              # MTP drafts are sampled and verified by rejection sampling, which keeps the target's output distribution.
+              # Agent requests sample at temperature 1.0, where greedy drafts are accepted less often: explain at 8k with
+              # the agent sessions' sampling decoded 67.7 -> 76.9 t/s (mean of 3 seeds, acceptance ~48% -> ~60%); copies
+              # are unchanged (n-gram drafts). Greedy requests draft greedily either way. A later
+              # --spec-draft-sampling greedy overrides it.
               spec_type="''${LLAMA_SPEC_TYPE:-draft-mtp,ngram-mod}"
               spec_note=""
               case "$spec_type" in *ngram-mod*) spec_note=" (ngram-mod n_max 16, n_min 12, n_match 24)" ;; esac
@@ -221,7 +226,7 @@
                 echo " Context:     $ctx_size tokens"
                 echo " KV resident: $resident_mib MiB (prefill), $resident_mib_decode MiB (decode)"
                 echo " Reasoning:   effort $reasoning_effort by default (per request: reasoning_effort)"
-                echo " Speculative: $spec_type$spec_note"
+                echo " Speculative: $spec_type$spec_note, probabilistic MTP drafts"
                 echo " Devices:     ROCR_VISIBLE_DEVICES=$ROCR_VISIBLE_DEVICES"
                 echo " Tuning env:  GPU_MAX_HW_QUEUES=''${GPU_MAX_HW_QUEUES:-default}" \
                   "ROC_ACTIVE_WAIT_TIMEOUT=''${ROC_ACTIVE_WAIT_TIMEOUT:-default}" \
@@ -251,6 +256,7 @@
                 --spec-ngram-mod-n-max 16 \
                 --spec-ngram-mod-n-min 12 \
                 --spec-ngram-mod-n-match 24 \
+                --spec-draft-sampling probabilistic \
                 --chat-template-kwargs "{\"reasoning_effort\":\"$reasoning_effort\"}" \
                 -b 2048 \
                 -ub 512 \
