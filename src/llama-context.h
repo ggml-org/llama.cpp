@@ -13,8 +13,11 @@
 #include "ggml-opt.h"
 
 #include <array>
+#include <atomic>
+#include <condition_variable>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 struct llama_model;
@@ -273,21 +276,25 @@ public:
         // hits, while recency carries almost none of it (11% one-step reuse),
         // so frequency is the only metric that makes a 6.7 GiB pool pay off.
         std::vector<uint32_t> slot_freq;
+        std::vector<uint32_t> dec_freq;   // n_layer*n_expert: decode-only routing counts
+        std::vector<uint16_t> pred16;     // n_layer*16: predictor candidates for the next step
+        long pred_hit = 0, pred_fresh = 0;
         int n_layer = 0, n_expert = 0, n_used = 0, s_per_layer = 0;
         int n_slots = 0;   // s_per_layer plus the sentinel slot when armed
         long n_hit = 0, n_miss = 0, n_page_fail = 0;
+        bool count_freq = true;
+        std::atomic<long> ra_done{0};
+        std::vector<uint16_t> exp_rank;  // n_layer*n_expert: LFU rank within layer
         long prefill_resident = 0, prefill_miss = 0;
-        long host_hit = 0, host_miss = 0;
         // zero-copy pinned host pool: flat array of H uniform slots holding
         // whole experts (gate|up|down compact). served with plain H2D on the
         // compute stream, no staging copy and no extra stream.
         char * host_pool = nullptr;
         size_t host_slot_bytes = 0;
         int    host_nslots = 0;
-        std::vector<int32_t> host_of;   // n_layer*n_expert -> host slot or -1
-        std::vector<int32_t> host_key;  // host slot -> global key or -1
-        std::vector<uint32_t> host_freq;
-        int host_clock = 0;
+        int    host_rr = 0;
+        int    host_ring = 0;
+        std::vector<void *> host_ev;
         // per-layer compact role sizes within a host slot
         std::vector<size_t> host_gate, host_up, host_down;
         // previous decode step's top-k per layer, for the recency predictor
@@ -311,6 +318,30 @@ public:
     };
     moe_pool moe;
     moe_pager pager;
+    // page-cache read-ahead pool: background threads only issue readahead(),
+    // never touch CUDA or slot tables
+    std::vector<std::thread> or_thr;
+    std::atomic<bool> or_run{false};
+    std::mutex or_mtx;
+    std::vector<uint32_t> or_q;
+    int  hot_k = 0;
+    int  hot_pos = 0;
+    bool hot_cycles = false;
+    // persistent pool for the staging-ring preads
+    struct moe_io_job { int32_t e; int vslot; int rslot; };
+    std::mutex io_mtx;
+    std::condition_variable io_cv, io_done_cv;
+    std::vector<moe_io_job> io_jobs, io_jobs_scratch;
+    int  io_pfd = -1, io_il = 0;
+    size_t io_stride = 0, io_per = 0, io_nth = 0;
+    std::atomic<size_t> io_next{0};
+    std::atomic<long> io_fail{0};
+    std::atomic<long> io_finished{0};
+    long io_thr_active = 0;
+    unsigned long long io_gen = 0;
+    std::atomic<unsigned long long> io_gen_done{0};
+    std::atomic<bool> io_run{false};
+    std::vector<std::thread> io_thr;
     bool      moe_ready = false;
     bool moe_enabled() const { return moe_ready; }
     int  moe_page(int il, int e);
@@ -340,6 +371,8 @@ public:
     // first decode step starts warm; pages synchronously, failures are
     // tolerated (slots stay -1). capped at 2s to bound server startup.
     void moe_seed_hot();
+    void moe_hot_save();
+    void moe_hot_cycle(int fd);
     // re-seed once when decoding starts after a long prefill: micro-chunk
     // paging churns the hot set, so restore the profile before token 0.
     // bounded by the same budget; no-op for pure decode streams.

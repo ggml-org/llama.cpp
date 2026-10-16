@@ -32,6 +32,19 @@ moe_pager::~moe_pager() {
     if (ring_) { io_uring_queue_exit((struct io_uring *) ring_); ring_ = nullptr; }
     if (stage_) { cudaFreeHost(stage_); stage_ = nullptr; }
     if (fd_ >= 0) { close(fd_); fd_ = -1; }
+    if (fd_pack_ >= 0) { close(fd_pack_); fd_pack_ = -1; }
+    if (fd_pack_buf_ >= 0) { close(fd_pack_buf_); fd_pack_buf_ = -1; }
+}
+
+int moe_pager::pack_fd_buf() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (fd_pack_buf_ < 0 && !pack_path_.empty()) {
+        fd_pack_buf_ = open(pack_path_.c_str(), O_RDONLY);
+        if (fd_pack_buf_ >= 0) {
+            posix_fadvise(fd_pack_buf_, 0, 0, POSIX_FADV_RANDOM);
+        }
+    }
+    return fd_pack_buf_;
 }
 
 bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_used, std::string & err) {
@@ -127,6 +140,7 @@ bool moe_pager::use_pack(const char * experts_bin, const char * index_txt, std::
     if (fd_pack_ < 0) {
         fd_pack_ = open(experts_bin, O_RDONLY | O_DIRECT);
         if (fd_pack_ < 0) { err = "open experts.bin O_DIRECT failed"; return false; }
+        pack_path_ = experts_bin;
     }
     bsrc_.assign((size_t) n_layer_ * n_expert_ * 3, 0);
     // build into temporaries: a rejected pack must leave the GGUF index intact

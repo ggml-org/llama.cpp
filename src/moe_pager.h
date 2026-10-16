@@ -97,6 +97,7 @@ public:
     bool use_pack(const char * experts_bin, const char * index_txt, std::string & err);
     bool pack_mode() const { return pack_mode_; }
     int pack_fd() const { return fd_pack_; }
+    int pack_fd_buf();
     long stats_gguf_reads() const { return n_gguf_reads_; }
     long stats_pack_reads() const { return n_pack_reads_; }
 
@@ -125,6 +126,8 @@ private:
     // single-blob pack mode (see use_pack)
     bool   pack_mode_ = false;
     int    fd_pack_   = -1;                 // fd_ stays the GGUF, pack reads use this
+    int    fd_pack_buf_ = -1;              // buffered (page-cache) twin of fd_pack_
+    std::string pack_path_;
     std::vector<uint32_t> bsrc_;            // n_layer*n_expert*3: src offset inside the blob read
     long n_gguf_reads_ = 0, n_pack_reads_ = 0;
 
