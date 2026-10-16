@@ -1,9 +1,16 @@
-import sys
+"""Test KV cache scales with synthetic tensors; no GPU or model downloads required.
+
+Install dependencies and run from the repository root:
+    python -m pip install -r requirements/requirements-convert_hf_to_gguf.txt
+    python -m pip install -e ./gguf-py
+    python -m unittest discover -s tests -p 'test_kv_cache_scales.py' -v
+
+Use unittest discovery so the repository root is available for imports.
+"""
+
 import tempfile
 import unittest
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
 

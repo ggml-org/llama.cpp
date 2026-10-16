@@ -302,7 +302,7 @@ llama_test_cmd(python3
     NAME test-kv-cache-scales
     LABEL "python behavior"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    ARGS ${CMAKE_CURRENT_SOURCE_DIR}/test-kv-cache-scales.py -v
+    ARGS -m unittest discover -s tests -p test_kv_cache_scales.py -v
 )
 llama_build_and_test(test-json-schema.cpp  LABEL behavior)
 llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
