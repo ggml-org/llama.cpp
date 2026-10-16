@@ -156,6 +156,10 @@ llama               ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,
 llama4              ,0   ,any     ,ADD+ADD                     ,      2
 llama4              ,0   ,any     ,RMS_NORM+MUL                ,      9
 maincoder           ,0   ,any     ,RMS_NORM+MUL                ,      9
+maion-coder         ,0   ,any     ,MUL+ADD                     ,      4
+maion-coder         ,0   ,any     ,RMS_NORM+MUL                ,     17
+maion-coder         ,0   ,any     ,RMS_NORM+MUL+ADD            ,      8
+maion-coder         ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 mamba               ,0   ,any     ,RMS_NORM+MUL                ,      3
 mamba2              ,0   ,any     ,RMS_NORM+MUL                ,      5
 maple               ,0   ,any     ,MUL+ADD                     ,      4
@@ -189,6 +193,8 @@ mistral4            ,0   ,any     ,RMS_NORM+MUL                ,      9
 mpt                 ,0   ,any     ,NORM+MUL+ADD                ,      5
 muse-glimmer        ,0   ,any     ,RMS_NORM+MUL                ,     10
 muse-glimmer        ,0   ,any     ,RMS_NORM+MUL+ADD            ,      3
+muse-spark          ,0   ,any     ,MUL+ADD                     ,      4
+muse-spark          ,0   ,any     ,RMS_NORM+MUL                ,     14
 nanbeige            ,0   ,any     ,RMS_NORM+MUL                ,      5
 nemotron            ,0   ,any     ,NORM+MUL+ADD                ,      5
 nemotron_h          ,0   ,any     ,RMS_NORM+MUL                ,      5
@@ -251,7 +257,6 @@ qwen3vlmoe          ,1   ,any     ,MUL+ADD                     ,      4
 qwen3vlmoe          ,1   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen4exp            ,0   ,any     ,ADD+ADD+ADD                 ,      2
-qwen4exp            ,0   ,any     ,ADD+ADD+ADD+ADD+ADD+ADD+ADD ,      9
 qwen4exp            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen4exp            ,0   ,any     ,MUL+ADD                     ,      4
 qwen4exp            ,0   ,any     ,RMS_NORM+MUL                ,     13

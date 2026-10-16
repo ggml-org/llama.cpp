@@ -448,7 +448,20 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : 2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
-        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         arch == LLM_ARCH_DEEPSEEK4 ? uint32_t(4) : uint32_t(2)); // sqrtsoftplus : sigmoid
+
+        uint32_t gating_func = 2;
+        switch (arch) {
+            case LLM_ARCH_MELLUM:
+                gating_func = 1;
+                break;
+            case LLM_ARCH_DEEPSEEK4:
+                gating_func = 4;
+                break;
+            default:
+                break;
+        }
+
+        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         gating_func); // sigmoid : softmax : sqrtsoftplus
         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
         if (arch == LLM_ARCH_K2_HORIZON) {
