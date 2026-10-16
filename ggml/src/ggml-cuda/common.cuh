@@ -878,7 +878,7 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
 }
 
-static __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
+static __host__ __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
     __nv_fp8_e4m3 xf;
     xf.__x = x;
