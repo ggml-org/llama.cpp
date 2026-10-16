@@ -629,14 +629,14 @@ static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int
 // RDNA4, multiple columns: the waves per SIMD to compile for, or `dflt` for the compiler's choice. To fit 12 waves
 // (120 VGPRs) the compiler splits these types' loop iterations into several dependent round trips to memory, which
 // slows each wave once the GPU drains at the end of a launch. Capped at 10 (IQ3_S: 8, it spills at 10), an iteration
-// issues all its loads before the first wait. At 4 columns: ~1.5 us less per IQ4_XS launch, ~2 us for Q5_K, ~3 us for
-// IQ3_S. Past 5 columns (IQ3_S: 7) the cap makes the compiler serialize the loads instead, and 8 for IQ4_XS loses
-// overall: a 5120-row launch (1280 blocks) no longer fits on the GPU at once. IQ3_XXS does not gain. This rests on
-// the compiler's scheduling (measured with ROCm 7.2.3): re-measure after a compiler update or a change to these loops.
+// issues all its loads before the first wait. At 4 columns: ~1.5 us less per IQ4_XS launch, ~3 us for IQ3_S. Past 5
+// columns (IQ3_S: 7) the cap makes the compiler serialize the loads instead, and 8 for IQ4_XS loses overall: a 5120-row
+// launch (1280 blocks) no longer fits on the GPU at once. IQ3_XXS does not gain. Q5_K, which reads 16 bytes per call,
+// spills at 10 and gains as much without the cap. This rests on the compiler's scheduling (measured with ROCm 7.2.3):
+// re-measure after a compiler update or a change to these loops.
 static constexpr __host__ __device__ int mmvq_waves_per_eu_rdna4(ggml_type type, int ncols_dst, int dflt) {
     switch (type) {
         case GGML_TYPE_IQ4_XS:
-        case GGML_TYPE_Q5_K:
             return ncols_dst > 1 && ncols_dst <= 5 ? 10 : dflt;
         case GGML_TYPE_IQ3_S:
             return ncols_dst > 1 && ncols_dst <= 7 ? 8 : dflt;
