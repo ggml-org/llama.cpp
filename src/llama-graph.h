@@ -152,6 +152,19 @@ public:
     const int64_t n_embd = 0;
 };
 
+class llm_graph_input_dspark_logsnr : public llm_graph_input_i {
+public:
+    llm_graph_input_dspark_logsnr(std::vector<float> feat) : v_feat(std::move(feat)) {}
+    virtual ~llm_graph_input_dspark_logsnr() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * feat = nullptr;
+    std::vector<float> v_feat;
+};
+
 // similar to llm_graph_input_embd but with an additional hidden state input, fed from ubatch.embd_state
 class llm_graph_input_embd_h : public llm_graph_input_i {
 public:

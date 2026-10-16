@@ -795,6 +795,11 @@ struct llama_model {
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
 
+    struct ggml_tensor * dspark_log_snr_fc1_w = nullptr;
+    struct ggml_tensor * dspark_log_snr_fc1_b = nullptr;
+    struct ggml_tensor * dspark_log_snr_fc2_w = nullptr;
+    struct ggml_tensor * dspark_log_snr_fc2_b = nullptr;
+
     struct ggml_tensor * dflash_selector_prev   = nullptr;
     struct ggml_tensor * dflash_selector_next   = nullptr;
     struct ggml_tensor * dflash_selector_hidden = nullptr;

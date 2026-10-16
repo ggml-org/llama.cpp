@@ -274,6 +274,10 @@ struct llama_hparams {
     float    lilicorr_vector_eps     = 0.0f;
     float    lilicorr_logit_scale    = 0.0f;
 
+    bool  dspark_log_snr_conditioning = false;
+    float dspark_min_log_snr = 0.0f;
+    float dspark_max_log_snr = 0.0f;
+
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;
