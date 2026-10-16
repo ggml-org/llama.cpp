@@ -2,6 +2,18 @@
 
 #define MMVQ_MAX_BATCH_SIZE 8 // Max. batch size for which to use MMVQ kernels.
 
+// RDNA4: the columns up to which gate/up + GLU run as one fused MMVQ (elsewhere 1). The other types' fused kernels
+// spill registers past 2 columns.
+static constexpr __host__ __device__ int mmvq_fusion_max_ncols_rdna4(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_Q4_K:
+            return 4;
+        default:
+            return 1;
+    }
+}
+
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11);
 
 // Returns the maximum batch size for which MMVQ should be used for MUL_MAT_ID,

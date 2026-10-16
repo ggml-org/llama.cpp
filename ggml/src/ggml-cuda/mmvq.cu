@@ -634,7 +634,10 @@ static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int
 // launch (1280 blocks) no longer fits on the GPU at once. IQ3_XXS does not gain. Q5_K, which reads 16 bytes per call,
 // spills at 10 and gains as much without the cap. This rests on the compiler's scheduling (measured with ROCm 7.2.3):
 // re-measure after a compiler update or a change to these loops.
-static constexpr __host__ __device__ int mmvq_waves_per_eu_rdna4(ggml_type type, int ncols_dst, int dflt) {
+static constexpr __host__ __device__ int mmvq_waves_per_eu_rdna4(ggml_type type, int ncols_dst, bool has_fusion, int dflt) {
+    if (has_fusion) {
+        return dflt; // two matrices: more registers than the caps were chosen for
+    }
     switch (type) {
         case GGML_TYPE_IQ4_XS:
             return ncols_dst > 1 && ncols_dst <= 5 ? 10 : dflt;
@@ -648,7 +651,7 @@ static constexpr __host__ __device__ int mmvq_waves_per_eu_rdna4(ggml_type type,
 template <ggml_type type, int ncols_dst, bool has_fusion, bool small_k = false, bool halve_iters = false>
 #if defined(RDNA4)
 __attribute__((amdgpu_flat_work_group_size(1, calc_nwarps(type, ncols_dst, get_device_table_id(), small_k, halve_iters)*ggml_cuda_get_physical_warp_size()),
-               amdgpu_waves_per_eu(mmvq_waves_per_eu_rdna4(type, ncols_dst, 1), mmvq_waves_per_eu_rdna4(type, ncols_dst, 16))))
+               amdgpu_waves_per_eu(mmvq_waves_per_eu_rdna4(type, ncols_dst, has_fusion, 1), mmvq_waves_per_eu_rdna4(type, ncols_dst, has_fusion, 16))))
 #else
 __launch_bounds__(calc_nwarps(type, ncols_dst, get_device_table_id(), small_k, halve_iters)*ggml_cuda_get_physical_warp_size(), 1)
 #endif // defined(RDNA4)
@@ -1098,7 +1101,7 @@ static void mul_mat_vec_q_switch_fusion(
 
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr ||
                             fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
-    if constexpr (c_ncols_dst == 1) {
+    if constexpr (c_ncols_dst == 1 || c_ncols_dst <= mmvq_fusion_max_ncols_rdna4(type)) {
         if (has_fusion) {
             ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
             launch_params.any_order = mmvq_any_order;
@@ -1110,7 +1113,7 @@ static void mul_mat_vec_q_switch_fusion(
         }
     }
 
-    GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
+    GGML_ASSERT(!has_fusion && "fusion not supported for this type and ncols_dst");
 
     ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
     launch_params.any_order = mmvq_any_order;
@@ -1563,7 +1566,7 @@ void ggml_cuda_mul_mat_vec_q(
     if (fusion) {
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
         GGML_ASSERT( !ids || dst->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc));
-        GGML_ASSERT(  ids || dst->ne[1] == 1);
+        GGML_ASSERT(  ids || dst->ne[1] == 1 || (fusion->gate && dst->ne[1] <= mmvq_fusion_max_ncols_rdna4(src0->type)));
         // Scale fusion is only allowed for NVFP4 currently as the cost of checking this at run-time in the prologue is
         // non-negligible for some models such as gpt-oss-20b
         GGML_ASSERT((fusion->x_scale == nullptr && fusion->gate_scale == nullptr) || src0->type == GGML_TYPE_NVFP4);
