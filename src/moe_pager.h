@@ -108,6 +108,12 @@ public:
     bool pack_mode() const { return pack_mode_; }
     int pack_fd() const { return fd_pack_; }
     int pack_fd_buf();
+    struct moe_pack_loc { int fd; uint64_t off; uint32_t len; uint32_t pre; };
+    bool use_warm_pack(const char * path, const char * index_txt, std::string & err);
+    bool warm_has(int il, int e) const;
+    int warm_fd();
+    moe_pack_loc pack_loc(int il, int e);
+    long stats_warm_reads() const { return n_warm_reads_; }
     long stats_gguf_reads() const { return n_gguf_reads_; }
     long stats_pack_reads() const { return n_pack_reads_; }
     bool drop_gguf_pages();
@@ -140,8 +146,12 @@ private:
     int    fd_pack_   = -1;                 // fd_ stays the GGUF, pack reads use this
     int    fd_pack_buf_ = -1;              // buffered (page-cache) twin of fd_pack_
     std::string pack_path_;
+    int    fd_warm_ = -1;
+    std::string warm_path_;
+    std::vector<moe_expert_slice> warm_idx_;  // n_layer*n_expert, s[0] valid when present
+    std::vector<char> warm_has_;
     std::vector<uint32_t> bsrc_;            // n_layer*n_expert*3: src offset inside the blob read
-    long n_gguf_reads_ = 0, n_pack_reads_ = 0;
+    long n_gguf_reads_ = 0, n_pack_reads_ = 0, n_warm_reads_ = 0;
 
     void * backend_ = nullptr;
     std::mutex mtx_;

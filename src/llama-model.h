@@ -773,8 +773,7 @@ struct llama_model {
     uint64_t n_elements() const;
 
     void print_info() const;
-
-    ggml_backend_dev_t dev_layer(int il) const;
+    void audit_residency() const;    ggml_backend_dev_t dev_layer(int il) const;
     ggml_backend_dev_t dev_output() const;
 
     ggml_backend_buffer_type_t select_buft(int il) const;
@@ -785,7 +784,6 @@ struct llama_model {
 
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
-
     ggml_tensor * get_rope_factors(const llama_cparams & cparams, int il) const;
 
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;

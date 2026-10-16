@@ -279,6 +279,7 @@ public:
         int n_layer = 0, n_expert = 0, n_used = 0, s_per_layer = 0;
         int n_slots = 0;   // s_per_layer plus the sentinel slot when armed
         long n_hit = 0, n_miss = 0, n_page_fail = 0;
+        long n_warm_hit = 0, n_pack_hit = 0;
         bool count_freq = true;
         std::atomic<long> ra_done{0};
         std::vector<uint16_t> exp_rank;  // n_layer*n_expert: LFU rank within layer
@@ -330,7 +331,7 @@ public:
     int  hot_pos = 0;
     bool hot_cycles = false;
     // persistent pool for the staging-ring preads
-    struct moe_io_job { int32_t e; int vslot; int rslot; };
+    struct moe_io_job { int32_t e; int vslot; int rslot; int fd; uint64_t off; uint32_t len; uint32_t pre; };
     std::mutex io_mtx;
     std::condition_variable io_cv, io_done_cv;
     std::vector<moe_io_job> io_jobs, io_jobs_scratch;

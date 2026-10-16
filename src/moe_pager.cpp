@@ -34,6 +34,7 @@ moe_pager::~moe_pager() {
     if (fd_ >= 0) { close(fd_); fd_ = -1; }
     if (fd_pack_ >= 0) { close(fd_pack_); fd_pack_ = -1; }
     if (fd_pack_buf_ >= 0) { close(fd_pack_buf_); fd_pack_buf_ = -1; }
+    if (fd_warm_ >= 0) { close(fd_warm_); fd_warm_ = -1; }
 }
 
 int moe_pager::pack_fd_buf() {
@@ -598,6 +599,69 @@ bool moe_pager::commit_locked(int il, int e, void * dst_gate, size_t gate_bytes,
     (reqs_[r].demand ? free_demand_ : free_stage_).push_back(reqs_[r].stage);
     reqs_[r].used = false;
     return true;
+}
+
+bool moe_pager::use_warm_pack(const char * path, const char * index_txt, std::string & err) {
+    if (n_layer_ <= 0 || n_expert_ <= 0) { err = "pager not indexed"; return false; }
+    std::ifstream f(index_txt);
+    if (!f) { err = "cannot open warm pack index"; return false; }
+    std::vector<moe_expert_slice> widx((size_t) n_layer_ * n_expert_, moe_expert_slice{0, 0, 0});
+    std::vector<char> whas((size_t) n_layer_ * n_expert_, 0);
+    std::string line;
+    long rows = 0;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        int il, e;
+        long long off = 0, len = 0;
+        if (!(is >> il >> e >> off >> len)) { err = "bad warm pack index line"; return false; }
+        if (il < 0 || il >= n_layer_ || e < 0 || e >= n_expert_ || off < 0 || len <= 0) {
+            err = "warm pack index out of range"; return false;
+        }
+        widx[(size_t) il * n_expert_ + e] = moe_expert_slice{(uint64_t) off, (uint32_t) len, 0};
+        whas[(size_t) il * n_expert_ + e] = 1;
+        rows++;
+    }
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { err = "open warm pack failed"; return false; }
+    posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+    if (fd_warm_ >= 0) close(fd_warm_);
+    fd_warm_ = fd;
+    warm_path_ = path;
+    warm_idx_.swap(widx);
+    warm_has_.swap(whas);
+    return true;
+}
+
+bool moe_pager::warm_has(int il, int e) const {
+    if (il < 0 || il >= n_layer_ || e < 0 || e >= n_expert_ || warm_has_.empty()) return false;
+    return warm_has_[(size_t) il * n_expert_ + e] != 0;
+}
+
+int moe_pager::warm_fd() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (fd_warm_ < 0 && !warm_path_.empty()) {
+        fd_warm_ = open(warm_path_.c_str(), O_RDONLY);
+        if (fd_warm_ >= 0) posix_fadvise(fd_warm_, 0, 0, POSIX_FADV_RANDOM);
+    }
+    return fd_warm_;
+}
+
+moe_pager::moe_pack_loc moe_pager::pack_loc(int il, int e) {
+    moe_pack_loc L{-1, 0, 0, 0};
+    if (il < 0 || il >= n_layer_ || e < 0 || e >= n_expert_) return L;
+    if (warm_has(il, e)) {
+        const moe_expert_slice & s = warm_idx_[(size_t) il * n_expert_ + e];
+        L.fd = warm_fd();
+        L.off = s.off; L.len = s.len; L.pre = 0;
+        if (L.fd >= 0) n_warm_reads_++;
+        return L;
+    }
+    if (!pack_mode_) return L;
+    const moe_expert_slice * s = slices(il, e);
+    L.fd = pack_fd_buf();
+    L.off = s->off; L.len = s->len; L.pre = s->pre;
+    return L;
 }
 
 void * moe_pager::worker_stream() {

@@ -2047,6 +2047,60 @@ uint64_t llama_model::n_elements() const {
     return pimpl->n_elements;
 }
 
+void llama_model::audit_residency() const {
+    struct Acc { double cuda = 0, host = 0; };
+    std::map<std::string, Acc> cat;
+    auto put = [&](const std::string & name, ggml_tensor * t) {
+        const size_t nb = ggml_nbytes(t);
+        const bool is_host = !t->buffer || ggml_backend_buffer_is_host(t->buffer);
+        std::string c = "other";
+        if (name.find("_exps") != std::string::npos) c = "routed-experts";
+        else if (name.find("shexp") != std::string::npos) c = "shared-expert";
+        else if (name.find("attn_") != std::string::npos) c = "attention";
+        else if (name.find("ffn_gate_inp") != std::string::npos) c = "router-gate";
+        else if (name.find("token_embd") != std::string::npos) c = "embeddings";
+        else if (name.find("output") != std::string::npos) c = "output";
+        else if (name.find("norm") != std::string::npos) c = "norms";
+        Acc & a = cat[c];
+        if (is_host) a.host += (double) nb; else a.cuda += (double) nb;
+    };
+    for (const auto & kv : tensors_by_name) put(kv.first, kv.second);
+    for (const auto & kv : cat) {
+        fprintf(stderr, "[moe_audit] %-15s CUDA %8.0f MiB  HOST %8.0f MiB\n",
+            kv.first.c_str(), kv.second.cuda / 1048576.0, kv.second.host / 1048576.0);
+    }
+    {
+        double vram_real = 0, vram_alias = 0;
+        for (const auto & kv : tensors_by_name) {
+            ggml_tensor * t = kv.second;
+            if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) continue;
+            void * base = ggml_backend_buffer_get_base(t->buffer);
+            bool in_map = false;
+            for (const auto & m : pimpl->mappings) {
+                if (!m) continue;
+                const char * a = (const char *) m->addr();
+                if (base >= (void *) a && base < (void *) (a + m->size())) { in_map = true; break; }
+            }
+            if (in_map) vram_alias += (double) ggml_nbytes(t);
+            else vram_real += (double) ggml_nbytes(t);
+        }
+        fprintf(stderr, "[moe_audit] TRUE-VRAM real-copies %.0f MiB  host-aliased %.0f MiB\n",
+            vram_real / 1048576.0, vram_alias / 1048576.0);
+    }
+    {
+        std::vector<std::pair<std::string, size_t>> big;
+        for (const auto & kv : tensors_by_name) {
+            if (kv.second->buffer && !ggml_backend_buffer_is_host(kv.second->buffer)) continue;
+            big.emplace_back(kv.first, ggml_nbytes(kv.second));
+        }
+        std::sort(big.begin(), big.end(), [](const auto & a, const auto & b) { return a.second > b.second; });
+        for (size_t i = 0; i < big.size() && i < 20; i++) {
+            fprintf(stderr, "[moe_audit] host-big %-60s %8.0f MiB\n",
+                big[i].first.c_str(), (double) big[i].second / 1048576.0);
+        }
+    }
+}
+
 void llama_model::print_info() const {
     const std::string rope_scaling_type = llama_rope_scaling_type_name(hparams.rope_scaling_type_train);
 

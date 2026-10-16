@@ -274,9 +274,13 @@ static void moe_slot_resolve_sync(
     s_ntok += nt;
     s_nmiss += (long) uniq.size();
     if (s_nres % 1024 == 0) {
+        static long p_warm = 0, p_pack = 0;
+        const long d_warm = ctx->moe.n_warm_hit - p_warm;
+        const long d_pack = ctx->moe.n_pack_hit - p_pack;
+        p_warm = ctx->moe.n_warm_hit; p_pack = ctx->moe.n_pack_hit;
         fprintf(stderr,
-                "[moe_res] n=%ld tok=%ld nt=%ld sync_ms=%.1f io_ms=%.1f tot_ms=%.1f miss=%ld host=%ld\n",
-                s_nres, s_ntok, nt, s_ta, s_tio, s_tres, s_nmiss, s_host);
+                "[moe_res] n=%ld tok=%ld nt=%ld sync_ms=%.1f io_ms=%.1f tot_ms=%.1f miss=%ld host=%ld warm=%ld/%ld\n",
+                s_nres, s_ntok, nt, s_ta, s_tio, s_tres, s_nmiss, s_host, d_warm, d_warm + d_pack);
         s_tres = 0.0; s_tpg = 0.0; s_ta = 0.0; s_tio = 0.0; s_nres = 0; s_ntok = 0; s_nmiss = 0; s_host = 0;
     }
     if (!uniq.empty()) {
@@ -385,22 +389,23 @@ static void moe_io_worker(llama_context * ctx) {
         for (;;) {
             const size_t i = ctx->io_next.fetch_add(1);
             if (i >= total) break;
-            const int32_t e = ctx->io_jobs[i].e;
+            const int fd = ctx->io_jobs[i].fd;
+            const uint64_t off = ctx->io_jobs[i].off;
+            const uint32_t len = ctx->io_jobs[i].len;
             const int rslot = ctx->io_jobs[i].rslot;
-            const moe_expert_slice * s = ctx->pager.slices(il, e);
             char * dst = ctx->moe.host_pool + (size_t) rslot * stride;
-            if (cudaEventSynchronize((cudaEvent_t) ctx->moe.host_ev[(size_t) rslot]) != cudaSuccess) {
+            if (fd < 0 || cudaEventSynchronize((cudaEvent_t) ctx->moe.host_ev[(size_t) rslot]) != cudaSuccess) {
                 local_fail++;
                 continue;
             }
-            size_t left = s->len, done = 0;
+            size_t left = len, done = 0;
             while (left > 0) {
-                ssize_t r = pread(pfd, dst + done, left, (off_t) (s->off + done));
+                ssize_t r = pread(fd, dst + done, left, (off_t) (off + done));
                 if (r <= 0) break;
                 done += (size_t) r;
                 left -= (size_t) r;
             }
-            if (done != s->len) local_fail++;
+            if (done != len) local_fail++;
         }
         if (local_fail) ctx->io_fail.fetch_add(local_fail);
         // Only the last worker out publishes completion: workers with no work
@@ -854,6 +859,16 @@ llama_context::llama_context(
                     } else {
                         LLAMA_LOG_INFO("%s: moe pack ON: one blob read per expert (%d layers x %d experts)\n",
                                        __func__, n_layer, n_exp);
+                        const char * wp = getenv("MOE_WARM_PACK");
+                        const char * wi = getenv("MOE_WARM_INDEX");
+                        std::string wbin = wp && wp[0] ? wp : "/home/zyxciss/moe_warm_btrfs.bin";
+                        std::string widx = wi && wi[0] ? wi : "/home/zyxciss/moe_warm_btrfs.idx";
+                        std::string e3;
+                        if (pager.use_warm_pack(wbin.c_str(), widx.c_str(), e3)) {
+                            LLAMA_LOG_INFO("%s: moe warm pack ON: %s\n", __func__, wbin.c_str());
+                        } else {
+                            LLAMA_LOG_WARN("%s: moe warm pack OFF: %s\n", __func__, e3.c_str());
+                        }
                     }
                 }
                 ggml_init_params ip = {
@@ -1045,6 +1060,7 @@ llama_context::llama_context(
                                     const char * e = getenv("MOE_DROP_MMAP");
                                     drop = (e && atoi(e) != 0) ? 1 : 0;
                                 }
+                                model.audit_residency();
                                 if (drop) {
                                     const size_t dropped = model.drop_mmap_cache();
                                     LLAMA_LOG_INFO("%s: GGUF mmap page cache released (%.2f MiB mapped)\n",
@@ -5450,32 +5466,35 @@ bool llama_context::moe_page_host_batch(int il, const int32_t * uniq, size_t nun
         pinned[(size_t) vslot - (size_t) base] = 1;
         const int rslot = moe.host_ring % moe.host_nslots;
         moe.host_ring++;
-        jobs.push_back({e, vslot, rslot});
+        const moe_pager::moe_pack_loc L = pager.pack_loc(il, e);
+        if (L.fd < 0) {
+            pinned[(size_t) vslot - (size_t) base] = 0;
+            continue;
+        }
+        jobs.push_back({e, vslot, rslot, L.fd, L.off, L.len, L.pre});
+        if (L.fd == pager.warm_fd()) moe.n_warm_hit++; else moe.n_pack_hit++;
     }
-    const int pfd = pager.pack_fd_buf();
     if (io_thr.empty()) {
         for (size_t i = 0; i < jobs.size(); i++) {
-            const moe_expert_slice * s = pager.slices(il, jobs[i].e);
             char * dst = moe.host_pool + (size_t) jobs[i].rslot * stride;
             if (cudaEventSynchronize((cudaEvent_t) moe.host_ev[(size_t) jobs[i].rslot]) != cudaSuccess) {
                 for (size_t k = 0; k < jobs.size(); k++) pinned[(size_t) (jobs[k].vslot - base)] = 0;
                 return false;
             }
-            size_t left = s->len, done = 0;
+            size_t left = jobs[i].len, done = 0;
             while (left > 0) {
-                ssize_t r = pread(pfd, dst + done, left, (off_t) (s->off + done));
+                ssize_t r = pread(jobs[i].fd, dst + done, left, (off_t) (jobs[i].off + done));
                 if (r <= 0) break;
                 done += (size_t) r;
                 left -= (size_t) r;
             }
-            if (done != s->len) {
+            if (done != jobs[i].len) {
                 for (size_t k = 0; k < jobs.size(); k++) pinned[(size_t) (jobs[k].vslot - base)] = 0;
                 return false;
             }
         }
     } else {
         std::unique_lock<std::mutex> lock(io_mtx);
-        io_pfd    = pfd;
         io_jobs   = jobs;
         io_il     = il;
         io_stride = stride;
@@ -5499,7 +5518,7 @@ bool llama_context::moe_page_host_batch(int il, const int32_t * uniq, size_t nun
     for (size_t i = 0; i < jobs.size(); i++) {
         const int local = jobs[i].vslot - base;
         const char * src = moe.host_pool + (size_t) jobs[i].rslot * stride;
-        const size_t pre = pager.slices(il, jobs[i].e)->pre;
+        const size_t pre = jobs[i].pre;
         cudaMemcpyAsync((char *) moe.pool_gate[il]->data + (size_t) local * vg, src + pre,
                         std::min(vg, gb), cudaMemcpyHostToDevice, st);
         cudaMemcpyAsync((char *) moe.pool_up[il]->data + (size_t) local * vu, src + pre + gb,
