@@ -2494,6 +2494,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         GGML_ASSERT(device->subgroup_ballot);
 
         cm1_create({GGML_TYPE_F32, GGML_TYPE_F32, true, false}, tc_mm, "matmul_id_subgroup_f32_f32", matmul_id_subgroup_f32_f32_cm1_len, matmul_id_subgroup_f32_f32_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+        cm1_create({GGML_TYPE_F32, GGML_TYPE_F16, true, false}, tc_mm, "matmul_id_subgroup_f32_f16", matmul_id_subgroup_f32_f16_cm1_len, matmul_id_subgroup_f32_f16_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
         if (device->coopmat_acc_f16_support) {
             cm1_create({GGML_TYPE_F16, GGML_TYPE_F16, true, true},  tc_mm, "matmul_id_subgroup_f16_f16acc",     matmul_id_subgroup_f16_f16acc_cm1_len,     matmul_id_subgroup_f16_f16acc_cm1_data,     sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
             cm1_create({GGML_TYPE_F16, GGML_TYPE_F32, true, true},  tc_mm, "matmul_id_subgroup_f16_f32_f16acc", matmul_id_subgroup_f16_f32_f16acc_cm1_len, matmul_id_subgroup_f16_f32_f16acc_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
@@ -2646,6 +2647,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
             if (device->subgroup_ballot && device->subgroup_require_full_support && subgroup_min_size_16) {
                 sg_create({GGML_TYPE_F32, GGML_TYPE_F32, true, false}, tc_id, "matmul_id_subgroup_f32_f32", SPV_DOT2(matmul_id_subgroup_f32_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size_16);
+                sg_create({GGML_TYPE_F32, GGML_TYPE_F16, true, false}, tc_id, "matmul_id_subgroup_f32_f16", SPV_DOT2(matmul_id_subgroup_f32_f16), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size_16);
                 sg_create({GGML_TYPE_F16, GGML_TYPE_F16, true, true},  tc_id, "matmul_id_subgroup_f16_f16acc",     SPV_DOT2_F16ACC(matmul_id_subgroup_f16),     sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size_16);
                 sg_create({GGML_TYPE_F16, GGML_TYPE_F16, true, false}, tc_id, "matmul_id_subgroup_f16",            SPV_DOT2(matmul_id_subgroup_f16),            sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size_16);
                 sg_create({GGML_TYPE_F16, GGML_TYPE_F32, true, true},  tc_id, "matmul_id_subgroup_f16_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_subgroup_f16_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size_16);
@@ -2685,6 +2687,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #endif
             } else {
                 sg_create({GGML_TYPE_F32, GGML_TYPE_F32, true, false}, tc_mm, "matmul_id_f32_f32", SPV_DOT2(matmul_id_f32_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+                sg_create({GGML_TYPE_F32, GGML_TYPE_F16, true, false}, tc_mm, "matmul_id_f32_f16", SPV_DOT2(matmul_id_f32_f16), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
                 sg_create({GGML_TYPE_F16, GGML_TYPE_F16, true, true},  tc_mm, "matmul_id_f16_f16acc",     SPV_DOT2_F16ACC(matmul_id_f16),     sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
                 sg_create({GGML_TYPE_F16, GGML_TYPE_F16, true, false}, tc_mm, "matmul_id_f16",            SPV_DOT2(matmul_id_f16),            sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
                 sg_create({GGML_TYPE_F16, GGML_TYPE_F32, true, true},  tc_mm, "matmul_id_f16_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_f16_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
@@ -7510,7 +7513,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 
     // rescale src1 to avoid f16 overflow
     const bool use_amax = ggml_prec_get_src(dst, 1) == GGML_PREC_F32 && ctx->device->fp16 && src1->type == GGML_TYPE_F32 &&
-                          (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_vk_mm_id_amax_backend_supported(ctx->device);
+                          (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_vk_mm_id_amax_backend_supported(ctx->device);
     const ggml_prec mm_prec = use_amax ? GGML_PREC_F32 : ggml_prec_get_acc(dst);
 
     const ggml_type y_kernel_type = ggml_vk_mul_mat_b_type(ctx, src0->type, src1, f16_type,
@@ -15609,7 +15612,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         // If there's not enough shared memory for row_ids and the result tile, fallback to CPU
                         return false;
                     }
-                    const bool src1_rescale_ok = (src0_type == GGML_TYPE_F16 || ggml_is_quantized(src0_type)) && ggml_vk_mm_id_amax_backend_supported(device);
+                    const bool src1_rescale_ok = (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16 || ggml_is_quantized(src0_type)) && ggml_vk_mm_id_amax_backend_supported(device);
                     if (ggml_prec_get_src(op, 1) == GGML_PREC_F32 && op->src[1]->type == GGML_TYPE_F32 && device->fp16 &&
                         src0_type != GGML_TYPE_BF16 && !src1_rescale_ok) {
                         return false;

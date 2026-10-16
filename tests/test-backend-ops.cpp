@@ -5445,7 +5445,7 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax =
         if (t->type == GGML_TYPE_I32) {
             continue;
         }
-        if (amax != 1.0f && t->type == GGML_TYPE_F32) {
+        if (amax != 1.0f && t->type == GGML_TYPE_F32 && strcmp(t->name, "b") == 0) {
             init_tensor_uniform(t, -amax, amax);
         } else {
             init_tensor_uniform(t);
