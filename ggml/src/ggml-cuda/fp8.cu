@@ -1,53 +1,5 @@
 #include "fp8.cuh"
 
-static __global__ void mul_mat_fp8_fallback(
-        const char * src0, const char * src1, char * dst, int64_t ne00, int64_t ne01, int64_t ne11,
-        int64_t ne12, int64_t ne13, int64_t r2, int64_t r3, int64_t nb01, int64_t nb02, int64_t nb03,
-        int64_t nb11, int64_t nb12, int64_t nb13, int64_t nb1, int64_t nb2, int64_t nb3, int64_t ne_dst) {
-    for (int64_t id = blockIdx.x; id < ne_dst; id += gridDim.x) {
-        int64_t tmp = id / ne01;
-        const int64_t i0 = id - tmp*ne01;
-        const int64_t i1 = tmp % ne11;
-        tmp /= ne11;
-        const int64_t i2 = tmp % ne12;
-        const int64_t i3 = tmp / ne12;
-
-        const ggml_fp8_e4m3_t * x = (const ggml_fp8_e4m3_t *) (src0 + i0*nb01 + (i2/r2)*nb02 + (i3/r3)*nb03);
-        const float * y = (const float *) (src1 + i1*nb11 + i2*nb12 + i3*nb13);
-        float sum = 0.0f;
-        for (int64_t k = threadIdx.x; k < ne00; k += blockDim.x) {
-            sum = fmaf(ggml_cuda_f8_e4m3_to_fp32(x[k].bits), y[k], sum);
-        }
-
-        __shared__ float shared[WARP_SIZE];
-        sum = block_reduce<block_reduce_method::SUM, 256>(sum, shared);
-        if (threadIdx.x == 0) {
-            *(float *) (dst + i0*sizeof(float) + i1*nb1 + i2*nb2 + i3*nb3) = sum;
-        }
-        __syncthreads();
-    }
-}
-
-void ggml_cuda_mul_mat_fp8_fallback(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_ASSERT(src0->type == GGML_TYPE_F8_E4M3);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(src0->nb[0] == sizeof(ggml_fp8_e4m3_t));
-    GGML_ASSERT(src1->nb[0] == sizeof(float));
-
-    const int64_t r2 = src1->ne[2] / src0->ne[2];
-    const int64_t r3 = src1->ne[3] / src0->ne[3];
-    const int64_t ne_dst = ggml_nelements(dst);
-    const int blocks = std::min<int64_t>(ne_dst, 65535);
-    mul_mat_fp8_fallback<<<blocks, 256, 0, ctx.stream()>>>(
-        (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
-        src0->ne[0], src0->ne[1], src1->ne[1], src1->ne[2], src1->ne[3], r2, r3,
-        src0->nb[1], src0->nb[2], src0->nb[3], src1->nb[1], src1->nb[2], src1->nb[3],
-        dst->nb[1], dst->nb[2], dst->nb[3], ne_dst);
-    CUDA_CHECK(cudaGetLastError());
-}
-
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
 
 struct fp8_abs_src {
