@@ -216,7 +216,7 @@ public:
     void push_back_placeholder(const mtmd_input_chunk * chunk);
 
     // appends server tokens, updates the media map. copies media chunks.
-    void push_back(server_tokens & tokens);
+    void push_back(const server_tokens & tokens);
 
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens);
