@@ -69,7 +69,7 @@ inline bool ggml_sycl_xmx_gather_type_enabled(ggml_type src0_type) {
 // (op_params[3], [TAG_GGML_PREC]); the accumulator is f32, which meets any request.
 // q8_0 and the k-quants are not handled here, only in the grouped path below.
 // Returns false when the case is not handled (type, device, precision, or shape).
-bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, const void * src0, const void * src1, ggml_type src1_type,
+bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, bool src0_reordered, const void * src0, const void * src1, ggml_type src1_type,
                                   int32_t src1_prec, float * dst, int64_t M, int64_t N, int64_t K, int64_t ldd,
                                   ggml_sycl_pool & pool, dpct::queue_ptr stream);
 

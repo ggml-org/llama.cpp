@@ -173,6 +173,52 @@ static void get_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor *sr
     GGML_UNUSED(ctx);
 }
 
+// IQ3_S / IQ3_XXS in the persistent reorder layout: one work-group of 32 threads
+// dequantizes one QK_K block of one requested row, reusing the reorder-aware
+// block dequantizers that the dequantize-based mul_mat path already uses.
+template <typename F>
+static void get_rows_sycl_reorder_iq3(ggml_backend_sycl_context & ctx, const ggml_tensor * src0,
+                                      const ggml_tensor * src1, ggml_tensor * dst,
+                                      const int32_t * src1_dd, float * dst_dd,
+                                      F dequantize_block) {
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    // the persistent reorder is only installed for 2D weights
+    GGML_ASSERT(ne02 == 1 && ne03 == 1);
+    GGML_ASSERT(ne00 % QK_K == 0);
+
+    const int64_t nblk    = ne00 / QK_K;
+    const int64_t nb      = nblk * ne01; // blocks in the whole tensor
+    const int64_t ngroups = ne10 * ne11 * ne12 * nblk;
+
+    const size_t s1  = nb1 / ggml_element_size(dst);
+    const size_t s2  = nb2 / ggml_element_size(dst);
+    const size_t s3  = nb3 / ggml_element_size(dst);
+
+    const size_t s10 = nb10 / ggml_element_size(src1);
+    const size_t s11 = nb11 / ggml_element_size(src1);
+    const size_t s12 = nb12 / ggml_element_size(src1);
+
+    queue_ptr stream = ctx.stream();
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>(1, 1, ngroups * 32), sycl::range<3>(1, 1, 32)),
+        [=](sycl::nd_item<3> item_ct1) {
+            const int64_t g   = item_ct1.get_group(2);
+            const int64_t b   = g % nblk;
+            const int64_t r   = g / nblk;
+            const int64_t i10 = r % ne10;
+            const int64_t i11 = (r / ne10) % ne11;
+            const int64_t i12 = r / (ne10 * ne11);
+
+            const int64_t i01 = src1_dd[i10*s10 + i11*s11 + i12*s12];
+
+            float * y = dst_dd + i10*s1 + i11*s2 + i12*s3 + b*QK_K;
+            dequantize_block(y, i01*nblk + b, item_ct1, nb);
+        });
+
+    GGML_UNUSED(dst);
+}
+
 template <int qk, int qr, dequantize_kernel_f32_t dq>
 static void get_rows_sycl_f32(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
                               ggml_tensor *dst, const void *src0_dd,
@@ -332,6 +378,10 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->nb[0] == ggml_type_size(dst->type));
 
     const int32_t * src1_i32 = (const int32_t *) dst->src[1]->data;
+    // a weight shared with MUL_MAT can be in the persistent reorder layout
+    // (IQ3_S / IQ3_XXS since the SYCL IQ3 reorder work)
+    const bool src0_reordered = dst->src[0]->extra &&
+        ((const ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder;
     /* TODO: Refactor and remove duplicates */
     switch (dst->src[0]->type) {
         case GGML_TYPE_F16:
@@ -375,6 +425,15 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ3_XXS:
+            if (src0_reordered) {
+                const void * vx = dst->src[0]->data;
+                get_rows_sycl_reorder_iq3(ctx, dst->src[0], dst->src[1], dst, src1_i32, (float *) dst->data,
+                    [=](float * y, int64_t iblk, const sycl::nd_item<3> & item_ct1, int64_t nb) {
+                        dequantize_block_iq3_xxs_reorder(vx, y, iblk, item_ct1, nb,
+                                                         iq3xxs_grid, ksigns_iq2xs, kmask_iq2xs);
+                    });
+                break;
+            }
             get_rows_sycl<QK_K, 1, dequantize_iq3_xxs>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
@@ -387,6 +446,15 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ3_S:
+            if (src0_reordered) {
+                const void * vx = dst->src[0]->data;
+                get_rows_sycl_reorder_iq3(ctx, dst->src[0], dst->src[1], dst, src1_i32, (float *) dst->data,
+                    [=](float * y, int64_t iblk, const sycl::nd_item<3> & item_ct1, int64_t nb) {
+                        dequantize_block_iq3_s_reorder(vx, y, iblk, item_ct1, nb,
+                                                       kmask_iq2xs, iq3s_grid);
+                    });
+                break;
+            }
             get_rows_sycl<QK_K, 1, dequantize_iq3_s>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
