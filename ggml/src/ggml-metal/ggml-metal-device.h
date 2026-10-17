@@ -204,6 +204,12 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool has_bias,
         bool has_scap);
 
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_tensor_gqa(
+        ggml_metal_library_t lib,
+        const struct ggml_tensor * op,
+        bool    has_mask,
+        int32_t nwg);
+
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op,

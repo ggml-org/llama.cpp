@@ -8554,6 +8554,39 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+// each token sees only its own range of KV cells and the last range is masked for all tokens (sequences and an idle slot in a unified KV cache)
+struct test_flash_attn_ext_seq_mask : public test_flash_attn_ext {
+    using test_flash_attn_ext::test_flash_attn_ext;
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",seq_mask=1";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+
+        ggml_tensor * m = ggml_get_tensor(ctx, "m");
+
+        std::vector<ggml_fp16_t> data(ggml_nelements(m));
+        ggml_backend_tensor_get(m, data.data(), 0, ggml_nbytes(m));
+
+        const int64_t n_kv  = m->ne[0];
+        const int64_t n_seq = m->ne[1] + 1;
+
+        for (int64_t i3 = 0; i3 < m->ne[3]; i3++) {
+            for (int64_t i1 = 0; i1 < m->ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < n_kv; i0++) {
+                    if (i0*n_seq/n_kv != i1) {
+                        data[(i3*m->ne[1] + i1)*n_kv + i0] = ggml_fp32_to_fp16(-INFINITY);
+                    }
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(m, data.data(), 0, ggml_nbytes(m));
+    }
+};
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -11838,6 +11871,35 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {2, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {4, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+
+    // GQA with small batches and long KV, in the KV cache layout
+    for (int hs : { 128, 256 }) {
+        for (int nb : { 1, 2, 3, 4, 5 }) {
+            for (bool mask : { true, false }) {
+                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {6, 1}, 8192, nb, mask, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+            }
+        }
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 16384, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {5, 1},  4096, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    for (int nb : { 1, 2, 3 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 4096, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    }
+    // sinks, ALiBi and softcap fall back to the other kernels
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8192, 4, true, true,  0.0f,  0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8192, 4, true, false, 8.0f,  0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8192, 4, true, false, 0.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext_large_logits(128, 128, 4, {6, 1},   8192, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256, 4, {6, 1},   8192, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256, 4, {6, 1},  65536, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {8, 1},  8512, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1},  8200, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 2},  8192, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    for (int hs : { 128, 256 }) {
+        for (int nb : { 1, 2, 3, 4 }) {
+            test_cases.emplace_back(new test_flash_attn_ext_seq_mask(hs, hs, 4, {6, 1}, 8192, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+        }
+    }
 
     // dense-allocated (non-view) quant K/V at batch >= 64, in cache and native layouts
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}, false));
