@@ -214,11 +214,35 @@ def check_simple(tr, args, c):
         v = sorted(v, key=t0)
         overlap += [r for a, b in zip(v, v[1:]) if t0(b) < t1(a) - 1e-3][:1]
     c.check(not overlap, "no overlap within a row", f"{overlap}")
-    names_ok = all(re.fullmatch(r"L\d+ e\d+", e["name"]) for e in tr.worker_experts + tr.loads) and \
-        all(re.fullmatch(r"L\d+", e["name"]) for e in tr.worker_dense) and \
-        all(re.fullmatch(r"L\d+|output", e["name"]) for e in tr.gpu) and \
-        all(re.fullmatch(r"L\d+|input|output", e["name"]) for e in tr.copies_s)
-    c.check(names_ok, "span names exactly L<layer> e<expert> / L<layer> (input / output for copies, output on the GPU)")
+    def code(v, n):
+        out = ""
+        for _ in range(n):
+            out = chr(ord("a") + v % 26) + out
+            v //= 26
+        return out
+
+    def name_ok(name, layer_only, args=None):
+        # "L<layer> e<expert> <matrix> <4 letters>" / "L<layer> <2 letters>": the letters encode the numbers (Perfetto
+        # colors by the name without digits), so they must match them, and the numbers and matrix match the args
+        m = re.fullmatch(r"L(\d+) ([a-z]{2})", name) if layer_only else re.fullmatch(r"L(\d+) e(\d+) (gate|up|down|other) ([a-z]{4})", name)
+        if not m:
+            return False
+        if layer_only:
+            return m.group(2) == code(int(m.group(1)), 2)
+        if args is not None:
+            matrix = args.get("matrix") or kind_of(args.get("tensor", ""))
+            if (int(m.group(1)), int(m.group(2)), m.group(3)) != (args["layer"], args["expert"], matrix):
+                return False
+            if "tensor" in args and kind_of(args["tensor"]) != matrix:
+                return False
+        return m.group(4) == code(int(m.group(1)) * 1024 + int(m.group(2)), 4)
+
+    names_ok = all(name_ok(e["name"], False, e["args"]) for e in tr.worker_experts + tr.loads) and \
+        all(name_ok(e["name"], True) for e in tr.worker_dense) and \
+        all(e["name"] == "output" or name_ok(e["name"], True) for e in tr.gpu) and \
+        all(e["name"] in ("input", "output") or name_ok(e["name"], True) for e in tr.copies_s)
+    c.check(names_ok, "span names exactly L<layer> e<expert> <matrix> <code> / L<layer> <code> (input / output for copies, "
+            "output on the GPU), matching their args")
 
     n_tok = args.tokens
     if n_tok is None:
@@ -260,7 +284,12 @@ def check_simple(tr, args, c):
         bad_same = [l for l in layers if not (sets[(l, "gate")] == sets[(l, "up")] == sets[(l, "down")])]
         c.check(len(keys) == want_exp and a["n_experts"] == want_exp, f"step {s}: EXPERT count", f"{len(keys)} in the rows, {a['n_experts']} counted, expected {want_exp}")
         c.check(all(n == n_threads for n in keys.values()) and a["n_expert_threads"] == want_exp * n_threads,
-                f"step {s}: one span per thread and expert", f"{a['n_expert_threads']}, {n_threads} threads")
+                f"step {s}: one span per thread and expert matrix", f"{a['n_expert_threads']}, {n_threads} threads")
+        per_thread = Counter()
+        for w, v in tr.workers.items():
+            per_thread[w] = len({e["name"] for e in v if e["args"]["step"] == s and "expert" in e["args"]})
+        c.check(len(per_thread) >= n_threads and all(n == want_exp for w, n in per_thread.items() if n),
+                f"step {s}: {want_exp} distinct expert matrix names per thread", f"{sorted(set(per_thread.values()))}")
         c.check(len(layers) == args.moe_layers and not bad_l, f"step {s}: {args.n_used} distinct experts per MoE layer and tensor", f"bad {bad_l[:5]}")
         c.check(not bad_same, f"step {s}: same expert set on gate/up/down", f"bad layers {bad_same[:5]}")
         res = {}
@@ -328,7 +357,8 @@ def check_simple(tr, args, c):
     not_comp = [e for e in tr.loads if e["name"] not in comp.get(e["args"]["step"], set())]
     bad_pf = [e["name"] for e in not_comp if "prefetch" in e["args"].get("sources", "")]
     flag_bad = [e["name"] for e in tr.loads if "computed" in e["args"] and e["args"]["computed"] != (e["name"] in comp.get(e["args"]["step"], set()))]
-    c.check(not bad_pf, "every load with source prefetch has a worker span of the same name in its step", f"{len(bad_pf)}, e.g. {bad_pf[:3]}")
+    c.check(not bad_pf, "every load with source prefetch has a worker span of the same (layer, expert, matrix) name in its step",
+            f"{len(bad_pf)}, e.g. {bad_pf[:3]}")
     c.check(not flag_bad, "load 'computed' flags match the worker rows", f"{len(flag_bad)}, e.g. {flag_bad[:3]}")
     by_src = Counter(e["args"].get("sources", "?") for e in not_comp)
     c.info("loads not computed in their step (wrong guesses)", f"{len(not_comp)} of {len(tr.loads)}: {dict(by_src)}")

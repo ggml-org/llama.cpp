@@ -11,14 +11,13 @@ Output: a Chrome-trace JSON of "X" events only, process "simple", rows (threads)
   token      one span per TOKEN: "token <step> -> <token_out>"
   GPU        "L<layer>": the device time of the GPU ops, merged over consecutive ops of the same layer less than
              100 us apart (concurrent streams are clipped so that the row does not overlap itself)
-  worker N   "L<layer> e<expert>" while CPU thread N computes that expert (one span per tensor, consecutive
-             spans of the same name merged); "L<layer>" for the layer's other CPU ops, merged over consecutive ops
+  worker N   "L<layer> e<expert> <gate|up|down> <code>" while CPU thread N computes that expert matrix; "L<layer>" for the layer's other CPU ops, merged over consecutive ops
              of the same layer (worker 0 only: the trace records the non-expert ops on worker 0)
   copy N     "L<layer>" (the layer of the copied tensor; "input" / "output" without one) for every host <-> device
              transfer of a step: scheduler copies of split inputs and the application's tensor set / get (logits)
-  load N     "L<layer> e<expert>" from the first read issue to the last piece resident, merged over the expert's
-             pieces, its gate/up/down tensors and the sources (prefetch, predictor) into one span per
-             (layer, expert, step); greedy lanes so that no row overlaps itself. Loads that were cached at issue
+  load N     "L<layer> e<expert> <gate|up|down> <code>" from the first read issue to the last piece resident,
+             merged over the matrix's pieces and the sources (prefetch, predictor) into one span per
+             (layer, expert, matrix, step); greedy lanes so that no row overlaps itself. Loads that were cached at issue
              (no read at all) are SKIPPED; a load still unresolved at the end of the trace ends with its step.
 Span names are exactly "L<layer> e<expert>" / "L<layer>" in every row; tensor, source, step, etc. go to args.
 
@@ -47,14 +46,14 @@ TRACER_ARGS = {
                "n_predict", "n_experts", "n_expert_threads", "n_residency", "n_pieces_prefetch", "n_pieces_predict_high",
                "n_pieces_predict_low", "n_pieces_cached", "n_pieces_dup", "n_loads", "n_loads_cached", "n_copies", "copy_bytes",
                "n_gpu_ops"}, {"out_sync_ts", "out_sync_dur", "sample_ts", "sample_dur"}),
-    "worker_expert": ({"layer", "expert", "step", "tensor", "bytes", "stall_ns", "n_threads"}, {"resident_frac", "sample_delay_ns"}),
+    "worker_expert": ({"layer", "expert", "matrix", "step", "tensor", "bytes", "stall_ns", "n_threads"}, {"resident_frac", "sample_delay_ns"}),
     "worker_dense": ({"layer", "step", "n_ops"}, set()),
     "GPU": ({"layer", "step", "n_ops", "n_weight_ops"}, set()),
     "copy": ({"layer", "step", "direction", "bytes", "kind", "async", "weight", "tensor", "backend"}, set()),
-    "load": ({"layer", "expert", "step", "pieces", "cached_pieces", "duplicate_pieces", "bytes", "tensors", "sources",
+    "load": ({"layer", "expert", "matrix", "step", "pieces", "cached_pieces", "duplicate_pieces", "bytes", "sources",
               "unresolved", "computed"}, {"t_resident_ns"}),
 }
-TRACER_TYPES = {"sources": str, "tensors": int, "unresolved": bool, "computed": bool, "weight": bool, "async": bool,
+TRACER_TYPES = {"sources": str, "matrix": str, "unresolved": bool, "computed": bool, "weight": bool, "async": bool,
                 "direction": str, "tensor": str, "backend": str, "kind": str}
 
 
@@ -115,12 +114,30 @@ def parse_layer(name):
     return int(m.group(1)) if m else None
 
 
-def ename(layer, expert):
-    return f"L{layer} e{expert}"
+def letters(v, n):
+    """Perfetto colors a slice by its name with the digits removed: a letters-only code keeps layers / experts apart."""
+    out = []
+    for _ in range(n):
+        out.append(chr(ord("a") + v % 26))
+        v //= 26
+    return "".join(reversed(out))
+
+
+def kind_of(name):
+    """gate / up / down / other from a node (ffn_moe_up-12) or tensor (blk.12.ffn_up_exps.weight) name, as the tracer"""
+    for k in ("gate", "up", "down"):
+        if k in name:
+            return k
+    return "other"
+
+
+def ename(layer, expert, matrix):
+    """The name of an expert matrix's compute and load spans: identical on worker and load rows"""
+    return f"L{layer} e{expert} {matrix} {letters(max(layer, 0) * 1024 + expert, 4)}"
 
 
 def lname(layer):
-    return f"L{layer}"
+    return f"L{layer} {letters(max(layer, 0), 2)}"
 
 
 GPU_GAP_US = 100.0  # the tracer's GGML_TRACE_GPU_GAP_NS
@@ -276,9 +293,9 @@ def simplify(events):
             k = (a["step"], a["name"], a["expert"])
             ex = dict(exp_args.get(k, {"bytes": 0}))
             ex["n_threads"] = n_thr[k]
-            worker_items[e["tid"] - TID_WORKER0].append((e["ts"], e["ts"] + e["dur"], ename(a["layer"], a["expert"]),
-                                                       dict(ex, layer=a["layer"], expert=a["expert"], step=a["step"], tensor=a["name"],
-                                                            stall_ns=a.get("stall_ns", 0))))
+            worker_items[e["tid"] - TID_WORKER0].append((e["ts"], e["ts"] + e["dur"], ename(a["layer"], a["expert"], kind_of(a["name"])),
+                                                       dict(ex, layer=a["layer"], expert=a["expert"], matrix=kind_of(a["name"]), step=a["step"],
+                                                            tensor=a["name"], stall_ns=a.get("stall_ns", 0))))
     else:
         notes.append("detail 1: no per-thread expert records; each expert's merged span (first thread start .. last "
                      "thread end) is shown on every worker that took part, clipped so that the experts of one node do "
@@ -292,9 +309,10 @@ def simplify(events):
                 if i + 1 < len(node):
                     t1 = min(t1, node[i + 1][0])
                 for w in range(a.get("n_threads", 1)):
-                    worker_items[w].append((t0, t1, ename(a["layer"], a["expert"]),
+                    worker_items[w].append((t0, t1, ename(a["layer"], a["expert"], kind_of(a["name"])),
                                             dict(exp_args.get((a["step"], a["name"], a["expert"]), {}), layer=a["layer"], expert=a["expert"],
-                                                 step=a["step"], tensor=a["name"], stall_ns=a.get("stall_ns", 0) // max(1, a.get("n_threads", 1)))))
+                                                 matrix=kind_of(a["name"]), step=a["step"], tensor=a["name"],
+                                                 stall_ns=a.get("stall_ns", 0) // max(1, a.get("n_threads", 1)))))
     # the layer's other CPU ops (worker 0 records them; MUL_MAT_ID is shown per expert above)
     for e in events:
         if e.get("cat") == "op" and e.get("ph") == "X" and e.get("pid") == PID_HOST and e.get("tid") == TID_WORKER0:
@@ -324,7 +342,7 @@ def simplify(events):
     # loads, as the tracer builds them: the counts from the issue records, the ends from the I/O spans
     def new_load():
         return {"t0": float("inf"), "t_issue_end": 0.0, "t_res": None, "pieces": 0, "cached": 0, "dup": 0, "bytes": 0,
-                "unresolved": False, "sources": set(), "tensors": set()}
+                "unresolved": False, "sources": set()}
     loads = defaultdict(new_load)
     # older traces also recorded the hints of prompt batches and skipped steps (before the first TOKEN); the tracer
     # no longer does, and they are left out here too
@@ -336,7 +354,7 @@ def simplify(events):
                 n_early += 1
                 continue
             a = e["args"]
-            d = loads[(a["layer"], a["expert"], step_for(e["ts"], a["step"]))]
+            d = loads[(a["layer"], a["expert"], kind_of(a.get("name", "")), step_for(e["ts"], a["step"]))]
             d["t0"] = min(d["t0"], e["ts"])
             d["t_issue_end"] = max(d["t_issue_end"], e["ts"] + e["dur"])
             d["pieces"] += 1
@@ -344,12 +362,11 @@ def simplify(events):
             d["dup"] += bool(a.get("duplicate"))
             d["bytes"] += a.get("bytes", 0)
             d["sources"].add(a.get("source", "prefetch"))
-            d["tensors"].add(a.get("name", "?"))
     for t0, t1, b, e in spans_of(events, "io", PID_IO):
         cached = bool(b.get("cached")) or e.get("resolution") == "cached"
         if cached or t0 < first_tok:
             continue
-        d = loads[(b["layer"], b["expert"], step_for(t0, b["step"]))]
+        d = loads[(b["layer"], b["expert"], kind_of(b.get("name", "")), step_for(t0, b["step"]))]
         d["t_res"] = max(d["t_res"] or 0.0, t1)
         d["unresolved"] = d["unresolved"] or bool(e.get("unresolved")) or e.get("resolution") == "unresolved" or bool(e.get("partial"))
     computed = defaultdict(set)
@@ -360,7 +377,7 @@ def simplify(events):
     step_end = {s: t1 for _, t1, s in tok_ends}
     load_items = []
     n_cached = 0
-    for (layer, expert, step), d in loads.items():
+    for (layer, expert, matrix, step), d in loads.items():
         if d["cached"] == d["pieces"]:
             n_cached += 1  # no read at all
             continue
@@ -369,20 +386,20 @@ def simplify(events):
             t1 = min(t1, max(step_end[step], d["t_issue_end"])) if step in step_end else d["t_issue_end"]
         if t1 <= d["t0"]:
             t1 = d["t0"] + 0.001
-        args = {"layer": layer, "expert": expert, "step": step, "pieces": d["pieces"], "cached_pieces": d["cached"],
-                "duplicate_pieces": d["dup"], "bytes": d["bytes"], "tensors": len(d["tensors"]),
+        args = {"layer": layer, "expert": expert, "matrix": matrix, "step": step, "pieces": d["pieces"], "cached_pieces": d["cached"],
+                "duplicate_pieces": d["dup"], "bytes": d["bytes"],
                 "sources": ",".join(x for x in SOURCES if x in d["sources"]), "unresolved": d["unresolved"],
-                "computed": ename(layer, expert) in computed[step]}
+                "computed": ename(layer, expert, matrix) in computed[step]}
         if d["t_res"] is not None:
             args["t_resident_ns"] = int(round(d["t_res"] * 1000))
-        load_items.append((d["t0"], t1, ename(layer, expert), args))
+        load_items.append((d["t0"], t1, ename(layer, expert, matrix), args))
     for i, lane in enumerate(place_lanes(load_items)):
         rows[(TID_LOAD + i, f"load {i}")] = [list(x) for x in lane]
     notes.append(f"{n_cached} loads cached at issue (no read) are not shown")
     if n_early:
         notes.append(f"{n_early} read hints before the first TOKEN (prompt batches, skipped steps) are left out")
     n_loads, n_loads_cached = defaultdict(int), defaultdict(int)
-    for (layer, expert, step), d in loads.items():
+    for (layer, expert, matrix, step), d in loads.items():
         n_loads[step] += 1
         n_loads_cached[step] += d["cached"] == d["pieces"]
     for span in rows[(TID_TOKEN, "token")]:
@@ -452,13 +469,15 @@ def selftest():
         ev.append(X("expert_thread", "e8", 160 + w, 40, 1, 100 + w, step=0, layer=1, expert=8, name="ffn_moe_gate-1"))
     # loads: expert 3 read by the prefetch (2 pieces) and hinted by the predictor; expert 8 read; expert 9 cached
     for (ts, dur, st, ex, nm, src, cached) in [(50, 2, 0, 3, "blk.1.ffn_gate_exps.weight", "prefetch", False),
-                                               (40, 3, -1, 3, "blk.1.ffn_up_exps.weight", "predict_low", False),
+                                               (40, 3, -1, 3, "blk.1.ffn_gate_exps.weight", "predict_low", False),
+                                               (45, 3, -1, 3, "blk.1.ffn_up_exps.weight", "predict_low", False),
                                                (60, 2, 0, 8, "blk.1.ffn_gate_exps.weight", "prefetch", False),
                                                (60, 1, 0, 9, "blk.1.ffn_gate_exps.weight", "prefetch", True)]:
         ev.append(X("io_issue", f"ISSUE L1 e{ex} p0", ts, dur, 1, 100, step=st, layer=1, expert=ex, name=nm, source=src,
                     piece=0, n_pieces=1, bytes=4096, cached=cached, duplicate=False))
     ev.append(X("io", "L1 e3", 50, 30, 101, 800, step=0, layer=1, expert=3, name="blk.1.ffn_gate_exps.weight", source="prefetch", cached=False))
-    ev.append(X("io", "L1 e3", 40, 70, 101, 801, step=-1, layer=1, expert=3, name="blk.1.ffn_up_exps.weight", source="predict_low", cached=False))
+    ev.append(X("io", "L1 e3", 40, 70, 101, 801, step=-1, layer=1, expert=3, name="blk.1.ffn_gate_exps.weight", source="predict_low", cached=False))
+    ev.append(X("io", "L1 e3", 45, 20, 101, 804, step=-1, layer=1, expert=3, name="blk.1.ffn_up_exps.weight", source="predict_low", cached=False))
     ev.append(X("io", "L1 e8", 60, 50, 101, 802, step=0, layer=1, expert=8, name="blk.1.ffn_gate_exps.weight", source="prefetch", cached=False))
     ev.append(X("io", "L1 e9", 60, 0, 101, 803, step=0, layer=1, expert=9, name="blk.1.ffn_gate_exps.weight", source="prefetch", cached=True))
     ev.append(X("xfer", "inp_tokens", 5, 2, 1, 1, step=0, direction="input", bytes=4, name="inp_tokens"))
@@ -468,27 +487,29 @@ def selftest():
     bad = check(out) + arg_problems(out)
     names, rows = rows_of(out)
     assert not bad, bad
-    assert set(names.values()) == {"token", "GPU", "worker 0", "worker 1", "load 0", "load 1", "copy 0"}, names
+    assert set(names.values()) == {"token", "GPU", "worker 0", "worker 1", "load 0", "load 1", "load 2", "copy 0"}, names
     assert [(e["name"], e["args"]["direction"]) for e in sorted(rows["copy 0"], key=lambda e: e["ts"])] == \
-        [("input", "h2d"), ("L0", "d2h"), ("output", "d2h")], rows["copy 0"]
+        [("input", "h2d"), (lname(0), "d2h"), ("output", "d2h")], rows["copy 0"]
     w = expert_names(rows, "worker ")
     ld = expert_names(rows, "load ")
-    assert w == ld == {"L1 e3", "L1 e8"}, (w, ld)  # byte-identical names on compute and load rows
-    assert [e["name"] for e in rows["GPU"]] == ["L0", "output"], rows["GPU"]
-    assert [e["name"] for e in sorted(rows["worker 0"], key=lambda e: e["ts"])] == ["L1", "L1 e3", "L1 e8", "L1"]
-    assert [e["name"] for e in rows["worker 1"]] == ["L1 e3", "L1 e8"]
-    l3 = [e for r, s in rows.items() if r.startswith("load") for e in s if e["name"] == "L1 e3"]
+    # byte-identical names on compute and load rows; the up matrix of expert 3 was guessed but not computed
+    assert w == {ename(1, 3, "gate"), ename(1, 8, "gate")} and ld == w | {ename(1, 3, "up")}, (w, ld)
+    assert [e["name"] for e in rows["GPU"]] == [lname(0), "output"], rows["GPU"]
+    assert [e["name"] for e in sorted(rows["worker 0"], key=lambda e: e["ts"])] == [lname(1), ename(1, 3, "gate"), ename(1, 8, "gate"), lname(1)]
+    assert [e["name"] for e in rows["worker 1"]] == [ename(1, 3, "gate"), ename(1, 8, "gate")]
+    l3 = [e for r, s in rows.items() if r.startswith("load") for e in s if e["name"] == ename(1, 3, "gate")]
     assert len(l3) == 1 and l3[0]["ts"] == 40 and l3[0]["dur"] == 70, l3  # pieces, tensors, sources merged
     assert rows["token"][0]["name"] == "token 0 -> 7"
     loads = {e["name"]: e["args"] for r, s in rows.items() if r.startswith("load") for e in s}
-    assert loads["L1 e3"]["sources"] == "prefetch,predict_low" and loads["L1 e3"]["pieces"] == 2 and loads["L1 e3"]["computed"] is True
-    assert rows["token"][0]["args"]["n_loads"] == 3 and rows["token"][0]["args"]["n_loads_cached"] == 1
-    # one expert per node and thread: consecutive spans of the same expert (gate, then up) stay apart
+    assert loads[ename(1, 3, "gate")]["sources"] == "prefetch,predict_low" and loads[ename(1, 3, "gate")]["pieces"] == 2 and loads[ename(1, 3, "gate")]["computed"] is True
+    assert loads[ename(1, 3, "up")]["computed"] is False and loads[ename(1, 3, "up")]["matrix"] == "up"
+    assert rows["token"][0]["args"]["n_loads"] == 4 and rows["token"][0]["args"]["n_loads_cached"] == 1
+    # expert spans are never merged: two consecutive spans of the same expert matrix (two tokens) stay apart
     ev2 = [dict(e) for e in ev if e.get("cat") != "expert_thread"]
-    for tensor, t in (("ffn_moe_gate-1", 115), ("ffn_moe_up-1", 160)):
-        ev2.append(X("expert_thread", "e3", t, 40, 1, 100, step=0, layer=1, expert=3, name=tensor))
+    for t in (115, 160):
+        ev2.append(X("expert_thread", "e3", t, 40, 1, 100, step=0, layer=1, expert=3, name="ffn_moe_gate-1"))
     _, rows2 = rows_of(simplify(ev2)[0])
-    assert [e["name"] for e in rows2["worker 0"]].count("L1 e3") == 2, rows2["worker 0"]
+    assert [e["name"] for e in rows2["worker 0"]].count(ename(1, 3, "gate")) == 2, rows2["worker 0"]
     print("selftest OK")
     return 0
 

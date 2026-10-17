@@ -740,14 +740,15 @@ static void check_simple(const trace_file & tf, const moe_graph & g) {
             if (e.at("name").get<std::string>().find(" e") != std::string::npos) {
                 worker_names.insert(e.at("name").get<std::string>());
                 const json & a = e.at("args");
-                CHECK(a.at("layer") == LAYER && a.at("tensor") == "ffn_moe_up-7" && a.at("bytes").get<int64_t>() == (int64_t) g.as->nb[2] &&
+                CHECK(a.at("layer") == LAYER && a.at("tensor") == "ffn_moe_up-7" && a.at("matrix") == "up" && a.at("bytes").get<int64_t>() == (int64_t) g.as->nb[2] &&
                       a.at("stall_ns").get<int64_t>() >= 0 && a.at("n_threads") == N_THREAD, "worker span args %s", a.dump().c_str());
                 CHECK(ts(e) >= ts(tok) && te(e) <= te(tok) + 1e-3, "worker span outside the token");
             }
         }
-        CHECK(n["L7 e3"] == 1 && n["L7 e5"] == 1, "worker %d expert spans", w);
+        // the matrix, then the letters of layer*1024 + expert (Perfetto colors by the name without its digits)
+        CHECK(n["L7 e3 up akpv"] == 1 && n["L7 e5 up akpx"] == 1, "worker %d expert spans", w);
         if (w == 0) {
-            CHECK(n["L7"] == 1 && n.size() == 3, "worker 0 rows: %zu names, %d L7", n.size(), n["L7"]);
+            CHECK(n["L7 ah"] == 1 && n.size() == 3, "worker 0 rows: %zu names, %d L7", n.size(), n["L7 ah"]);
         } else {
             CHECK(n.size() == 2, "worker %d: %zu names", w, n.size());
         }
@@ -760,8 +761,8 @@ static void check_simple(const trace_file & tf, const moe_graph & g) {
             for (const auto & e : kv.second) {
                 load_names.insert(e.at("name").get<std::string>());
                 const json & a = e.at("args");
-                CHECK(a.at("pieces") == 2 && a.at("sources") == "prefetch" && a.at("tensors") == 1 && a.at("unresolved") == false,
-                        "load args %s", a.dump().c_str());
+                CHECK(a.at("pieces") == 2 && a.at("sources") == "prefetch" && a.at("matrix") == "up" && a.at("unresolved") == false &&
+                      a.at("computed") == true, "load args %s", a.dump().c_str());
             }
         }
     }
@@ -769,14 +770,14 @@ static void check_simple(const trace_file & tf, const moe_graph & g) {
         CHECK(worker_names.count(n), "load %s has no compute span of the same name", n.c_str());
     }
     if (g.evictable) {
-        CHECK(load_names == std::set<std::string>({ "L7 e5" }), "load names %zu", load_names.size());
+        CHECK(load_names == std::set<std::string>({ "L7 e5 up akpx" }), "load names %zu", load_names.size());
     }
 
     // copies
     int64_t bytes = 0;
     for (const auto & e : rows["copy 0"]) {
         bytes += e.at("args").at("bytes").get<int64_t>();
-        CHECK(e.at("name") == "L7" && e.at("args").at("direction") == "h2d", "copy span %s", e.dump().c_str());
+        CHECK(e.at("name") == "L7 ah" && e.at("args").at("direction") == "h2d", "copy span %s", e.dump().c_str());
     }
     CHECK(rows["copy 0"].size() == 2 && bytes == 32768 + 8, "copy row: %zu spans, %lld bytes", rows["copy 0"].size(), (long long) bytes);
 }

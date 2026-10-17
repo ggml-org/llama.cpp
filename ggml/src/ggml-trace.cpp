@@ -1459,12 +1459,13 @@ struct ggml_trace_writer {
 
 
     //
-    // simple layout (detail 1): one process "simple" with the rows token, GPU, worker N, load N, copy N; every span
-    // of a layer and expert is named exactly "L<layer> e<expert>", every other span of a layer "L<layer>", so that
-    // Perfetto gives them the same color in every row. the records of a step are collected until the step is
-    // complete (its TOKEN record has arrived and two more writer passes have run), then its rows are written;
-    // loads are written once all their pieces are resident. the per-step counts the checks need are in the args
-    // of the token span
+    // simple layout (detail 1): one process "simple" with the rows token, GPU, worker N, load N, copy N. the compute
+    // of an expert matrix on a worker and its load (one span per step, layer, expert and matrix, over its pieces and
+    // sources) are both named exactly "L<layer> e<expert> <gate|up|down> <code>", every other span of a layer
+    // "L<layer> <code>", so that Perfetto gives them the same color in every row. the records of a step are
+    // collected until the step is complete (its TOKEN record has arrived and two more writer passes have run),
+    // then its rows are written; loads are written once all their pieces are resident. the per-step counts the
+    // checks need are in the args of the token span
     //
 
     struct simple_step {
@@ -1486,11 +1487,10 @@ struct ggml_trace_writer {
         int     n_pieces = 0, n_cached = 0, n_dup = 0;
         unsigned sources = 0;
         bool    unresolved = false;
-        std::set<std::string> tensors;
         std::set<int64_t>     pending; // cookies not resident yet
     };
 
-    using load_key = std::tuple<int, int, int>; // (step, layer, expert)
+    using load_key = std::tuple<int, int, int, int>; // (step, layer, expert, matrix = ggml_trace_tensor_kind)
 
     std::map<int, simple_step> s_steps;
     std::set<int>              s_done; // steps whose rows have been written
@@ -1533,12 +1533,27 @@ struct ggml_trace_writer {
                 us(t0), (double) std::max<int64_t>(0, t1 - t0)/1000.0, PID_HOST, tid);
     }
 
-    static std::string simple_name(int layer, int expert) {
-        char buf[48];
+    // Perfetto colors a slice by its name with the digits removed, so "L1 e76" and "L4 e300" would share one color: a
+    // letters-only code of the layer (and expert) follows the numbers, so every layer / expert gets its own color key
+    static void simple_letters(char * out, unsigned v, int n) {
+        for (int i = n - 1; i >= 0; --i) {
+            out[i] = (char) ('a' + v % 26);
+            v /= 26;
+        }
+        out[n] = 0;
+    }
+
+    // "L<layer> e<expert> <matrix> <code>" for an expert matrix (kind: ggml_trace_tensor_kind), "L<layer> <code>"
+    // for the layer's other work
+    static std::string simple_name(int layer, int expert, int kind = 0) {
+        char buf[64];
+        char code[8];
         if (expert >= 0) {
-            snprintf(buf, sizeof(buf), "L%d e%d", layer, expert);
+            simple_letters(code, (unsigned) std::max(layer, 0)*1024u + (unsigned) expert, 4);
+            snprintf(buf, sizeof(buf), "L%d e%d %s %s", layer, expert, ggml_trace_kind_name(kind), code);
         } else {
-            snprintf(buf, sizeof(buf), "L%d", layer);
+            simple_letters(code, (unsigned) std::max(layer, 0), 2);
+            snprintf(buf, sizeof(buf), "L%d %s", layer, code);
         }
         return buf;
     }
@@ -1631,7 +1646,7 @@ struct ggml_trace_writer {
             s.n_pieces_cached += cached;
             s.n_pieces_dup    += dup;
         }
-        const load_key key { ev.pos, ev.layer, ev.expert };
+        const load_key key { ev.pos, ev.layer, ev.expert, ggml_trace_tensor_kind(ev.name) };
         simple_load & l = s_loads[key];
         l.t0          = std::min(l.t0, ev.t0_ns);
         l.t_issue_end = std::max(l.t_issue_end, ev.t1_ns);
@@ -1640,7 +1655,6 @@ struct ggml_trace_writer {
         l.n_cached   += cached;
         l.n_dup      += dup;
         l.sources    |= 1u << src;
-        l.tensors.insert(ev.name);
         if (cached) {
             return;
         }
@@ -1693,15 +1707,15 @@ struct ggml_trace_writer {
             copy_bytes += c.bytes;
         }
         int n_loads = 0, n_loads_cached = 0;
-        for (auto it = s_loads.lower_bound(load_key { step, INT_MIN, INT_MIN }); it != s_loads.end() && std::get<0>(it->first) == step; ++it) {
+        for (auto it = s_loads.lower_bound(load_key { step, INT_MIN, INT_MIN, INT_MIN }); it != s_loads.end() && std::get<0>(it->first) == step; ++it) {
             n_loads++;
             n_loads_cached += it->second.n_cached == it->second.n_pieces;
         }
-        // the experts this step computed, for the loads written later ("computed" in their args)
+        // the expert matrices this step computed, for the loads written later ("computed" in their args)
         {
             auto & comp = s_computed[step];
             for (const auto & e : s.expert_threads) {
-                comp.insert({ ggml_trace_parse_layer(e.name), e.expert });
+                comp.insert({ ggml_trace_parse_layer(e.name), e.expert, ggml_trace_tensor_kind(e.name) });
             }
         }
         if (s.have_token) {
@@ -1760,10 +1774,12 @@ struct ggml_trace_writer {
                     continue;
                 }
                 prev_end = it.t1;
-                simple_head(simple_name(it.layer, it.expert), t0, it.t1, S_TID_WORKER0 + kv.first);
+                const int kind = it.expert >= 0 ? ggml_trace_tensor_kind(it.ev->name) : 0;
+                simple_head(simple_name(it.layer, it.expert, kind), t0, it.t1, S_TID_WORKER0 + kv.first);
                 if (it.expert >= 0) {
                     const ggml_trace_event & e = *it.ev;
-                    j.raw("\"layer\":%d,\"expert\":%d,\"step\":%d,\"tensor\":", it.layer, it.expert, step);
+                    j.raw("\"layer\":%d,\"expert\":%d,\"matrix\":\"%s\",\"step\":%d,\"tensor\":", it.layer, it.expert,
+                            ggml_trace_kind_name(kind), step);
                     j.str(e.name);
                     j.raw(",\"bytes\":%" PRId64 ",\"stall_ns\":%" PRId64 ",\"n_threads\":%d", e.bytes, e.aux, e.n_parts);
                     auto r = s.residency.find({ e.name, e.expert });
@@ -1844,9 +1860,9 @@ struct ggml_trace_writer {
             t1 = it != token_span.end() ? std::min(t1, std::max(it->second.second, l.t_issue_end)) : l.t_issue_end;
         }
         auto cit = s_computed.find(std::get<0>(key));
-        const bool computed = cit != s_computed.end() && cit->second.count({ std::get<1>(key), std::get<2>(key) }) > 0;
+        const bool computed = cit != s_computed.end() && cit->second.count({ std::get<1>(key), std::get<2>(key), std::get<3>(key) }) > 0;
         s_newest = std::max(s_newest, l.t0);
-        simple_head(simple_name(std::get<1>(key), std::get<2>(key)), l.t0, t1, S_TID_LOAD0 + s_load_lanes.place(l.t0, t1));
+        simple_head(simple_name(std::get<1>(key), std::get<2>(key), std::get<3>(key)), l.t0, t1, S_TID_LOAD0 + s_load_lanes.place(l.t0, t1));
         std::string src;
         for (int i = 0; i < 3; ++i) {
             if (l.sources & (1u << i)) {
@@ -1854,10 +1870,10 @@ struct ggml_trace_writer {
                 src += ggml_trace_source_name(i);
             }
         }
-        j.raw("\"layer\":%d,\"expert\":%d,\"step\":%d,\"pieces\":%d,\"cached_pieces\":%d,\"duplicate_pieces\":%d,\"bytes\":%" PRId64
-              ",\"tensors\":%zu,\"sources\":\"%s\",\"unresolved\":%s,\"computed\":%s",
-                std::get<1>(key), std::get<2>(key), std::get<0>(key), l.n_pieces, l.n_cached, l.n_dup, l.bytes,
-                l.tensors.size(), src.c_str(), l.unresolved ? "true" : "false", computed ? "true" : "false");
+        j.raw("\"layer\":%d,\"expert\":%d,\"matrix\":\"%s\",\"step\":%d,\"pieces\":%d,\"cached_pieces\":%d,\"duplicate_pieces\":%d,\"bytes\":%" PRId64
+              ",\"sources\":\"%s\",\"unresolved\":%s,\"computed\":%s",
+                std::get<1>(key), std::get<2>(key), ggml_trace_kind_name(std::get<3>(key)), std::get<0>(key), l.n_pieces, l.n_cached, l.n_dup, l.bytes,
+                src.c_str(), l.unresolved ? "true" : "false", computed ? "true" : "false");
         if (l.t_res > 0) {
             j.raw(",\"t_resident_ns\":%" PRId64, l.t_res - st->t_base);
         }
@@ -1865,7 +1881,7 @@ struct ggml_trace_writer {
     }
 
     std::map<int, std::pair<int64_t, int64_t>> s_token_span; // written steps: TOKEN t0, t1
-    std::map<int, std::set<std::pair<int, int>>> s_computed; // written steps: (layer, expert) computed
+    std::map<int, std::set<std::tuple<int, int, int>>> s_computed; // written steps: (layer, expert, matrix) computed
     uint64_t s_late = 0; // records of a step that had already been written (dropped)
 
     void simple_flush(bool final) {

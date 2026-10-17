@@ -240,7 +240,7 @@ int main() {
             n_gpu    += r == "GPU";
             if (r.rfind("copy ", 0) == 0 && e.at("args").at("weight").get<bool>()) {
                 n_w++;
-                CHECK(e.at("args").at("direction") == "h2d" && e.at("name") == "L12", "weight copy span %s", e.dump().c_str());
+                CHECK(e.at("args").at("direction") == "h2d" && e.at("name") == "L12 am", "weight copy span %s", e.dump().c_str());
             }
         }
         CHECK(n_tokens == n_traced && n_gpu > 0 && n_w == n_traced, "simple layout: %zu tokens, %zu GPU spans, %zu weight copies", n_tokens, n_gpu, n_w);
