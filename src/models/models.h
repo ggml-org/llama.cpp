@@ -785,6 +785,195 @@ struct llama_model_gpt2 : public llama_model_base {
 };
 
 
+// backbone is plain qwen2, only the acoustic decoder and the diffusion head have a graph so far
+struct llama_model_vibevoice : public llama_model_qwen2 {
+    llama_model_vibevoice(const struct llama_model_params & params);
+    ~llama_model_vibevoice() override;
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // projects acoustic/semantic latents into the LM embedding space
+    struct connector {
+        ggml_tensor * fc1   = nullptr;
+        ggml_tensor * fc1_b = nullptr;
+        ggml_tensor * norm  = nullptr;
+        ggml_tensor * fc2   = nullptr;
+        ggml_tensor * fc2_b = nullptr;
+    };
+
+    struct diff_layer {
+        ggml_tensor * norm     = nullptr;
+        ggml_tensor * adaln    = nullptr;
+        ggml_tensor * ffn_gate = nullptr;
+        ggml_tensor * ffn_up   = nullptr;
+        ggml_tensor * ffn_down = nullptr;
+    };
+
+    struct diff_head {
+        ggml_tensor * noisy_proj  = nullptr;
+        ggml_tensor * cond_proj   = nullptr;
+        ggml_tensor * t_embd_fc1  = nullptr;
+        ggml_tensor * t_embd_fc2  = nullptr;
+        ggml_tensor * final_adaln = nullptr;
+        ggml_tensor * final_proj  = nullptr;
+
+        std::vector<diff_layer> layers;
+    };
+
+    struct tok_block {
+        ggml_tensor * norm       = nullptr;
+        ggml_tensor * dwconv     = nullptr;
+        ggml_tensor * dwconv_b   = nullptr;
+        ggml_tensor * gamma      = nullptr;
+        ggml_tensor * ffn_norm   = nullptr;
+        ggml_tensor * ffn_up     = nullptr;
+        ggml_tensor * ffn_up_b   = nullptr;
+        ggml_tensor * ffn_down   = nullptr;
+        ggml_tensor * ffn_down_b = nullptr;
+        ggml_tensor * ffn_gamma  = nullptr;
+    };
+
+    struct tok_stage {
+        // stem or resample conv, runs before the blocks
+        ggml_tensor * conv   = nullptr;
+        ggml_tensor * conv_b = nullptr;
+
+        std::vector<tok_block> blocks;
+    };
+
+    // encoder or decoder of a tokenizer
+    struct tok_part {
+        ggml_tensor * head   = nullptr;
+        ggml_tensor * head_b = nullptr;
+
+        std::vector<tok_stage> stages;
+    };
+
+    connector acoustic_conn;
+    connector semantic_conn;
+
+    diff_head diff;
+
+    tok_part acoustic_enc;
+    tok_part acoustic_dec;
+    tok_part semantic_enc;
+
+    // acoustic latents [vae_dim, n_frames] -> waveform [n_frames * prod(dec_ratios), 1]
+    // the latents must already be unscaled with speech_scaling_factor/speech_bias_factor
+    ggml_tensor * build_acoustic_dec(ggml_context * ctx, ggml_tensor * latents) const;
+
+    // mono waveform [T, 1] -> semantic latents [semantic.vae_dim, T / hop]
+    // hop is the product of the encoder ratios (reversed from HF config order at runtime)
+    // T should be a multiple of hop so no extra right-pad is needed
+    ggml_tensor * build_semantic_enc(ggml_context * ctx, ggml_tensor * wav) const;
+
+    // same layout as build_semantic_enc, using the acoustic tokenizer encoder weights
+    ggml_tensor * build_acoustic_enc(ggml_context * ctx, ggml_tensor * wav) const;
+
+    // SpeechConnector: Linear -> RMSNorm (LM eps) -> Linear, no activation
+    // features [in_dim, N] -> [n_embd, N]; pass acoustic_conn or semantic_conn
+    ggml_tensor * build_connector(ggml_context * ctx, ggml_tensor * features, const connector & conn) const;
+
+    // one evaluation of the diffusion head, predicts v (v_prediction)
+    // noisy [latent_size, N], cond [n_embd, N], t [N] or [1] (float timesteps, a single one is shared) -> v [latent_size, N]
+    ggml_tensor * build_diffusion_head(ggml_context * ctx, ggml_tensor * noisy, ggml_tensor * cond, ggml_tensor * t) const;
+
+    // host side sampler for the diffusion head, DPMSolverMultistepScheduler as configured upstream:
+    // dpmsolver++, order 2, midpoint, cosine betas, linspace timesteps, final sigma 0
+    // it keeps the state of one denoising run, use a new one for each run
+    struct diff_sampler {
+        diff_sampler(uint32_t n_train_steps, uint32_t n_steps);
+
+        std::vector<float> timesteps; // head input of each step, descending
+        std::vector<float> sigmas;    // one more than timesteps, the last one is 0
+
+        // v: head output at timesteps[i] for the current sample x, x is updated in place to the next sample
+        // after the last step x holds the denoised latents
+        void step(const float * v, float * x, size_t n);
+
+    private:
+        size_t i = 0;
+
+        // data prediction of the previous step, for the second order update
+        std::vector<float> x0_prev;
+    };
+
+    // classifier-free guidance on stacked head outputs: guided = uncond + scale * (cond - uncond)
+    // all three buffers are length n (latent_size * n_frames)
+    static void cfg_guide(const float * v_cond, const float * v_uncond, float * guided, size_t n, float scale);
+
+    // full denoising run of the diffusion head on the host, with a new diff_sampler for each call
+    // noise [latent_size * n_frames] is the initial sample, cond and uncond [n_embd * n_frames] are LM last hidden rows
+    // with uncond the head runs on the stacked cond/uncond batch and the outputs are combined with cfg_guide,
+    // without it (nullptr) the head runs on cond only
+    // the backend must be able to use the model weights, returns the scaled latents [latent_size * n_frames]
+    std::vector<float> sample_speech_latents(ggml_backend_t backend, const float * noise, const float * cond, const float * uncond,
+            int64_t n_frames, float cfg_scale) const;
+
+    // same, the initial sample is drawn from a standard normal seeded with seed
+    std::vector<float> sample_speech_latents(ggml_backend_t backend, const float * cond, const float * uncond,
+            int64_t n_frames, float cfg_scale, uint32_t seed) const;
+
+    // special tokens of the generation loop, upstream repurposes the Qwen2 vision tokens
+    // audio_bos starts a speech segment and resets the negative (CFG) branch to a single token cache
+    // audio_token asks for one diffusion frame, the speech feedback of that frame is the next input embedding
+    static constexpr llama_token audio_bos_token_id = 151652; // <|vision_start|>
+    static constexpr llama_token audio_token_id     = 151654; // <|vision_pad|>
+
+    // left context of every causal conv of one tokenizer part, for chunk by chunk (streaming) decode/encode
+    // one buffer per conv in graph order, [n_ctx, C] with n_ctx = K - stride (K - 1 for the transposed convs)
+    // a cleared cache is a cold start, the left context is zeros like the padding of a full sequence
+    struct tok_stream_cache {
+        std::vector<std::vector<float>> convs;
+
+        void clear() { convs.clear(); }
+    };
+
+    // streaming build_acoustic_dec, the concatenated chunks match a decode of the full sequence
+    // unscaled latents [vae_dim * n_new] -> the new waveform samples [n_new * prod(dec_ratios)]
+    std::vector<float> acoustic_dec_stream(ggml_backend_t backend, tok_stream_cache & cache, const float * latents, int64_t n_new) const;
+
+    // streaming build_semantic_enc, n_samples must be a multiple of the encoder hop
+    // wav [n_samples] -> the new semantic latents [semantic.vae_dim * n_samples / hop]
+    std::vector<float> semantic_enc_stream(ggml_backend_t backend, tok_stream_cache & cache, const float * wav, int64_t n_samples) const;
+
+    // streaming build_speech_feedback, the cache is the semantic encoder one (the acoustic connector is per frame)
+    // scaled_latents [latent_size * n_new], wav [n_new * hop] -> [n_embd * n_new]
+    std::vector<float> speech_feedback_stream(ggml_backend_t backend, tok_stream_cache & semantic_cache,
+            const float * scaled_latents, const float * wav, int64_t n_new) const;
+
+    // undo speech scaling in place: x = x / speech_scaling_factor - speech_bias_factor
+    void unscale_speech_latents(float * latents, size_t n) const;
+
+    // next-token speech embedding for one or more frames (upstream acoustic_conn + semantic_conn)
+    // scaled_latents [vae_dim, N] are still in diffusion/speech space (before unscale)
+    // wav [T, 1] is the decoded mono waveform with T = N * hop (hop = prod(acoustic.dec_ratios))
+    // returns [n_embd, N] = acoustic_conn(scaled_latents) + semantic_conn(semantic_enc(wav))
+    ggml_tensor * build_speech_feedback(ggml_context * ctx, ggml_tensor * scaled_latents, ggml_tensor * wav) const;
+
+    struct stream_io;
+
+private:
+    struct graph_cache;
+
+    // Each cache serializes compute and owns its graph buffers until rebuild or model destruction.
+    mutable std::unique_ptr<graph_cache> diffusion_graph;
+    mutable std::unique_ptr<graph_cache> acoustic_dec_graph;
+    mutable std::unique_ptr<graph_cache> semantic_enc_graph;
+    mutable std::unique_ptr<graph_cache> feedback_graph;
+
+    struct tok_tensors;
+
+    // with st the causal convs read their left context from cache inputs and output the updated caches
+    ggml_tensor * build_acoustic_dec(ggml_context * ctx, ggml_tensor * latents, stream_io * st) const;
+    ggml_tensor * build_semantic_enc(ggml_context * ctx, ggml_tensor * wav, stream_io * st) const;
+    ggml_tensor * build_speech_feedback(ggml_context * ctx, ggml_tensor * scaled_latents, ggml_tensor * wav, stream_io * st) const;
+
+    void load_connector(llama_model_loader & ml, connector & conn, llm_tensor fc1, llm_tensor norm, llm_tensor fc2, int64_t n_in);
+    void load_tok_part(llama_model_loader & ml, tok_part & part, const tok_tensors & ids, const llama_hparams_vv_tokenizer & hp, bool decoder);
+};
+
+
 struct llama_model_pockettts : public llama_model_base {
     llama_model_pockettts(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

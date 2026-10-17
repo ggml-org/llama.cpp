@@ -1046,6 +1046,11 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_embd_inp, w->ne[1], 1, 1);
                 op_tensor = ggml_im2col(ctx, w, b, 1, 0, 0, 0, 1, 0, false, GGML_TYPE_F16);
             } break;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            {
+                ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 512, w->ne[2]);
+                op_tensor = ggml_conv_transpose_1d(ctx, w, b, 1, 0, 1);
+            } break;
         case GGML_OP_SCALE:
             {
                 op_tensor = ggml_scale(ctx, w, 1.0f);

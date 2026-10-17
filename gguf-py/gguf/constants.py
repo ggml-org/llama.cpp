@@ -337,6 +337,32 @@ class Keys:
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
+    class VibeVoice:
+        SPEECH_SCALING_FACTOR       = "{arch}.speech_scaling_factor"
+        SPEECH_BIAS_FACTOR          = "{arch}.speech_bias_factor"
+        ACOUSTIC_VAE_DIM            = "{arch}.acoustic_tokenizer.vae_dim"
+        ACOUSTIC_N_FILTERS          = "{arch}.acoustic_tokenizer.n_filters"
+        ACOUSTIC_ENCODER_RATIOS     = "{arch}.acoustic_tokenizer.encoder_ratios"
+        ACOUSTIC_ENCODER_DEPTHS     = "{arch}.acoustic_tokenizer.encoder_depths"
+        ACOUSTIC_DECODER_RATIOS     = "{arch}.acoustic_tokenizer.decoder_ratios"
+        ACOUSTIC_DECODER_DEPTHS     = "{arch}.acoustic_tokenizer.decoder_depths"
+        ACOUSTIC_FIX_STD            = "{arch}.acoustic_tokenizer.fix_std"
+        ACOUSTIC_LAYERNORM_EPS      = "{arch}.acoustic_tokenizer.layer_norm_rms_epsilon"
+        SEMANTIC_VAE_DIM            = "{arch}.semantic_tokenizer.vae_dim"
+        SEMANTIC_N_FILTERS          = "{arch}.semantic_tokenizer.n_filters"
+        SEMANTIC_ENCODER_RATIOS     = "{arch}.semantic_tokenizer.encoder_ratios"
+        SEMANTIC_ENCODER_DEPTHS     = "{arch}.semantic_tokenizer.encoder_depths"
+        SEMANTIC_LAYERNORM_EPS      = "{arch}.semantic_tokenizer.layer_norm_rms_epsilon"
+        DIFFUSION_BLOCK_COUNT       = "{arch}.diffusion_head.block_count"
+        DIFFUSION_FEED_FORWARD_LEN  = "{arch}.diffusion_head.feed_forward_length"
+        DIFFUSION_LATENT_SIZE       = "{arch}.diffusion_head.latent_size"
+        DIFFUSION_LAYERNORM_EPS     = "{arch}.diffusion_head.layer_norm_rms_epsilon"
+        DIFFUSION_TYPE              = "{arch}.diffusion_head.type"
+        DIFFUSION_PREDICTION_TYPE   = "{arch}.diffusion_head.prediction_type"
+        DIFFUSION_BETA_SCHEDULE     = "{arch}.diffusion_head.beta_schedule"
+        DIFFUSION_TRAIN_STEPS       = "{arch}.diffusion_head.train_steps"
+        DIFFUSION_INFERENCE_STEPS   = "{arch}.diffusion_head.inference_steps"
+
     class Decision:
         TYPE               = "{arch}.decision.type"
         # note: single-use-case keys can be hard-coded in cpp code
@@ -700,6 +726,7 @@ class MODEL_ARCH(IntEnum):
     NANBEIGE         = auto()
     QWEN3TTS         = auto()
     POCKETTTS        = auto()
+    VIBEVOICE        = auto()
     K2HORIZON        = auto()
     KOLIBRI1         = auto()
 
@@ -1356,6 +1383,51 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # vibevoice
+    VV_ACOUSTIC_CONN_FC1       = auto()
+    VV_ACOUSTIC_CONN_NORM      = auto()
+    VV_ACOUSTIC_CONN_FC2       = auto()
+    VV_SEMANTIC_CONN_FC1       = auto()
+    VV_SEMANTIC_CONN_NORM      = auto()
+    VV_SEMANTIC_CONN_FC2       = auto()
+    VV_DIFF_NOISY_PROJ         = auto()
+    VV_DIFF_COND_PROJ          = auto()
+    VV_DIFF_T_EMBD_FC1         = auto() # timestep embedder MLP
+    VV_DIFF_T_EMBD_FC2         = auto()
+    VV_DIFF_NORM               = auto()
+    VV_DIFF_ADALN              = auto() # AdaLN modulation, -> shift/scale/gate
+    VV_DIFF_FFN_GATE           = auto()
+    VV_DIFF_FFN_UP             = auto()
+    VV_DIFF_FFN_DOWN           = auto()
+    VV_DIFF_FINAL_ADALN        = auto() # final layer AdaLN modulation, -> shift/scale
+    VV_DIFF_FINAL_PROJ         = auto()
+    VV_ACOUSTIC_ENC_CONV       = auto() # 0 is the stem conv, then strided downsample convs
+    VV_ACOUSTIC_ENC_HEAD       = auto()
+    VV_ACOUSTIC_ENC_NORM       = auto()
+    VV_ACOUSTIC_ENC_DWCONV     = auto() # depthwise conv mixer
+    VV_ACOUSTIC_ENC_GAMMA      = auto()
+    VV_ACOUSTIC_ENC_FFN_NORM   = auto()
+    VV_ACOUSTIC_ENC_FFN_UP     = auto()
+    VV_ACOUSTIC_ENC_FFN_DOWN   = auto()
+    VV_ACOUSTIC_ENC_FFN_GAMMA  = auto()
+    VV_ACOUSTIC_DEC_CONV       = auto() # 0 is the stem conv, then strided upsample convtr
+    VV_ACOUSTIC_DEC_HEAD       = auto()
+    VV_ACOUSTIC_DEC_NORM       = auto()
+    VV_ACOUSTIC_DEC_DWCONV     = auto()
+    VV_ACOUSTIC_DEC_GAMMA      = auto()
+    VV_ACOUSTIC_DEC_FFN_NORM   = auto()
+    VV_ACOUSTIC_DEC_FFN_UP     = auto()
+    VV_ACOUSTIC_DEC_FFN_DOWN   = auto()
+    VV_ACOUSTIC_DEC_FFN_GAMMA  = auto()
+    VV_SEMANTIC_ENC_CONV       = auto()
+    VV_SEMANTIC_ENC_HEAD       = auto()
+    VV_SEMANTIC_ENC_NORM       = auto()
+    VV_SEMANTIC_ENC_DWCONV     = auto()
+    VV_SEMANTIC_ENC_GAMMA      = auto()
+    VV_SEMANTIC_ENC_FFN_NORM   = auto()
+    VV_SEMANTIC_ENC_FFN_UP     = auto()
+    VV_SEMANTIC_ENC_FFN_DOWN   = auto()
+    VV_SEMANTIC_ENC_FFN_GAMMA  = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1518,6 +1590,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.NANBEIGE:         "nanbeige",
     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
     MODEL_ARCH.POCKETTTS:        "pockettts",
+    MODEL_ARCH.VIBEVOICE:        "vibevoice",
     MODEL_ARCH.K2HORIZON:        "k2-horizon",
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
 }
@@ -2127,6 +2200,50 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_QF_FFN_UP:               "a.proj_blk.{bid}.ffn_up",
     MODEL_TENSOR.A_QF_FFN_DOWN:             "a.proj_blk.{bid}.ffn_down",
     MODEL_TENSOR.A_QF_FFN_NORM:             "a.proj_blk.{bid}.ffn_norm",
+    MODEL_TENSOR.VV_ACOUSTIC_CONN_FC1:      "acoustic_conn.fc1",
+    MODEL_TENSOR.VV_ACOUSTIC_CONN_NORM:     "acoustic_conn.norm",
+    MODEL_TENSOR.VV_ACOUSTIC_CONN_FC2:      "acoustic_conn.fc2",
+    MODEL_TENSOR.VV_SEMANTIC_CONN_FC1:      "semantic_conn.fc1",
+    MODEL_TENSOR.VV_SEMANTIC_CONN_NORM:     "semantic_conn.norm",
+    MODEL_TENSOR.VV_SEMANTIC_CONN_FC2:      "semantic_conn.fc2",
+    MODEL_TENSOR.VV_DIFF_NOISY_PROJ:        "diff_head.noisy_proj",
+    MODEL_TENSOR.VV_DIFF_COND_PROJ:         "diff_head.cond_proj",
+    MODEL_TENSOR.VV_DIFF_T_EMBD_FC1:        "diff_head.t_embd.fc1",
+    MODEL_TENSOR.VV_DIFF_T_EMBD_FC2:        "diff_head.t_embd.fc2",
+    MODEL_TENSOR.VV_DIFF_NORM:              "diff_head.blk.{bid}.norm",
+    MODEL_TENSOR.VV_DIFF_ADALN:             "diff_head.blk.{bid}.adaln",
+    MODEL_TENSOR.VV_DIFF_FFN_GATE:          "diff_head.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.VV_DIFF_FFN_UP:            "diff_head.blk.{bid}.ffn_up",
+    MODEL_TENSOR.VV_DIFF_FFN_DOWN:          "diff_head.blk.{bid}.ffn_down",
+    MODEL_TENSOR.VV_DIFF_FINAL_ADALN:       "diff_head.final.adaln",
+    MODEL_TENSOR.VV_DIFF_FINAL_PROJ:        "diff_head.final.proj",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_CONV:      "acoustic_enc.conv.{bid}",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_HEAD:      "acoustic_enc.head",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_NORM:      "acoustic_enc.stage.{bid}.blk.{xid}.norm",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_DWCONV:    "acoustic_enc.stage.{bid}.blk.{xid}.dwconv",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_GAMMA:     "acoustic_enc.stage.{bid}.blk.{xid}.gamma",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_NORM:  "acoustic_enc.stage.{bid}.blk.{xid}.ffn_norm",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_UP:    "acoustic_enc.stage.{bid}.blk.{xid}.ffn_up",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_DOWN:  "acoustic_enc.stage.{bid}.blk.{xid}.ffn_down",
+    MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_GAMMA: "acoustic_enc.stage.{bid}.blk.{xid}.ffn_gamma",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_CONV:      "acoustic_dec.conv.{bid}",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_HEAD:      "acoustic_dec.head",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_NORM:      "acoustic_dec.stage.{bid}.blk.{xid}.norm",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_DWCONV:    "acoustic_dec.stage.{bid}.blk.{xid}.dwconv",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_GAMMA:     "acoustic_dec.stage.{bid}.blk.{xid}.gamma",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_NORM:  "acoustic_dec.stage.{bid}.blk.{xid}.ffn_norm",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_UP:    "acoustic_dec.stage.{bid}.blk.{xid}.ffn_up",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_DOWN:  "acoustic_dec.stage.{bid}.blk.{xid}.ffn_down",
+    MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_GAMMA: "acoustic_dec.stage.{bid}.blk.{xid}.ffn_gamma",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_CONV:      "semantic_enc.conv.{bid}",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_HEAD:      "semantic_enc.head",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_NORM:      "semantic_enc.stage.{bid}.blk.{xid}.norm",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_DWCONV:    "semantic_enc.stage.{bid}.blk.{xid}.dwconv",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_GAMMA:     "semantic_enc.stage.{bid}.blk.{xid}.gamma",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_NORM:  "semantic_enc.stage.{bid}.blk.{xid}.ffn_norm",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_UP:    "semantic_enc.stage.{bid}.blk.{xid}.ffn_up",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_DOWN:  "semantic_enc.stage.{bid}.blk.{xid}.ffn_down",
+    MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_GAMMA: "semantic_enc.stage.{bid}.blk.{xid}.ffn_gamma",
     # NextN/MTP
     MODEL_TENSOR.NEXTN_PROJ_PRE:            "nextn.pre_projection",
     MODEL_TENSOR.NEXTN_PROJ_POST:           "nextn.post_projection",
@@ -6027,6 +6144,64 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.VIBEVOICE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.VV_ACOUSTIC_CONN_FC1,
+        MODEL_TENSOR.VV_ACOUSTIC_CONN_NORM,
+        MODEL_TENSOR.VV_ACOUSTIC_CONN_FC2,
+        MODEL_TENSOR.VV_SEMANTIC_CONN_FC1,
+        MODEL_TENSOR.VV_SEMANTIC_CONN_NORM,
+        MODEL_TENSOR.VV_SEMANTIC_CONN_FC2,
+        MODEL_TENSOR.VV_DIFF_NOISY_PROJ,
+        MODEL_TENSOR.VV_DIFF_COND_PROJ,
+        MODEL_TENSOR.VV_DIFF_T_EMBD_FC1,
+        MODEL_TENSOR.VV_DIFF_T_EMBD_FC2,
+        MODEL_TENSOR.VV_DIFF_NORM,
+        MODEL_TENSOR.VV_DIFF_ADALN,
+        MODEL_TENSOR.VV_DIFF_FFN_GATE,
+        MODEL_TENSOR.VV_DIFF_FFN_UP,
+        MODEL_TENSOR.VV_DIFF_FFN_DOWN,
+        MODEL_TENSOR.VV_DIFF_FINAL_ADALN,
+        MODEL_TENSOR.VV_DIFF_FINAL_PROJ,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_CONV,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_HEAD,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_NORM,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_DWCONV,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_GAMMA,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_NORM,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_UP,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_DOWN,
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_FFN_GAMMA,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_CONV,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_HEAD,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_NORM,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_DWCONV,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_GAMMA,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_NORM,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_UP,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_DOWN,
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_FFN_GAMMA,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_CONV,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_HEAD,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_NORM,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_DWCONV,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_GAMMA,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_NORM,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_UP,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_DOWN,
+        MODEL_TENSOR.VV_SEMANTIC_ENC_FFN_GAMMA,
     ],
     MODEL_ARCH.K2HORIZON: [
         MODEL_TENSOR.TOKEN_EMBD,

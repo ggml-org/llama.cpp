@@ -301,6 +301,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
 
     const std::string name = ggml_get_name(tensor);
 
+    // VibeVoice convolution kernels require F16/F32 weights, including heads with one output channel.
+    if (arch == LLM_ARCH_VIBEVOICE && (
+            name.find(".conv.") != std::string::npos || name.find(".dwconv.weight") != std::string::npos ||
+            name == LLM_TN(arch)(LLM_TENSOR_VV_ACOUSTIC_ENC_HEAD, "weight") ||
+            name == LLM_TN(arch)(LLM_TENSOR_VV_ACOUSTIC_DEC_HEAD, "weight") ||
+            name == LLM_TN(arch)(LLM_TENSOR_VV_SEMANTIC_ENC_HEAD, "weight"))) {
+        return false;
+    }
+
     // This used to be a regex, but <regex> has an extreme cost to compile times.
     bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
 
