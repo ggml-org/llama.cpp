@@ -46,6 +46,8 @@
 #include "ggml-quants.h"
 #include "ggml-threading.h"
 #include "traits.h"
+#include "ops.h"
+#include "vec.h"
 
 #include "kernels.h"
 
@@ -304,12 +306,14 @@ static int parse_uint_env(const char *s, const char *name, bool *ok) {
 }
 
 static void init_kleidiai_context(void) {
+    static std::atomic<bool> initialized = false;
+    if (initialized.load(std::memory_order_acquire)) {
+        return;
+    }
+
     ggml_critical_section_start();
-    static bool initialized = false;
 
-    if (!initialized) {
-        initialized = true;
-
+    if (!initialized.load(std::memory_order_relaxed)) {
         // Optional diagnostics/debug overrides; production defaults come from runtime detection.
         const char *env_sme         = getenv("GGML_KLEIDIAI_SME");
         const char *env_threads     = getenv("GGML_TOTAL_THREADS");
@@ -438,6 +442,8 @@ static void init_kleidiai_context(void) {
         } else {
             GGML_LOG_INFO("kleidiai: SME disabled\n");
         }
+
+        initialized.store(true, std::memory_order_release);
     }
 
     ggml_critical_section_end();
@@ -453,6 +459,253 @@ static inline size_t align_up(size_t value, size_t alignment) {
     }
     const size_t remainder = value % alignment;
     return remainder == 0 ? value : value + (alignment - remainder);
+}
+
+struct ggml_kleidiai_sme2_flash_attn_workspace {
+    size_t work_size;
+    size_t thread_size;
+};
+
+struct kleidiai_sme2_flash_attn_layout {
+    size_t q_packed;
+    size_t lhs_packed;
+    size_t rhs_packed;
+    size_t bias;
+    size_t output;
+    size_t size;
+};
+
+struct kleidiai_sme2_flash_attn_state {
+    uint32_t                         magic;
+    size_t                           dk;
+    size_t                           dv;
+    kleidiai_sme2_flash_attn_layout layout;
+};
+
+static constexpr uint32_t GGML_KLEIDIAI_SME2_FA_MAGIC          = 0x4b464132;
+static constexpr size_t   GGML_KLEIDIAI_SME2_FA_THREAD_PADDING = 256;
+
+static bool kleidiai_sme2_flash_attn_supported_head_size(size_t size) {
+    return size == 64 || size == 128 || size == 256 || size == 512;
+}
+
+static bool kleidiai_reserve_aligned(size_t & cursor, size_t size, size_t & offset) {
+    if (cursor > SIZE_MAX - (GGML_KLEIDIAI_PACK_ALIGN - 1)) {
+        return false;
+    }
+
+    offset = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
+    if (size > SIZE_MAX - offset) {
+        return false;
+    }
+
+    cursor = offset + size;
+    return true;
+}
+
+static bool kleidiai_sme2_flash_attn_make_layout(ggml_kleidiai_kernels *           kernels,
+                                                 size_t                            dk,
+                                                 size_t                            dv,
+                                                 kleidiai_sme2_flash_attn_layout & layout) {
+    if (!kernels || kernels->required_cpu != CPU_FEATURE_SME2) {
+        return false;
+    }
+
+    kernel_info *      gemm = &kernels->gemm;
+    lhs_packing_info * lhs  = &kernels->gemm_lhs_info;
+    rhs_packing_info * rhs  = &kernels->rhs_kxn_info;
+    if (!gemm->get_mr || !gemm->get_nr || !gemm->get_kr || !gemm->get_sr || !lhs->packed_size_ex ||
+        !lhs->pack_func_ex || !rhs->packed_size_ex || !rhs->pack_func_ex || !gemm->run_kernel_ex) {
+        return false;
+    }
+
+    const size_t mr = gemm->get_mr();
+    const size_t nr = gemm->get_nr();
+    const size_t kr = gemm->get_kr();
+    const size_t sr = gemm->get_sr();
+    if (mr == 0 || nr == 0 || kr == 0 || sr == 0) {
+        return false;
+    }
+
+    const size_t q_size      = lhs->packed_size_ex(64, dk, 0, mr, kr, sr);
+    const size_t lhs_size    = lhs->packed_size_ex(64, 64, 0, mr, kr, sr);
+    const size_t qk_rhs_size = rhs->packed_size_ex(64, dk, nr, kr, 0);
+    const size_t av_rhs_size = rhs->packed_size_ex(dv, 64, nr, kr, 0);
+    const size_t bias_count  = std::max<size_t>(64, dv);
+    if (bias_count > SIZE_MAX / sizeof(float) || dv > SIZE_MAX / (64 * sizeof(float))) {
+        return false;
+    }
+
+    size_t cursor = sizeof(kleidiai_sme2_flash_attn_state);
+    if (!kleidiai_reserve_aligned(cursor, q_size, layout.q_packed) ||
+        !kleidiai_reserve_aligned(cursor, lhs_size, layout.lhs_packed) ||
+        !kleidiai_reserve_aligned(cursor, std::max(qk_rhs_size, av_rhs_size), layout.rhs_packed) ||
+        !kleidiai_reserve_aligned(cursor, bias_count * sizeof(float), layout.bias) ||
+        !kleidiai_reserve_aligned(cursor, 64 * dv * sizeof(float), layout.output)) {
+        return false;
+    }
+
+    layout.size = cursor;
+    return true;
+}
+
+static const kleidiai_sme2_flash_attn_state * kleidiai_sme2_flash_attn_get_state(const void * work_data,
+                                                                                size_t       work_size) {
+    if (!work_data || work_size < sizeof(kleidiai_sme2_flash_attn_state)) {
+        return nullptr;
+    }
+
+    const auto * state = static_cast<const kleidiai_sme2_flash_attn_state *>(work_data);
+    if (state->magic != GGML_KLEIDIAI_SME2_FA_MAGIC || state->layout.size > work_size) {
+        return nullptr;
+    }
+
+    return state;
+}
+
+static ggml_kleidiai_kernels * kleidiai_sme2_flash_attn_kernels() {
+    init_kleidiai_context();
+    // The MUL_MAT scheduling cap does not limit these F32 FA tile kernels; all workers use the selected SME2 kernel.
+    if (!ctx.kernels_f32 || ctx.kernels_f32->required_cpu != CPU_FEATURE_SME2) {
+        return nullptr;
+    }
+
+    return ctx.kernels_f32;
+}
+
+static bool ggml_kleidiai_sme2_flash_attn_get_workspace(const ggml_tensor * op,
+                                                 ggml_kleidiai_sme2_flash_attn_workspace * workspace) {
+    if (!workspace) {
+        return false;
+    }
+    *workspace = {};
+
+    if (!op || op->op != GGML_OP_FLASH_ATTN_EXT || !op->src[0] || !op->src[1] || !op->src[2] ||
+        op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16 ||
+        (op->op_params[3] != GGML_PREC_DEFAULT && op->op_params[3] != GGML_PREC_F32) ||
+        op->src[0]->ne[1] < 64 || op->src[0]->ne[0] != op->src[1]->ne[0] ||
+        !kleidiai_sme2_flash_attn_supported_head_size(op->src[1]->ne[0]) ||
+        !kleidiai_sme2_flash_attn_supported_head_size(op->src[2]->ne[0])) {
+        return false;
+    }
+
+    ggml_kleidiai_kernels *         kernels = kleidiai_sme2_flash_attn_kernels();
+    kleidiai_sme2_flash_attn_layout layout  = {};
+    if (!kleidiai_sme2_flash_attn_make_layout(kernels, op->src[1]->ne[0], op->src[2]->ne[0], layout) ||
+        layout.size > SIZE_MAX - GGML_KLEIDIAI_SME2_FA_THREAD_PADDING) {
+        return false;
+    }
+
+    workspace->work_size   = layout.size;
+    workspace->thread_size = layout.size + GGML_KLEIDIAI_SME2_FA_THREAD_PADDING;
+    return true;
+}
+
+static bool ggml_kleidiai_sme2_flash_attn_prepare_q(const float * q,
+                                             size_t        m,
+                                             size_t        k,
+                                             size_t        dv,
+                                             void *        work_data,
+                                             size_t        work_size) {
+    if (!q || !work_data || m != 64 || !kleidiai_sme2_flash_attn_supported_head_size(k) ||
+        !kleidiai_sme2_flash_attn_supported_head_size(dv)) {
+        return false;
+    }
+
+    ggml_kleidiai_kernels *         kernels = ctx.kernels_f32;
+    kleidiai_sme2_flash_attn_layout layout  = {};
+    if (!kleidiai_sme2_flash_attn_make_layout(kernels, k, dv, layout) || layout.size > work_size) {
+        return false;
+    }
+
+    auto * state   = static_cast<kleidiai_sme2_flash_attn_state *>(work_data);
+    state->magic   = GGML_KLEIDIAI_SME2_FA_MAGIC;
+    state->dk      = k;
+    state->dv      = dv;
+    state->layout  = layout;
+
+    kernel_info *      kernel   = &kernels->gemm;
+    lhs_packing_info * lhs_info = &kernels->gemm_lhs_info;
+    lhs_info->pack_func_ex(m, k, 0, kernel->get_mr(), kernel->get_kr(), kernel->get_sr(), 0, q, k * sizeof(float),
+                           static_cast<uint8_t *>(work_data) + layout.q_packed);
+    return true;
+}
+
+static bool ggml_kleidiai_sme2_flash_attn_qk(float *       dst,
+                                      const float * rhs,
+                                      size_t        m,
+                                      size_t        n,
+                                      size_t        k,
+                                      void *        work_data,
+                                      size_t        work_size) {
+    if (!dst || !rhs || !work_data || m != 64 || n != 64 || !kleidiai_sme2_flash_attn_supported_head_size(k)) {
+        return false;
+    }
+
+    const kleidiai_sme2_flash_attn_state * state = kleidiai_sme2_flash_attn_get_state(work_data, work_size);
+    if (!state || state->dk != k) {
+        return false;
+    }
+
+    ggml_kleidiai_kernels * kernels = ctx.kernels_f32;
+    kernel_info *      kernel   = &kernels->gemm;
+    rhs_packing_info * rhs_info = &kernels->rhs_kxn_info;
+    const size_t       nr       = kernel->get_nr();
+    const size_t       kr       = kernel->get_kr();
+    const size_t       sr       = kernel->get_sr();
+
+    uint8_t * work       = static_cast<uint8_t *>(work_data);
+    void *    q_packed   = work + state->layout.q_packed;
+    void *    rhs_packed = work + state->layout.rhs_packed;
+    float *   bias       = reinterpret_cast<float *>(work + state->layout.bias);
+
+    memset(bias, 0, n * sizeof(float));
+    rhs_info->pack_func_ex(1, n, k, nr, kr, sr, 0, n * sizeof(float), rhs, bias, nullptr, rhs_packed, 0, nullptr);
+    kernel->run_kernel_ex(m, n, k, 0, q_packed, rhs_packed, dst, n * sizeof(float), sizeof(float), -FLT_MAX, FLT_MAX);
+    return true;
+}
+
+static bool ggml_kleidiai_sme2_flash_attn_av(float *       dst,
+                                      const float * lhs,
+                                      const float * rhs,
+                                      size_t        m,
+                                      size_t        n,
+                                      size_t        k,
+                                      void *        work_data,
+                                      size_t        work_size) {
+    if (!dst || !lhs || !rhs || !work_data || m != 64 || k != 64 || !kleidiai_sme2_flash_attn_supported_head_size(n)) {
+        return false;
+    }
+
+    const kleidiai_sme2_flash_attn_state * state = kleidiai_sme2_flash_attn_get_state(work_data, work_size);
+    if (!state || state->dv != n) {
+        return false;
+    }
+
+    ggml_kleidiai_kernels * kernels = ctx.kernels_f32;
+    kernel_info *      kernel   = &kernels->gemm;
+    lhs_packing_info * lhs_info = &kernels->gemm_lhs_info;
+    rhs_packing_info * rhs_info = &kernels->rhs_kxn_info;
+    const size_t       mr       = kernel->get_mr();
+    const size_t       nr       = kernel->get_nr();
+    const size_t       kr       = kernel->get_kr();
+    const size_t       sr       = kernel->get_sr();
+
+    uint8_t * work       = static_cast<uint8_t *>(work_data);
+    void *    lhs_packed = work + state->layout.lhs_packed;
+    void *    rhs_packed = work + state->layout.rhs_packed;
+    float *   bias       = reinterpret_cast<float *>(work + state->layout.bias);
+    float *   output     = reinterpret_cast<float *>(work + state->layout.output);
+
+    lhs_info->pack_func_ex(m, k, 0, mr, kr, sr, 0, lhs, k * sizeof(float), lhs_packed);
+    memset(bias, 0, n * sizeof(float));
+    rhs_info->pack_func_ex(1, n, k, nr, kr, sr, 0, n * sizeof(float), rhs, bias, nullptr, rhs_packed, 0, nullptr);
+    kernel->run_kernel_ex(m, n, k, 0, lhs_packed, rhs_packed, output, n * sizeof(float), sizeof(float), -FLT_MAX,
+                          FLT_MAX);
+
+    ggml_vec_acc_f32((int) (m * n), dst, output);
+
+    return true;
 }
 
 static inline size_t gcd_size(size_t a, size_t b) {
@@ -1782,6 +2035,33 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_
 }
 
 namespace ggml::cpu::kleidiai {
+class flash_attn_traits : public ggml::cpu::tensor_traits {
+    bool work_size(int n_threads, const ggml_tensor * op, size_t & size) override {
+        ggml_kleidiai_sme2_flash_attn_workspace workspace;
+        if (!ggml_kleidiai_sme2_flash_attn_get_workspace(op, &workspace)) {
+            return false;
+        }
+        size = ggml_flash_attn_ext_work_size(op, n_threads, workspace.thread_size);
+        return true;
+    }
+
+    bool compute_forward(ggml_compute_params * params, ggml_tensor * op) override {
+        ggml_kleidiai_sme2_flash_attn_workspace workspace;
+        if (params->use_ref || !ggml_kleidiai_sme2_flash_attn_get_workspace(op, &workspace)) {
+            return false;
+        }
+        const ggml_flash_attn_tile_kernel kernel = {
+            workspace.work_size,
+            workspace.thread_size,
+            ggml_kleidiai_sme2_flash_attn_prepare_q,
+            ggml_kleidiai_sme2_flash_attn_qk,
+            ggml_kleidiai_sme2_flash_attn_av,
+        };
+        ggml_compute_forward_flash_attn_ext_with_kernel(params, op, &kernel);
+        return true;
+    }
+};
+
 class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         // GET_ROWS needs the original weights in a native buffer.
@@ -1849,6 +2129,14 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
     }
 
     ggml::cpu::tensor_traits * get_tensor_traits(const struct ggml_tensor * op) override {
+        if (op->op == GGML_OP_FLASH_ATTN_EXT) {
+            ggml_kleidiai_sme2_flash_attn_workspace workspace;
+            if (ggml_kleidiai_sme2_flash_attn_get_workspace(op, &workspace)) {
+                static flash_attn_traits traits;
+                return &traits;
+            }
+            return nullptr;
+        }
         if (op->op == GGML_OP_MUL_MAT) {
             if (op->src[0]->buffer && op->src[0]->buffer->buft->context == this) {
                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;

@@ -9158,7 +9158,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 static void ggml_compute_forward_flash_attn_ext_tiled(
         const ggml_compute_params * params,
         ggml_tensor * dst,
-        int ir0, int ir1) {
+        int ir0, int ir1,
+        const ggml_flash_attn_tile_kernel * kernel) {
     const ggml_tensor * q     = dst->src[0];
     const ggml_tensor * k     = dst->src[1];
     const ggml_tensor * v     = dst->src[2];
@@ -9264,14 +9265,18 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
         // VKQ32:  Q_TILE_SZ * DV (FP32 output accumulator)
         // V32:    KV_TILE_SZ * DV (F32 buffer for V tile)
         // K_f32:  KV_TILE_SZ * DK (F32 buffer for K tile — GEMM path)
-        float * base  = (float *) params->wdata + ith*(Q_TILE_SZ*DK + 2*Q_TILE_SZ*KV_TILE_SZ + Q_TILE_SZ*DV + KV_TILE_SZ*DV + KV_TILE_SZ*DK + CACHE_LINE_SIZE_F32);
+        const size_t tile_scratch_size = sizeof(float) * (Q_TILE_SZ * DK + 2 * Q_TILE_SZ * KV_TILE_SZ + Q_TILE_SZ * DV +
+                                                          KV_TILE_SZ * DV + KV_TILE_SZ * DK);
+        const size_t thread_scratch_size = tile_scratch_size + (kernel ? kernel->thread_size : CACHE_LINE_SIZE);
+        uint8_t * base = (uint8_t *) params->wdata + ith * thread_scratch_size;
 
         void  * Q_q    = base;
-        float * KQ     = (float *)((char *)base + Q_TILE_SZ * DK * sizeof(float));
+        float * KQ     = (float *) (base + Q_TILE_SZ * DK * sizeof(float));
         float * mask32 = KQ + Q_TILE_SZ * KV_TILE_SZ;
         float * VKQ32  = mask32 + Q_TILE_SZ * KV_TILE_SZ;
         float * V32    = VKQ32 + Q_TILE_SZ * DV;
         float * K_f32  = V32 + KV_TILE_SZ * DV;
+        void * kernel_work = base + tile_scratch_size;
 
         memset(VKQ32, 0, Q_TILE_SZ * DV * sizeof(float));
         memset(mask32, 0, Q_TILE_SZ * KV_TILE_SZ * sizeof(float));
@@ -9294,6 +9299,9 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 memset(Q_f32 + tq * DK, 0, DK * sizeof(float));
             }
         }
+
+        const bool q_prepared = kernel && kernel->prepare_q(
+            (const float *) Q_q, Q_TILE_SZ, DK, DV, kernel_work, kernel->work_size);
 
         memset(K_f32, 0, DK * KV_TILE_SZ * sizeof(float));
         memset(V32,   0, KV_TILE_SZ * DV * sizeof(float));
@@ -9340,7 +9348,10 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 }
             }
             memset(KQ, 0, Q_TILE_SZ * KV_TILE_SZ * sizeof(float));
-            simd_gemm(KQ, (const float *)Q_q, K_f32, Q_TILE_SZ, DK, KV_TILE_SZ);
+            if (!q_prepared || !kernel->qk(KQ, K_f32, Q_TILE_SZ, KV_TILE_SZ, DK,
+                                            kernel_work, kernel->work_size)) {
+                simd_gemm(KQ, (const float *) Q_q, K_f32, Q_TILE_SZ, DK, KV_TILE_SZ);
+            }
             ggml_vec_scale_f32(Q_TILE_SZ * KV_TILE_SZ, KQ, scale);
 
             if (logit_softcap != 0.0f) {
@@ -9403,7 +9414,10 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     memset(KQ + tq * KV_TILE_SZ, 0, KV_TILE_SZ * sizeof(float));
                 }
             }
-            simd_gemm(VKQ32, KQ, V32, Q_TILE_SZ, KV_TILE_SZ, DV);
+            if (!q_prepared || !kernel->av(VKQ32, KQ, V32, Q_TILE_SZ, DV, KV_TILE_SZ,
+                                            kernel_work, kernel->work_size)) {
+                simd_gemm(VKQ32, KQ, V32, Q_TILE_SZ, KV_TILE_SZ, DV);
+            }
         }
 
         // sinks (apply only to valid rows in the tile)
@@ -9517,7 +9531,8 @@ static void ggml_flash_attn_ext_reduce_partials(
 
 static void ggml_compute_forward_flash_attn_ext_f16(
         const ggml_compute_params * params,
-        ggml_tensor * dst) {
+        ggml_tensor * dst,
+        const ggml_flash_attn_tile_kernel * kernel) {
 
     const ggml_tensor * q     = dst->src[0];
     const ggml_tensor * k     = dst->src[1];
@@ -9641,7 +9656,8 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             const int64_t ir1 = MIN(ir0 + dr, nr);
 
             if (use_tiled) {
-                ggml_compute_forward_flash_attn_ext_tiled(params, dst, ir0, ir1);
+                ggml_compute_forward_flash_attn_ext_tiled(
+                    params, dst, ir0, ir1, kernel);
             } else {
                 ggml_compute_forward_flash_attn_ext_f16_one_chunk(params, dst, ir0, ir1, 0, nek1, nullptr, 0);
             }
@@ -9649,6 +9665,24 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             current_chunk = ggml_threadpool_chunk_add(params->threadpool, 1);
         }
     }
+}
+
+size_t ggml_flash_attn_ext_work_size(const ggml_tensor * dst, int n_threads, size_t thread_size) {
+    const size_t dk = dst->src[1]->ne[0];
+    const size_t dv = dst->src[2]->ne[0];
+    const size_t q = ggml_fa_tile_config::Q;
+    const size_t kv = ggml_fa_tile_config::KV;
+    const size_t prefill = n_threads * (sizeof(float) * (q * dk + 2 * q * kv + q * dv + kv * dv + kv * dk) + thread_size);
+    const size_t decode = sizeof(float) * n_threads * (dst->src[0]->ne[2] * (2 + dv) + dk + 2 * dv);
+    return std::max(prefill, decode);
+}
+
+void ggml_compute_forward_flash_attn_ext_with_kernel(
+        const ggml_compute_params * params,
+        ggml_tensor * dst,
+        const ggml_flash_attn_tile_kernel * kernel) {
+    GGML_ASSERT(dst->op_params[3] == GGML_PREC_DEFAULT || dst->op_params[3] == GGML_PREC_F32);
+    ggml_compute_forward_flash_attn_ext_f16(params, dst, kernel);
 }
 
 void ggml_compute_forward_flash_attn_ext(
@@ -9659,7 +9693,7 @@ void ggml_compute_forward_flash_attn_ext(
         case GGML_PREC_F32:
             {
                 // uses F32 accumulators
-                ggml_compute_forward_flash_attn_ext_f16(params, dst);
+                ggml_compute_forward_flash_attn_ext_f16(params, dst, nullptr);
             } break;
         default:
             {
