@@ -194,3 +194,124 @@ kernel void kernel_gemv_f32_f32_mc(
     }
     if (lane == 0) dst[(ulong)n * (uint)stride_d + m] = red[0];
 }
+
+// Small-N GEMV that reads each weight row once: 2^lpr_log2 lanes own a row and keep one
+// accumulator per column (N <= 8).
+kernel void kernel_gemv_f32_f32_mcr(
+    global float * src0, ulong offset0,
+    global float * src1, ulong offset1,
+    global float * dst,  ulong offsetd,
+    int ne00,        // K
+    int ne01,        // M
+    int ne11,        // N, 1..8
+    int stride_a,
+    int stride_b,
+    int stride_d,
+    int lpr_log2)    // lanes per row = 1 << lpr_log2, 1..64
+{
+    src0 = (global float*)((global char*)src0 + offset0);
+    src1 = (global float*)((global char*)src1 + offset1);
+    dst  = (global float*)((global char*)dst  + offsetd);
+
+    const uint lane = get_local_id(0);
+    const uint lpr  = 1u << lpr_log2;
+    const uint l    = lane & (lpr - 1);
+    const uint mr   = get_group_id(0) * (64u >> lpr_log2) + (lane >> lpr_log2);
+    const bool valid = mr < (uint)ne01;
+    const uint m    = valid ? mr : (uint)ne01 - 1;      // keep every lane in the barriers
+
+    global float4 * wrow = (global float4*)(src0 + (ulong)m * (uint)stride_a);
+    const uint k4 = (uint)ne00 >> 2;
+
+    float acc[8] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    for (uint k = l; k < k4; k += lpr) {
+        const float4 w = wrow[k];
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            if (n < ne11) {
+                acc[n] += dot(w, ((global float4*)(src1 + (ulong)n * (uint)stride_b))[k]);
+            }
+        }
+    }
+
+    local float red[8 * 64];
+    #pragma unroll
+    for (int n = 0; n < 8; n++) {
+        red[n * 64 + lane] = acc[n];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (uint s = lpr >> 1; s > 0; s >>= 1) {
+        if (l < s) {
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                red[n * 64 + lane] += red[n * 64 + lane + s];
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (l == 0 && valid) {
+        for (int n = 0; n < ne11; n++) {
+            dst[(ulong)n * (uint)stride_d + m] = red[n * 64 + lane];
+        }
+    }
+}
+
+// f16-weight twin of kernel_gemv_f32_f32_mcr.
+kernel void kernel_gemv_f16_f32_mcr(
+    global half  * src0, ulong offset0,
+    global float * src1, ulong offset1,
+    global float * dst,  ulong offsetd,
+    int ne00,        // K
+    int ne01,        // M
+    int ne11,        // N, 1..8
+    int stride_a,
+    int stride_b,
+    int stride_d,
+    int lpr_log2)    // lanes per row = 1 << lpr_log2, 1..64
+{
+    src0 = (global half*)((global char*)src0 + offset0);
+    src1 = (global float*)((global char*)src1 + offset1);
+    dst  = (global float*)((global char*)dst  + offsetd);
+
+    const uint lane = get_local_id(0);
+    const uint lpr  = 1u << lpr_log2;
+    const uint l    = lane & (lpr - 1);
+    const uint mr   = get_group_id(0) * (64u >> lpr_log2) + (lane >> lpr_log2);
+    const bool valid = mr < (uint)ne01;
+    const uint m    = valid ? mr : (uint)ne01 - 1;      // keep every lane in the barriers
+
+    global half * wrow = src0 + (ulong)m * (uint)stride_a;
+    const uint k4 = (uint)ne00 >> 2;
+
+    float acc[8] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    for (uint k = l; k < k4; k += lpr) {
+        const float4 w = vload_half4(k, wrow);
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            if (n < ne11) {
+                acc[n] += dot(w, ((global float4*)(src1 + (ulong)n * (uint)stride_b))[k]);
+            }
+        }
+    }
+
+    local float red[8 * 64];
+    #pragma unroll
+    for (int n = 0; n < 8; n++) {
+        red[n * 64 + lane] = acc[n];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (uint s = lpr >> 1; s > 0; s >>= 1) {
+        if (l < s) {
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                red[n * 64 + lane] += red[n * 64 + lane + s];
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (l == 0 && valid) {
+        for (int n = 0; n < ne11; n++) {
+            dst[(ulong)n * (uint)stride_d + m] = red[n * 64 + lane];
+        }
+    }
+}
