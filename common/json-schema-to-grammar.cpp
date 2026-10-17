@@ -741,24 +741,32 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        // required keys first, exactly once, in any order like common_chat_peg_builder::permute (declared order above max_required)
-        // then optional and additional keys in any order, repeats allowed
-        constexpr size_t max_required = 6;
+        // up to max_tracked keys, required first: in any order, at most once, close only when all required keys are seen (like common_chat_peg_builder::permute)
+        // other keys: anywhere, repeats allowed; with more than max_tracked required keys, those keep the declared order
+        constexpr size_t max_tracked = 6;
         if (_unordered_properties) {
-            const size_t n = required_props.size();
-            const bool any_order = n <= max_required;
-            std::vector<std::string> optional_kvs;
+            const size_t n_required = required_props.size();
+            const bool any_order = n_required <= max_tracked;
+            std::vector<std::string> tracked = required_props;
+            std::vector<std::string> free_kvs;
             for (const auto & prop_name : optional_props) {
-                optional_kvs.push_back(prop_kv_rule_names[prop_name]);
+                if (any_order && prop_name != "*" && tracked.size() < max_tracked) {
+                    tracked.push_back(prop_name);
+                } else {
+                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
+                }
             }
-            std::string free_kv = optional_kvs.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(optional_kvs, " | "));
+            std::string free_kv = free_kvs.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
+            std::string free_loop = free_kv.empty() ? "" : "( \",\" space " + free_kv + " )*";
 
-            // seen: bitmask of required keys, or with any_order == false their count
-            auto required_alts = [&](size_t seen, const std::function<std::string(size_t)> & rest) {
+            // seen: bitmask of tracked keys, or with any_order == false the count of required keys
+            const size_t required_mask = any_order ? (size_t(1) << n_required) - 1 : 0;
+            auto all_required = [&](size_t seen) { return any_order ? (seen & required_mask) == required_mask : seen == n_required; };
+            auto tracked_alts = [&](size_t seen, const std::function<std::string(size_t)> & rest) {
                 std::vector<std::string> alts;
-                for (size_t i = 0; i < n; i++) {
+                for (size_t i = 0; i < tracked.size(); i++) {
                     if (any_order ? !(seen & (size_t(1) << i)) : i == seen) {
-                        alts.push_back(prop_kv_rule_names[required_props[i]] + " " + rest(any_order ? seen | (size_t(1) << i) : seen + 1));
+                        alts.push_back(prop_kv_rule_names[tracked[i]] + " " + rest(any_order ? seen | (size_t(1) << i) : seen + 1));
                     }
                 }
                 return alts;
@@ -769,14 +777,19 @@ private:
                 if (it != rest_rules.end()) {
                     return it->second;
                 }
-                auto alts = required_alts(seen, rest);
-                return rest_rules[seen] = alts.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), "\",\" space ( " + string_join(alts, " | ") + " )");
+                auto alts = tracked_alts(seen, rest);
+                std::string body = free_loop;
+                if (!alts.empty()) {
+                    body += (body.empty() ? "" : " ") + std::string("( \",\" space ( ") + string_join(alts, " | ") + " ) )" + (all_required(seen) ? "?" : "");
+                }
+                return rest_rules[seen] = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
             };
 
-            if (n == 0) {
-                return "\"{\" space ( " + free_kv + " ( \",\" space " + free_kv + " )* )? space \"}\"";
+            auto firsts = tracked_alts(0, rest);
+            if (!free_kv.empty()) {
+                firsts.push_back(free_kv + " " + rest(0));
             }
-            return "\"{\" space ( " + string_join(required_alts(0, rest), " | ") + " )" + (free_kv.empty() ? "" : " ( \",\" space " + free_kv + " )*") + " space \"}\"";
+            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (n_required == 0 ? "?" : "") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
