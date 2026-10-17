@@ -451,12 +451,10 @@ public:
 
         seq_pos_rm(i);
 
-        pos[i]   += d;
-        shift[i] += d;
+        const int64_t np = (int64_t) pos[i] + d;
+        const int64_t ns = (int64_t) shift[i] + d;
 
-        has_shift = true;
-
-        if (pos[i] < 0) {
+        if (np < 0 || np > (int64_t) std::numeric_limits<llama_pos>::max()) {
             seq[i].reset();
             pos[i] = -1;
             shift[i] = 0;
@@ -465,6 +463,11 @@ public:
 
             return true;
         }
+
+        pos[i]   = (llama_pos) np;
+        shift[i] = (llama_pos) ns;
+
+        has_shift = true;
 
         seq_pos_add(i);
 
