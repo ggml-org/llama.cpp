@@ -1576,6 +1576,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
+    vsub             (params.vsub),
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
@@ -1631,6 +1632,73 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
     cur = build_hadamard_input(w, cur);
+
+    if (vsub != nullptr) {
+        // reduced draft LM head, lora is not applied to it
+        const auto it = vsub->heads.find(w);
+        if (it != vsub->heads.end() && ggml_n_dims(cur) <= 2 && (w_s == nullptr || ggml_nelements(w_s) == 1)) {
+            const llama_vocab_subset::head & head = it->second;
+
+            const int64_t n_embd    = w->ne[0];
+            const int64_t n_vocab   = w->ne[1];
+            const int64_t n_base    = vsub->n_base;
+            const int64_t n_dyn     = vsub->n_dynamic;
+            const int64_t n_outputs = cur->ne[1];
+
+            // same precision as the full head, the policy is keyed on w and not on the views of it
+            const auto set_prec = [&](ggml_tensor * t) {
+                if (prec_policy != nullptr) {
+                    const auto p = prec_policy->prec_src1.find(w);
+                    if (p != prec_policy->prec_src1.end()) {
+                        ggml_prec_set_src(t, p->second, 1);
+                    }
+                }
+                if (w->type == GGML_TYPE_NVFP4) {
+                    ggml_prec_set_acc(t, GGML_PREC_BF16);
+                }
+            };
+
+            // exact logits for the lowest n_base ids, -inf for the rest until they get picked
+            ggml_tensor * logits = ggml_mul_mat(ctx0, ggml_view_2d(ctx0, w, n_embd, n_base, w->nb[1], 0), cur);
+            set_prec(logits);
+            logits = ggml_concat(ctx0, logits, ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab - n_base, n_outputs), -INFINITY), 0);
+
+            if (n_outputs > 0) {
+                // score the other ids in vocab order so top_k returns token ids, end-of-generation ids always win
+                ggml_tensor * scores = ggml_mul_mat(ctx0, head.scorer, ggml_mul_mat(ctx0, head.basis, cur));
+                scores = ggml_concat(ctx0, ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_base, n_outputs), -INFINITY), scores, 0);
+                if (vsub->eog != nullptr) {
+                    const int64_t n_eog = vsub->eog->ne[0];
+                    scores = ggml_set_rows(ctx0, ggml_reshape_3d(ctx0, scores, 1, n_vocab, n_outputs),
+                            ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_eog, n_outputs), INFINITY),
+                            ggml_reshape_3d(ctx0, vsub->eog, n_eog, 1, 1));
+                }
+
+                // one output per op: CUDA's multi-row top_k is slow and its multi-column MUL_MAT_ID reads 2 rows per expert
+                ggml_tensor * as     = ggml_reshape_3d(ctx0, w, n_embd, 1, n_vocab); // one-row experts, only the picked rows are read
+                ggml_tensor * ids    = nullptr;
+                ggml_tensor * picked = nullptr;
+                for (int64_t i = 0; i < n_outputs; ++i) {
+                    ggml_tensor * ids_i = ggml_top_k(ctx0, ggml_view_1d(ctx0, scores, n_vocab, i*n_vocab*ggml_element_size(scores)), n_dyn);
+                    ggml_tensor * cur_i = ggml_view_3d(ctx0, cur, n_embd, 1, 1, cur->nb[1], cur->nb[1], i*cur->nb[1]);
+                    ggml_tensor * p_i   = ggml_mul_mat_id(ctx0, as, cur_i, ggml_reshape_2d(ctx0, ids_i, n_dyn, 1));
+                    set_prec(p_i);
+                    ids    = ids    == nullptr ? ids_i : ggml_concat(ctx0, ids,    ids_i, 1);
+                    picked = picked == nullptr ? p_i   : ggml_concat(ctx0, picked, p_i,   2);
+                }
+
+                logits = ggml_set_rows(ctx0, ggml_reshape_3d(ctx0, logits, 1, n_vocab, n_outputs), picked, ggml_reshape_2d(ctx0, ids, n_dyn, n_outputs));
+            }
+
+            logits = ggml_reshape_2d(ctx0, logits, n_vocab, n_outputs);
+            if (w_s) {
+                logits = ggml_mul(ctx0, logits, w_s);
+            }
+
+            return logits;
+        }
+    }
+
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
     if (prec_policy) {

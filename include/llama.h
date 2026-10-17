@@ -425,6 +425,9 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
+
+        // [EXPERIMENTAL] draft contexts: compute only the lowest token ids plus this many best-scoring others per output (0 = full LM head)
+        uint32_t n_vocab_dynamic;
     };
 
     struct llama_model_tensor_override {

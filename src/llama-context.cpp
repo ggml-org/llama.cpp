@@ -484,6 +484,19 @@ llama_context::llama_context(
         memory.reset(model.create_memory(params_mem, cparams));
     }
 
+    // reduced LM head, must exist before the graph is reserved
+    if (!hparams.vocab_only && params.n_vocab_dynamic > 0) {
+        try {
+            vsub_init(params.n_vocab_dynamic);
+        } catch (const std::exception & e) {
+            // e.g. out of memory, the draft still works with the full head
+            LLAMA_LOG_WARN("%s: vocab_subset: %s, using the full LM head\n", __func__, e.what());
+            vsub.reset();
+            vsub_bufs.clear();
+            vsub_ctxs.clear();
+        }
+    }
+
     // init backends
     if (!hparams.vocab_only) {
         LLAMA_LOG_DEBUG("%s: enumerating backends\n", __func__);
@@ -2542,6 +2555,11 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
     }
 
+    // the reduced LM head adds a top_k and a row gather per output
+    if (vsub) {
+        res += 32 + 8*std::min(n_tokens, cparams.n_outputs_max);
+    }
+
     if (cparams.training) {
         res *= 4;
     }
@@ -2706,6 +2724,7 @@ llm_graph_params llama_context::graph_params(
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
+        /*.vsub        =*/ vsub.get(),
     };
 }
 
@@ -2726,6 +2745,270 @@ void llama_context::sched_graph_realloc(ggml_backend_sched_t sched, ggml_cgraph 
     LLAMA_LOG_INFO("%s: graph reallocation: nodes = %d (changed = %d), splits = %d, n_same = %d, n_diff = %d\n",
             __func__, ggml_graph_n_nodes(gf), graph_size_changed, ggml_backend_sched_get_n_splits(sched),
             lctx->n_reallocs_same, lctx->n_reallocs_diff);
+}
+
+// reduced draft LM head: the lowest ids stay exact, the rest are ranked by a low-rank scorer
+static constexpr int64_t vsub_n_base = 32768;
+static constexpr int64_t vsub_rank   = 512;
+
+// modified Gram-Schmidt on the columns of q [n_rows, n_cols]
+static void vsub_orth(std::vector<double> & q, int64_t n_rows, int64_t n_cols) {
+    auto dot = [n_rows](const double * a, const double * b) {
+        double s = 0.0;
+        for (int64_t i = 0; i < n_rows; ++i) {
+            s += a[i]*b[i];
+        }
+        return s;
+    };
+
+    for (int64_t j = 0; j < n_cols; ++j) {
+        double * qj = q.data() + j*n_rows;
+        for (int64_t k = 0; k < j; ++k) {
+            const double * qk = q.data() + k*n_rows;
+            const double   d  = dot(qk, qj);
+            for (int64_t i = 0; i < n_rows; ++i) {
+                qj[i] -= d*qk[i];
+            }
+        }
+        const double norm = std::sqrt(dot(qj, qj));
+        for (int64_t i = 0; i < n_rows; ++i) {
+            qj[i] = norm > 0.0 ? qj[i]/norm : 0.0;
+        }
+    }
+}
+
+void llama_context::vsub_init(uint32_t n_dynamic) {
+    const int64_t t_start_us = ggml_time_us();
+
+    const int64_t n_vocab = model.vocab.n_tokens();
+    const int64_t n_base  = std::min(vsub_n_base, n_vocab);
+
+    // 65535 is the CUDA grid limit for the picked rows
+    if (n_dynamic > n_vocab - n_base || n_dynamic > 65535) {
+        LLAMA_LOG_WARN("%s: vocab_subset: %u dynamic rows do not fit a vocabulary of %" PRId64 " tokens, using the full LM head\n",
+                __func__, n_dynamic, n_vocab);
+        return;
+    }
+
+    // the model's head, the MTP heads, and the target's head for drafters that have none (DFlash, EAGLE3)
+    std::vector<ggml_tensor *> cands = { model.output };
+    for (const auto & layer : model.layers) {
+        cands.push_back(layer.nextn.shared_head_head);
+    }
+    if (model.output == nullptr && cparams.ctx_other != nullptr) {
+        cands.push_back(llama_get_model(cparams.ctx_other)->output);
+    }
+
+    // end-of-generation ids above the base are always picked so a draft can still end the reply
+    std::vector<int32_t> eog;
+    for (llama_token id = (llama_token) n_base; id < (llama_token) n_vocab; ++id) {
+        if (model.vocab.is_eog(id)) {
+            eog.push_back(id);
+        }
+    }
+
+    vsub = std::make_unique<llama_vocab_subset>();
+    vsub->n_base    = n_base;
+    vsub->n_dynamic = n_dynamic;
+
+    for (ggml_tensor * w : cands) {
+        if (w == nullptr || vsub->heads.count(w) || ggml_n_dims(w) != 2 || w->ne[1] != n_vocab || !ggml_is_contiguous(w) || w->buffer == nullptr) {
+            continue;
+        }
+
+        // row views need the plain layout, so skip repacked and split weights
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(w->buffer);
+        ggml_backend_dev_t         dev  = ggml_backend_buft_get_device(buft);
+        if (!ggml_backend_buft_is_host(buft) && (dev == nullptr || ggml_backend_dev_buffer_type(dev) != buft)) {
+            LLAMA_LOG_WARN("%s: vocab_subset: %s is in buffer type %s, not supported\n", __func__, w->name, ggml_backend_buft_name(buft));
+            continue;
+        }
+
+        // the scorer only ranks ids, Q8_0 is precise enough
+        const int64_t   rank = std::min(vsub_rank, w->ne[0]);
+        const ggml_type type = rank % ggml_blck_size(GGML_TYPE_Q8_0) == 0 ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
+
+        ggml_init_params ip = {
+            /*.mem_size   =*/ 3*ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context * ctx = ggml_init(ip);
+        vsub_ctxs.emplace_back(ctx);
+
+        llama_vocab_subset::head & head = vsub->heads[w];
+        head.basis  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, w->ne[0], rank);
+        head.scorer = ggml_new_tensor_2d(ctx, type,          rank,     n_vocab - n_base);
+
+        // the eog ids are stored next to the first head
+        const bool with_eog = vsub->eog == nullptr && !eog.empty();
+        if (with_eog) {
+            vsub->eog = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, eog.size());
+        }
+
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+        if (buf == nullptr) {
+            throw std::runtime_error("vocab_subset: failed to allocate the reduced LM head");
+        }
+        ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        vsub_bufs.emplace_back(buf);
+
+        if (with_eog) {
+            ggml_backend_tensor_set(vsub->eog, eog.data(), 0, eog.size()*sizeof(int32_t));
+        }
+
+        vsub_init_head(w, head);
+    }
+
+    if (vsub->heads.empty()) {
+        LLAMA_LOG_WARN("%s: vocab_subset: no LM head found, using the full LM head\n", __func__);
+        vsub.reset();
+        return;
+    }
+
+    LLAMA_LOG_INFO("%s: vocab_subset: lowest %" PRId64 " of %" PRId64 " ids + %u picked per output, %zu LM head(s), %.2f s\n",
+            __func__, n_base, n_vocab, n_dynamic, vsub->heads.size(), (ggml_time_us() - t_start_us)/1e6);
+}
+
+// basis = top right singular vectors of w, scorer = rows n_base.. of w projected on the basis
+void llama_context::vsub_init_head(ggml_tensor * w, const llama_vocab_subset::head & head) {
+    const int64_t n_embd = w->ne[0];
+    const int64_t n_rows = w->ne[1];
+    const int64_t n_rank = head.basis->ne[1];
+    const int64_t n_base = n_rows - head.scorer->ne[1];
+
+    const int     n_iter  = 12;
+    const int64_t n_chunk = 4096; // head rows per graph
+
+    // run on the backend of the head
+    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(head.basis->buffer);
+
+    ggml_backend_t backend = ggml_backend_buft_is_host(buft) ? backend_cpu : nullptr;
+    for (const auto & b : backends) {
+        if (backend == nullptr && ggml_backend_get_device(b.get()) == ggml_backend_buft_get_device(buft)) {
+            backend = b.get();
+        }
+    }
+    if (backend == nullptr) {
+        throw std::runtime_error(format("vocab_subset: no backend for buffer type %s", ggml_backend_buft_name(buft)));
+    }
+    for (const auto & [b, set_n_threads] : set_n_threads_fns) {
+        if (b == backend) {
+            set_n_threads(b, cparams.n_threads);
+        }
+    }
+
+    if (!ggml_is_quantized(w->type) && !ggml_backend_buft_is_host(buft)) {
+        LLAMA_LOG_WARN("%s: vocab_subset: %s is %s, picking rows of a non-quantized head is slow on some backends (e.g. CUDA)\n",
+                __func__, w->name, ggml_type_name(w->type));
+    }
+
+    // identity, Gram matrix G = W^T W and the iterated block q
+    ggml_init_params ip = {
+        /*.mem_size   =*/ 3*ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx_work { ggml_init(ip) };
+
+    ggml_tensor * eye = ggml_new_tensor_2d(ctx_work.get(), GGML_TYPE_F32, n_embd, n_embd);
+    ggml_tensor * g   = ggml_new_tensor_2d(ctx_work.get(), GGML_TYPE_F32, n_embd, n_embd);
+    ggml_tensor * q   = ggml_new_tensor_2d(ctx_work.get(), GGML_TYPE_F32, n_embd, n_rank);
+
+    ggml_backend_buffer_ptr buf_work { ggml_backend_alloc_ctx_tensors_from_buft(ctx_work.get(), buft) };
+    if (!buf_work) {
+        throw std::runtime_error("vocab_subset: failed to allocate the work buffer");
+    }
+    ggml_backend_buffer_clear(buf_work.get(), 0);
+
+    std::vector<float> host(n_embd*n_embd, 0.0f);
+    for (int64_t i = 0; i < n_embd; ++i) {
+        host[i*n_embd + i] = 1.0f;
+    }
+    ggml_backend_tensor_set(eye, host.data(), 0, ggml_nbytes(eye));
+
+    ggml_gallocr_ptr galloc { ggml_gallocr_new(buft) };
+
+    // the returned context keeps the result alive
+    auto compute = [&](auto build) {
+        ggml_init_params ip_graph = {
+            /*.mem_size   =*/ 16*ggml_tensor_overhead() + ggml_graph_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr ctx_graph { ggml_init(ip_graph) };
+
+        ggml_cgraph * gf  = ggml_new_graph(ctx_graph.get());
+        ggml_tensor * out = build(ctx_graph.get());
+        ggml_set_output(out);
+        ggml_build_forward_expand(gf, out);
+
+        if (!ggml_gallocr_alloc_graph(galloc.get(), gf) || ggml_backend_graph_compute(backend, gf) != GGML_STATUS_SUCCESS) {
+            throw std::runtime_error("vocab_subset: failed to compute the basis graph");
+        }
+
+        return std::make_pair(std::move(ctx_graph), out);
+    };
+
+    // multiplying by the identity dequantizes a chunk of rows whatever the head type
+    for (int64_t r0 = 0; r0 < n_rows; r0 += n_chunk) {
+        const int64_t n = std::min(n_chunk, n_rows - r0);
+        compute([&](ggml_context * ctx) {
+            ggml_tensor * xt = ggml_mul_mat(ctx, ggml_view_2d(ctx, w, n_embd, n, w->nb[1], r0*w->nb[1]), eye); // [n, n_embd]
+            return ggml_add_inplace(ctx, g, ggml_mul_mat(ctx, xt, xt));
+        });
+    }
+
+    // subspace iteration q = orth(G q) from a fixed-seed random block (splitmix64)
+    std::vector<double> qd(n_embd*n_rank);
+    uint64_t state = 0x853c49e6748fea9bULL;
+    for (double & v : qd) {
+        uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
+        z = (z ^ (z >> 30))*0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27))*0x94d049bb133111ebULL;
+        z =  z ^ (z >> 31);
+        v = (double) (z >> 11)/9007199254740992.0 - 0.5;
+    }
+
+    std::vector<float> qf(qd.size());
+    for (int it = 0; it <= n_iter; ++it) {
+        vsub_orth(qd, n_embd, n_rank);
+        for (size_t i = 0; i < qd.size(); ++i) {
+            qf[i] = (float) qd[i];
+        }
+        if (it == n_iter) {
+            break;
+        }
+        ggml_backend_tensor_set(q, qf.data(), 0, ggml_nbytes(q));
+        auto res = compute([&](ggml_context * ctx) { return ggml_mul_mat(ctx, g, q); });
+        ggml_backend_tensor_get(res.second, qf.data(), 0, ggml_nbytes(q));
+        qd.assign(qf.begin(), qf.end());
+    }
+    ggml_backend_tensor_set(head.basis, qf.data(), 0, ggml_nbytes(head.basis));
+
+    // scorer rows are rows n_base.. of W B
+    const size_t row_size = ggml_row_size(head.scorer->type, n_rank);
+
+    std::vector<uint8_t> data((n_rows - n_base)*row_size);
+    std::vector<float>   pf(n_chunk*n_rank);
+
+    for (int64_t r0 = n_base; r0 < n_rows; r0 += n_chunk) {
+        const int64_t n = std::min(n_chunk, n_rows - r0);
+
+        auto res = compute([&](ggml_context * ctx) {
+            ggml_tensor * p = ggml_mul_mat(ctx, ggml_view_2d(ctx, w, n_embd, n, w->nb[1], r0*w->nb[1]), head.basis);
+            return ggml_cont(ctx, ggml_transpose(ctx, p)); // [n_rank, n]
+        });
+        ggml_backend_tensor_get(res.second, pf.data(), 0, n*n_rank*sizeof(float));
+
+        uint8_t * dst = data.data() + (r0 - n_base)*row_size;
+        if (head.scorer->type == GGML_TYPE_F16) {
+            ggml_fp32_to_fp16_row(pf.data(), (ggml_fp16_t *) dst, n*n_rank);
+        } else {
+            ggml_quantize_chunk(head.scorer->type, pf.data(), dst, 0, n, n_rank, nullptr);
+        }
+    }
+    ggml_backend_tensor_set(head.scorer, data.data(), 0, data.size());
 }
 
 ggml_status llama_context::graph_compute(
@@ -4013,6 +4296,7 @@ llama_context_params llama_context_default_params() {
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
+        /*.n_vocab_dynamic             =*/ 0,
     };
 
     return result;

@@ -787,6 +787,21 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 
 class llm_graph_result;
 
+// reduced draft LM head, see llama_context_params::n_vocab_dynamic (tensors owned by llama_context)
+struct llama_vocab_subset {
+    int64_t n_base    = 0; // the lowest n_base ids always get exact logits
+    int64_t n_dynamic = 0; // best-scoring other ids picked per output
+
+    struct head {
+        ggml_tensor * basis  = nullptr; // F32 [n_embd, rank], top right singular vectors of the head
+        ggml_tensor * scorer = nullptr; // [rank, n_vocab - n_base], rows n_base.. of the head projected on basis
+    };
+
+    std::map<const ggml_tensor *, head> heads;
+
+    ggml_tensor * eog = nullptr; // I32 end-of-generation ids >= n_base, always picked
+};
+
 struct llm_graph_params {
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
@@ -832,6 +847,8 @@ struct llm_graph_params {
     llm_graph_cb cb;
 
     llm_graph_result * res;
+
+    const llama_vocab_subset * vsub = nullptr;
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
@@ -1068,6 +1085,8 @@ struct llm_graph_context {
     const llm_graph_cb & cb_func;
 
     llm_graph_result * res;
+
+    const llama_vocab_subset * vsub;
 
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
