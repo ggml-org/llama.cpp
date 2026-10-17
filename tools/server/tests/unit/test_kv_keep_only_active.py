@@ -89,6 +89,85 @@ def test_clear_and_restore():
     assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
 
 
+# the state of a cache_prompt = false task is not saved to cache-ram
+def test_nocache_prompt_not_saved():
+    global server
+    server.start()
+    log = LogReader(server.log_path)
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_PROMPT,
+        "id_slot": 0,
+        "cache_prompt": False,
+    })
+    assert res.status_code == 200
+    log.drain()
+
+    # Launching slot 1 would save idle slot 0, but its state came from a cache_prompt = false task
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "The quick brown fox",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
+
+
+def test_restored_slot_after_nocache_task_is_saved(tmp_path):
+    global server
+    server.slot_save_path = str(tmp_path)
+    server.start()
+    log = LogReader(server.log_path)
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_PROMPT,
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    original_prompt_n = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/slots/0?action=save", data={
+        "filename": "cached.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_saved"] > 0
+
+    # Erase the slot before the no-cache task so no RAM copy can mask a failed restore.
+    res = server.make_request("POST", "/slots/0?action=erase")
+    assert res.status_code == 200
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "A short unrelated prompt",
+        "id_slot": 0,
+        "cache_prompt": False,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "cached.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_restored"] > 0
+    log.drain()
+
+    # An explicit restore replaces the no-cache task's state and can be cached again.
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "The quick brown fox",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" in log.drain()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_PROMPT,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] > 0
+    assert res.body["timings"]["prompt_n"] < original_prompt_n
+
+
 def test_disabled_with_flag():
     global server
     server.no_cache_idle_slots = True
