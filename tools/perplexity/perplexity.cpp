@@ -2008,6 +2008,9 @@ int llama_perplexity(int argc, char ** argv) {
     if (params.hellaswag || params.winogrande || params.multiple_choice) {
         params.n_parallel = std::max(4, params.n_parallel);
         params.kv_unified = true;
+    } else if (params.ppl_stride > 0 && !params.kl_divergence) {
+        // perplexity_v2 uses a single sequence.
+        params.n_parallel = 1;
     } else { // Perplexity & KL divergence
         params.n_parallel = std::max(1, params.n_batch / n_ctx);
     }

@@ -295,6 +295,24 @@ set_tests_properties(test-download-model PROPERTIES FIXTURES_SETUP test-download
 llama_test(test-llama-context NAME test-llama-context-model LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-llama-context-model PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+if (LLAMA_BUILD_TOOLS AND GGML_CPU AND NOT EMSCRIPTEN)
+    set(PPL_TEST_TEXT " the")
+    foreach(i RANGE 1 13)
+        string(APPEND PPL_TEST_TEXT "${PPL_TEST_TEXT}")
+    endforeach()
+    set(PPL_TEST_FILE "${CMAKE_CURRENT_BINARY_DIR}/perplexity.txt")
+    file(WRITE "${PPL_TEST_FILE}" "${PPL_TEST_TEXT}")
+    llama_test(
+        llama-perplexity
+        NAME test-perplexity-strided
+        ARGS -m "${MODEL_DEST}" -f "${PPL_TEST_FILE}" -c 512 -b 2048 --ppl-stride 256 --chunks 2 -t 2 -ngl 0
+    )
+    set_tests_properties(test-perplexity-strided PROPERTIES
+        FIXTURES_REQUIRED test-download-model
+        PASS_REGULAR_EXPRESSION "\\[2\\][0-9]+\\.[0-9]+,"
+    )
+endif()
+
 llama_build_and_test(test-thread-safety.cpp ARGS -m "${MODEL_DEST}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
 set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
 
