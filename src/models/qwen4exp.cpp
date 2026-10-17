@@ -1149,7 +1149,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
     ggml_tensor * lookahead = nullptr;
     {
         static int look_on = -1;
-        if (look_on < 0) { const char * e = getenv("MOE_LOOKAHEAD"); look_on = (e && atoi(e) != 0) ? 1 : 0; }        if (0 && look_on && cur->ne[1] == 1 && il + 1 < (int) model.layers.size() &&
+        if (look_on < 0) { const char * e = getenv("MOE_LOOKAHEAD"); look_on = (e && atoi(e) != 0) ? 1 : 0; }        if (look_on && cur->ne[1] == 1 && il + 1 < (int) model.layers.size() &&
             model.layers[il + 1].ffn_gate_inp != nullptr) {
             ggml_tensor * nl = build_lora_mm(model.layers[il + 1].ffn_gate_inp, cur);
             cb(nl, "ffn_next_logits", il);
