@@ -1588,19 +1588,39 @@ static void test_json_schema_unordered_properties() {
         });
 
     test_schema_unordered(
-        "too many required properties: keep declared order",
+        "too many required properties: keep their declared order, the rest anywhere",
         R"""({
             "type": "object",
-            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
+            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}},
             "required": ["a", "b", "c", "d", "e", "f", "g"],
             "additionalProperties": false
         })""",
         {
             R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
+            R"""({"i": 1, "a": 1, "b": 1, "h": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "i": 1})""",
         },
         {
             R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
             R"""({"g": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "a": 1})""",
+        });
+
+    test_schema_unordered(
+        "property names that clash with generated rule names",
+        R"""({
+            "type": "object",
+            "properties": {"rest-0": {"type": "integer"}, "rest-1": {"type": "string"}, "free-kv": {"type": "boolean"}},
+            "required": ["rest-1"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"rest-1": "x"})""",
+            R"""({"free-kv": true, "rest-1": "x", "rest-0": 1})""",
+        },
+        {
+            R"""({"rest-0": 1})""",
+            R"""({"rest-1": 1})""",
+            R"""({"rest-1": "x", "rest-1": "y"})""",
         });
 
     test_schema(

@@ -369,6 +369,17 @@ private:
         return key;
     }
 
+    // for rules that refer to themselves: pick a free name now, set the body later
+    std::string _reserve_rule_name(const std::string & name) {
+        std::string esc_name = regex_replace(name, INVALID_RULE_CHARS_RE, "-");
+        std::string key = esc_name;
+        for (int i = 0; _rules.find(key) != _rules.end(); i++) {
+            key = esc_name + std::to_string(i);
+        }
+        _rules[key] = "";
+        return key;
+    }
+
     std::string _generate_union_rule(const std::string & name, const std::vector<common_chat_schema_ptr> & alt_schemas) {
         std::vector<std::string> rules;
         rules.reserve(alt_schemas.size());
@@ -744,44 +755,64 @@ private:
         // required keys: exactly once, in any order (2^n rules, so above max_required keep the declared order)
         // optional and additional keys: anywhere, repeats allowed
         constexpr size_t max_required = 6;
-        if (_unordered_properties && required_props.size() <= max_required) {
+        if (_unordered_properties) {
             const size_t n = required_props.size();
+            const bool any_order = n <= max_required;
             std::string free_kv;
-            std::string free_loop;
             if (!optional_props.empty()) {
                 std::vector<std::string> free_kvs;
                 for (const auto & prop_name : optional_props) {
                     free_kvs.push_back(prop_kv_rule_names[prop_name]);
                 }
                 free_kv = _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
-                free_loop = "( \",\" space " + free_kv + " )*";
             }
 
-            // rest of the object after the required keys in `seen`
-            std::map<size_t, std::string> rest_rules;
-            std::function<std::string(size_t)> get_rest = [&](size_t seen) -> std::string {
-                auto it = rest_rules.find(seen);
-                if (it != rest_rules.end()) {
-                    return it->second;
+            // state: bitmask of the required keys seen, or with any_order == false the count of required keys seen
+            auto next_required = [&](size_t state) {
+                std::vector<std::pair<size_t, size_t>> res;
+                if (!any_order) {
+                    if (state < n) {
+                        res.emplace_back(state, state + 1);
+                    }
+                    return res;
                 }
-                std::vector<std::string> alts;
                 for (size_t i = 0; i < n; i++) {
-                    if (!(seen & (size_t(1) << i))) {
-                        alts.push_back("\",\" space " + prop_kv_rule_names[required_props[i]] + " " + get_rest(seen | (size_t(1) << i)));
+                    if (!(state & (size_t(1) << i))) {
+                        res.emplace_back(i, state | (size_t(1) << i));
                     }
                 }
-                std::string body = free_loop;
-                if (!alts.empty()) {
-                    body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )";
-                }
-                std::string res = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
-                rest_rules[seen] = res;
                 return res;
             };
 
+            // rest of the object after `state`; one "," then the key, so the sampler keeps fewer stacks
+            std::map<size_t, std::string> rest_rules;
+            std::function<std::string(size_t)> get_rest = [&](size_t state) -> std::string {
+                auto it = rest_rules.find(state);
+                if (it != rest_rules.end()) {
+                    return it->second;
+                }
+                auto nexts = next_required(state);
+                if (nexts.empty() && free_kv.empty()) {
+                    rest_rules[state] = "";
+                    return "";
+                }
+                auto rest = _reserve_rule_name(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(state));
+                rest_rules[state] = rest;
+                std::vector<std::string> alts;
+                if (!free_kv.empty()) {
+                    alts.push_back(free_kv + " " + rest);
+                }
+                for (const auto & [i, next_state] : nexts) {
+                    alts.push_back(prop_kv_rule_names[required_props[i]] + " " + get_rest(next_state));
+                }
+                std::string body = "\",\" space ( " + string_join(alts, " | ") + " )";
+                _rules[rest] = nexts.empty() ? "( " + body + " )?" : body;
+                return rest;
+            };
+
             std::vector<std::string> firsts;
-            for (size_t i = 0; i < n; i++) {
-                firsts.push_back(prop_kv_rule_names[required_props[i]] + " " + get_rest(size_t(1) << i));
+            for (const auto & [i, next_state] : next_required(0)) {
+                firsts.push_back(prop_kv_rule_names[required_props[i]] + " " + get_rest(next_state));
             }
             if (!free_kv.empty()) {
                 firsts.push_back(free_kv + " " + get_rest(0));
