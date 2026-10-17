@@ -341,6 +341,10 @@ struct common_params_speculative_draft {
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
 
+    // combined spec-types: when an external draft model is combined with draft-mtp,
+    // ctx_dft belongs to the external draft model and ctx_mtp is the MTP context on the target model
+    llama_context * ctx_mtp = nullptr;
+
     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
 
     int32_t n_ubatch = 0; // physical batch size of the draft context (0 - use the target's n_ubatch)
