@@ -113,7 +113,10 @@ int llama_server(int argc, char ** argv) {
         return 1;
     }
 
-    SRV_INF("%s", "initializing ...\n");
+    SRV_INF("version %s, build %d, commit %s, initializing ...\n",
+            llama_version(),
+            llama_build_number(),
+            llama_commit());
 
     llama_backend_init();
     llama_numa_init(params.numa);
