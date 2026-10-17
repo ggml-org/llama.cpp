@@ -351,6 +351,50 @@ bool server_http_context::init_listener(const common_params & params) {
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
         }
+
+        // `/tools` invokes built-in tools (e.g. exec_shell_command) on the host.
+        // A webpage can send a "simple request" (text/plain or form Content-Type)
+        // that skips CORS preflight entirely, so without this check a malicious
+        // site can drive-by execute commands even when the server is bound to
+        // localhost. Never service cross-origin browsers or non-JSON bodies here.
+        if (req.method == "POST" && req.path == "/tools") {
+            const std::string origin = req.get_header_value("Origin");
+            if (!origin.empty()) {
+                const std::string host = req.get_header_value("Host");
+                const bool same_origin = origin == "http://" + host || origin == "https://" + host;
+                bool origin_allowed = same_origin || origin_is_localhost(origin) || params.cors_origins == "*";
+                if (!origin_allowed) {
+                    // an explicit --cors-origins list also permits the origin
+                    for (auto allowed : string_split<std::string>(params.cors_origins, ',')) {
+                        const auto first = allowed.find_first_not_of(" \t");
+                        const auto last  = allowed.find_last_not_of(" \t");
+                        if (first != std::string::npos && allowed.substr(first, last - first + 1) == origin) {
+                            origin_allowed = true;
+                        }
+                    }
+                }
+                if (!origin_allowed) {
+                    SRV_WRN("(tools) rejected cross-origin request from: %s\n", origin.c_str());
+                    res.status = 403;
+                    res.set_content(
+                        safe_json_to_str(format_error_response(
+                            "cross-origin requests to /tools are not allowed", ERROR_TYPE_PERMISSION)),
+                        "application/json; charset=utf-8"
+                    );
+                    return httplib::Server::HandlerResponse::Handled;
+                }
+            }
+            const std::string content_type = req.get_header_value("Content-Type");
+            if (content_type.rfind("application/json", 0) != 0) {
+                res.status = 400;
+                res.set_content(
+                    safe_json_to_str(format_error_response(
+                        "POST /tools requires Content-Type: application/json", ERROR_TYPE_INVALID_REQUEST)),
+                    "application/json; charset=utf-8"
+                );
+                return httplib::Server::HandlerResponse::Handled;
+            }
+        }
         if (!middleware_server_state(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
         }
