@@ -55,7 +55,7 @@ extern "C" {
 
     enum ggml_trace_flag {
         GGML_TRACE_FLAG_LAYER_INFERRED = 1, // layer inherited from the previous event of the emitting thread
-        GGML_TRACE_FLAG_WEIGHT_SRC     = 2, // OP_GPU: src[0] is a weight (a weight buffer of the device)
+        GGML_TRACE_FLAG_WEIGHT_SRC     = 2, // OP_GPU: src[0] is a weight; COPY: the copied tensor is a weight
     };
 
     // tid of the named host tracks; compute threads use their worker index (>= 0)

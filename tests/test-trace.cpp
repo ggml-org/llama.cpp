@@ -313,6 +313,7 @@ static ggml_trace_params make_params(const std::string & path, int detail) {
 
 struct trace_file {
     json meta;
+    std::map<std::pair<int, int>, std::string> thread_names; // (pid, tid) -> name
     std::vector<json> ev; // all but metadata / M records
     size_t n_lines = 0;
     std::vector<std::string> lines;
@@ -384,6 +385,9 @@ static bool load_trace(const std::string & path, trace_file & tf) {
         CHECK(e.contains("ph") && e.contains("pid") && e.contains("name"), "event without ph/pid/name: %s", e.dump().c_str());
         const std::string ph = e.value("ph", "");
         if (ph == "M") {
+            if (e.value("name", "") == "thread_name") {
+                tf.thread_names[{ e.at("pid").get<int>(), e.at("tid").get<int>() }] = e.at("args").at("name").get<std::string>();
+            }
             continue;
         }
         if (e.value("name", "") == "meta") {
@@ -391,20 +395,56 @@ static bool load_trace(const std::string & path, trace_file & tf) {
             continue;
         }
         CHECK(e.contains("ts") && e.contains("tid") && e.contains("args"), "event without ts/tid/args: %s", e.dump().c_str());
-        CHECK(ph == "X" || ph == "i" || ph == "b" || ph == "e", "unexpected ph %s", ph.c_str());
+        // Perfetto puts async b/e spans on global tracks, outside their process: only complete and instant events
+        CHECK(ph == "X" || ph == "i", "unexpected ph %s: %s", ph.c_str(), e.dump().c_str());
         if (ph == "X") {
             CHECK(e.contains("dur") && e.at("dur").get<double>() >= 0.0, "X without dur >= 0: %s", e.dump().c_str());
-        }
-        if (ph == "b" || ph == "e") {
-            CHECK(e.contains("id"), "async event without id: %s", e.dump().c_str());
         }
         tf.ev.push_back(e);
     }
     CHECK(!tf.meta.is_null(), "no metadata record");
+
+    // expert compute / expert I/O: spans on named lanes of their process, never overlapping within a lane
+    std::map<std::pair<int, int>, std::vector<std::pair<double, double>>> by_lane;
+    for (const auto & e : tf.ev) {
+        const int pid = e.at("pid").get<int>();
+        const std::string cat = e.value("cat", "");
+        if (cat == "expert" || cat == "io") {
+            CHECK(pid == (cat == "expert" ? 100 : 101), "%s span on pid %d", cat.c_str(), pid);
+            CHECK(e.at("ph") == "X", "%s span not a complete event", cat.c_str());
+            by_lane[{ pid, e.at("tid").get<int>() }].emplace_back(ts(e), te(e));
+        }
+    }
+    for (auto & [lane, v] : by_lane) {
+        const auto it = tf.thread_names.find(lane);
+        CHECK(it != tf.thread_names.end(), "lane %d/%d without thread_name", lane.first, lane.second);
+        if (it != tf.thread_names.end()) {
+            const std::string & n = it->second;
+            const bool ok = lane.first == 100 ? (n.rfind("gate", 0) == 0 || n.rfind("up", 0) == 0 || n.rfind("down", 0) == 0 || n.rfind("other", 0) == 0)
+                                              : n.find('/') != std::string::npos;
+            CHECK(ok, "lane %d/%d named %s", lane.first, lane.second, n.c_str());
+        }
+        std::sort(v.begin(), v.end());
+        for (size_t i = 1; i < v.size(); ++i) {
+            CHECK(v[i].first >= v[i - 1].second - 1e-3, "lane %d/%d: [%.3f, %.3f] overlaps [%.3f, %.3f]", lane.first, lane.second,
+                    v[i].first, v[i].second, v[i - 1].first, v[i - 1].second);
+        }
+    }
     return true;
 }
 
-// one EXPERT span: its b event's args plus the matching e time
+// the issue -> resident spans on the expert I/O process
+static std::vector<json> io_spans(const trace_file & tf) {
+    std::vector<json> r;
+    for (const auto & e : tf.ev) {
+        if (e.value("cat", "") == "io" && e.at("pid") == 101) {
+            r.push_back(e);
+        }
+    }
+    return r;
+}
+
+// one EXPERT span
 struct expert_span {
     json   args;
     double t0, t1;
@@ -412,20 +452,12 @@ struct expert_span {
 
 // the EXPERT spans of one step, by expert
 static std::map<int, expert_span> experts_of(const trace_file & tf, int step = 0) {
-    std::map<int64_t, double> e_ts;
-    for (const auto & e : tf.ev) {
-        if (is(e, "expert", "e")) {
-            e_ts[e.at("id").get<int64_t>()] = ts(e);
-        }
-    }
     std::map<int, expert_span> r;
     for (const auto & e : tf.ev) {
-        if (is(e, "expert", "b") && e.at("args").at("step") == step) {
+        if (is(e, "expert", "X") && e.at("args").at("step") == step) {
             const int x = e.at("args").at("expert").get<int>();
             CHECK(r.count(x) == 0, "two EXPERT spans for expert %d", x);
-            const int64_t id = e.at("id").get<int64_t>();
-            CHECK(e_ts.count(id) == 1, "EXPERT b without e (expert %d)", x);
-            r[x] = { e.at("args"), ts(e), e_ts.count(id) ? e_ts[id] : -1.0 };
+            r[x] = { e.at("args"), ts(e), te(e) };
         }
     }
     return r;
@@ -548,7 +580,7 @@ static void check_token(const trace_file & tf, const moe_graph & g, bool prefetc
     }
 
     // I/O issues of the prefetch on the issuing threads' tracks
-    const auto iss = tf.sel([](const json & e) { return is(e, "io", "X"); });
+    const auto iss = tf.sel([](const json & e) { return is(e, "io_issue", "X"); });
     if (!prefetch) {
         CHECK(iss.empty(), "IO_ISSUE without prefetch");
         return;
@@ -585,32 +617,34 @@ static void check_token(const trace_file & tf, const moe_graph & g, bool prefetc
         }
     }
 
-    // the I/O tracks: issue -> resident spans
-    std::map<int64_t, json> b_by_id, e_by_id;
-    for (const auto & e : tf.ev) {
-        if (e.at("pid") == 101 && e.value("cat", "") == "io") {
-            (e.at("ph") == "b" ? b_by_id : e_by_id)[e.at("id").get<int64_t>()] = e;
+    // the I/O tracks: one issue -> resident span per slice (detail 1) or piece (detail 2), ending at residency
+    const auto spans = io_spans(tf);
+    for (const auto & sp : spans) {
+        CHECK(!sp.at("args").contains("partial"), "partial I/O span %s", sp.dump().c_str());
+        if (sp.at("args").contains("t_resident_ns")) {
+            CHECK(std::fabs(sp.at("args").at("t_resident_ns").get<double>()/1000.0 - te(sp)) < 2e-3 || te(sp) > sp.at("args").at("t_resident_ns").get<double>()/1000.0,
+                    "I/O span does not end at residency: %s", sp.dump().c_str());
         }
     }
-    CHECK(b_by_id.size() == e_by_id.size(), "I/O b/e mismatch: %zu b, %zu e", b_by_id.size(), e_by_id.size());
     if (detail == 1) {
         // one merged slice span per used expert
-        CHECK(b_by_id.size() == 2, "I/O slice spans %zu", b_by_id.size());
-        for (const auto & [id, b] : b_by_id) {
+        CHECK(spans.size() == 2, "I/O slice spans %zu", spans.size());
+        for (const auto & b : spans) {
             const int x = b.at("args").at("expert").get<int>();
             CHECK(b.at("args").at("n_pieces") == 2, "slice n_pieces");
             if (g.evictable) {
                 CHECK(b.at("args").at("cached").get<bool>() == (x == HOT), "slice %d cached", x);
             }
-            if (e_by_id.count(id)) {
-                const json & e = e_by_id.at(id);
-                CHECK(ts(e) >= ts(b), "slice resident before issue");
-                if (x == COLD && !e.at("args").at("unresolved").get<bool>()) {
-                    CHECK(e.at("args").contains("t_prev_poll_ns"), "resolved slice without t_prev_poll");
-                }
+            if (x == COLD && !b.at("args").at("unresolved").get<bool>()) {
+                CHECK(b.at("args").contains("t_prev_poll_ns"), "resolved slice without t_prev_poll");
             }
         }
     } else {
+        std::map<int64_t, json> e_by_id;
+        for (const auto & sp : spans) {
+            CHECK(e_by_id.count(sp.at("args").at("cookie").get<int64_t>()) == 0, "two spans of one cookie");
+            e_by_id[sp.at("args").at("cookie").get<int64_t>()] = sp;
+        }
         // per piece by cookie: every non-duplicate issue has exactly one resolution
         int n_issued = 0, n_cached = 0, n_resolved = 0, n_unresolved = 0;
         for (const auto & i : iss) {
@@ -620,7 +654,7 @@ static void check_token(const trace_file & tf, const moe_graph & g, bool prefetc
             }
             n_issued++;
             const int64_t c = a.at("cookie").get<int64_t>();
-            CHECK(b_by_id.count(c) == 1 && e_by_id.count(c) == 1, "cookie %lld without b/e", (long long) c);
+            CHECK(e_by_id.count(c) == 1, "cookie %lld without its span", (long long) c);
             if (!e_by_id.count(c)) {
                 continue;
             }
@@ -629,9 +663,9 @@ static void check_token(const trace_file & tf, const moe_graph & g, bool prefetc
             n_cached     += r == "cached";
             n_resolved   += r == "resolved";
             n_unresolved += r == "unresolved";
-            CHECK(r == "cached" || ts(e) >= te(i) - 1e-3, "resident before issue end: %s", e.dump().c_str());
+            CHECK(r == "cached" || te(e) >= te(i) - 1e-3, "resident before issue end: %s", e.dump().c_str());
             if (r == "resolved") {
-                CHECK(e.at("args").at("t_prev_poll_ns").get<double>()/1000.0 <= ts(e) + 1e-3, "t_prev_poll > t_this_poll");
+                CHECK(e.at("args").at("t_prev_poll_ns").get<double>()/1000.0 <= te(e) + 1e-3, "t_prev_poll > t_this_poll");
             }
             if (g.evictable) {
                 CHECK((r == "cached") == (a.at("expert") == HOT), "resolution %s for expert %d", r.c_str(), a.at("expert").get<int>());
@@ -640,6 +674,111 @@ static void check_token(const trace_file & tf, const moe_graph & g, bool prefetc
         CHECK(n_issued == 4, "non-duplicate pieces %d", n_issued);
         CHECK(n_cached + n_resolved + n_unresolved == n_issued, "resolutions %d + %d + %d != %d", n_cached, n_resolved, n_unresolved, n_issued);
     }
+}
+
+
+// the default (simple) layout: rows token / worker N / load N / copy N of process "simple", spans named exactly
+// "L<layer> e<expert>" or "L<layer>" (or input / output for copies); the per-step counts are in the token's args
+static void check_simple(const trace_file & tf, const moe_graph & g) {
+    CHECK(tf.meta.at("layout") == "simple", "layout %s", tf.meta.at("layout").dump().c_str());
+    std::map<std::string, std::vector<json>> rows;
+    for (const auto & e : tf.ev) {
+        if (e.value("cat", "") == "meta") {
+            continue;
+        }
+        CHECK(e.at("ph") == "X" && e.value("cat", "") == "simple" && e.at("pid") == 1, "not a simple span: %s", e.dump().c_str());
+        const auto it = tf.thread_names.find({ 1, e.at("tid").get<int>() });
+        CHECK(it != tf.thread_names.end(), "span on an unnamed row: %s", e.dump().c_str());
+        if (it != tf.thread_names.end()) {
+            rows[it->second].push_back(e);
+        }
+    }
+    std::set<std::string> names;
+    for (auto & kv : rows) {
+        names.insert(kv.first);
+        auto & v = kv.second;
+        std::sort(v.begin(), v.end(), [](const json & a, const json & b) { return ts(a) < ts(b); });
+        for (size_t i = 1; i < v.size(); ++i) {
+            CHECK(ts(v[i]) >= te(v[i - 1]) - 1e-3, "row %s: %s overlaps %s", kv.first.c_str(), v[i].dump().c_str(), v[i - 1].dump().c_str());
+        }
+    }
+    std::set<std::string> want = { "token", "copy 0" };
+    for (int w = 0; w < N_THREAD; ++w) {
+        want.insert("worker " + std::to_string(w));
+    }
+    if (g.evictable) {
+        want.insert("load 0"); // the cold expert is read; the hot one is cached at issue and has no load span
+    }
+    CHECK(names == want, "rows: got %zu, expected %zu", names.size(), want.size());
+    for (const auto & n : names) {
+        CHECK(want.count(n), "unexpected row %s", n.c_str());
+    }
+
+    // token: the exact counts
+    CHECK(rows["token"].size() == 1, "token spans %zu", rows["token"].size());
+    if (rows["token"].size() != 1) {
+        return;
+    }
+    const json & tok = rows["token"][0];
+    const json & ta  = tok.at("args");
+    CHECK(tok.at("name") == "token 0 -> 5678", "token span %s", tok.at("name").dump().c_str());
+    CHECK(ta.at("token") == 1234 && ta.at("pos") == 41 && ta.at("token_out") == 5678, "token args");
+    CHECK(ta.at("n_experts") == N_USED && ta.at("n_expert_threads") == N_USED*N_THREAD && ta.at("n_residency") == N_USED, "expert counts %s", ta.dump().c_str());
+    CHECK(ta.at("n_pieces_prefetch") == 4 && ta.at("n_pieces_dup") == 0, "piece counts %s", ta.dump().c_str());
+    if (g.evictable) {
+        CHECK(ta.at("n_pieces_cached") == 2 && ta.at("n_loads") == 2 && ta.at("n_loads_cached") == 1, "cached counts %s", ta.dump().c_str());
+    }
+    // the same transfers as XFER in the detailed layout: the two inputs, 32768 + 8 bytes
+    CHECK(ta.at("n_copies") == 2 && ta.at("copy_bytes") == 32768 + 8, "copy counts %s", ta.dump().c_str());
+
+    // workers: each thread computes both experts once; worker 0 also the layer's other ops (scale, add), merged
+    std::set<std::string> worker_names;
+    for (int w = 0; w < N_THREAD; ++w) {
+        std::map<std::string, int> n;
+        for (const auto & e : rows["worker " + std::to_string(w)]) {
+            n[e.at("name").get<std::string>()]++;
+            if (e.at("name").get<std::string>().find(" e") != std::string::npos) {
+                worker_names.insert(e.at("name").get<std::string>());
+                const json & a = e.at("args");
+                CHECK(a.at("layer") == LAYER && a.at("tensor") == "ffn_moe_up-7" && a.at("bytes").get<int64_t>() == (int64_t) g.as->nb[2] &&
+                      a.at("stall_ns").get<int64_t>() >= 0 && a.at("n_threads") == N_THREAD, "worker span args %s", a.dump().c_str());
+                CHECK(ts(e) >= ts(tok) && te(e) <= te(tok) + 1e-3, "worker span outside the token");
+            }
+        }
+        CHECK(n["L7 e3"] == 1 && n["L7 e5"] == 1, "worker %d expert spans", w);
+        if (w == 0) {
+            CHECK(n["L7"] == 1 && n.size() == 3, "worker 0 rows: %zu names, %d L7", n.size(), n["L7"]);
+        } else {
+            CHECK(n.size() == 2, "worker %d: %zu names", w, n.size());
+        }
+    }
+
+    // loads: the cold expert from issue to resident, named like its compute spans
+    std::set<std::string> load_names;
+    for (const auto & kv : rows) {
+        if (kv.first.rfind("load ", 0) == 0) {
+            for (const auto & e : kv.second) {
+                load_names.insert(e.at("name").get<std::string>());
+                const json & a = e.at("args");
+                CHECK(a.at("pieces") == 2 && a.at("sources") == "prefetch" && a.at("tensors") == 1 && a.at("unresolved") == false,
+                        "load args %s", a.dump().c_str());
+            }
+        }
+    }
+    for (const auto & n : load_names) {
+        CHECK(worker_names.count(n), "load %s has no compute span of the same name", n.c_str());
+    }
+    if (g.evictable) {
+        CHECK(load_names == std::set<std::string>({ "L7 e5" }), "load names %zu", load_names.size());
+    }
+
+    // copies
+    int64_t bytes = 0;
+    for (const auto & e : rows["copy 0"]) {
+        bytes += e.at("args").at("bytes").get<int64_t>();
+        CHECK(e.at("name") == "L7" && e.at("args").at("direction") == "h2d", "copy span %s", e.dump().c_str());
+    }
+    CHECK(rows["copy 0"].size() == 2 && bytes == 32768 + 8, "copy row: %zu spans, %lld bytes", rows["copy 0"].size(), (long long) bytes);
 }
 
 static int case_token(bool prefetch, int detail) {
@@ -678,7 +817,11 @@ static int case_token(bool prefetch, int detail) {
 
     trace_file tf;
     if (load_trace(path, tf)) {
-        check_token(tf, g, prefetch, detail);
+        if (detail == 1) {
+            check_simple(tf, g);
+        } else {
+            check_token(tf, g, prefetch, detail);
+        }
         CHECK(tf.meta.at("tokens_traced") == 1 && tf.meta.at("dropped") == 0 && tf.meta.at("ring_drops") == 0, "meta counters %s", tf.meta.dump().c_str());
         CHECK(tf.meta.at("config").at("detail") == detail, "meta detail");
 
@@ -795,9 +938,9 @@ static int case_state() {
         }
         CHECK(n_nodes == 2*g.n_computed(), "OP_CPU nodes %d, expected %d", n_nodes, 2*g.n_computed());
         CHECK(experts_of(tf, 0).size() == 2 && experts_of(tf, 1).size() == 2, "EXPERT spans per traced token");
-        CHECK(tf.sel([](const json & e) { return is(e, "expert", "b"); }).size() == 4, "EXPERT spans outside the traced tokens");
+        CHECK(tf.sel([](const json & e) { return is(e, "expert", "X"); }).size() == 4, "EXPERT spans outside the traced tokens");
 
-        const auto iss = tf.sel([](const json & e) { return is(e, "io", "X"); });
+        const auto iss = tf.sel([](const json & e) { return is(e, "io_issue", "X"); });
         CHECK(iss.size() == 2, "IO_ISSUE count %zu", iss.size());
         if (!g.evictable) {
             printf("  file pages could not be dropped (tmpfs?): duplicate checks skipped\n");
@@ -824,7 +967,7 @@ static int case_state() {
         // one resolution for the cookie: unresolved at stop (the range was never read)
         int n_e = 0;
         for (const auto & e : tf.ev) {
-            if (e.at("pid") == 101 && e.at("ph") == "e" && e.at("id") == c0) {
+            if (e.at("pid") == 101 && e.value("cat", "") == "io" && e.at("args").at("cookie") == c0) {
                 n_e++;
                 CHECK(e.at("args").at("resolution") == "unresolved", "resolution %s", e.dump().c_str());
             }
@@ -850,7 +993,7 @@ static int case_plan() {
     plan.work_data = work.data();
 
     const std::string path = tmp_dir() + "/test-trace-plan-" + std::to_string(getpid()) + ".json";
-    ggml_trace_params p = make_params(path, 1);
+    ggml_trace_params p = make_params(path, 2);
     CHECK(ggml_trace_start(&p), "start failed");
     ggml_trace_batch_begin(1, 7, 3);
     CHECK(ggml_graph_compute(g.gf, &plan) == GGML_STATUS_SUCCESS, "compute failed");
@@ -873,7 +1016,7 @@ static int case_plan() {
 
 static int case_buffer() {
     const std::string path = tmp_dir() + "/test-trace-buffer-" + std::to_string(getpid()) + ".json";
-    ggml_trace_params p = make_params(path, 1);
+    ggml_trace_params p = make_params(path, 2);
     p.buffer_mb = 1;
     CHECK(ggml_trace_start(&p), "start failed");
     ggml_trace_batch_begin(1, 0, 0);
@@ -976,6 +1119,60 @@ static int case_buffer() {
     return g_failures ? 1 : 0;
 }
 
+
+// lanes are pruned of old intervals: a load that is still pending (written at the end, unresolved) must not land on
+// a lane next to an earlier load it overlaps, also when spans more than 10 s later have been written in between
+static int case_lanes() {
+    const size_t mb = 1u << 20;
+    char * buf = (char *) mmap(nullptr, 4*mb, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(buf != MAP_FAILED, "mmap");
+    memset(buf + 2*mb, 1, 3*4096); // B and C resident, A never touched
+    const std::string path = tmp_dir() + "/test-trace-lanes-" + std::to_string(getpid()) + ".json";
+    ggml_trace_params p = make_params(path, 1);
+    CHECK(ggml_trace_start(&p), "start failed");
+    ggml_trace_batch_begin(1, 1, 0);
+    const int64_t t = ggml_trace_now_ns();
+    const int64_t late = t + 20000000000LL; // a span 20 s later (faked time)
+    ggml_trace_io_issue(0, buf,                4096, GGML_TRACE_IO_PREFETCH, -1, 3, 5, "blk.3.ffn_up_exps.weight", 0, 1, t,      t + 1000, 4096, 0);
+    ggml_trace_io_issue(0, buf + 2*mb,         4096, GGML_TRACE_IO_PREFETCH, -1, 3, 6, "blk.3.ffn_up_exps.weight", 0, 1, t + 10, t + 1000, 4096, 0);
+    ggml_trace_io_issue(0, buf + 2*mb + 8192,  4096, GGML_TRACE_IO_PREFETCH, -1, 3, 7, "blk.3.ffn_up_exps.weight", 0, 1, late,   late + 1000, 4096, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ggml_trace_batch_end();
+    ggml_trace_stamp_token_out(2);
+    // B and C resolve and are written, then the 20 s span lets the lanes prune; A is written at stop
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    ggml_trace_stop();
+    munmap(buf, 4*mb);
+
+    trace_file tf;
+    if (load_trace(path, tf)) {
+        std::map<std::string, std::vector<json>> rows;
+        for (const auto & e : tf.ev) {
+            if (e.value("cat", "") == "simple") {
+                rows[tf.thread_names[{ 1, e.at("tid").get<int>() }]].push_back(e);
+            }
+        }
+        int n_loads = 0, n_unresolved = 0;
+        for (auto & kv : rows) {
+            if (kv.first.rfind("load ", 0) != 0) {
+                continue;
+            }
+            auto & v = kv.second;
+            std::sort(v.begin(), v.end(), [](const json & a, const json & b) { return ts(a) < ts(b); });
+            for (size_t i = 1; i < v.size(); ++i) {
+                CHECK(ts(v[i]) >= te(v[i - 1]) - 1e-3, "%s: %s overlaps %s", kv.first.c_str(), v[i].dump().c_str(), v[i - 1].dump().c_str());
+            }
+            for (const auto & e : v) {
+                n_loads++;
+                n_unresolved += e.at("args").at("unresolved").get<bool>();
+            }
+        }
+        CHECK(n_loads == 3 && n_unresolved == 1, "loads %d, unresolved %d", n_loads, n_unresolved);
+    }
+    remove_trace(path);
+    return g_failures ? 1 : 0;
+}
+
 //
 // driver: one process per case
 //
@@ -1015,10 +1212,11 @@ int main(int argc, char ** argv) {
         int rc = 1;
         if (c == "prefetch") { rc = case_token(true,  1); }
         if (c == "detail2")  { rc = case_token(true,  2); }
-        if (c == "cold")     { rc = case_token(false, 1); }
+        if (c == "cold")     { rc = case_token(false, 2); }
         if (c == "state")    { rc = case_state(); }
         if (c == "plan")     { rc = case_plan(); }
         if (c == "buffer")   { rc = case_buffer(); }
+        if (c == "lanes")    { rc = case_lanes(); }
         return rc;
     }
 
@@ -1030,6 +1228,7 @@ int main(int argc, char ** argv) {
         { "state",    { } },
         { "plan",     { } },
         { "buffer",   { } },
+        { "lanes",    { } },
     };
     bool ok = true, skipped = false;
     for (const auto & c : cases) {
