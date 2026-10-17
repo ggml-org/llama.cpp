@@ -8,6 +8,7 @@ deprecated = "warn"
 [src]
 exclude = [
     "./tools/mtmd/legacy-models/**",
+    "./skills/**",
 ]
 
 [[overrides]]
