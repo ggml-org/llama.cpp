@@ -169,6 +169,21 @@ typedef sycl::half2 ggml_half2;
 #define QI3_S (QK_K / (4*QR3_S))
 #define QR3_S 4
 
+#define QI_IQ2_K (QK_K / (4*QR_IQ2_K))
+#define QR_IQ2_K 4
+
+#define QI_IQ3_K (QK_K / (4*QR_IQ3_K))
+#define QR_IQ3_K 4
+
+#define QI_IQ4_K (QK_K / (4*QR_IQ4_K))
+#define QR_IQ4_K 2
+
+#define QI_IQ5_K (QK_K / (4*QR_IQ5_K))
+#define QR_IQ5_K 2
+
+#define QI_IQ6_K (QK_K / (4*QR_IQ6_K))
+#define QR_IQ6_K 2
+
 #endif // GGML_COMMON_DECL_CUDA || GGML_COMMON_DECL_HIP
 
 #ifdef _MSC_VER
@@ -458,6 +473,59 @@ typedef struct {
     uint8_t  qs[QK_K/2];
 } block_iq4_xs;
 static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/2, "wrong iq4_xs block size/padding");
+
+// IQK Superblock quants
+
+// 2.375 bpw
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    uint8_t   scales[QK_K/32];
+    uint8_t   qs[QK_K/4];
+} block_iq2_k;
+static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
+
+// 3.4375 bpw
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    uint16_t  scales_h;
+    uint8_t   scales_l[QK_K/32];
+    uint8_t   qs[QK_K/4];
+    uint8_t   qh[QK_K/8];
+} block_iq3_k;
+static_assert(sizeof(block_iq3_k) == sizeof(ggml_half) + 2*sizeof(uint16_t) + QK_K/32 + QK_K/4 + QK_K/8, "wrong iq3_k block size/padding");
+
+// 4.5 bpw
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    uint8_t   scales_h[QK_K/64];
+    uint8_t   scales_l[QK_K/32];
+    uint8_t   qs[QK_K/2];
+} block_iq4_k;
+static_assert(sizeof(block_iq4_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/32 + QK_K/2, "wrong iq4_k block size/padding");
+
+// 5.5 bpw
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    uint8_t   scales_h[QK_K/64];
+    uint8_t   scales_l[QK_K/32];
+    uint8_t   qs[QK_K/2];
+    uint8_t   qh[QK_K/8];
+} block_iq5_k;
+static_assert(sizeof(block_iq5_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/32 + QK_K/2 + QK_K/8, "wrong iq5_k block size/padding");
+
+// 6.625 bpw
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    int8_t    scales[QK_K/16];
+    uint8_t   qs[QK_K/2];
+    uint8_t   qh[QK_K/4];
+} block_iq6_k;
+static_assert(sizeof(block_iq6_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/16 + QK_K/2 + QK_K/4, "wrong iq6_k block size/padding");
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
@@ -1120,6 +1188,36 @@ GGML_TABLE_END()
 GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
 GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq2k, 4)
+    -31, -14, -2, 10,
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq3k, 8)
+    -56, -37, -23, -12, -1, 10, 23, 40,
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq4k, 16)
+    -127, -97, -78, -62, -48, -35, -23, -12, -1, 11, 23, 36, 51, 67, 87, 105,
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq5k, 32)
+    -115, -105, -94, -83, -73, -65, -58, -51, -45, -39, -33, -27, -22, -17, -11, -6,
+      -1,    4,   9,  15,  20,  26,  32,  39,  46,  53,  61,  69,  77,  86, 103, 111,
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq6k, 64)
+    -120, -115, -108, -103, -99, -93, -88, -83, -79, -75, -70, -66, -62, -59, -55, -51,
+     -48,  -45,  -41,  -38, -35, -32, -29, -26, -24, -21, -18, -15, -13, -10,  -7,  -5,
+      -2,    0,    3,    6,   8,  11,  14,  16,  19,  22,  25,  28,  31,  34,  38,  41,
+      44,   48,   52,   56,  60,  64,  68,  73,  77,  82,  86,  93,  97, 104, 109, 114,
+GGML_TABLE_END()
+
+#define IQ2K_PHASE 5
+#define IQ3K_PHASE 23
+#define IQ4K_PHASE 18
+#define IQ5K_PHASE 15
+#define IQ6K_PHASE 13
 
 // e2m1 values (doubled), shared by MXFP4 and NVFP4
 // ref: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
