@@ -10122,6 +10122,11 @@ static void ggml_compute_forward_ssm_scan_f32(
 
     const int32_t * ids = (const int32_t *) src6->data;
 
+    for (int64_t i = 0; i < src6->ne[0]; ++i) {
+        const int32_t id = ids[i];
+        GGML_ASSERT(id >= 0 && (int64_t) id < src0->ne[3]);
+    }
+
     for (int i3 = 0; i3 < ns; ++i3) {
         const float * s0 = (const float *) ((const char *) src0->data + ids[i3]*(src0->nb[3])); // {d_state, dim, nh, ns}
               float * s  = (      float *) ((      char *) dst->data  + i3*(src0->nb[3]) + s_off); // {d_state, dim, nh, ns}
