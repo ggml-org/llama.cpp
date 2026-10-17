@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "common.h"
+#include "fit.h"
 
 struct common_speculative;
 
@@ -36,6 +37,22 @@ std::vector<double> common_speculative_synth_rates_resolve(const common_params_s
 const std::vector<double> & common_speculative_get_synth_probs(const common_speculative * spec);
 
 common_params common_base_params_to_speculative(const common_params & params);
+
+// draft model or MTP context for memory fitting; get() is nullptr if the params need no draft context
+// not copyable: extra points to the members
+struct common_speculative_fit_extra {
+    common_params          params;
+    llama_model_params     mparams;
+    llama_context_params   cparams;
+    common_fit_extra_model extra;
+    bool                   enabled;
+
+    explicit common_speculative_fit_extra(const common_params & params_base);
+    common_speculative_fit_extra(const common_speculative_fit_extra &) = delete;
+    common_speculative_fit_extra & operator=(const common_speculative_fit_extra &) = delete;
+
+    common_fit_extra_model * get() { return enabled ? &extra : nullptr; }
+};
 
 struct common_speculative_output_limits {
     int32_t total;
