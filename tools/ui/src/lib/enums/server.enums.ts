@@ -18,6 +18,8 @@ export enum ServerModelStatus {
 	DOWNLOADED = 'downloaded',
 	DOWNLOADING = 'downloading',
 	FAILED = 'failed',
+	/** A download that never finished: listed by the server without an instance, resumable. */
+	INCOMPLETE = 'incomplete',
 	LOADED = 'loaded',
 	LOADING = 'loading',
 	SLEEPING = 'sleeping',

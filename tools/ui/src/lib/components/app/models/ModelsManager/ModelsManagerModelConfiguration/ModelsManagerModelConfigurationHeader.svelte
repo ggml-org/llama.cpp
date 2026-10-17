@@ -8,8 +8,14 @@
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
+		isDownload?: boolean;
+		isDownloadPaused?: boolean;
 		isLoaded: boolean;
 		onClose: () => void;
+		/** Opens the manager dialog on the Discover view, focused on this model's repo. */
+		onSeeInDiscover?: () => void;
+		onRequestCancelDownload?: () => void;
+		onToggleDownload?: () => void;
 		onToggleLoad: () => void;
 		onUseInChat: () => void;
 		onUseInNewChat: () => void;
@@ -18,13 +24,27 @@
 		status: ServerModelStatus | null;
 	}
 
-	let { isLoaded, onClose, onToggleLoad, onUseInChat, onUseInNewChat, option, status }: Props =
-		$props();
+	let {
+		isDownload = false,
+		isDownloadPaused = false,
+		isLoaded,
+		onClose,
+		onRequestCancelDownload,
+		onSeeInDiscover,
+		onToggleDownload,
+		onToggleLoad,
+		onUseInChat,
+		onUseInNewChat,
+		option,
+		status
+	}: Props = $props();
 
 	let isMobile = $derived(deviceStore.isMobile);
 	let isLoading = $derived(status === ServerModelStatus.LOADING);
 
 	let statusLabel = $derived.by(() => {
+		if (isDownload) return isDownloadPaused ? 'Paused' : 'Downloading';
+
 		if (status === ServerModelStatus.LOADING) return 'Loading';
 
 		if (status === ServerModelStatus.FAILED) return 'Failed to load';
@@ -37,6 +57,8 @@
 	});
 
 	let statusDot = $derived.by(() => {
+		if (isDownload) return isDownloadPaused ? 'bg-yellow-500' : 'bg-blue-500 animate-pulse';
+
 		if (status === ServerModelStatus.FAILED) return 'bg-red-500';
 
 		if (status === ServerModelStatus.LOADING) return 'bg-muted-foreground/50 animate-pulse';
@@ -100,8 +122,13 @@
 	<!-- a phone floats the actions at the bottom of the pane, where the thumb is -->
 	{#if !isMobile}
 		<ModelsManagerModelConfigurationActions
+			{isDownload}
+			{isDownloadPaused}
 			{isLoaded}
 			{isLoading}
+			{onRequestCancelDownload}
+			{onSeeInDiscover}
+			{onToggleDownload}
 			{onToggleLoad}
 			{onUseInChat}
 			{onUseInNewChat}

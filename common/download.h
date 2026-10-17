@@ -104,9 +104,16 @@ std::string common_docker_resolve_model(const std::string & docker);
 // Remove a cached model from disk
 // input format: "user/model" or "user/model:tag"
 // - if tag is omitted, removes the entire repo cache directory
-// - if tag is present, removes only files matching that tag (and orphaned blobs)
+// - if tag is present, removes only files matching that tag (and orphaned blobs),
+//   except the files another cached tag of the repo still loads
 // returns true if anything was removed
 bool common_download_remove(const std::string & hf_repo_with_tag);
+
+// remove the cached sidecar files `opts` selects for "user/model:tag", as the cached
+// plan resolves them, and leave the model files in place; a sidecar file another tag
+// shares goes for every tag that resolves it
+// returns true if anything was removed
+bool common_download_remove_sidecars(const std::string & hf_repo_with_tag, const common_download_opts & opts);
 
 struct common_download_hf_plan {
     hf_cache::hf_file primary;
@@ -119,3 +126,33 @@ struct common_download_hf_plan {
     hf_cache::hf_file preset; // if set, only this file is downloaded
 };
 common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts);
+
+// a sidecar kind a download can pull next to its model: mmproj, and the draft heads
+// of --spec-type draft-<name>
+struct common_download_sidecar {
+    const char * name;    // the kind, as the API names it
+    const char * keyword; // the part of a file name that marks a file of this kind
+    bool         draft;   // a draft head, resolved at the tag even without a model
+
+    bool              common_download_opts::*    opt;  // the option that requests it
+    hf_cache::hf_file common_download_hf_plan::* file; // the plan file it resolves to
+};
+
+// every sidecar kind, the single list the resolution, the listing and the removal follow
+const std::vector<common_download_sidecar> & common_download_sidecars();
+
+// select the sidecar `kind` in `opts`; returns false for an unknown kind
+bool common_download_opts_add_sidecar(common_download_opts & opts, const std::string & kind);
+
+// the sidecar kinds `plan` resolves a file for
+std::vector<std::string> common_download_plan_sidecars(const common_download_hf_plan & plan);
+
+// a file `plan` still has to download, at the path its partial takes while it is
+// incomplete; kind is the sidecar it belongs to, empty for the model files
+struct common_download_partial {
+    std::string kind;
+    std::string path;
+};
+
+// the partials the download of `plan` writes, for the files not in the cache yet
+std::vector<common_download_partial> common_download_plan_partials(const common_download_hf_plan & plan);

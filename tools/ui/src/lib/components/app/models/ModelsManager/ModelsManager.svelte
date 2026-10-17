@@ -32,9 +32,22 @@
 	let capabilityFilter = $state<ModelCapability[]>([]);
 	let selectedId = $state<string | null>(null);
 
+	// tracked downloads get their own section, listed like any other model
+	let downloads = $derived(
+		downloadGroups(modelsStore.status.getDownloadEntries(), modelsStore.models, (repo) =>
+			modelsStore.status.getDraftSidecars(repo)
+		)
+	);
+
 	let allModels = $derived(modelsStore.models);
 
-	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
+	// the download groups stand in for rows the listing does not carry yet, so a
+	// click on them still finds its option and opens the pane
+	let selected = $derived(
+		allModels.find((option) => option.id === selectedId) ??
+			downloads.find((group) => group.base.id === selectedId)?.base ??
+			null
+	);
 	// The pane is laid out before it is ever opened, so the first open only slides a
 	// finished panel in. It renders the selection, else the model it last showed.
 	let lastPicked = $state<ModelOption | null>(null);
@@ -42,7 +55,11 @@
 	let shownId = $state<string | null>(null);
 	let isSwapping = $state(false);
 	let fade = $state<'open' | 'swap'>('open');
-	let shownOption = $derived(allModels.find((option) => option.id === shownId) ?? null);
+	let shownOption = $derived(
+		allModels.find((option) => option.id === shownId) ??
+			downloads.find((group) => group.base.id === shownId)?.base ??
+			null
+	);
 
 	$effect(() => {
 		const id = selectedId;
@@ -144,10 +161,6 @@
 		rank.size === 0 ? list : [...list].sort((a, b) => rankOf(a) - rankOf(b));
 	// one entry per repo, so a model with several quants takes a single table row
 	let entries = $derived(byRecency(groupModelQuants(matching)));
-	// tracked downloads get their own section, listed like any other model
-	let downloads = $derived(
-		downloadGroups(modelsStore.status.getDownloadEntries(), modelsStore.models)
-	);
 	let groups = $derived.by(() => {
 		// a loaded quant is a model of its own: its repo keeps the quants left behind
 		const isLoaded = (option: ModelOption) => modelsStore.isModelLoaded(option.model);
@@ -216,13 +229,16 @@
 		return ordered;
 	});
 
-	// a caller can ask for one model to be revealed, the download rows do
+	// a caller can ask for one model to be revealed, the download rows do; a
+	// tracked download is not in the listing yet, so its own rows are searched too
 	$effect(() => {
 		const focus = uiStore.manageModelFocus;
 
 		if (!focus) return;
 
-		const option = allModels.find((model) => model.id === focus || model.model === focus);
+		const matches = (candidate: ModelOption) => candidate.id === focus || candidate.model === focus;
+		const option =
+			allModels.find(matches) ?? downloads.find((group) => matches(group.base))?.base ?? null;
 
 		if (option) selectedId = option.id;
 
