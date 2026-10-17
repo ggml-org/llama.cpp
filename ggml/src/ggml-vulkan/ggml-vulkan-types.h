@@ -259,10 +259,12 @@ struct vk_matmul_pipeline_key {
     ggml_type type_b;
     bool mul_mat_id;
     bool f16acc;
+    // f32 shared memory even when the device supports fp16, so that f32 src1 is never rounded to f16
+    bool fp32 = false;
 
     bool operator<(const vk_matmul_pipeline_key & o) const {
-        return std::tie(type_a, type_b, mul_mat_id, f16acc)
-             < std::tie(o.type_a, o.type_b, o.mul_mat_id, o.f16acc);
+        return std::tie(type_a, type_b, mul_mat_id, f16acc, fp32)
+             < std::tie(o.type_a, o.type_b, o.mul_mat_id, o.f16acc, o.fp32);
     }
 };
 
