@@ -964,6 +964,7 @@ public:
 
     server_context_impl() {
         mtmd_helper_log_set(common_log_default_callback, nullptr);
+        prompt_chunks.reserve(32);
     }
 
     ~server_context_impl() {
@@ -1029,8 +1030,12 @@ private:
     // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
     // note: kept out of server_metrics, which is copied as-is into the task result
     int64_t  t_decode_start  = 0; // start of the last submitted decode
-    int64_t  t_prompt_start  = 0; // start of the oldest queued prompt decode
-    uint64_t n_prompt_queued = 0;
+    struct prompt_chunk {
+        uint64_t n_tokens;
+        int64_t  t_start;
+        int64_t  t_end = 0; // set when chunk is flushed
+    };
+    std::vector<prompt_chunk> prompt_chunks; // track each prompt chunk for metrics
 
     json json_ui_settings = json::object();
 
@@ -2960,6 +2965,11 @@ private:
                     res->id                  = task.id;
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
+
+                    if (!prompt_chunks.empty()) {
+                        metrics_flush_prompt(); // ensure metrics are up-to-date for this snapshot
+                    }
+
                     res->metrics             = metrics;
 
                     if (task.metrics_reset_bucket) {
@@ -4677,23 +4687,26 @@ private:
         if (n_tokens == 0) {
             return;
         }
-        if (n_prompt_queued == 0) {
-            t_prompt_start = t_decode_start;
-        }
-        n_prompt_queued += n_tokens;
+        prompt_chunks.push_back({n_tokens, t_decode_start, 0});
     }
 
     // call only after the context is synchronized, otherwise the time is meaningless
+    // now called unconditionally after each batch decode to keep metrics up-to-date
     void metrics_flush_prompt() {
-        if (n_prompt_queued == 0) {
+        if (prompt_chunks.empty()) {
             return;
         }
-        metrics.add_prompt(n_prompt_queued, ggml_time_us() - t_prompt_start);
-        n_prompt_queued = 0;
+        const int64_t t_now = ggml_time_us();
+        for (auto & chunk : prompt_chunks) {
+            chunk.t_end = t_now;
+            metrics.add_prompt(chunk.n_tokens, chunk.t_end - chunk.t_start);
+        }
+        prompt_chunks.clear();
     }
 
     // has_output is computed by the caller, which also already synchronized the context if it is set
     void metrics_post_decode(int32_t off, int32_t n_tokens, bool has_output) {
+        GGML_UNUSED(has_output);
         metrics.n_decode++;
         for (const auto & slot : slots) {
             if (slot.is_processing()) {
@@ -4724,10 +4737,9 @@ private:
 
         metrics_queue_prompt(n_prompt_tokens);
 
-        if (has_output) {
-            // the context is already synchronized, so the timings are correct
-            metrics_flush_prompt();
-        }
+        // always flush prompt metrics after decode
+        // the context is already synchronized if has_output is true
+        metrics_flush_prompt();
 
         // advance the prompt timing of the slots that had tokens in this batch
         // note: a second pass, it must run after the sync to reflect the compute
@@ -4743,11 +4755,10 @@ private:
 
     // flush any queued prompt metrics if all slots are now idle
     void metrics_flush_idle() {
-        if (n_prompt_queued == 0) {
+        if (prompt_chunks.empty()) {
             return;
         }
 
-        llama_synchronize(ctx_tgt);
         metrics_flush_prompt();
     }
 
