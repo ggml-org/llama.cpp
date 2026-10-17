@@ -60,7 +60,7 @@ Audit the existing vision-arena quant guard as well: apply the same structural/c
 
 Acceptance: supported pairs start and execute through all admitted widths; unsupported paths are rejected before requests.
 
-Status: pending.
+Status: completed. The old Q8/Q8 MTP startup failure is preserved in the stopped exploratory matrix. Live 8 Ki-capacity/4096-prompt/32-output smoke runs now pass all nine combinations of Q8/Q8, Q5_1/Q5_1 and Q8/Q4 with target-only, MTP=3 and DFlash=7; speculative cases generate actual drafts and the harness rejects any recovered execution failure. These are fixed-quota compatibility checks, not performance data or primary sweep points. Results and logs are under `benchmarks/results/kq-qualified-20261016/smoke`, with runner output `/tmp/kq4-live-smoke.log`. Vision validation first fails on 160 newly admitted format/mode cases, then passes 7 tests/200 assertions under ASan/UBSan and the CUDA-linked build. All other vision restrictions remain. Initialization and all-width backend qualification reuse KQ2/KQ3 checks; full numerical and vision-handoff qualification follows in KQ5. Production is restored healthy.
 
 ## KQ5 - Numerical and lifecycle qualification
 

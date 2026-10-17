@@ -15,6 +15,17 @@ static common_params qualified() {
 
 int main() {
     testing t;
+    t.test("vision_cache_formats_are_validated_by_capabilities_not_one_pair", [](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL};
+        for (bool mtp : {false, true}) for (auto key : types) for (auto value : types) {
+            auto p = qualified();
+            p.cache_type_k = key;
+            p.cache_type_v = value;
+            if (mtp) p.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+            t.assert_true(server_vision_arena_config_error(p) == nullptr);
+        }
+    });
     t.test("serial_no_mtp_vision_arena_is_admitted_without_changing_params", [](testing & t) {
         auto p = qualified();
         t.assert_true(server_uses_vision_arena(p));
@@ -28,14 +39,18 @@ int main() {
         check([](auto & p) { p.shared_device_memory_bytes = 0; p.kv_stream_pool_bytes = 1048576; });
         check([](auto & p) { p.kv_stream_pool_bytes = 1048576; });
         check([](auto & p) { p.mmproj_use_gpu = false; });
-        check([](auto & p) { p.cache_type_k = GGML_TYPE_F16; });
-        check([](auto & p) { p.cache_type_v = GGML_TYPE_Q8_0; });
+        check([](auto & p) { p.cache_type_k = GGML_TYPE_I32; });
+        check([](auto & p) { p.cache_type_v = GGML_TYPE_Q8_1; });
         check([](auto & p) { p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED; });
         check([](auto & p) { p.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP}; p.speculative.draft.n_max = 4; });
         check([](auto & p) { p.speculative.types = {COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE}; });
         check([](auto & p) { p.kv_stream_auxiliary_layers = 1; });
         check([](auto & p) { p.embedding = true; });
         check([](auto & p) { p.no_kv_offload = true; });
+        check([](auto & p) {
+            p.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+            p.speculative.draft.cache_type_k_explicit = true;
+        });
     });
     t.test("media_prefix_and_serialization_preserve_whole_chunks_and_model_positions", [](testing & t) {
         mtmd::input_chunks_ptr input(mtmd_test_create_input_chunks());

@@ -1165,9 +1165,8 @@ private:
                 std::any_of(params.speculative.types.begin(), params.speculative.types.end(),
                     [](auto type) { return type != COMMON_SPECULATIVE_TYPE_NONE &&
                         type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP; }) || params.n_parallel != 1 ||
-                params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 3 ||
-                params.cache_type_k != GGML_TYPE_Q8_0 || params.cache_type_v != GGML_TYPE_Q4_0)) {
-            SRV_ERR("%s", "adaptive MTP currently requires serial embedded Qwen MTP, 1-3 draft tokens, Q8_0 K/Q4_0 V, and a KV stream pool or arena\n");
+                params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 3)) {
+            SRV_ERR("%s", "adaptive MTP requires serial embedded Qwen MTP, 1-3 draft tokens, and a KV stream pool or arena; cache support is checked during context initialization\n");
             return false;
         }
 

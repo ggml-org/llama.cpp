@@ -45,9 +45,9 @@ const char * server_vision_arena_config_error(const common_params & params) {
     if (params.fit_params || params.n_parallel != 1 || !params.mmproj_use_gpu || params.embedding ||
             params.no_kv_offload || !params.lora_adapters.empty())
         return "vision arena requires serial GPU execution, --fit off, KV offload, no embeddings and no LoRA";
-    if (params.cache_type_k != GGML_TYPE_Q8_0 || params.cache_type_v != GGML_TYPE_Q4_0 ||
-            params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
-        return "vision arena is currently qualified with -fa on, Q8_0 K and Q4_0 V";
+    if (const auto * error = common_streamed_kv_config_error(params)) return error;
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
+        return "vision arena requires -fa on; cache support is checked during context initialization";
     const bool mtp = common_params_uses_streamed_mtp(params);
     if (params.speculative.has_dft() || (params.kv_stream_auxiliary_layers && !mtp) ||
             params.kv_stream_auxiliary_layers > 1 || (mtp && (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 3)))
