@@ -1731,8 +1731,16 @@ bool llama_model_loader::load_all_data(
                 auto & mmap_used = mmaps_used[weight->idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+
+                // read in place from the mmap, so its source pages must stay mapped
+                read_from_mmap.insert(weight);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
+
+                // the source pages are no longer needed; reclaimed after all contexts are loaded (skipped under mlock)
+                if (use_mmap && lmlocks == nullptr) {
+                    copied_from_mmap.emplace_back(weight, n_size);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);
@@ -1842,6 +1850,34 @@ bool llama_model_loader::load_all_data(
     if (size_done >= size_data) {
         // unmap offloaded tensors and metadata
         if (use_mmap) {
+            // drop the source pages of tensors copied out of the mmap (e.g. by weight repacking) from RSS
+            // only for --load-mode auto/mmap; the pages stay in the page cache, ref: https://github.com/ggml-org/llama.cpp/issues/16761
+            size_t size_reclaimed = 0;
+            for (const auto & copied : copied_from_mmap) {
+                const llama_tensor_weight * w = copied.first;
+                // a duplicated tensor (e.g. tied token_embd/output) may still read the same range in place
+                if (read_from_mmap.count(w)) {
+                    continue;
+                }
+                // range outside the surviving mapping are unmapped below anyway, so skip the madvise and don't count them
+                const auto & used = mmaps_used[w->idx];
+                const size_t begin = std::max(w->offs, used.first);
+                const size_t end   = std::min(w->offs + copied.second, used.second);
+                if (end <= begin) {
+                    continue;
+                }
+                // on failure (e.g. seccomp) the same error would repeat for every tensor
+                if (!mappings.at(w->idx)->discard_fragment(w->offs, w->offs + copied.second)) {
+                    break;
+                }
+                size_reclaimed += end - begin;
+            }
+            if (size_reclaimed > 0) {
+                LLAMA_LOG_INFO("%s: reclaimed %.2f MiB of mmap source pages\n", __func__, size_reclaimed / 1024.0 / 1024.0);
+            }
+            copied_from_mmap.clear();
+            read_from_mmap.clear();
+
             for (uint32_t idx = 0; idx < mappings.size(); idx++) {
                 const auto & mmap_used = mmaps_used.at(idx);
                 auto & mapping = mappings.at(idx);
