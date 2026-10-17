@@ -19,15 +19,15 @@ def fill_templated_filename(filename: str, output_type: str | None) -> str:
 
 
 def model_weight_count_rounded_notation(model_params_count: int, min_digits: int = 2) -> str:
-    if model_params_count > 1e12 :
+    if model_params_count >= 1e12 :
         # Trillions Of Parameters
         scaled_model_params = model_params_count * 1e-12
         scale_suffix = "T"
-    elif model_params_count > 1e9 :
+    elif model_params_count >= 1e9 :
         # Billions Of Parameters
         scaled_model_params = model_params_count * 1e-9
         scale_suffix = "B"
-    elif model_params_count > 1e6 :
+    elif model_params_count >= 1e6 :
         # Millions Of Parameters
         scaled_model_params = model_params_count * 1e-6
         scale_suffix = "M"
