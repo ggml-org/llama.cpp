@@ -117,7 +117,7 @@ public:
     LLAMA_API bool has_speculative_consumer() const noexcept;
     // Vision can suspend only the known host-backed auxiliary cache and its registered serial draft.
     LLAMA_API bool can_suspend_for_vision() const noexcept;
-    bool borrows_serial_parent() const noexcept;
+    LLAMA_API bool borrows_serial_parent() const noexcept;
     LLAMA_API ggml_backend_buffer_t shared_parent() const noexcept;
     size_t shared_parent_capacity() const noexcept;
     uint64_t shared_arena_generation() const noexcept;
