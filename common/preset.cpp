@@ -149,6 +149,8 @@ void common_preset::apply_to_params(common_params & params, const std::set<std::
         // apply each option to params
         if (opt.handler_string) {
             opt.handler_string(params, val);
+        } else if (opt.handler_path) {
+            opt.handler_path(params, std::filesystem::u8path(val));
         } else if (opt.handler_int) {
             opt.handler_int(params, std::stoi(val));
         } else if (opt.handler_bool) {

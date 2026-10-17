@@ -33,6 +33,7 @@ struct common_arg {
     bool is_preset_only = false; // is current arg preset-only (not treated as CLI arg)
     void (*handler_void)   (common_params & params) = nullptr;
     void (*handler_string) (common_params & params, const std::string &) = nullptr;
+    void (*handler_path)   (common_params & params, const std::filesystem::path &) = nullptr;
     void (*handler_str_str)(common_params & params, const std::string &, const std::string &) = nullptr;
     void (*handler_int)    (common_params & params, int) = nullptr;
     void (*handler_bool)   (common_params & params, bool) = nullptr;
@@ -45,6 +46,13 @@ struct common_arg {
         const std::string & help,
         void (*handler)(common_params & params, const std::string &)
     ) : args(args), value_hint(value_hint), help(help), handler_string(handler) {}
+
+    common_arg(
+        const std::initializer_list<const char *> & args,
+        const char * value_hint,
+        const std::string & help,
+        void (*handler)(common_params & params, const std::filesystem::path &)
+    ) : args(args), value_hint(value_hint), help(help), handler_path(handler) {}
 
     common_arg(
         const std::initializer_list<const char *> & args,
@@ -84,6 +92,7 @@ struct common_arg {
     bool in_example(enum llama_example ex);
     bool is_exclude(enum llama_example ex);
     bool get_value_from_env(std::string & output) const;
+    bool get_value_from_env(std::filesystem::path & output) const;
     bool has_value_from_env() const;
     std::string to_string() const;
 

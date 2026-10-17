@@ -2,6 +2,8 @@
 
 #include "ggml.h" // for ggml_log_level
 
+#include <filesystem>
+
 #define LOG_CLR_TO_EOL  "\033[K\r"
 #define LOG_COL_DEFAULT "\033[0m"
 #define LOG_COL_BOLD    "\033[1m"
@@ -91,13 +93,13 @@ void common_log_add(struct common_log * log, enum ggml_log_level level, const ch
 // O - output  (stdout, V = LOG_DEFAULT_OUTPUT)
 //
 
-void common_log_set_file      (struct common_log * log, const char * file); // not thread-safe
-void common_log_set_stdo      (struct common_log * log, bool enabled);      // whether to output to stdout/stderr
-void common_log_set_colors    (struct common_log * log, log_colors colors); // not thread-safe
-bool common_log_get_colors    (struct common_log * log);                    // whether colors are enabled
-void common_log_set_prefix    (struct common_log * log, bool prefix);       // whether to output prefix to each log
-void common_log_set_timestamps(struct common_log * log, bool timestamps);   // whether to output timestamps in the prefix
-void common_log_flush         (struct common_log * log);                    // flush all pending log messages
+void common_log_set_file      (struct common_log * log, const std::filesystem::path & file); // not thread-safe
+void common_log_set_stdo      (struct common_log * log, bool enabled);                       // whether to output to stdout/stderr
+void common_log_set_colors    (struct common_log * log, log_colors colors);                  // not thread-safe
+bool common_log_get_colors    (struct common_log * log);                                     // whether colors are enabled
+void common_log_set_prefix    (struct common_log * log, bool prefix);                        // whether to output prefix to each log
+void common_log_set_timestamps(struct common_log * log, bool timestamps);                    // whether to output timestamps in the prefix
+void common_log_flush         (struct common_log * log);                                     // flush all pending log messages
 
 // helper macros for logging
 // use these to avoid computing log arguments if the verbosity of the log is higher than the threshold

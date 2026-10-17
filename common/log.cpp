@@ -388,17 +388,21 @@ public:
         thrd.join();
     }
 
-    void set_file(const char * path) {
+    void set_file(const std::filesystem::path & path) {
         pause();
 
         if (file) {
             fclose(file);
         }
 
-        if (path) {
-            file = fopen(path, "w");
-        } else {
-            file = nullptr;
+        file = nullptr;
+
+        if (!path.empty()) {
+#if defined(_WIN32)
+            file = _wfopen(path.c_str(), L"w");
+#else
+            file = fopen(path.c_str(), "w");
+#endif
         }
 
         resume();
@@ -505,7 +509,7 @@ void common_log_add_json(struct common_log * log, const char * type, const commo
     log->add_json(type, obj);
 }
 
-void common_log_set_file(struct common_log * log, const char * file) {
+void common_log_set_file(struct common_log * log, const std::filesystem::path & file) {
     log->set_file(file);
 }
 

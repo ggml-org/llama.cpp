@@ -142,6 +142,22 @@ bool common_arg::get_value_from_env(std::string & output) const {
     return false;
 }
 
+bool common_arg::get_value_from_env(std::filesystem::path & output) const {
+    if (env == nullptr) return false;
+#if defined(_WIN32)
+    const std::wstring wenv = utf8_to_wstring(env);
+    const wchar_t * wvalue = _wgetenv(wenv.c_str());
+    if (wvalue == nullptr) return false;
+    output = wvalue;
+    return true;
+#else
+    const char * value = std::getenv(env);
+    if (value == nullptr) return false;
+    output = value;
+    return true;
+#endif
+}
+
 bool common_arg::has_value_from_env() const {
     if (env != nullptr && !args_neg.empty()) {
         // for compatibility, we need to check LLAMA_ARG_NO_ env as well
@@ -786,6 +802,18 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // handle environment variables
     for (auto & opt : ctx_arg.options) {
+        if (opt.handler_path) {
+            std::filesystem::path value_path;
+            if (opt.get_value_from_env(value_path)) {
+                try {
+                    opt.handler_path(params, value_path);
+                } catch (std::exception & e) {
+                    throw std::invalid_argument(string_format(
+                        "error while handling environment variable \"%s\": %s\n\n", opt.env, e.what()));
+                }
+            }
+            continue;
+        }
         std::string value;
         if (opt.get_value_from_env(value)) {
             try {
@@ -861,6 +889,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 }
                 if (opt.handler_string) {
                     opt.handler_string(params, val);
+                    continue;
+                }
+                if (opt.handler_path) {
+                    opt.handler_path(params, std::filesystem::u8path(val));
                     continue;
                 }
 
@@ -3900,8 +3932,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--log-file"}, "FNAME",
         "Log to file",
-        [](common_params &, const std::string & value) {
-            common_log_set_file(common_log_main(), value.c_str());
+        [](common_params &, const std::filesystem::path & value) {
+            common_log_set_file(common_log_main(), value);
         }
     ).set_env("LLAMA_ARG_LOG_FILE"));
     add_opt(common_arg(
