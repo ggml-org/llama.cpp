@@ -152,8 +152,7 @@ static void llama_token_data_array_partial_sort(const llama_token_data_array & c
 
     for (int i = 0; i < (int)cur.size; ++i) {
         const float val = cur.data[i].logit;
-        int ib = int(bucket_scale * val + bucket_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
-        ib = std::max(0, std::min(nbuckets - 1, ib));
+        int ib = int(std::max(0.f, std::min((float)(nbuckets - 1), bucket_scale * val + bucket_inter))); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
         bucket_idx.push_back(ib);
         ++histo[ib];
     }
