@@ -4207,17 +4207,24 @@ llama_token llama_vocab::text_to_token(const std::string & text) const {
 
 const llama_vocab::token_data & llama_vocab::get_token_data(llama_token id) const {
     GGML_ASSERT(pimpl->type != LLAMA_VOCAB_TYPE_NONE);
-    return pimpl->id_to_token.at(id);
+    GGML_ASSERT(id >= 0 && (size_t) id < pimpl->id_to_token.size());
+    return pimpl->id_to_token[id];
 }
 
 const char * llama_vocab::token_get_text(llama_token id) const {
     GGML_ASSERT(pimpl->type != LLAMA_VOCAB_TYPE_NONE);
-    return pimpl->id_to_token.at(id).text.c_str();
+    if (id < 0 || (size_t) id >= pimpl->id_to_token.size()) {
+        return nullptr;
+    }
+    return pimpl->id_to_token[id].text.c_str();
 }
 
 float llama_vocab::token_get_score(llama_token id) const {
     GGML_ASSERT(pimpl->type != LLAMA_VOCAB_TYPE_NONE);
-    return pimpl->id_to_token.at(id).score;
+    if (id < 0 || (size_t) id >= pimpl->id_to_token.size()) {
+        return 0.0f;
+    }
+    return pimpl->id_to_token[id].score;
 }
 
 llama_token_attr llama_vocab::token_get_attr(llama_token id) const {
