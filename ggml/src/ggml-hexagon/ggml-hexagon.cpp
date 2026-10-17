@@ -710,6 +710,9 @@ struct ggml_hexagon_rpcmem_block {
 };
 
 struct ggml_hexagon_shared_buffer {
+    static constexpr size_t page_size  = 4096; // data size alignment
+    static constexpr size_t guard_size = 4096; // guard page appended to every buffer
+
     ggml_hexagon_session *                     sess;
     std::shared_ptr<ggml_hexagon_rpcmem_block> mem;
     std::vector<ggml_hexagon_tensor_extra *>   tensor_extra;
@@ -789,8 +792,8 @@ struct ggml_hexagon_shared_buffer {
         this->extended = false;
 
         // Size adjustment inside the buffer class: 4K aligned data size + 4K guard page
-        size_t guard_offset = (size + 4095) & ~4095;
-        size_t total_size   = guard_offset + 4096;
+        size_t guard_offset = (size + page_size - 1) & ~(page_size - 1);
+        size_t total_size   = guard_offset + guard_size;
         if (!pinned && opt_dma64) {
             constexpr size_t extended_align = 2 * 1024 * 1024;
             total_size = (total_size + extended_align - 1) & ~(extended_align - 1);
@@ -3098,32 +3101,32 @@ void ggml_hexagon_session::unclone_buffer(const ggml_hexagon_shared_buffer * sbu
 }
 
 static size_t ggml_hexagon_measure_max_vmem(ggml_hexagon_session *sess) {
-    // Allocate a bunch pinned buffers till failure.
+    // Allocate pinned buffers in uniform steps till failure.
     // This is kind of expensive but handy for figuring out exactly how much we can mmap on a specific device.
     // Typically we're going to allocate all/most of these buffers anyway for the model weights.
+    // Probe with mappings that are exactly a power of 2 (step + guard page): Linux IOMMU DMA aligns each IOVA range to its size rounded up to a power of 2, so 1 GiB + guard probes need 2 GiB-aligned ranges and under-report.
 
     std::vector<ggml_hexagon_shared_buffer *> sbufs;
 
-    const size_t MiB = 1024 * 1024;
-    const size_t GiB = MiB  * 1024;
+    constexpr size_t MiB  = 1024 * 1024;
+    constexpr size_t step = 256u * MiB - ggml_hexagon_shared_buffer::guard_size;
+    static_assert(step % ggml_hexagon_shared_buffer::page_size == 0, "probe step + guard page must be exactly 256 MiB");
 
     size_t vmem = 0;
-    size_t step = 256u * MiB;
 
     try {
-        sbufs.push_back(new ggml_hexagon_shared_buffer(sess, GiB, true)); vmem += GiB;
-        sbufs.push_back(new ggml_hexagon_shared_buffer(sess, GiB, true)); vmem += GiB;
-        sbufs.push_back(new ggml_hexagon_shared_buffer(sess, GiB, true)); vmem += GiB;
-
         while (1) {
             sbufs.push_back(new ggml_hexagon_shared_buffer(sess, step, true));
-            vmem += step;
+            vmem += sbufs.back()->size();
         }
     } catch (...) { }
 
+    const size_t backoff = sbufs.empty() ? 0 : sbufs.back()->size();
+
     for (auto b : sbufs) { delete b; }
 
-    return vmem - step; // backoff to account for overhead from internal mappings
+    // backoff to account for overhead from internal mappings
+    return vmem > backoff ? vmem - backoff : 0;
 }
 
 void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) noexcept(false) {
@@ -3316,7 +3319,13 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
 
     if (!opt_vmem) {
         opt_vmem = ggml_hexagon_measure_max_vmem(this);
-        GGML_LOG_INFO("ggml-hex: %s measured max vmem %zu\n", this->c_name(), opt_vmem);
+        if (opt_vmem) {
+            GGML_LOG_INFO("ggml-hex: %s measured max vmem %zu\n", this->c_name(), opt_vmem);
+        } else {
+            const size_t MiB = 1024 * 1024;
+            opt_vmem = opt_arch >= 75 ? HTP_OP_MAX_VMEM_DEFAULT : 3000 * MiB;
+            GGML_LOG_WARN("ggml-hex: %s failed to measure max vmem, using default %zu\n", this->c_name(), opt_vmem);
+        }
     }
     const size_t shm_size = this->op_queue->shm_size();
     this->max_vmem = (opt_vmem > shm_size) ? (opt_vmem - shm_size) : opt_vmem;
