@@ -1,14 +1,14 @@
-#include "server-task.h"
+#include "engine-task.h"
 
 #include "build-info.h"
-#include "server-chat.h"
+#include "engine-chat.h"
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "sampling.h"
 #include "speculative.h"
-#include "server-common.h"
+#include "engine-common.h"
 
 #include <sstream>
 
@@ -88,7 +88,7 @@ json task_params::to_json(bool only_metrics) const {
 
     auto grammar_triggers = json::array();
     for (const auto & trigger : sampling.grammar_triggers) {
-        server_grammar_trigger ct(trigger);
+        engine_grammar_trigger ct(trigger);
         grammar_triggers.push_back(ct.to_json());
     }
 
@@ -307,9 +307,9 @@ std::vector<unsigned char> completion_token_output::str_to_bytes(const std::stri
 }
 
 //
-// server_task_result_cmpl_final
+// engine_task_result_cmpl_final
 //
-json server_task_result_cmpl_final::to_json() {
+json engine_task_result_cmpl_final::to_json() {
     GGML_ASSERT(is_updated && "update() must be called before to_json()");
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
@@ -329,7 +329,7 @@ json server_task_result_cmpl_final::to_json() {
     }
 }
 
-json server_task_result_cmpl_final::to_json_non_oaicompat() {
+json engine_task_result_cmpl_final::to_json_non_oaicompat() {
     json res = json {
         {"index",               index},
         {"content",             content.text},
@@ -354,7 +354,7 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
     return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
-json server_task_result_cmpl_final::usage_json_oaicompat() {
+json engine_task_result_cmpl_final::usage_json_oaicompat() {
     return json {
         {"completion_tokens", n_decoded},
         {"prompt_tokens",     n_prompt_tokens},
@@ -363,7 +363,7 @@ json server_task_result_cmpl_final::usage_json_oaicompat() {
     };
 }
 
-json server_task_result_cmpl_final::to_json_oaicompat() {
+json engine_task_result_cmpl_final::to_json_oaicompat() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
     if (!stream && probs_output.size() > 0) {
@@ -403,7 +403,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
     return res;
 }
 
-json server_task_result_cmpl_final::to_json_oaicompat_chat() {
+json engine_task_result_cmpl_final::to_json_oaicompat_chat() {
     std::string finish_reason = "length";
     common_chat_msg msg;
     if (!oaicompat_msg.empty()) {
@@ -451,7 +451,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     return res;
 }
 
-json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
+json engine_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     std::time_t t = std::time(0);
     std::string finish_reason = "length";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
@@ -465,7 +465,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
                 json {
                     {"finish_reason", nullptr},
                     {"index", index},
-                    {"delta", server_chat_msg_diff_to_json_oaicompat(diff)},
+                    {"delta", engine_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
             {"created", t},
@@ -517,7 +517,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     return deltas;
 }
 
-json server_task_result_cmpl_final::to_json_oaicompat_resp() {
+json engine_task_result_cmpl_final::to_json_oaicompat_resp() {
     common_chat_msg msg;
     if (!oaicompat_msg.empty()) {
         msg = oaicompat_msg;
@@ -588,7 +588,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     return res;
 }
 
-json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
+json engine_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     std::vector<json> server_sent_events;
     std::vector<json> output;
 
@@ -705,7 +705,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     return server_sent_events;
 }
 
-json server_task_result_cmpl_final::to_json_oaicompat_asr() {
+json engine_task_result_cmpl_final::to_json_oaicompat_asr() {
     json event = json {
         {"type",  "transcript.text.done"},
         {"text",  oaicompat_msg.content},
@@ -720,7 +720,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_asr() {
     return event;
 }
 
-json server_task_result_cmpl_final::to_json_anthropic() {
+json engine_task_result_cmpl_final::to_json_anthropic() {
     std::string stop_reason = "max_tokens";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
@@ -786,7 +786,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
     return res;
 }
 
-json server_task_result_cmpl_final::to_json_anthropic_stream() {
+json engine_task_result_cmpl_final::to_json_anthropic_stream() {
     json events = json::array();
 
     std::string stop_reason = "max_tokens";
@@ -975,9 +975,9 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 }
 
 //
-// server_task_result_cmpl_partial
+// engine_task_result_cmpl_partial
 //
-void server_task_result_cmpl_partial::update(task_result_state & state) {
+void engine_task_result_cmpl_partial::update(task_result_state & state) {
     is_updated = true;
     if (is_begin) {
         return; // begin marker only flushes headers, skip parsing
@@ -1015,7 +1015,7 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     }
 }
 
-json server_task_result_cmpl_partial::to_json() {
+json engine_task_result_cmpl_partial::to_json() {
     GGML_ASSERT(is_updated && "update() must be called before to_json()");
     if (is_begin) {
         return nullptr; // simply signal to HTTP handler to send the headers and status code
@@ -1038,7 +1038,7 @@ json server_task_result_cmpl_partial::to_json() {
     }
 }
 
-json server_task_result_cmpl_partial::to_json_non_oaicompat() {
+json engine_task_result_cmpl_partial::to_json_non_oaicompat() {
     // non-OAI-compat JSON
     json res = json {
         {"index",            index},
@@ -1062,7 +1062,7 @@ json server_task_result_cmpl_partial::to_json_non_oaicompat() {
     return res;
 }
 
-json server_task_result_cmpl_partial::to_json_oaicompat() {
+json engine_task_result_cmpl_partial::to_json_oaicompat() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
     if (prob_output.probs.size() > 0) {
@@ -1100,7 +1100,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat() {
     return res;
 }
 
-json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
+json engine_task_result_cmpl_partial::to_json_oaicompat_chat() {
     bool first = n_decoded == 1;
     std::time_t t = std::time(0);
     json choices;
@@ -1131,7 +1131,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
     }
 
     for (const auto & diff : oaicompat_msg_diffs) {
-        add_delta(server_chat_msg_diff_to_json_oaicompat(diff));
+        add_delta(engine_chat_msg_diff_to_json_oaicompat(diff));
     }
 
     if (!deltas.empty()) {
@@ -1155,7 +1155,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
     return deltas;
 }
 
-json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
+json engine_task_result_cmpl_partial::to_json_oaicompat_resp() {
     std::vector<json> events;
 
     if (!oai_resp_created) {
@@ -1305,7 +1305,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
     return events;
 }
 
-json server_task_result_cmpl_partial::to_json_oaicompat_asr() {
+json engine_task_result_cmpl_partial::to_json_oaicompat_asr() {
     json event = json {
         {"type", "transcript.text.delta"},
         {"delta", content.text},
@@ -1313,7 +1313,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_asr() {
     return event;
 }
 
-json server_task_result_cmpl_partial::to_json_anthropic() {
+json engine_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
     // use member variables to track block state across streaming calls
@@ -1453,22 +1453,22 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
 }
 
 //
-// server_task_result_embd
+// engine_task_result_embd
 //
-json server_task_result_embd::to_json() {
+json engine_task_result_embd::to_json() {
     return res_type == TASK_RESPONSE_TYPE_OAI_EMBD
         ? to_json_oaicompat()
         : to_json_non_oaicompat();
 }
 
-json server_task_result_embd::to_json_non_oaicompat() {
+json engine_task_result_embd::to_json_non_oaicompat() {
     return json {
         {"index",     index},
         {"embedding", embedding},
     };
 }
 
-json server_task_result_embd::to_json_oaicompat() {
+json engine_task_result_embd::to_json_oaicompat() {
     return json {
         {"index",            index},
         {"embedding",        embedding[0]},
@@ -1477,9 +1477,9 @@ json server_task_result_embd::to_json_oaicompat() {
 }
 
 //
-// server_task_result_rerank
+// engine_task_result_rerank
 //
-json server_task_result_rerank::to_json() {
+json engine_task_result_rerank::to_json() {
     return json {
         {"index",            index},
         {"score",            score},
@@ -1488,9 +1488,9 @@ json server_task_result_rerank::to_json() {
 }
 
 //
-// server_task_result_decision
+// engine_task_result_decision
 //
-json server_task_result_decision::to_json() {
+json engine_task_result_decision::to_json() {
     return json {
         {"index",            index},
         {"scores",           scores},
@@ -1499,9 +1499,9 @@ json server_task_result_decision::to_json() {
 }
 
 //
-// server_task_result_error
+// engine_task_result_error
 //
-json server_task_result_error::to_json() {
+json engine_task_result_error::to_json() {
     json res = format_error_response(err_msg, err_type);
     if (err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
         res["n_prompt_tokens"] = n_prompt_tokens;
@@ -1511,19 +1511,19 @@ json server_task_result_error::to_json() {
 }
 
 //
-// server_task_result_metrics
+// engine_task_result_metrics
 //
-json server_task_result_slots::to_json() {
+json engine_task_result_slots::to_json() {
     return slots_data;
 }
 
-json server_task_result_metrics::to_json() {
+json engine_task_result_metrics::to_json() {
     // not used, /metrics renders prometheus text via to_metrics()
     return json{};
 }
 
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
-std::string server_task_result_metrics::to_metrics() {
+std::string engine_task_result_metrics::to_metrics() {
     const std::vector<metric_item> counters = {
         {
             "prompt_tokens_total",
@@ -1620,9 +1620,9 @@ std::string server_task_result_metrics::to_metrics() {
 }
 
 //
-// server_task_result_slot_save_load
+// engine_task_result_slot_save_load
 //
-json server_task_result_slot_save_load::to_json() {
+json engine_task_result_slot_save_load::to_json() {
     if (is_save) {
         return json {
             { "id_slot",   id_slot },
@@ -1647,9 +1647,9 @@ json server_task_result_slot_save_load::to_json() {
 }
 
 //
-// server_task_result_slot_erase
+// engine_task_result_slot_erase
 //
-json server_task_result_slot_erase::to_json() {
+json engine_task_result_slot_erase::to_json() {
     return json {
         { "id_slot",  id_slot },
         { "n_erased", n_erased },
@@ -1657,10 +1657,10 @@ json server_task_result_slot_erase::to_json() {
 }
 
 //
-// server_task_result_get_lora
+// engine_task_result_get_lora
 //
 
-json server_task_result_get_lora::to_json() {
+json engine_task_result_get_lora::to_json() {
     json result = json::array();
     for (size_t i = 0; i < loras.size(); ++i) {
         auto & lora = loras[i];
@@ -1681,17 +1681,17 @@ json server_task_result_get_lora::to_json() {
 }
 
 //
-// server_task_result_apply_lora
+// engine_task_result_apply_lora
 //
 
-json server_task_result_apply_lora::to_json() {
+json engine_task_result_apply_lora::to_json() {
     return json {{ "success", true }};
 }
 
 //
-// server_prompt_cache
+// engine_prompt_cache
 //
-size_t server_prompt_cache::size() const {
+size_t engine_prompt_cache::size() const {
     size_t res = 0;
 
     for (const auto & state : states) {
@@ -1701,7 +1701,7 @@ size_t server_prompt_cache::size() const {
     return res;
 }
 
-size_t server_prompt_cache::n_tokens() const {
+size_t engine_prompt_cache::n_tokens() const {
     size_t res = 0;
 
     for (const auto & state : states) {
@@ -1711,7 +1711,7 @@ size_t server_prompt_cache::n_tokens() const {
     return res;
 }
 
-server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
+engine_prompt_cache_state * engine_prompt_cache::alloc(const engine_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);
@@ -1793,7 +1793,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+bool engine_prompt_cache::load(engine_prompt & prompt, const engine_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -1870,7 +1870,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     return true;
 }
 
-void server_prompt_cache::update() {
+void engine_prompt_cache::update() {
     if (limit_size > 0) {
         while (!states.empty() && size() > limit_size) {
             SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));

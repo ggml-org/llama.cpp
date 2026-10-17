@@ -1,8 +1,8 @@
-#include "server-schema.h"
+#include "engine-schema.h"
 
 #include "json-schema-to-grammar.h"
 
-namespace server_schema {
+namespace engine_schema {
 
 //
 // llama.cpp-specific completion schema
@@ -324,7 +324,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             std::vector<common_grammar_trigger> triggers;
             for (const auto & t : data.at("grammar_triggers")) {
-                triggers.push_back(server_grammar_trigger(t).value);
+                triggers.push_back(engine_grammar_trigger(t).value);
             }
             common_sampling_add_grammar_triggers(ctx.params.sampling, ctx.vocab, std::move(triggers));
         }));
@@ -600,4 +600,4 @@ void field_nested::eval(field_eval_context & ctx, const json & data) {
     }
 }
 
-} // namespace server_schema
+} // namespace engine_schema

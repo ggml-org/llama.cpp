@@ -43,20 +43,25 @@ The server supports two primary operating modes:
 - **Inference mode**: The default mode for performing inference with a single loaded GGUF model.
 - **Router mode**: Enables management of multiple inference server instances behind a single API endpoint. Requests are automatically routed to the appropriate backend instance based on the requested model.
 
+The code is split into two libraries:
+
+- `libllama-engine` (`tools/engine`): the inference engine, including `engine_context`, task queue, tasks and common utils. It has no HTTP dependency.
+- `libllama-server-impl` (`tools/server`): the HTTP layer (`server_http_context`, `server_routes`), router mode, stream replay and MCP.
+
 The core architecture consists of the following components:
 
-- `server_context`: Holds the primary inference state, including the main `llama_context` and all active slots.
-- `server_slot`: An abstraction over a single “sequence” in llama.cpp, responsible for managing individual parallel inference requests.
-- `server_routes`: Middleware layer between `server_context` and the HTTP interface; handles JSON parsing/formatting and request routing logic.
+- `engine_context`: Holds the primary inference state, including the main `llama_context` and all active slots.
+- `engine_slot`: An abstraction over a single “sequence” in llama.cpp, responsible for managing individual parallel inference requests.
+- `server_routes`: Middleware layer between `engine_context` and the HTTP interface; handles JSON parsing/formatting and request routing logic.
 - `server_http_context`: Implements the HTTP server using `cpp-httplib`.
-- `server_queue`: Thread-safe queue used by HTTP workers to submit new tasks to `server_context`.
-- `server_response`: Thread-safe queue used by `server_context` to return results to HTTP workers.
-- `server_response_reader`: Higher-level wrapper around the two queues above for cleaner code.
-- `server_task`: Unit of work pushed into `server_queue`.
-- `server_task_result`: Unit of result pushed into `server_response`.
-- `server_tokens`: Unified representation of token sequences (supports both text and multimodal tokens); used by `server_task` and `server_slot`.
+- `engine_queue`: Thread-safe queue used by HTTP workers to submit new tasks to `engine_context`.
+- `engine_response`: Thread-safe queue used by `engine_context` to return results to HTTP workers.
+- `engine_response_reader`: Higher-level wrapper around the two queues above for cleaner code.
+- `engine_task`: Unit of work pushed into `engine_queue`.
+- `engine_task_result`: Unit of result pushed into `engine_response`.
+- `engine_tokens`: Unified representation of token sequences (supports both text and multimodal tokens); used by `engine_task` and `engine_slot`.
 - `server_prompt_checkpoint`: For recurrent (e.g., RWKV) and SWA models, stores snapshots of KV cache state. Enables reuse when subsequent requests share the same prompt prefix, saving redundant computation.
-- `server_models`: Standalone component for managing multiple backend instances (used in router mode). It is completely independent of `server_context`.
+- `server_models`: Standalone component for managing multiple backend instances (used in router mode). It is completely independent of `engine_context`.
 - `stream_session_manager`: process wide owner of resumable SSE stream sessions, keyed by conversation id. A file-static singleton inside `server-stream.cpp`, driven through `server_stream_session_manager_start/stop`. Backs the replay buffer that lets a client reattach to a generation after an HTTP disconnect. See the "Resumable streaming" section below.
 
 ```mermaid
@@ -64,13 +69,13 @@ graph TD
     API_User <--> server_http_context
     server_http_context <-- router mode --> server_models
     server_http_context <-- inference mode --> server_routes
-    server_routes -- server_task --> server_queue
-    subgraph server_context
-        server_queue --> server_slot
-        server_slot -- server_task_result --> server_response
-        server_slot[multiple server_slot]
+    server_routes -- engine_task --> engine_queue
+    subgraph engine_context
+        engine_queue --> engine_slot
+        engine_slot -- engine_task_result --> engine_response
+        engine_slot[multiple engine_slot]
     end
-    server_response --> server_routes
+    engine_response --> server_routes
 ```
 
 ### Batching
@@ -85,21 +90,21 @@ Following decoding, the system either retrieves embeddings or samples the next t
 
 ### Thread Management
 
-`server_context` runs on a dedicated single thread. Because it is single-threaded, heavy post-processing (especially after token generation) should be avoided, as it directly impacts multi-sequence throughput.
+`engine_context` runs on a dedicated single thread. Because it is single-threaded, heavy post-processing (especially after token generation) should be avoided, as it directly impacts multi-sequence throughput.
 
 Each incoming HTTP request is handled by its own thread managed by the HTTP library. The following operations are performed in HTTP worker threads:
 
 - JSON request parsing
 - Chat template application
 - Tokenization
-- Conversion of `server_task_result` into final JSON response
+- Conversion of `engine_task_result` into final JSON response
 - Error formatting into JSON
 - Tracking of partial/incremental responses (e.g., streaming tool calls or reasoning steps)
 
 **Best practices to follow:**
 
 - All JSON formatting and chat template logic must stay in the HTTP layer.
-- Avoid passing raw JSON between the HTTP layer and `server_slot`. Instead, parse everything into native C++ types as early as possible.
+- Avoid passing raw JSON between the HTTP layer and `engine_slot`. Instead, parse everything into native C++ types as early as possible.
 
 ### Example trace of a request
 
@@ -107,13 +112,13 @@ Here is an example trace of an API request for text completion:
 
 - A request arrives at the HTTP layer.
 - The request is routed to the corresponding handler inside `server_routes`. In this case, `handle_completions_impl` is invoked.
-- The handler parses the input request, constructs a new `server_task`, and passes it to `server_res_generator`.
+- The handler parses the input request, constructs a new `engine_task`, and passes it to `server_res_generator`.
 - `server_res_generator` creates a new `task_result_state` for each task:
     - `task_result_state` stays in the HTTP layer, responsible for keeping track of the current state of the response (e.g., parsing tool calls or thinking messages).
-    - `server_task` is moved into `server_queue` inside `server_context`.
-- `server_context` launches the task by moving it into an available slot (see `launch_slot_with_task()`).
+    - `engine_task` is moved into `engine_queue` inside `engine_context`.
+- `engine_context` launches the task by moving it into an available slot (see `launch_slot_with_task()`).
 - `update_slot()` processes the task as described in the "Batching" section above.
-- Results may be sent using `send_partial_response` or `send_final_response`, which creates a new `server_task_result` and pushes it to the response queue.
+- Results may be sent using `send_partial_response` or `send_final_response`, which creates a new `engine_task_result` and pushes it to the response queue.
 - At the same time, `server_res_generator` listens to the response queue and retrieves this response.
 - As the response is stateless, `server_res_generator` calls `response->update()` to update the response with the current state.
 - `server_res_generator` then calls `response->to_json()` and passes the response to the HTTP layer.
@@ -134,7 +139,7 @@ The implementation is hidden in `server-stream.cpp` (pimpl). The header exposes 
 
 Producer side: `server_res_generator` extends `server_res_spipe`, which keeps all spipe logic out of the generic `server_http_res`. `set_req` attaches a producer when the header is present, and the wrapped `next` tees each chunk into the ring before the socket, so a chunk lost to a dead wire is already buffered. While attached, `should_stop` ignores peer disconnect: only a `DELETE` stops generation. On an early peer drop, `on_complete` drains the tail into the ring on the http worker.
 
-Lifetime safety: the session holds no back reference to the response, so `spipe` is a plain `unique_ptr` touched only by the http worker. `cancel` raises an atomic the producer polls; the producer finalizes the session from its destructor, which also runs `~server_response_reader::stop()` to cancel the generation at the queue level. A `DELETE` stops work by raising the flag and letting the worker unwind.
+Lifetime safety: the session holds no back reference to the response, so `spipe` is a plain `unique_ptr` touched only by the http worker. `cancel` raises an atomic the producer polls; the producer finalizes the session from its destructor, which also runs `~engine_response_reader::stop()` to cancel the generation at the queue level. A `DELETE` stops work by raising the flag and letting the worker unwind.
 
 Consumer side: `GET /v1/stream?conv_id=<id>&from=N` opens a `text/event-stream` that replays buffered bytes from offset `N` and blocks for live bytes, so the browser reattaches like a fresh EventSource. An offset below the dropped prefix returns 400.
 
@@ -281,7 +286,7 @@ The main goal of this API is to allow downloading models and/or removing models 
 
 Instead of building everything from the ground up (like what most AI agents will do when you ask them to implement a similar feature), we built on top of existing, already well-engineered components inside the codebase:
 - Model cache infrastructure as mentioned above (`common/download.h`)
-- Server response queue (`server-queue.h`). We use this feature to broadcast events to SSE clients.
+- Server response queue (`engine-queue.h`). We use this feature to broadcast events to SSE clients.
 - Server router thread management (`server-models.h`). We re-use the same thread model that is used for managing subprocess life cycle, except that we don't create a new subprocess, but launch the download right inside the thread.
 
 The flow for downloading a new model:
@@ -294,27 +299,27 @@ The flow for downloading a new model:
 ### Sleep mode
 
 Sleep mode was initially introduced in PR [#18228](https://github.com/ggml-org/llama.cpp/pull/18228). The main idea is to have:
-- `server_queue` keeping track of the idle timeout
-- When the timeout is detected, `server_queue` signals to `server_context_impl` that it should go into sleep
-- `server_context_impl` frees all `llama_context` and `mtmd_context`
+- `engine_queue` keeping track of the idle timeout
+- When the timeout is detected, `engine_queue` signals to `engine_context_impl` that it should go into sleep
+- `engine_context_impl` frees all `llama_context` and `mtmd_context`
 
 Compared to simply exiting the whole process, this approach allows accessing some read-only endpoints during sleep, while also handling wakeup-on-request. Any inference request will wake the server up.
 
 Call stack on entering sleeping:
-- `server_queue::start_loop` (main thread) sees no task for `idle_sleep_ms` --> `sleeping = true`
+- `engine_queue::start_loop` (main thread) sees no task for `idle_sleep_ms` --> `sleeping = true`
 - `cb0(true)` --> `server_routes::update_cached_responses`
     - snapshots `/props`, `/models` and metrics; the model is still alive here
-- `cb1(true)` --> `server_context_impl::handle_sleeping_state`
-    - `callback_state(SERVER_STATE_SLEEPING)` --> reported to router in child mode
+- `cb1(true)` --> `engine_context_impl::handle_sleeping_state`
+    - `callback_state(ENGINE_STATE_SLEEPING)` --> reported to router in child mode
     - `destroy()` --> frees `llama_context` and `mtmd_context`
 - `condition_tasks.wait` until `req_stop_sleeping`
 
 Call stack on waking up:
-- `server_res_generator` constructor (HTTP thread) --> `server_queue::wait_until_no_sleep`
+- `server_res_generator` constructor (HTTP thread) --> `engine_queue::wait_until_no_sleep`
     - sets `req_stop_sleeping = true`, then waits until `sleeping == false`
-- `server_queue::start_loop` (main thread) wakes up
-- `cb1(false)` --> `server_context_impl::handle_sleeping_state`
-    - `load_model()`, which then emits `callback_state(SERVER_STATE_READY)`
+- `engine_queue::start_loop` (main thread) wakes up
+- `cb1(false)` --> `engine_context_impl::handle_sleeping_state`
+    - `load_model()`, which then emits `callback_state(ENGINE_STATE_READY)`
 - `cb0(false)` --> `server_routes::update_cached_responses`
     - nothing to do, the cache is only read during sleep
 - `sleeping = false` --> `notify_all` unblocks the HTTP thread, the request is handled as usual
@@ -325,7 +330,7 @@ Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, 
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
 - Parallel decoding support: https://github.com/ggml-org/llama.cpp/pull/3228
-- Refactor introducing `server_queue` and `server_response`: https://github.com/ggml-org/llama.cpp/pull/5065
+- Refactor introducing `server_queue` and `server_response` (now `engine_queue` and `engine_response`): https://github.com/ggml-org/llama.cpp/pull/5065
 - Reranking endpoint: https://github.com/ggml-org/llama.cpp/pull/9510
 - Multimodal model support (`libmtmd`): https://github.com/ggml-org/llama.cpp/pull/12898
 - Unified KV cache handling: https://github.com/ggml-org/llama.cpp/pull/16736

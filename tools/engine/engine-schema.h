@@ -1,7 +1,7 @@
 #pragma once
 
-#include "server-common.h"
-#include "server-task.h"
+#include "engine-common.h"
+#include "engine-task.h"
 
 #include "sampling.h"
 #include "speculative.h"
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace server_schema {
+namespace engine_schema {
 
 struct field_eval_context {
     task_params & params;
@@ -101,4 +101,4 @@ task_params eval_llama_cmpl_schema(
                     const std::vector<llama_logit_bias> & logit_bias_eog,
                     const json & data);
 
-} // namespace server_schema
+} // namespace engine_schema

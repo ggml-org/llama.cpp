@@ -1,9 +1,9 @@
-#include "server-chat.h"
-#include "server-common.h"
+#include "engine-chat.h"
+#include "engine-common.h"
 
 #include <sstream>
 
-json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
+json engine_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
     }
@@ -345,7 +345,7 @@ static void normalize_anthropic_billing_header(std::string & system_text) {
     }
 }
 
-json server_chat_convert_anthropic_to_oai(const json & body) {
+json engine_chat_convert_anthropic_to_oai(const json & body) {
     json oai_body;
 
     // Convert system prompt
@@ -618,7 +618,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
     return oai_body;
 }
 
-json server_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
+json engine_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
     json delta = json::object();
     if (!diff.reasoning_content_delta.empty()) {
         delta["reasoning_content"] = diff.reasoning_content_delta;

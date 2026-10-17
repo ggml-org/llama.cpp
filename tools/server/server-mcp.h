@@ -1,6 +1,7 @@
 #pragma once
 
-#include "server-common.h"
+#include "engine-common.h"
+#include "server-subproc.h"
 
 #include <atomic>
 #include <chrono>

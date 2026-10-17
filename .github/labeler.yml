@@ -46,6 +46,7 @@ examples:
                 - examples/**
                 - tools/**
             - all-globs-to-all-files:
+                - '!tools/engine/**'
                 - '!tools/server/**'
                 - '!tools/mtmd/**'
                 - '!tools/ui/**'
@@ -76,6 +77,7 @@ server/ui:
 server:
     - changed-files:
         - any-glob-to-any-file:
+            - tools/engine/**
             - tools/server/**
 mtmd:
     - changed-files:

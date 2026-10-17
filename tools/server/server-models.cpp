@@ -1,7 +1,7 @@
-#include "server-common.h"
+#include "engine-common.h"
 #include "http.h"
 #include "server-models.h"
-#include "server-context.h"
+#include "engine-context.h"
 #include "server-stream.h"
 
 #include "build-info.h"
@@ -540,7 +540,7 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
 
 void server_model_meta::update_caps(const common_params & base) {
     // reset to the default so a failed refresh cannot keep old values
-    architecture = server_model_architecture_json(false, false, false, {"text"});
+    architecture = engine_model_architecture_json(false, false, false, {"text"});
     n_ctx_train  = 0;
 
     // resolve the model file offline; do not download
@@ -570,7 +570,7 @@ void server_model_meta::update_caps(const common_params & base) {
     std::vector<std::string> output_modalities = {"text"};
     if (!params.model.path.empty()) {
         const common_gguf_info info = common_get_gguf_info(params.model.path);
-        output_modalities = server_model_output_modalities(info.decision_type);
+        output_modalities = engine_model_output_modalities(info.decision_type);
         n_ctx_train       = info.n_ctx_train;
     }
 
@@ -588,7 +588,7 @@ void server_model_meta::update_caps(const common_params & base) {
     }
 
     // offline discovery cannot see video; a loaded model reports it
-    architecture = server_model_architecture_json(inp_image, inp_audio, false, output_modalities);
+    architecture = engine_model_architecture_json(inp_image, inp_audio, false, output_modalities);
 }
 
 //
@@ -916,7 +916,7 @@ bool server_models::remove_sidecar(const std::string & name, const std::string &
 }
 
 void server_models::notify_sse(const std::string & event, const std::string & model_id, const json & data) {
-    std::unique_ptr<server_task_result_router> result = std::make_unique<server_task_result_router>();
+    std::unique_ptr<engine_task_result_router> result = std::make_unique<engine_task_result_router>();
     result->data = {
         {"model", model_id},
         {"event", event},
@@ -1945,12 +1945,12 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
 }
 
 void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
-    server_state state;
+    engine_state state;
     json payload;
 
     try {
         json data = json::parse(raw_input.substr(strlen(CMD_CHILD_TO_ROUTER_STATE)));
-        state = server_state_from_str(json_value(data, "state", std::string()));
+        state = engine_state_from_str(json_value(data, "state", std::string()));
         payload = json_value(data, "payload", json{});
     } catch (const std::exception & e) {
         SRV_ERR("failed to parse child state update for name=%s: %s\n", name.c_str(), e.what());
@@ -1958,7 +1958,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
     }
 
     switch (state) {
-        case SERVER_STATE_DOWNLOADING:
+        case ENGINE_STATE_DOWNLOADING:
             {
                 std::string result = json_value(payload, "result", std::string());
                 std::string url    = json_value(payload, "url",    std::string());
@@ -1983,7 +1983,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
                     update_download_progress(name, p, false);
                 }
             } break;
-        case SERVER_STATE_LOADING:
+        case ENGINE_STATE_LOADING:
             {
                 update_status(name, {
                     SERVER_MODEL_STATUS_LOADING,
@@ -1992,7 +1992,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
                     payload,
                 });
             } break;
-        case SERVER_STATE_READY:
+        case ENGINE_STATE_READY:
             {
                 update_status(name, {
                     SERVER_MODEL_STATUS_LOADED,
@@ -2002,7 +2002,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
                     {}, // reset progress info
                 });
             } break;
-        case SERVER_STATE_SLEEPING:
+        case ENGINE_STATE_SLEEPING:
             {
                 update_status(name, { SERVER_MODEL_STATUS_SLEEPING });
             } break;
@@ -2069,7 +2069,7 @@ struct server_download_state : public common_download_callback {
             {"downloaded", p.downloaded},
             {"total", p.total},
         };
-        self->notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), data);
+        self->notify_to_router(engine_state_to_str(ENGINE_STATE_DOWNLOADING), data);
     }
     void on_start(const common_download_progress & p) override {
         on_progress(p);
@@ -2105,7 +2105,7 @@ int server_child::run_download(common_params & params) {
 
     bool ok = dl.run(params);
 
-    notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), {
+    notify_to_router(engine_state_to_str(ENGINE_STATE_DOWNLOADING), {
         {"result", ok ? "download_finished" : "download_failed"},
     });
 
@@ -2159,12 +2159,12 @@ void server_child::notify_to_router(const std::string & state, const json & payl
 // server_models_routes
 //
 
-// RAII wrapper similar to server_response_reader, but doesn't use server_queue
+// RAII wrapper similar to engine_response_reader, but doesn't use engine_queue
 static std::atomic<int> sse_client_id_counter = 0;
 struct server_models_sse_client {
-    server_response & queue_results;
+    engine_response & queue_results;
     int client_id;
-    server_models_sse_client(server_response & q)
+    server_models_sse_client(engine_response & q)
             : queue_results(q), client_id(sse_client_id_counter.fetch_add(1, std::memory_order_relaxed)) {
         SRV_DBG("new SSE client connected, assigned client_id=%d\n", client_id);
         queue_results.add_waiting_task_id(client_id);
@@ -2176,10 +2176,10 @@ struct server_models_sse_client {
 
     // return nullptr if should_stop() is true before receiving a result
     // note: if one error is received, it will stop further processing and return error result
-    server_task_result_ptr next(const std::function<bool()> & should_stop) {
+    engine_task_result_ptr next(const std::function<bool()> & should_stop) {
         while (true) {
             static const int http_polling_seconds = 1; // check should_stop every 1 second
-            server_task_result_ptr result = queue_results.recv_with_timeout({client_id}, http_polling_seconds);
+            engine_task_result_ptr result = queue_results.recv_with_timeout({client_id}, http_polling_seconds);
             if (result == nullptr) {
                 // timeout, check stop condition
                 if (should_stop()) {

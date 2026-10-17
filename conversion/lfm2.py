@@ -188,7 +188,7 @@ def _load_d1_omni_hparams(dir_model: Path) -> dict[str, Any]:
 class D1OmniModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
 
-    # the server cuts the text to these lengths, see server-decision.cpp
+    # the server cuts the text to these lengths, see engine-decision.cpp
     _MAX_LENGTH = 16384
     _IMAGE_TEXT_LENGTH = 896
     _AUDIO_TEXT_LENGTH = 15360

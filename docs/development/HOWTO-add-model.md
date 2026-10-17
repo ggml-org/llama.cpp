@@ -147,11 +147,11 @@ The conversion is the same as above, but a new model needs its own `DecisionType
 
 > [!IMPORTANT]
 >
-> Most of the logic is handled in `tools/server/server-decision.cpp`, to avoid too many changes to `libllama`.
+> Most of the logic is handled in `tools/engine/engine-decision.cpp`, to avoid too many changes to `libllama`.
 
 Note:
 - If a new public API is needed in `libllama`, add it to `llama-ext.h`.
-- Metadata with a single use case must be hard-coded in `server-decision.cpp` instead of being saved to the GGUF. This avoids bloating the conversion code.
+- Metadata with a single use case must be hard-coded in `engine-decision.cpp` instead of being saved to the GGUF. This avoids bloating the conversion code.
 - Most importantly, keep your change as small and as self-contained as possible. Reuse the existing infrastructure whenever you can.
 
 For more information, see [PR #29818](https://github.com/ggml-org/llama.cpp/pull/29818).

@@ -6,7 +6,6 @@
 #include "chat.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
-#include "subproc.h"
 
 #include "json.h"
 
@@ -39,6 +38,12 @@ using json = common_json;
 
 using raw_buffer = std::vector<uint8_t>;
 
+struct uploaded_file {
+    raw_buffer data;
+    std::string filename;
+    std::string content_type;
+};
+
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {
     // Fallback null to default value
@@ -67,12 +72,12 @@ enum error_type {
 };
 
 // thin wrapper around common_grammar_trigger with (de)serialization functions
-struct server_grammar_trigger {
+struct engine_grammar_trigger {
     common_grammar_trigger value;
 
-    server_grammar_trigger() = default;
-    server_grammar_trigger(const common_grammar_trigger & value) : value(value) {}
-    server_grammar_trigger(const json & in) {
+    engine_grammar_trigger() = default;
+    engine_grammar_trigger(const common_grammar_trigger & value) : value(value) {}
+    engine_grammar_trigger(const json & in) {
         value.type = (common_grammar_trigger_type) in.at("type").get<int>();
         value.value = in.at("value").get<std::string>();
         if (value.type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
@@ -110,10 +115,10 @@ const char * get_media_marker();
 //
 
 // output modalities for architecture.output_modalities in GET /models
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type);
+std::vector<std::string> engine_model_output_modalities(common_decision_type decision_type);
 
 // architecture object of GET /models; shared by the direct server and the router
-json server_model_architecture_json(
+json engine_model_architecture_json(
         bool inp_image,
         bool inp_audio,
         bool inp_video,
@@ -142,14 +147,14 @@ bool are_lora_equal(
 std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_info> & loras);
 
 //
-// server_tokens
+// engine_tokens
 //
 
 /**
- * server_tokens is a helper to manage the input tokens and image for the server.
+ * engine_tokens is a helper to manage the input tokens and image for the server.
  * it is made this way to simplify the logic of KV cache management.
  */
-struct server_tokens {
+struct engine_tokens {
     bool has_mtmd = false;
 
 private: // disallow accessing these members directly, risking out-of-sync
@@ -172,24 +177,24 @@ private: // disallow accessing these members directly, risking out-of-sync
     // map_idx_to_media will contain: {5, img0}, {8, img1}
 
 public:
-    server_tokens() = default;
-    ~server_tokens() = default;
+    engine_tokens() = default;
+    ~engine_tokens() = default;
 
     // Prevent copying
-    // TODO: server_tokens should be copyable - remove this:
-    server_tokens(const server_tokens&) = delete;
-    server_tokens& operator=(const server_tokens&) = delete;
+    // TODO: engine_tokens should be copyable - remove this:
+    engine_tokens(const engine_tokens&) = delete;
+    engine_tokens& operator=(const engine_tokens&) = delete;
 
     // Allow moving (usually implicitly generated if members are movable)
-    server_tokens(server_tokens&&) = default;
-    server_tokens& operator=(server_tokens&&) = default;
+    engine_tokens(engine_tokens&&) = default;
+    engine_tokens& operator=(engine_tokens&&) = default;
 
     // Allow accessing elements using [] operator
     llama_token operator[](size_t index) { return tokens[index]; }
     const llama_token& operator[](size_t index) const { return tokens[index]; }
 
-    server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd);
-    server_tokens(const llama_tokens & tokens, bool has_mtmd);
+    engine_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd);
+    engine_tokens(const llama_tokens & tokens, bool has_mtmd);
 
     // for debugging
     std::string str() const;
@@ -216,7 +221,7 @@ public:
     void push_back_placeholder(const mtmd_input_chunk * chunk);
 
     // appends server tokens, updates the media map. copies media chunks.
-    void push_back(server_tokens & tokens);
+    void push_back(engine_tokens & tokens);
 
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens);
@@ -227,7 +232,7 @@ public:
     llama_tokens get_text_tokens() const;
 
     std::vector<char> serialize() const;
-    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
+    static engine_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
@@ -245,7 +250,7 @@ public:
 
     std::string detokenize(const llama_context * ctx, bool special) const;
 
-    size_t get_common_prefix(const server_tokens & b) const;
+    size_t get_common_prefix(const engine_tokens & b) const;
 
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
@@ -253,7 +258,7 @@ public:
     // check text token IDs and the mapping between media chunks and token ranges
     bool validate(const struct llama_context * ctx) const;
 
-    server_tokens clone() const;
+    engine_tokens clone() const;
 };
 
 
@@ -290,9 +295,9 @@ void handle_media(
         const std::string & url,
         const std::string & media_path);
 
-// process mtmd prompt, return the server_tokens containing both text tokens and media chunks
-// if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
-server_tokens process_mtmd_prompt(
+// process mtmd prompt, return the engine_tokens containing both text tokens and media chunks
+// if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to engine_queue)
+engine_tokens process_mtmd_prompt(
                                         mtmd_context * mctx,
                                         const std::string & prompt,
                                         const std::vector<raw_buffer> & files,
@@ -312,7 +317,7 @@ server_tokens process_mtmd_prompt(
  * - "prompt": [[12, 34, 56], [78, 90, 12]]
  * - "prompt": [[12, 34, "string", 56, 78], [12, 34, 56], { "prompt_string": "string", "multimodal_data": [ "base64" ]}]
  */
-std::vector<server_tokens> tokenize_input_prompts(
+std::vector<engine_tokens> tokenize_input_prompts(
                                         const llama_vocab * vocab,
                                         mtmd_context * mctx,
                                         const json & json_prompt,
@@ -321,7 +326,7 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         const mtmd_helper_init_opt & init_opt);
 
 // tokenize a single prompt, see tokenize_input_prompts() for the supported shapes
-server_tokens tokenize_input_subprompt(
+engine_tokens tokenize_input_subprompt(
                                         const llama_vocab * vocab,
                                         mtmd_context * mctx,
                                         const json & json_prompt,
@@ -334,7 +339,7 @@ server_tokens tokenize_input_subprompt(
 //
 
 // global server parameters for chat formatting / parsing
-struct server_chat_params {
+struct engine_chat_params {
     bool use_jinja;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
@@ -357,28 +362,28 @@ json oaicompat_completion_params_parse(const json & body);
 json oaicompat_chat_params_parse(
     const llama_vocab * vocab,
     json & body, /* openai api json semantics */
-    const server_chat_params & opt,
+    const engine_chat_params & opt,
     std::vector<raw_buffer> & out_files,
     common_chat_session & out_session);
 
 // used by /embeddings endpoint, content has the same format as a chat message content array
-server_tokens tokenize_oai_content_array(
+engine_tokens tokenize_oai_content_array(
     const llama_vocab * vocab,
     mtmd_context * mctx,
-    const server_chat_params & opt,
+    const engine_chat_params & opt,
     json content,
     bool add_special,
     bool parse_special,
     const mtmd_helper_init_opt & init_opt);
 
-// TODO: move it to server-task.cpp
+// TODO: move it to engine-task.cpp
 json format_embeddings_response_oaicompat(
     const json & request,
     const std::string & model_name,
     const json & embeddings,
     bool use_base64 = false);
 
-// TODO: move it to server-task.cpp
+// TODO: move it to engine-task.cpp
 json format_response_rerank(
         const json & request,
         const std::string & model_name,
@@ -391,14 +396,14 @@ json format_response_rerank(
 // stats and metrics
 //
 
-// shared between server_slot and server_task_result_*
-struct server_slot_stats {
+// shared between engine_slot and engine_task_result_*
+struct engine_slot_stats {
     uint64_t n_prompt_cached    = 0;
     uint64_t n_prompt_processed = 0;
     uint64_t n_gen              = 0;
 
     // speculative decoding stats
-    // note: the per-position breakdown lives in server_slot, it is not needed in a task result
+    // note: the per-position breakdown lives in engine_slot, it is not needed in a task result
     uint64_t n_draft_tokens      = 0;
     uint64_t n_draft_accepted    = 0;
     uint64_t n_draft_verif_steps = 0;
@@ -478,9 +483,9 @@ struct server_slot_stats {
     json to_json() const;
 };
 
-// shared between server_context_impl and server_task_result_*
-// unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
-struct server_metrics {
+// shared between engine_context_impl and engine_task_result_*
+// unlike engine_slot_stats, engine_metrics is server-global and cumulative, not tied to a slot
+struct engine_metrics {
     int64_t t_start = 0;
 
     struct bucket {
@@ -568,7 +573,7 @@ bool is_valid_utf8(const std::string & str);
 
 //
 // formatting output responses
-// TODO: move these to server-task.cpp
+// TODO: move these to engine-task.cpp
 //
 
 llama_tokens format_prompt_infill(
@@ -583,126 +588,10 @@ llama_tokens format_prompt_infill(
         const llama_tokens & tokens_prompt);
 
 // format rerank task: [BOS]query[EOS][SEP]doc[EOS].
-server_tokens format_prompt_rerank(
+engine_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc,
         const mtmd_helper_init_opt & init_opt);
-
-// simple implementation of a pipe
-// used for streaming data between threads
-template<typename T>
-struct server_pipe {
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::queue<T> queue;
-    std::atomic<bool> writer_closed{false};
-    std::atomic<bool> reader_closed{false};
-
-    // 0 = unbounded (default)
-    // > 0, write() drops the oldest item once the queue is full
-    size_t max_size = 0;
-
-    void close_write() {
-        writer_closed.store(true, std::memory_order_relaxed);
-        cv.notify_all();
-    }
-
-    void close_read() {
-        reader_closed.store(true, std::memory_order_relaxed);
-        cv.notify_all();
-    }
-
-    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
-    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
-    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
-        std::unique_lock<std::mutex> lk(mutex);
-        constexpr auto poll_interval = std::chrono::milliseconds(500);
-        while (true) {
-            if (!queue.empty()) {
-                output = std::move(queue.front());
-                queue.pop();
-                return true;
-            }
-            if (writer_closed.load()) {
-                return false; // clean EOF
-            }
-            if (should_stop && should_stop()) { // a null should_stop means "never stop"
-                if (close_on_stop) {
-                    close_read(); // signal broken pipe to writer
-                }
-                return false; // cancelled / deadline reached
-            }
-            cv.wait_for(lk, poll_interval);
-        }
-    }
-
-    bool write(T && data) {
-        std::lock_guard<std::mutex> lk(mutex);
-        if (reader_closed.load()) {
-            return false; // broken pipe
-        }
-        if (max_size > 0) {
-            while (queue.size() >= max_size) {
-                queue.pop(); // drop oldest to stay bounded
-            }
-        }
-        queue.push(std::move(data));
-        cv.notify_one();
-        return true;
-    }
-};
-
-// a child server writes its state commands to stdout and its logs to stderr
-enum server_subproc_stream {
-    SERVER_SUBPROC_STDOUT,
-    SERVER_SUBPROC_STDERR,
-    SERVER_SUBPROC_STREAMS,
-};
-
-// gives the current stdout to the caller as a stream of its own, and sends everything else written to stdout to stderr
-FILE * server_reserve_stdout();
-
-// wrapper around common_subproc to manage a child server process
-// mainly used by router mode
-struct server_subproc {
-    common_subproc sproc;
-    std::atomic<bool> stopped{false}; // set by the monitor once the process exited and was reaped
-
-    bool is_alive() { return sproc.alive(); }
-    void terminate() { sproc.terminate(); }
-    int  join() { return sproc.join(); }
-
-    // true if both output pipes of the child are available (call after create())
-    bool has_output();
-
-    // true once both output pipes are closed
-    bool output_closed() const;
-
-    // non-blocking read from one output pipe
-    // returns the number of bytes read, 0 when nothing is available, -1 when the pipe is closed or broken
-    int read_output(server_subproc_stream stream, char * buf, size_t len);
-
-    // wait until one of a set of children has output, wake() is called, or a timeout passes
-    struct waiter {
-        waiter();
-        ~waiter();
-
-        // thread-safe; on Windows this is a no-op, wait() returns within 50 ms anyway
-        void wake();
-
-        // timeout_ms < 0 waits until data or wake(); ready[i] is set for each child with data on an open pipe (or a broken pipe)
-        void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
-
-    private:
-#ifndef _WIN32
-        intptr_t wake_fd[2] = { -1, -1 }; // POSIX self-pipe
-#endif
-    };
-
-private:
-    intptr_t out_handles[SERVER_SUBPROC_STREAMS] = { -1, -1 }; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
-    bool     out_closed [SERVER_SUBPROC_STREAMS] = { false, false };
-};

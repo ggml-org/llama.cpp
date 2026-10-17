@@ -96,7 +96,7 @@ def test_slot_restore_legacy_token_list():
     assert res.status_code == 200
     assert res.body["n_saved"] == 84
 
-    # rewrite the token payload into a plain token list, as written by servers that predate the packed server_tokens format
+    # rewrite the token payload into a plain token list, as written by servers that predate the packed engine_tokens format
     path = os.path.join(server.slot_save_path, "slot_legacy.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())

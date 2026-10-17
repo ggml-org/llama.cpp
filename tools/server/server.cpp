@@ -1,4 +1,5 @@
-#include "server-context.h"
+#include "engine-context.h"
+#include "server-routes.h"
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
@@ -195,7 +196,7 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     server_mcp mcp_mgr;
 
     // struct that contains llama context and inference
-    server_context ctx_server;
+    engine_context ctx_server;
 
     //
     // Router
@@ -480,8 +481,8 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
 
         // setup communication child --> router if necessary
         if (child.is_child()) {
-            ctx_server.set_state_callback([&](server_state state, json payload) {
-                child.notify_to_router(server_state_to_str(state), payload);
+            ctx_server.set_state_callback([&](engine_state state, json payload) {
+                child.notify_to_router(engine_state_to_str(state), payload);
             });
         }
 
@@ -540,7 +541,7 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
         std::thread monitor_thread;
         if (child.is_child()) {
             monitor_thread = child.setup(shutdown_handler);
-            child.notify_to_router(server_state_to_str(SERVER_STATE_READY), routes.get_model_info());
+            child.notify_to_router(engine_state_to_str(ENGINE_STATE_READY), routes.get_model_info());
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called

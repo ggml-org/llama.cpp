@@ -3,9 +3,10 @@
 #include "common.h"
 #include "download.h"
 #include "preset.h"
-#include "server-common.h"
+#include "engine-common.h"
 #include "server-http.h"
-#include "server-queue.h"
+#include "engine-queue.h"
+#include "server-subproc.h"
 
 #include <mutex>
 #include <condition_variable>
@@ -88,7 +89,7 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     bool hidden = false; // hidden from GET /models, but still accept if requested
-    json architecture = server_model_architecture_json(false, false, false, {"text"});
+    json architecture = engine_model_architecture_json(false, false, false, {"text"});
     uint32_t n_ctx_train = 0; // trained context, read from the GGUF metadata; 0 when unknown
 
     bool is_ready() const {
@@ -288,7 +289,7 @@ public:
     server_models(const common_params & params, int argc, char ** argv);
     ~server_models();
 
-    server_response sse; // for real-time updates via SSE endpoint
+    engine_response sse; // for real-time updates via SSE endpoint
 
     // (re-)load the list of models from various sources and prepare the metadata mapping
     // - if this is called the first time, simply populate the metadata

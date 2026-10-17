@@ -1755,7 +1755,7 @@ struct server_tool_get_info : server_tool {
     }
 };
 
-struct server_tool_stream_result : server_task_result {
+struct server_tool_stream_result : engine_task_result {
     std::string chunk;
     bool done = false;
     std::string error_msg;
@@ -1783,7 +1783,7 @@ void server_tool::stream::push(const std::string & chunk) {
 
 struct server_tools_res : server_http_res {
     std::thread worker;
-    server_response * qr = nullptr; // set only for streaming responses
+    engine_response * qr = nullptr; // set only for streaming responses
     int id = -1;
 
     ~server_tools_res() override {

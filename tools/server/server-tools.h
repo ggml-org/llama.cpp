@@ -1,8 +1,8 @@
 #pragma once
 
-#include "server-common.h"
+#include "engine-common.h"
 #include "server-http.h"
-#include "server-queue.h"
+#include "engine-queue.h"
 #include "server-mcp.h"
 
 #include <atomic>
@@ -21,7 +21,7 @@ struct server_tool {
     virtual std::string type() const { return "server"; }
 
     struct stream {
-        server_response & qr;
+        engine_response & qr;
         int id;
         std::function<bool()> alive;
         void push(const std::string & chunk);
@@ -37,7 +37,7 @@ struct server_tools {
     std::vector<std::unique_ptr<server_tool>> tools;
 
     // for streaming
-    server_response queue_res;
+    engine_response queue_res;
     std::atomic<int> res_id{0};
 
     // set when --tools-runtime is configured; routes every tool call through an isolate

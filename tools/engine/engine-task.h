@@ -8,26 +8,26 @@
 #include <list>
 #include <map>
 
-// TODO: prevent including the whole server-common.h as we only use server_tokens
-#include "server-common.h"
+// TODO: prevent including the whole engine-common.h as we only use engine_tokens
+#include "engine-common.h"
 
 
-enum server_task_type {
-    SERVER_TASK_TYPE_COMPLETION,
-    SERVER_TASK_TYPE_EMBEDDING,
-    SERVER_TASK_TYPE_RERANK,
-    SERVER_TASK_TYPE_DECISION,
-    SERVER_TASK_TYPE_INFILL,
-    SERVER_TASK_TYPE_CANCEL,
-    SERVER_TASK_TYPE_CONTROL,
-    SERVER_TASK_TYPE_NEXT_RESPONSE,
-    SERVER_TASK_TYPE_METRICS,
-    SERVER_TASK_TYPE_SLOT_GET,
-    SERVER_TASK_TYPE_SLOT_SAVE,
-    SERVER_TASK_TYPE_SLOT_RESTORE,
-    SERVER_TASK_TYPE_SLOT_ERASE,
-    SERVER_TASK_TYPE_GET_LORA,
-    SERVER_TASK_TYPE_SET_LORA,
+enum engine_task_type {
+    ENGINE_TASK_TYPE_COMPLETION,
+    ENGINE_TASK_TYPE_EMBEDDING,
+    ENGINE_TASK_TYPE_RERANK,
+    ENGINE_TASK_TYPE_DECISION,
+    ENGINE_TASK_TYPE_INFILL,
+    ENGINE_TASK_TYPE_CANCEL,
+    ENGINE_TASK_TYPE_CONTROL,
+    ENGINE_TASK_TYPE_NEXT_RESPONSE,
+    ENGINE_TASK_TYPE_METRICS,
+    ENGINE_TASK_TYPE_SLOT_GET,
+    ENGINE_TASK_TYPE_SLOT_SAVE,
+    ENGINE_TASK_TYPE_SLOT_RESTORE,
+    ENGINE_TASK_TYPE_SLOT_ERASE,
+    ENGINE_TASK_TYPE_GET_LORA,
+    ENGINE_TASK_TYPE_SET_LORA,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -85,7 +85,7 @@ struct task_params {
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
 
-    // realtime control (SERVER_TASK_TYPE_CONTROL)
+    // realtime control (ENGINE_TASK_TYPE_CONTROL)
     std::string        control_action;
     std::string        control_cmpl_id;
 
@@ -134,37 +134,37 @@ struct task_result_state {
         bool filter_tool_calls = false);
 };
 
-struct server_task {
-    int id = -1; // to be filled by server_queue
+struct engine_task {
+    int id = -1; // to be filled by engine_queue
 
     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
     size_t index = 0; // used when there are multiple prompts (batch request)
 
-    // used by SERVER_TASK_TYPE_CANCEL
+    // used by ENGINE_TASK_TYPE_CANCEL
     int id_target = -1;
     int id_slot   = -1;
 
     // used by parallel sampling (multiple completions from same prompt)
     int id_parent  = -1;
     // temporary store of child tasks for scheduling
-    // note: accessing to elements is invalid after the task is moved to server_slot
-    std::vector<server_task> child_tasks;
+    // note: accessing to elements is invalid after the task is moved to engine_slot
+    std::vector<engine_task> child_tasks;
     // if set on a parent, the children have their own prompt and only share its first n_tokens_shared tokens
     int32_t n_tokens_shared = 0;
 
-    // used by SERVER_TASK_TYPE_INFERENCE
+    // used by ENGINE_TASK_TYPE_INFERENCE
     task_params   params;
-    server_tokens tokens;
+    engine_tokens tokens;
 
     // only used by CLI, this allow tokenizing CLI inputs on server side
-    // we need this because mtmd_context and vocab are not accessible outside of server_context
+    // we need this because mtmd_context and vocab are not accessible outside of engine_context
     bool                    cli = false;
     std::string             cli_prompt;
     std::vector<raw_buffer> cli_files;
 
-    server_task_type type;
+    engine_task_type type;
 
-    // used by SERVER_TASK_TYPE_SLOT_SAVE, SERVER_TASK_TYPE_SLOT_RESTORE, SERVER_TASK_TYPE_SLOT_ERASE
+    // used by ENGINE_TASK_TYPE_SLOT_SAVE, ENGINE_TASK_TYPE_SLOT_RESTORE, ENGINE_TASK_TYPE_SLOT_ERASE
     struct slot_action {
         int id_slot;
         std::string filename;
@@ -172,10 +172,10 @@ struct server_task {
     };
     slot_action slot_action;
 
-    // used by SERVER_TASK_TYPE_METRICS
+    // used by ENGINE_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
 
-    // used by SERVER_TASK_TYPE_DECISION
+    // used by ENGINE_TASK_TYPE_DECISION
     // where to read the model output of each option, exactly one of the two lists is used
     struct decision {
         std::vector<llama_token> labels;       // logits of these tokens, at the last prompt token
@@ -206,12 +206,12 @@ struct server_task {
     };
     decision decision;
 
-    // used by SERVER_TASK_TYPE_SET_LORA
+    // used by ENGINE_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
 
-    server_task() = default;
+    engine_task() = default;
 
-    server_task(server_task_type type) : type(type) {}
+    engine_task(engine_task_type type) : type(type) {}
 
     int32_t n_tokens() const {
         return tokens.size();
@@ -219,10 +219,10 @@ struct server_task {
 
     bool need_embd() const {
         switch (type) {
-            case SERVER_TASK_TYPE_EMBEDDING:
-            case SERVER_TASK_TYPE_RERANK:
+            case ENGINE_TASK_TYPE_EMBEDDING:
+            case ENGINE_TASK_TYPE_RERANK:
                 return true;
-            case SERVER_TASK_TYPE_DECISION:
+            case ENGINE_TASK_TYPE_DECISION:
                 return !decision.markers.empty() || !decision.order.empty();
             default:
                 return false;
@@ -231,10 +231,10 @@ struct server_task {
 
     bool need_logits() const {
         switch (type) {
-            case SERVER_TASK_TYPE_COMPLETION:
-            case SERVER_TASK_TYPE_INFILL:
+            case ENGINE_TASK_TYPE_COMPLETION:
+            case ENGINE_TASK_TYPE_INFILL:
                 return true;
-            case SERVER_TASK_TYPE_DECISION:
+            case ENGINE_TASK_TYPE_DECISION:
                 return !decision.labels.empty();
             default:
                 return false;
@@ -243,8 +243,8 @@ struct server_task {
 
     bool need_sampling() const {
         switch (type) {
-            case SERVER_TASK_TYPE_COMPLETION:
-            case SERVER_TASK_TYPE_INFILL:
+            case ENGINE_TASK_TYPE_COMPLETION:
+            case ENGINE_TASK_TYPE_INFILL:
                 return true;
             default:
                 return false;
@@ -252,7 +252,7 @@ struct server_task {
     }
 
     // utility function
-    static std::unordered_set<int> get_list_id(const std::vector<server_task> & tasks) {
+    static std::unordered_set<int> get_list_id(const std::vector<engine_task> & tasks) {
         std::unordered_set<int> ids(tasks.size());
         for (size_t i = 0; i < tasks.size(); i++) {
             ids.insert(tasks[i].id);
@@ -275,7 +275,7 @@ struct server_task {
     }
 
     void add_child(int id_parent, int id_child) {
-        server_task copy;
+        engine_task copy;
 
         copy.id        = id_child;
         copy.id_parent = id_parent;
@@ -303,7 +303,7 @@ struct server_task {
 
     // embedding and rerank tasks always process their whole prompt, their state is never reused
     bool is_stateless() const {
-        return type == SERVER_TASK_TYPE_EMBEDDING || type == SERVER_TASK_TYPE_RERANK;
+        return type == ENGINE_TASK_TYPE_EMBEDDING || type == ENGINE_TASK_TYPE_RERANK;
     }
 };
 
@@ -316,7 +316,7 @@ struct result_prompt_progress {
     json to_json() const;
 };
 
-struct server_task_result {
+struct engine_task_result {
     int id           = -1;
     int id_slot      = -1;
 
@@ -324,25 +324,25 @@ struct server_task_result {
     size_t index = 0; // to be used for batched tasks
 
     virtual bool is_error() {
-        // only used by server_task_result_error
+        // only used by engine_task_result_error
         return false;
     }
     virtual bool is_stop() {
-        // only used by server_task_result_cmpl_*
+        // only used by engine_task_result_cmpl_*
         return true;
     }
     virtual void update(task_result_state &) {
-        // only used by server_task_result_cmpl_*
+        // only used by engine_task_result_cmpl_*
     }
     virtual json to_json() = 0;
-    virtual ~server_task_result() = default;
-    virtual server_task_result * clone() const {
+    virtual ~engine_task_result() = default;
+    virtual engine_task_result * clone() const {
         GGML_ABORT("not implemented for this task type");
     }
 };
 
-// using shared_ptr for polymorphism of server_task_result
-using server_task_result_ptr = std::unique_ptr<server_task_result>;
+// using shared_ptr for polymorphism of engine_task_result
+using engine_task_result_ptr = std::unique_ptr<engine_task_result>;
 
 struct completion_token_output {
     llama_token tok;
@@ -365,13 +365,13 @@ struct completion_token_output {
 
 };
 
-struct server_task_result_cmpl_final : server_task_result {
+struct engine_task_result_cmpl_final : engine_task_result {
     common_chat_input content;
     llama_tokens tokens;
 
     bool stream;
     bool include_usage;
-    server_slot_stats stats;
+    engine_slot_stats stats;
     std::string prompt;
 
     bool truncated;
@@ -440,7 +440,7 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_anthropic_stream();
 };
 
-struct server_task_result_cmpl_partial : server_task_result {
+struct engine_task_result_cmpl_partial : engine_task_result {
     common_chat_input content;
     llama_tokens      tokens;
 
@@ -453,7 +453,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
                            // ref: https://github.com/ggml-org/llama.cpp/pull/23884
     completion_token_output prob_output;
-    server_slot_stats stats;
+    engine_slot_stats stats;
     result_prompt_progress progress;
 
     // response formatting
@@ -499,7 +499,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_anthropic();
 };
 
-struct server_task_result_embd : server_task_result {
+struct engine_task_result_embd : engine_task_result {
     std::vector<std::vector<float>> embedding;
 
     int32_t n_tokens;
@@ -514,7 +514,7 @@ struct server_task_result_embd : server_task_result {
     json to_json_oaicompat();
 };
 
-struct server_task_result_rerank : server_task_result {
+struct engine_task_result_rerank : engine_task_result {
     float score = -1e6;
 
     int32_t n_tokens;
@@ -522,7 +522,7 @@ struct server_task_result_rerank : server_task_result {
     virtual json to_json() override;
 };
 
-struct server_task_result_decision : server_task_result {
+struct engine_task_result_decision : engine_task_result {
     std::vector<float> scores; // one raw model output per option
 
     int32_t n_tokens;
@@ -530,7 +530,7 @@ struct server_task_result_decision : server_task_result {
     virtual json to_json() override;
 };
 
-struct server_task_result_error : server_task_result {
+struct engine_task_result_error : engine_task_result {
     error_type err_type = ERROR_TYPE_SERVER;
     std::string err_msg;
 
@@ -546,12 +546,12 @@ struct server_task_result_error : server_task_result {
 };
 
 // used by /metrics API
-struct server_task_result_metrics : server_task_result {
-    // these are immediate stats, not accumulated (server_metrics is cumulative)
+struct engine_task_result_metrics : engine_task_result {
+    // these are immediate stats, not accumulated (engine_metrics is cumulative)
     int n_processing_slots = 0;
     int n_tasks_deferred = 0;
 
-    server_metrics metrics;
+    engine_metrics metrics;
 
     virtual json to_json() override;
 
@@ -564,17 +564,17 @@ struct server_task_result_metrics : server_task_result {
 };
 
 // used by /slots API
-struct server_task_result_slots : server_task_result {
+struct engine_task_result_slots : engine_task_result {
     int n_idle_slots = 0;
 
-    // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
+    // while we can also use std::vector<engine_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
 
     virtual json to_json() override;
 };
 
-struct server_task_result_slot_save_load : server_task_result {
+struct engine_task_result_slot_save_load : engine_task_result {
     std::string filename;
     bool is_save; // true = save, false = load
 
@@ -585,13 +585,13 @@ struct server_task_result_slot_save_load : server_task_result {
     virtual json to_json() override;
 };
 
-struct server_task_result_slot_erase : server_task_result {
+struct engine_task_result_slot_erase : engine_task_result {
     size_t n_erased;
 
     virtual json to_json() override;
 };
 
-struct server_task_result_control : server_task_result {
+struct engine_task_result_control : engine_task_result {
     bool        success = false;
     std::string message; // optional detail when success is false
 
@@ -604,7 +604,7 @@ struct server_task_result_control : server_task_result {
     }
 };
 
-struct server_task_result_get_lora : server_task_result {
+struct engine_task_result_get_lora : engine_task_result {
     struct lora {
         common_adapter_lora_info info;
         std::string  alora_invocation_string;
@@ -615,12 +615,12 @@ struct server_task_result_get_lora : server_task_result {
     virtual json to_json() override;
 };
 
-struct server_task_result_apply_lora : server_task_result {
+struct engine_task_result_apply_lora : engine_task_result {
     virtual json to_json() override;
 };
 
-struct server_prompt {
-    server_tokens tokens;
+struct engine_prompt {
+    engine_tokens tokens;
 
     std::list<common_prompt_checkpoint> checkpoints;
 
@@ -633,15 +633,15 @@ struct server_prompt {
         return tokens.size();
     }
 
-    server_prompt clone() const {
-        return server_prompt {
+    engine_prompt clone() const {
+        return engine_prompt {
             tokens.clone(),
             checkpoints,
         };
     }
 };
 
-struct server_prompt_data {
+struct engine_prompt_data {
     std::vector<uint8_t> main;
     std::vector<uint8_t> drft;
 
@@ -650,9 +650,9 @@ struct server_prompt_data {
     }
 };
 
-struct server_prompt_cache_state {
-    server_prompt prompt;
-    server_prompt_data data;
+struct engine_prompt_cache_state {
+    engine_prompt prompt;
+    engine_prompt_data data;
 
     size_t size() const {
         size_t res = data.size();
@@ -665,13 +665,13 @@ struct server_prompt_cache_state {
     }
 };
 
-struct server_prompt_cache {
-    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
+struct engine_prompt_cache {
+    engine_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
         this->limit_tokens = limit_tokens;
     }
 
-    std::list<server_prompt_cache_state> states;
+    std::list<engine_prompt_cache_state> states;
 
     // in bytes, 0 = no limit
     size_t limit_size = 0;
@@ -683,18 +683,18 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    engine_prompt_cache_state * alloc(const engine_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    bool load(engine_prompt & prompt, const engine_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
 };
 
 // used exclusively by router mode
-struct server_task_result_router : server_task_result {
+struct engine_task_result_router : engine_task_result {
     json data;
     virtual json to_json() override { return data; }
-    virtual server_task_result * clone() const override {
-        return new server_task_result_router(*this);
+    virtual engine_task_result * clone() const override {
+        return new engine_task_result_router(*this);
     }
 };

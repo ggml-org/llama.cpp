@@ -1,6 +1,6 @@
 #pragma once
 
-#include "server-task.h"
+#include "engine-task.h"
 
 #include <condition_variable>
 #include <deque>
@@ -11,8 +11,8 @@
 #include <unordered_set>
 
 // struct for managing server tasks
-// in most cases, use server_response_reader to post new tasks and retrieve results
-struct server_queue {
+// in most cases, use engine_response_reader to post new tasks and retrieve results
+struct engine_queue {
 private:
     int id = 0;
     bool running  = false;
@@ -21,11 +21,11 @@ private:
     int64_t time_last_task = 0;
 
     // queues
-    std::deque<server_task> queue_tasks;
-    std::deque<server_task> queue_tasks_deferred;
+    std::deque<engine_task> queue_tasks;
+    std::deque<engine_task> queue_tasks_deferred;
     // tasks declined while yielding, put back in queue_tasks once the yield is done
     // note: kept as a member so that cleanup_pending_task() can also reach them
-    std::deque<server_task> queue_tasks_unhandled;
+    std::deque<engine_task> queue_tasks_unhandled;
 
     std::mutex mutex_tasks;
     std::condition_variable condition_tasks;
@@ -42,21 +42,21 @@ private:
     worker_t worker;
 
     // callback functions
-    std::function<bool(server_task &&, bool)> callback_new_task;
+    std::function<bool(engine_task &&, bool)> callback_new_task;
     std::function<void(void)>                 callback_update_slots;
     std::vector<std::function<void(bool)>>    callback_sleeping_state;
 
 public:
-    ~server_queue() { worker_stop(); }
+    ~engine_queue() { worker_stop(); }
 
     // Add a new task to the end of the queue
-    int post(server_task && task, bool front = false);
+    int post(engine_task && task, bool front = false);
 
     // multi-task version of post()
-    int post(std::vector<server_task> && tasks, bool front = false);
+    int post(std::vector<engine_task> && tasks, bool front = false);
 
     // Add a new task, but defer until one slot is available
-    void defer(server_task && task);
+    void defer(engine_task && task);
 
     // Get the next id for creating a new task
     int get_new_id();
@@ -118,7 +118,7 @@ public:
     // only then may the callback return false to decline the task, and it must leave it
     // untouched, so that it can be put back in the queue later
     // note: while yielding, the callback runs on worker thread, not main thread
-    void on_new_task(std::function<bool(server_task &&, bool)> callback) {
+    void on_new_task(std::function<bool(engine_task &&, bool)> callback) {
         callback_new_task = std::move(callback);
     }
 
@@ -150,8 +150,8 @@ private:
 };
 
 // struct for managing server responses
-// in most cases, use server_response_reader to retrieve results
-struct server_response {
+// in most cases, use engine_response_reader to retrieve results
+struct engine_response {
 private:
     bool running = true;
 
@@ -159,7 +159,7 @@ private:
     std::unordered_set<int> waiting_task_ids;
 
     // the main result queue (using ptr for polymorphism)
-    std::vector<server_task_result_ptr> queue_results;
+    std::vector<engine_task_result_ptr> queue_results;
 
     std::mutex mutex_results;
     std::condition_variable condition_results;
@@ -177,33 +177,33 @@ public:
     void remove_waiting_task_ids(const std::unordered_set<int> & id_tasks);
 
     // This function blocks the thread until there is a response for one of the id_tasks
-    server_task_result_ptr recv(const std::unordered_set<int> & id_tasks);
+    engine_task_result_ptr recv(const std::unordered_set<int> & id_tasks);
 
     // same as recv(), but have timeout in seconds
     // if timeout is reached, nullptr is returned
-    server_task_result_ptr recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout);
+    engine_task_result_ptr recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout);
 
     // single-task version of recv()
-    server_task_result_ptr recv(int id_task);
+    engine_task_result_ptr recv(int id_task);
 
     // Send a new result to a waiting id_task
-    void send(server_task_result_ptr && result);
+    void send(engine_task_result_ptr && result);
 
     // broadcast a new result to all waiting tasks
     // (used by router mode)
-    void broadcast(server_task_result_ptr && result);
+    void broadcast(engine_task_result_ptr && result);
 
     // terminate the waiting loop
     void terminate();
 };
 
-// RAII wrapper to make working with server_queue and server_response easier
+// RAII wrapper to make working with engine_queue and engine_response easier
 // it provides a generator-like API for server responses
 // support pooling connection state and aggregating multiple results
-struct server_response_reader {
+struct engine_response_reader {
     std::unordered_set<int> id_tasks;
-    server_queue & queue_tasks;
-    server_response & queue_results;
+    engine_queue & queue_tasks;
+    engine_response & queue_results;
     size_t received_count = 0;
     bool cancelled = false;
     int polling_interval_seconds;
@@ -213,9 +213,9 @@ struct server_response_reader {
     std::vector<task_result_state> states;
 
     // should_stop function will be called each polling_interval_seconds
-    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds)
+    engine_response_reader(engine_queue & queue_tasks, engine_response & queue_results, int polling_interval_seconds)
         : queue_tasks(queue_tasks), queue_results(queue_results), polling_interval_seconds(polling_interval_seconds) {}
-    ~server_response_reader() {
+    ~engine_response_reader() {
         stop();
     }
 
@@ -224,18 +224,18 @@ struct server_response_reader {
     }
 
     // if front = true, the task will be posted to the front of the queue (high priority)
-    void post_task(server_task && task, bool front = false);
-    void post_tasks(std::vector<server_task> && tasks, const common_chat_session & session = {}, bool front = false);
+    void post_task(engine_task && task, bool front = false);
+    void post_tasks(std::vector<engine_task> && tasks, const common_chat_session & session = {}, bool front = false);
     bool has_next() const;
 
     // return nullptr if should_stop() is true before receiving a result
     // note: if one error is received, it will stop further processing and return error result
-    server_task_result_ptr next(const std::function<bool()> & should_stop);
+    engine_task_result_ptr next(const std::function<bool()> & should_stop);
 
     struct batch_response {
         bool is_terminated = false; // if true, indicates that processing was stopped before all results were received
-        std::vector<server_task_result_ptr> results;
-        server_task_result_ptr error; // nullptr if no error
+        std::vector<engine_task_result_ptr> results;
+        engine_task_result_ptr error; // nullptr if no error
     };
     // aggregate multiple results
     batch_response wait_for_all(const std::function<bool()> & should_stop);

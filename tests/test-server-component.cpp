@@ -1,7 +1,8 @@
 #include "testing.h"
 
-#include "../tools/server/server-common.h"
-#include "../tools/server/server-decision.h"
+#include "../tools/engine/engine-common.h"
+#include "../tools/server/server-subproc.h"
+#include "../tools/engine/engine-decision.h"
 
 #include <cstdlib>
 #include <regex>
@@ -15,11 +16,11 @@
 // see skills/code-review/SKILL.md for more
 
 //
-// server_tokens (text only, has_mtmd = false)
+// engine_tokens (text only, has_mtmd = false)
 //
 
-static void test_server_tokens_basic(testing & t) {
-    server_tokens st(llama_tokens{1, 2, 3}, false);
+static void test_engine_tokens_basic(testing & t) {
+    engine_tokens st(llama_tokens{1, 2, 3}, false);
     t.assert_equal("size", (size_t) 3, st.size());
     t.assert_true("not empty", !st.empty());
     t.assert_equal("operator[]", 2, st[1]);
@@ -47,8 +48,8 @@ static void test_server_tokens_basic(testing & t) {
     t.assert_true("clear", st.empty());
 }
 
-static void test_server_tokens_pos(testing & t) {
-    server_tokens st(llama_tokens{1, 2, 3, 4, 5}, false);
+static void test_engine_tokens_pos(testing & t) {
+    engine_tokens st(llama_tokens{1, 2, 3, 4, 5}, false);
     t.assert_equal("pos_next()", (llama_pos) 5, st.pos_next());
     t.assert_equal("pos_next(0)", (llama_pos) 0, st.pos_next(0));
     t.assert_equal("pos_next(3)", (llama_pos) 3, st.pos_next(3));
@@ -58,8 +59,8 @@ static void test_server_tokens_pos(testing & t) {
     t.assert_equal("size_up_to_pos clamps", (size_t) 5, st.size_up_to_pos(100));
 }
 
-static void test_server_tokens_keep_first(testing & t) {
-    server_tokens st(llama_tokens{1, 2, 3, 4, 5}, false);
+static void test_engine_tokens_keep_first(testing & t) {
+    engine_tokens st(llama_tokens{1, 2, 3, 4, 5}, false);
     st.keep_first(5);
     t.assert_equal("keep all", (size_t) 5, st.size());
     st.keep_first(2);
@@ -68,21 +69,21 @@ static void test_server_tokens_keep_first(testing & t) {
     t.assert_true("keep 0", st.empty());
 }
 
-static void test_server_tokens_common_prefix(testing & t) {
-    server_tokens a(llama_tokens{1, 2, 3, 4}, false);
-    server_tokens empty(llama_tokens{}, false);
+static void test_engine_tokens_common_prefix(testing & t) {
+    engine_tokens a(llama_tokens{1, 2, 3, 4}, false);
+    engine_tokens empty(llama_tokens{}, false);
 
     t.assert_equal("both empty",  (size_t) 0, empty.get_common_prefix(empty));
     t.assert_equal("one empty",   (size_t) 0, a.get_common_prefix(empty));
     t.assert_equal("identical",   (size_t) 4, a.get_common_prefix(a));
-    t.assert_equal("diverge at 2", (size_t) 2, a.get_common_prefix(server_tokens(llama_tokens{1, 2, 9, 4}, false)));
-    t.assert_equal("diverge at 0", (size_t) 0, a.get_common_prefix(server_tokens(llama_tokens{9, 2, 3, 4}, false)));
-    t.assert_equal("b is prefix",  (size_t) 2, a.get_common_prefix(server_tokens(llama_tokens{1, 2}, false)));
-    t.assert_equal("a is prefix",  (size_t) 4, a.get_common_prefix(server_tokens(llama_tokens{1, 2, 3, 4, 5, 6}, false)));
+    t.assert_equal("diverge at 2", (size_t) 2, a.get_common_prefix(engine_tokens(llama_tokens{1, 2, 9, 4}, false)));
+    t.assert_equal("diverge at 0", (size_t) 0, a.get_common_prefix(engine_tokens(llama_tokens{9, 2, 3, 4}, false)));
+    t.assert_equal("b is prefix",  (size_t) 2, a.get_common_prefix(engine_tokens(llama_tokens{1, 2}, false)));
+    t.assert_equal("a is prefix",  (size_t) 4, a.get_common_prefix(engine_tokens(llama_tokens{1, 2, 3, 4, 5, 6}, false)));
 }
 
-static void test_server_tokens_serialize(testing & t) {
-    // same packing as slot save/restore in server-context.cpp
+static void test_engine_tokens_serialize(testing & t) {
+    // same packing as slot save/restore in engine-context.cpp
     auto pack = [](const std::vector<char> & data) {
         llama_tokens packed(data.size() / sizeof(llama_token));
         memcpy(packed.data(), data.data(), data.size());
@@ -90,29 +91,29 @@ static void test_server_tokens_serialize(testing & t) {
     };
 
     t.test("roundtrip", [&](testing & t) {
-        server_tokens st(llama_tokens{10, 20, 30}, false);
+        engine_tokens st(llama_tokens{10, 20, 30}, false);
         std::vector<char> data = st.serialize();
         t.assert_equal("aligned to llama_token", (size_t) 0, data.size() % sizeof(llama_token));
 
-        server_tokens restored = server_tokens::deserialize(pack(data), false);
+        engine_tokens restored = engine_tokens::deserialize(pack(data), false);
         t.assert_true("tokens", restored.get_tokens() == st.get_tokens());
     });
 
     t.test("roundtrip empty", [&](testing & t) {
-        server_tokens st(llama_tokens{}, false);
-        server_tokens restored = server_tokens::deserialize(pack(st.serialize()), false);
+        engine_tokens st(llama_tokens{}, false);
+        engine_tokens restored = engine_tokens::deserialize(pack(st.serialize()), false);
         t.assert_true("empty", restored.empty());
     });
 
     t.test("legacy plain token list", [&](testing & t) {
-        server_tokens restored = server_tokens::deserialize(llama_tokens{7, 8, 9}, false);
+        engine_tokens restored = engine_tokens::deserialize(llama_tokens{7, 8, 9}, false);
         t.assert_true("tokens", restored.get_tokens() == llama_tokens({7, 8, 9}));
     });
 
     auto expect_throw = [](testing & t, const std::string & msg, const llama_tokens & packed) {
         bool thrown = false;
         try {
-            server_tokens::deserialize(packed, false);
+            engine_tokens::deserialize(packed, false);
         } catch (const std::exception &) {
             thrown = true;
         }
@@ -120,7 +121,7 @@ static void test_server_tokens_serialize(testing & t) {
     };
 
     t.test("corrupted", [&](testing & t) {
-        llama_tokens good = pack(server_tokens(llama_tokens{10, 20, 30}, false).serialize());
+        llama_tokens good = pack(engine_tokens(llama_tokens{10, 20, 30}, false).serialize());
 
         llama_tokens bad_version = good;
         bad_version[1] = 999;
@@ -142,22 +143,22 @@ static void test_server_tokens_serialize(testing & t) {
     });
 }
 
-static void test_server_tokens_clone(testing & t) {
-    server_tokens st(llama_tokens{1, 2, 3}, false);
-    server_tokens cl = st.clone();
+static void test_engine_tokens_clone(testing & t) {
+    engine_tokens st(llama_tokens{1, 2, 3}, false);
+    engine_tokens cl = st.clone();
     cl.push_back(4);
     t.assert_equal("original untouched", (size_t) 3, st.size());
     t.assert_equal("clone grew", (size_t) 4, cl.size());
     t.assert_true("get_text_tokens", cl.get_text_tokens() == llama_tokens({1, 2, 3, 4}));
 }
 
-static void test_server_tokens(testing & t) {
-    t.test("basic",         test_server_tokens_basic);
-    t.test("pos",           test_server_tokens_pos);
-    t.test("keep_first",    test_server_tokens_keep_first);
-    t.test("common_prefix", test_server_tokens_common_prefix);
-    t.test("serialize",     test_server_tokens_serialize);
-    t.test("clone",         test_server_tokens_clone);
+static void test_engine_tokens(testing & t) {
+    t.test("basic",         test_engine_tokens_basic);
+    t.test("pos",           test_engine_tokens_pos);
+    t.test("keep_first",    test_engine_tokens_keep_first);
+    t.test("common_prefix", test_engine_tokens_common_prefix);
+    t.test("serialize",     test_engine_tokens_serialize);
+    t.test("clone",         test_engine_tokens_clone);
 }
 
 //
@@ -374,7 +375,7 @@ static void test_server_pipe(testing & t) {
 }
 
 //
-// server_decision_escape_special_tokens
+// engine_decision_escape_special_tokens
 //
 
 // "<|name|>" with U+00A6 in place of "|"
@@ -398,7 +399,7 @@ static void test_decision_escape(testing & t) {
             { "<|abc",            "<|abc"                          },
         };
         for (const auto & [text, expected] : cases) {
-            t.assert_equal(text, expected, server_decision_escape_special_tokens(text));
+            t.assert_equal(text, expected, engine_decision_escape_special_tokens(text));
         }
     });
 
@@ -418,7 +419,7 @@ static void test_decision_escape(testing & t) {
                 for (size_t k = 0, v = idx; k < len; k++, v /= chars.size()) {
                     text += chars[v % chars.size()];
                 }
-                if (server_decision_escape_special_tokens(text) != std::regex_replace(text, re_special, "<\xC2\xA6$1\xC2\xA6>")) {
+                if (engine_decision_escape_special_tokens(text) != std::regex_replace(text, re_special, "<\xC2\xA6$1\xC2\xA6>")) {
                     n_diff++;
                 }
                 n_strings++;
@@ -430,8 +431,8 @@ static void test_decision_escape(testing & t) {
     // std::regex overflowed the stack on these
     t.test("long input", [](testing & t) {
         const std::string name(1000000, 'a');
-        t.assert_true("not closed", server_decision_escape_special_tokens("<|" + name) == "<|" + name);
-        t.assert_true("closed", server_decision_escape_special_tokens("<|" + name + "|>") == escaped(name));
+        t.assert_true("not closed", engine_decision_escape_special_tokens("<|" + name) == "<|" + name);
+        t.assert_true("closed", engine_decision_escape_special_tokens("<|" + name + "|>") == escaped(name));
     });
 }
 
@@ -447,7 +448,7 @@ int main(int argc, char ** argv) {
         t.set_filter(argv[1]);
     }
 
-    t.test("server_tokens", test_server_tokens);
+    t.test("engine_tokens", test_engine_tokens);
     t.test("utf8",          test_utf8);
     t.test("sse",           test_sse);
     t.test("json_helpers",  test_json_helpers);

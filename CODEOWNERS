@@ -101,6 +101,7 @@
 /tools/batched-bench/                   @ggerganov
 /tools/cli/                             @ngxson
 /tools/completion/                      @ggerganov
+/tools/engine/                          @ggml-org/llama-server
 /tools/mtmd/                            @ggml-org/llama-mtmd
 /tools/perplexity/                      @ggerganov
 /tools/parser/                          @pwilkin

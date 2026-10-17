@@ -7,7 +7,7 @@
 //
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
-#include "../tools/server/server-chat.h"
+#include "../tools/engine/engine-chat.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -1864,7 +1864,7 @@ static void test_convert_responses_to_chatcmpl() {
             }
         })");
 
-        json result = server_chat_convert_responses_to_chatcmpl(input);
+        json result = engine_chat_convert_responses_to_chatcmpl(input);
 
         // Verify messages were converted correctly
         assert_equals(true, result.contains("messages"));
@@ -1904,7 +1904,7 @@ static void test_convert_responses_to_chatcmpl() {
             "model": "test-model"
         })");
 
-        json result = server_chat_convert_responses_to_chatcmpl(input);
+        json result = engine_chat_convert_responses_to_chatcmpl(input);
 
         assert_equals((size_t)1, result.at("messages").size());
         const auto & msg = result.at("messages")[0];
@@ -1920,7 +1920,7 @@ static void test_convert_responses_to_chatcmpl() {
             "model": "test-model"
         })");
 
-        json result = server_chat_convert_responses_to_chatcmpl(input);
+        json result = engine_chat_convert_responses_to_chatcmpl(input);
 
         assert_equals((size_t)2, result.at("messages").size());
         const auto & sys_msg = result.at("messages")[0];
@@ -1936,7 +1936,7 @@ static void test_convert_responses_to_chatcmpl() {
             "max_output_tokens": 100
         })");
 
-        json result = server_chat_convert_responses_to_chatcmpl(input);
+        json result = engine_chat_convert_responses_to_chatcmpl(input);
 
         assert_equals(true, result.contains("max_tokens"));
         assert_equals(false, result.contains("max_output_tokens"));
@@ -1980,7 +1980,7 @@ static void test_convert_responses_to_chatcmpl() {
             ]
         })");
 
-        json result = server_chat_convert_responses_to_chatcmpl(input);
+        json result = engine_chat_convert_responses_to_chatcmpl(input);
 
         assert_equals(true, result.contains("tools"));
         assert_equals(true, result.at("tools").is_array());
@@ -2015,7 +2015,7 @@ static void test_convert_responses_to_chatcmpl() {
             ]
         })");
 
-        json result = server_chat_convert_responses_to_chatcmpl(input);
+        json result = engine_chat_convert_responses_to_chatcmpl(input);
 
         assert_equals(false, result.contains("tools"));
     }
@@ -7938,7 +7938,7 @@ static void test_reasoning_budget_tokens_per_request() {
     // the reasoning-budget code path in oaicompat_chat_params_parse.
     auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
 
-    server_chat_params opt;
+    engine_chat_params opt;
     opt.tmpls            = std::move(tmpls);
     opt.use_jinja        = true;
     opt.enable_thinking  = true;
@@ -7970,7 +7970,7 @@ static void test_reasoning_budget_message_per_request() {
     // <think>...</think> markers enable the reasoning-budget block in oaicompat_chat_params_parse.
     auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
 
-    server_chat_params opt;
+    engine_chat_params opt;
     opt.tmpls                   = std::move(tmpls);
     opt.use_jinja               = true;
     opt.enable_thinking         = true;
