@@ -200,7 +200,9 @@ static std::string format_kernel_params(const htp_opnode & node) {
                  (unsigned int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
         const auto * kparams = node.kparams<htp_lid_kernel_params>();
-        snprintf(str, max_size, "hvx tok %u nth %u vtcm %u", (unsigned int) kparams->n_tokens_tile,
+        snprintf(str, max_size, "%s tok %u nth %u vtcm %u",
+                 kparams->kernel_type == HTP_LID_KERNEL_HMX ? "hmx" : "hvx",
+                 (unsigned int) kparams->n_tokens_tile,
                  (unsigned int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {

@@ -4733,17 +4733,46 @@ static bool htp_kparams_solve_lightning_indexer(
         return false;
     }
 
+    const uint32_t D        = q->ne[0];
+    const uint32_t n_head   = q->ne[1];
+    const uint32_t n_tokens = q->ne[2];
     const uint32_t n_threads = (std::min)(htp_session_n_threads(sess), n_kv_blocks);
+
+    const bool hmx_ok = htp_session_n_hmx(sess) > 0 &&
+                        D % HMX_FP16_TILE_N_COLS == 0 &&
+                        n_head % 2 == 0 &&
+                        n_tokens >= 8 &&
+                        n_tokens * n_head >= HMX_FP16_TILE_N_ROWS;
+    if (hmx_ok) {
+        uint32_t n_tok = (std::min)(n_tokens, (uint32_t) HTP_LID_HMX_TOKENS_MAX);
+        while (n_tok > 1 && htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, n_threads) > htp_session_vtcm_size(sess)) {
+            n_tok /= 2;
+        }
+
+        const size_t vtcm_size = htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, n_threads);
+        if (n_tok * n_head >= HMX_FP16_TILE_N_ROWS && vtcm_size <= htp_session_vtcm_size(sess)) {
+            kparams->kernel_type       = HTP_LID_KERNEL_HMX;
+            kparams->n_threads         = n_threads;
+            kparams->n_tokens_tile     = n_tok;
+            kparams->n_kv_blocks       = n_kv_blocks;
+            kparams->blocks_per_thread = (n_kv_blocks + n_threads - 1) / n_threads;
+            kparams->n_row_pad         = (uint32_t) hex_round_up((size_t) n_tok * n_head, HMX_FP16_TILE_N_ROWS);
+            kparams->vtcm_size         = (uint32_t) vtcm_size;
+            return true;
+        }
+    }
+
     uint32_t n_tok = (std::min)((uint32_t) q->ne[2], (uint32_t) HTP_LID_TOKENS_MAX);
-    while (n_tok > 1 && htp_lid_compute_vtcm_usage(q->ne[0], q->ne[1], n_tok, n_threads) > htp_session_vtcm_size(sess)) {
+    while (n_tok > 1 && htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads) > htp_session_vtcm_size(sess)) {
         n_tok /= 2;
     }
 
-    const size_t vtcm_size = htp_lid_compute_vtcm_usage(q->ne[0], q->ne[1], n_tok, n_threads);
+    const size_t vtcm_size = htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads);
     if (vtcm_size > htp_session_vtcm_size(sess)) {
         return false;
     }
 
+    kparams->kernel_type       = HTP_LID_KERNEL_HVX;
     kparams->n_threads         = n_threads;
     kparams->n_tokens_tile     = n_tok;
     kparams->n_kv_blocks       = n_kv_blocks;
