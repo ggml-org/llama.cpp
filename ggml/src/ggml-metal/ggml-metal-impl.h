@@ -620,6 +620,7 @@ typedef struct {
 
 // NORM
 // RMS_NORM
+// RMS_NORM_BACK
 typedef struct {
     int32_t  ne00;
     int32_t  ne00_t;
