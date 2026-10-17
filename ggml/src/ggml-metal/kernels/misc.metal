@@ -558,7 +558,8 @@ template [[host_name("kernel_fwht_f16_2048")]] kernel kernel_fwht_f16_t kernel_f
 template [[host_name("kernel_fwht_f16_4096")]] kernel kernel_fwht_f16_t kernel_fwht_tg<4096, GGML_METAL_FWHT_TG_NT, half>;
 template [[host_name("kernel_fwht_f16_8192")]] kernel kernel_fwht_f16_t kernel_fwht_tg<8192, GGML_METAL_FWHT_TG_NT, half>;
 
-constant int FC_dsv4_hc_n_hc [[function_constant(FC_DSV4_HC + 0)]];
+constant int  FC_dsv4_hc_n_hc       [[function_constant(FC_DSV4_HC + 0)]];
+constant bool FC_dsv4_hc_post_gated [[function_constant(FC_DSV4_HC + 1)]];
 
 kernel void kernel_dsv4_hc_comb_f32(
         constant ggml_metal_kargs_dsv4_hc_comb & args,
@@ -694,6 +695,9 @@ kernel void kernel_dsv4_hc_post_nocomb_f32(
     float post_lane = 0.0f;
     if (tiisg < hc) {
         post_lane = *(device const float *) (post + tiisg*args.nb_p0 + it*args.nb_p1);
+        if (FC_dsv4_hc_post_gated) {
+            post_lane = args.gate_scale_out * (1.0f/(1.0f + exp(-(args.gate_scale_in*post_lane))));
+        }
     }
 
     float post_reg[hc];
@@ -732,6 +736,9 @@ kernel void kernel_dsv4_hc_post_f32(
     float coeff_lane = 0.0f;
     if (tiisg < hc) {
         coeff_lane = *(device const float *) (post + tiisg*args.nb_p0 + it*args.nb_p1);
+        if (FC_dsv4_hc_post_gated) {
+            coeff_lane = args.gate_scale_out * (1.0f/(1.0f + exp(-(args.gate_scale_in*coeff_lane))));
+        }
     } else if (tiisg < hc + hc*hc) {
         const ushort idx  = tiisg - hc;
         const ushort idst = idx & 3;

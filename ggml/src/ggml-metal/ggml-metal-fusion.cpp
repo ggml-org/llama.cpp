@@ -343,6 +343,71 @@ static bool ggml_metal_fusion_check_snake(
     return types_ok && shape_ok && dim_ok && contig_ok && x_in_add == x;
 }
 
+// SCALE + UNARY (sigmoid) + SCALE + DSV4_HC_POST: the trailing hc_post kernel folds the gate
+// chain into its post weights, so the three element-wise nodes are elided
+static bool ggml_metal_fusion_check_hc_post_gate(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    GGML_ASSERT(fusion->ops.size() == 4);
+
+    const ggml_tensor * scale_in  = nodes[0];
+    const ggml_tensor * sigmoid   = nodes[1];
+    const ggml_tensor * scale_out = nodes[2];
+    const ggml_tensor * hc_post   = nodes[3];
+
+    // the chain must feed hc_post->src[2]; a bias on either scale is not handled
+    if (scale_in->op  != GGML_OP_SCALE || scale_in->src[1]  ||
+        sigmoid->op   != GGML_OP_UNARY || sigmoid->src[0] != scale_in ||
+        scale_out->op != GGML_OP_SCALE || scale_out->src[1] || scale_out->src[0] != sigmoid ||
+        hc_post->op   != GGML_OP_DSV4_HC_POST || hc_post->src[2] != scale_out) {
+        return false;
+    }
+
+    const ggml_tensor * post = scale_in->src[0];
+
+    if (ggml_get_unary_op(sigmoid) != GGML_UNARY_OP_SIGMOID ||
+        ggml_get_op_params_f32(scale_in,  1) != 0.0f ||
+        ggml_get_op_params_f32(scale_out, 1) != 0.0f ||
+        post->type != GGML_TYPE_F32 || scale_out->type != GGML_TYPE_F32 ||
+        !ggml_are_same_shape(post, scale_out)) {
+        return false;
+    }
+
+    // the fused kernel runs in place of DSV4_HC_POST, so it has to satisfy the op's own
+    // support constraints, which ggml_metal_device_supports_op never gets to evaluate here
+    const ggml_tensor * x        = hc_post->src[0];
+    const ggml_tensor * residual = hc_post->src[1];
+    const ggml_tensor * comb     = hc_post->src[3];
+
+    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || hc_post->type != GGML_TYPE_F32 ||
+        (comb && comb->type != GGML_TYPE_F32) ||
+        residual->ne[1] != 4 || post->ne[0] != 4 ||
+        (comb && (comb->ne[0] != 4 || comb->ne[1] != 4)) ||
+        !ggml_is_contiguous_rows(x) || !ggml_is_contiguous_rows(residual) ||
+        !ggml_is_contiguous_rows(post) || (comb && !ggml_is_contiguous_rows(comb))) {
+        return false;
+    }
+
+    const int raw_count = (int) fusion->ops_all.size();
+    const int outputs[1] = { node_idxs[idx + 3] };
+
+    if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, raw_count, fusion->ops_all.data(), outputs, 1)) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSION_FULL) {
+        if (!post->data || !hc_post->data) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 #define GGML_METAL_TOPK_MOE_MAX_EXPERTS 1024
 
 // SOFT_MAX + ARGSORT + GET_ROWS (plus optional norm/scale) for MoE routing.
@@ -757,6 +822,10 @@ static const std::vector<ggml_op> ops_moe_reduce_8 = {
 
 static const std::vector<ggml_op> ops_mul_mat_add = { GGML_OP_MUL_MAT, GGML_OP_ADD };
 
+static const std::vector<ggml_op> ops_hc_post_gate = {
+    GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE, GGML_OP_DSV4_HC_POST
+};
+
 static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_NORM_MUL,       ops_norm_mul,               {},     false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_norm_mul_add,           {},     false, ggml_metal_fusion_check_norm },
@@ -785,6 +854,7 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_8,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          {},     false, ggml_metal_fusion_check_ssm_conv_silu },
     { GGML_METAL_FUSION_MUL_MAT_ADD,    ops_mul_mat_add,            {},     false, ggml_metal_fusion_check_mul_mat_add },
+    { GGML_METAL_FUSION_HC_POST_GATE,   ops_hc_post_gate,           {},     true,  ggml_metal_fusion_check_hc_post_gate },
 };
 
 // ---- alloc deps -----------------------------------------------------------
