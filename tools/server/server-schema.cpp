@@ -34,6 +34,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_bool("return_tokens", params.return_tokens))
         ->set_desc("Return the raw generated token ids in the `tokens` field"));
 
+    add((new field_bool("return_last_hidden_state", params.return_last_hidden_state))
+        ->add_alias("return_hidden_state")
+        ->set_desc("Return the last hidden state of the prompt (PromptEOL / NuMind embedding)"));
+
     add((new field_bool("return_progress", params.return_progress))
         ->set_desc("Include prompt processing progress events in stream mode"));
 
@@ -496,6 +500,21 @@ task_params eval_llama_cmpl_schema(
     // eval all fields in the schema
     for (const auto & f : schema) {
         f->eval(ctx, data);
+    }
+
+    if (data.contains("extra_body") && data.at("extra_body").is_object()) {
+        const auto & extra = data.at("extra_body");
+        if (extra.contains("return_last_hidden_state")) {
+            params.return_last_hidden_state = extra.at("return_last_hidden_state").get<bool>();
+        } else if (extra.contains("return_hidden_state")) {
+            params.return_last_hidden_state = extra.at("return_hidden_state").get<bool>();
+        }
+        if (extra.contains("kv_transfer_params") && extra.at("kv_transfer_params").is_object()) {
+            const auto & kv = extra.at("kv_transfer_params");
+            if (kv.contains("return_last_hidden_state")) {
+                params.return_last_hidden_state = kv.at("return_last_hidden_state").get<bool>();
+            }
+        }
     }
 
     // debugging
