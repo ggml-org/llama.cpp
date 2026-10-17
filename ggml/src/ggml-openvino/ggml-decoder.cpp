@@ -1210,10 +1210,13 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     } else if (is_inp_mask(input, op)) {
         // mask
         if (m_is_static) {
-            int attention_size = m_model_params.ctx;
+            // The sliding-window mask spans the window cache, which is smaller than the context once
+            // the context exceeds n_swa + n_ubatch (gemma-4 at -c 4096 -ub 1024: 1536 vs 4096 cells).
+            // Both masks are named "attn_inp_kq_mask", so tell them apart by tensor identity.
+            const bool swa_mask = is_swa_mask(input);
+            int attention_size = swa_mask ? m_model_params.ctx_per_seq_swa * m_model_params.n_seq : m_model_params.ctx;
             if (m_is_prefill && ggml_openvino_npu_kv_slice_enabled()) {
-                attention_size = name.find("swa") != std::string::npos ? m_compute_params.attention_size_swa :
-                                                                         m_compute_params.attention_size;
+                attention_size = swa_mask ? m_compute_params.attention_size_swa : m_compute_params.attention_size;
             }
             input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, attention_size};
         } else if (m_is_stateful) {
