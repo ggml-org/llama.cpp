@@ -1272,7 +1272,7 @@ std::vector<server_task> server_decision_group_tasks(std::vector<server_task> &&
         size_t n_shared = parent.tokens.size() - 1;
         for (size_t j = i + 1; j < end; j++) {
             n_shared = std::min(n_shared, parent.tokens.get_common_prefix(tasks[j].tokens));
-            n_shared = std::min(n_shared, tasks[j].tokens.size() - 1);
+            n_shared = std::min({n_shared, tasks[j].tokens.size() - 1, (size_t) parent.decision.pos_first(), (size_t) tasks[j].decision.pos_first()});
         }
 
         if (end - i < 2 || n_shared == 0) {
