@@ -5,6 +5,73 @@
 #include "gated_delta_net.hpp"
 #include <cmath>
 
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+#    include <sycl/ext/intel/esimd.hpp>
+
+static void launch_gated_delta_net_esimd(const float *   q,
+                                         const float *   k,
+                                         const float *   v,
+                                         const float *   g,
+                                         const float *   beta,
+                                         const float *   curr_state,
+                                         float *         dst,
+                                         float *         state,
+                                         int64_t         H,
+                                         int64_t         n_tokens,
+                                         int64_t         n_seqs,
+                                         int64_t         sq1,
+                                         int64_t         sq2,
+                                         int64_t         sq3,
+                                         int64_t         sv1,
+                                         int64_t         sv2,
+                                         int64_t         sv3,
+                                         int64_t         sb1,
+                                         int64_t         sb2,
+                                         int64_t         sb3,
+                                         int64_t         neqk1,
+                                         int64_t         rq3,
+                                         float           scale,
+                                         int64_t         state_slot_stride,
+                                         int             K,
+                                         dpct::queue_ptr stream) {
+    constexpr int S_v = 128;
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>((size_t) n_seqs, (size_t) H, S_v), sycl::range<3>(1, 1, 16)),
+        [=](sycl::nd_item<3> it) [[intel::sycl_explicit_simd]] {
+            using namespace sycl::ext::intel::esimd;
+            const int col      = it.get_global_id(2);
+            const int h_idx    = it.get_group(1);
+            const int sequence = it.get_group(0);
+            const int iq1      = h_idx % (int) neqk1;
+            const int iq3      = sequence / (int) rq3;
+
+            const int64_t    head      = sequence * H + h_idx;
+            simd<float, S_v> s         = block_load<float, S_v>(curr_state + head * S_v * S_v + col * S_v);
+            float *          state_col = state + head * S_v * S_v + col * S_v;
+            float *          attn      = dst + (sequence * n_tokens * H + h_idx) * S_v + col;
+
+            for (int t = 0; t < n_tokens; ++t) {
+                const simd<float, S_v> q_t      = block_load<float, S_v>(q + iq3 * sq3 + t * sq2 + iq1 * sq1);
+                const simd<float, S_v> k_t      = block_load<float, S_v>(k + iq3 * sq3 + t * sq2 + iq1 * sq1);
+                const float            v_val    = v[sequence * sv3 + t * sv2 + h_idx * sv1 + col];
+                const int64_t          gb       = sequence * sb3 + t * sb2 + h_idx * sb1;
+                const float            g_val    = exp(g[gb]);
+                const float            beta_val = beta[gb];
+
+                // kv = S^T k, delta = (v - g kv) beta, S = g S + k delta, attn = S^T q
+                const float kv              = reduce<float>(s * k_t, std::plus<>());
+                const float delta           = (v_val - g_val * kv) * beta_val;
+                s                           = g_val * s + k_t * delta;
+                attn[(int64_t) t * S_v * H] = reduce<float>(s * q_t, std::plus<>()) * scale;
+
+                const int slot = (int) n_tokens - 1 - t;
+                if (slot < K) {
+                    block_store<float, S_v>(state_col + slot * state_slot_stride, s);
+                }
+            }
+        });
+}
+#endif
 
 template <int S_v, bool KDA, bool keep_rs_t>
 void gated_delta_net_sycl(const float *     q,
@@ -326,6 +393,14 @@ static void ggml_sycl_op_gated_delta_net_impl(ggml_backend_sycl_context & ctx, g
         state_d           = cache->data;
         state_slot_stride = cache->slot_stride;
     }
+
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+    if (!kda && S_v == 128 && g_ggml_sycl_enable_esimd && state_slot_stride % 4 == 0 && (uintptr_t) state_d % 16 == 0) {
+        launch_gated_delta_net_esimd(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens, n_seqs, sq1, sq2, sq3,
+                                     sv1, sv2, sv3, sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
+        return;
+    }
+#endif
 
     if (kda) {
         if (keep_rs) {
