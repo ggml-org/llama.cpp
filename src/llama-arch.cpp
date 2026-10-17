@@ -6,6 +6,7 @@
 #include <vector>
 
 static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+    { LLM_ARCH_DORY,             "dory"             },
     { LLM_ARCH_CLIP,             "clip"             }, // dummy, only used by llama-quantize
     { LLM_ARCH_LLAMA,            "llama"            },
     { LLM_ARCH_LLAMA4,           "llama4"           },
@@ -258,6 +259,16 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
     { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
     { LLM_KV_NUM_LOOPS,                         "%s.num_loops"                         },
+    { LLM_KV_INPUT_LAYER_COUNT,                 "%s.input_layer_count"                 },
+    { LLM_KV_RECURRENT_LAYER_COUNT,             "%s.recurrent_layer_count"             },
+    { LLM_KV_OUTPUT_LAYER_COUNT,                "%s.output_layer_count"                },
+    { LLM_KV_RECURRENT_KV_CACHE_MODE,            "%s.recurrent_kv_cache_mode"            },
+    { LLM_KV_LAYER_PATTERN,                     "%s.layer_pattern"                     },
+    { LLM_KV_ROPE_PROFILE,                      "%s.rope.profile"                      },
+    { LLM_KV_ROPE_FREQ_BASE_2,                   "%s.rope.freq_base_2"                   },
+    { LLM_KV_INIT_STD,                          "%s.init_std"                          },
+    { LLM_KV_ALPHA_INIT,                        "%s.alpha_init"                        },
+    { LLM_KV_GATE_INIT,                         "%s.gate_init"                         },
     { LLM_KV_SKIP_LOOP_FINAL_NORM,              "%s.skip_loop_final_norm"              },
     { LLM_KV_HRM_LAYERS_PER_STACK,              "%s.hrm.layers_per_stack"              },
     { LLM_KV_HRM_H_CYCLES,                      "%s.hrm.h_cycles"                      },
@@ -477,6 +488,12 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 };
 
 static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+    { LLM_TENSOR_RESIDUAL_ALPHA,                         "blk.%d.residual_alpha" },
+    { LLM_TENSOR_ATTN_QK_SCALE,                          "blk.%d.attn_qk_scale" },
+    { LLM_TENSOR_ATTN_GATE_SCALE,                        "blk.%d.attn_gate_scale" },
+    { LLM_TENSOR_FFN_GATE_SCALE,                         "blk.%d.ffn_gate_scale" },
+    { LLM_TENSOR_FFN_UP_SCALE,                           "blk.%d.ffn_up_scale" },
+    { LLM_TENSOR_OUTPUT_SCALE,                          "output_scale" },
     { LLM_TENSOR_TOKEN_EMBD,                             "token_embd" },
     { LLM_TENSOR_OUTPUT_NORM,                            "output_norm" },
     { LLM_TENSOR_OUTPUT_NORM_LFM2,                       "token_embd_norm" }, // fix for wrong tensor name
@@ -810,6 +827,12 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
 // example: https://github.com/ggml-org/llama.cpp/pull/17548
 //
 static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+    {LLM_TENSOR_RESIDUAL_ALPHA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_ATTN_QK_SCALE,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_ATTN_GATE_SCALE,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_FFN_GATE_SCALE,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_FFN_UP_SCALE,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_OUTPUT_SCALE,              {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_TOKEN_EMBD,                 {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_POS_EMBD,                   {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_TOKEN_TYPES,                {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},

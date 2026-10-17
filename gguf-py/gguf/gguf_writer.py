@@ -984,6 +984,30 @@ class GGUFWriter:
     def add_num_loops(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NUM_LOOPS.format(arch=self.arch), count)
 
+    def add_input_layer_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.INPUT_LAYER_COUNT.format(arch=self.arch), count)
+
+    def add_recurrent_layer_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.RECURRENT_LAYER_COUNT.format(arch=self.arch), count)
+
+    def add_output_layer_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.OUTPUT_LAYER_COUNT.format(arch=self.arch), count)
+
+    def add_recurrent_kv_cache_mode(self, value: str) -> None:
+        self.add_string(Keys.LLM.RECURRENT_KV_CACHE_MODE.format(arch=self.arch), value)
+
+    def add_layer_pattern(self, value: str) -> None:
+        self.add_string(Keys.LLM.LAYER_PATTERN.format(arch=self.arch), value)
+
+    def add_init_std(self, value: float) -> None:
+        self.add_float32(Keys.LLM.INIT_STD.format(arch=self.arch), value)
+
+    def add_alpha_init(self, value: float) -> None:
+        self.add_float32(Keys.LLM.ALPHA_INIT.format(arch=self.arch), value)
+
+    def add_gate_init(self, value: float) -> None:
+        self.add_float32(Keys.LLM.GATE_INIT.format(arch=self.arch), value)
+
     def add_skip_loop_final_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SKIP_LOOP_FINAL_NORM.format(arch=self.arch), value)
 
@@ -1166,6 +1190,12 @@ class GGUFWriter:
 
     def add_rope_freq_base(self, value: float) -> None:
         self.add_float32(Keys.Rope.FREQ_BASE.format(arch=self.arch), value)
+
+    def add_rope_freq_base_2(self, value: float) -> None:
+        self.add_float32(Keys.Rope.FREQ_BASE_2.format(arch=self.arch), value)
+
+    def add_rope_profile(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.Rope.PROFILE.format(arch=self.arch), value)
 
     def add_rope_scaling_type(self, value: RopeScalingType) -> None:
         self.add_string(Keys.Rope.SCALING_TYPE.format(arch=self.arch), value.value)
