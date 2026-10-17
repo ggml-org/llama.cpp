@@ -435,6 +435,26 @@ static void test_decision_escape(testing & t) {
     });
 }
 
+//
+// server_decision_context::parse_questions
+//
+
+static void test_decision_depth(testing & t) {
+    t.test("deep state", [](testing & t) {
+        const size_t deep = 1000;
+        const json body = json::parse(R"({"state": )" + std::string(deep, '[') + std::string(deep, ']') +
+                                      R"(, "questions": {"q": {"type": "noul", "instructions": "Is it nested?"}}})");
+        server_decision_context ctx;
+        std::string error;
+        try {
+            ctx.parse_questions(body);
+        } catch (const std::exception & e) {
+            error = e.what();
+        }
+        t.assert_true("rejected as nested: " + error, error.find("nested") != std::string::npos);
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -454,6 +474,7 @@ int main(int argc, char ** argv) {
     t.test("lora_helpers",  test_lora_helpers);
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
+    t.test("decision_depth",  test_decision_depth);
 
     return t.summary();
 }

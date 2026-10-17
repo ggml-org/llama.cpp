@@ -181,6 +181,8 @@ static bool decision_is_payload(const json & val) {
 }
 
 std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
+    // the state, instructions and criteria are walked with recursion when the prompt is built
+    common_chat_check_json_depth(body);
     // lfm2-d1, lfm2-d1-omni and vllm-d3 accept a null state, for example to ask about images only
     if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1 && type != COMMON_DECISION_TYPE_LFM2_D1_OMNI && type != COMMON_DECISION_TYPE_VLLM_D3)) {
         throw std::invalid_argument("\"state\" must be provided");
