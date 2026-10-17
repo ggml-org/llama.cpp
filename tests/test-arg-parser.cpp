@@ -148,7 +148,19 @@ static void test(void) {
         assert(rejects(automatic, -1, "no MTP"));
         automatic.speculative.draft.mparams.path = "standalone.gguf";
         assert(rejects(automatic, 1, "embedded"));
+        assert(common_kv_stream_auxiliary_layers(automatic, 0, true) == 0);
+        assert(common_kv_stream_auxiliary_layers(automatic, 4, true) == 0);
+        automatic.kv_stream_auxiliary_layers = 4;
+        bool shared_rejected=false;
+        try { common_kv_stream_auxiliary_layers(automatic, 4, true); }
+        catch (const std::invalid_argument &) { shared_rejected=true; }
+        assert(shared_rejected);
+        automatic.kv_stream_auxiliary_layers = 0;
         automatic.speculative.draft.mparams.path.clear();
+        shared_rejected=false;
+        try { common_kv_stream_auxiliary_layers(automatic, 0, true); }
+        catch (const std::invalid_argument &) { shared_rejected=true; }
+        assert(shared_rejected);
         automatic.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3);
         assert(rejects(automatic, 1, "only draft-mtp"));
         automatic.speculative.types = {COMMON_SPECULATIVE_TYPE_NONE};

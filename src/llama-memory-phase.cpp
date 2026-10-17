@@ -60,6 +60,27 @@ bool llama_memory_cache_bound_make(const llama_memory_cache_requirement & r,
     return true;
 }
 
+bool llama_memory_cache_read_binding_make(const llama_memory_cache_requirement & alias,
+        const llama_memory_cache_requirement & source, uint32_t first_position, uint32_t end_position,
+        uint64_t lease_revision, llama_memory_cache_read_binding & output) noexcept {
+    llama_memory_cache_bound bound;
+    if (alias.role != llama_memory_cache_role::read_only_source || !lease_revision ||
+            first_position > end_position || end_position > source.history_rows ||
+            !llama_memory_cache_bound_make(alias,&source,bound) ||
+            end_position-first_position > bound.capacity_rows) return false;
+    output={alias,first_position,end_position,lease_revision};
+    return true;
+}
+
+bool llama_memory_cache_read_binding_valid(const llama_memory_cache_read_binding & binding,
+        const llama_memory_cache_requirement & source, uint32_t first_position, uint32_t end_position,
+        uint64_t lease_revision) noexcept {
+    if (binding.first_position != first_position || binding.end_position != end_position ||
+            binding.lease_revision != lease_revision) return false;
+    llama_memory_cache_read_binding checked;
+    return llama_memory_cache_read_binding_make(binding.cache,source,first_position,end_position,lease_revision,checked);
+}
+
 bool llama_memory_workload_requirement_valid(const llama_memory_workload_requirement & r,
         const llama_memory_cache_requirement & cache) noexcept {
     if (!r.serial || !r.input_rows || r.input_rows > r.microbatch_rows || r.output_rows > r.input_rows ||

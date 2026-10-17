@@ -1297,10 +1297,20 @@ const char * common_streamed_dflash_config_error(const common_params & params) {
     return nullptr;
 }
 
-uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers) {
+uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers,
+        bool shares_target_kv) {
     if (!common_params_uses_streamed_mtp(params)) {
         if (params.kv_stream_auxiliary_layers) {
             throw std::invalid_argument("the auxiliary KV layer setting requires streamed embedded MTP");
+        }
+        return 0;
+    }
+    if (shares_target_kv) {
+        if (!params.speculative.has_dft() || params.kv_stream_auxiliary_layers ||
+                std::any_of(params.speculative.types.begin(), params.speculative.types.end(), [](auto type) {
+                    return type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+                })) {
+            throw std::invalid_argument("shared-target MTP requires a separate assistant and no auxiliary KV layers or other speculative mode");
         }
         return 0;
     }
@@ -1375,7 +1385,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     try {
-        cparams.kv_stream_auxiliary_layers = common_kv_stream_auxiliary_layers(params, llama_model_n_layer_nextn(model));
+        char architecture[32] = {};
+        const bool shared_target_kv = params.speculative.has_dft() &&
+            llama_model_meta_val_str(model,"general.architecture",architecture,sizeof(architecture)) == 6 &&
+            std::strcmp(architecture,"gemma4") == 0;
+        cparams.kv_stream_auxiliary_layers = common_kv_stream_auxiliary_layers(
+            params, llama_model_n_layer_nextn(model), shared_target_kv);
     } catch (const std::invalid_argument & error) {
         COM_ERR("%s\n", error.what());
         return;

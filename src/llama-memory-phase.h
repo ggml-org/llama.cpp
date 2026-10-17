@@ -52,6 +52,22 @@ struct llama_memory_cache_bound {
 bool llama_memory_cache_bound_make(const llama_memory_cache_requirement & requirement,
         const llama_memory_cache_requirement * source, llama_memory_cache_bound & output) noexcept;
 
+// Logical read validity only; the reader must also retain storage and its final GPU completion.
+struct llama_memory_cache_read_binding {
+    llama_memory_cache_requirement cache;
+    uint32_t first_position = 0, end_position = 0;
+    uint64_t lease_revision = 0;
+};
+
+// Bind one read-only source range without allocating storage. Failure preserves output.
+bool llama_memory_cache_read_binding_make(const llama_memory_cache_requirement & alias,
+        const llama_memory_cache_requirement & source, uint32_t first_position, uint32_t end_position,
+        uint64_t lease_revision, llama_memory_cache_read_binding & output) noexcept;
+// Reject a stale logical prefix or physical binding even if its raw address is unchanged.
+bool llama_memory_cache_read_binding_valid(const llama_memory_cache_read_binding & binding,
+        const llama_memory_cache_requirement & source, uint32_t first_position, uint32_t end_position,
+        uint64_t lease_revision) noexcept;
+
 enum class llama_memory_text_phase {
     unspecified,
     prefill,
