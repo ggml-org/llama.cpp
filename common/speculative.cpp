@@ -1519,6 +1519,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
 
+        // the nextn extraction changes the target graph shape after its initial warmup, so warm up again
+        if (this->params.warmup) {
+            common_warmup(ctx_tgt, llama_n_batch(ctx_tgt));
+        }
+
         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
