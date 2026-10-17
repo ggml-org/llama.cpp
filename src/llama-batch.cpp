@@ -475,7 +475,7 @@ bool llama_batch_allocr::init(
 
                 cur_seq_set[seq_id] &= seq_set[i];
 
-                if (cur_seq_set[seq_id].none()) {
+                if (cur_seq_set[seq_id] != seq_set[i]) {
                     LLAMA_LOG_ERROR("%s: sequence %d belongs to incompatible sequence sets (not allowed)\n", __func__, seq_id);
                     return false;
                 }
