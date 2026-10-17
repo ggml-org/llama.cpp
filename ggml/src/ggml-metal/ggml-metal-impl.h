@@ -782,6 +782,38 @@ typedef struct {
 } ggml_metal_kargs_im2col;
 
 typedef struct {
+    uint64_t ofs0;     // elements to the next image
+    uint64_t ofs1;     // elements to the next channel
+    uint64_t ofs2;     // elements to the next depth slice
+    uint64_t ofs3;     // elements to the next row
+    int32_t  IW;
+    int32_t  IH;
+    int32_t  ID;
+    int32_t  OW;
+    int32_t  OH;
+    int32_t  OD;
+    int32_t  KW;
+    int32_t  KH;
+    int32_t  KD;
+    int32_t  IC;
+    int32_t  N;
+    // pre-computed on CPU to save per-thread work
+    int32_t  OHOW;     // OH*OW
+    int32_t  KHKW;     // KH*KW
+    int32_t  KDHW;     // KD*KH*KW
+    int32_t  CDHW;     // IC*KD*KH*KW
+    int32_t  s0;
+    int32_t  s1;
+    int32_t  s2;
+    int32_t  p0;
+    int32_t  p1;
+    int32_t  p2;
+    int32_t  d0;
+    int32_t  d1;
+    int32_t  d2;
+} ggml_metal_kargs_im2col_3d;
+
+typedef struct {
     int32_t  IW;
     int32_t  IH;
     int32_t  ID;

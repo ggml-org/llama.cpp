@@ -2363,6 +2363,36 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_im2col(ggml_meta
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_im2col_3d(
+        ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_IM2COL_3D);
+
+    GGML_TENSOR_LOCALS(int64_t, ne0, op->src[0], ne);
+
+    GGML_ASSERT(op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->type         == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
+
+    const int64_t KD = ne02;
+    const int64_t KH = ne01;
+    const int64_t KW = ne00;
+
+    GGML_ASSERT(KD*KH*KW <= 256 && "im2col_3d: kernel window too large");
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_im2col_3d_%s", ggml_type_name(op->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_transpose_1d(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_CONV_TRANSPOSE_1D);
 
