@@ -64,6 +64,9 @@ extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
 extern int g_ggml_sycl_mmvq_wide;
+extern int g_ggml_sycl_enable_xmx_esimd;
+extern int g_ggml_sycl_xmx_max_cols;
+extern int g_ggml_sycl_xmx_glu_max_cols;
 extern int g_ggml_sycl_prioritize_dmmv;
 
 // Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
@@ -223,6 +226,41 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
+#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
+#    define GGML_SYCL_MMVQ_HAS_XMX
+#endif // __INTEL_LLVM_COMPILER
+
+// default of the most columns the XMX mul_mat_vec_q handles (GGML_SYCL_XMX_MAX_COLS), wider batches use other kernels
+#define GGML_SYCL_XMX_MAX_COLS_DEFAULT 80
+
+// most columns the fused gate and up XMX kernel is built for, GGML_SYCL_XMX_GLU_MAX_COLS can only lower this limit
+#define GGML_SYCL_XMX_GLU_MAX_COLS 16
+
+static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// the DPAS shapes and 2D block loads used by the XMX kernel are those of Xe2
+static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31 ||
+           arch == gpu_arch::intel_gpu_lnl_m;
+}
+
+// fewest columns for which the XMX kernel is faster than the other kernels
+static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
+    return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K ? 1 : 2;
+}
+
 static int g_all_sycl_device_count = -1;
 static bool g_ggml_backend_sycl_buffer_type_initialized = false;
 
@@ -305,6 +343,10 @@ struct ggml_sycl_device_info {
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
+
+static inline bool ggml_sycl_xmx_enabled(int device) {
+    return g_ggml_sycl_enable_xmx_esimd && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
+}
 
 static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 
