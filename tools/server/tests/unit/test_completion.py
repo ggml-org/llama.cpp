@@ -1,3 +1,4 @@
+import http.client
 import pytest
 import requests
 import time
@@ -91,6 +92,30 @@ def test_completion_stream_vs_non_stream():
     for data in res_stream:
         content_stream += data["content"]
     assert content_stream == res_non_stream.body["content"]
+
+
+def test_completion_connection_reuse():
+    server.start()
+    conn = http.client.HTTPConnection(server.server_host, server.server_port, timeout=30)
+    try:
+        conn.connect()
+        conn.auto_open = 0
+        original_socket = conn.sock
+        conn.request("POST", "/completion", json.dumps({
+            "prompt": "Hello", "n_predict": 4, "stream": True,
+        }), {"Content-Type": "application/json"})
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert response.chunked
+            assert not response.will_close
+            assert response.read()
+        conn.request("GET", "/health")
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert json.loads(response.read())["status"] == "ok"
+        assert conn.sock is original_socket
+    finally:
+        conn.close()
 
 
 def test_completion_with_openai_library():
