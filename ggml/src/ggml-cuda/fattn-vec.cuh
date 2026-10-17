@@ -374,6 +374,9 @@ static __global__ void flash_attn_ext_vec(
             }
 #endif // V_DOT2_F32_F16_AVAILABLE
         }
+
+        // KQ is overwritten in the next iteration, wait for all lanes to finish reading it
+        ggml_cuda_syncwarp();
     }
 
     if (sinks && blockIdx.y == 0) {
