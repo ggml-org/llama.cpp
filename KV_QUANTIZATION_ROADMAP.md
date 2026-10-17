@@ -48,7 +48,7 @@ Tests cover all candidate layouts, asymmetric pairs, exact fits, one-byte-short 
 
 Acceptance: no Q8/Q4 size assumptions, no hidden reserve, no out-of-bounds access under focused sanitizers.
 
-Status: pending.
+Status: completed as a qualification-only change: the existing sizing implementation passes the expanded checks without alteration. ASan/UBSan passes partition/minimum/exact-fit accounting (36 tests/153360 assertions), host layouts (8/386), row publication (12/4258) and extended lease population (19/339). CUDA passes model ownership/admission and 64-pair auxiliary phase quotes (34/4341), all 81 writer format combinations with partial/cross-page rows (12/4260), lease population (20/339), strict host registration (9/394) and unchanged recurrent spill (22/3769). Unsupported IQ4_NL native attention is rejected at width one before model allocations. Logs are `/tmp/kq3-{policy,host,writer,lease,model-cuda,writer-cuda,lease-cuda,host-cuda,recurrent-cuda}.log`; no numerical tolerance or original failure assertion is weakened. Production is restored healthy.
 
 ## KQ4 - Capability-based MTP integration
 

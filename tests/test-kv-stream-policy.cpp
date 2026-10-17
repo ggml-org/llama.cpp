@@ -49,6 +49,50 @@ static uint32_t reference_target(uint32_t pool, uint32_t layers, uint32_t active
 
 int main() {
     testing t;
+    t.test("all_cache_pairs_quote_exact_minimum_and_seventeen_layer_partitions", [](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL};
+        for (auto key : types) for (auto value : types) for (uint32_t layers : {1u, 16u, 17u}) {
+            auto c = config(64, layers);
+            c.shape.type_k = key;
+            c.shape.type_v = value;
+            c.capabilities.k.type = key;
+            c.capabilities.v.type = value;
+            ggml_kv_stream_layout page;
+            if (!t.assert_true(ggml_kv_stream_layout_make(c.shape, 256, page).status == ggml_kv_stream_status::success)) return;
+            size_t minimum = 0;
+            if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(c, minimum).status == status::success)) return;
+            t.assert_equal((size_t(layers)+1)*page.bytes, minimum);
+            c.pool_bytes = minimum;
+            llama_kv_stream_policy_state state;
+            if (!start(t, c, state)) return;
+            auto short_config = c;
+            --short_config.pool_bytes;
+            llama_kv_stream_policy_state untouched;
+            untouched.budget.pool_bytes = 77;
+            t.assert_true(llama_kv_stream_policy_initialize(short_config, untouched).status != status::success);
+            t.assert_equal(size_t(77), untouched.budget.pool_bytes);
+            c.pool_bytes = size_t(layers*8+16)*page.bytes+127;
+            if (layers == 17) c.caches = {{101, 16}, {202, 1}};
+            if (!start(t, c, state)) return;
+            llama_kv_stream_policy_decision decision;
+            if (!t.assert_true(llama_kv_stream_policy_step(c, state, observe(13), decision).status == status::success)) return;
+            llama_kv_stream_policy_layout layout;
+            if (!t.assert_true(llama_kv_stream_policy_layout_make(c, decision.next, 13*256-1, layout).status == status::success)) return;
+            size_t accounted = layout.ring.bytes;
+            for (const auto & layer : layout.layers) {
+                t.assert_equal(layer.capacity_pages*page.k_bytes, layer.planes.k_bytes);
+                t.assert_equal(layer.capacity_pages*page.v_bytes, layer.planes.v_bytes);
+                accounted += layer.planes.bytes;
+            }
+            t.assert_equal(layout.conversion_offset, accounted);
+            t.assert_equal(c.pool_bytes, accounted+layout.conversion_bytes+decision.next.budget.unused_bytes);
+            if (layers == 17) {
+                t.assert_equal(uint64_t(202), layout.layers.back().cache_id);
+                t.assert_equal(0u, layout.layers.back().cache_layer);
+            }
+        }
+    });
     t.test("fresh_grant_restore_accepts_equal_smaller_and_larger_phase_budgets", [](testing & t) {
         const auto c = config(358);
         for (bool decode : {false,true}) for (size_t bytes : {c.pool_bytes,size_t(64)*425984,size_t(512)*425984}) {

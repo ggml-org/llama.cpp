@@ -211,6 +211,30 @@ int main(int argc, char ** argv) {
         return 0;
     }
     testing t;
+    t.test("all_cache_pairs_publish_partial_and_cross_page_rows_like_stock", [&](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL};
+        for (auto key : types) for (auto value : types) {
+            writer_fixture f(backend.get(), cuda, key, value);
+            if (!t.assert_true(f.resident->configure_writes(512))) return;
+            for (bool values : {false, true}) for (size_t count : {1u, 17u, 257u}) {
+                encoder control(f, count, values ? value : key);
+                control.run();
+                std::vector<uint8_t> expected(count*control.row_bytes);
+                ggml_backend_tensor_get(control.output, expected.data(), 0, expected.size());
+                if (!t.assert_true(f.resident->write_rows(0, values ? ggml_kv_stream_operand::v : ggml_kv_stream_operand::k,
+                        255, control.source))) return;
+                if (!t.assert_true(f.resident->synchronize(1024))) return;
+                llama_kv_stream_host_layer layer;
+                if (!t.assert_true(f.host->layer(0, layer))) return;
+                const auto * plane = static_cast<const uint8_t *>(values ? layer.v : layer.k);
+                t.assert_true(std::memcmp(plane+255*control.row_bytes, expected.data(), expected.size()) == 0);
+                t.assert_true(std::all_of(plane, plane+255*control.row_bytes, [](uint8_t byte) { return byte == 0; }));
+                t.assert_true(std::all_of(plane+512*control.row_bytes, plane+513*control.row_bytes,
+                    [](uint8_t byte) { return byte == 0; }));
+            }
+        }
+    });
     t.test("writer_quote_uses_independent_row_traits_and_bounded_tiles", [&](testing & t) {
         const ggml_type types[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
             GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};

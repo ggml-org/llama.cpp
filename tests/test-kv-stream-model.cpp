@@ -323,6 +323,18 @@ int main(int argc,char ** argv) {
         t.assert_true(bool(model));
         t.assert_equal(uint32_t(0),unavailable);
     });
+    t.test("native_attention_admission_rejects_unsupported_formats_before_allocating", [&](testing & t) {
+        for (auto pair : {std::pair{GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL},
+                std::pair{GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_0}, std::pair{GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL}}) {
+            fixture f(backend.get(), true, pair.first, pair.second, 513, false, 1);
+            kv_allocation_probe allocations(dev);
+            uint32_t unavailable = 0;
+            auto model = llama_kv_stream_model::create({backend.get(), f.host->config(), f.policy.pool_bytes, 256, 4}, &unavailable);
+            t.assert_true(!model);
+            t.assert_equal(1u, unavailable);
+            t.assert_equal(size_t(0), allocations.calls);
+        }
+    });
     t.test("native_attention_admission_rejects_missing_width_before_allocating", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         for (uint32_t rows : {1u,2u,3u,4u,8u,16u,64u,128u,256u}) {
@@ -1673,6 +1685,32 @@ int main(int argc,char ** argv) {
                     requirements.pool_decode_min_bytes);
                 t.assert_equal(minimum,requirements.pool_bytes);
             }
+        }
+    });
+    t.test("auxiliary_phase_quotes_follow_every_native_cache_pair", [&](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1};
+        for (auto key : types) for (auto value : types) {
+            fixture f(backend.get(), true, key, value, 1025, false, 2, 2, 7);
+            if (!f.policy.capabilities.direct_pair) continue;
+            auto policy = f.policy;
+            policy.layers = 3;
+            size_t minimum = 0;
+            if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(policy, minimum).status ==
+                    llama_kv_stream_policy_status::success)) return;
+            ggml_kv_stream_execution page;
+            if (!t.assert_true(ggml_kv_stream_resolve(policy.shape, policy.capabilities, 256, page).status ==
+                    ggml_kv_stream_status::success)) return;
+            llama_kv_stream_model_config config{backend.get(), f.host->config(), minimum, 4, 4};
+            config.auxiliary_cache_layers = 1;
+            config.shared_device_memory_bytes = 64*1048576;
+            auto model = llama_kv_stream_model::create(config);
+            if (!t.assert_true(bool(model))) return;
+            llama_kv_stream_memory_requirements quote;
+            if (!t.assert_true(model->memory_requirements(quote))) return;
+            t.assert_equal(5*page.storage.bytes+page.conversion.bytes, quote.pool_decode_min_bytes);
+            t.assert_equal(minimum, quote.pool_bytes);
+            t.assert_true(quote.attention_prefill_bytes >= model->auxiliary_cache()->host()->layout().bytes);
         }
     });
     t.test("mtp_decode_phase_preflight_accepts_exact_arena_and_rejects_one_byte_short", [&](testing & t) {

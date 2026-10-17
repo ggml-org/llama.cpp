@@ -228,7 +228,9 @@ int main(int argc, char ** argv) {
 
     t.test("prefetched_population_preserves_encoded_bytes_across_cache_formats", [&](testing & t) {
         for (const auto & types : {std::pair{GGML_TYPE_F16,GGML_TYPE_F16},std::pair{GGML_TYPE_BF16,GGML_TYPE_BF16},
-                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q4_1},
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q8_0},
+                std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q5_1},std::pair{GGML_TYPE_F32,GGML_TYPE_Q8_0},
+                std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q4_1},
                 std::pair{GGML_TYPE_Q4_0,GGML_TYPE_Q8_0}}) {
             mtp_fixture f(cuda,761,0,3,types.first,types.second);
             auto transfer=llama_kv_stream_transfer::create(f.backend.get());
