@@ -365,7 +365,7 @@ static __global__ void flash_attn_ext_vec(
 
 #pragma unroll
         for (int k0 = 0; k0 < warp_size; k0 += V_cols_per_iter) {
-            const int k = threadIdx.y*warp_size + k0 + (nthreads_V == warp_size ? 0 : threadIdx.x / nthreads_V);
+            const int k = threadIdx.y*warp_size + (warp_size == 64 ? (threadIdx.x / nthreads_V)*nthreads_V + k0/V_cols_per_iter : + k0 + (nthreads_V == warp_size ? 0 : threadIdx.x / nthreads_V));
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
             half2 KQ_k[ncols];
