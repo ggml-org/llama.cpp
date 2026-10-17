@@ -1395,4 +1395,9 @@ typedef struct {
     int64_t ne;
 } ggml_metal_kargs_silu_back;
 
+typedef struct {
+    int64_t ne00;
+    int64_t nrows;
+} ggml_metal_kargs_cross_entropy_loss;
+
 #endif // GGML_METAL_IMPL
