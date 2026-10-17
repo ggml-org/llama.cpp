@@ -336,6 +336,21 @@ static bool fast_bf16_hardware_available(const int cc) {
             || (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_AMPERE);
 }
 
+// HELPER 1
+// NVIDIA Tensor-Op GEMM algorithm selection.
+// Use the default algorithm on pre-Volta NVIDIA GPUs (e.g. Kepler).
+// Preserve existing behavior for non-NVIDIA backends.
+static bool cublas_tensor_op_hardware_available(const int cc) {
+    return !GGML_CUDA_CC_IS_NVIDIA(cc) || cc >= GGML_CUDA_CC_VOLTA;
+}
+
+// HELPER 2
+// TF32 Tensor Core math is supported on NVIDIA Ampere (SM 8.0) and newer.
+static bool cublas_tf32_hardware_available(const int cc) {
+    return GGML_CUDA_CC_IS_NVIDIA(cc) &&
+           cc >= GGML_CUDA_CC_AMPERE;
+}
+
 static bool bf16_mma_hardware_available(const int cc) {
     return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_AMPERE) ||
         GGML_CUDA_CC_IS_CDNA(cc) || cc >= GGML_CUDA_CC_RDNA3 ||
@@ -1530,23 +1545,48 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
+    
     cublasHandle_t cublas_handle() {
-        if (cublas_handles[device][curr_stream_no] == nullptr) {
-            ggml_cuda_set_device(device);
-            CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
-            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device][curr_stream_no], CUBLAS_TF32_TENSOR_OP_MATH));
-            CUBLAS_CHECK(cublasSetStream(cublas_handles[device][curr_stream_no], stream()));
+    if (cublas_handles[device][curr_stream_no] == nullptr) {
+        ggml_cuda_set_device(device);
+        CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
+
+        const int cc = ggml_cuda_info().devices[device].cc;
+        const cublasMath_t math_mode =
+            cublas_tf32_hardware_available(cc)
+                ? CUBLAS_TF32_TENSOR_OP_MATH
+                : CUBLAS_DEFAULT_MATH;
+
+        CUBLAS_CHECK(cublasSetMathMode(
+            cublas_handles[device][curr_stream_no],
+            math_mode));
+
+        CUBLAS_CHECK(cublasSetStream(
+            cublas_handles[device][curr_stream_no],
+            stream()));
+
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2))
-            if (cublas_workspace_sizes[device] == 0) {
-                const int cc = ggml_cuda_info().devices[device].cc;
-                cublas_workspace_sizes[device] = (cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
-            }
-            CUDA_CHECK(cudaMalloc(&cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
-            CUBLAS_CHECK(cublasSetWorkspace(cublas_handles[device][curr_stream_no], cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
-#endif
+        if (cublas_workspace_sizes[device] == 0) {
+            cublas_workspace_sizes[device] =
+                (cc >= GGML_CUDA_CC_HOPPER)
+                    ? 32 * 1024 * 1024
+                    : 4 * 1024 * 1024;
         }
-        return cublas_handles[device][curr_stream_no];
+
+        CUDA_CHECK(cudaMalloc(
+            &cublas_workspaces[device][curr_stream_no],
+            cublas_workspace_sizes[device]));
+
+        CUBLAS_CHECK(cublasSetWorkspace(
+            cublas_handles[device][curr_stream_no],
+            cublas_workspaces[device][curr_stream_no],
+            cublas_workspace_sizes[device]));
+#endif
     }
+
+    return cublas_handles[device][curr_stream_no];
+}
+
 
     // pool
     std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
