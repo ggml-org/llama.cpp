@@ -91,16 +91,9 @@ def report_simple(tr, args):
         src = ",".join(src) if isinstance(src, list) else str(src)  # older converter output: a list
         by_src[src].append(e["dur"] / 1000)
         wasted[src] += e["args"].get("computed") is False
-    print("\nloads (issue -> resident of one expert matrix, merged over its pieces and sources) by source set; "
-          "not computed = wrong guesses")
+    print("\nloads (issue -> resident, merged over pieces, tensors and sources) by source set; not computed = wrong guesses")
     for src, v in sorted(by_src.items()):
         print(f"{src:>34} {len(v):>7} spans  median {med(v):8.2f} ms  p95 {pct(v, 0.95):8.2f} ms  not computed {wasted[src]:>6}")
-    by_mat = defaultdict(list)
-    for e in tr.loads:
-        by_mat[e["args"].get("matrix") or "?"].append(e["dur"] / 1000)
-    print("loads by matrix")
-    for m, v in sorted(by_mat.items()):
-        print(f"{m:>34} {len(v):>7} spans  median {med(v):8.2f} ms  p95 {pct(v, 0.95):8.2f} ms")
     layer_rows = {}
     if args.layers:
         n_tok = max(1, len(tr.tokens))
