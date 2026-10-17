@@ -1,6 +1,7 @@
 #include "llama.h"
 #include "../src/llama-memory-hybrid.h"
 #include "../src/llama-context.h"
+#include "../src/llama-model.h"
 #include "../src/llama-kv-stream-model.h"
 #include "../src/llama-kv-stream-logical-cache.h"
 #include "../src/llama-memory-recurrent-spill.h"
@@ -661,6 +662,49 @@ int main(int argc,char ** argv) {
     if (baseline) return 77;
 #endif
     testing t;
+    t.test("memory_resources_resolve_cache_roles_without_hybrid_casts", [](testing & t) {
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_GEMMA4, llama_model_default_params()));
+        auto & hp = model->hparams;
+        hp = {};
+        hp.n_layer_all = 2;
+        hp.n_embd = 64;
+        hp.n_head_arr.fill(2);
+        hp.n_head_kv_arr.fill(1);
+        hp.n_embd_head_k_full = hp.n_embd_head_v_full = 32;
+        hp.n_embd_head_k_swa = hp.n_embd_head_v_swa = 32;
+        hp.n_swa = 128;
+        hp.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        hp.is_swa_impl[0] = true;
+        llama_kv_cache_iswa local(*model, GGML_TYPE_F32, GGML_TYPE_F32, false, false, false,
+                true, 256, 1, 64, 1, nullptr, nullptr, nullptr, nullptr);
+        const auto view = llama_memory_kv_resources_get(&local);
+        t.assert_true(view.full == local.get_base());
+        t.assert_true(view.bounded == local.get_swa());
+        t.assert_true(view.recurrent == nullptr);
+        auto ctx = local.init_full();
+        const auto * iswa = dynamic_cast<llama_kv_cache_iswa_context *>(ctx.get());
+        t.assert_true(iswa && llama_memory_kv_context_get(ctx.get()) == iswa->get_base());
+        t.assert_true(llama_memory_kv_resources_get(view.full).full == view.full);
+        auto full_ctx = view.full->init_full();
+        t.assert_true(llama_memory_kv_context_get(full_ctx.get()) == dynamic_cast<llama_kv_cache_context *>(full_ctx.get()));
+        t.assert_true(!llama_memory_kv_resources_get(nullptr).full);
+        t.assert_true(!llama_memory_kv_context_get(nullptr));
+
+        const auto skip = [](int32_t) { return false; };
+        llama_memory_hybrid hybrid(*model, GGML_TYPE_F32, GGML_TYPE_F32, false, 256, 1, 0,
+                LLAMA_SWA_TYPE_NONE, GGML_TYPE_F32, GGML_TYPE_F32, 1, 1, 0,
+                false, true, skip, skip);
+        const auto hybrid_view = llama_memory_kv_resources_get(&hybrid);
+        t.assert_true(hybrid_view.full == hybrid.get_mem_attn());
+        t.assert_true(hybrid_view.recurrent == hybrid.get_mem_recr());
+        t.assert_true(hybrid_view.bounded == nullptr);
+        auto hybrid_ctx = hybrid.init_full();
+        const auto * hybrid_cast = dynamic_cast<llama_memory_hybrid_context *>(hybrid_ctx.get());
+        t.assert_true(hybrid_cast && llama_memory_kv_context_get(hybrid_ctx.get()) == hybrid_cast->get_attn());
+        t.assert_true(!llama_memory_kv_resources_get(hybrid.get_mem_recr()).full);
+        auto recurrent_ctx = hybrid.get_mem_recr()->init_full();
+        t.assert_true(!llama_memory_kv_context_get(recurrent_ctx.get()));
+    });
     test_kv_stream_bit_exact_comparator(t);
     t.test("short_dflash_profiles_keep_native_controls_physically_bounded", [&](testing & t) {
         const auto original = dflash_exact_profiles(false, false, false, false, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0);

@@ -583,11 +583,11 @@ llama_context::llama_context(
         }
 
         memory.reset(model.create_memory(params_mem, cparams));
+        kv_resources = llama_memory_kv_resources_get(memory.get());
         if (cparams.kv_streaming()) {
-            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(memory.get());
-            auto * stream=hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+            auto * stream=kv_resources.full ? kv_resources.full->get_kv_stream() : nullptr;
             cparams.kv_stream_prefill=stream && stream->bounded_prefill();
-            cparams.kv_stream_mask=stream && stream->compact_prefill_mask() && hybrid->get_mem_attn()->supports_mask_bounds();
+            cparams.kv_stream_mask=stream && stream->compact_prefill_mask() && kv_resources.full->supports_mask_bounds();
         }
         if (mtp_attached) {
             auto * draft_kv = dynamic_cast<llama_kv_cache *>(memory.get());
@@ -849,7 +849,7 @@ bool llama_context::prepare_compute_arenas(
 
     llama_kv_stream_model * stream = nullptr;
     if (cparams.kv_streaming() && memory) {
-        stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+        stream = kv_resources.full ? kv_resources.full->get_kv_stream() : nullptr;
         if (!stream) return false;
     }
     if (!cparams.pipeline_parallel && cparams.n_seq_max == 1 &&
@@ -876,7 +876,7 @@ bool llama_context::prepare_compute_arenas(
 
 void llama_context::release_kv_workspaces(bool retiring) {
     if (!cparams.kv_streaming() || !memory) return;
-    auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+    auto * stream = kv_resources.full ? kv_resources.full->get_kv_stream() : nullptr;
     if (!stream) return;
     if (retiring) stream->abort();
     const bool released = stream->set_workspaces({});
@@ -1239,8 +1239,8 @@ bool llama_serial_features_match(llama_context * ctx,const llama_batch_ext * bat
 bool llama_context_suspend_kv_device(llama_context * ctx) noexcept {
     if (!ctx || !ctx->get_cparams().kv_streaming()) return false;
     auto * owner = llama_context_compute_memory(ctx);
-    auto * hybrid = static_cast<llama_memory_hybrid *>(ctx->get_memory());
-    auto * stream = hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+    const auto resources = ctx->get_kv_resources();
+    auto * stream = resources.full ? resources.full->get_kv_stream() : nullptr;
     if (!owner || !stream || (!stream->complete() && !stream->device_suspended())) return false;
     struct recurrent_completion : llama_memory_executor_backend {
         llama_context & ctx;
@@ -1252,7 +1252,7 @@ bool llama_context_suspend_kv_device(llama_context * ctx) noexcept {
         }
     };
     try {
-        auto * recurrent = hybrid->get_mem_recr();
+        auto * recurrent = resources.recurrent;
         if (!recurrent) return false;
         recurrent_completion completion(*ctx,*recurrent);
         return owner->suspend_kv(&completion);
@@ -1914,27 +1914,27 @@ llm_graph_result * llama_context::process_ubatch(
         llama_memory_text_phase phase, ggml_status & ret) {
     llama_memory_recurrent * rs_spill = nullptr;
     if (model.arch == LLM_ARCH_QWEN35 && cparams.n_rs_seq && gtype == LLM_GRAPH_TYPE_DEFAULT && memory) {
-        rs_spill = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_recr();
+        rs_spill = kv_resources.recurrent;
         if (rs_spill && rs_spill->spill_enabled() && !rs_spill->complete_spill()) {
             ret = GGML_STATUS_FAILED;
             return nullptr;
         }
     }
     llama_kv_stream_model * stream = nullptr;
+    const auto * stream_context = cparams.kv_streaming() ? llama_memory_kv_context_get(mctx) : nullptr;
     if (cparams.kv_streaming()) {
         static const std::vector<ggml_backend_memory_lease_t> empty;
-        stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+        stream = kv_resources.full ? kv_resources.full->get_kv_stream() : nullptr;
         if (!stream || !stream->set_workspaces(compute_memory ? compute_memory->workspace_leases() : empty)) {
             ret = GGML_STATUS_FAILED; return nullptr;
         }
-        if (!mctx || gtype != LLM_GRAPH_TYPE_DEFAULT ||
+        if (!stream_context || gtype != LLM_GRAPH_TYPE_DEFAULT ||
                 (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode) ||
-                !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->kv_stream_begin(
+                !stream_context->kv_stream_begin(
                     ubatch, phase == llama_memory_text_phase::decode)) {
             LLAMA_LOG_ERROR("%s: KV streaming rejected non-serial/non-append execution\n",__func__);
             ret = GGML_STATUS_FAILED; return nullptr;
         }
-        stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
     }
     struct stream_guard {
         llama_kv_stream_model * stream;
@@ -1947,7 +1947,7 @@ llm_graph_result * llama_context::process_ubatch(
         return nullptr;
     }
     if (stream && cparams.kv_stream_mask && phase == llama_memory_text_phase::prefill &&
-            !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->prepare_mask_bounds(ubatch,cparams.causal_attn)) {
+            !stream_context->prepare_mask_bounds(ubatch,cparams.causal_attn)) {
         LLAMA_LOG_ERROR("%s: managed prefill mask cannot be represented by an exact visibility interval\n",__func__);
         ret=GGML_STATUS_FAILED;
         return nullptr;
@@ -2371,7 +2371,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     }
 
     if (cparams.kv_streaming()) {
-        auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+        auto * stream = kv_resources.full ? kv_resources.full->get_kv_stream() : nullptr;
         if (!stream || !stream->complete()) {
             LLAMA_LOG_ERROR("%s: KV streaming requires an idle target append\n",__func__); return -1;
         }
@@ -2379,7 +2379,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         if (first > cparams.n_ctx_seq || batch_inp.tokens.size() > cparams.n_ctx_seq-first) {
             LLAMA_LOG_ERROR("%s: KV streaming context capacity exceeded\n",__func__); return 1;
         }
-        const auto previous_position = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->seq_pos_max(0);
+        const auto previous_position = kv_resources.full->seq_pos_max(0);
         if (!llama_kv_stream_validate_append(batch_inp, {first, cparams.n_ctx_seq, previous_position,
                 model.hparams.n_pos_per_embd(), cparams.kv_stream_decode, false})) {
             LLAMA_LOG_ERROR("%s: KV streaming rejected target payload, positions or sequence\n",__func__); return -1;
@@ -4053,7 +4053,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
         LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
     }
     if ((flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) && cparams.n_rs_seq && model.arch == LLM_ARCH_QWEN35 && memory) {
-        auto * recurrent=static_cast<llama_memory_hybrid *>(memory.get())->get_mem_recr();
+        auto * recurrent=kv_resources.recurrent;
         if (recurrent && !recurrent->materialize_spill_for_device_state()) return 0;
     }
 
@@ -4075,7 +4075,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
         LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
     }
     if ((flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) && cparams.n_rs_seq && model.arch == LLM_ARCH_QWEN35 && memory) {
-        auto * recurrent=static_cast<llama_memory_hybrid *>(memory.get())->get_mem_recr();
+        auto * recurrent=kv_resources.recurrent;
         if (recurrent && !recurrent->materialize_spill_for_device_state()) return 0;
     }
 
@@ -4882,8 +4882,8 @@ void llama_set_kv_stream_decode(llama_context * ctx, bool decode) {
 }
 static llama_kv_stream_model * llama_mtp_target_stream(llama_context * ctx) {
     if (!ctx) return nullptr;
-    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx));
-    return hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+    auto * full = ctx->get_kv_resources().full;
+    return full ? full->get_kv_stream() : nullptr;
 }
 
 bool llama_kv_stream_mtp_prepare(llama_context * ctx, uint32_t future_tokens) {

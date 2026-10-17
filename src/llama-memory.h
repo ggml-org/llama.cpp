@@ -15,6 +15,19 @@ class llama_batch_allocr;
 class llama_io_write_i;
 class llama_io_read_i;
 class llama_kv_stream_logical_cache;
+class llama_kv_cache;
+class llama_kv_cache_context;
+class llama_memory_recurrent;
+
+// Borrow cache roles for the lifetime of their memory owner; this does not admit a streamed model.
+struct llama_memory_kv_resources {
+    llama_kv_cache * full = nullptr;
+    llama_kv_cache * bounded = nullptr;
+    llama_memory_recurrent * recurrent = nullptr;
+};
+
+llama_memory_kv_resources llama_memory_kv_resources_get(llama_memory_t memory) noexcept;
+const llama_kv_cache_context * llama_memory_kv_context_get(const llama_memory_context_i * context) noexcept;
 
 struct llama_memory_params {
     // kv cache

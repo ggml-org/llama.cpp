@@ -89,6 +89,7 @@ struct llama_context {
     uint32_t n_threads_batch() const;
 
     llama_memory_t get_memory() const;
+    llama_memory_kv_resources get_kv_resources() const noexcept { return kv_resources; }
 
     // return true if the memory was updated
     bool memory_update(bool optimize);
@@ -388,6 +389,7 @@ private:
     std::unique_ptr<llama_context_memory_loan> publication_stage;
     // Memory consumers may drain backend work during teardown, including constructor-failure unwinding.
     llama_memory_ptr memory;
+    llama_memory_kv_resources kv_resources;
 
     // The scheduler is declared after the arenas and backends so it is destroyed first.
     std::vector<llama_compute_arena_binding> compute_arenas;
