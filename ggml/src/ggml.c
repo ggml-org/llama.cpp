@@ -7102,6 +7102,15 @@ static void ggml_compute_backward(
                 ggml_add_or_set(ctx, cgraph, isrc0, ggml_diag_mask_zero_impl(ctx, grad, n_past, false));
             }
         } break;
+        case GGML_OP_TRI: {
+            if (src0_needs_grads) {
+                // a triangular mask is linear, so the gradient is masked the same way. It is not necessarily
+                // contiguous (a transpose upstream is enough) and ggml_tri requires it to be contiguous
+                struct ggml_tensor * g = ggml_is_contiguous(grad) ? grad : ggml_cont(ctx, grad);
+                ggml_add_or_set(ctx, cgraph, isrc0,
+                        ggml_tri(ctx, g, (enum ggml_tri_type) ggml_get_op_params_i32(tensor, 0)));
+            }
+        } break;
         case GGML_OP_SOFT_MAX: {
             if (src0_needs_grads) {
                 float scale    = 1.0f;
