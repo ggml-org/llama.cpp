@@ -1010,6 +1010,37 @@ enum llama_pooling_type llama_context::pooling_type() const {
     return cparams.pooling_type;
 }
 
+const llama_outputs * llama_context::get_outputs() {
+    synchronize();
+    output_reorder();
+
+    outputs.vocab = &model.vocab;
+    outputs.n_vocab = model.vocab.n_tokens();
+    outputs.embeddings = embd.data;
+    outputs.embeddings_nextn = embd_nextn.data;
+    outputs.output_ids = &output_ids;
+
+    outputs.sampling.resize(n_outputs);
+    for (uint32_t row = 0; row < n_outputs; ++row) {
+        const int32_t idx = (int32_t) row - (int32_t) n_outputs;
+        auto & output = outputs.sampling[row];
+        output.token = get_sampled_token_ith(idx);
+        output.probs = get_sampled_probs_ith(idx);
+        output.sampled_logits = get_sampled_logits_ith(idx);
+        output.candidates = get_sampled_candidates_ith(idx);
+        output.n_probs = (uint32_t) get_sampled_probs_count(idx);
+        output.n_logits = (uint32_t) get_sampled_logits_count(idx);
+        output.logits = !output.sampled_logits && logits.has_data() ? get_logits_ith(idx) : nullptr;
+    }
+
+    outputs.embeddings_layer_inp.resize(embd_layer_inp.size());
+    for (uint32_t lid = 0; lid < embd_layer_inp.size(); ++lid) {
+        outputs.embeddings_layer_inp[lid] = embd_layer_inp[lid].has_data() ? get_embeddings_layer_inp(lid) : nullptr;
+    }
+
+    return &outputs;
+}
+
 float * llama_context::get_logits() {
     output_reorder();
 
@@ -4293,6 +4324,10 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
     return ctx->set_sampler(seq_id, smpl);
+}
+
+const llama_outputs * llama_get_outputs(llama_context * ctx) {
+    return ctx->get_outputs();
 }
 
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {

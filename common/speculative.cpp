@@ -1206,6 +1206,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
 
+        const auto * outputs = llama_get_outputs(ctx_tgt);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_batch_beg[seq_id] < 0) {
                 continue;
@@ -1226,7 +1228,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 // injects them into the K/V cache at the target positions
                 features_buf.resize((size_t) n_chunk * n_embd_enc);
                 for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+                    const float * layer = outputs->get_embeddings_layer_inp((uint32_t) target_layer_ids[k]);
                     if (!layer) {
                         GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
                     }
@@ -1319,6 +1321,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             return;
         }
 
+        const auto * outputs = llama_get_outputs(ctx_dft);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1334,7 +1338,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             if (is_dflash2 || is_lilicorr) {
                 // Both DFlash and LiliCorr greedily walk the candidate lattice.
-                const float * lattice = llama_get_embeddings_nextn(ctx_dft);
+                const float * lattice = outputs->embeddings_nextn;
                 GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
 
                 int32_t predecessor = 0;
@@ -1366,7 +1370,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             if (is_dspark) {
                 // DSpark: read from the first draft slot, truncate below the confidence threshold
-                const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
+                const float * conf = params.p_min > 0.0f ? outputs->embeddings_nextn : nullptr;
                 // bonus-anchor drafts read the mask positions only, like DFlash
                 const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
                 for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {
@@ -1376,7 +1380,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         break;
                     }
 
-                    common_sampler_sample(smpl, ctx_dft, idx, true);
+                    common_sampler_sample_from_outputs(smpl, outputs, idx, true);
 
                     const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1395,7 +1399,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             } else {
                 // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
                 for (int32_t i = 1; i < n_block_tokens; ++i) {
-                    common_sampler_sample(smpl, ctx_dft, beg + i, true);
+                    common_sampler_sample_from_outputs(smpl, outputs, beg + i, true);
 
                     const auto * cur_p = common_sampler_get_candidates(smpl, true);
 

@@ -81,6 +81,8 @@ struct llama_context {
 
     enum llama_pooling_type pooling_type() const;
 
+    const llama_outputs * get_outputs();
+
     float * get_logits();
     float * get_logits_ith(int32_t i);
 
@@ -308,6 +310,8 @@ private:
 
     llama_memory_ptr memory;
     llama_moe_cache_ptr moe_cache;
+
+    llama_outputs outputs;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
