@@ -2187,6 +2187,41 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         }
     }
     const std::chrono::duration<double, std::milli> deserialize_ms = std::chrono::steady_clock::now() - t_deserialize;
+    // A remote graph is rebuilt from client-supplied tensor descriptions, so the shape and the
+    // op_params of a node are arbitrary and are not validated anywhere else.  PAD_REFLECT_1D is
+    // a write kernel whose loops are bounded by p0/p1/ne0, so reject any node that does not
+    // satisfy the same contract that ggml_pad_reflect_1d() enforces for locally built graphs.
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        const struct ggml_tensor * node = graph->nodes[i];
+
+        if (node == nullptr || node->op != GGML_OP_PAD_REFLECT_1D) {
+            continue;
+        }
+
+        const struct ggml_tensor * src0 = node->src[0];
+
+        const int32_t p0 = src0 != nullptr ? ((const int32_t *) node->op_params)[0] : 0;
+        const int32_t p1 = src0 != nullptr ? ((const int32_t *) node->op_params)[1] : 0;
+
+        const bool valid =
+            src0 != nullptr &&
+            src0->type == GGML_TYPE_F32 &&
+            node->type == GGML_TYPE_F32 &&
+            // the kernel indexes both tensors as contiguous rows of the element type
+            ggml_is_contiguous(src0) &&
+            ggml_is_contiguous(node) &&
+            p0 >= 0 && p1 >= 0 &&
+            p0 < src0->ne[0] && p1 < src0->ne[0] &&
+            node->ne[0] == src0->ne[0] + p0 + p1 &&
+            node->ne[1] == src0->ne[1] &&
+            node->ne[2] == src0->ne[2] &&
+            node->ne[3] == src0->ne[3];
+
+        if (!valid) {
+            LOG_ERROR("[%s] malformed PAD_REFLECT_1D graph detected\n", __func__);
+            return false;
+        }
+    }
 
     ggml_status status = ggml_backend_graph_compute_async(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
