@@ -191,6 +191,8 @@ pre_computed_hashes = [
     {"name": "grok-2",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/alvarobartt/grok-2-tokenizer", "chkhsh": "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273"},
     # muse-spark uses the l4_202k tokenizer, whose pre-tokenizer regex is gpt-4o's
     {"name": "gpt-4o",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B", "chkhsh": "f5c965e4198da6e7525072d87d1ecf4c51d981fd486c7c4ec728ef9cec7e03fc"},
+    # kolibri1 uses a 128k vocabulary with the qwen2 pre-tokenizer regex
+    {"name": "qwen2",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Aleph-Alpha/Kolibri-1", "chkhsh": "6e040dfe72e4b85855588c53acf4909ac4e98e55bc3a33cd7db499180dc42a78"},
     # jina-v2-de variants
     {"name": "jina-v2-de", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/aari1995/German_Semantic_V3", "chkhsh": "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df"},
     {"name": "gpt-2", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/evilfreelancer/ruGPT3XL", "chkhsh": "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4"},

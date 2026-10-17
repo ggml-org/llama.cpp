@@ -139,6 +139,9 @@ kimi-linear         ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-linear         ,0   ,any     ,MUL+ADD                     ,      2
 kimi-linear         ,0   ,any     ,RMS_NORM+MUL                ,      7
 kimi-linear         ,0   ,any     ,RMS_NORM+SCALE              ,      2
+kolibri1            ,0   ,any     ,MUL+ADD                     ,      4
+kolibri1            ,0   ,any     ,RMS_NORM+MUL                ,     10
+kolibri1            ,0   ,any     ,RMS_NORM+MUL+ADD            ,      3
 laguna              ,0   ,any     ,ADD+ADD                     ,      1
 laguna              ,0   ,any     ,MUL+ADD                     ,      2
 laguna              ,0   ,any     ,RMS_NORM+MUL                ,      9

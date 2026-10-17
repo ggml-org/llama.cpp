@@ -115,6 +115,7 @@ enum llm_type {
     LLM_TYPE_10B_128x3_66B,
     LLM_TYPE_57B_A14B,
     LLM_TYPE_816B_A42B,
+    LLM_TYPE_78B_A3_5B,  // Kolibri1
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
     LLM_TYPE_A13B,

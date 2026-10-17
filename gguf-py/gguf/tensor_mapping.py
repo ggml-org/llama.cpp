@@ -416,6 +416,7 @@ class TensorNameMap:
             "model.layers.{bid}.post_attention_layernorm",       # gemma2 olmo2    # ge
             "layers.{bid}.post_attention_layernorm",             # embeddinggemma
             "model.layers.{bid}.post_self_attn_layernorm",       # glm-4-0414
+            "model.layers.{bid}.post_attn_norm",                 # kolibri1
             "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
         ),
 
@@ -498,6 +499,7 @@ class TensorNameMap:
             "model.layers.{bid}.post_feedforward_layernorm",  # gemma2 olmo2
             "layers.{bid}.post_feedforward_layernorm",        # embeddinggemma
             "model.layers.{bid}.post_mlp_layernorm",          # glm-4-0414
+            "model.layers.{bid}.post_ffn_norm",               # kolibri1
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
@@ -542,6 +544,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
             "model.layers.{bid}.mlp.expert_bias",                           # afmoe
+            "model.layers.{bid}.moe.router.expert_bias",                    # kolibri1
             "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
             "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
             "backbone.layers.{bid}.mixer.gate.e_score_correction",          # nemotron-h-moe

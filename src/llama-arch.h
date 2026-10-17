@@ -171,6 +171,7 @@ enum llm_arch {
     LLM_ARCH_HRM_TEXT,
     LLM_ARCH_K2_HORIZON,
     LLM_ARCH_BEAM,
+    LLM_ARCH_KOLIBRI1,
     LLM_ARCH_UNKNOWN,
 };
 
