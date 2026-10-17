@@ -289,6 +289,80 @@ static void repack_tiled_q8_0(void * data, const ggml_tensor * t, size_t offset,
 
 // --- Float Types (F16, F32, BF16 -> f16_tiled HMX layout) ---
 
+static void repack_q2_0_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size) {
+    GGML_ASSERT(offset == 0);
+    GGML_ASSERT(t->ne[0] % 64 == 0);
+    GGML_ASSERT(size == ggml_nbytes(t));
+
+    const block_q2_0 * src = (const block_q2_0 *) data;
+    const int64_t blocks_per_row = t->ne[0] / 64;
+    const int64_t n_col_tiles = hex_round_up(t->ne[1], 32) / 32;
+    const int64_t n_weight_tiles = blocks_per_row;
+    const size_t matrix_size = (size_t) n_col_tiles * n_weight_tiles * HTP_TENSOR_TILE_SIZE_Q2_0;
+
+    for (int64_t slice = 0; slice < t->ne[2] * t->ne[3]; ++slice) {
+        const block_q2_0 * src_slice = src + slice * t->ne[1] * blocks_per_row;
+        uint8_t * dst_slice = (uint8_t *) t->data + slice * matrix_size;
+        memset(dst_slice, 0, matrix_size);
+
+        for (int64_t row_index = 0; row_index < t->ne[1]; ++row_index) {
+            const int64_t ct = row_index / 32;
+            const int row = (int) (row_index % 32);
+            for (int64_t kt = 0; kt < n_weight_tiles; ++kt) {
+                const block_q2_0 * block = src_slice + row_index * blocks_per_row + kt;
+                uint8_t * tile = dst_slice + (ct * n_weight_tiles + kt) * HTP_TENSOR_TILE_SIZE_Q2_0;
+                for (int group = 0; group < 16; ++group) {
+                    for (int byte = 0; byte < 4; ++byte) {
+                        const int k = 4 * group + byte;
+                        const uint8_t code = (block->qs[k / 4] >> (2 * (k % 4))) & 3;
+                        tile[(group >> 2) * 128 + 4 * row + byte] |= code << (2 * (group & 3));
+                    }
+                }
+                memcpy(tile + 512 + 2 * row, &block->d, sizeof(block->d));
+            }
+        }
+    }
+}
+
+static void repack_tiled_q2_0(void * data, const ggml_tensor * t, size_t offset, size_t size) {
+    GGML_ASSERT(t->ne[0] % 64 == 0);
+    GGML_ASSERT(offset + size <= ggml_nbytes(t));
+
+    const size_t first_block = offset / sizeof(block_q2_0);
+    const size_t end_block = (offset + size + sizeof(block_q2_0) - 1) / sizeof(block_q2_0);
+    const size_t blocks_per_row = t->ne[0] / 64;
+    const size_t blocks_per_slice = t->ne[1] * blocks_per_row;
+    const size_t n_weight_tiles = blocks_per_row;
+    const size_t n_col_tiles = hex_round_up(t->ne[1], 32) / 32;
+    const size_t matrix_size = n_col_tiles * n_weight_tiles * HTP_TENSOR_TILE_SIZE_Q2_0;
+
+    for (size_t block_index = first_block; block_index < end_block; ++block_index) {
+        const size_t slice = block_index / blocks_per_slice;
+        const size_t in_slice = block_index % blocks_per_slice;
+        const size_t row_index = in_slice / blocks_per_row;
+        const size_t kt = in_slice % blocks_per_row;
+        const size_t ct = row_index / 32;
+        const size_t row = row_index % 32;
+        const uint8_t * tile = (const uint8_t *) t->data + slice * matrix_size +
+            (ct * n_weight_tiles + kt) * HTP_TENSOR_TILE_SIZE_Q2_0;
+
+        block_q2_0 block = {};
+        memcpy(&block.d, tile + 512 + 2 * row, sizeof(block.d));
+        for (int group = 0; group < 16; ++group) {
+            for (int byte = 0; byte < 4; ++byte) {
+                const uint8_t packed = tile[(group >> 2) * 128 + 4 * row + byte];
+                const uint8_t code = (packed >> (2 * (group & 3))) & 3;
+                block.qs[group] |= code << (2 * byte);
+            }
+        }
+
+        const size_t block_begin = block_index * sizeof(block_q2_0);
+        const size_t copy_begin = (std::max)(block_begin, offset);
+        const size_t copy_end = (std::min)(block_begin + sizeof(block_q2_0), offset + size);
+        memcpy((uint8_t *) data + copy_begin - offset, (const uint8_t *) &block + copy_begin - block_begin, copy_end - copy_begin);
+    }
+}
+
 template <typename SrcT, typename ToFp16Fn>
 static void repack_float_to_f16_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size, ToFp16Fn && to_fp16) {
     repack_to_tiled_grid_32<SrcT, 32>(t, data, offset, size, HTP_TENSOR_TILE_SIZE_F16,
@@ -917,6 +991,9 @@ void htp_repack_tensor_tiled(ggml_tensor * tensor, const void * data, size_t siz
         case GGML_TYPE_MXFP4:
             repack_mxfp4_tiled(tensor, data, 0, size);
             break;
+        case GGML_TYPE_Q2_0:
+            repack_q2_0_tiled(tensor, data, 0, size);
+            break;
         case GGML_TYPE_Q2_K:
             repack_q2_K_tiled(tensor, data, 0, size);
             break;
@@ -965,6 +1042,9 @@ void htp_unpack_tensor_tiled(void * data, const ggml_tensor * tensor, size_t off
             break;
         case GGML_TYPE_MXFP4:
             repack_tiled_mxfp4(data, tensor, offset, size);
+            break;
+        case GGML_TYPE_Q2_0:
+            repack_tiled_q2_0(data, tensor, offset, size);
             break;
         case GGML_TYPE_Q2_K:
             repack_tiled_q2_K(data, tensor, offset, size);

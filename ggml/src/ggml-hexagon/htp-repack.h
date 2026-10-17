@@ -13,6 +13,7 @@ static inline bool htp_is_tiled_weight_type(enum ggml_type type) {
            type == GGML_TYPE_MXFP4 || type == GGML_TYPE_Q6_K   ||
            type == GGML_TYPE_Q4_K  || type == GGML_TYPE_Q5_K   ||
            type == GGML_TYPE_Q3_K  || type == GGML_TYPE_Q2_K   ||
+           type == GGML_TYPE_Q2_0  ||
            type == GGML_TYPE_F16   || type == GGML_TYPE_F32    ||
            type == GGML_TYPE_BF16;
 }
@@ -41,6 +42,9 @@ static inline size_t htp_tiled_row_size(enum ggml_type type, int64_t ne0) {
     }
     if (type == GGML_TYPE_Q6_K) {
         return (size_t) (ne0 / 32) * (HTP_TENSOR_TILE_SIZE_Q6_K / 32);
+    }
+    if (type == GGML_TYPE_Q2_0) {
+        return (size_t) (ne0 / 64) * 18;
     }
     if (type == GGML_TYPE_Q4_K) {
         return (size_t) (ne0 / 32) * (HTP_TENSOR_TILE_SIZE_Q4_K / 32);

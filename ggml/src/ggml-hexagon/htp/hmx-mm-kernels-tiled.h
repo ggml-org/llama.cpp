@@ -24,8 +24,10 @@ struct tiled_dequantize_state {
     const uint8_t           * src;
     tiled_dequant_task_fn_t   task_fn;
 
-    struct fastdiv_values     n_k_tiles_div;
-    uint32_t                  n_k_tiles;
+    struct fastdiv_values     n_hmx_k_tiles_div;   // expanded 32-k fp16 tiles per col tile (dst)
+    uint32_t                  n_hmx_k_tiles;
+    struct fastdiv_values     n_weight_tiles_div;  // packed weight tiles per col tile (src, tasks)
+    uint32_t                  n_weight_tiles;
     uint32_t                  n_tot_tiles;
     uint32_t                  n_tiles_per_task;
     uint32_t                  tile_size;
@@ -751,13 +753,51 @@ static void dequantize_tiled_weight_to_fp16_task_q2_k(
     }
 }
 
+// Q2_0 stores codes 0..3 (value code - 1) and one fp16 scale per row, see HTP_MM_WEIGHT_TILE_SIZE_Q2_0.
+// One packed 64-k tile expands into two consecutive 32-k fp16 tiles.
+static void dequantize_tiled_weight_to_fp16_task_q2_0(
+        const tiled_dequantize_state_t *state,
+        uint32_t start_tile, uint32_t end_tile) {
+
+    const HVX_Vector mask_03 = Q6_Vb_vsplat_R(0x03);
+    const HVX_Vector i1      = Q6_Vb_vsplat_R(1);
+
+    for (uint32_t t = start_tile; t < end_tile; t++) {
+        const uint32_t col_tile      = fastdiv(t, &state->n_weight_tiles_div);
+        const uint32_t weight_k_tile = fastmodulo(t, state->n_weight_tiles, &state->n_weight_tiles_div);
+
+        const HVX_Vector * vptr = (const HVX_Vector *) (state->src + t * state->aligned_tile_size);
+        __fp16 * dst_base = state->dst + (col_tile * state->n_hmx_k_tiles + 2 * weight_k_tile) * HTP_MM_HMX_TILE_N_ELMS;
+
+        HVX_Vector v_sc    = vptr[4];
+        HVX_Vector v_scale = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
+
+        #pragma unroll
+        for (int half = 0; half < 2; half++) {
+            __fp16 * dst_ptr = dst_base + half * HTP_MM_HMX_TILE_N_ELMS;
+
+            #pragma unroll
+            for (int g = 0; g < 8; g++) {
+                HVX_Vector     v_q  = Q6_Vb_vsub_VbVb(unpack_q3_k_low2(vptr, 8 * half + g, mask_03), i1);
+                HVX_VectorPair vp16 = Q6_Wh_vunpack_Vb(v_q);
+                HVX_VectorPair vp_k = Q6_W_vdeal_VVR(Q6_V_hi_W(vp16), Q6_V_lo_W(vp16), -4);
+
+                hvx_vmem(dst_ptr + (2 * g + 0) * 64) =
+                    Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_k)), v_scale));
+                hvx_vmem(dst_ptr + (2 * g + 1) * 64) =
+                    Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_k)), v_scale));
+            }
+        }
+    }
+}
+
 static __attribute__((noinline))
 void convert_f16_weight_to_fp16_tiles_task(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
 
-    const uint32_t n_k_tiles = state->n_k_tiles;
-    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
+    const uint32_t n_k_tiles = state->n_hmx_k_tiles;
+    const struct fastdiv_values n_k_tiles_div = state->n_hmx_k_tiles_div;
 
     const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
     const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);
@@ -799,8 +839,8 @@ void quantize_f32_weight_to_fp16_tiles_task(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
 
-    const uint32_t n_k_tiles = state->n_k_tiles;
-    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
+    const uint32_t n_k_tiles = state->n_hmx_k_tiles;
+    const struct fastdiv_values n_k_tiles_div = state->n_hmx_k_tiles_div;
 
     const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
     const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);
@@ -846,8 +886,8 @@ void convert_bf16_weight_to_fp16_tiles_task(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
 
-    const uint32_t n_k_tiles = state->n_k_tiles;
-    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
+    const uint32_t n_k_tiles = state->n_hmx_k_tiles;
+    const struct fastdiv_values n_k_tiles_div = state->n_hmx_k_tiles_div;
 
     const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
     const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);

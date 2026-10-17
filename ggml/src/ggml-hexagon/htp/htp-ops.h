@@ -32,6 +32,7 @@ enum htp_data_type {
     HTP_TYPE_I64    = 27,
     HTP_TYPE_BF16   = 30,
     HTP_TYPE_MXFP4  = 39,
+    HTP_TYPE_Q2_0   = 42,
 
     HTP_TYPE_INVALID
 };

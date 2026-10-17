@@ -20,6 +20,10 @@ extern "C" {
 #define HTP_MM_HMX_TILE_N_ELMS 1024
 #define HTP_MM_HMX_MIN_NROWS   4
 
+#define HTP_MM_WEIGHT_TILE_K_Q2_0             64
+#define HTP_MM_WEIGHT_TILE_SIZE_Q2_0          HTP_TENSOR_TILE_SIZE_Q2_0
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q2_0  640
+
 // --- Activation Tiled Block Sizes (including padding) ---
 #define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
 #define HTP_MM_ACT_TILE_SIZE_Q8_1      1280
@@ -227,8 +231,8 @@ static inline void htp_mm_hmx_get_2d_chunk_costs(
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && wtype != HTP_TYPE_BF16);
     const size_t row_stride = htp_tensor_get_row_size(wtype, k);
     const size_t vec_dot_size = k * sizeof(uint16_t);
-    const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
-    const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
+    const uint32_t n_weight_tiles = k / htp_tensor_get_tile_k(wtype);
+    const size_t qweight_row_stride = is_quant ? (size_t)(n_weight_tiles * aligned_tile_size) / 32 : 0;
 
     *size_per_n_out = (pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) +
                       (pipeline ? 2 * vec_dot_size : vec_dot_size);
@@ -359,11 +363,11 @@ static inline void htp_mm_hmx_vtcm_layout_build(
         const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && wtype != HTP_TYPE_BF16);
         const size_t row_stride = htp_tensor_get_row_size(wtype, k);
         const size_t vec_dot_size = k * sizeof(uint16_t);
-        const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
+        const uint32_t n_weight_tiles = k / htp_tensor_get_tile_k(wtype);
 
         const size_t min_f32_size = hex_align_up(act_threads * HTP_MM_DMA_ACT_MULTIPLIER * k * sizeof(float), 128);
         const size_t weight_area_size = is_quant
-            ? hex_align_up((nc / 32) * n_k_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
+            ? hex_align_up((nc / 32) * n_weight_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
             : hex_align_up(nc * row_stride, HTP_MM_HMX_TILE_SIZE);
         const size_t act_area_size    = hex_align_up(mc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
         const size_t output_area_size = hex_align_up(mc * nc * sizeof(__fp16), HTP_MM_HMX_TILE_SIZE);
@@ -489,8 +493,8 @@ static inline void htp_mm_hvx_vtcm_layout_build(
             case HTP_MM_KERNEL_HVX_QUANT_ROW: {
                 size_t q_act_row_size = htp_mm_tiled_act_row_size(wtype, ne10);
                 uint32_t aligned_tile_size = htp_tensor_get_tile_padded_size(wtype);
-                uint32_t n_k_tiles = (ne10 + 31) / 32;
-                uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
+                uint32_t n_weight_tiles = (ne10 + htp_tensor_get_tile_k(wtype) - 1) / htp_tensor_get_tile_k(wtype);
+                uint32_t tile_row_size = n_weight_tiles * aligned_tile_size;
                 size_t tiled_vtcm_size = htp_mm_round_up(n_prefetch * tile_row_size, 256);
 
                 src0_sz = tiled_vtcm_size * n_threads;
