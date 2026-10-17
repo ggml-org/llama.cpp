@@ -6,8 +6,8 @@
 #include <functional>
 #include <string>
 
-std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf = false, bool unordered_properties = false);
-std::string json_schema_to_grammar(const common_chat_schema_document & schema, bool unordered_properties = false);
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf = false);
+std::string json_schema_to_grammar(const common_chat_schema_document & schema);
 
 struct common_grammar_builder {
     std::function<std::string(const std::string &, const std::string &)>    add_rule;

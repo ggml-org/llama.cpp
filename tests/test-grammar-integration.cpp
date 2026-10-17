@@ -193,7 +193,9 @@ static void test_schema(const std::string & test_desc, const std::string & schem
 }
 
 static void test_schema_unordered(const std::string & test_desc, const std::string & schema_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
-    test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true, true), passing_strings, failing_strings);
+    auto doc = common_chat_schema_from_json(json::parse(schema_str));
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) { builder.add_schema_unordered("root", *doc.root); });
+    test(test_desc + ". Schema: " + schema_str, grammar, passing_strings, failing_strings);
 }
 
 static void test_simple_grammar() {
@@ -1523,23 +1525,24 @@ static void test_json_schema_unordered_properties() {
         });
 
     test_schema_unordered(
-        "required properties in any order",
+        "required properties first in any order",
         make_schema(R"""(, "required": ["expr", "n"], "additionalProperties": false)"""),
         {
             R"""({"expr": "0", "n": 1})""",
             R"""({"n": 1, "expr": "0"})""",
-            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
-            R"""({"dtype": "int", "expr": "0", "n": 1})""",
+            R"""({"n": 1, "expr": "0", "dtype": "int"})""",
         },
         {
             R"""({})""",
+            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
+            R"""({"dtype": "int", "expr": "0", "n": 1})""",
             R"""({"expr": "0"})""",
             R"""({"dtype": "int", "n": 1})""",
             R"""({"n": 1, "n": 1, "expr": "0"})""",
         });
 
     test_schema_unordered(
-        "many properties: required exactly once, the rest in any order",
+        "many properties: required first, the rest in any order",
         R"""({
             "type": "object",
             "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
@@ -1549,11 +1552,12 @@ static void test_json_schema_unordered_properties() {
         {
             R"""({"a": 1, "b": 2})""",
             R"""({"b": 2, "a": 1})""",
-            R"""({"g": 3, "b": 2, "a": 1})""",
-            R"""({"a": 1, "g": 3, "b": 2, "f": 4})""",
+            R"""({"b": 2, "a": 1, "g": 3, "c": 4, "g": 5})""",
         },
         {
             R"""({"a": 1})""",
+            R"""({"g": 3, "b": 2, "a": 1})""",
+            R"""({"a": 1, "g": 3, "b": 2, "f": 4})""",
             R"""({"g": 3, "a": 1})""",
             R"""({"a": 1, "a": 2, "b": 3})""",
             R"""({"a": 1, "b": 2, "x": 3})""",
@@ -1576,7 +1580,7 @@ static void test_json_schema_unordered_properties() {
         {
             R"""({"name": "n", "column_type": "expression", "expr": "0", "dtype": "int"})""",
             R"""({"name": "n", "column_type": "expression", "dtype": "int", "expr": "0"})""",
-            R"""({"column_type": "llm-text", "model_alias": "m", "prompt": "p", "name": "q"})""",
+            R"""({"column_type": "llm-text", "name": "q", "model_alias": "m", "prompt": "p"})""",
             R"""({"name": "n", "column_type": "sampler", "params": {"values": ["a"]}, "sampler_type": "category"})""",
             R"""({"name": "n", "column_type": "x", "extract_reasoning_content": true, "other": 1})""",
         },
@@ -1585,10 +1589,11 @@ static void test_json_schema_unordered_properties() {
             R"""({"name": "n", "dtype": "int"})""",
             R"""({"name": "n", "name": "m", "column_type": "x"})""",
             R"""({"name": "n", "column_type": "x", "prompt": 1})""",
+            R"""({"dtype": "int", "name": "n", "column_type": "expression"})""",
         });
 
     test_schema_unordered(
-        "too many required properties: keep their declared order, the rest anywhere",
+        "too many required properties: keep their declared order, the rest in any order",
         R"""({
             "type": "object",
             "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}},
@@ -1597,12 +1602,13 @@ static void test_json_schema_unordered_properties() {
         })""",
         {
             R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
-            R"""({"i": 1, "a": 1, "b": 1, "h": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "i": 1})""",
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "i": 1, "h": 1, "i": 1})""",
         },
         {
             R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
             R"""({"g": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
             R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "a": 1})""",
+            R"""({"a": 1, "b": 1, "h": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
         });
 
     test_schema_unordered(
@@ -1615,7 +1621,7 @@ static void test_json_schema_unordered_properties() {
         })""",
         {
             R"""({"rest-1": "x"})""",
-            R"""({"free-kv": true, "rest-1": "x", "rest-0": 1})""",
+            R"""({"rest-1": "x", "free-kv": true, "rest-0": 1})""",
         },
         {
             R"""({"rest-0": 1})""",

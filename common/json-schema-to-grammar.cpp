@@ -369,17 +369,6 @@ private:
         return key;
     }
 
-    // for rules that refer to themselves: pick a free name now, set the body later
-    std::string _reserve_rule_name(const std::string & name) {
-        std::string esc_name = regex_replace(name, INVALID_RULE_CHARS_RE, "-");
-        std::string key = esc_name;
-        for (int i = 0; _rules.find(key) != _rules.end(); i++) {
-            key = esc_name + std::to_string(i);
-        }
-        _rules[key] = "";
-        return key;
-    }
-
     std::string _generate_union_rule(const std::string & name, const std::vector<common_chat_schema_ptr> & alt_schemas) {
         std::vector<std::string> rules;
         rules.reserve(alt_schemas.size());
@@ -752,72 +741,42 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        // required keys: exactly once, in any order (2^n rules, so above max_required keep the declared order)
-        // optional and additional keys: anywhere, repeats allowed
+        // required keys first, exactly once, in any order like common_chat_peg_builder::permute (declared order above max_required)
+        // then optional and additional keys in any order, repeats allowed
         constexpr size_t max_required = 6;
         if (_unordered_properties) {
             const size_t n = required_props.size();
             const bool any_order = n <= max_required;
-            std::string free_kv;
-            if (!optional_props.empty()) {
-                std::vector<std::string> free_kvs;
-                for (const auto & prop_name : optional_props) {
-                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
-                }
-                free_kv = _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
+            std::vector<std::string> optional_kvs;
+            for (const auto & prop_name : optional_props) {
+                optional_kvs.push_back(prop_kv_rule_names[prop_name]);
             }
+            std::string free_kv = optional_kvs.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(optional_kvs, " | "));
 
-            // state: bitmask of the required keys seen, or with any_order == false the count of required keys seen
-            auto next_required = [&](size_t state) {
-                std::vector<std::pair<size_t, size_t>> res;
-                if (!any_order) {
-                    if (state < n) {
-                        res.emplace_back(state, state + 1);
-                    }
-                    return res;
-                }
+            // seen: bitmask of required keys, or with any_order == false their count
+            auto required_alts = [&](size_t seen, const std::function<std::string(size_t)> & rest) {
+                std::vector<std::string> alts;
                 for (size_t i = 0; i < n; i++) {
-                    if (!(state & (size_t(1) << i))) {
-                        res.emplace_back(i, state | (size_t(1) << i));
+                    if (any_order ? !(seen & (size_t(1) << i)) : i == seen) {
+                        alts.push_back(prop_kv_rule_names[required_props[i]] + " " + rest(any_order ? seen | (size_t(1) << i) : seen + 1));
                     }
                 }
-                return res;
+                return alts;
             };
-
-            // rest of the object after `state`; one "," then the key, so the sampler keeps fewer stacks
             std::map<size_t, std::string> rest_rules;
-            std::function<std::string(size_t)> get_rest = [&](size_t state) -> std::string {
-                auto it = rest_rules.find(state);
+            std::function<std::string(size_t)> rest = [&](size_t seen) -> std::string {
+                auto it = rest_rules.find(seen);
                 if (it != rest_rules.end()) {
                     return it->second;
                 }
-                auto nexts = next_required(state);
-                if (nexts.empty() && free_kv.empty()) {
-                    rest_rules[state] = "";
-                    return "";
-                }
-                auto rest = _reserve_rule_name(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(state));
-                rest_rules[state] = rest;
-                std::vector<std::string> alts;
-                if (!free_kv.empty()) {
-                    alts.push_back(free_kv + " " + rest);
-                }
-                for (const auto & [i, next_state] : nexts) {
-                    alts.push_back(prop_kv_rule_names[required_props[i]] + " " + get_rest(next_state));
-                }
-                std::string body = "\",\" space ( " + string_join(alts, " | ") + " )";
-                _rules[rest] = nexts.empty() ? "( " + body + " )?" : body;
-                return rest;
+                auto alts = required_alts(seen, rest);
+                return rest_rules[seen] = alts.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), "\",\" space ( " + string_join(alts, " | ") + " )");
             };
 
-            std::vector<std::string> firsts;
-            for (const auto & [i, next_state] : next_required(0)) {
-                firsts.push_back(prop_kv_rule_names[required_props[i]] + " " + get_rest(next_state));
+            if (n == 0) {
+                return "\"{\" space ( " + free_kv + " ( \",\" space " + free_kv + " )* )? space \"}\"";
             }
-            if (!free_kv.empty()) {
-                firsts.push_back(free_kv + " " + get_rest(0));
-            }
-            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (n == 0 ? "?" : "") + " space \"}\"";
+            return "\"{\" space ( " + string_join(required_alts(0, rest), " | ") + " )" + (free_kv.empty() ? "" : " ( \",\" space " + free_kv + " )*") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
@@ -1078,25 +1037,24 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf, bool unordered_properties) {
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
 #ifdef LLAMA_USE_LLGUIDANCE
-    // llguidance %json keeps the declared order, so use GBNF for unordered
-    if (!force_gbnf && !unordered_properties) {
+    if (!force_gbnf) {
         return "%llguidance {}\nstart: %json " + schema.dump();
     }
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     try {
-        return json_schema_to_grammar(common_chat_schema_from_json(schema), unordered_properties);
+        return json_schema_to_grammar(common_chat_schema_from_json(schema));
     } catch (const std::runtime_error & e) {
         throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
     }
 }
 
-std::string json_schema_to_grammar(const common_chat_schema_document & schema, bool unordered_properties) {
+std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
     common_chat_schema_converter converter(false);
-    (unordered_properties ? converter.add_schema_unordered("", *schema.root) : converter.add_schema("", *schema.root));
+    converter.visit(*schema.root, "");
     converter.check_errors();
     return converter.format_grammar();
 }
