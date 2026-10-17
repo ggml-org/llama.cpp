@@ -5,6 +5,7 @@
 #include "llama-grammar.h"
 
 #include "ggml-cpp.h"
+#include "ggml-trace.h"
 
 #include <array>
 #include <algorithm>
@@ -892,7 +893,33 @@ uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler) {
     return chain->n_nodes;
 }
 
+static llama_token llama_sampler_sample_impl(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx);
+
 llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
+    if (!ggml_trace_enabled()) {
+        return llama_sampler_sample_impl(smpl, ctx, idx);
+    }
+
+    // decode trace (ggml-trace.h): the sampling of a traced step, after its output wait
+    llama_synchronize(ctx);
+    const int64_t t0 = ggml_trace_now_ns();
+    const llama_token token = llama_sampler_sample_impl(smpl, ctx, idx);
+    const int64_t t1 = ggml_trace_now_ns();
+
+    const int step = ggml_trace_stamp_token_out(token);
+    if (step >= 0) {
+        ggml_trace_event ev;
+        ggml_trace_event_init(&ev, GGML_TRACE_SAMPLE, GGML_TRACE_TID_SAMPLER);
+        ev.t0_ns = t0;
+        ev.t1_ns = t1;
+        ev.step  = step;
+        ev.aux   = token;
+        ggml_trace_emit(&ev);
+    }
+    return token;
+}
+
+static llama_token llama_sampler_sample_impl(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
     const llama_token   sampled_token  = llama_get_sampled_token_ith     (ctx, idx);
     const float *       sampled_probs  = llama_get_sampled_probs_ith     (ctx, idx);
     const float *       sampled_logits = llama_get_sampled_logits_ith    (ctx, idx);

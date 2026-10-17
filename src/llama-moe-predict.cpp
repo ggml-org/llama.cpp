@@ -2,6 +2,8 @@
 
 #include "llama-impl.h"
 
+#include "ggml-trace.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
@@ -93,7 +95,7 @@ llama_moe_predictor::llama_moe_predictor(const params & p, std::vector<layer_ten
     // the worker hints in prefetch mode, and saves in both modes
     const int n_workers = par.mode == MODE_PREFETCH ? par.n_workers : 1;
     for (int i = 0; i < n_workers; ++i) {
-        workers.emplace_back([this] { worker_loop(); });
+        workers.emplace_back([this, i] { worker_loop(i); });
     }
 
     LLAMA_LOG_INFO("%s: MoE expert prediction %s, %d workers, slots cap %d, grow %.2f, shrink %.2f, stats %s\n",
@@ -144,8 +146,13 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
         return;
     }
 
+    // decode trace: this call as a PREDICT span (it runs on compute thread 0, inside the hint op)
+    const bool    trace    = ggml_trace_active();
+    const int64_t trace_t0 = trace ? ggml_trace_now_ns() : 0;
+
     std::vector<int> act;
     std::vector<int> guess;
+    std::vector<int> guess_rank; // router position r, or GGML_TRACE_RANK_POPULARITY + popularity position
     bool do_save = false;
 
     {
@@ -310,7 +317,13 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
             nx.has_pred = true;
 
             guess.assign(nx.pred_r.begin(), nx.pred_r.begin() + std::min<size_t>(nx.pred_r.size(), nx.n_r));
+            const size_t n_guess_r = guess.size();
             guess.insert(guess.end(), nx.pred_p.begin(), nx.pred_p.begin() + std::min<size_t>(nx.pred_p.size(), nx.n_p));
+            if (trace) {
+                for (size_t i = 0; i < guess.size(); ++i) {
+                    guess_rank.push_back(i < n_guess_r ? (int) i : GGML_TRACE_RANK_POPULARITY + (int) (i - n_guess_r));
+                }
+            }
         }
 
         if (il == first_moe) {
@@ -329,9 +342,9 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
     layer_seen.store(il,  std::memory_order_relaxed);
 
     if (par.mode == MODE_PREFETCH) {
-        enqueue(true, il, act);
+        enqueue(true, il, act, trace);
         if (!guess.empty()) {
-            enqueue(false, il_next, guess);
+            enqueue(false, il_next, guess, trace, trace ? &guess_rank : nullptr);
         }
     }
     if (do_save) {
@@ -340,6 +353,18 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
             want_save = true;
         }
         qcv.notify_one();
+    }
+
+    if (trace) {
+        ggml_trace_event ev;
+        ggml_trace_event_init(&ev, GGML_TRACE_PREDICT, 0);
+        ev.t0_ns = trace_t0;
+        ev.t1_ns = ggml_trace_now_ns();
+        ev.layer = il;
+        ev.bytes = (int64_t) guess.size();
+        ev.aux   = il_next;
+        ev.aux2  = (int64_t) act.size();
+        ggml_trace_emit(&ev);
     }
 }
 
@@ -405,16 +430,18 @@ llama_moe_predictor::layer_view llama_moe_predictor::view(int il) const {
 // prefetch worker
 //
 
-void llama_moe_predictor::enqueue(bool high, int il, const std::vector<int> & experts) {
+void llama_moe_predictor::enqueue(bool high, int il, const std::vector<int> & experts, bool trace, const std::vector<int> * ranks) {
     const int64_t t = ggml_time_us();
     {
         std::lock_guard<std::mutex> lock(qmtx);
-        for (int e : experts) {
+        for (size_t i = 0; i < experts.size(); ++i) {
+            const int e    = experts[i];
+            const int rank = ranks ? (*ranks)[i] : -1;
             if (high) {
-                q_high.push_back({ il, e, step_seen.load(std::memory_order_relaxed), t });
+                q_high.push_back({ il, e, step_seen.load(std::memory_order_relaxed), t, rank, trace });
                 n_high_pending++;
             } else if (q_low.size() < MOE_PRED_QMAX) {
-                q_low.push_back({ il, e, step_seen.load(std::memory_order_relaxed), t });
+                q_low.push_back({ il, e, step_seen.load(std::memory_order_relaxed), t, rank, trace });
             } else {
                 low_drops++;
             }
@@ -450,7 +477,7 @@ void llama_moe_predictor::drain_high() {
             std::lock_guard<std::mutex> lock(qmtx);
             trace.push_back(w.il + 1);
         }
-        prefetch_expert(w.il, w.e, false);
+        prefetch_expert(w.il, w.e, false, w.rank, w.trace);
     }
 }
 
@@ -476,20 +503,42 @@ std::vector<int> llama_moe_predictor::get_trace() {
     return trace;
 }
 
-void llama_moe_predictor::prefetch_expert(int il, int e, bool low) {
+// trace track of the calling prediction worker
+static thread_local int llama_moe_predictor_worker_idx = 0;
+
+void llama_moe_predictor::prefetch_expert(int il, int e, bool low, int rank, bool trace_work) {
 #if defined(LLAMA_MOE_PREDICT_MADVISE)
+    // decode trace: one IO_ISSUE per piece for the work of a traced step, also when it runs after the step (IDLE,
+    // step -1); never during a prompt batch
+    const bool trace     = trace_work && ggml_trace_io_enabled();
+    const int  trace_tid = llama_moe_predictor_worker_idx == 0 ? GGML_TRACE_TID_PREDICTOR : GGML_TRACE_TID_PREDICTOR1;
     for (const ggml_tensor * t : lt[il].exps) {
         if (t == nullptr || e >= t->ne[2]) {
             continue;
         }
+        // one step for all pieces of the slice, even if a step begins or ends in between
+        const int trace_step = trace ? ggml_trace_step() : -1;
         const size_t nb02 = t->nb[2];
         const uintptr_t slice = (uintptr_t) t->data + (uintptr_t) e*nb02;
-        for (size_t off = 0; off < nb02; off += MOE_PRED_PIECE) {
+        const int n_pieces = (int) ((nb02 + MOE_PRED_PIECE - 1) / MOE_PRED_PIECE);
+        int piece = 0;
+        for (size_t off = 0; off < nb02; off += MOE_PRED_PIECE, ++piece) {
             const uintptr_t p   = slice + off;
             const uintptr_t n   = std::min(MOE_PRED_PIECE, nb02 - off);
             const uintptr_t beg = p & ~(uintptr_t) (page_size - 1);
             const uintptr_t end = (p + n + page_size - 1) & ~(uintptr_t) (page_size - 1);
-            (void) posix_madvise((void *) beg, end - beg, POSIX_MADV_WILLNEED);
+            if (trace) {
+                // a zero read_bytes delta means the range was already cached
+                const int64_t rb0 = ggml_trace_read_bytes();
+                const int64_t t0  = ggml_trace_now_ns();
+                (void) posix_madvise((void *) beg, end - beg, POSIX_MADV_WILLNEED);
+                const int64_t t1  = ggml_trace_now_ns();
+                const int64_t rb1 = ggml_trace_read_bytes();
+                ggml_trace_io_issue(trace_step, (const void *) beg, end - beg, low ? GGML_TRACE_IO_PREDICT_LOW : GGML_TRACE_IO_PREDICT_HIGH,
+                        rank, il, e, t->name, piece, n_pieces, t0, t1, rb0 >= 0 && rb1 >= 0 ? rb1 - rb0 : -1, trace_tid);
+            } else {
+                (void) posix_madvise((void *) beg, end - beg, POSIX_MADV_WILLNEED);
+            }
             // the experts the current layer needs come before the guesses for the next one
             if (low && n_high_pending.load(std::memory_order_relaxed) > 0) {
                 drain_high();
@@ -500,10 +549,13 @@ void llama_moe_predictor::prefetch_expert(int il, int e, bool low) {
     GGML_UNUSED(il);
     GGML_UNUSED(e);
     GGML_UNUSED(low);
+    GGML_UNUSED(rank);
+    GGML_UNUSED(trace_work);
 #endif
 }
 
-void llama_moe_predictor::worker_loop() {
+void llama_moe_predictor::worker_loop(int idx) {
+    llama_moe_predictor_worker_idx = idx;
     for (;;) {
         work w;
         bool have_low = false;
@@ -541,7 +593,7 @@ void llama_moe_predictor::worker_loop() {
                     std::lock_guard<std::mutex> lock(qmtx);
                     trace.push_back(-(w.il + 1));
                 }
-                prefetch_expert(w.il, w.e, true);
+                prefetch_expert(w.il, w.e, true, w.rank, w.trace);
                 low_done++;
             }
         } else {

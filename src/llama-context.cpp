@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-trace.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
@@ -10,17 +11,25 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
+#include "llama-moe-predict.h"
 #include "llama-ext.h"
 #include "llama-sampler.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+
+#if defined(__linux__)
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 //
 // llama_context
@@ -600,11 +609,62 @@ llama_context::llama_context(
             sampling.token_ids_full_vocab[i] = i;
         }
     }
+
+    // last, so that a constructor that throws leaves no trace reference behind
+    trace_init();
+}
+
+void llama_context::trace_init() {
+    const char * path = getenv("LLAMA_TRACE");
+    if (path == nullptr || *path == 0) {
+        return;
+    }
+    auto env_int = [](const char * name, int def) {
+        const char * v = getenv(name);
+        return v != nullptr && *v != 0 ? atoi(v) : def;
+    };
+
+    // mincore reports page cache residency of a file mapping only to the file's owner or a writer
+    bool residency_valid = true;
+#if defined(__linux__)
+    for (const auto & f : model.lazy_file_paths) {
+        struct stat sb;
+        if (stat(f.c_str(), &sb) != 0 || (sb.st_uid != geteuid() && access(f.c_str(), W_OK) != 0)) {
+            LLAMA_LOG_WARN("%s: %s is neither owned nor writable: expert residency in the trace is not valid\n", __func__, f.c_str());
+            residency_valid = false;
+        }
+    }
+#endif
+
+    std::string desc = model.desc();
+    std::replace_if(desc.begin(), desc.end(), [](char c) { return c == '"' || c == '\\' || (unsigned char) c < 0x20; }, '_');
+    char meta[512];
+    snprintf(meta, sizeof(meta), "\"model\":\"%s\",\"n_threads\":%u,\"n_gpu_layers\":%u,\"lazy_files\":%zu,\"moe_predictor\":%d",
+            desc.c_str(), cparams.n_threads, model.n_gpu_layers(), model.lazy_file_paths.size(),
+            model.moe_predictor ? model.moe_predictor->mode() : 0);
+
+    ggml_trace_params tp = {};
+    tp.path            = path;
+    tp.n_tokens        = env_int("LLAMA_TRACE_TOKENS", 16);
+    tp.n_skip          = env_int("LLAMA_TRACE_SKIP", 1);
+    tp.max_batch       = env_int("LLAMA_TRACE_MAX_BATCH", 1);
+    tp.detail          = env_int("LLAMA_TRACE_DETAIL", 1);
+    tp.poll_us         = env_int("LLAMA_TRACE_POLL_US", 1000);
+    tp.buffer_mb       = env_int("LLAMA_TRACE_BUFFER_MB", 64);
+    tp.residency_valid = residency_valid;
+    tp.meta            = meta;
+    trace_started = ggml_trace_start(&tp);
 }
 
 llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
+
+    // the trace samples the residency of the mapped weights: it stops before the model can be unmapped
+    if (trace_started) {
+        ggml_trace_stop();
+        trace_started = false;
+    }
 
     // the reader threads write into the ring buffers, which an upload in flight may still read: stop the threads,
     // then (synchronized above) free the buffers before the backends
@@ -908,7 +968,25 @@ void llama_context::synchronize() {
         return;
     }
 
+    // trace: the wait for the outputs of a traced decode step (its last split runs on the GPU)
+    const bool trace = trace_sync_pending && ggml_trace_enabled();
+    const int64_t trace_t0 = trace ? ggml_trace_now_ns() : 0;
+
     ggml_backend_sched_synchronize(sched.get());
+
+    if (trace) {
+        ggml_trace_event ev;
+        ggml_trace_event_init(&ev, GGML_TRACE_SYNC, GGML_TRACE_TID_SCHED);
+        ev.t0_ns  = trace_t0;
+        ev.t1_ns  = ggml_trace_now_ns();
+        ev.detail  = GGML_TRACE_OUTPUT;
+        ev.step    = ggml_trace_last_step();
+        ev.backend = trace_out_backend;
+        ggml_trace_emit(&ev);
+        // the GPU timings of the step are complete now: resolve them, also if no further step follows soon
+        ggml_trace_flush();
+    }
+    trace_sync_pending = false;
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -2019,8 +2097,28 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
 
+    // trace: each ubatch opens a step (traced, or suspended for prompt and multi-sequence batches); the last one
+    // ends when decode returns, after the output read-back has been enqueued
+    struct trace_batch_scope {
+        llama_context * lctx;
+        bool open = false;
+        ~trace_batch_scope() {
+            if (open) {
+                lctx->trace_sync_pending = ggml_trace_active();
+                ggml_trace_batch_end();
+            }
+        }
+    } trace_batch { this };
+
     do {
         const auto & ubatch = mctx->get_ubatch();
+
+        if (ggml_trace_enabled()) {
+            // several sequences in one ubatch are not a single decode step
+            const int n = ubatch.n_seqs_unq > 1 ? INT_MAX : (int) ubatch.n_tokens;
+            ggml_trace_batch_begin(n, ubatch.token ? ubatch.token[0] : -1, ubatch.pos ? ubatch.pos[0] : -1);
+            trace_batch.open = true;
+        }
 
         // count the outputs in this ubatch
         {
@@ -2093,6 +2191,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             GGML_ASSERT(logits.data != nullptr);
 
             float * logits_out = logits.data + n_outputs_prev*n_vocab;
+
+            if (ggml_trace_active()) {
+                trace_out_backend = ggml_trace_backend_id(ggml_backend_name(backend_res));
+            }
 
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);

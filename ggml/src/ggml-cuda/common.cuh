@@ -1445,10 +1445,13 @@ struct ggml_cuda_stream_context {
     }
 };
 
+struct ggml_cuda_trace; // decode trace state (ggml-trace.h), defined in ggml-cuda.cu
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
     cudaEvent_t copy_event = nullptr;
+    ggml_cuda_trace * trace = nullptr;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};

@@ -19,6 +19,11 @@
 #               model fits (default: 1 for an IQ1 model file, 0 otherwise)
 #   PREDICT_STATS  where the learned prediction state is kept across restarts
 #               (default: ${XDG_STATE_HOME:-~/.local/state}/llama.cpp/<model file name>.predict.bin, one per model)
+#   TRACE       write a per-action trace of the decode steps to this Chrome-trace JSON file (ui.perfetto.dev;
+#               kimi-k3/tools/trace_check.py / trace_report.py); sets LLAMA_TRACE. Tuned with LLAMA_TRACE_TOKENS
+#               (traced tokens, default 16, 0 = all), LLAMA_TRACE_SKIP (decode tokens skipped first, default 1),
+#               LLAMA_TRACE_DETAIL (1, or 2 for per-thread and per-piece records), LLAMA_TRACE_POLL_US (1000),
+#               LLAMA_TRACE_BUFFER_MB (64), LLAMA_TRACE_MAX_BATCH (1); default: off
 #   CHECKPOINTS context checkpoints per slot (llama-server --ctx-checkpoints; default: the server's). The server
 #               splits a prompt at the user-turn start to create one, which costs a second pass over the experts
 #               (~1.6k-token prompt: 108 s with, 76 s without). 0 is right for single-turn requests; keep the
@@ -59,6 +64,7 @@ UBATCH="${UBATCH:-2048}"
 PREDICT="${PREDICT:-2}"
 PREDICT_STATS="${PREDICT_STATS:-${XDG_STATE_HOME:-$HOME/.local/state}/llama.cpp/$(basename "$MODEL" .gguf).predict.bin}"
 CHECKPOINTS="${CHECKPOINTS:-}"
+TRACE="${TRACE:-}"
 N_LAYER=93
 
 die() { echo "run-server.sh: $*" >&2; exit 1; }
@@ -106,6 +112,9 @@ done
 [[ "$PREDICT" =~ ^[012]$ ]] || die "PREDICT must be 0, 1 or 2"
 [[ "$OFFLOAD" =~ ^[01]$ ]] || die "OFFLOAD must be 0 or 1"
 [[ -z "$CHECKPOINTS" || "$CHECKPOINTS" =~ ^(0|[1-9][0-9]*)$ ]] || die "CHECKPOINTS must be a non-negative integer"
+if [[ -n "$TRACE" ]]; then
+    [[ -d "$(dirname "$TRACE")" && -w "$(dirname "$TRACE")" ]] || die "TRACE: directory of $TRACE is not writable"
+fi
 
 # another llama process competes for the same 160 GB of RAM and page cache
 if others="$(pgrep -a -x 'llama-[a-z0-9-]+' || true)"; [[ -n "$others" ]]; then
@@ -131,6 +140,12 @@ if [[ "$PREDICT" != 0 ]]; then
     export LLAMA_MOE_PREDICT="$PREDICT" LLAMA_MOE_PREDICT_STATS="$PREDICT_STATS"
 else
     unset LLAMA_MOE_PREDICT LLAMA_MOE_PREDICT_STATS
+fi
+if [[ -n "$TRACE" ]]; then
+    export LLAMA_TRACE="$TRACE"
+    echo "run-server.sh: tracing decode steps to $TRACE"
+else
+    unset LLAMA_TRACE
 fi
 # prompt batches (>= 32 tokens) use nearly every expert, so uploading each layer's expert tensors to the GPU and
 # running the matmuls there is far faster than the CPU; single-token decode always stays on the CPU

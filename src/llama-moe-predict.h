@@ -123,11 +123,14 @@ private:
         int e;
         uint64_t step;
         int64_t  t_us; // enqueue time
+        int      rank;  // guess rank for the trace (ggml-trace.h), -1 for an actual selection
+        bool     trace; // enqueued by a traced step: its hints are traced (not those of prompt batches)
     };
 
-    void enqueue(bool high, int il, const std::vector<int> & experts);
-    void worker_loop();
-    void prefetch_expert(int il, int e, bool low);
+    // ranks: per expert, for the trace; null for an actual selection
+    void enqueue(bool high, int il, const std::vector<int> & experts, bool trace = false, const std::vector<int> * ranks = nullptr);
+    void worker_loop(int idx);
+    void prefetch_expert(int il, int e, bool low, int rank, bool trace);
     bool pop_high(work & w);
     void drain_high();
     void adapt(layer_state & s);

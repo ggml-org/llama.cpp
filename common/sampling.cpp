@@ -6,6 +6,7 @@
 #include "reasoning-budget.h"
 
 #include "ggml.h"
+#include "ggml-trace.h"
 
 #include <algorithm>
 #include <cctype>
@@ -603,7 +604,33 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
     return gsmpl->chain;
 }
 
+static llama_token common_sampler_sample_impl(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first);
+
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
+    if (!ggml_trace_enabled()) {
+        return common_sampler_sample_impl(gsmpl, ctx, idx, grammar_first);
+    }
+
+    // decode trace (ggml-trace.h): the sampling of a traced step, after its output wait
+    llama_synchronize(ctx);
+    const int64_t t0 = ggml_trace_now_ns();
+    const llama_token id = common_sampler_sample_impl(gsmpl, ctx, idx, grammar_first);
+    const int64_t t1 = ggml_trace_now_ns();
+
+    const int step = ggml_trace_stamp_token_out(id);
+    if (step >= 0) {
+        ggml_trace_event ev;
+        ggml_trace_event_init(&ev, GGML_TRACE_SAMPLE, GGML_TRACE_TID_SAMPLER);
+        ev.t0_ns = t0;
+        ev.t1_ns = t1;
+        ev.step  = step;
+        ev.aux   = id;
+        ggml_trace_emit(&ev);
+    }
+    return id;
+}
+
+static llama_token common_sampler_sample_impl(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
     llama_synchronize(ctx);
 
     // start measuring sampling time after the llama_context synchronization in order to not measure any ongoing async operations

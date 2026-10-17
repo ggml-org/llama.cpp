@@ -357,6 +357,18 @@ if (GGML_CPU AND NOT WIN32)
         ENVIRONMENT "GGML_CPU_MOE_PREFETCH=1;GGML_CPU_MOE_PREFETCH_WINDOW_MB=4" SKIP_RETURN_CODE 77)
 endif()
 
+if (GGML_CPU AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # decode trace (ggml-trace.h) of a MUL_MAT_ID graph on mmap'ed weights; runs each case in its own process
+    llama_build_and_test(test-trace.cpp LINK ggml vendor::nlohmann)
+    set_tests_properties(test-trace PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+if (GGML_CUDA AND NOT GGML_BACKEND_DL)
+    # traced steps bypass CUDA graphs; untraced steps afterwards must not replay a graph of another shape
+    llama_build_and_test(test-trace-cuda.cpp LINK ggml vendor::nlohmann)
+    set_tests_properties(test-trace-cuda PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # libmtmd
 llama_build_and_test(test-mtmd-c-api.c LINK mtmd)
 
