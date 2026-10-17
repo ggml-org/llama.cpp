@@ -1284,8 +1284,8 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
 
     const uint32_t D = hsk | hsv;
 
-    const uint32_t coopmat_block_rows = 16;
-    const uint32_t coopmat_block_cols = 16;
+    const uint32_t coopmat_block_rows = device->coopmat_n;
+    const uint32_t coopmat_block_cols = device->coopmat_m;
 
     const uint32_t num_subgroups = 4;
 
@@ -1348,8 +1348,11 @@ vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, 
     }
 
     if (path == FA_COOPMAT1) {
-        bool shape_ok = (f32acc && device->coopmat_support_16x16x16_f32acc) ||
-                        (!f32acc && device->coopmat_support_16x16x16_f16acc);
+        bool shape_ok = device->coopmat_k == 16 && device->coopmat_n == 16 &&
+                        device->coopmat_m != 0 && (device->coopmat_m % 4) == 0 &&
+                        (device->coopmat_n % device->coopmat_m) == 0 &&
+                        ((f32acc && device->coopmat_acc_f32_support) ||
+                        (!f32acc && device->coopmat_acc_f16_support));
         const vk_fa_tuning_params params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
         bool shmem_ok = ggml_vk_flash_attn_coopmat_shmem_support(device, params, hsk, hsv, f32acc, k_type, v_type);
 
@@ -1398,7 +1401,7 @@ static uint32_t fa_block_bytes(ggml_type t) {
     return (uint32_t) ggml_type_size(t);
 }
 
-static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& state) {
+static std::vector<uint32_t> get_fa_spec_constants(const vk_device& device, const vk_fa_pipeline_state& state) {
     return {
         /* 0 WorkGroupSize   */ state.workgroup_size,
         /* 1 Br              */ state.Br,
@@ -1416,6 +1419,8 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
         /*13 FaTypeV         */ static_cast<uint32_t>(state.v_type),
         /*14 FaBlockBytesK   */ fa_block_bytes(state.k_type),
         /*15 FaBlockBytesV   */ fa_block_bytes(state.v_type),
+        /*16 MatBr           */ device->coopmat_n,
++       /*17 MatBc           */ device->coopmat_m,
     };
 }
 
@@ -2072,7 +2077,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
         ggml_vk_create_pipeline(device, fa.second, name, spv_size, spv_data, "main", 8,
                                 sizeof(vk_flash_attn_push_constants), {Br, 1, 1},
-                                get_fa_spec_constants(fa.first), aligned ? Bc : 1, true,
+                                get_fa_spec_constants(device, fa.first), aligned ? Bc : 1, true,
                                 !fa_ds, !fa_ds ? fa_sgs : 0);
     }
 
@@ -2108,7 +2113,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
             ggml_vk_create_pipeline(device, fa.second, name, spv_size, spv_data, "main", 8,
                                     sizeof(vk_flash_attn_push_constants), {Br, 1, 1},
-                                    get_fa_spec_constants(fa.first), aligned ? Bc : 1, true,
+                                    get_fa_spec_constants(device, fa.first), aligned ? Bc : 1, true,
                                     !fa_ds, !fa_ds ? fa_sgs : 0);
         }
     }
@@ -2145,7 +2150,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
             ggml_vk_create_pipeline(device, fa.second, name, spv_size, spv_data, "main", 8,
                                     sizeof(vk_flash_attn_push_constants), {Br, 1, 1},
-                                    get_fa_spec_constants(fa.first), aligned ? Bc : 1, true, false, 0);
+                                    get_fa_spec_constants(device, fa.first), aligned ? Bc : 1, true, false, 0);
         }
     }
 #endif
@@ -8029,9 +8034,9 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     const uint32_t Br = params.block_rows;
     const uint32_t Bc = params.block_cols;
 
-    const uint32_t MatBr = 16, MatBc = 16;
+    const uint32_t MatBr = device->coopmat_n, MatBc = device->coopmat_m;
 
-    const uint32_t row_split = Bc / MatBc;
+    const uint32_t row_split = params.row_split;
 
     const uint32_t hsk_pad = ROUNDUP_POW2(hsk, 16);
     const uint32_t hsv_pad = ROUNDUP_POW2(hsv, 16);
@@ -8039,7 +8044,7 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     const uint32_t acctype = f32acc ? 4 : 2;
     const uint32_t f16vec4 = 8;
 
-    const uint32_t tmpsh = (Bc / MatBc) * sizeof(float);
+    const uint32_t tmpsh = row_split * sizeof(float);
     // DATA_A_IQ4_NL is compiled into the FA shaders unconditionally, so its shared table is always allocated.
     const uint32_t iq_shmem = 16 * sizeof(ggml_fp16_t);
 
@@ -8053,13 +8058,13 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     const uint32_t sfsh = Bc * sfshstride * acctype;
 
     const uint32_t kvshstride = (params.shmem_staging ? std::max(hsk_pad, hsv_pad) : MatBr) / 4 + 2;
-    const uint32_t vsh_stride = MatBc / 4 * row_split;
+    const uint32_t vsh_stride = MatBr / 4 * row_split;
     const uint32_t ksh = ((kvshstride >= vsh_stride) ? (Bc * kvshstride) : (Bc * vsh_stride)) * f16vec4;
 
     // BF16 PVMat accumulator is f32 (no bf16 accumulator support), so pvsh is vec4 (16 bytes)
     const uint32_t pvsh_elem_size = (k_type == GGML_TYPE_BF16) ? 16u : f16vec4;
-    const uint32_t osh_stride = params.row_split * MatBr / 4;
-    const uint32_t pvsh = MatBc * osh_stride * pvsh_elem_size;
+    const uint32_t osh_stride = row_split * MatBr / 4;
+    const uint32_t pvsh = Br * osh_stride * pvsh_elem_size;
 
     const uint32_t slope = Br * acctype;
 
