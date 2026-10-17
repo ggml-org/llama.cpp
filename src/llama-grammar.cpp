@@ -7,6 +7,8 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 
@@ -1341,14 +1343,27 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
     };
 
     // redirect elements in stacks to point to new rules
-    for (size_t is = 0; is < result->stacks.size(); is++) {
-        for (size_t ie = 0; ie < result->stacks[is].size(); ie++) {
-            for (size_t ir0 = 0; ir0 < grammar.rules.size(); ir0++) {
-                for (size_t ir1 = 0; ir1 < grammar.rules[ir0].size(); ir1++) {
-                    if (grammar.stacks[is][ie] == &grammar.rules[ir0][ir1]) {
-                        result->stacks[is][ie] =  &result->rules[ir0][ir1];
-                    }
-                }
+    // binary search on rule start addresses - a linear scan is slow for big grammars (the server clones on every spec step)
+    using elem_ptr = const llama_grammar_element *;
+    const std::less<elem_ptr> ptr_less;
+    std::vector<std::pair<elem_ptr, size_t>> starts;
+    starts.reserve(grammar.rules.size());
+    for (size_t ir = 0; ir < grammar.rules.size(); ir++) {
+        if (!grammar.rules[ir].empty()) {
+            starts.emplace_back(grammar.rules[ir].data(), ir);
+        }
+    }
+    std::sort(starts.begin(), starts.end(), [&](const auto & a, const auto & b) { return ptr_less(a.first, b.first); });
+    for (auto & stack : result->stacks) {
+        for (auto & pe : stack) {
+            auto it = std::upper_bound(starts.begin(), starts.end(), pe, [&](elem_ptr v, const auto & e) { return ptr_less(v, e.first); });
+            if (it == starts.begin()) {
+                continue;
+            }
+            const size_t ir = std::prev(it)->second;
+            const auto & rule = grammar.rules[ir];
+            if (ptr_less(pe, rule.data() + rule.size())) {
+                pe = &result->rules[ir][pe - rule.data()];
             }
         }
     }

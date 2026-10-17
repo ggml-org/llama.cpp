@@ -188,6 +188,48 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
 static void test_grammar(const std::string & test_desc, const std::string & grammar_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
     test(test_desc + ". Grammar: " + grammar_str, grammar_str, passing_strings, failing_strings);
 }
+
+static bool stacks_point_into_rules(llama_grammar * grammar) {
+    const auto & rules = llama_grammar_get_rules(grammar);
+    for (const auto & stack : llama_grammar_get_stacks(grammar)) {
+        for (const llama_grammar_element * pe : stack) {
+            bool found = false;
+            for (const auto & rule : rules) {
+                found = found || (!rule.empty() && pe >= rule.data() && pe < rule.data() + rule.size());
+            }
+            if (!found) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void test_clone() {
+    fprintf(stderr, "⚫ Testing grammar clone at each position of an input\n");
+    const std::string grammar_str = json_schema_to_grammar(json::parse(R"""({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "n": {"type": "integer"}
+        },
+        "required": ["name", "n"]
+    })"""), true);
+    const std::string input = R"""({"name": "a", "n": 42, "tags": ["x", "y"]})""";
+    for (size_t k = 0; k <= input.size(); k++) {
+        auto * grammar = build_grammar(grammar_str);
+        for (const auto & in : parse_tokens(input.substr(0, k))) {
+            llama_grammar_accept_token(*grammar, in.token, in.piece);
+        }
+        auto * clone = llama_grammar_clone_impl(*grammar);
+        llama_grammar_free_impl(grammar);
+        assert(stacks_point_into_rules(clone));
+        assert(match_string(input.substr(k), clone));
+        llama_grammar_free_impl(clone);
+    }
+    fprintf(stdout, "  ✅︎\n");
+}
 static void test_schema(const std::string & test_desc, const std::string & schema_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
     test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true), passing_strings, failing_strings);
 }
@@ -1490,6 +1532,7 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_clone();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
