@@ -1064,13 +1064,15 @@ bool ggml_cuda_flash_attn_ext_mma_convert_rows(
         bool contiguous) {
     if (!source || !destination || rows <= 0 || source_stride <= 0 || destination_stride < 256*int64_t(sizeof(half))) return false;
     const ggml_cuda_kernel_launch_params launch({unsigned(rows),1,1},{32,1,1},0,ctx.stream());
-    if (type == GGML_TYPE_Q8_0) {
-        ggml_cuda_kernel_launch(flash_attn_ext_mma_convert_rows_kernel<GGML_TYPE_Q8_0>,launch,
-            source,destination,source_stride,destination_stride,contiguous);
-    } else if (type == GGML_TYPE_Q4_0) {
-        ggml_cuda_kernel_launch(flash_attn_ext_mma_convert_rows_kernel<GGML_TYPE_Q4_0>,launch,
-            source,destination,source_stride,destination_stride,contiguous);
-    } else return false;
+    switch (type) {
+#define CONVERT(TYPE) case GGML_TYPE_##TYPE: \
+        ggml_cuda_kernel_launch(flash_attn_ext_mma_convert_rows_kernel<GGML_TYPE_##TYPE>,launch, \
+            source,destination,source_stride,destination_stride,contiguous); break;
+        CONVERT(F32) CONVERT(F16) CONVERT(BF16) CONVERT(Q8_0)
+        CONVERT(Q4_0) CONVERT(Q4_1) CONVERT(Q5_0) CONVERT(Q5_1)
+#undef CONVERT
+        default: return false;
+    }
     CUDA_CHECK(cudaGetLastError());
     return true;
 }

@@ -8,7 +8,7 @@ namespace {
 static fattn_kernel_t encoded_kernel(ggml_type key, ggml_type value, uint32_t c1, uint32_t c2) {
     switch (key) {
 #define KEY(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_tile_kernel_##K(value,c1,c2);
-        KEY(F16) KEY(BF16) KEY(Q4_0) KEY(Q4_1) KEY(Q5_0) KEY(Q5_1) KEY(Q8_0)
+        KEY(F32) KEY(F16) KEY(BF16) KEY(Q4_0) KEY(Q4_1) KEY(Q5_0) KEY(Q5_1) KEY(Q8_0)
 #undef KEY
         default: return nullptr;
     }

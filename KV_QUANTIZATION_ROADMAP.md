@@ -36,7 +36,9 @@ Tests cover vector/tile/MMA selection, dense and compact masks, stock conversion
 
 Acceptance: native/spanned/resumed arithmetic qualifies for implemented pairs; missing pairs fail before execution; Q8/Q4 optimized dispatch is preserved.
 
-Status: pending.
+Status: completed. The all-pairs release server and libraries rebuild coherently. All 64 compiled pairs execute TG1-TG8 against native attention (3075 assertions); the complete backend span suite passes 23 tests/6214 assertions. Focused F32 complete/wrapped/resumed cases pass 2/924 with zero reported maximum error. CUDA memcheck and synccheck report zero errors; racecheck reports zero hazards, errors or warnings. Unchanged seven-type CUDA reference objects are relinked against the coherent libraries: conversion 112 cases, staging 112, encoded MMA 1372, FP16 tile 48 and FP16 MMA 24 all match; native resumed tile passes 104 stock-exact cases and vector passes 34 wave cases with stock maximum error zero. No ABI or reference arithmetic changes are involved in reusing those unchanged reference objects. Logs are `/tmp/kq2-{f32-green,quant-matrix,spans-final,f32-memcheck,f32-racecheck,f32-synccheck,unchanged-cuda-spans,unchanged-cuda-resume}.log`.
+
+The first broad A/B completes all 96 numerical/timing cases; one measurement line in each combined stdout/stderr log is interleaved and excluded, leaving 95 paired measurements. Focused alternating A/B runs use one identical O2-compiled driver against frozen old/new libraries, three repetitions, 64/128 Ki, TG1/TG4/TG8 and three wrapped spans. Median latency changes range from -0.122% to +0.156%, treated as noise rather than a speedup. Whole-model performance qualification remains KQ6. The exploratory full-matrix second repetition is deliberately interrupted after the first complete pair, not accepted as another full run. Logs are `/tmp/kq2-ab-{old,new}-1.log` and `/tmp/kq2-focused-{old,new}-{1,2,3}.log`. Production is restored healthy.
 
 ## KQ3 - Quant-dependent memory accounting
 
@@ -53,6 +55,8 @@ Status: pending.
 Replace the server's Q8_0/Q4_0-only check after the lower layers qualify. Prepare required native and streamed prediction/catch-up/verification/replay variants before arena allocation. Keep target and MTP cache formats identical and the auxiliary cache in the existing shared physical policy. DFlash inherits target formats under KQ1 policy while retaining bounded draft storage.
 
 Add regressions for Q8/Q8, Q5_1/Q5_1, Q8/Q4 and asymmetric formats: context construction, attachment, publication, lease reuse, rejection, truncation and cleanup. Verify bad pairs and inadequate budgets return actionable initialization errors rather than assertions or recovered execution failures.
+
+Audit the existing vision-arena quant guard as well: apply the same structural/capability distinction without changing its serial, projector, model, LoRA or speculative-mode restrictions. Qualify inherited cache formats across target/MTP suspension and restoration before claiming image-path coverage.
 
 Acceptance: supported pairs start and execute through all admitted widths; unsupported paths are rejected before requests.
 
@@ -83,6 +87,8 @@ Use shorter correctness controls for remaining supported pairs. Compare Q8/Q4 ag
 
 Update README support and invocation guidance, inherited draft-cache behavior, capability diagnostics and plotting instructions. Preserve full commands, logs, manifests and the final graph. Verify production's host health endpoint after restoration.
 
+After implementation and correctness qualification, restart the full requested matrix under independent termination/stall supervision. If a worker aborts before completion, inspect its exact failure, fix the in-scope issue, rerun affected correctness checks and resume missing points without discarding accepted records. A clean process exit or launched background job is not completion. Review all points and final artifacts before reporting KQ6 complete.
+
 Acceptance: all 45 requested points pass, matched-mode correctness qualifies, Q8/Q4 performance remains comparable, documentation is accurate, production is healthy, and no unqualified support claim remains.
 
 Status: pending.
@@ -90,3 +96,8 @@ Status: pending.
 ## Progress log
 
 - Roadmap saved before implementation. No runtime changes or new qualification matrix started yet.
+- KQ1 committed as c6ce1800e. Only title text was used in the commit, as requested.
+- KQ2 in progress: the new host dispatch regression fails 144 assertions before removing the pair-specific TG2 gate, then passes under ASan/UBSan. An additional Volta unquantized-TG1 regression first fails three assertions; final host admission passes 24 tests/7211 assertions. A separately compiled new CUDA fixture against the frozen baseline reproduces F32 capability rejection (`/tmp/kq2-f32-red.log`). F32 readers round into FP16 like stock and use mapped F16 native vector occupancy. Raw F32 cannot fit an FP16-sized staging tile; the initial compile rejection and temporary direct-loader build are archived in `/tmp/kq2-cuda-build{,-2}.log`. The refined provider instead rounds F32 on ingress into the existing FP16-sized staging region, then preserves the common staged MMA pipeline without additional buffers. Existing encoded quant paths are unchanged. The coherent all-pairs CUDA release build is running in build-upstream-attention-port (`/tmp/kq2-cuda-build-3.log`); actual GPU validation and this stage commit remain pending. IQ4_NL is absent from the current stock CUDA FA selector and remains a documented upstream limitation, not newly advertised support.
+- KQ3 test preparation, not yet committed: expanded 81-pair partition/minimum-budget checks pass 36 tests/153360 assertions; host layout passes 8/386; stock-versus-writer partial/cross-page publication passes 12/4258 under ASan/UBSan. No sizing implementation change was necessary for these checks. Additional CUDA phase-quote and lease cases await the coherent CUDA build. Tests remain in the working tree for their own stage commit.
+- While the all-pairs CUDA build runs, later-stage test preparation proceeds without committing those stages early. KQ4 vision configuration first fails 160 of 199 assertions on the old fixed-pair check, then passes 7 tests/200 assertions with the shared type policy (`/tmp/kq4-vision-{red,green}.log`). The server's MTP type guard is removed in the working tree; real-model admission remains pending. KQ5's new oracle type option first fails as unknown, then its host suite passes 8 tests/207 assertions (`/tmp/kq5-{red,green}.log`); the native/streamed MTP oracle, DFlash oracle and vision handoff can select matching cache formats without changing their defaults or tolerances. KQ6's fixed-span command test first fails on hardcoded Q8_0, then 36 fixed-span and 54 DFlash harness checks pass with configurable target cache types. GPU qualification and stage commits remain pending in order after KQ2.
+- Production remains on its existing container image; no new sweep is running. The user explicitly requested resuming and supervising the complete matrix after implementation and correctness qualification.

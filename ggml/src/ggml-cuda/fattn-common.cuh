@@ -115,6 +115,30 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f16(
     return sum;
 }
 
+// Stream F32 rows with the same per-value FP16 rounding as stock's conversion plane.
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f32_as_f16(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+    constexpr int cpy_ne = ggml_cuda_get_max_cpy_bytes()/4;
+    const auto * source = reinterpret_cast<const float2 *>(K_c);
+    float sum = 0.0f;
+#pragma unroll
+    for (int first = 0; first < D/2; first += nthreads*cpy_ne) {
+#pragma unroll
+        for (int pair = 0; pair < cpy_ne; ++pair) {
+            const half2 value = __float22half2_rn(source[first+(threadIdx.x%nthreads)*cpy_ne+pair]);
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            ggml_cuda_mad(sum, value, static_cast<const half2 *>(Q_v)[first/nthreads+pair]);
+#else
+            ggml_cuda_mad(sum, __half22float2(value), static_cast<const float2 *>(Q_v)[first/nthreads+pair]);
+#endif
+        }
+    }
+    return sum;
+}
+
 template <int D, int nthreads>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_bf16(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds_v) {
@@ -393,6 +417,18 @@ static __device__ __forceinline__ void dequantize_V_f16(const void * __restrict_
     }
 }
 
+// Match stock F32-to-F16 conversion before the ordinary vector value arithmetic.
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_f32_as_f16(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const auto * source = static_cast<const float *>(vx)+i0;
+#pragma unroll
+    for (int i = 0; i < ne; ++i) {
+        const half value = __float2half_rn(source[i]);
+        if constexpr (std::is_same_v<T, half>) static_cast<half *>(dst)[i] = value;
+        else static_cast<float *>(dst)[i] = __half2float(value);
+    }
+}
+
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     static_assert(std::is_same_v<T, float>, "BF16 V dequantization only supports float output");
@@ -627,6 +663,8 @@ template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
         return vec_dot_fattn_vec_KQ_f16<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_F32) {
+        return vec_dot_fattn_vec_KQ_f32_as_f16<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_Q4_0) {
         return vec_dot_fattn_vec_KQ_q4_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_Q4_1) {
@@ -649,6 +687,8 @@ template <ggml_type type_V, typename T, int ne>
 constexpr __device__ dequantize_V_t get_dequantize_V() {
     if constexpr (type_V == GGML_TYPE_F16) {
         return dequantize_V_f16<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_F32) {
+        return dequantize_V_f32_as_f16<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_Q4_0) {
         return dequantize_V_q4_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_Q4_1) {

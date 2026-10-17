@@ -342,12 +342,12 @@ static bool resume_plan(
     if (family == kernel_family::tile) return ggml_cuda_kv_stream_tile_plan(
         ctx,ggml_type(key),ggml_type(value),heads,kv_heads,queries,tokens,output);
     if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_f16_resume_plan(ctx,&op,output);
-    auto native=ggml_cuda_kv_stream_vector_kernel(ggml_type(key),ggml_type(value),queries);
+    auto native=ggml_cuda_kv_stream_vector_kernel(key == GGML_TYPE_F32 ? GGML_TYPE_F16 : ggml_type(key),
+        value == GGML_TYPE_F32 ? GGML_TYPE_F16 : ggml_type(value),queries);
     auto resumed=ggml_cuda_kv_stream_resume_kernel(ggml_type(key),ggml_type(value),queries);
     if (!native || !resumed ||
             ggml_cuda_kv_stream_attention_select(device.cc,queries,ggml_type(key),ggml_type(value)) == ggml_cuda_kv_stream_attention_path::none ||
-            family != kernel_family::vector ||
-            (!ggml_is_quantized(ggml_type(key)) && !ggml_is_quantized(ggml_type(value)))) return false;
+            family != kernel_family::vector) return false;
     const ggml_cuda_fattn_plan_key cache_key{ctx.device,device.cc,compiled_arch,device.nsm,device.warp_size,device.smpbo,
         key,value,heads,kv_heads,queries,uint32_t(tokens),0,uint32_t(kernel_family::vector),true,false};
     static thread_local ggml_cuda_fattn_plan_cache<ggml_kv_stream_resume_plan> cache;
@@ -771,7 +771,6 @@ static bool spans_workspace(
 static bool convert_mma_rows(
         ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination) {
     if (!backend || !ggml_backend_is_cuda(backend) || !source || !destination ||
-            (source->type != GGML_TYPE_Q8_0 && source->type != GGML_TYPE_Q4_0) ||
             destination->type != GGML_TYPE_F16 || source->ne[0] != 256 ||
             source->ne[1] <= 0 || source->ne[1] > INT_MAX || source->ne[2] != 1 || source->ne[3] != 1 ||
             destination->ne[0] != source->ne[0] || destination->ne[1] != source->ne[1] ||

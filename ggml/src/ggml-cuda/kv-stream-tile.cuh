@@ -5,6 +5,7 @@
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #define KV_TILE_DECLARE(K) fattn_kernel_t ggml_cuda_kv_stream_tile_kernel_##K(ggml_type value, uint32_t ncols1, uint32_t ncols2);
+KV_TILE_DECLARE(F32)
 KV_TILE_DECLARE(F16)
 KV_TILE_DECLARE(BF16)
 KV_TILE_DECLARE(Q4_0)

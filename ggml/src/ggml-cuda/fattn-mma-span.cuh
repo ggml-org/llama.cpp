@@ -131,6 +131,22 @@ static __device__ __forceinline__ void ggml_cuda_fattn_prefetch_encoded_tile(
         const ggml_cuda_kv_span * spans, int count, bool value, int head, int first,
         char * staging, int full_width, int live) {
     constexpr int warp = ggml_cuda_get_physical_warp_size();
+    if constexpr (type == GGML_TYPE_F32) {
+        const int thread = threadIdx.y*warp+threadIdx.x;
+        for (int i = thread; i < rows*full_width; i += warps*warp) {
+            const int row = i/full_width, pair = i%full_width;
+            const int index = row < live ? flash_attn_ext_f16_span_index(spans,count,first+row) : -1;
+            const char * source = nullptr;
+            if (index >= 0) {
+                const auto & span = spans[index];
+                source = (value ? span.v : span.k)+int64_t(first+row-span.first)*(value ? span.v_token_stride : span.k_token_stride)+
+                    int64_t(head)*(value ? span.v_head_stride : span.k_head_stride);
+            }
+            reinterpret_cast<half2 *>(staging)[i] = source ?
+                __float22half2_rn(reinterpret_cast<const float2 *>(source)[pair]) : __float22half2_rn(make_float2(0,0));
+        }
+        return;
+    }
     const int bytes = ggml_cuda_fattn_encoded_traits<type>::row_bytes(full_width), chunks = bytes/16;
     const unsigned int shared = ggml_cuda_cvta_generic_to_shared(staging);
     const int4 zero = {};
@@ -225,9 +241,12 @@ struct ggml_cuda_fattn_mma_contiguous_kv {
 template<ggml_type key = GGML_TYPE_F16, ggml_type value_type = GGML_TYPE_F16, bool resume = false>
 struct ggml_cuda_fattn_mma_typed_span_kv {
     static constexpr bool spanned = true;
-    static constexpr bool staged = key != GGML_TYPE_F16 || value_type != GGML_TYPE_F16;
+    static constexpr bool encoded = key != GGML_TYPE_F16 || value_type != GGML_TYPE_F16;
+    static constexpr bool staged = encoded;
     static constexpr bool resumable = resume;
-    static constexpr ggml_type key_type = key, v_type = value_type;
+    // F32 is rounded on ingress so every staged row fits the existing decoded tile.
+    static constexpr ggml_type key_type = key == GGML_TYPE_F32 ? GGML_TYPE_F16 : key;
+    static constexpr ggml_type v_type = value_type == GGML_TYPE_F32 ? GGML_TYPE_F16 : value_type;
     const ggml_cuda_kv_span * spans;
     int count;
     int head;
@@ -254,9 +273,9 @@ struct ggml_cuda_fattn_mma_typed_span_kv {
     __device__ __forceinline__ void load(bool value, const half2 *, half2 * tile, int width, int,
             int first, int live, const int32_t *, int feature) const {
         static_assert(!sparse, "sparse attention over spans is not implemented");
-        if constexpr (!staged) flash_attn_ext_f16_load_span_tile<stride,warps,rows,asynchronous>(
+        if constexpr (!encoded) flash_attn_ext_f16_load_span_tile<stride,warps,rows,asynchronous>(
             spans,count,value,head,first,feature,tile,width,live);
-        else if constexpr (asynchronous) {
+        else if constexpr (asynchronous && staged) {
             if (value) ggml_cuda_fattn_prefetch_encoded_tile<value_type,warps,rows>(
                 spans,count,true,head,first,reinterpret_cast<char *>(tile),width,live);
             else ggml_cuda_fattn_prefetch_encoded_tile<key,warps,rows>(
@@ -270,11 +289,11 @@ struct ggml_cuda_fattn_mma_typed_span_kv {
     }
     template<int stride, int warps, int rows>
     __device__ __forceinline__ void finish_key(const char * raw,half2 * tile,int width) const {
-        ggml_cuda_fattn_finish_encoded_tile<key,stride,warps,rows>(raw,tile,width,0,width,conversion_flags&1);
+        ggml_cuda_fattn_finish_encoded_tile<key_type,stride,warps,rows>(raw,tile,width,0,width,conversion_flags&1);
     }
     template<int stride, int warps, int rows>
     __device__ __forceinline__ void finish_value(const char * raw,half2 * tile,int width) const {
-        ggml_cuda_fattn_finish_encoded_tile<value_type,stride,warps,rows>(raw,tile,width,0,width,conversion_flags&2);
+        ggml_cuda_fattn_finish_encoded_tile<v_type,stride,warps,rows>(raw,tile,width,0,width,conversion_flags&2);
     }
 };
 

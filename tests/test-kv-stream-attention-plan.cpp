@@ -201,6 +201,24 @@ int main() {
             t.assert_equal(size_t(32768), output.requirements.shared_bytes);
         }
     });
+    t.test("two_query_mma_admission_is_not_tied_to_one_cache_pair", [](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1};
+        for (int cc : {750, 800, 860}) for (auto key : types) for (auto value : types) {
+            t.assert_true(ggml_cuda_kv_stream_attention_select(cc, 2, key, value) ==
+                ggml_cuda_kv_stream_attention_path::mma);
+        }
+    });
+    t.test("unquantized_volta_vector_and_float32_lane_geometry_are_admitted", [](testing & t) {
+        for (auto key : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
+            t.assert_true(ggml_cuda_kv_stream_attention_select(700, 1, key, GGML_TYPE_F16) ==
+                ggml_cuda_kv_stream_attention_path::vector);
+        }
+        for (int cc : {610, 700, 860, 1200}) {
+            t.assert_equal(ggml_cuda_kv_stream_vector_values_per_thread(GGML_TYPE_F16, cc),
+                ggml_cuda_kv_stream_vector_values_per_thread(GGML_TYPE_F32, cc));
+        }
+    });
     t.test("existing_modern_dispatch_observations_remain_unchanged", [](testing & t) {
         using path = ggml_cuda_kv_stream_attention_path;
         for (int cc : {860, 890, 1200}) {
@@ -216,8 +234,8 @@ int main() {
                 t.assert_true(output.family == supplied);
             }
         }
-        t.assert_true(ggml_cuda_kv_stream_attention_select(860, 2, GGML_TYPE_Q5_0, GGML_TYPE_Q4_0) == path::none);
-        t.assert_true(ggml_cuda_kv_stream_attention_select(860, 2, GGML_TYPE_F16, GGML_TYPE_F16) == path::none);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(860, 2, GGML_TYPE_Q5_0, GGML_TYPE_Q4_0) == path::mma);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(860, 2, GGML_TYPE_F16, GGML_TYPE_F16) == path::mma);
     });
     t.test("pascal_two_query_vector_admission_preserves_modern_families", [](testing & t) {
         using path = ggml_cuda_kv_stream_attention_path;
@@ -227,8 +245,7 @@ int main() {
             t.assert_true(ggml_cuda_kv_stream_attention_select(610,2,pair.first,pair.second) == path::vector);
             for (uint32_t queries : {0u,3u,4u})
                 t.assert_true(ggml_cuda_kv_stream_attention_select(610,queries,pair.first,pair.second) == path::none);
-            t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,pair.first,pair.second) ==
-                (pair.first == GGML_TYPE_Q8_0 && pair.second == GGML_TYPE_Q4_0 ? path::mma : path::none));
+            t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,pair.first,pair.second) == path::mma);
             for (int cc : {500,600,609})
                 t.assert_true(ggml_cuda_kv_stream_attention_select(cc,1,pair.first,pair.second) == path::none);
         }
@@ -251,7 +268,7 @@ int main() {
         using path = ggml_cuda_kv_stream_attention_path;
         t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::mma);
         t.assert_true(ggml_cuda_kv_stream_attention_select(750,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::vector);
-        t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0) == path::none);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0) == path::mma);
     });
     t.test("metadata_contract_has_no_new_query_or_head_size_policy", [](testing & t) {
         fixture f;

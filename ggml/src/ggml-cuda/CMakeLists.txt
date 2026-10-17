@@ -130,7 +130,11 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
     # Compile private head-256 streamed kernels without changing stock attention dispatch.
-    foreach(KV_STREAM_KEY IN ITEMS F16 BF16 Q4_0 Q4_1 Q5_0 Q5_1 Q8_0)
+    foreach(KV_STREAM_KEY IN ITEMS F32 F16 BF16 Q4_0 Q4_1 Q5_0 Q5_1 Q8_0)
+        set(KV_STREAM_COMPILED_KEY ${KV_STREAM_KEY})
+        if (KV_STREAM_KEY STREQUAL "F32")
+            set(KV_STREAM_COMPILED_KEY F16)
+        endif()
         set(KV_STREAM_DEFAULT_NATIVE 0)
         if (KV_STREAM_KEY MATCHES "^(F16|BF16|Q4_0|Q8_0)$")
             set(KV_STREAM_DEFAULT_NATIVE 1)

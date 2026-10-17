@@ -19,25 +19,26 @@ fattn_kernel_t ggml_cuda_kv_stream_tile_kernel_@KV_STREAM_KEY@(ggml_type value, 
     GGML_UNUSED_VARS(value,ncols1,ncols2);
 #ifndef GGML_CUDA_NO_FA
     switch (value) {
-#if GGML_CUDA_FA_@KV_STREAM_KEY@_F16
+#if GGML_CUDA_FA_@KV_STREAM_COMPILED_KEY@_F16
+        case GGML_TYPE_F32: return tile_kernel<GGML_TYPE_F32>(ncols1,ncols2);
         case GGML_TYPE_F16: return tile_kernel<GGML_TYPE_F16>(ncols1,ncols2);
 #endif
-#if GGML_CUDA_FA_@KV_STREAM_KEY@_BF16
+#if GGML_CUDA_FA_@KV_STREAM_COMPILED_KEY@_BF16
         case GGML_TYPE_BF16: return tile_kernel<GGML_TYPE_BF16>(ncols1,ncols2);
 #endif
-#if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_0
+#if GGML_CUDA_FA_@KV_STREAM_COMPILED_KEY@_Q4_0
         case GGML_TYPE_Q4_0: return tile_kernel<GGML_TYPE_Q4_0>(ncols1,ncols2);
 #endif
-#if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_1
+#if GGML_CUDA_FA_@KV_STREAM_COMPILED_KEY@_Q4_1
         case GGML_TYPE_Q4_1: return tile_kernel<GGML_TYPE_Q4_1>(ncols1,ncols2);
 #endif
-#if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_0
+#if GGML_CUDA_FA_@KV_STREAM_COMPILED_KEY@_Q5_0
         case GGML_TYPE_Q5_0: return tile_kernel<GGML_TYPE_Q5_0>(ncols1,ncols2);
 #endif
-#if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_1
+#if GGML_CUDA_FA_@KV_STREAM_COMPILED_KEY@_Q5_1
         case GGML_TYPE_Q5_1: return tile_kernel<GGML_TYPE_Q5_1>(ncols1,ncols2);
 #endif
-#if GGML_CUDA_FA_@KV_STREAM_KEY@_Q8_0
+#if GGML_CUDA_FA_@KV_STREAM_COMPILED_KEY@_Q8_0
         case GGML_TYPE_Q8_0: return tile_kernel<GGML_TYPE_Q8_0>(ncols1,ncols2);
 #endif
         default: break;
