@@ -3336,7 +3336,11 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 
 #if defined(__AVX2__)
 
-    const uint64_t * signs64 = (const uint64_t *)keven_signs_q2xs;
+    const __m256i shifts = _mm256_setr_epi32(0, 0, 7, 7, 14, 14, 21, 21);
+    const __m256i spread = _mm256_setr_epi8(0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12,
+                                            0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12);
+    const __m256i bits = _mm256_set1_epi64x(0x8040201008040201);
+    const __m256i parity = _mm256_broadcastsi128_si256(_mm_setr_epi8(0, -128, -128, 0, -128, 0, 0, -128, -128, 0, 0, -128, 0, -128, -128, 0));
 
     uint32_t aux32[2];
 
@@ -3348,6 +3352,9 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
         __m256i sumi1 = _mm256_setzero_si256();
         __m256i sumi2 = _mm256_setzero_si256();
+#if defined(__GNUC__)
+        #pragma GCC unroll 4
+#endif
         for (int ib32 = 0; ib32 < QK_K/32; ib32 += 2) {
             const __m256i q8_1 = _mm256_loadu_si256((const __m256i *)q8); q8 += 32;
             const __m256i q8_2 = _mm256_loadu_si256((const __m256i *)q8); q8 += 32;
@@ -3358,12 +3365,19 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
                                                   iq3xxs_grid[q3[3]], iq3xxs_grid[q3[2]], iq3xxs_grid[q3[1]], iq3xxs_grid[q3[0]]);
             q3 += 8;
             memcpy(aux32, gas, 8); gas += 8;
-            const __m256i s2_1 = _mm256_set_epi64x(signs64[(aux32[0] >> 21) & 127], signs64[(aux32[0] >> 14) & 127],
-                                                   signs64[(aux32[0] >>  7) & 127], signs64[(aux32[0] >>  0) & 127]);
-            const __m256i s2_2 = _mm256_set_epi64x(signs64[(aux32[1] >> 21) & 127], signs64[(aux32[1] >> 14) & 127],
-                                                   signs64[(aux32[1] >>  7) & 127], signs64[(aux32[1] >>  0) & 127]);
-            const __m256i q8s_1 = _mm256_sign_epi8(q8_1, s2_1);
-            const __m256i q8s_2 = _mm256_sign_epi8(q8_2, s2_2);
+            // The eighth sign bit is the parity of the seven stored bits.
+            __m256i signs0 = _mm256_and_si256(_mm256_srlv_epi32(_mm256_set1_epi32(aux32[0]), shifts), _mm256_set1_epi32(127));
+            const __m256i parity0 = _mm256_shuffle_epi8(parity, _mm256_and_si256(_mm256_xor_si256(signs0, _mm256_srli_epi32(signs0, 4)), _mm256_set1_epi8(15)));
+            signs0 = _mm256_or_si256(signs0, parity0);
+            signs0 = _mm256_shuffle_epi8(signs0, spread);
+            const __m256i neg0 = _mm256_cmpeq_epi8(_mm256_and_si256(signs0, bits), bits);
+            const __m256i q8s_1 = _mm256_sub_epi8(_mm256_xor_si256(q8_1, neg0), neg0);
+            __m256i signs1 = _mm256_and_si256(_mm256_srlv_epi32(_mm256_set1_epi32(aux32[1]), shifts), _mm256_set1_epi32(127));
+            const __m256i parity1 = _mm256_shuffle_epi8(parity, _mm256_and_si256(_mm256_xor_si256(signs1, _mm256_srli_epi32(signs1, 4)), _mm256_set1_epi8(15)));
+            signs1 = _mm256_or_si256(signs1, parity1);
+            signs1 = _mm256_shuffle_epi8(signs1, spread);
+            const __m256i neg1 = _mm256_cmpeq_epi8(_mm256_and_si256(signs1, bits), bits);
+            const __m256i q8s_2 = _mm256_sub_epi8(_mm256_xor_si256(q8_2, neg1), neg1);
             const __m256i dot1  = _mm256_maddubs_epi16(q2_1, q8s_1);
             const __m256i dot2  = _mm256_maddubs_epi16(q2_2, q8s_2);
             const uint16_t ls1 = aux32[0] >> 28;
@@ -3471,16 +3485,6 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const __m256i mask1 = _mm256_loadu_si256((const __m256i*)k_mask1);
     const __m256i mask2 = _mm256_loadu_si256((const __m256i*)k_mask2);
 
-    const __m256i idx_shift = _mm256_set_epi32(1, 2, 3, 4, 5, 6, 7, 8);
-    const __m256i idx_mask  = _mm256_set1_epi32(256);
-
-    typedef union {
-        __m256i  vec[2];
-        uint32_t index[16];
-    } index_t;
-
-    index_t idx;
-
     __m256 accumf = _mm256_setzero_ps();
     for (int i = 0; i < nb; ++i) {
         const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
@@ -3490,35 +3494,38 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
         __m256i sumi1 = _mm256_setzero_si256();
         __m256i sumi2 = _mm256_setzero_si256();
+#if defined(__GNUC__)
+        #pragma GCC unroll 4
+#endif
         for (int ib32 = 0; ib32 < QK_K/32; ib32 += 2) {
             const __m256i q8_1 = _mm256_loadu_si256((const __m256i *)q8); q8 += 32;
             const __m256i q8_2 = _mm256_loadu_si256((const __m256i *)q8); q8 += 32;
-            const __m256i idx_l = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)qs)); qs += 16;
-            idx.vec[0] = _mm256_set1_epi32(qh[ib32+0]);
-            idx.vec[1] = _mm256_set1_epi32(qh[ib32+1]);
-            idx.vec[0] = _mm256_and_si256(_mm256_sllv_epi32(idx.vec[0], idx_shift), idx_mask);
-            idx.vec[1] = _mm256_and_si256(_mm256_sllv_epi32(idx.vec[1], idx_shift), idx_mask);
-            idx.vec[0] = _mm256_or_si256(idx.vec[0], _mm256_cvtepi16_epi32(_mm256_castsi256_si128(idx_l)));
-            idx.vec[1] = _mm256_or_si256(idx.vec[1], _mm256_cvtepi16_epi32(_mm256_extractf128_si256(idx_l, 1)));
-
-            // At leat on my CPU (Ryzen 7950X), using _mm256_i32gather_epi32 is slower than _mm256_set_epi32. Strange.
-            //const __m256i q2_1 = _mm256_i32gather_epi32((const int *)iq3s_grid, idx.vec[0], 4);
-            //const __m256i q2_2 = _mm256_i32gather_epi32((const int *)iq3s_grid, idx.vec[1], 4);
             const __m256i q2_1 = _mm256_set_epi32(
-                    iq3s_grid[idx.index[7]], iq3s_grid[idx.index[6]], iq3s_grid[idx.index[5]], iq3s_grid[idx.index[4]],
-                    iq3s_grid[idx.index[3]], iq3s_grid[idx.index[2]], iq3s_grid[idx.index[1]], iq3s_grid[idx.index[0]]
-            );
+                    iq3s_grid[qs[ 7] | ((qh[ib32+0] << 1) & 256)],
+                    iq3s_grid[qs[ 6] | ((qh[ib32+0] << 2) & 256)],
+                    iq3s_grid[qs[ 5] | ((qh[ib32+0] << 3) & 256)],
+                    iq3s_grid[qs[ 4] | ((qh[ib32+0] << 4) & 256)],
+                    iq3s_grid[qs[ 3] | ((qh[ib32+0] << 5) & 256)],
+                    iq3s_grid[qs[ 2] | ((qh[ib32+0] << 6) & 256)],
+                    iq3s_grid[qs[ 1] | ((qh[ib32+0] << 7) & 256)],
+                    iq3s_grid[qs[ 0] | ((qh[ib32+0] << 8) & 256)]);
             const __m256i q2_2 = _mm256_set_epi32(
-                    iq3s_grid[idx.index[15]], iq3s_grid[idx.index[14]], iq3s_grid[idx.index[13]], iq3s_grid[idx.index[12]],
-                    iq3s_grid[idx.index[11]], iq3s_grid[idx.index[10]], iq3s_grid[idx.index[ 9]], iq3s_grid[idx.index[ 8]]
-            );
+                    iq3s_grid[qs[15] | ((qh[ib32+1] << 1) & 256)],
+                    iq3s_grid[qs[14] | ((qh[ib32+1] << 2) & 256)],
+                    iq3s_grid[qs[13] | ((qh[ib32+1] << 3) & 256)],
+                    iq3s_grid[qs[12] | ((qh[ib32+1] << 4) & 256)],
+                    iq3s_grid[qs[11] | ((qh[ib32+1] << 5) & 256)],
+                    iq3s_grid[qs[10] | ((qh[ib32+1] << 6) & 256)],
+                    iq3s_grid[qs[ 9] | ((qh[ib32+1] << 7) & 256)],
+                    iq3s_grid[qs[ 8] | ((qh[ib32+1] << 8) & 256)]);
+            qs += 16;
 
-            __m256i aux256 = _mm256_set1_epi32(signs[0] | (signs[1] << 16));
+            __m256i aux256 = _mm256_set1_epi32(signs[0] | ((uint32_t) signs[1] << 16));
             aux256 = _mm256_and_si256(_mm256_shuffle_epi8(aux256,mask1), mask2);
             const __m256i s2_1 = _mm256_cmpeq_epi8(aux256, mask2);
             const __m256i q8s_1 = _mm256_sub_epi8(_mm256_xor_si256(s2_1, q8_1), s2_1);
 
-            aux256 = _mm256_set1_epi32(signs[2] | (signs[3] << 16));
+            aux256 = _mm256_set1_epi32(signs[2] | ((uint32_t) signs[3] << 16));
             aux256 = _mm256_and_si256(_mm256_shuffle_epi8(aux256,mask1), mask2);
             const __m256i s2_2 = _mm256_cmpeq_epi8(aux256, mask2);
             const __m256i q8s_2 = _mm256_sub_epi8(_mm256_xor_si256(s2_2, q8_2), s2_2);
@@ -3605,7 +3612,7 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             const __m128i q2_2_0 = _mm_set_epi32(iq3s_grid[idx.index[11]], iq3s_grid[idx.index[10]], iq3s_grid[idx.index[9]], iq3s_grid[idx.index[8]]);
             const __m128i q2_2_1 = _mm_set_epi32(iq3s_grid[idx.index[15]], iq3s_grid[idx.index[14]], iq3s_grid[idx.index[13]], iq3s_grid[idx.index[12]]);
 
-            __m128i aux128_0 = _mm_set1_epi32(signs[0] | (signs[1] << 16));
+            __m128i aux128_0 = _mm_set1_epi32(signs[0] | ((uint32_t) signs[1] << 16));
             __m128i aux128_1 = aux128_0;
             aux128_0 = _mm_and_si128(_mm_shuffle_epi8(aux128_0,mask1_0), mask2_0);
             aux128_1 = _mm_and_si128(_mm_shuffle_epi8(aux128_1,mask1_1), mask2_1);
@@ -3614,7 +3621,7 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             const __m128i q8s_1_0 = _mm_sub_epi8(_mm_xor_si128(s2_1_0, q8_1_0), s2_1_0);
             const __m128i q8s_1_1 = _mm_sub_epi8(_mm_xor_si128(s2_1_1, q8_1_1), s2_1_1);
 
-            aux128_0 = _mm_set1_epi32(signs[2] | (signs[3] << 16));
+            aux128_0 = _mm_set1_epi32(signs[2] | ((uint32_t) signs[3] << 16));
             aux128_1 = aux128_0;
             aux128_0 = _mm_and_si128(_mm_shuffle_epi8(aux128_0,mask1_0), mask2_0);
             aux128_1 = _mm_and_si128(_mm_shuffle_epi8(aux128_1,mask1_1), mask2_1);
