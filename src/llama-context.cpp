@@ -2906,9 +2906,37 @@ public:
             uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
 
     ~llama_io_write_host() {
-        // TODO: add backend support to batch tensor_get? or some other way to speed this up
-        for (const auto & winfo : winfos) {
-            ggml_backend_tensor_get(winfo.tensor, winfo.ptr, winfo.offset, winfo.size);
+        // merge nearby small ranges of one device tensor into a single read: interleaved cells otherwise cost one blocking copy each
+        // large ranges and host buffers keep the direct read, where the staging copy would cost more than the call it saves
+        const size_t small_range = 64*1024;
+        std::vector<uint8_t> staging;
+        for (size_t i = 0; i < winfos.size(); ) {
+            const write_info & first = winfos[i];
+            const bool merge = first.size < small_range && !ggml_backend_buffer_is_host(first.tensor->buffer);
+            size_t end     = first.offset + first.size;
+            size_t payload = first.size;
+            size_t j       = i + 1;
+            for (; merge && j < winfos.size(); ++j) {
+                const write_info & next = winfos[j];
+                const size_t next_end = next.offset + next.size;
+                // read at most 8x the bytes actually needed, plus 1 MiB, to bound the wasted transfer
+                if (next.tensor != first.tensor || next.offset < end || next.size >= small_range ||
+                    next_end - first.offset > 8*(payload + next.size) + (1u << 20)) {
+                    break;
+                }
+                end      = next_end;
+                payload += next.size;
+            }
+            if (j == i + 1) {
+                ggml_backend_tensor_get(first.tensor, first.ptr, first.offset, first.size);
+            } else {
+                staging.resize(end - first.offset);
+                ggml_backend_tensor_get(first.tensor, staging.data(), first.offset, staging.size());
+                for (size_t k = i; k < j; ++k) {
+                    memcpy(winfos[k].ptr, staging.data() + (winfos[k].offset - first.offset), winfos[k].size);
+                }
+            }
+            i = j;
         }
     }
 
