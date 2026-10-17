@@ -1,5 +1,7 @@
 #include "ggml-vulkan-common.h"
 
+#include <chrono>
+
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
     vk::PhysicalDeviceProperties props = device.getProperties();
 
@@ -3998,6 +4000,8 @@ static bool ggml_vk_host_buffer_import_usable(uint32_t vendor_id) {
     return vendor_id != VK_VENDOR_ID_AMD;
 }
 
+static void ggml_vk_device_start_keepalive(vk_device& device);
+
 vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
 
@@ -4928,6 +4932,8 @@ vk_device ggml_vk_get_device(size_t idx) {
         } else if (getenv("GGML_VK_FORCE_MMVQ")) {
             device->mmvq_mode = 1;
         }
+
+        ggml_vk_device_start_keepalive(device);
 
         // publish the device only when it is fully built
         vk_instance.devices[idx] = device;
@@ -16481,6 +16487,52 @@ void vk_queue_handle_unsynchronized::submit(vk::ArrayProxy<const vk::SubmitInfo>
     }
 }
 
+static void ggml_vk_device_keepalive_once(vk_device_struct * device) {
+    // Non-owning: keepalive thread is joined in ~vk_device_struct before teardown
+    vk_device dev(device, [](vk_device_struct *) {});
+
+    std::lock_guard<std::recursive_mutex> guard(dev->mutex);
+
+    vk_context subctx = ggml_vk_create_temporary_context(dev->transfer_queue->cmd_pool);
+    ggml_vk_ctx_begin(dev, subctx);
+    subctx->s->buffer->buf.fillBuffer(dev->keepalive_buffer->buffer, 0, 4, 0);
+    ggml_vk_ctx_end(subctx);
+
+    ggml_vk_submit(subctx, dev->keepalive_fence);
+    VK_CHECK(dev->device.waitForFences({ dev->keepalive_fence }, true, UINT64_MAX), "vk_keepalive waitForFences", dev);
+    dev->device.resetFences({ dev->keepalive_fence });
+    ggml_vk_queue_command_pools_cleanup(dev);
+}
+
+static void ggml_vk_device_start_keepalive(vk_device& device) {
+    const char * env = getenv("GGML_VK_KEEPALIVE_MS");
+    const int ms = env ? atoi(env) : 0;
+    if (ms <= 0) {
+        return;
+    }
+
+    device->keepalive_ms = ms;
+    device->keepalive_fence = device->device.createFence({});
+    device->keepalive_buffer = ggml_vk_create_buffer_check(device, 4, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    GGML_LOG_INFO("ggml_vulkan: GGML_VK_KEEPALIVE_MS=%d on %s\n", ms, device->name.c_str());
+
+    vk_device_struct * dev = device.get();
+    device->keepalive_thread = std::thread([dev] {
+        std::unique_lock<std::mutex> lock(dev->keepalive_mutex);
+        while (!dev->keepalive_cv.wait_for(lock, std::chrono::milliseconds(dev->keepalive_ms),
+                                           [dev] { return dev->keepalive_stop; })) {
+            lock.unlock();
+            try {
+                ggml_vk_device_keepalive_once(dev);
+            } catch (const vk::SystemError & e) {
+                GGML_LOG_WARN("ggml_vulkan: keepalive failed on %s: %s\n", dev->name.c_str(), e.what());
+            }
+            lock.lock();
+        }
+    });
+}
+
 vk_device_struct::~vk_device_struct() {
     // the build failed before the device was created, nothing to destroy
     if (device == VK_NULL_HANDLE) {
@@ -16488,6 +16540,21 @@ vk_device_struct::~vk_device_struct() {
     }
 
     VK_LOG_DEBUG("destroy device " << name);
+
+    {
+        std::lock_guard<std::mutex> lock(keepalive_mutex);
+        keepalive_stop = true;
+    }
+    keepalive_cv.notify_all();
+    if (keepalive_thread.joinable()) {
+        keepalive_thread.join();
+    }
+
+    if (keepalive_fence) {
+        device.destroyFence(keepalive_fence);
+        keepalive_fence = nullptr;
+    }
+    ggml_vk_destroy_buffer(keepalive_buffer);
 
     device.destroyFence(fence);
 

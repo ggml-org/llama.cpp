@@ -68,6 +68,8 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include <condition_variable>
 #include <thread>
 
+#include <atomic>
+
 #if defined(_MSC_VER)
 # define NOMINMAX 1
 # include <windows.h>
@@ -1000,6 +1002,15 @@ struct vk_device_struct {
 
     vk::Fence fence;
     vk_buffer sync_staging;
+
+    // Workaround for drivers moving VRAM contents off the GPU when idle
+    int keepalive_ms = 0;
+    bool keepalive_stop = false;
+    std::mutex keepalive_mutex;
+    std::condition_variable keepalive_cv;
+    std::thread keepalive_thread;
+    vk::Fence keepalive_fence;
+    vk_buffer keepalive_buffer;
 
     ggml_backend_buffer_type buffer_type;
 
