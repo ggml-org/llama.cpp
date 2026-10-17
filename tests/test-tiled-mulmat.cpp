@@ -380,6 +380,104 @@ static ggml_backend_buffer_type_t get_cpu_repack_buft(void) {
     return (bufts && *bufts) ? *bufts : NULL;
 }
 
+// Correctness of the repacked (CPU_REPACK) GEMV/GEMM kernels against the vec-only reference.
+// The repack buffer type rewrites src0 into the kernel's blocked layout at tensor-init time, so
+// the only way to exercise those kernels is to allocate src0 into that buffer. Both graphs are
+// fed byte-identical quantized weights, so any difference beyond tolerance is a kernel bug.
+//
+// M is the activation row count: values that are not a multiple of the kernel's row tile
+// exercise the GEMM tail, and M == 1 takes the GEMV path instead.
+static void test_matmul_repack(ggml_backend_t backend, int64_t M, int64_t N, int64_t K, ggml_type quant_type) {
+    srand(0xBEEF);
+
+    struct ggml_init_params ip = { 1024*1024*1024, nullptr, true };
+    struct ggml_context * ctx = ggml_init(ip);
+
+    struct ggml_tensor * src1     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, M);
+    struct ggml_tensor * src0_std = ggml_new_tensor_2d(ctx, quant_type,    N, K);
+    struct ggml_tensor * src0_rep = ggml_new_tensor_2d(ctx, quant_type,    N, K);
+
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
+    struct ggml_tensor * dst = ggml_mul_mat(ctx, src0_std, src1);
+    ggml_build_forward_expand(gf, dst);
+
+    struct ggml_cgraph * gf_rep = ggml_new_graph(ctx);
+    struct ggml_tensor * dst_rep = ggml_mul_mat(ctx, src0_rep, src1);
+    ggml_build_forward_expand(gf_rep, dst_rep);
+
+    // put src0_rep in the repack buffer; init_tensor sets ->extra iff a repack kernel exists
+    // for this type and shape on this machine
+    ggml_backend_buffer_type_t repack_buft = get_cpu_repack_buft();
+    ggml_backend_buffer_t buf_rep = NULL;
+    bool have_repack = false;
+    if (repack_buft) {
+        buf_rep = ggml_backend_buft_alloc_buffer(repack_buft, ggml_nbytes(src0_rep));
+        src0_rep->buffer = buf_rep;
+        src0_rep->data   = ggml_backend_buffer_get_base(buf_rep);
+        ggml_backend_buffer_init_tensor(buf_rep, src0_rep);
+        have_repack = (src0_rep->extra != NULL);
+    }
+
+    if (!have_repack) {
+        printf("TEST repack %lldx%lld * %lldx%lld (%s): SKIP (no repack kernel for this type/shape)\n",
+               (long long)M, (long long)N, (long long)N, (long long)K, ggml_type_name(quant_type));
+        if (buf_rep) {
+            ggml_backend_buffer_free(buf_rep);
+        }
+        ggml_free(ctx);
+        return;
+    }
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+    float * src1_data = gen_rand_f32(M * N);
+    float * src0_data = gen_rand_f32(N * K);
+    fill_tensor(src1,     src1_data, M, N, GGML_TYPE_F32);
+    fill_tensor(src0_std, src0_data, K, N, quant_type);
+    fill_tensor(src0_rep, src0_data, K, N, quant_type);
+    free(src1_data); free(src0_data);
+
+    float * out_ref = (float *) malloc(M * K * sizeof(float));
+    float * out_rep = (float *) malloc(M * K * sizeof(float));
+
+    // reference: the vec-only path on the un-repacked weights
+    cpu_set_use_ref(backend, true);
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, out_ref, 0, ggml_nbytes(dst));
+
+    // the repacked kernel
+    cpu_set_use_ref(backend, false);
+    ggml_backend_graph_compute(backend, gf_rep);
+    ggml_backend_tensor_get(dst_rep, out_rep, 0, ggml_nbytes(dst_rep));
+
+    float max_err, rms_err;
+    compare_f32(out_ref, out_rep, M * K, &max_err, &rms_err);
+    const float tol = 1e-3f;
+
+    printf("TEST repack %lldx%lld * %lldx%lld (%s): %s (max_err: %f, rms: %f, tolerance: %f)\n",
+           (long long)M, (long long)N, (long long)N, (long long)K, ggml_type_name(quant_type),
+           (max_err <= tol) ? "PASS" : "FAIL", max_err, rms_err, tol);
+
+    if (max_err > tol) {
+        int64_t shown = 0;
+        for (int64_t i = 0; i < M*K && shown < 8; ++i) {
+            const float err = fabsf(out_ref[i] - out_rep[i]);
+            if (err > tol) {
+                printf("  repack vs ref: i=%lld (m=%lld k=%lld) ref=%f repack=%f err=%f\n",
+                       (long long)i, (long long)(i/K), (long long)(i%K), out_ref[i], out_rep[i], err);
+                ++shown;
+            }
+        }
+        ++n_failed;
+    }
+
+    free(out_ref); free(out_rep);
+    ggml_backend_buffer_free(buf);
+    ggml_backend_buffer_free(buf_rep);
+    ggml_free(ctx);
+}
+
+
 struct bench_row {
     const char * name;
     double time_std, time_repack, time_tiled;
@@ -696,6 +794,21 @@ int main(int argc, char ** argv) {
     test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ1_M);
     test_mul_mat_id(backend,  256,  256,   2, 8, 1,  64, GGML_TYPE_Q4_K);  // single block, cne1 = 256
     test_mul_mat_id(backend,  512,  300,   4, 2, 1, 150, GGML_TYPE_IQ2_XXS); // iq type, imatrix quant
+
+    // repacked (CPU_REPACK) kernels. These were previously exercised only under --bench, so no
+    // repack kernel had default correctness coverage. M is the activation row count: 1 takes the
+    // GEMV path, a multiple of the row tile takes the clean GEMM path, and anything else exercises
+    // the GEMM tail. N spans more than one QK_K block where the type is K-quantized.
+    // TQ2_0 (8x8, i8mm): requires NEON + matmul_int8 and ne1 % 8 == 0, otherwise it SKIPs.
+    test_matmul_repack(backend,   1, 512, 256, GGML_TYPE_TQ2_0);  // GEMV, 2 QK_K blocks
+    test_matmul_repack(backend,   8, 512, 256, GGML_TYPE_TQ2_0);  // exactly one row tile
+    test_matmul_repack(backend,  17, 512, 256, GGML_TYPE_TQ2_0);  // GEMM tail: 2 tiles + 1 row
+    test_matmul_repack(backend,  33, 768, 256, GGML_TYPE_TQ2_0);  // tail + 3 QK_K blocks
+    test_matmul_repack(backend,   7, 256,  64, GGML_TYPE_TQ2_0);  // sub-tile rows, single block
+    test_matmul_repack(backend,  64, 1024, 512, GGML_TYPE_TQ2_0); // several tiles, 4 QK_K blocks
+    // the same shapes on an unrelated repacked type, so the harness is not TQ2_0-specific
+    test_matmul_repack(backend,  17, 512, 256, GGML_TYPE_Q4_0);
+    test_matmul_repack(backend,   1, 512, 256, GGML_TYPE_Q4_0);
 
     if (run_fuzz) {
         printf("Running fuzz tests.\n");

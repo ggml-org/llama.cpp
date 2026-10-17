@@ -1064,12 +1064,39 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
     return op_supported;
 }
 
+// ACCEL devices that use the canonical CPU buffer type (e.g. BLAS) are left out of the CPU buffer type list,
+// so a CPU extra buffer type (e.g. repack) would otherwise take the weight and hide it from them.
+// For TQ2_0 MUL_MAT weights, keep canonical CPU storage when such a device supports the op.
+static bool weight_prefers_canonical_cpu_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op) {
+    if (tensor->type != GGML_TYPE_TQ2_0 || op != GGML_OP_MUL_MAT) {
+        return false;
+    }
+
+    ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL &&
+            ggml_backend_dev_buffer_type(dev) == cpu_buft &&
+            weight_buft_supported(hparams, tensor, op, cpu_buft, dev)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // find the first buffer type in the list that can use the tensor
 static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list) {
     GGML_ASSERT(!buft_list->empty());
+    const bool skip_cpu_extra_bufts = weight_prefers_canonical_cpu_buft(hparams, tensor, op);
     for (const auto & cur : *buft_list) {
         ggml_backend_dev_t cur_dev = cur.first;
         ggml_backend_buffer_type_t cur_buft = cur.second;
+        if (skip_cpu_extra_bufts &&
+            ggml_backend_dev_type(cur_dev) == GGML_BACKEND_DEVICE_TYPE_CPU &&
+            cur_buft != ggml_backend_dev_buffer_type(cur_dev)) {
+            continue;
+        }
         if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
             return cur_buft;
         }
