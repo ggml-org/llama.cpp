@@ -6,63 +6,6 @@
 #include <future>
 #include <vector>
 
-// view of the stacks [s0, s0 + n) of a stacked ztensor, the stacks are the outermost dim of its buffer
-// the view descs must outlive the view
-static zdnn_ztensor ggml_zdnn_stack_view(zdnn_tensor_desc * pre_tfm_desc,
-                                         zdnn_tensor_desc * tfm_desc,
-                                   const zdnn_ztensor     & src,
-                                         int64_t            n_stacks,
-                                         int64_t            s0,
-                                         int64_t            n) {
-
-    GGML_ASSERT(src.buffer_size % n_stacks == 0);
-    const uint64_t stack_bytes = src.buffer_size / n_stacks;
-
-    *pre_tfm_desc = *src.pre_transformed_desc;
-    *tfm_desc     = *src.transformed_desc;
-
-    switch (pre_tfm_desc->layout) {
-        case ZDNN_3DS:
-            {
-                pre_tfm_desc->dim3 = n;
-            } break;
-        case ZDNN_2DS:
-            {
-                pre_tfm_desc->dim2 = n;
-            } break;
-        default:
-            GGML_ABORT("%s: unsupported stacked layout", __func__);
-    }
-
-    tfm_desc->dim4 = n;
-    GGML_ASSERT(zdnn_getsize_ztensor(tfm_desc) == n*stack_bytes);
-
-    zdnn_ztensor view = src;
-    view.pre_transformed_desc = pre_tfm_desc;
-    view.transformed_desc     = tfm_desc;
-    view.buffer               = (char *) src.buffer + s0*stack_bytes;
-    view.buffer_size          = n * stack_bytes;
-    return view;
-}
-
-// zero bias of n_stacks stacks, created once per shape as it never changes
-static const zdnn_ztensor & ggml_zdnn_zero_bias(ggml_backend_zdnn_context * ctx, int64_t n_stacks, int64_t ne0) {
-    std::unique_ptr<ggml_backend_zdnn_buffer> & bias = ctx->zero_bias[{ n_stacks, ne0 }];
-
-    if (!bias) {
-        bias = std::make_unique<ggml_backend_zdnn_buffer>();
-
-        std::vector<float> zeros(n_stacks * ne0, 0.0f);
-
-        zdnn_init_pre_transformed_desc(ZDNN_2DS, FP32, &bias->pre_tfm_desc, n_stacks, ne0);
-        ZDNN_CHECK(zdnn_generate_transformed_desc(&bias->pre_tfm_desc, &bias->tfm_desc));
-        ZDNN_CHECK(zdnn_init_ztensor_with_malloc(&bias->pre_tfm_desc, &bias->tfm_desc, &bias->ztensor));
-        ZDNN_CHECK(zdnn_transform_ztensor(&bias->ztensor, zeros.data()));
-    }
-
-    return bias->ztensor;
-}
-
 // the weights are stacked into groups along ne00, and each group of each row of the inputs and weights has its own scale
 // zDNN multiplies the groups in stacked calls, then the partial results of each group are scaled and summed here
 static void ggml_zdnn_mul_mat_q_grouped(ggml_backend_zdnn_context * ctx,
@@ -81,18 +24,20 @@ static void ggml_zdnn_mul_mat_q_grouped(ggml_backend_zdnn_context * ctx,
     GGML_ASSERT(n_groups * gs >= ne10 && (n_groups - 1) * gs < ne10);
 
     // the rounding errors of the inputs are stacked after the inputs, see ggml_zdnn_quantize_inputs
-    int8_t * inputs_q = ggml_zdnn_resize_scratch_max(ctx->scratch_q, 2 * n_groups * gs * ne11);
+    ggml_zdnn_pool_alloc<int8_t> inputs_q_alloc(ctx->pool, 2 * n_groups * gs * ne11);
+    int8_t * inputs_q = inputs_q_alloc.get();
     std::vector<float> inputs_scales(n_groups * ne11);
     ggml_zdnn_quantize_inputs(n_threads, inputs, gs, weights_extra->channel_scales.data(),
                             inputs_q, inputs_q + n_groups * gs * ne11, inputs_scales.data());
 
-    zdnn_tensor_desc inputs_pre_tfm_desc;
-    zdnn_tensor_desc inputs_tfm_desc;
-    zdnn_ztensor     inputs_ztensor;
+    zdnn_tensor_desc              inputs_pre_tfm_desc;
+    zdnn_tensor_desc              inputs_tfm_desc;
+    zdnn_ztensor                  inputs_ztensor;
+    ggml_zdnn_pool_alloc<uint8_t> inputs_ztensor_alloc;
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, INT8, &inputs_pre_tfm_desc, 2 * n_groups, ne11, gs);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&inputs_pre_tfm_desc, QUANTIZED_INT8, &inputs_tfm_desc));
-    ggml_zdnn_init_scratch_ztensor(ctx, &inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, 0);
+    ggml_zdnn_init_scratch_ztensor(ctx, &inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, inputs_ztensor_alloc);
     ZDNN_CHECK(zdnn_transform_quantized_ztensor(&inputs_ztensor, false, -127, 127, inputs_q));
 
     // each group of the partial results is read back as its own 2D ztensor
@@ -116,19 +61,21 @@ static void ggml_zdnn_mul_mat_q_grouped(ggml_backend_zdnn_context * ctx,
 
     // two partial buffers, so the next chunk runs on the NNPA while this one is summed
     // each holds the results of a chunk of inputs, followed by the results of their rounding errors
-    zdnn_tensor_desc partial_pre_tfm_desc;
-    zdnn_tensor_desc partial_tfm_desc;
-    zdnn_ztensor     partial_ztensor[2];
+    zdnn_tensor_desc              partial_pre_tfm_desc;
+    zdnn_tensor_desc              partial_tfm_desc;
+    zdnn_ztensor                  partial_ztensor[2];
+    ggml_zdnn_pool_alloc<uint8_t> partial_ztensor_alloc[2];
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, FP32, &partial_pre_tfm_desc, 2 * n_chunk, ne11, ne0);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&partial_pre_tfm_desc, QUANTIZED_DLFLOAT16, &partial_tfm_desc));
     GGML_ASSERT(zdnn_getsize_ztensor(&partial_tfm_desc) == (uint64_t)(2 * n_chunk) * group_bytes);
     for (int32_t i = 0; i < 2; i++) {
-        ggml_zdnn_init_scratch_ztensor(ctx, &partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor[i], 1 + i);
+        ggml_zdnn_init_scratch_ztensor(ctx, &partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor[i], partial_ztensor_alloc[i]);
     }
 
     const float * weights_scales = weights_extra->scales.data();
-    float * partial     = ggml_zdnn_resize_scratch_max(ctx->scratch_f32, 2 * ne11 * ne0);
+    ggml_zdnn_pool_alloc<float> partial_alloc(ctx->pool, 2 * ne11 * ne0);
+    float * partial     = partial_alloc.get();
     float * partial_res = partial + ne11 * ne0;
 
     const auto sum_chunk = [&](const zdnn_ztensor & chunk, int64_t g0, int64_t n) {
@@ -262,27 +209,30 @@ void ggml_zdnn_mul_mat_q(
 
     // zDNN takes one scale per zTensor, so quantize each row of the inputs with its own scale
     // the rounding errors of the inputs are stacked after the inputs, see ggml_zdnn_quantize_inputs
-    int8_t * inputs_q = ggml_zdnn_resize_scratch_max(ctx->scratch_q, 2 * ne10 * ne11);
+    ggml_zdnn_pool_alloc<int8_t> inputs_q_alloc(ctx->pool, 2 * ne10 * ne11);
+    int8_t * inputs_q = inputs_q_alloc.get();
     std::vector<float> inputs_scales(ne11);
     ggml_zdnn_quantize_inputs(n_threads, inputs, ne10, weights_extra->channel_scales.data(),
                             inputs_q, inputs_q + ne10 * ne11, inputs_scales.data());
 
-    zdnn_tensor_desc inputs_pre_tfm_desc;
-    zdnn_tensor_desc inputs_tfm_desc;
-    zdnn_ztensor     inputs_ztensor;
+    zdnn_tensor_desc              inputs_pre_tfm_desc;
+    zdnn_tensor_desc              inputs_tfm_desc;
+    zdnn_ztensor                  inputs_ztensor;
+    ggml_zdnn_pool_alloc<uint8_t> inputs_ztensor_alloc;
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, INT8, &inputs_pre_tfm_desc, 2, ne11, ne10);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&inputs_pre_tfm_desc, QUANTIZED_INT8, &inputs_tfm_desc));
-    ggml_zdnn_init_scratch_ztensor(ctx, &inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, 0);
+    ggml_zdnn_init_scratch_ztensor(ctx, &inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, inputs_ztensor_alloc);
     ZDNN_CHECK(zdnn_transform_quantized_ztensor(&inputs_ztensor, false, -127, 127, inputs_q));
 
-    zdnn_tensor_desc partial_pre_tfm_desc;
-    zdnn_tensor_desc partial_tfm_desc;
-    zdnn_ztensor     partial_ztensor;
+    zdnn_tensor_desc              partial_pre_tfm_desc;
+    zdnn_tensor_desc              partial_tfm_desc;
+    zdnn_ztensor                  partial_ztensor;
+    ggml_zdnn_pool_alloc<uint8_t> partial_ztensor_alloc;
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, FP32, &partial_pre_tfm_desc, 2, ne11, ne0);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&partial_pre_tfm_desc, QUANTIZED_DLFLOAT16, &partial_tfm_desc));
-    ggml_zdnn_init_scratch_ztensor(ctx, &partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor, 1);
+    ggml_zdnn_init_scratch_ztensor(ctx, &partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor, partial_ztensor_alloc);
 
     // both stacks are multiplied by the same unstacked weights in one broadcast call
     // the bias is all zeros, so it is already the pre-computed bias
@@ -300,7 +250,8 @@ void ggml_zdnn_mul_mat_q(
     const uint64_t stack_bytes = zdnn_getsize_ztensor(&stack_tfm_desc);
     GGML_ASSERT(partial_ztensor.buffer_size == 2*stack_bytes);
 
-    float * partial[2] = { (float *)output->data, ggml_zdnn_resize_scratch_max(ctx->scratch_f32, ne11 * ne0) };
+    ggml_zdnn_pool_alloc<float> partial_res_alloc(ctx->pool, ne11 * ne0);
+    float * partial[2] = { (float *)output->data, partial_res_alloc.get() };
 
     ggml_zdnn_parallel_for(n_threads, 2, [&](int64_t s_start, int64_t s_end) {
         zdnn_ztensor stack_ztensor;
