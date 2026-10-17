@@ -295,9 +295,25 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         nextn.enorm        = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,        "weight", il), { n_embd }, mtp_flags);
         // RMS per hc stream of the trunk residual, so the gammas load as [n_embd, hc] like the mixer norms
         nextn.hnorm        = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,        "weight", il), { n_embd, hc }, mtp_flags | TENSOR_ALLOW_RESHAPE);
-        nextn.hc_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_NORM, "weight", il), { n_embd, hc }, mtp_flags | TENSOR_ALLOW_RESHAPE);
-        nextn.hc_head_down = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_DOWN, "weight", il), { hc_dim, hc_lr }, mtp_flags);
-        nextn.hc_head_up   = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_UP,   "weight", il), { hc_lr, hc_dim }, mtp_flags);
+        // the MTP head mixer: reference checkpoints carry a per-block copy of
+        // the trunk head mixer (output_hc_* duplicated as nextn.hc_head_*),
+        // while other exporters share the trunk down/up and name the per-block
+        // norm shared_head_norm (original HF name). Accept whichever is present.
+        nextn.hc_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_NORM,    "weight", il), { n_embd, hc }, mtp_flags | TENSOR_ALLOW_RESHAPE | TENSOR_NOT_REQUIRED);
+        nextn.hc_head_down = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_DOWN,    "weight", il), { hc_dim, hc_lr }, mtp_flags | TENSOR_NOT_REQUIRED);
+        nextn.hc_head_up   = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_UP,      "weight", il), { hc_lr, hc_dim }, mtp_flags | TENSOR_NOT_REQUIRED);
+        if (!nextn.hc_head_norm) {
+            nextn.hc_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", il), { n_embd, hc }, mtp_flags | TENSOR_NOT_REQUIRED | TENSOR_ALLOW_RESHAPE);
+        }
+        if (!nextn.hc_head_norm) {
+            nextn.hc_head_norm = hc_head_norm;
+        }
+        if (!nextn.hc_head_down) {
+            nextn.hc_head_down = hc_head_down;
+        }
+        if (!nextn.hc_head_up) {
+            nextn.hc_head_up = hc_head_up;
+        }
     }
 }
 
@@ -569,7 +585,9 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
     ggml_build_forward_expand(gf, inp_hyb->get_recr()->s_copy);
 
     llm_graph_input_kpool * inp_kpool = nullptr;
-    if (mctx_hyb->get_idx() && hparams.indexer_kpool > 0) {
+    // the MTP block is not a QSA layer, so nothing in this graph would read the
+    // kpool tensors and they would go unallocated -- only build them when it pools
+    if (mctx_hyb->get_idx() && hparams.indexer_kpool > 0 && hparams.dsv4_compress_ratios[il] > 0) {
         GGML_ASSERT(mctx_hyb->get_idx()->get_n_kv() == mctx_hyb->get_attn()->get_n_kv() &&
                 "the indexer cache must track the attention cache cell for cell");
         inp_kpool = build_inp_kpool(mctx_hyb);
@@ -650,9 +668,15 @@ public:
     virtual ~llm_graph_input_kpool() = default;
 
     void set_input(const llama_ubatch * ubatch) override {
-        mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, nullptr, new_pool_idxs, new_pool_rep,
-                              ubatch, new_pool_pos);
+        // k_idxs and the new-pool tensors can be left unallocated when the graph
+        // has no QSA layer to consume them, like the KV cache bypassed during training
+        if (k_idxs && k_idxs->buffer) {
+            mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
+        }
+        if (new_pool_idxs && new_pool_idxs->buffer) {
+            mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, nullptr, new_pool_idxs, new_pool_rep,
+                                  ubatch, new_pool_pos);
+        }
     }
 
     bool can_reuse(const llm_graph_params & params) override {
