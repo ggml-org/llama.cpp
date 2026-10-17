@@ -1,0 +1,87 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {float data_a[];};
+layout (binding = 1)          buffer D {float data_d[];};
+
+layout (push_constant) uniform parameter {
+    uint ne;
+    uint nparts;
+    uint strided;
+    uint ne0; uint ne1; uint ne2;
+    uint nb0; uint nb1; uint nb2; uint nb3;
+} p;
+
+shared float sh[256];
+
+#ifdef AMAX_REDUCE
+uint amax_offset(uint i) {
+    if (p.strided == 0) {
+        return i;
+    }
+    uint i0 = i % p.ne0; uint r = i / p.ne0;
+    uint i1 = r % p.ne1; r /= p.ne1;
+    uint i2 = r % p.ne2; uint i3 = r / p.ne2;
+    return i0 * p.nb0 + i1 * p.nb1 + i2 * p.nb2 + i3 * p.nb3;
+}
+#endif
+
+// dst layout: [0]=s1_inv, [1]=s1_scale, [2 .. 2+nparts)=per-workgroup partials.
+
+#ifdef AMAX_REDUCE
+void main() {
+    const uint tid       = gl_LocalInvocationID.x;
+    const uint wg        = gl_WorkGroupID.x;
+    const uint nthreads  = gl_WorkGroupSize.x;
+
+    float lmax = 0.0f;
+    for (uint i = wg * nthreads + tid; i < p.ne; i += p.nparts * nthreads) {
+        lmax = max(lmax, abs(data_a[amax_offset(i)]));
+    }
+
+    sh[tid] = lmax;
+    barrier();
+    [[unroll]] for (uint s = nthreads / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sh[tid] = max(sh[tid], sh[tid + s]);
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        data_d[2 + wg] = sh[0];
+    }
+}
+#else
+void main() {
+    const uint tid      = gl_LocalInvocationID.x;
+    const uint nthreads = gl_WorkGroupSize.x;
+
+    float lmax = 0.0f;
+    for (uint i = tid; i < p.nparts; i += nthreads) {
+        lmax = max(lmax, data_d[2 + i]);
+    }
+
+    sh[tid] = lmax;
+    barrier();
+    [[unroll]] for (uint s = nthreads / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sh[tid] = max(sh[tid], sh[tid + s]);
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        const float amax = sh[0];
+        float scale = 1.0f;
+        if (!isinf(amax) && !isnan(amax) && amax > 32768.0f) {
+            scale = exp2(ceil(log2(amax)) - 15.0f);
+        }
+        data_d[0] = 1.0f / scale; // exact: scale is a power of two
+        data_d[1] = scale;
+    }
+}
+#endif

@@ -79,6 +79,7 @@ layout (push_constant) uniform parameter
     uint ne11;
     uint n_experts;
     uint row_ids_offset;
+    uint rescale;
 #else
     uint base_work_group_z;
     uint num_batches;
@@ -179,6 +180,8 @@ f16vec4 mmDecodeA_v(const in decodeBufA bl_in, const in uint blockCoords[2], con
 #ifdef MUL_MAT_ID
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
 layout (binding = 4) readonly buffer RowMap {uint data_row_map[];};
+layout (binding = 5) readonly buffer Amax {float data_amax[];};
+float mmid_s1_scale;
 
 shared u16vec4 row_ids[BN];
 
@@ -228,7 +231,7 @@ D_TYPE perElemOpD(const in uint32_t r, const in uint32_t c, const in D_TYPE elem
     if (dr < p.M && dc < _ne1) {
         uint row_i = c;
         const u16vec4 row_idx = row_ids[row_i];
-        data_d[row_idx.y * p.batch_stride_d + row_idx.z * p.stride_d + dr] = elem;
+        data_d[row_idx.y * p.batch_stride_d + row_idx.z * p.stride_d + dr] = D_TYPE(float(elem) * mmid_s1_scale);
     }
     return elem;
 }
@@ -273,6 +276,10 @@ void main() {
 
 #if defined(NEEDS_INIT_IQ_SHMEM) || defined(MULMAT_QUANT)
     init_iq_shmem(gl_WorkGroupSize);
+#endif
+
+#ifdef MUL_MAT_ID
+    mmid_s1_scale = p.rescale != 0 ? data_amax[1] : 1.0f;
 #endif
 
 #ifndef MUL_MAT_ID
