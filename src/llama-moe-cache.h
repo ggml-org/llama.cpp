@@ -8,7 +8,7 @@
 
 struct llama_model;
 
-// keeps the most recently used experts of host-resident MoE layers in a device buffer
+// keeps recently and repeatedly used experts of host-resident MoE layers in a device buffer
 // each layer has a slot map in host memory: when the scheduler copies it to the device, the copy callback uploads the missing experts
 class llama_moe_cache {
 public:
