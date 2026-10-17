@@ -67,6 +67,7 @@ if (Vulkan_FOUND)
                              ggml-vulkan-common.h
                              ggml-vulkan-buffers.cpp
                              ggml-vulkan-debug.cpp
+                             ggml-vulkan-scratch.cpp
                             )
 
     # hide symbols, so dlclosed duplicate copies cannot interpose them
