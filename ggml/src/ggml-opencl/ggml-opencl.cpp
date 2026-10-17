@@ -10235,7 +10235,16 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
     // conversion kernel.
     if (tensor->type == GGML_TYPE_Q4_0) {
         // Views can't SoA-ify here — parent owns the layout (see q8_0 guard).
+        // A view of an AoS tensor (the KV cache, written by a state restore)
+        // is written in place.
         if (tensor->view_src != nullptr || !ggml_is_contiguous(tensor)) {
+            if (!ggml_cl_is_q4_0_soa(tensor)) {
+                ggml_tensor_extra_cl * extra_aos = (ggml_tensor_extra_cl *) tensor->extra;
+                CL_CHECK(clEnqueueWriteBuffer(
+                    queue, extra_aos->data_device, CL_TRUE,
+                    extra_aos->offset + tensor->view_offs + offset,
+                    size, data, 0, NULL, NULL));
+            }
             return;
         }
         // Tensors should have been preallocated, therefore they should
@@ -10939,7 +10948,16 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
     }
     if (tensor->type == GGML_TYPE_Q8_0) {
         // Views share the parent's buffer; parent owns SoA conversion.
+        // A view of an AoS tensor (the KV cache, written by a state restore)
+        // is written in place.
         if (tensor->view_src != nullptr || !ggml_is_contiguous(tensor)) {
+            if (!ggml_cl_is_q8_0_soa(tensor)) {
+                ggml_tensor_extra_cl * extra_aos = (ggml_tensor_extra_cl *) tensor->extra;
+                CL_CHECK(clEnqueueWriteBuffer(
+                    queue, extra_aos->data_device, CL_TRUE,
+                    extra_aos->offset + tensor->view_offs + offset,
+                    size, data, 0, NULL, NULL));
+            }
             return;
         }
 
@@ -11774,7 +11792,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         GGML_ASSERT(extra);
 
         cl_ulong n_elements = size / sizeof(ggml_fp16_t);
-        cl_ulong off_dst = (extra->offset + offset) / sizeof(ggml_fp16_t);
+        cl_ulong off_dst = (extra->offset + tensor->view_offs + offset) / sizeof(ggml_fp16_t);
 
         cl_int err;
         cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
@@ -11802,8 +11820,9 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
     ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) tensor->extra;
     GGML_ASSERT(extra);
 
+    // a view reuses its parent's extra, whose offset does not include view_offs
     CL_CHECK(clEnqueueWriteBuffer(
-        queue, extra->data_device, CL_TRUE, extra->offset + offset,
+        queue, extra->data_device, CL_TRUE, extra->offset + tensor->view_offs + offset,
         size, data, 0, NULL, NULL));
 
     GGML_UNUSED(buffer);
