@@ -15,11 +15,13 @@ struct common_imatrix_entry {
     std::vector<float>   sums;
     std::vector<float>   activations;
     std::vector<int64_t> counts;
+    std::vector<float>   stats;
 };
 
 struct common_imatrix {
     std::map<std::string, common_imatrix_entry> entries;
     std::vector<std::string> datasets;
+    std::vector<std::string> stats_schema;
     int32_t chunk_count    = 0;
     int32_t chunk_size     = 0;
     int32_t n_layer_nextn  = 0;
