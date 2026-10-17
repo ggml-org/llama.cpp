@@ -2250,6 +2250,134 @@ struct test_glu_split : public test_case {
     }
 };
 
+// GLU feeding a batched matmul: exercises the fusion of the GLU into the MMQ activation
+// quantization on the CUDA backend in every input layout (packed, packed+swapped, split,
+// split with a strided up tensor - the last one must not fuse and covers the fallback)
+struct test_glu_mul_mat : public test_case {
+    enum layout_t {
+        LAYOUT_PACKED,
+        LAYOUT_PACKED_SWAPPED,
+        LAYOUT_SPLIT,
+        LAYOUT_SPLIT_STRIDED_UP,
+        LAYOUT_NONADJACENT,
+    };
+
+    const ggml_glu_op glu_op;
+    const ggml_type   type;
+    const int64_t     k;
+    const int64_t     m;
+    const int64_t     n;
+    const layout_t    layout;
+    const bool        reuse_glu;
+
+    test_glu_mul_mat(ggml_glu_op glu_op, ggml_type type, int64_t k, int64_t m, int64_t n, layout_t layout, bool reuse_glu = false)
+        : glu_op(glu_op), type(type), k(k), m(m), n(n), layout(layout), reuse_glu(reuse_glu) {}
+
+    std::string vars() override {
+        return VARS_TO_STR7(glu_op, type, k, m, n, layout, reuse_glu);
+    }
+
+    std::string op_desc(ggml_tensor *) override {
+        return "GLU_MUL_MAT";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * gate = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, layout <= LAYOUT_PACKED_SWAPPED ? 2*k : k, n, 2, 2);
+        ggml_tensor * glu;
+        if (layout <= LAYOUT_PACKED_SWAPPED) {
+            glu = ggml_glu(ctx, gate, glu_op, layout == LAYOUT_PACKED_SWAPPED);
+        } else {
+            ggml_tensor * up = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, layout == LAYOUT_SPLIT_STRIDED_UP ? 2*k : k, n, 2, 2);
+            if (layout == LAYOUT_SPLIT_STRIDED_UP) {
+                up = ggml_view_4d(ctx, up, k, n, 2, 2, up->nb[1], up->nb[2], up->nb[3], 0);
+            }
+            glu = ggml_glu_split(ctx, gate, up, glu_op);
+        }
+        if (layout == LAYOUT_NONADJACENT) {
+            // an unrelated matmul between the GLU and its down projection: the fusion must
+            // decline (computing the matmul at the GLU's position would let the intervening
+            // node overwrite its output buffer) and the fallback must stay correct
+            ggml_tensor * dummy_w = ggml_new_tensor_2d(ctx, type, k, m);
+            ggml_tensor * dummy_x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, k, n, 2, 2);
+            ggml_tensor * dummy   = ggml_scale(ctx, ggml_mul_mat(ctx, dummy_w, dummy_x), 0.0f);
+            ggml_tensor * weight0 = ggml_new_tensor_2d(ctx, type, k, m);
+            ggml_tensor * out0    = ggml_mul_mat(ctx, weight0, glu);
+            return ggml_add(ctx, out0, dummy);
+        }
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, k, m);
+        ggml_tensor * out = ggml_mul_mat(ctx, weight, glu);
+        if (reuse_glu) {
+            out = ggml_add(ctx, out, ggml_sum_rows(ctx, glu));
+        }
+        return out;
+    }
+};
+
+// the same with a MUL_MAT_ID down projection (the routed MoE path)
+struct test_swiglu_mul_mat_id : public test_case {
+    const ggml_type type;
+    const int64_t   k;
+    const int64_t   m;
+    const int64_t   n_expert;
+    const int64_t   n_used;
+    const int64_t   n_tokens;
+
+    test_swiglu_mul_mat_id(ggml_type type, int64_t k, int64_t m, int64_t n_expert, int64_t n_used, int64_t n_tokens)
+        : type(type), k(k), m(m), n_expert(n_expert), n_used(n_used), n_tokens(n_tokens) {}
+
+    std::string vars() override {
+        return VARS_TO_STR6(type, k, m, n_expert, n_used, n_tokens);
+    }
+
+    std::string op_desc(ggml_tensor *) override {
+        return "SWIGLU_MUL_MAT_ID";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * gate = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, n_tokens);
+        ggml_tensor * up   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, n_tokens);
+        ggml_tensor * glu  = ggml_swiglu_split(ctx, gate, up);
+        ggml_tensor * weight = ggml_new_tensor_3d(ctx, type, k, m, n_expert);
+        ggml_tensor * ids    = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_used, n_tokens);
+        ggml_tensor * out    = ggml_mul_mat_id(ctx, weight, glu, ids);
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::random_device rd;
+        std::default_random_engine rng(rd());
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                if (ggml_is_view_op(t->op)) {
+                    continue;
+                }
+                for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                    std::vector<int32_t> data(t->ne[0]);
+                    for (int i = 0; i < t->ne[0]; i++) {
+                        data[i] = i % (int) n_expert;
+                    }
+                    std::shuffle(data.begin(), data.end(), rng);
+                    ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+                }
+            } else {
+                init_tensor_uniform(t, -1.0f, 1.0f);
+            }
+        }
+    }
+};
+
 struct test_swiglu_oai : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
@@ -9765,6 +9893,36 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_post(2560, 21, true, true));
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, false, true));
 
+    // GLU feeding a batched matmul (the MMQ activation quantization fusion)
+    for (ggml_glu_op glu_op : { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU }) {
+        for (ggml_type type : { GGML_TYPE_Q4_0, GGML_TYPE_Q2_K, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ1_S, GGML_TYPE_IQ2_S, GGML_TYPE_IQ4_NL }) {
+            for (auto layout : {
+                test_glu_mul_mat::LAYOUT_PACKED,
+                test_glu_mul_mat::LAYOUT_PACKED_SWAPPED,
+                test_glu_mul_mat::LAYOUT_SPLIT,
+                test_glu_mul_mat::LAYOUT_SPLIT_STRIDED_UP,
+                test_glu_mul_mat::LAYOUT_NONADJACENT}) {
+                for (int64_t n : { 1, 4, 65 }) {
+                    test_cases.emplace_back(new test_glu_mul_mat(glu_op, type, 768, 128, n, layout));
+                }
+            }
+            test_cases.emplace_back(new test_glu_mul_mat(glu_op, type, 768, 128, 4,  test_glu_mul_mat::LAYOUT_SPLIT, true));
+            test_cases.emplace_back(new test_glu_mul_mat(glu_op, type, 768, 128, 65, test_glu_mul_mat::LAYOUT_SPLIT, true));
+        }
+    }
+
+    // GLU feeding a MUL_MAT_ID down projection (the routed MoE path)
+    for (ggml_type type : { GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL }) {
+        for (int64_t n_tokens : { 1, 4, 65, 2048 }) {
+            test_cases.emplace_back(new test_swiglu_mul_mat_id(type, 640, 128, 8, 4, n_tokens));
+        }
+    }
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_S }) {
+        for (int64_t n_tokens : { 4, 65 }) {
+            test_cases.emplace_back(new test_swiglu_mul_mat_id(type, 2560, 64, 8, 4, n_tokens));
+        }
+    }
+
     // glu ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
         for (int v : {0, 1}) {
@@ -12313,6 +12471,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 32, 4, false, 2880, bs, 2880));
                 test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, type_b, 32, 4, false, 2880, bs, 2880, 1));
             }
+        }
+    }
+
+    // SWIGLU -> MUL_MAT_ID down projection at real MoE FFN shapes: the GLU can be fused into the
+    // Q8_1 activation quantization of the down MMQ by backends that support it
+    for (ggml_type type : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL }) {
+        // Qwen3.8-Flash-Next down projection geometry (640 -> 2560, 10 of 512)
+        for (int64_t n_tokens : { 512, 2048 }) {
+            test_cases.emplace_back(new test_swiglu_mul_mat_id(type, 640, 2560, 512, 10, n_tokens));
+        }
+        // GLM-4.7-Flash expert geometry (1536 -> 2048, 8 of 128)
+        for (int64_t n_tokens : { 2048 }) {
+            test_cases.emplace_back(new test_swiglu_mul_mat_id(type, 1536, 2048, 128, 8, n_tokens));
+        }
+        // Qwen3.5-35B-A3B expert geometry (512 -> 2048, 8 of 256)
+        for (int64_t n_tokens : { 2048 }) {
+            test_cases.emplace_back(new test_swiglu_mul_mat_id(type, 512, 2048, 256, 8, n_tokens));
+        }
+    }
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_IQ2_S }) {
+        // Qwen3.8-Flash-Next gate/up geometry (2560 -> 640, 10 of 512)
+        for (int64_t n_tokens : { 2048 }) {
+            test_cases.emplace_back(new test_swiglu_mul_mat_id(type, 2560, 640, 512, 10, n_tokens));
         }
     }
 
