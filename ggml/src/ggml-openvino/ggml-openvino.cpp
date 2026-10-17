@@ -364,7 +364,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
 
     ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
-    if (tensor->data != nullptr && !ggml_is_quantized(tensor->type)) {
+    if (tensor->data != nullptr && !ggml_is_quantized(tensor->type) && ggml_nbytes(tensor) > 0) {
         ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(tensor, ctx->is_remote);
         if (extra != nullptr) {
             auto it = ctx->tensor_extras.find(tensor);
