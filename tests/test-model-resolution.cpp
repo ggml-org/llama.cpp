@@ -153,7 +153,7 @@ static const std::vector<std::string> vendors = {
 };
 
 // every speculative sidecar type at the same quant
-static const std::vector<std::string> quad = {
+static const std::vector<std::string> all_sidecars = {
     "model-Q8_0.gguf",
     "mtp-model-Q8_0.gguf",
     "dflash-model-Q8_0.gguf",
@@ -270,7 +270,7 @@ static const plan_case plan_cases[] = {
      "", "", "", "", ""},
 
     // every sidecar type resolves at the tag
-    {"quad exact tag", quad, "test/repo:Q8_0", "", true, false,
+    {"all_sidecars exact tag", all_sidecars, "test/repo:Q8_0", "", true, false,
      "model-Q8_0.gguf", {"model-Q8_0.gguf"},
      "", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", "eagle3-model-Q8_0.gguf", "dspark-model-Q8_0.gguf"},
 
@@ -366,7 +366,7 @@ static void test_task_assembly() {
 
     g_repos["test/main"]   = flat;
     g_repos["test/hole"]   = hole;
-    g_repos["test/quad"]   = quad;
+    g_repos["test/all_sidecars"]   = all_sidecars;
     g_repos["test/dflash"] = dflash_only;
     g_repos["test/eagle3"] = eagle3_only;
     g_repos["test/spark"]  = spark;
@@ -430,9 +430,9 @@ static void test_task_assembly() {
     {
         // -hfd without a spec type auto-selects the type, mtp first when all ship
         common_params params;
-        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/quad:Q8_0"}, params);
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/all_sidecars:Q8_0"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_MTP});
-        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/quad", "mtp-model-Q8_0.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/all_sidecars", "mtp-model-Q8_0.gguf"));
     }
     {
         // auto-selection with only a dflash sidecar
