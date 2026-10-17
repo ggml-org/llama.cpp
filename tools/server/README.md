@@ -1489,6 +1489,31 @@ Acts on an in-flight completion identified by its `id` (the `id` field streamed 
 
 Returns a JSON object with a boolean `success` field, and an optional `message` field describing the reason when `success` is `false`.
 
+### WebSocket `/v1/realtime`: Realtime transcription
+
+Transcribes streamed audio, for models with a streaming audio encoder. Compatible with OAI `/v1/realtime` schema.
+
+Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `input_audio_sample_rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
+
+*Client events:*
+
+- `session.update`: accepted for compatibility, the server replies with `session.updated`
+- `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
+- `input_audio_buffer.commit`: flushes the audio received so far, so the words still held back by the model's delay are produced. The server replies with `input_audio_buffer.committed` and starts a new item. With `"final": true`, the input ends instead and the last item is completed once the stream drains.
+- `input_audio_buffer.clear`: accepted for compatibility, audio already sent cannot be discarded
+
+Closing the websocket also ends the input.
+
+*Server events:*
+
+- `session.created` and `session.updated`: carry the `session` object
+- `conversation.item.input_audio_transcription.delta`: `delta` holds the new text for `item_id`
+- `conversation.item.input_audio_transcription.completed`: `transcript` holds the full text of `item_id`
+- `input_audio_buffer.committed`: `item_id` of the new item, `previous_item_id` of the completed one
+- `error`: `error.message` describes the problem
+
+Note that words held back by the model's delay at the time of a commit are attributed to the next item.
+
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
 *Options:*
@@ -1987,6 +2012,8 @@ For **GET** endpoints (`/props`, `/metrics`, etc.) The router uses the `model` q
 ```
 GET /props?model=ggml-org%2Fgemma-3-4b-it-GGUF%3AQ4_K_M
 ```
+
+For the **WebSocket** endpoint (`/v1/realtime`) The router also uses the `model` query parameter.
 
 By default, the model will be loaded automatically if it's not loaded. To disable this, add `--no-models-autoload` when starting the server. Additionally, you can include `?autoload=true|false` in the query param to control this behavior per-request.
 

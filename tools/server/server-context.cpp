@@ -1,4 +1,7 @@
 #include "server-context.h"
+#include <atomic>
+#include <thread>
+#include "base64.hpp"
 #include "server-chat.h"
 #include "server-common.h"
 #include "server-decision.h"
@@ -360,7 +363,12 @@ struct server_slot {
 
     // for TTS models, this is the embd generated from prev step, decode this to generate next hidden state
     // corresponding to one token position (size = n_embd)
+    // for realtime transcription, these are the rows from the last audio stream step (size = n_rows * n_embd)
     std::vector<float> inp_embd;
+
+    // realtime transcription, see SERVER_TASK_TYPE_TRANSCRIBE_RT
+    mtmd::audio_stream_ptr audio_stream;
+    bool audio_wait = false; // the stream needs more audio before it can produce rows
 
     server_slot_stats stats;
 
@@ -413,6 +421,9 @@ struct server_slot {
 
         // clear multimodal state
         mbatch.reset();
+        audio_stream.reset();
+        audio_wait = false;
+        inp_embd.clear();
     }
 
     void init_sampler() const {
@@ -542,16 +553,28 @@ struct server_slot {
     // add sampled token of this slot to the batch, optionally add the speculative draft tokens if any
     void handle_last_sampled_token(server_batch & batch) {
         bool add_ok = true;
+        // the audio stream has no token before the first step, track the position with a dummy token
+        const llama_token tok_track = sampled == LLAMA_TOKEN_NULL ? 0 : sampled;
         if (spec_draft.empty()) {
             // no speculative decoding
             i_batch = batch.size();
 
             if (!inp_embd.empty()) {
-                // text embeddings broadcast the same position across the M-RoPE sections
-                const llama_pos p = prompt.tokens.pos_next();
-                const llama_pos pos[GGML_MROPE_SECTIONS] = { p, p, p, 0 };
-                GGML_ASSERT((int32_t) inp_embd.size() == batch.n_embd);
-                add_ok &= batch.add_embd(id, inp_embd.data(), pos, true, false);
+                const int32_t n_rows = (int32_t) inp_embd.size() / batch.n_embd;
+                GGML_ASSERT((int32_t) inp_embd.size() == n_rows * batch.n_embd);
+                i_batch = batch.size() + n_rows - 1;
+                for (int32_t i = 0; i < n_rows; i++) {
+                    // text embeddings broadcast the same position across the M-RoPE sections
+                    const llama_pos p = prompt.tokens.pos_next();
+                    const llama_pos pos[GGML_MROPE_SECTIONS] = { p, p, p, 0 };
+                    add_ok &= batch.add_embd(id, inp_embd.data() + (size_t) i * batch.n_embd, pos, i == n_rows - 1, false);
+                    if (i < n_rows - 1) {
+                        prompt.tokens.push_back(tok_track);
+                    }
+                }
+                if (audio_stream) {
+                    inp_embd.clear(); // rows are consumed, the next step produces new ones
+                }
             } else {
                 add_ok &= batch.add(id, sampled, prompt.tokens.pos_next(), true, false);
             }
@@ -579,7 +602,7 @@ struct server_slot {
 
         GGML_ASSERT(add_ok && "batch must be large enough to hold the sampled and draft tokens");
 
-        prompt.tokens.push_back(sampled);
+        prompt.tokens.push_back(tok_track);
         prompt.tokens.insert(spec_draft);
     }
 
@@ -595,7 +618,7 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             // nor of the stateless slots - no task ever reuses it
-            if (task->is_child() || task->is_stateless()) {
+            if (task->is_child() || task->is_stateless() || audio_stream) {
                 prompt_clear();
             }
 
@@ -2828,6 +2851,7 @@ private:
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_TRANSCRIBE_RT:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
             case SERVER_TASK_TYPE_DECISION:
@@ -2915,15 +2939,15 @@ private:
 
                     server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);
                     if (slot == nullptr) {
-                        SRV_WRN("control %s on unknown completion id=%s, no live slot\n",
-                                task.params.control_action.c_str(), task.params.control_cmpl_id.c_str());
+                        SRV_WRN("control %d on unknown completion id=%s, no live slot\n",
+                                (int) task.params.control_action, task.params.control_cmpl_id.c_str());
                         res->success = false;
                         res->message = "no active completion for this id";
                         queue_results.send(std::move(res));
                         break;
                     }
 
-                    if (task.params.control_action == "reasoning_end") {
+                    if (task.params.control_action == SERVER_CONTROL_ACTION_REASONING_END) {
                         // the budget sampler only exists when reasoning control was armed
                         if (!slot->task->params.sampling.reasoning_control) {
                             res->success = false;
@@ -2934,6 +2958,22 @@ private:
                         // act on the live slot mid generation, never defer
                         common_sampler_reasoning_budget_force(slot->smpl.get());
                         res->success = true;
+                    } else if (task.params.control_action == SERVER_CONTROL_ACTION_AUDIO_APPEND
+                            || task.params.control_action == SERVER_CONTROL_ACTION_AUDIO_COMMIT
+                            || task.params.control_action == SERVER_CONTROL_ACTION_AUDIO_END) {
+                        if (!slot->audio_stream) {
+                            res->success = false;
+                            res->message = "not a realtime transcription slot";
+                        } else {
+                            auto * stream = slot->audio_stream.get();
+                            if (task.params.control_action == SERVER_CONTROL_ACTION_AUDIO_APPEND) {
+                                mtmd_audio_stream_push(stream, task.params.control_audio.data(), task.params.control_audio.size());
+                            } else {
+                                mtmd_audio_stream_flush(stream, task.params.control_action == SERVER_CONTROL_ACTION_AUDIO_END);
+                            }
+                            slot->audio_wait = false;
+                            res->success = true;
+                        }
                     } else {
                         res->success = false;
                         res->message = "unknown control action";
@@ -3253,6 +3293,39 @@ private:
     };
 #endif
 
+    // fill slot.inp_embd with the next rows of the audio stream
+    // returns false if the slot has nothing to decode now
+    bool slot_audio_step(server_slot & slot) {
+        if (!slot.inp_embd.empty()) {
+            return true; // rows from a previous step, not decoded yet
+        }
+
+        const int32_t n = mtmd_audio_stream_step(slot.audio_stream.get(), slot.sampled);
+        if (n > 0) {
+            const float * rows = mtmd_audio_stream_get_output_embd(slot.audio_stream.get());
+            slot.inp_embd.assign(rows, rows + (size_t) n * batch.n_embd);
+            slot.audio_wait = false;
+            return true;
+        }
+        if (n == 0) {
+            slot.audio_wait = true;
+            return false;
+        }
+        if (n == -2) {
+            send_error(slot, "audio stream error", ERROR_TYPE_SERVER);
+            slot.release();
+            return false;
+        }
+
+        // end of stream
+        slot.stop           = STOP_TYPE_EOS;
+        slot.has_next_token = false;
+        slot.print_timings();
+        send_final_response(slot);
+        slot.release();
+        return false;
+    }
+
     void update_slots() {
 #ifdef DEBUG_TIMINGS
         static int64_t t_prev = 0;
@@ -3268,11 +3341,12 @@ private:
 #endif
 
         // check if all slots are idle
+        // a realtime slot waiting for audio has no work, the next audio control task wakes the loop
         {
             bool all_idle = true;
 
             for (auto & slot : slots) {
-                if (slot.is_processing()) {
+                if (slot.is_processing() && !slot.audio_wait) {
                     all_idle = false;
                     break;
                 }
@@ -3447,6 +3521,10 @@ private:
                 return;
             }
 
+            if (slot.audio_stream && !slot_audio_step(slot)) {
+                return; // waiting for audio, or the stream ended
+            }
+
             // check if we can batch this slot with the previous one
             if (!slot_batched) {
                 slot_batched = &slot;
@@ -3597,6 +3675,23 @@ private:
                 // check if this is a child slot
                 if (slot.state == SLOT_STATE_WAIT_OTHER) {
                     SLT_DBG(slot, "%s", "waiting for parent slot to complete\n");
+                    return;
+                }
+
+                if (slot.state == SLOT_STATE_STARTED && slot.task->type == SERVER_TASK_TYPE_TRANSCRIBE_RT) {
+                    // no prompt, the rows come from the audio stream
+                    slot.audio_stream.reset(mtmd_audio_stream_init(mctx, mtmd_audio_stream_params_default()));
+                    if (!slot.audio_stream) {
+                        send_error(slot, "failed to initialize the audio stream", ERROR_TYPE_SERVER);
+                        slot.release();
+                        return;
+                    }
+                    slot.prompt_clear();
+                    slot.init_sampler();
+                    slot.sampled = LLAMA_TOKEN_NULL;
+                    slot.i_batch = -1;
+                    slot.stats.update_prompt_start();
+                    slot.state = SLOT_STATE_GENERATING;
                     return;
                 }
 
@@ -4822,6 +4917,7 @@ server_context_meta server_context::get_meta() const {
         /* has_inp_image           */ impl->chat_params.allow_image,
         /* has_inp_audio           */ impl->chat_params.allow_audio,
         /* has_inp_video           */ impl->chat_params.allow_video,
+        /* has_audio_stream        */ impl->mctx != nullptr && mtmd_support_audio_stream(impl->mctx),
         /* json_ui_settings        */ impl->json_ui_settings,
         /* slot_n_ctx              */ impl->n_ctx_slot(),
         /* pooling_type            */ llama_pooling_type(impl->ctx_tgt),
@@ -5598,7 +5694,7 @@ void server_routes::init_routes() {
             server_task task(SERVER_TASK_TYPE_CONTROL);
             task.id              = rd.get_new_id();
             task.params.control_cmpl_id = cmpl_id;
-            task.params.control_action  = action;
+            task.params.control_action  = SERVER_CONTROL_ACTION_REASONING_END;
             rd.post_task(std::move(task));
         }
 
@@ -5671,6 +5767,204 @@ void server_routes::init_routes() {
             files,
             TASK_RESPONSE_TYPE_OAI_ASR,
             session);
+    };
+
+    // realtime transcription over websocket, modeled after the OpenAI realtime API
+    // audio is PCM16 mono at the model sample rate, sent as base64 in input_audio_buffer.append events
+    // input_audio_buffer.commit with "final": true ends the input, closing the socket also ends it
+    this->ws_realtime = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        auto send_event = [&conn](json ev) {
+            ev["event_id"] = "event_" + random_string();
+            conn.send(safe_json_to_str(ev));
+        };
+        auto send_error_event = [&send_event](const std::string & message, const std::string & type) {
+            send_event(json {
+                {"type", "error"},
+                {"error", {
+                    {"type",    type},
+                    {"code",    nullptr},
+                    {"message", message},
+                    {"param",   nullptr},
+                }},
+            });
+        };
+
+        if (!meta->has_audio_stream) {
+            send_error_event("The current model does not support realtime transcription.", "invalid_request_error");
+            conn.close();
+            return;
+        }
+
+        // the API key middleware does not cover websocket paths, check the bearer token here
+        if (!params.api_keys.empty()) {
+            std::string token;
+            for (const auto & [key, value] : req.headers) {
+                std::string lower = key;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower == "authorization") {
+                    token = value;
+                }
+            }
+            const std::string prefix = "Bearer ";
+            if (token.compare(0, prefix.size(), prefix) == 0) {
+                token = token.substr(prefix.size());
+            }
+            const auto & keys = params.api_keys;
+            if (std::find(keys.begin(), keys.end(), token) == keys.end()) {
+                send_error_event("Invalid API Key", "authentication_error");
+                conn.close();
+                return;
+            }
+        }
+
+        const std::string session_id = "sess_" + random_string();
+        const json session_config = json {
+            {"id",                      session_id},
+            {"object",                  "realtime.transcription_session"},
+            {"input_audio_format",      "pcm16"},
+            {"input_audio_sample_rate", mtmd_get_audio_sample_rate(ctx_server.mctx)},
+            {"input_audio_transcription", {{"model", meta->model_name}}},
+            {"modalities",     json::array({"text"})},
+            {"turn_detection", nullptr},
+        };
+        send_event(json {{"type", "session.created"}, {"session", session_config}});
+
+        auto res = create_response();
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_TRANSCRIBE_RT);
+            task.id = rd.get_new_id();
+            task.params.sampling          = params.sampling;
+            task.params.stream            = true;
+            task.params.oaicompat_cmpl_id = session_id;
+            task.params.oaicompat_model   = meta->model_name;
+            rd.post_task(std::move(task));
+        }
+
+        // one item per committed audio buffer, deltas are attributed to the current item
+        std::mutex  mutex_item;
+        std::string item_id = "item_" + random_string();
+        std::string item_text;
+
+        auto send_completed = [&]() {
+            std::lock_guard<std::mutex> lock(mutex_item);
+            send_event(json {
+                {"type",          "conversation.item.input_audio_transcription.completed"},
+                {"item_id",       item_id},
+                {"content_index", 0},
+                {"transcript",    item_text},
+            });
+            item_text.clear();
+        };
+
+        auto post_control = [&](server_control_action action, std::vector<float> && audio) {
+            server_response_reader ctl(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
+            server_task task(SERVER_TASK_TYPE_CONTROL);
+            task.id                     = ctl.get_new_id();
+            task.params.control_action  = action;
+            task.params.control_cmpl_id = session_id;
+            task.params.control_audio   = std::move(audio);
+            ctl.post_task(std::move(task));
+            auto result = ctl.next([&conn]() { return !conn.is_open(); });
+            auto * control = result ? dynamic_cast<server_task_result_control *>(result.get()) : nullptr;
+            return control && control->success;
+        };
+
+        // client events are read on this thread, the transcript is sent from the thread below
+        std::atomic<bool> input_ended{false};
+        std::thread reader([&]() {
+            std::string msg;
+            while (conn.read(msg) != 0) {
+                json ev;
+                try {
+                    ev = json::parse(msg);
+                } catch (const std::exception &) {
+                    send_error_event("invalid JSON", "invalid_request_error");
+                    continue;
+                }
+                const std::string type = json_value(ev, "type", std::string());
+                if (type == "session.update" || type == "transcription_session.update") {
+                    send_event(json {{"type", "session.updated"}, {"session", session_config}});
+                } else if (type == "input_audio_buffer.append") {
+                    std::string pcm;
+                    try {
+                        pcm = base64::decode(json_value(ev, "audio", std::string()));
+                    } catch (const std::exception &) {
+                        send_error_event("invalid base64 audio", "invalid_request_error");
+                        continue;
+                    }
+                    std::vector<float> samples(pcm.size() / 2);
+                    for (size_t i = 0; i < samples.size(); i++) {
+                        int16_t v;
+                        memcpy(&v, pcm.data() + 2 * i, sizeof(v));
+                        samples[i] = v / 32768.0f;
+                    }
+                    if (!post_control(SERVER_CONTROL_ACTION_AUDIO_APPEND, std::move(samples))) {
+                        break;
+                    }
+                } else if (type == "input_audio_buffer.commit") {
+                    // "final": true ends the input, the last item is completed when the stream drains
+                    if (json_value(ev, "final", false)) {
+                        input_ended = true;
+                        post_control(SERVER_CONTROL_ACTION_AUDIO_END, {});
+                        continue;
+                    }
+                    if (!post_control(SERVER_CONTROL_ACTION_AUDIO_COMMIT, {})) {
+                        break;
+                    }
+                    send_completed();
+                    const std::string next_id = "item_" + random_string();
+                    std::string prev_id;
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_item);
+                        prev_id = item_id;
+                        item_id = next_id;
+                    }
+                    send_event(json {
+                        {"type",             "input_audio_buffer.committed"},
+                        {"previous_item_id", prev_id},
+                        {"item_id",          next_id},
+                    });
+                } else if (type == "input_audio_buffer.clear") {
+                    send_event(json {{"type", "input_audio_buffer.cleared"}});
+                } else {
+                    send_error_event("unknown event type: " + type, "invalid_request_error");
+                }
+            }
+            if (!input_ended.exchange(true)) {
+                post_control(SERVER_CONTROL_ACTION_AUDIO_END, {});
+            }
+        });
+
+        while (true) {
+            auto result = rd.next([&conn]() { return !conn.is_open(); });
+            if (!result) {
+                break; // connection closed
+            }
+            if (result->is_error()) {
+                send_error_event(json_value(result->to_json(), "message", std::string("server error")), "server_error");
+                break;
+            }
+            if (auto * partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get())) {
+                if (!partial->content.text.empty()) {
+                    std::lock_guard<std::mutex> lock(mutex_item);
+                    item_text += partial->content.text;
+                    send_event(json {
+                        {"type",          "conversation.item.input_audio_transcription.delta"},
+                        {"item_id",       item_id},
+                        {"content_index", 0},
+                        {"delta",         partial->content.text},
+                    });
+                }
+            } else if (result->is_stop()) {
+                send_completed();
+                break;
+            }
+        }
+
+        input_ended = true;
+        conn.close();
+        reader.join();
     };
 
     this->post_anthropic_messages = [this](const server_http_req & req) {
