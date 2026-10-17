@@ -689,3 +689,38 @@ def test_completion_prompt_cache():
         assert "prompt_n" in timings and timings["prompt_n"] + timings["cache_n"] == n_prompt
         assert "predicted_n" in timings and timings["predicted_n"] == n_predict
         assert "tokens" in res.body and isinstance(res.body["tokens"], list)
+
+
+# validate that tails of prompts that share a long prefix are not discarded
+# if the tails are longer than the batch size
+# ref: https://github.com/ggml-org/llama.cpp/pull/30319
+@pytest.mark.parametrize("n_batch,is_restored", [
+    (8,   True),
+    (128, False),
+])
+def test_completion_prompt_cache_shared_prefix(n_batch: int, is_restored: bool):
+    global server
+    server.n_slots = 1
+    server.n_batch = n_batch
+    server.n_predict = 4
+    server.start()
+
+    prefix = (
+        "this is very long prefix such as a system prompt or agent instructions, "
+        "this is very long prefix such as a system prompt or agent instructions, "
+        "this is very long prefix such as a system prompt or agent instructions, "
+    )
+    prompt_a = prefix + " this is a set of instructions given to agent A"
+    prompt_b = prefix + " agent B received a different set of instructions"
+
+    res = server.make_request("POST", "/completion", data={"prompt": prompt_a})
+    assert res.status_code == 200
+    n_prompt_a = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/completion", data={"prompt": prompt_b})
+    assert res.status_code == 200
+    n_prefix = res.body["timings"]["cache_n"]
+
+    res = server.make_request("POST", "/completion", data={"prompt": prompt_a})
+    assert res.status_code == 200
+    assert res.body["timings"]["prompt_n"] == (1 if is_restored else n_prompt_a - n_prefix)
