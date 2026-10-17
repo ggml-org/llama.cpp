@@ -1021,20 +1021,7 @@ struct llm_tokenizer_ugm_session {
 
         // normalize the input first
         std::string normalized;
-        if (vocab.get_normalizer_opts().nfc) {
-            try {
-                std::string canonical;
-                for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
-                    canonical += unicode_cpt_to_utf8(cpt);
-                }
-                normalize(canonical, &normalized);
-            } catch (const std::invalid_argument &) {
-                // Use the existing UGM normalization path for malformed input.
-                normalize(text, &normalized);
-            }
-        } else {
-            normalize(text, &normalized);
-        }
+        normalize(text, &normalized);
         size_t input_len = normalized.size();
         if (input_len == 0) {
             return;
@@ -2014,6 +2001,8 @@ struct llama_vocab::impl {
     void init_tokenizer(enum llama_vocab_type type);
 
     void tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const;
+
+    std::string tokenizer_normalize(const fragment_buffer_variant & fragment) const;
 
     std::string token_to_piece_for_cache(
                   llama_token   token,
@@ -3533,6 +3522,20 @@ std::string llama_vocab::impl::token_to_piece_for_cache(llama_token token, bool 
     return piece;
 }
 
+std::string llama_vocab::impl::tokenizer_normalize(const fragment_buffer_variant & fragment) const {
+    if (!normalizer_opts.nfc) {
+        return fragment.raw_text.substr(fragment.offset, fragment.length);
+    }
+
+    const auto cpts = unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(fragment.raw_text.data() + fragment.offset, fragment.length));
+    std::string text;
+    text.reserve(fragment.length);
+    for (const uint32_t cpt : cpts) {
+        text += unicode_cpt_to_utf8(cpt);
+    }
+    return text;
+}
+
 static void llama_escape_whitespace(std::string & text) {
     replace_all(text, " ", "\xe2\x96\x81");
 }
@@ -3600,7 +3603,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                             text = ' ';
                         }
 
-                        text += fragment.raw_text.substr(fragment.offset, fragment.length);
+                        text += tokenizer_normalize(fragment);
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
@@ -3647,7 +3650,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 }
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        std::string text = tokenizer_normalize(fragment);
 
                         if (escape_whitespaces) {
                             llama_escape_whitespace(text);
@@ -3678,7 +3681,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
 
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        std::string text = tokenizer_normalize(fragment);
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
@@ -3704,7 +3707,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
 
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        std::string text = tokenizer_normalize(fragment);
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
 #endif
@@ -3731,7 +3734,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 llm_tokenizer_rwkv_session session(vocab, *static_cast<const llm_tokenizer_rwkv *>(tokenizer.get()));
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        std::string text = tokenizer_normalize(fragment);
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
@@ -3753,7 +3756,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 llm_tokenizer_plamo2_session session(*static_cast<const llm_tokenizer_plamo2 *>(tokenizer.get()));
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        std::string text = tokenizer_normalize(fragment);
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());

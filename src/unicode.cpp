@@ -27,8 +27,8 @@ static std::string unicode_cpts_to_utf8(const std::vector<uint32_t> & cps) {
     return result;
 }
 
-uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
-    assert(offset < utf8.size());
+static uint32_t unicode_cpt_from_utf8(const char * utf8, size_t length, size_t & offset) {
+    assert(offset < length);
     if (!(utf8[offset + 0] & 0x80)) {
         auto result = utf8[offset + 0];
         offset += 1;
@@ -38,7 +38,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         throw std::invalid_argument("invalid character");
     }
     if (!(utf8[offset + 0] & 0x20)) {
-        if (offset + 1 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80)) {
+        if (offset + 1 >= length || ! ((utf8[offset + 1] & 0xc0) == 0x80)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x1f) << 6) | (utf8[offset + 1] & 0x3f);
@@ -49,7 +49,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return result;
     }
     if (!(utf8[offset + 0] & 0x10)) {
-        if (offset + 2 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80)) {
+        if (offset + 2 >= length || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x0f) << 12) | ((utf8[offset + 1] & 0x3f) << 6) | (utf8[offset + 2] & 0x3f);
@@ -60,7 +60,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return result;
     }
     if (!(utf8[offset + 0] & 0x08)) {
-        if (offset + 3 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80) || !((utf8[offset + 3] & 0xc0) == 0x80)) {
+        if (offset + 3 >= length || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80) || !((utf8[offset + 3] & 0xc0) == 0x80)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x07) << 18) | ((utf8[offset + 1] & 0x3f) << 12) | ((utf8[offset + 2] & 0x3f) << 6) | (utf8[offset + 3] & 0x3f);
@@ -71,6 +71,10 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return result;
     }
     throw std::invalid_argument("failed to convert utf8 to codepoint");
+}
+
+uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
+    return unicode_cpt_from_utf8(utf8.data(), utf8.size(), offset);
 }
 
 //static std::vector<uint16_t> unicode_cpt_to_utf16(uint32_t cpt) {
@@ -1375,12 +1379,16 @@ std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & c
 }
 
 std::vector<uint32_t> unicode_cpts_from_utf8(const std::string & utf8) {
+    return unicode_cpts_from_utf8(utf8.data(), utf8.size());
+}
+
+std::vector<uint32_t> unicode_cpts_from_utf8(const char * utf8, size_t length) {
     std::vector<uint32_t> result;
-    result.reserve(utf8.size());
+    result.reserve(length);
     size_t offset = 0;
-    while (offset < utf8.size()) {
+    while (offset < length) {
         try {
-            result.push_back(unicode_cpt_from_utf8(utf8, offset));
+            result.push_back(unicode_cpt_from_utf8(utf8, length, offset));
         }
         catch (const std::invalid_argument & /*ex*/) {
             // Silently ignore invalid UTF-8 input to avoid leaking the exception beyond llama_tokenize
