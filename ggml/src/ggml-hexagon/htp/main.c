@@ -316,9 +316,17 @@ static int vtcm_release_callback(unsigned int rctx, void * state) {
     return 0;
 }
 
-static int vtcm_alloc(struct htp_context * ctx) {
+static unsigned int vtcm_query_size(void) {
     unsigned int vtcm_size = 8 * 1024 * 1024;  // 8MB default
-    HAP_compute_res_query_VTCM(0, &vtcm_size, NULL, NULL, NULL);
+    unsigned int vtcm_avail;
+    compute_res_vtcm_page_t total_layout, avail_layout;
+    // some images (e.g. FuSa cDSP) fail the query when the layout out-params are NULL
+    HAP_compute_res_query_VTCM(0, &vtcm_size, &total_layout, &vtcm_avail, &avail_layout);
+    return vtcm_size;
+}
+
+static int vtcm_alloc(struct htp_context * ctx) {
+    unsigned int vtcm_size = vtcm_query_size();
 
     compute_res_attr_t attr;
     HAP_compute_res_attr_init(&attr);
@@ -770,9 +778,7 @@ AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_
     *n_hvx     = n_hvx_val;
     *n_hmx     = 1;
 
-    uint32_t vtcm_sz = 8 * 1024 * 1024; // 8MB default fallback
-    HAP_compute_res_query_VTCM(0, (unsigned int *)&vtcm_sz, NULL, NULL, NULL);
-    *vtcm_size = vtcm_sz;
+    *vtcm_size = vtcm_query_size();
 
     return AEE_SUCCESS;
 }
