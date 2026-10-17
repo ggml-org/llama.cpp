@@ -66,6 +66,31 @@ MAKE_TEST(test_image_preprocessor_longest_edge) {
     }
 }
 
+MAKE_TEST(test_image_preprocessor_dyn_size) {
+    // { patch_size, image size, expected size }
+    // a side that is an even number plus .5 merged patches rounds down, like Python round() in smart_resize
+    const std::vector<std::tuple<int, clip_image_size, clip_image_size>> cases = {
+        { 16, {  768, 400 }, {  768, 384 } },
+        { 16, {  800, 336 }, {  800, 320 } },
+        { 16, {  400, 400 }, {  384, 384 } },
+        { 16, {  640, 240 }, {  640, 256 } },
+        { 14, {  966, 560 }, {  952, 560 } },
+    };
+
+    for (const auto & [patch_size, input, expected] : cases) {
+        clip_hparams hparams;
+        hparams.patch_size = patch_size;
+        hparams.n_merge = 2;
+        hparams.image_round_half_even = true;
+        hparams.set_limit_image_tokens(8, 4096);
+
+        const clip_image_size actual = mtmd_image_preprocessor_dyn_size::get_target_size(hparams, input);
+        const std::string name = std::to_string(input.width) + "x" + std::to_string(input.height);
+        t.assert_equal(name + " width", expected.width, actual.width);
+        t.assert_equal(name + " height", expected.height, actual.height);
+    }
+}
+
 MAKE_TEST(test_image_preprocessor_lfm2) {
     clip_hparams hparams;
     hparams.patch_size = 16;
