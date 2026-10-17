@@ -1097,10 +1097,11 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     const bool prefill = cross && !s.sequence->decode;
     const bool bounded_prefill=prefill && s.prefill_scratch_bytes;
     if (compact_mask && (!bounded_prefill || ops->version < 14)) return false;
+    const bool geometry=ops->version >= 15 && ops->geometry;
     const bool resumed = ((s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 8) || bounded_prefill) && !s.fallback &&
-        ops->version >= 5 && ops->resume_plan && ops->resume &&
-        ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
-            uint32_t(q->ne[2]),uint32_t(s.binding.config.shape.heads),uint32_t(q->ne[1]),padded,resume_plan);
+        ops->version >= 5 && (ops->resume_plan || geometry) && ops->resume &&
+        ggml_kv_stream_resume_plan_query(ops,s.backend,{s.binding.config.shape,
+            uint32_t(q->ne[2]),uint32_t(q->ne[1]),padded},resume_plan);
     if (bounded_prefill && !resumed) return false;
     const bool segmented = s.native_graph_attention && cross && !prefill && !s.fallback &&
         q->ne[1] <= 8 && blocks <= slots && ops->version >= 8 && ops->spans && ops->spans_workspace &&

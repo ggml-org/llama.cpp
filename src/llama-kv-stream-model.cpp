@@ -274,7 +274,8 @@ struct llama_kv_stream_model::implementation {
             case GGML_OP_SET_ROWS: {
                 uint32_t layer; bool value;
                 return plane(op->src[2],layer,value) && op->src[0] && op->src[1] &&
-                    op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] == config.host.shape.heads*256 &&
+                    op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] == config.host.shape.heads*
+                        (value ? config.host.shape.head_dim_v : config.host.shape.head_dim_k) &&
                     op->src[0]->ne[1] > 0 && op->src[0]->ne[1] <= config.max_batch_rows &&
                     op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
                     op->src[1]->type == GGML_TYPE_I64 && ggml_is_contiguous(op->src[1]) &&
@@ -288,7 +289,7 @@ struct llama_kv_stream_model::implementation {
                 if (op->src[5] && (!compact_prefill_mask ||
                         !ggml_backend_execution_mask_metadata(op,logical,mask))) return false;
                 float params[3]; std::memcpy(params,op->op_params,sizeof(params));
-                return params[0] > 0 && params[1] == 0 && params[2] == 0 && op->src[0]->ne[0] == 256 &&
+                return params[0] > 0 && params[1] == 0 && params[2] == 0 && op->src[0]->ne[0] == config.host.shape.head_dim_k &&
                     op->src[0]->ne[1] > 0 && op->src[0]->ne[1] <= config.max_batch_rows &&
                     op->src[0]->ne[2] == config.query_heads && op->src[0]->ne[3] == 1 &&
                     (op->src[5] || op->src[3]->type == GGML_TYPE_F16);
@@ -438,7 +439,29 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         return {};
     }
     ggml_kv_stream_block_layout partial;
-    if (ggml_kv_stream_block_layout_make(size_t(config.max_batch_rows)*config.query_heads,256,partial).status != ggml_kv_stream_partial_status::success) return {};
+    auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+        ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+    const auto * partial_ops = get ? get() : nullptr;
+    const bool geometry=partial_ops && partial_ops->version >= 15 && partial_ops->geometry;
+    if ((config.host.shape.head_dim_k != 256 || config.host.shape.head_dim_v != 256) && !geometry) {
+        if (unavailable_queries) *unavailable_queries=1;
+        return {};
+    }
+    if (config.host.shape.head_dim_k != 256 || config.host.shape.head_dim_v != 256) {
+        ggml_kv_stream_resume_plan probe;
+        size_t bytes=0;
+        const size_t tokens=(config.host.context_tokens+255)/256*256;
+        if (!ggml_kv_stream_resume_plan_query(partial_ops,config.backend,
+                {config.host.shape,config.query_heads,1,tokens},probe) ||
+                !ggml_kv_stream_workspace_query(partial_ops,config.backend,
+                    {config.host.shape,config.query_heads,uint32_t(std::min(size_t(config.max_batch_rows),tokens)),tokens},
+                    ggml_kv_stream_workspace_kind::prefill,bytes)) {
+            if (unavailable_queries) *unavailable_queries=1;
+            return {};
+        }
+    }
+    if (ggml_kv_stream_block_layout_make(size_t(config.max_batch_rows)*config.query_heads,
+            size_t(config.host.shape.head_dim_v),partial).status != ggml_kv_stream_partial_status::success) return {};
     try {
         auto s = std::make_shared<implementation>(); s->config = config;
         if (!llama_kv_stream_writer::requirements(type,config.host.shape,config.max_batch_rows,s->writer_bytes)) return {};
@@ -472,24 +495,22 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             s->transfer=llama_kv_stream_transfer::create(config.backend);
             if (!s->transfer) return {};
         }
-        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
-            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
         ggml_kv_stream_resume_plan plan;
-        const auto * partial_ops = get ? get() : nullptr;
         s->prefill_bytes=s->host->layout().bytes;
-        if (!std::getenv("LLAMA_KV_STREAM_PREFILL_GATHER") && partial_ops && partial_ops->version >= 13 && partial_ops->prefill_workspace) {
+        if (!std::getenv("LLAMA_KV_STREAM_PREFILL_GATHER") && partial_ops && partial_ops->version >= 13 && (partial_ops->prefill_workspace || geometry)) {
             size_t bytes=0;
             bool available=true;
-            bool compact=partial_ops->version >= 14 && partial_ops->prefill_mask_bounds &&
+            bool compact=partial_ops->version >= 14 && (partial_ops->prefill_mask_bounds || geometry) &&
                 !std::getenv("LLAMA_KV_STREAM_DENSE_MASK");
             const uint32_t maximum=uint32_t(std::min(size_t(config.max_batch_rows),s->host->layout().tokens));
             for (uint32_t rows=1;rows<=maximum;++rows) {
                 size_t bound=0;
-                if (!partial_ops->prefill_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
-                        config.query_heads,config.host.shape.heads,rows,s->host->layout().tokens,bound)) { available=false; break; }
+                const ggml_kv_stream_attention_request request{config.host.shape,config.query_heads,rows,s->host->layout().tokens};
+                if (!ggml_kv_stream_workspace_query(partial_ops,config.backend,request,
+                        ggml_kv_stream_workspace_kind::prefill,bound)) { available=false; break; }
                 bytes=std::max(bytes,bound);
-                if (compact && !partial_ops->prefill_mask_bounds(config.backend,config.host.shape.type_k,config.host.shape.type_v,
-                        config.query_heads,config.host.shape.heads,rows,s->host->layout().tokens)) compact=false;
+                if (compact && !ggml_kv_stream_workspace_query(partial_ops,config.backend,request,
+                        ggml_kv_stream_workspace_kind::prefill_mask_bounds,bound)) compact=false;
             }
             if (available) {
                 if (bytes > SIZE_MAX-s->prefill_bytes) return {};
@@ -500,10 +521,10 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         // Embedded MTP retains its separately qualified gathered-prefill path in the same serial scratch lease.
         if (s->auxiliary_cache) s->prefill_bytes=std::max(s->prefill_bytes,s->auxiliary_cache->host()->layout().bytes);
         const bool resume_capable = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") &&
-            partial_ops && partial_ops->version >= 5 && partial_ops->resume_plan && partial_ops->resume;
+            partial_ops && partial_ops->version >= 5 && (partial_ops->resume_plan || geometry) && partial_ops->resume;
         const auto plan_resume = [&](uint32_t queries) {
-            return partial_ops->resume_plan(config.backend,config.host.shape.type_k,config.host.shape.type_v,
-                config.query_heads,config.host.shape.heads,queries,s->host->layout().tokens,plan);
+            return ggml_kv_stream_resume_plan_query(partial_ops,config.backend,
+                {config.host.shape,config.query_heads,queries,s->host->layout().tokens},plan);
         };
         const uint32_t decode_rows = std::min(2u,config.max_batch_rows);
         s->config.resume_decode = resume_capable &&
@@ -514,21 +535,22 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             return {};
         }
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
-        if (s->config.resume_decode && partial_ops->version >= 10 && partial_ops->decode_workspace) {
+        if (s->config.resume_decode && partial_ops->version >= 10 && (partial_ops->decode_workspace || geometry)) {
             size_t bytes=0;
-            if (!partial_ops->decode_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
-                    config.query_heads,config.host.shape.heads,std::min(config.max_decode_rows,config.max_batch_rows),
-                    s->host->layout().tokens,bytes)) {
+            if (!ggml_kv_stream_workspace_query(partial_ops,config.backend,
+                    {config.host.shape,config.query_heads,std::min(config.max_decode_rows,config.max_batch_rows),s->host->layout().tokens},
+                    ggml_kv_stream_workspace_kind::decode,bytes)) {
                 LLAMA_LOG_ERROR("%s: unsupported decode KV attention workspace for K=%s, V=%s, maximum query width=%u; check compiled streamed kernels and device resources\n",
                     __func__,ggml_type_name(ggml_type(config.host.shape.type_k)),ggml_type_name(ggml_type(config.host.shape.type_v)),
                     std::min(config.max_decode_rows,config.max_batch_rows));
                 return {};
             }
             s->span_bytes=bytes; s->decode_bytes=std::max(s->decode_bytes,bytes);
-        } else if (s->config.resume_decode && get()->version >= 9 && get()->mma_workspace) {
+        } else if (s->config.resume_decode && partial_ops->version >= 9 && (partial_ops->mma_workspace || geometry)) {
             size_t mma_bytes=0;
-            if (get()->mma_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
-                    config.query_heads,config.host.shape.heads,s->host->layout().tokens,3,mma_bytes)) {
+            if (ggml_kv_stream_workspace_query(partial_ops,config.backend,
+                    {config.host.shape,config.query_heads,decode_rows,s->host->layout().tokens},
+                    ggml_kv_stream_workspace_kind::mma,mma_bytes)) {
                 s->span_bytes = mma_bytes;
                 s->decode_bytes=std::max(s->decode_bytes,mma_bytes);
             }

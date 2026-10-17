@@ -29,23 +29,23 @@ static bool decode_workspace_bytes(ggml_backend_t backend, const llama_kv_stream
     auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
         ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)),"ggml_backend_kv_stream_partial_ops"));
     const auto * ops=get ? get() : nullptr;
-    if (ops && ops->version >= 10 && ops->decode_workspace) return ops->decode_workspace(
-        backend,config.policy.shape.type_k,config.policy.shape.type_v,config.query_heads,
-        config.policy.shape.heads,std::min(config.max_decode_rows,config.max_batch_rows),tokens,bytes);
+    const bool geometry=ops && ops->version >= 15 && ops->geometry;
+    const ggml_kv_stream_attention_request request{config.policy.shape,config.query_heads,
+        std::min(config.max_decode_rows,config.max_batch_rows),tokens};
+    if (ops && ops->version >= 10 && (ops->decode_workspace || geometry))
+        return ggml_kv_stream_workspace_query(ops,backend,request,ggml_kv_stream_workspace_kind::decode,bytes);
     ggml_kv_stream_resume_plan plan;
-    if (!ops || ops->version < 5 || !ops->resume_plan) return false;
+    if (!ops || ops->version < 5 || (!ops->resume_plan && !geometry)) return false;
     const uint32_t queries = std::min(2u,config.max_batch_rows);
     const auto query = [&](uint32_t rows) {
-        return ops->resume_plan(backend,config.policy.shape.type_k,config.policy.shape.type_v,
-            config.query_heads,config.policy.shape.heads,rows,tokens,plan);
+        return ggml_kv_stream_resume_plan_query(ops,backend,{config.policy.shape,config.query_heads,rows,tokens},plan);
     };
     // Match the model owner's TG1-only fallback during phase transitions and session reconstruction.
     if (!query(queries) && (queries != 2 || !query(1))) return false;
     bytes=plan.bytes;
-    if (ops->version >= 9 && ops->mma_workspace) {
+    if (ops->version >= 9 && (ops->mma_workspace || geometry)) {
         size_t mma=0;
-        if (ops->mma_workspace(backend,config.policy.shape.type_k,config.policy.shape.type_v,
-                config.query_heads,config.policy.shape.heads,tokens,3,mma)) bytes=std::max(bytes,mma);
+        if (ggml_kv_stream_workspace_query(ops,backend,request,ggml_kv_stream_workspace_kind::mma,mma)) bytes=std::max(bytes,mma);
     }
     return true;
 }
@@ -597,15 +597,17 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
     if (!backend || !content || !config.max_batch_rows || config.max_batch_rows > INT32_MAX || !config.query_heads ||
             !config.max_decode_rows || config.max_decode_rows > 8 ||
             (config.max_decode_rows > 4 && (!config.native_graph_attention || !config.resume_decode)) ||
-            config.query_heads > SIZE_MAX/config.max_batch_rows || config.policy.shape.head_dim_k != 256 ||
-            config.policy.shape.head_dim_v != 256 || config.policy.shape.heads <= 0 ||
+            config.query_heads > SIZE_MAX/config.max_batch_rows || config.policy.shape.head_dim_k <= 0 ||
+            config.policy.shape.head_dim_k > INT32_MAX || config.policy.shape.head_dim_v <= 0 ||
+            config.policy.shape.head_dim_v > INT32_MAX || config.policy.shape.heads <= 0 ||
             config.query_heads%config.policy.shape.heads) return {};
     auto * type = llama_kv_stream_device_buffer_type(ggml_backend_get_device(backend));
     if (!type || ggml_backend_buffer_get_type(content->host()->buffer()) != llama_kv_stream_host_buffer_type(ggml_backend_get_device(backend))) return {};
     llama_kv_stream_policy_state state;
     if (llama_kv_stream_policy_initialize(config.policy,state).status != llama_kv_stream_policy_status::success) return {};
     ggml_kv_stream_block_layout work;
-    if (ggml_kv_stream_block_layout_make(size_t(config.query_heads)*config.max_batch_rows,256,work).status != ggml_kv_stream_partial_status::success) return {};
+    if (ggml_kv_stream_block_layout_make(size_t(config.query_heads)*config.max_batch_rows,
+            size_t(config.policy.shape.head_dim_v),work).status != ggml_kv_stream_partial_status::success) return {};
     const std::array<ggml_backend_memory_lease_t,3> grants{pool,writer,partial};
     std::array<ggml_backend_memory_region,3> regions{};
     std::array<uintptr_t,3> addresses{};
@@ -682,20 +684,20 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
                 const auto * ops=get ? get() : nullptr;
                 size_t mma_bytes=0;
                 ggml_kv_stream_resume_plan resume;
-                const bool resumable=s.config.resume_decode && ops && ops->version >= 10 && ops->resume_plan &&
-                    ops->resume_plan(s.backend,s.config.policy.shape.type_k,s.config.policy.shape.type_v,
-                        s.config.query_heads,s.config.policy.shape.heads,queries,(active+255)/256*256,resume);
+                const bool geometry=ops && ops->version >= 15 && ops->geometry;
+                const ggml_kv_stream_attention_request request{s.config.policy.shape,s.config.query_heads,
+                    std::min(s.config.max_decode_rows,s.config.max_batch_rows),s.content->host()->layout().tokens};
+                const bool resumable=s.config.resume_decode && ops && ops->version >= 10 && (ops->resume_plan || geometry) &&
+                    ggml_kv_stream_resume_plan_query(ops,s.backend,{s.config.policy.shape,
+                        s.config.query_heads,queries,(active+255)/256*256},resume);
                 const bool capable = s.config.native_graph_attention && s.config.resume_decode &&
-                    ops && ((ops->version >= 10 && ops->decode_workspace) || (ops->version >= 9 && ops->mma_workspace));
+                    ops && ((ops->version >= 10 && (ops->decode_workspace || geometry)) || (ops->version >= 9 && ops->mma_workspace));
                 bool planned = capable && s.config.span_workspace_bytes != 0;
                 if (planned) mma_bytes = s.config.span_workspace_bytes;
-                else if (capable && ops->version >= 10 && ops->decode_workspace) planned=ops->decode_workspace(s.backend,
-                    s.config.policy.shape.type_k,s.config.policy.shape.type_v,s.config.query_heads,
-                    s.config.policy.shape.heads,std::min(s.config.max_decode_rows,s.config.max_batch_rows),s.content->host()->layout().tokens,mma_bytes);
-                else if (capable) planned = ops->mma_workspace(s.backend,
-                    s.config.policy.shape.type_k, s.config.policy.shape.type_v,
-                    s.config.query_heads, s.config.policy.shape.heads,
-                    s.content->host()->layout().tokens, 3, mma_bytes);
+                else if (capable && ops->version >= 10 && (ops->decode_workspace || geometry))
+                    planned=ggml_kv_stream_workspace_query(ops,s.backend,request,ggml_kv_stream_workspace_kind::decode,mma_bytes);
+                else if (capable) planned=ggml_kv_stream_workspace_query(
+                    ops,s.backend,request,ggml_kv_stream_workspace_kind::mma,mma_bytes);
                 const size_t available = ggml_backend_buffer_get_size(
                     ggml_backend_memory_lease_buffer(s.leases[2].get()));
                 if (!planned || mma_bytes > available) {
@@ -1242,7 +1244,8 @@ bool llama_kv_stream_session::set_attention_workspace(ggml_backend_memory_lease_
         size_t needed = s.config.prefill_span_bytes ? s.config.prefill_span_bytes : s.content->host()->layout().bytes;
         if (!s.config.native_graph_attention) {
             ggml_kv_stream_block_layout partial;
-            if (ggml_kv_stream_block_layout_make(size_t(s.config.query_heads)*s.config.max_batch_rows,256,partial).status != ggml_kv_stream_partial_status::success) return false;
+            if (ggml_kv_stream_block_layout_make(size_t(s.config.query_heads)*s.config.max_batch_rows,
+                    size_t(s.config.policy.shape.head_dim_v),partial).status != ggml_kv_stream_partial_status::success) return false;
             needed = partial.bytes;
         }
         if (decode && s.config.resume_decode) {

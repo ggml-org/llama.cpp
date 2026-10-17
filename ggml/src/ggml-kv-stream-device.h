@@ -24,6 +24,25 @@ GGML_API bool ggml_kv_stream_query_tile_make(
 // Getter may return null when disabled. Call outside active capture; CUDA execution errors follow backend error handling.
 // All tensor/workspace buffers belong to the backend; workspace must not overlap inputs or public output.
 struct ggml_kv_stream_resume_plan;
+struct ggml_kv_stream_geometry_ops;
+
+struct ggml_kv_stream_attention_request {
+    ggml_kv_stream_shape shape;
+    uint32_t query_heads = 0, query_tokens = 0;
+    size_t tokens = 0;
+    size_t spans = 3;
+};
+
+enum class ggml_kv_stream_workspace_kind { decode, prefill, mma, prefill_mask_bounds };
+
+// Backend-neutral geometry-aware quotes; returning support does not execute attention or allocate its scratch.
+struct ggml_kv_stream_geometry_ops {
+    bool (*resume_plan)(ggml_backend_t, const ggml_kv_stream_attention_request &,
+            ggml_kv_stream_resume_plan &) = nullptr;
+    bool (*workspace)(ggml_backend_t, const ggml_kv_stream_attention_request &,
+            ggml_kv_stream_workspace_kind, size_t &) = nullptr;
+};
+
 struct ggml_kv_stream_partial_ops {
     uint32_t version;
     bool (*supports)(ggml_backend_t backend, const ggml_tensor * attention);
@@ -74,6 +93,8 @@ struct ggml_kv_stream_partial_ops {
     // Version 14: exact interval masks in the selected bounded prefill family, not an ordinary FA input.
     bool (*prefill_mask_bounds)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
             uint32_t kv_heads, uint32_t queries, size_t tokens) = nullptr;
+    // Version 15: independent K/V head dimensions. Earlier quote callbacks imply exactly 256/256.
+    const ggml_kv_stream_geometry_ops * geometry = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
 
@@ -85,8 +106,16 @@ struct ggml_kv_stream_resume_plan {
     // Some native families need conversion extras outside the public output; keep their full layer on the resume path.
     bool resume_resident = false;
     bool span_resume = false;
+    uint32_t head_dim_k = 256, head_dim_v = 256;
 };
 // Bound the native per-thread state and final partials without a context-sized KV allocation.
 GGML_API bool ggml_kv_stream_resume_layout_make(
         uint32_t heads, uint32_t queries, uint32_t splits, uint32_t values_per_thread,
-        ggml_kv_stream_resume_plan & output);
+        ggml_kv_stream_resume_plan & output, uint32_t width = 256);
+
+// Validate metadata before dispatch. Legacy quote callbacks are used only for their original 256/256 contract.
+// Failure leaves output unchanged; successful replies retain the requested geometry in their plan identity.
+GGML_API bool ggml_kv_stream_resume_plan_query(const ggml_kv_stream_partial_ops * ops, ggml_backend_t backend,
+        const ggml_kv_stream_attention_request & request, ggml_kv_stream_resume_plan & output);
+GGML_API bool ggml_kv_stream_workspace_query(const ggml_kv_stream_partial_ops * ops, ggml_backend_t backend,
+        const ggml_kv_stream_attention_request & request, ggml_kv_stream_workspace_kind kind, size_t & output);

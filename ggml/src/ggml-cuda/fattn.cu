@@ -622,7 +622,8 @@ static bool mma_span_launch_make(
     const bool dense_strided=ggml_cuda_kv_stream_mma_dense_strided(dst->src[5] != nullptr,mma_span_conversion_flags(dst));
     const ggml_cuda_fattn_plan_key cache_key{ctx.device,cc,compiled_arch,device.nsm,device.warp_size,device.smpbo,
         k->type,v->type,uint32_t(q->ne[2]),uint32_t(k->ne[2]),uint32_t(q->ne[1]),uint32_t(k->ne[1]),
-        uint32_t(span_count),uint32_t(ggml_cuda_kv_stream_kernel_family::mma),resumable,dense_strided};
+        uint32_t(span_count),uint32_t(ggml_cuda_kv_stream_kernel_family::mma),resumable,dense_strided,
+        uint32_t(k->ne[0]),uint32_t(v->ne[0])};
     static thread_local ggml_cuda_fattn_plan_cache<mma_cached_plan> cache;
     mma_cached_plan cached;
     if (cache.find(cache_key,cached)) {
