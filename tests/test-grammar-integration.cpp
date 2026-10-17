@@ -1404,6 +1404,39 @@ static void test_json_schema() {
         }
     );
 
+    test_schema(
+        "optional props before and between required props",
+        // Schema
+        R"""({
+            "properties": {
+                "title": {"type": "string"},
+                "name": {"type": "string"},
+                "nickname": {"type": "string"},
+                "city": {"type": "string"},
+                "zip": {"type": "string"}
+            },
+            "required": ["name", "city"],
+            "additionalProperties": false
+        })""",
+        // Passing strings
+        {
+            R"""({"name": "Ana", "city": "Lima"})""",
+            R"""({"name": "Ana", "nickname": "An", "city": "Lima"})""",
+            R"""({"title": "Dr", "name": "Ana", "city": "Lima"})""",
+            R"""({"title": "Dr", "name": "Ana", "nickname": "An", "city": "Lima", "zip": "15001"})""",
+            R"""({"name": "Ana", "city": "Lima", "zip": "15001"})""",
+        },
+        // Failing strings
+        {
+            R"""({"name": "Ana", "city": "Lima", "nickname": "An"})""",
+            R"""({"name": "Ana", "title": "Dr", "city": "Lima"})""",
+            R"""({"title": "Dr", "city": "Lima"})""",
+            R"""({"name": "Ana", "nickname": "An"})""",
+            R"""({"title": "Dr", , "name": "Ana", "city": "Lima"})""",
+            R"""({"name": "Ana", "city": "Lima",})""",
+        }
+    );
+
     // NOTE: Example from https://json-schema.org/learn/getting-started-step-by-step#define-required-properties
     test_schema(
         "required props",
