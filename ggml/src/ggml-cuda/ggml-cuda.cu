@@ -579,6 +579,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
     CUdeviceptr pool_addr = 0;
     size_t pool_used = 0;
     size_t pool_size = 0;
+    size_t max_size = CUDA_POOL_VMM_MAX_SIZE;
     size_t granularity;
 #if defined(GGML_USE_HIP)
     std::vector<std::pair<CUdeviceptr, size_t>> mappings;
@@ -588,6 +589,11 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         device(device),
         physical_device(ggml_cuda_get_physical_device(device)),
         granularity(ggml_cuda_info().devices[device].vmm_granularity) {
+        cudaDeviceProp prop;
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, physical_device));
+        if (prop.integrated) {
+            max_size = 1ull << 33; // 8 GB
+        }
     }
 
     ~ggml_cuda_pool_vmm() {
@@ -600,7 +606,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 #else
             CU_CHECK(cuMemUnmap(pool_addr, pool_size));
 #endif
-            CU_CHECK(cuMemAddressFree(pool_addr, CUDA_POOL_VMM_MAX_SIZE));
+            CU_CHECK(cuMemAddressFree(pool_addr, max_size));
         }
     }
 
@@ -616,7 +622,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             size_t reserve_size = size - avail;
             reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
 
-            GGML_ASSERT(pool_size + reserve_size <= CUDA_POOL_VMM_MAX_SIZE);
+            GGML_ASSERT(pool_size + reserve_size <= max_size);
 
             // allocate more physical memory
             CUmemAllocationProp prop = {};
@@ -628,7 +634,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 
             // reserve virtual address space (if not already reserved)
             if (pool_addr == 0) {
-                CU_CHECK(cuMemAddressReserve(&pool_addr, CUDA_POOL_VMM_MAX_SIZE, 0, 0, 0));
+                CU_CHECK(cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0));
             }
 
             // map at the end of the pool
