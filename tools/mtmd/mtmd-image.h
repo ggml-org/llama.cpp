@@ -131,6 +131,7 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
 // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    static clip_image_size get_target_size(const clip_hparams & hparams, const clip_image_size & original_size);
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 };
 
