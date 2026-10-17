@@ -2959,9 +2959,10 @@ llm_graph_cb llama_context::graph_get_cb() const {
 
         // with pipeline parallelism, run the ops with host weights on the device of their layer, also the small ones (a CPU op stalls the pipeline)
         // cur can be a bias or a scale after the matmul, row lookups (e.g. token embeddings) copy only the needed rows
+        // views are skipped: on a device, the view of a host weight would be read in place instead of copied
         if (cparams.pipeline_parallel && cparams.op_offload && il != -1 && ubatch.n_tokens >= 32) {
             for (ggml_tensor * t : { cur, cur->src[0] }) {
-                if (t == nullptr || t->op == GGML_OP_GET_ROWS || !llama_has_host_weight(t)) {
+                if (t == nullptr || t->view_src != nullptr || t->op == GGML_OP_GET_ROWS || !llama_has_host_weight(t)) {
                     continue;
                 }
                 for (const auto & backend : backends) {
