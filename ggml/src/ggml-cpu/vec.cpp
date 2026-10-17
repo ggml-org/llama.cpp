@@ -195,6 +195,21 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
     sumf += (ggml_float)_mm_cvtss_f32(g);
 
 #undef LOAD
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    float32x4_t sum0 = vdupq_n_f32(0.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    for (; i + 8 <= n; i += 8) {
+        const uint16x8_t vx = vld1q_u16((const uint16_t *) (x + i));
+        const uint16x8_t vy = vld1q_u16((const uint16_t *) (y + i));
+        const float32x4_t x0 = vreinterpretq_f32_u32(vshll_n_u16(vget_low_u16(vx), 16));
+        const float32x4_t x1 = vreinterpretq_f32_u32(vshll_n_u16(vget_high_u16(vx), 16));
+        const float32x4_t y0 = vreinterpretq_f32_u32(vshll_n_u16(vget_low_u16(vy), 16));
+        const float32x4_t y1 = vreinterpretq_f32_u32(vshll_n_u16(vget_high_u16(vy), 16));
+        sum0 = vfmaq_f32(sum0, x0, y0);
+        sum1 = vfmaq_f32(sum1, x1, y1);
+    }
+    sumf += (ggml_float) vaddvq_f32(vaddq_f32(sum0, sum1));
+
 #elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfbfwma)
     size_t vl = __riscv_vsetvlmax_e32m4();
 
