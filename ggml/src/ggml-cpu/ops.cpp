@@ -537,25 +537,33 @@ void ggml_compute_forward_dup(
     switch (src0->type) {
         case GGML_TYPE_F16:
             {
-                /**/ if (dst->type == GGML_TYPE_F16)  ggml_compute_forward_dup_flt<ggml_fp16_t, ggml_fp16_t>(params, dst);
-                else if (dst->type == GGML_TYPE_BF16) ggml_compute_forward_dup_flt<ggml_fp16_t, ggml_bf16_t>(params, dst);
-                else if (dst->type == GGML_TYPE_F32)  ggml_compute_forward_dup_flt<ggml_fp16_t, float      >(params, dst);
+                /**/ if (dst->type == GGML_TYPE_F16)     ggml_compute_forward_dup_flt<ggml_fp16_t, ggml_fp16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_BF16)    ggml_compute_forward_dup_flt<ggml_fp16_t, ggml_bf16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_F32)     ggml_compute_forward_dup_flt<ggml_fp16_t, float      >(params, dst);
+                else if (dst->type == GGML_TYPE_F8_E4M3) ggml_compute_forward_dup_flt<ggml_fp16_t, ggml_fp8_e4m3_t>(params, dst);
                 else ggml_compute_forward_dup_to_q<ggml_fp16_t>(params, dst);
             } break;
         case GGML_TYPE_BF16:
             {
-                /**/ if (dst->type == GGML_TYPE_F16)  ggml_compute_forward_dup_flt<ggml_bf16_t, ggml_fp16_t>(params, dst);
-                else if (dst->type == GGML_TYPE_BF16) ggml_compute_forward_dup_flt<ggml_bf16_t, ggml_bf16_t>(params, dst);
-                else if (dst->type == GGML_TYPE_F32)  ggml_compute_forward_dup_flt<ggml_bf16_t, float      >(params, dst);
+                /**/ if (dst->type == GGML_TYPE_F16)     ggml_compute_forward_dup_flt<ggml_bf16_t, ggml_fp16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_BF16)    ggml_compute_forward_dup_flt<ggml_bf16_t, ggml_bf16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_F32)     ggml_compute_forward_dup_flt<ggml_bf16_t, float      >(params, dst);
+                else if (dst->type == GGML_TYPE_F8_E4M3) ggml_compute_forward_dup_flt<ggml_bf16_t, ggml_fp8_e4m3_t>(params, dst);
                 else ggml_compute_forward_dup_to_q<ggml_bf16_t>(params, dst);
             } break;
         case GGML_TYPE_F32:
             {
-                /**/ if (dst->type == GGML_TYPE_F16)  ggml_compute_forward_dup_flt<float, ggml_fp16_t>(params, dst);
-                else if (dst->type == GGML_TYPE_BF16) ggml_compute_forward_dup_flt<float, ggml_bf16_t>(params, dst);
-                else if (dst->type == GGML_TYPE_F32)  ggml_compute_forward_dup_flt<float, float      >(params, dst);
-                else if (dst->type == GGML_TYPE_I32)  ggml_compute_forward_dup_flt<float, int32_t    >(params, dst);
+                /**/ if (dst->type == GGML_TYPE_F16)     ggml_compute_forward_dup_flt<float, ggml_fp16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_BF16)    ggml_compute_forward_dup_flt<float, ggml_bf16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_F32)     ggml_compute_forward_dup_flt<float, float      >(params, dst);
+                else if (dst->type == GGML_TYPE_F8_E4M3) ggml_compute_forward_dup_flt<float, ggml_fp8_e4m3_t>(params, dst);
+                else if (dst->type == GGML_TYPE_I32)     ggml_compute_forward_dup_flt<float, int32_t    >(params, dst);
                 else ggml_compute_forward_dup_to_q<float>(params, dst);
+            } break;
+        case GGML_TYPE_F8_E4M3:
+            {
+                if (dst->type == GGML_TYPE_F32) ggml_compute_forward_dup_flt<ggml_fp8_e4m3_t, float>(params, dst);
+                else GGML_ABORT("not implemented");
             } break;
         case GGML_TYPE_I32:
             {
@@ -605,7 +613,7 @@ static void ggml_compute_forward_add_q_f32(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    GGML_ASSERT(ggml_is_quantized(src0->type));
+    GGML_ASSERT(ggml_is_quantized(src0->type) || src0->type == GGML_TYPE_F8_E4M3);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
     // rows per thread
@@ -673,6 +681,7 @@ void ggml_compute_forward_add(
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -950,7 +959,7 @@ static void ggml_compute_forward_add1_q_f32(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    GGML_ASSERT(ggml_is_quantized(src0->type));
+    GGML_ASSERT(ggml_is_quantized(src0->type) || src0->type == GGML_TYPE_F8_E4M3);
     GGML_ASSERT(dst->type == src0->type);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
@@ -1125,6 +1134,7 @@ void ggml_compute_forward_add1(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -1256,6 +1266,7 @@ void ggml_compute_forward_acc(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -4912,6 +4923,7 @@ void ggml_compute_forward_out_prod(
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -5231,6 +5243,7 @@ void ggml_compute_forward_set(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -5456,6 +5469,7 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -6216,6 +6230,7 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:

@@ -79,6 +79,15 @@ class Qwen2Model(TextModel):
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.removesuffix(".weight").endswith(".mlp.experts.gate_up_proj"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
+            )
+        return super()._map_fp8_weight_names(name)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
@@ -373,6 +382,16 @@ class _QwenMtpMixin:
 class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            # Both split projections keep the original per-tensor scales.
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid),
+            )
+        return super()._map_fp8_weight_names(name)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_ssm_conv_kernel(self.hparams["linear_conv_kernel_dim"])
@@ -490,6 +509,24 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         perm = list(range(len(new_shape)))
         perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
         return tensor.permute(*perm).contiguous().reshape(*shape)
+
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> Tensor:
+        num_k_heads = self.hparams.get("linear_num_key_heads", 0)
+        num_v_heads = self.hparams.get("linear_num_value_heads", 0)
+        if scale.numel() == 1 or num_k_heads == 0 or num_v_heads == 0 or num_k_heads == num_v_heads:
+            return scale
+
+        num_v_per_k = num_v_heads // num_k_heads
+        head_v_dim = self.hparams["linear_value_head_dim"]
+        if name.endswith(".linear_attn.in_proj_qkv.weight"):
+            qk_dim = 2 * self.hparams["linear_key_head_dim"] * num_k_heads
+            v_scale = self._reorder_v_heads(scale[qk_dim:], 0, num_k_heads, num_v_per_k, head_v_dim)
+            return torch.cat([scale[:qk_dim], v_scale])
+        if name.endswith(".linear_attn.in_proj_z.weight"):
+            return self._reorder_v_heads(scale, 0, num_k_heads, num_v_per_k, head_v_dim)
+        if name.endswith((".linear_attn.in_proj_a.weight", ".linear_attn.in_proj_b.weight")):
+            return self._reorder_v_heads(scale, 0, num_k_heads, num_v_per_k, 1)
+        return scale
 
     def _transform_nvfp4_weight(self, name: str, weight: Tensor, scale: Tensor) -> tuple[Tensor, Tensor]:
         if not name.endswith((
