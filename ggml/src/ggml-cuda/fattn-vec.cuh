@@ -9,8 +9,9 @@ static int ggml_cuda_fattn_vec_get_nthreads_host(const int cc) {
 template <ggml_type type_K, ggml_type type_V>
 static int ggml_cuda_fattn_vec_get_warp_size_host(const int cc) {
 #if defined(GGML_USE_HIP)
-    return GGML_CUDA_CC_IS_GCN(cc) &&
-        ((type_K == GGML_TYPE_Q8_0 && type_V == GGML_TYPE_Q8_0) || (type_K == GGML_TYPE_Q4_0 && type_V == GGML_TYPE_Q4_0)) ? 64 : WARP_SIZE;
+    return GGML_CUDA_CC_IS_GCN(cc) && type_K == type_V &&
+        (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_Q4_0 || type_K == GGML_TYPE_Q4_1 ||
+         type_K == GGML_TYPE_Q5_0 || type_K == GGML_TYPE_Q5_1 || type_K == GGML_TYPE_Q8_0) ? 64 : WARP_SIZE;
 #else
     GGML_UNUSED(cc);
     return WARP_SIZE;
@@ -24,7 +25,9 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
 template <ggml_type type_K, ggml_type type_V>
 static constexpr __device__ int ggml_cuda_fattn_vec_get_warp_size_device() {
 #if defined(GGML_USE_HIP) && defined(GCN)
-    return ((type_K == GGML_TYPE_Q8_0 && type_V == GGML_TYPE_Q8_0) || (type_K == GGML_TYPE_Q4_0 && type_V == GGML_TYPE_Q4_0)) ? 64 : WARP_SIZE;
+    return type_K == type_V &&
+        (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_Q4_0 || type_K == GGML_TYPE_Q4_1 ||
+         type_K == GGML_TYPE_Q5_0 || type_K == GGML_TYPE_Q5_1 || type_K == GGML_TYPE_Q8_0) ? 64 : WARP_SIZE;
 #else
     return WARP_SIZE;
 #endif // defined(GGML_USE_HIP) && defined(GCN)
