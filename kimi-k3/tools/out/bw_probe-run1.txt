@@ -1,0 +1,17 @@
+CPU streaming read of 4.00 GB
+   7 threads:  63.61 GB/s (best of 5)
+  14 threads:  68.02 GB/s (best of 5)
+  28 threads:  66.03 GB/s (best of 5)
+GPU NVIDIA GeForce RTX 3080 Ti, 80 SMs, VRAM free 10.33 GiB, test size 1.00 GB
+pinned -> VRAM copy: 10.96 GB/s
+zero-copy read (cudaHostAlloc):   10.16 GB/s (grid 1x SMs, 1 stream(s))
+zero-copy read (registered, read-only): 10.25 GB/s (grid 1x SMs, 1 stream(s))
+VRAM read: 866.51 GB/s (grid 1x SMs, 1 stream(s))
+PCIe link (nvidia-smi samples per phase):
+  idle                   gen 1..3, width x16..x16 (9 samples)
+  h2d                    gen 3..3, width x16..x16 (19 samples)
+  zero_copy_hostalloc    gen 3..3, width x16..x16 (18 samples)
+  zero_copy_registered   gen 3..3, width x16..x16 (13 samples)
+  vram                   gen 3..3, width x16..x16 (19 samples)
+not measured: NVMe DMA and GPU zero-copy share the memory controller
+wrote kimi-k3/tools/out/bw_probe-run1.json

@@ -1,0 +1,27 @@
+load avg 4.13 >= 2, waiting (0 / 300 s)
+load avg 3.80 >= 2, waiting (5 / 300 s)
+load avg 3.49 >= 2, waiting (10 / 300 s)
+load avg 3.29 >= 2, waiting (15 / 300 s)
+load avg 3.03 >= 2, waiting (20 / 300 s)
+load avg 2.79 >= 2, waiting (25 / 300 s)
+load avg 2.56 >= 2, waiting (30 / 300 s)
+load avg 2.36 >= 2, waiting (35 / 300 s)
+load avg 2.17 >= 2, waiting (40 / 300 s)
+load avg 2.00 >= 2, waiting (45 / 300 s)
+CPU streaming read of 4.00 GB
+   7 threads:  63.34 GB/s (best of 5)
+  14 threads:  67.79 GB/s (best of 5)
+  28 threads:  66.07 GB/s (best of 5)
+GPU NVIDIA GeForce RTX 3080 Ti, 80 SMs, VRAM free 10.37 GiB, test size 1.00 GB
+pinned -> VRAM copy: 10.93 GB/s
+zero-copy read (cudaHostAlloc):   10.37 GB/s (grid 1x SMs, 1 stream(s))
+zero-copy read (registered, read-only): 10.55 GB/s (grid 1x SMs, 1 stream(s))
+VRAM read: 866.54 GB/s (grid 1x SMs, 1 stream(s))
+PCIe link (nvidia-smi samples per phase):
+  idle                   gen 3..3, width x16..x16 (9 samples)
+  h2d                    gen 3..3, width x16..x16 (20 samples)
+  zero_copy_hostalloc    gen 3..3, width x16..x16 (8 samples)
+  zero_copy_registered   gen 3..3, width x16..x16 (13 samples)
+  vram                   gen 3..3, width x16..x16 (19 samples)
+not measured: NVMe DMA and GPU zero-copy share the memory controller
+wrote kimi-k3/tools/out/bw_probe-run2.json

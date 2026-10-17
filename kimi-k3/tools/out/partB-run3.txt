@@ -1,0 +1,570 @@
+load avg 2.14 >= 2, waiting (0 / 300 s)
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11878 MiB):
+  Device 0: NVIDIA GeForce RTX 3080 Ti, compute capability 8.6, VMM: yes, VRAM: 11878 MiB
+weights (33), cold footprint 256 MiB: K = max(1, ceil(footprint / bytes))
+  blk.50.ffn_gate_inp.weight         f32     ne [7168, 896, 1]     25690112 B  K=11
+  blk.50.ffn_routed_down.weight      iq4_xs  ne [7168, 3584, 1]     13647872 B  K=20
+  blk.50.ffn_routed_up.weight        iq4_xs  ne [3584, 7168, 1]     13647872 B  K=20
+  blk.50.ffn_down_shexp.weight       q5_K    ne [6144, 7168, 1]     30277632 B  K=9
+  blk.50.ffn_gate_shexp.weight       q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.50.ffn_up_shexp.weight         q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.50.ssm_beta.weight             iq4_xs  ne [7168, 96, 1]       365568 B  K=735
+  blk.50.ssm_f_a.weight              iq4_xs  ne [7168, 128, 1]       487424 B  K=551
+  blk.50.ssm_f_b.weight              iq4_nl  ne [128, 12288, 1]       884736 B  K=304
+  blk.50.ssm_g.weight                iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_k.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_output.weight          iq4_xs  ne [12288, 7168, 1]     46792704 B  K=6
+  blk.50.attn_q.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_v.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.51.ffn_gate_inp.weight         f32     ne [7168, 896, 1]     25690112 B  K=11
+  blk.51.ffn_routed_down.weight      iq4_xs  ne [7168, 3584, 1]     13647872 B  K=20
+  blk.51.ffn_routed_up.weight        iq4_xs  ne [3584, 7168, 1]     13647872 B  K=20
+  blk.51.ffn_down_shexp.weight       q5_K    ne [6144, 7168, 1]     30277632 B  K=9
+  blk.51.ffn_gate_shexp.weight       q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.51.ffn_up_shexp.weight         q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.51.attn_gate.weight            iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.51.attn_kv_a_mqa.weight        iq4_xs  ne [7168, 576, 1]      2193408 B  K=123
+  blk.51.attn_k_b.weight             iq4_nl  ne [128, 512, 96]      3538944 B  K=76
+  blk.51.attn_v_b.weight             iq4_xs  ne [512, 128, 96]      3342336 B  K=81
+  blk.51.attn_output.weight          iq4_xs  ne [12288, 7168, 1]     46792704 B  K=6
+  blk.51.attn_q_a.weight             iq4_xs  ne [7168, 1536, 1]      5849088 B  K=46
+  blk.51.attn_q_b.weight             iq4_xs  ne [1536, 18432, 1]     15040512 B  K=18
+  output.weight                      q6_K    ne [7168, 163840, 1]    963379200 B  K=1
+  blk.50.ffn_gate_exps.weight@0      iq1_s   ne [3584, 3072, 1]      2150400 B  K=125
+  blk.50.ffn_down_exps.weight@0      iq1_s   ne [3072, 3584, 1]      2150400 B  K=125
+  blk.5.ffn_down_exps.weight@0       q2_K    ne [3072, 3584, 1]      3612672 B  K=75
+  blk.50.ffn_gate_exps.weight@0:16   iq1_s   ne [3584, 3072, 16]     34406400 B  K=8
+  blk.50.ffn_down_exps.weight@0:16   iq1_s   ne [3072, 3584, 16]     34406400 B  K=8
+load avg 1.97, VRAM free 10.38 / 11.60 GiB, CUDA graphs off (GGML_CUDA_DISABLE_GRAPHS=1), host ptr usable 1, register 1, read-only register 1
+host copies: 269.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_inp.weight f32 [7168, 896, 1] 25.690 MB, K=11 (footprint 269.5 MiB)
+  a       7 K=11   R=2       0.4152 ms (min    0.4131)     61.88 GB/s (at min    62.19)  NMSE 7.82e-14 OK
+  a      14 K=11   R=1       0.4698 ms (min    0.3872)     54.68 GB/s (at min    66.34)  NMSE 7.82e-14 OK
+  a      28 K=11   R=2       0.4149 ms (min    0.3965)     61.91 GB/s (at min    64.79)  NMSE 7.82e-14 OK
+  b         K=11   R=14      0.0330 ms (min    0.0329)    778.17 GB/s (at min   780.59)  NMSE 1.61e-14 OK
+  a_pin  14 K=11   R=1       0.4707 ms (min    0.3861)     54.58 GB/s (at min    66.55)  NMSE 7.82e-14 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=11   R=14      0.0327 ms (min    0.0326)    786.21 GB/s (at min   788.73)  NMSE 1.61e-14 OK  "copy_ms": 2.35014, "copy_gbs": 10.9313, "copy_plus_compute_ms": 2.38282, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=11   R=1       3.3863 ms (min    3.2947)      7.59 GB/s (at min     7.80)  NMSE 1.61e-14 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=11   R=1       4.4865 ms (min    4.2668)      5.73 GB/s (at min     6.02)  NMSE 1.61e-14 OK  "instances": 4
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_routed_down.weight iq4_xs [7168, 3584, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.3962 ms (min    0.3934)     34.45 GB/s (at min    34.69)  NMSE 1.54e-05 OK
+  a      14 K=20   R=1       0.3333 ms (min    0.3304)     40.95 GB/s (at min    41.31)  NMSE 1.54e-05 OK
+  a      28 K=20   R=1       0.3168 ms (min    0.2977)     43.08 GB/s (at min    45.84)  NMSE 1.54e-05 OK
+  b         K=20   R=12      0.0214 ms (min    0.0207)    637.64 GB/s (at min   659.16)  NMSE 1.43e-05 OK
+  a_pin  14 K=20   R=1       0.3310 ms (min    0.3177)     41.23 GB/s (at min    42.96)  NMSE 1.54e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=20   R=12      0.0214 ms (min    0.0207)    637.99 GB/s (at min   658.31)  NMSE 1.43e-05 OK  "copy_ms": 1.25089, "copy_gbs": 10.9105, "copy_plus_compute_ms": 1.27228, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=20   R=1       2.5873 ms (min    2.5735)      5.28 GB/s (at min     5.30)  NMSE 1.43e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=20   R=1       2.4626 ms (min    2.2331)      5.54 GB/s (at min     6.11)  NMSE 1.43e-05 OK  "instances": 4
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_routed_up.weight iq4_xs [3584, 7168, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.4449 ms (min    0.4275)     30.68 GB/s (at min    31.92)  NMSE 1.53e-05 OK
+  a      14 K=20   R=1       0.4397 ms (min    0.4262)     31.04 GB/s (at min    32.02)  NMSE 1.53e-05 OK
+  a      28 K=20   R=1       0.2995 ms (min    0.2919)     45.57 GB/s (at min    46.76)  NMSE 1.53e-05 OK
+  b         K=20   R=12      0.0217 ms (min    0.0211)    629.60 GB/s (at min   645.63)  NMSE 1.43e-05 OK
+  a_pin  14 K=20   R=1       0.4054 ms (min    0.3891)     33.66 GB/s (at min    35.07)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=20   R=12      0.0217 ms (min    0.0211)    629.76 GB/s (at min   645.63)  NMSE 1.43e-05 OK  "copy_ms": 1.24485, "copy_gbs": 10.9635, "copy_plus_compute_ms": 1.26652, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=20   R=1       2.8957 ms (min    2.8794)      4.71 GB/s (at min     4.74)  NMSE 1.43e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=20   R=1       2.7503 ms (min    2.0078)      4.96 GB/s (at min     6.80)  NMSE 1.43e-05 OK  "instances": 4
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_shexp.weight q5_K [6144, 7168, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.6732 ms (min    0.6634)     44.97 GB/s (at min    45.64)  NMSE 1.53e-05 OK
+  a      14 K=9    R=2       0.5482 ms (min    0.5420)     55.23 GB/s (at min    55.87)  NMSE 1.53e-05 OK
+  a      28 K=9    R=2       0.5147 ms (min    0.5009)     58.82 GB/s (at min    60.45)  NMSE 1.53e-05 OK
+  b         K=9    R=14      0.0410 ms (min    0.0404)    737.62 GB/s (at min   749.27)  NMSE 1.44e-05 OK
+  a_pin  14 K=9    R=2       0.5376 ms (min    0.5208)     56.32 GB/s (at min    58.14)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=9    R=14      0.0411 ms (min    0.0402)    736.66 GB/s (at min   753.62)  NMSE 1.44e-05 OK  "copy_ms": 2.76889, "copy_gbs": 10.9349, "copy_plus_compute_ms": 2.80999, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=9    R=1      18.2061 ms (min   18.1323)      1.66 GB/s (at min     1.67)  NMSE 1.44e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=9    R=1      12.6857 ms (min   10.2193)      2.39 GB/s (at min     2.96)  NMSE 1.44e-05 OK  "instances": 4
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.6870 ms (min    0.6839)     44.07 GB/s (at min    44.27)  NMSE 1.56e-05 OK
+  a      14 K=9    R=1       0.5515 ms (min    0.5340)     54.90 GB/s (at min    56.70)  NMSE 1.56e-05 OK
+  a      28 K=9    R=2       0.5410 ms (min    0.5252)     55.96 GB/s (at min    57.65)  NMSE 1.56e-05 OK
+  b         K=9    R=14      0.0412 ms (min    0.0404)    734.67 GB/s (at min   749.65)  NMSE 1.45e-05 OK
+  a_pin  14 K=9    R=2       0.5462 ms (min    0.5331)     55.44 GB/s (at min    56.80)  NMSE 1.56e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=9    R=14      0.0412 ms (min    0.0404)    734.66 GB/s (at min   750.29)  NMSE 1.45e-05 OK  "copy_ms": 2.76312, "copy_gbs": 10.9578, "copy_plus_compute_ms": 2.80433, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=9    R=1      17.9848 ms (min   17.8375)      1.68 GB/s (at min     1.70)  NMSE 1.45e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=9    R=1      13.0457 ms (min   11.1049)      2.32 GB/s (at min     2.73)  NMSE 1.45e-05 OK  "instances": 4
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_up_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.6930 ms (min    0.6744)     43.69 GB/s (at min    44.89)  NMSE 1.55e-05 OK
+  a      14 K=9    R=1       0.5508 ms (min    0.5344)     54.97 GB/s (at min    56.65)  NMSE 1.55e-05 OK
+  a      28 K=9    R=2       0.5555 ms (min    0.5253)     54.51 GB/s (at min    57.64)  NMSE 1.55e-05 OK
+  b         K=9    R=14      0.0413 ms (min    0.0405)    733.43 GB/s (at min   747.56)  NMSE 1.45e-05 OK
+  a_pin  14 K=9    R=1       0.5695 ms (min    0.5404)     53.16 GB/s (at min    56.03)  NMSE 1.55e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=9    R=14      0.0412 ms (min    0.0403)    734.54 GB/s (at min   751.06)  NMSE 1.45e-05 OK  "copy_ms": 2.76592, "copy_gbs": 10.9467, "copy_plus_compute_ms": 2.80714, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=9    R=1      17.9821 ms (min   17.8763)      1.68 GB/s (at min     1.69)  NMSE 1.45e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=9    R=1      14.1645 ms (min   10.7783)      2.14 GB/s (at min     2.81)  NMSE 1.45e-05 OK  "instances": 4
+host copies: 258.4 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_beta.weight iq4_xs [7168, 96, 1] 0.366 MB, K=735 (footprint 258.4 MiB)
+  a       7 K=735  R=1       0.0244 ms (min    0.0240)     14.98 GB/s (at min    15.23)  NMSE 1.51e-05 OK
+  a      14 K=735  R=1       0.0320 ms (min    0.0317)     11.44 GB/s (at min    11.55)  NMSE 1.51e-05 OK
+  a      28 K=735  R=1       0.0355 ms (min    0.0312)     10.29 GB/s (at min    11.71)  NMSE 1.51e-05 OK
+  b         K=735  R=2       0.0062 ms (min    0.0061)     58.75 GB/s (at min    59.45)  NMSE 1.41e-05 OK
+  a_pin  14 K=735  R=1       0.0326 ms (min    0.0323)     11.22 GB/s (at min    11.33)  NMSE 1.51e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=735  R=2       0.0062 ms (min    0.0059)     59.12 GB/s (at min    61.62)  NMSE 1.41e-05 OK  "copy_ms": 0.0337179, "copy_gbs": 10.933, "copy_plus_compute_ms": 0.0399011, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=735  R=1       0.0408 ms (min    0.0408)      8.95 GB/s (at min     8.96)  NMSE 1.41e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=735  R=1       0.0388 ms (min    0.0387)      9.43 GB/s (at min     9.44)  NMSE 1.41e-05 OK  "instances": 4
+host copies: 256.1 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_f_a.weight iq4_xs [7168, 128, 1] 0.487 MB, K=551 (footprint 256.1 MiB)
+  a       7 K=551  R=1       0.0333 ms (min    0.0328)     14.64 GB/s (at min    14.88)  NMSE 1.53e-05 OK
+  a      14 K=551  R=1       0.0412 ms (min    0.0403)     11.83 GB/s (at min    12.10)  NMSE 1.53e-05 OK
+  a      28 K=551  R=1       0.0350 ms (min    0.0331)     13.92 GB/s (at min    14.71)  NMSE 1.53e-05 OK
+  b         K=551  R=2       0.0063 ms (min    0.0063)     77.31 GB/s (at min    77.69)  NMSE 1.41e-05 OK
+  a_pin  14 K=551  R=1       0.0415 ms (min    0.0392)     11.73 GB/s (at min    12.44)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=551  R=2       0.0061 ms (min    0.0060)     79.82 GB/s (at min    81.28)  NMSE 1.41e-05 OK  "copy_ms": 0.0445765, "copy_gbs": 10.9345, "copy_plus_compute_ms": 0.0506834, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=551  R=1       0.0524 ms (min    0.0523)      9.30 GB/s (at min     9.32)  NMSE 1.41e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=551  R=1       0.0508 ms (min    0.0507)      9.59 GB/s (at min     9.62)  NMSE 1.41e-05 OK  "instances": 4
+host copies: 257.7 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_f_b.weight iq4_nl [128, 12288, 1] 0.885 MB, K=304 (footprint 257.7 MiB)
+  a       7 K=304  R=1       0.0504 ms (min    0.0503)     17.54 GB/s (at min    17.58)  NMSE 1.40e-05 OK
+  a      14 K=304  R=1       0.0287 ms (min    0.0284)     30.86 GB/s (at min    31.11)  NMSE 1.40e-05 OK
+  a      28 K=304  R=1       0.0261 ms (min    0.0242)     33.85 GB/s (at min    36.56)  NMSE 1.40e-05 OK
+  b         K=304  R=2       0.0085 ms (min    0.0084)    104.18 GB/s (at min   104.91)  NMSE 1.40e-05 OK
+  a_pin  14 K=304  R=1       0.0297 ms (min    0.0285)     29.80 GB/s (at min    31.01)  NMSE 1.40e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=304  R=2       0.0085 ms (min    0.0084)    104.14 GB/s (at min   104.93)  NMSE 1.40e-05 OK  "copy_ms": 0.0811989, "copy_gbs": 10.9464, "copy_plus_compute_ms": 0.0896949, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=304  R=1       0.1420 ms (min    0.1418)      6.23 GB/s (at min     6.24)  NMSE 1.40e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=304  R=1       0.1421 ms (min    0.1419)      6.23 GB/s (at min     6.24)  NMSE 1.40e-05 OK  "instances": 4
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_g.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.1685 ms (min    1.1618)     40.04 GB/s (at min    40.27)  NMSE 1.55e-05 OK
+  a      14 K=6    R=1       0.8341 ms (min    0.8091)     56.10 GB/s (at min    57.83)  NMSE 1.55e-05 OK
+  a      28 K=6    R=1       0.8168 ms (min    0.7855)     57.28 GB/s (at min    59.57)  NMSE 1.55e-05 OK
+  b         K=6    R=14      0.0602 ms (min    0.0593)    777.84 GB/s (at min   788.49)  NMSE 1.42e-05 OK
+  a_pin  14 K=6    R=1       0.8342 ms (min    0.8250)     56.10 GB/s (at min    56.72)  NMSE 1.55e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=6    R=14      0.0601 ms (min    0.0593)    778.29 GB/s (at min   789.61)  NMSE 1.42e-05 OK  "copy_ms": 4.26894, "copy_gbs": 10.9612, "copy_plus_compute_ms": 4.32906, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1       9.6022 ms (min    9.4992)      4.87 GB/s (at min     4.93)  NMSE 1.42e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1       8.8551 ms (min    7.7382)      5.28 GB/s (at min     6.05)  NMSE 1.42e-05 OK  "instances": 4
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_k.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.1645 ms (min    1.1582)     40.18 GB/s (at min    40.40)  NMSE 1.63e-05 OK
+  a      14 K=6    R=1       0.8284 ms (min    0.8093)     56.49 GB/s (at min    57.82)  NMSE 1.63e-05 OK
+  a      28 K=6    R=1       0.8095 ms (min    0.7870)     57.80 GB/s (at min    59.46)  NMSE 1.63e-05 OK
+  b         K=6    R=9       0.0601 ms (min    0.0592)    778.90 GB/s (at min   790.37)  NMSE 1.48e-05 OK
+  a_pin  14 K=6    R=1       0.8328 ms (min    0.8182)     56.18 GB/s (at min    57.19)  NMSE 1.63e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=6    R=9       0.0600 ms (min    0.0592)    779.34 GB/s (at min   790.11)  NMSE 1.48e-05 OK  "copy_ms": 4.28233, "copy_gbs": 10.9269, "copy_plus_compute_ms": 4.34237, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1       9.6275 ms (min    9.5539)      4.86 GB/s (at min     4.90)  NMSE 1.48e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1       8.9795 ms (min    7.9038)      5.21 GB/s (at min     5.92)  NMSE 1.48e-05 OK  "instances": 4
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_output.weight iq4_xs [12288, 7168, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.1937 ms (min    1.1880)     39.20 GB/s (at min    39.39)  NMSE 1.55e-05 OK
+  a      14 K=6    R=2       0.7776 ms (min    0.7673)     60.18 GB/s (at min    60.99)  NMSE 1.55e-05 OK
+  a      28 K=6    R=2       0.7915 ms (min    0.7677)     59.12 GB/s (at min    60.95)  NMSE 1.55e-05 OK
+  b         K=6    R=14      0.0600 ms (min    0.0592)    780.06 GB/s (at min   790.51)  NMSE 1.41e-05 OK
+  a_pin  14 K=6    R=2       0.7860 ms (min    0.7669)     59.53 GB/s (at min    61.01)  NMSE 1.55e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=6    R=14      0.0601 ms (min    0.0592)    778.95 GB/s (at min   789.96)  NMSE 1.41e-05 OK  "copy_ms": 4.28366, "copy_gbs": 10.9235, "copy_plus_compute_ms": 4.34373, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1      12.7798 ms (min   12.6928)      3.66 GB/s (at min     3.69)  NMSE 1.41e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1      10.3266 ms (min    9.4116)      4.53 GB/s (at min     4.97)  NMSE 1.41e-05 OK  "instances": 4
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_q.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.1769 ms (min    1.1671)     39.76 GB/s (at min    40.09)  NMSE 1.61e-05 OK
+  a      14 K=6    R=1       0.8285 ms (min    0.8089)     56.48 GB/s (at min    57.85)  NMSE 1.61e-05 OK
+  a      28 K=6    R=2       0.8077 ms (min    0.7947)     57.94 GB/s (at min    58.88)  NMSE 1.61e-05 OK
+  b         K=6    R=14      0.0603 ms (min    0.0592)    775.93 GB/s (at min   790.41)  NMSE 1.44e-05 OK
+  a_pin  14 K=6    R=1       0.8327 ms (min    0.8134)     56.19 GB/s (at min    57.53)  NMSE 1.61e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=6    R=14      0.0602 ms (min    0.0592)    777.48 GB/s (at min   790.85)  NMSE 1.44e-05 OK  "copy_ms": 4.27597, "copy_gbs": 10.9432, "copy_plus_compute_ms": 4.33615, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1       9.6564 ms (min    9.5304)      4.85 GB/s (at min     4.91)  NMSE 1.44e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1       8.7595 ms (min    7.7190)      5.34 GB/s (at min     6.06)  NMSE 1.44e-05 OK  "instances": 4
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_v.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.1785 ms (min    1.1714)     39.71 GB/s (at min    39.95)  NMSE 1.55e-05 OK
+  a      14 K=6    R=1       0.8320 ms (min    0.8162)     56.24 GB/s (at min    57.33)  NMSE 1.55e-05 OK
+  a      28 K=6    R=2       0.8169 ms (min    0.7974)     57.28 GB/s (at min    58.68)  NMSE 1.55e-05 OK
+  b         K=6    R=14      0.0601 ms (min    0.0592)    778.64 GB/s (at min   790.23)  NMSE 1.46e-05 OK
+  a_pin  14 K=6    R=2       0.8320 ms (min    0.8185)     56.24 GB/s (at min    57.17)  NMSE 1.55e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=6    R=14      0.0602 ms (min    0.0597)    777.42 GB/s (at min   783.34)  NMSE 1.46e-05 OK  "copy_ms": 4.27581, "copy_gbs": 10.9436, "copy_plus_compute_ms": 4.336, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1       9.6105 ms (min    9.4746)      4.87 GB/s (at min     4.94)  NMSE 1.46e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1       8.9019 ms (min    7.7012)      5.26 GB/s (at min     6.08)  NMSE 1.46e-05 OK  "instances": 4
+host copies: 269.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_gate_inp.weight f32 [7168, 896, 1] 25.690 MB, K=11 (footprint 269.5 MiB)
+  a       7 K=11   R=2       0.4220 ms (min    0.4203)     60.87 GB/s (at min    61.12)  NMSE 7.84e-14 OK
+  a      14 K=11   R=2       0.3911 ms (min    0.3895)     65.69 GB/s (at min    65.95)  NMSE 7.84e-14 OK
+  a      28 K=11   R=2       0.4088 ms (min    0.3974)     62.84 GB/s (at min    64.65)  NMSE 7.84e-14 OK
+  b         K=11   R=14      0.0328 ms (min    0.0326)    783.27 GB/s (at min   787.81)  NMSE 1.64e-14 OK
+  a_pin  14 K=11   R=1       0.4717 ms (min    0.4217)     54.47 GB/s (at min    60.92)  NMSE 7.84e-14 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=11   R=14      0.0328 ms (min    0.0326)    783.87 GB/s (at min   787.63)  NMSE 1.64e-14 OK  "copy_ms": 2.34804, "copy_gbs": 10.9411, "copy_plus_compute_ms": 2.38081, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=11   R=1       3.4265 ms (min    3.3475)      7.50 GB/s (at min     7.67)  NMSE 1.64e-14 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=11   R=1       4.3071 ms (min    4.0880)      5.96 GB/s (at min     6.28)  NMSE 1.64e-14 OK  "instances": 4
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_routed_down.weight iq4_xs [7168, 3584, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.3765 ms (min    0.3728)     36.25 GB/s (at min    36.61)  NMSE 1.54e-05 OK
+  a      14 K=20   R=1       0.3331 ms (min    0.3269)     40.98 GB/s (at min    41.75)  NMSE 1.54e-05 OK
+  a      28 K=20   R=1       0.2968 ms (min    0.2742)     45.98 GB/s (at min    49.77)  NMSE 1.54e-05 OK
+  b         K=20   R=12      0.0215 ms (min    0.0209)    634.24 GB/s (at min   654.22)  NMSE 1.43e-05 OK
+  a_pin  14 K=20   R=1       0.3308 ms (min    0.3076)     41.25 GB/s (at min    44.37)  NMSE 1.54e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=20   R=12      0.0215 ms (min    0.0208)    636.03 GB/s (at min   654.71)  NMSE 1.43e-05 OK  "copy_ms": 1.24799, "copy_gbs": 10.9359, "copy_plus_compute_ms": 1.26945, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=20   R=1       2.5936 ms (min    2.5738)      5.26 GB/s (at min     5.30)  NMSE 1.43e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=20   R=1       2.4981 ms (min    2.3486)      5.46 GB/s (at min     5.81)  NMSE 1.43e-05 OK  "instances": 4
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_routed_up.weight iq4_xs [3584, 7168, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.4486 ms (min    0.4411)     30.42 GB/s (at min    30.94)  NMSE 1.54e-05 OK
+  a      14 K=20   R=1       0.4475 ms (min    0.4329)     30.49 GB/s (at min    31.53)  NMSE 1.54e-05 OK
+  a      28 K=20   R=1       0.2901 ms (min    0.2827)     47.04 GB/s (at min    48.28)  NMSE 1.54e-05 OK
+  b         K=20   R=12      0.0217 ms (min    0.0211)    629.83 GB/s (at min   645.39)  NMSE 1.43e-05 OK
+  a_pin  14 K=20   R=1       0.4223 ms (min    0.4058)     32.32 GB/s (at min    33.63)  NMSE 1.54e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=20   R=12      0.0217 ms (min    0.0212)    629.89 GB/s (at min   643.57)  NMSE 1.43e-05 OK  "copy_ms": 1.24765, "copy_gbs": 10.9389, "copy_plus_compute_ms": 1.26932, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=20   R=1       2.9008 ms (min    2.8674)      4.70 GB/s (at min     4.76)  NMSE 1.43e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=20   R=1       2.7667 ms (min    2.2522)      4.93 GB/s (at min     6.06)  NMSE 1.43e-05 OK  "instances": 4
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_down_shexp.weight q5_K [6144, 7168, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.6957 ms (min    0.6886)     43.52 GB/s (at min    43.97)  NMSE 1.53e-05 OK
+  a      14 K=9    R=1       0.5291 ms (min    0.5032)     57.22 GB/s (at min    60.18)  NMSE 1.53e-05 OK
+  a      28 K=9    R=1       0.5171 ms (min    0.5014)     58.56 GB/s (at min    60.39)  NMSE 1.53e-05 OK
+  b         K=9    R=14      0.0412 ms (min    0.0404)    734.99 GB/s (at min   749.96)  NMSE 1.42e-05 OK
+  a_pin  14 K=9    R=2       0.5421 ms (min    0.5003)     55.86 GB/s (at min    60.52)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=9    R=14      0.0411 ms (min    0.0403)    736.60 GB/s (at min   751.55)  NMSE 1.42e-05 OK  "copy_ms": 2.76856, "copy_gbs": 10.9362, "copy_plus_compute_ms": 2.80966, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=9    R=1      18.1859 ms (min   18.0744)      1.66 GB/s (at min     1.68)  NMSE 1.42e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=9    R=1      14.6009 ms (min   10.0683)      2.07 GB/s (at min     3.01)  NMSE 1.42e-05 OK  "instances": 4
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_gate_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.6720 ms (min    0.6657)     45.05 GB/s (at min    45.48)  NMSE 1.54e-05 OK
+  a      14 K=9    R=1       0.5409 ms (min    0.5265)     55.98 GB/s (at min    57.51)  NMSE 1.54e-05 OK
+  a      28 K=9    R=1       0.5313 ms (min    0.5203)     56.99 GB/s (at min    58.20)  NMSE 1.54e-05 OK
+  b         K=9    R=14      0.0413 ms (min    0.0409)    733.06 GB/s (at min   740.09)  NMSE 1.44e-05 OK
+  a_pin  14 K=9    R=1       0.5713 ms (min    0.5681)     52.99 GB/s (at min    53.30)  NMSE 1.54e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=9    R=14      0.0413 ms (min    0.0403)    733.76 GB/s (at min   750.55)  NMSE 1.44e-05 OK  "copy_ms": 2.76564, "copy_gbs": 10.9478, "copy_plus_compute_ms": 2.80691, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=9    R=1      18.0166 ms (min   17.8620)      1.68 GB/s (at min     1.70)  NMSE 1.44e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=9    R=1      14.2853 ms (min   10.5068)      2.12 GB/s (at min     2.88)  NMSE 1.44e-05 OK  "instances": 4
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_up_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.6687 ms (min    0.6628)     45.28 GB/s (at min    45.68)  NMSE 1.56e-05 OK
+  a      14 K=9    R=1       0.5383 ms (min    0.5170)     56.24 GB/s (at min    58.57)  NMSE 1.56e-05 OK
+  a      28 K=9    R=2       0.5341 ms (min    0.5178)     56.69 GB/s (at min    58.48)  NMSE 1.56e-05 OK
+  b         K=9    R=14      0.0413 ms (min    0.0404)    733.28 GB/s (at min   749.63)  NMSE 1.43e-05 OK
+  a_pin  14 K=9    R=2       0.5401 ms (min    0.5264)     56.06 GB/s (at min    57.52)  NMSE 1.56e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=9    R=14      0.0414 ms (min    0.0404)    731.87 GB/s (at min   750.21)  NMSE 1.43e-05 OK  "copy_ms": 2.7676, "copy_gbs": 10.94, "copy_plus_compute_ms": 2.80897, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=9    R=1      17.9922 ms (min   17.8934)      1.68 GB/s (at min     1.69)  NMSE 1.43e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=9    R=1      15.8439 ms (min   10.2374)      1.91 GB/s (at min     2.96)  NMSE 1.43e-05 OK NOISY (median > 1.5 x min)  "instances": 4
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_gate.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.1780 ms (min    1.1714)     39.72 GB/s (at min    39.94)  NMSE 1.52e-05 OK
+  a      14 K=6    R=1       0.8303 ms (min    0.8182)     56.35 GB/s (at min    57.19)  NMSE 1.52e-05 OK
+  a      28 K=6    R=2       0.8102 ms (min    0.7950)     57.76 GB/s (at min    58.86)  NMSE 1.52e-05 OK
+  b         K=6    R=14      0.0601 ms (min    0.0593)    778.71 GB/s (at min   789.19)  NMSE 1.42e-05 OK
+  a_pin  14 K=6    R=1       0.8326 ms (min    0.8232)     56.20 GB/s (at min    56.84)  NMSE 1.52e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=6    R=14      0.0601 ms (min    0.0592)    777.96 GB/s (at min   790.90)  NMSE 1.42e-05 OK  "copy_ms": 4.28307, "copy_gbs": 10.925, "copy_plus_compute_ms": 4.34322, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1       9.6000 ms (min    9.4865)      4.87 GB/s (at min     4.93)  NMSE 1.42e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1       8.8230 ms (min    7.8309)      5.30 GB/s (at min     5.98)  NMSE 1.42e-05 OK  "instances": 4
+host copies: 257.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_kv_a_mqa.weight iq4_xs [7168, 576, 1] 2.193 MB, K=123 (footprint 257.5 MiB)
+  a       7 K=123  R=1       0.1105 ms (min    0.1093)     19.85 GB/s (at min    20.07)  NMSE 1.52e-05 OK
+  a      14 K=123  R=1       0.1285 ms (min    0.1240)     17.07 GB/s (at min    17.70)  NMSE 1.52e-05 OK
+  a      28 K=123  R=1       0.1022 ms (min    0.0978)     21.47 GB/s (at min    22.43)  NMSE 1.52e-05 OK
+  b         K=123  R=6       0.0071 ms (min    0.0071)    307.92 GB/s (at min   309.38)  NMSE 1.43e-05 OK
+  a_pin  14 K=123  R=1       0.1238 ms (min    0.0991)     17.71 GB/s (at min    22.13)  NMSE 1.52e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=123  R=6       0.0071 ms (min    0.0071)    307.62 GB/s (at min   309.26)  NMSE 1.43e-05 OK  "copy_ms": 0.200903, "copy_gbs": 10.9279, "copy_plus_compute_ms": 0.208033, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=123  R=1       0.2265 ms (min    0.2254)      9.69 GB/s (at min     9.73)  NMSE 1.43e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=123  R=1       0.3080 ms (min    0.3002)      7.12 GB/s (at min     7.31)  NMSE 1.43e-05 OK  "instances": 4
+host copies: 256.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_k_b.weight iq4_nl [128, 512, 96] 3.539 MB, K=76 (footprint 256.8 MiB)
+  a       7 K=76   R=1       0.2394 ms (min    0.2375)     14.78 GB/s (at min    14.90)  NMSE 1.42e-05 OK
+  a      14 K=76   R=1       0.1375 ms (min    0.1369)     25.73 GB/s (at min    25.85)  NMSE 1.42e-05 OK
+  a      28 K=76   R=1       0.1108 ms (min    0.1058)     31.93 GB/s (at min    33.44)  NMSE 1.42e-05 OK
+  b         K=76   R=3       0.0225 ms (min    0.0217)    157.47 GB/s (at min   163.07)  NMSE 1.42e-05 OK
+  a_pin  14 K=76   R=1       0.1422 ms (min    0.1369)     24.88 GB/s (at min    25.85)  NMSE 1.42e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=76   R=3       0.0225 ms (min    0.0217)    157.34 GB/s (at min   163.21)  NMSE 1.42e-05 OK  "copy_ms": 0.32432, "copy_gbs": 10.9245, "copy_plus_compute_ms": 0.346813, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=76   R=1       0.5495 ms (min    0.5471)      6.44 GB/s (at min     6.47)  NMSE 1.42e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=76   R=1       0.5608 ms (min    0.5576)      6.31 GB/s (at min     6.35)  NMSE 1.42e-05 OK  "instances": 4
+host copies: 258.2 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_v_b.weight iq4_xs [512, 128, 96] 3.342 MB, K=81 (footprint 258.2 MiB)
+  a       7 K=81   R=1       0.1712 ms (min    0.1684)     19.52 GB/s (at min    19.85)  NMSE 1.53e-05 OK
+  a      14 K=81   R=1       0.1317 ms (min    0.1257)     25.38 GB/s (at min    26.58)  NMSE 1.53e-05 OK
+  a      28 K=81   R=1       0.1487 ms (min    0.1447)     22.47 GB/s (at min    23.10)  NMSE 1.53e-05 OK
+  b         K=81   R=5       0.0134 ms (min    0.0132)    249.55 GB/s (at min   252.53)  NMSE 1.42e-05 OK
+  a_pin  14 K=81   R=1       0.1288 ms (min    0.1261)     25.94 GB/s (at min    26.50)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=81   R=5       0.0134 ms (min    0.0133)    249.57 GB/s (at min   251.06)  NMSE 1.42e-05 OK  "copy_ms": 0.306003, "copy_gbs": 10.9226, "copy_plus_compute_ms": 0.319396, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=81   R=1       0.3523 ms (min    0.3517)      9.49 GB/s (at min     9.50)  NMSE 1.42e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=81   R=1       0.3783 ms (min    0.3750)      8.83 GB/s (at min     8.91)  NMSE 1.42e-05 OK  "instances": 4
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_output.weight iq4_xs [12288, 7168, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.1593 ms (min    1.1445)     40.36 GB/s (at min    40.89)  NMSE 1.50e-05 OK
+  a      14 K=6    R=2       0.7803 ms (min    0.7705)     59.96 GB/s (at min    60.73)  NMSE 1.50e-05 OK
+  a      28 K=6    R=2       0.7891 ms (min    0.7681)     59.30 GB/s (at min    60.92)  NMSE 1.50e-05 OK
+  b         K=6    R=14      0.0601 ms (min    0.0593)    779.06 GB/s (at min   788.94)  NMSE 1.39e-05 OK
+  a_pin  14 K=6    R=2       0.8007 ms (min    0.7771)     58.44 GB/s (at min    60.21)  NMSE 1.50e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=6    R=14      0.0603 ms (min    0.0592)    776.14 GB/s (at min   790.00)  NMSE 1.39e-05 OK  "copy_ms": 4.2708, "copy_gbs": 10.9564, "copy_plus_compute_ms": 4.33109, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1      12.7672 ms (min   12.3794)      3.67 GB/s (at min     3.78)  NMSE 1.39e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1      11.1654 ms (min    9.4034)      4.19 GB/s (at min     4.98)  NMSE 1.39e-05 OK  "instances": 4
+host copies: 256.6 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_q_a.weight iq4_xs [7168, 1536, 1] 5.849 MB, K=46 (footprint 256.6 MiB)
+  a       7 K=46   R=1       0.1856 ms (min    0.1820)     31.51 GB/s (at min    32.14)  NMSE 1.55e-05 OK
+  a      14 K=46   R=1       0.1929 ms (min    0.1885)     30.32 GB/s (at min    31.04)  NMSE 1.55e-05 OK
+  a      28 K=46   R=1       0.1719 ms (min    0.1642)     34.03 GB/s (at min    35.63)  NMSE 1.55e-05 OK
+  b         K=46   R=10      0.0115 ms (min    0.0112)    507.08 GB/s (at min   522.63)  NMSE 1.41e-05 OK
+  a_pin  14 K=46   R=1       0.1906 ms (min    0.1870)     30.69 GB/s (at min    31.28)  NMSE 1.55e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=46   R=10      0.0115 ms (min    0.0112)    507.15 GB/s (at min   523.07)  NMSE 1.41e-05 OK  "copy_ms": 0.535319, "copy_gbs": 10.9264, "copy_plus_compute_ms": 0.546852, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=46   R=1       0.9829 ms (min    0.9793)      5.95 GB/s (at min     5.97)  NMSE 1.41e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=46   R=1       1.1120 ms (min    1.0985)      5.26 GB/s (at min     5.32)  NMSE 1.41e-05 OK  "instances": 4
+host copies: 258.2 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_q_b.weight iq4_xs [1536, 18432, 1] 15.041 MB, K=18 (footprint 258.2 MiB)
+  a       7 K=18   R=1       0.4215 ms (min    0.4185)     35.68 GB/s (at min    35.94)  NMSE 1.52e-05 OK
+  a      14 K=18   R=1       0.2529 ms (min    0.2501)     59.47 GB/s (at min    60.14)  NMSE 1.52e-05 OK
+  a      28 K=18   R=2       0.2454 ms (min    0.2407)     61.30 GB/s (at min    62.49)  NMSE 1.52e-05 OK
+  b         K=18   R=12      0.0246 ms (min    0.0235)    610.47 GB/s (at min   639.09)  NMSE 1.43e-05 OK
+  a_pin  14 K=18   R=2       0.2573 ms (min    0.2470)     58.45 GB/s (at min    60.89)  NMSE 1.52e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=18   R=12      0.0247 ms (min    0.0238)    610.10 GB/s (at min   632.66)  NMSE 1.43e-05 OK  "copy_ms": 1.38269, "copy_gbs": 10.8777, "copy_plus_compute_ms": 1.40735, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=18   R=1       1.5042 ms (min    1.5007)     10.00 GB/s (at min    10.02)  NMSE 1.43e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=18   R=1       1.5233 ms (min    1.5091)      9.87 GB/s (at min     9.97)  NMSE 1.43e-05 OK  "instances": 4
+host copies: 918.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+output.weight q6_K [7168, 163840, 1] 963.379 MB, K=1 (footprint 918.8 MiB)
+  a       7 K=1    R=1      17.0295 ms (min   16.9866)     56.57 GB/s (at min    56.71)  NMSE 1.19e-05 OK
+  a      14 K=1    R=1      14.3194 ms (min   14.2780)     67.28 GB/s (at min    67.47)  NMSE 1.19e-05 OK
+  a      28 K=1    R=1      14.5755 ms (min   14.5409)     66.10 GB/s (at min    66.25)  NMSE 1.19e-05 OK
+  b         K=1    R=5       1.1218 ms (min    1.1192)    858.81 GB/s (at min   860.81)  NMSE 1.11e-05 OK
+  a_pin  14 K=1    R=1      14.3226 ms (min   14.2919)     67.26 GB/s (at min    67.41)  NMSE 1.19e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=1    R=5       1.1213 ms (min    1.1177)    859.15 GB/s (at min   861.90)  NMSE 1.11e-05 OK  "copy_ms": 87.943, "copy_gbs": 10.9546, "copy_plus_compute_ms": 89.0643, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=1    R=1     281.9472 ms (min  250.1527)      3.42 GB/s (at min     3.85)  NMSE 1.11e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=1    R=1     253.9151 ms (min  234.7729)      3.79 GB/s (at min     4.10)  NMSE 1.11e-05 OK  "instances": 4
+host copies: 256.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_exps.weight@0 iq1_s [3584, 3072, 1] 2.150 MB, K=125 (footprint 256.3 MiB)
+  a       7 K=125  R=1       0.3335 ms (min    0.3331)      6.45 GB/s (at min     6.46)  NMSE 1.53e-05 OK
+  a      14 K=125  R=1       0.4918 ms (min    0.4838)      4.37 GB/s (at min     4.45)  NMSE 1.53e-05 OK
+  a      28 K=125  R=1       0.2580 ms (min    0.2514)      8.33 GB/s (at min     8.56)  NMSE 1.53e-05 OK
+  b         K=125  R=4       0.0104 ms (min    0.0103)    207.58 GB/s (at min   208.53)  NMSE 3.99e-05 OK
+  a_pin  14 K=125  R=1       0.4919 ms (min    0.4846)      4.37 GB/s (at min     4.44)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=125  R=4       0.0092 ms (min    0.0091)    233.40 GB/s (at min   236.89)  NMSE 3.99e-05 OK  "copy_ms": 0.198003, "copy_gbs": 10.8605, "copy_plus_compute_ms": 0.207216, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=125  R=1       0.3242 ms (min    0.3142)      6.63 GB/s (at min     6.85)  NMSE 3.99e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=125  R=1       0.5500 ms (min    0.5395)      3.91 GB/s (at min     3.99)  NMSE 3.99e-05 OK  "instances": 4
+host copies: 256.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_exps.weight@0 iq1_s [3072, 3584, 1] 2.150 MB, K=125 (footprint 256.3 MiB)
+  a       7 K=125  R=1       0.2924 ms (min    0.2895)      7.35 GB/s (at min     7.43)  NMSE 1.53e-05 OK
+  a      14 K=125  R=1       0.2605 ms (min    0.2537)      8.25 GB/s (at min     8.48)  NMSE 1.53e-05 OK
+  a      28 K=125  R=1       0.1996 ms (min    0.1948)     10.78 GB/s (at min    11.04)  NMSE 1.53e-05 OK
+  b         K=125  R=4       0.0103 ms (min    0.0092)    209.47 GB/s (at min   234.17)  NMSE 3.88e-05 OK
+  a_pin  14 K=125  R=1       0.2618 ms (min    0.2558)      8.21 GB/s (at min     8.41)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=125  R=4       0.0090 ms (min    0.0089)    239.57 GB/s (at min   241.37)  NMSE 3.88e-05 OK  "copy_ms": 0.196849, "copy_gbs": 10.9241, "copy_plus_compute_ms": 0.205825, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=125  R=1       0.3262 ms (min    0.3244)      6.59 GB/s (at min     6.63)  NMSE 3.88e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=125  R=1       0.4542 ms (min    0.4498)      4.73 GB/s (at min     4.78)  NMSE 3.88e-05 OK  "instances": 4
+host copies: 258.4 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.5.ffn_down_exps.weight@0 q2_K [3072, 3584, 1] 3.613 MB, K=75 (footprint 258.4 MiB)
+  a       7 K=75   R=1       0.1667 ms (min    0.1656)     21.67 GB/s (at min    21.81)  NMSE 1.53e-05 OK
+  a      14 K=75   R=1       0.2012 ms (min    0.1995)     17.95 GB/s (at min    18.10)  NMSE 1.53e-05 OK
+  a      28 K=75   R=1       0.1131 ms (min    0.1079)     31.95 GB/s (at min    33.48)  NMSE 1.53e-05 OK
+  b         K=75   R=6       0.0124 ms (min    0.0114)    291.65 GB/s (at min   317.15)  NMSE 1.41e-05 OK
+  a_pin  14 K=75   R=1       0.2034 ms (min    0.1536)     17.76 GB/s (at min    23.52)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=75   R=6       0.0124 ms (min    0.0114)    291.78 GB/s (at min   318.06)  NMSE 1.41e-05 OK  "copy_ms": 0.330497, "copy_gbs": 10.931, "copy_plus_compute_ms": 0.342879, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=75   R=1       0.6736 ms (min    0.6722)      5.36 GB/s (at min     5.37)  NMSE 1.41e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=75   R=1       0.6969 ms (min    0.6893)      5.18 GB/s (at min     5.24)  NMSE 1.41e-05 OK  "instances": 4
+host copies: 262.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_exps.weight@0:16 iq1_s [3584, 3072, 16] 34.406 MB, K=8 (footprint 262.5 MiB)
+  a       7 K=8    R=1       3.5009 ms (min    3.4945)      9.83 GB/s (at min     9.85)  NMSE 1.54e-05 OK
+  a      14 K=8    R=1       2.0146 ms (min    1.9664)     17.08 GB/s (at min    17.50)  NMSE 1.54e-05 OK
+  a      28 K=8    R=1       1.9061 ms (min    1.8545)     18.05 GB/s (at min    18.55)  NMSE 1.54e-05 OK
+  b         K=8    R=9       0.0736 ms (min    0.0712)    467.42 GB/s (at min   483.15)  NMSE 3.10e-05 OK
+  a_pin  14 K=8    R=1       2.0044 ms (min    1.9709)     17.17 GB/s (at min    17.46)  NMSE 1.54e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=8    R=9       0.0743 ms (min    0.0662)    462.81 GB/s (at min   519.39)  NMSE 3.10e-05 OK  "copy_ms": 3.16912, "copy_gbs": 10.8568, "copy_plus_compute_ms": 3.24346, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=8    R=1       6.6924 ms (min    6.5424)      5.14 GB/s (at min     5.26)  NMSE 3.10e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=8    R=1       5.1051 ms (min    4.5768)      6.74 GB/s (at min     7.52)  NMSE 3.10e-05 OK  "instances": 4
+host copies: 262.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_exps.weight@0:16 iq1_s [3072, 3584, 16] 34.406 MB, K=8 (footprint 262.5 MiB)
+  a       7 K=8    R=1       3.3879 ms (min    3.3831)     10.16 GB/s (at min    10.17)  NMSE 1.53e-05 OK
+  a      14 K=8    R=1       1.7172 ms (min    1.7146)     20.04 GB/s (at min    20.07)  NMSE 1.53e-05 OK
+  a      28 K=8    R=1       1.7887 ms (min    1.7347)     19.23 GB/s (at min    19.83)  NMSE 1.53e-05 OK
+  b         K=8    R=10      0.0728 ms (min    0.0650)    472.53 GB/s (at min   529.30)  NMSE 4.18e-05 OK
+  a_pin  14 K=8    R=1       1.7119 ms (min    1.7041)     20.10 GB/s (at min    20.19)  NMSE 1.53e-05 OK
+        d vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  d         K=8    R=10      0.0729 ms (min    0.0652)    472.21 GB/s (at min   528.05)  NMSE 4.18e-05 OK  "copy_ms": 3.14256, "copy_gbs": 10.9485, "copy_plus_compute_ms": 3.21543, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=8    R=1       4.7844 ms (min    4.7061)      7.19 GB/s (at min     7.31)  NMSE 4.18e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=8    R=1       4.2893 ms (min    4.2042)      8.02 GB/s (at min     8.18)  NMSE 4.18e-05 OK  "instances": 4
+
+per type and path (GB/s = sum bytes / sum median ms; NMSE-passing paths only)
+  a@14    f32           n=2         51.4 MB     0.8609 ms     59.68 GB/s
+  a@14    iq1_s         n=2          4.3 MB     0.7524 ms      5.72 GB/s
+  a@14    iq1_s MMID    n=2         68.8 MB     3.7318 ms     18.44 GB/s
+  a@14    iq4_nl        n=2          4.4 MB     0.1662 ms     26.62 GB/s
+  a@14    iq4_xs        n=17       409.4 MB     8.0439 ms     50.90 GB/s
+  a@14    q2_K          n=1          3.6 MB     0.2012 ms     17.95 GB/s
+  a@14    q5_K          n=6        181.7 MB     3.2588 ms     55.75 GB/s
+  a@14    q6_K          n=1        963.4 MB    14.3194 ms     67.28 GB/s
+  a@28    f32           n=2         51.4 MB     0.8237 ms     62.38 GB/s
+  a@28    iq1_s         n=2          4.3 MB     0.4576 ms      9.40 GB/s
+  a@28    iq1_s MMID    n=2         68.8 MB     3.6948 ms     18.62 GB/s
+  a@28    iq4_nl        n=2          4.4 MB     0.1370 ms     32.30 GB/s
+  a@28    iq4_xs        n=17       409.4 MB     7.5837 ms     53.99 GB/s
+  a@28    q2_K          n=1          3.6 MB     0.1131 ms     31.95 GB/s
+  a@28    q5_K          n=6        181.7 MB     3.1937 ms     56.88 GB/s
+  a@28    q6_K          n=1        963.4 MB    14.5755 ms     66.10 GB/s
+  a@7     f32           n=2         51.4 MB     0.8372 ms     61.37 GB/s
+  a@7     iq1_s         n=2          4.3 MB     0.6259 ms      6.87 GB/s
+  a@7     iq1_s MMID    n=2         68.8 MB     6.8888 ms      9.99 GB/s
+  a@7     iq4_nl        n=2          4.4 MB     0.2898 ms     15.26 GB/s
+  a@7     iq4_xs        n=17       409.4 MB    10.8322 ms     37.80 GB/s
+  a@7     q2_K          n=1          3.6 MB     0.1667 ms     21.67 GB/s
+  a@7     q5_K          n=6        181.7 MB     4.0897 ms     44.42 GB/s
+  a@7     q6_K          n=1        963.4 MB    17.0295 ms     56.57 GB/s
+  a_pin@14 f32           n=2         51.4 MB     0.9424 ms     54.52 GB/s
+  a_pin@14 iq1_s         n=2          4.3 MB     0.7537 ms      5.71 GB/s
+  a_pin@14 iq1_s MMID    n=2         68.8 MB     3.7163 ms     18.52 GB/s
+  a_pin@14 iq4_nl        n=2          4.4 MB     0.1719 ms     25.73 GB/s
+  a_pin@14 iq4_xs        n=17       409.4 MB     8.0153 ms     51.08 GB/s
+  a_pin@14 q2_K          n=1          3.6 MB     0.2034 ms     17.76 GB/s
+  a_pin@14 q5_K          n=6        181.7 MB     3.3067 ms     54.94 GB/s
+  a_pin@14 q6_K          n=1        963.4 MB    14.3226 ms     67.26 GB/s
+  b       f32           n=2         51.4 MB     0.0658 ms    780.71 GB/s
+  b       iq1_s         n=2          4.3 MB     0.0206 ms    208.52 GB/s
+  b       iq1_s MMID    n=2         68.8 MB     0.1464 ms    469.96 GB/s
+  b       iq4_nl        n=2          4.4 MB     0.0310 ms    142.85 GB/s
+  b       iq4_xs        n=17       409.4 MB     0.5763 ms    710.48 GB/s
+  b       q2_K          n=1          3.6 MB     0.0124 ms    291.65 GB/s
+  b       q5_K          n=6        181.7 MB     0.2473 ms    734.51 GB/s
+  b       q6_K          n=1        963.4 MB     1.1218 ms    858.81 GB/s
+  c       f32           n=2         51.4 MB     6.8128 ms      7.54 GB/s
+  c       iq1_s         n=2          4.3 MB     0.6504 ms      6.61 GB/s
+  c       iq1_s MMID    n=2         68.8 MB    11.4768 ms      6.00 GB/s
+  c       iq4_nl        n=2          4.4 MB     0.6916 ms      6.40 GB/s
+  c       iq4_xs        n=17       409.4 MB    87.7801 ms      4.66 GB/s
+  c       q2_K          n=1          3.6 MB     0.6736 ms      5.36 GB/s
+  c       q5_K          n=6        181.7 MB   108.3677 ms      1.68 GB/s
+  c       q6_K          n=1        963.4 MB   281.9472 ms      3.42 GB/s
+  c4      f32           n=2         51.4 MB     8.7936 ms      5.84 GB/s
+  c4      iq1_s         n=2          4.3 MB     1.0042 ms      4.28 GB/s
+  c4      iq1_s MMID    n=2         68.8 MB     9.3944 ms      7.32 GB/s
+  c4      iq4_nl        n=2          4.4 MB     0.7029 ms      6.29 GB/s
+  c4      iq4_xs        n=17       409.4 MB    79.7000 ms      5.14 GB/s
+  c4      q2_K          n=1          3.6 MB     0.6969 ms      5.18 GB/s
+  c4      q5_K          n=6        181.7 MB    84.6259 ms      2.15 GB/s
+  c4      q6_K          n=1        963.4 MB   253.9151 ms      3.79 GB/s
+  d       f32           n=2         51.4 MB     0.0654 ms    785.04 GB/s
+  d       iq1_s         n=2          4.3 MB     0.0182 ms    236.45 GB/s
+  d       iq1_s MMID    n=2         68.8 MB     0.1472 ms    467.46 GB/s
+  d       iq4_nl        n=2          4.4 MB     0.0310 ms    142.75 GB/s
+  d       iq4_xs        n=17       409.4 MB     0.5762 ms    710.51 GB/s
+  d       q2_K          n=1          3.6 MB     0.0124 ms    291.78 GB/s
+  d       q5_K          n=6        181.7 MB     0.2473 ms    734.68 GB/s
+  d       q6_K          n=1        963.4 MB     1.1213 ms    859.15 GB/s
+
+wrote kimi-k3/tools/out/partB-run3.json
+
+OK: 0 path(s) failed the NMSE < 0.0005 check

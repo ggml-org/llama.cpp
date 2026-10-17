@@ -1,0 +1,191 @@
+load avg 3.86 >= 2, waiting (0 / 300 s)
+load avg 3.55 >= 2, waiting (5 / 300 s)
+load avg 3.27 >= 2, waiting (10 / 300 s)
+load avg 3.01 >= 2, waiting (15 / 300 s)
+load avg 2.77 >= 2, waiting (20 / 300 s)
+load avg 2.54 >= 2, waiting (25 / 300 s)
+load avg 2.34 >= 2, waiting (30 / 300 s)
+load avg 2.15 >= 2, waiting (35 / 300 s)
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11878 MiB):
+  Device 0: NVIDIA GeForce RTX 3080 Ti, compute capability 8.6, VMM: yes, VRAM: 11878 MiB
+weights (33), cold footprint 256 MiB: K = max(1, ceil(footprint / bytes))
+  blk.50.ffn_gate_inp.weight         f32     ne [7168, 896, 1]     25690112 B  K=11
+  blk.50.ffn_routed_down.weight      iq4_xs  ne [7168, 3584, 1]     13647872 B  K=20
+  blk.50.ffn_routed_up.weight        iq4_xs  ne [3584, 7168, 1]     13647872 B  K=20
+  blk.50.ffn_down_shexp.weight       q5_K    ne [6144, 7168, 1]     30277632 B  K=9
+  blk.50.ffn_gate_shexp.weight       q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.50.ffn_up_shexp.weight         q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.50.ssm_beta.weight             iq4_xs  ne [7168, 96, 1]       365568 B  K=735
+  blk.50.ssm_f_a.weight              iq4_xs  ne [7168, 128, 1]       487424 B  K=551
+  blk.50.ssm_f_b.weight              iq4_nl  ne [128, 12288, 1]       884736 B  K=304
+  blk.50.ssm_g.weight                iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_k.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_output.weight          iq4_xs  ne [12288, 7168, 1]     46792704 B  K=6
+  blk.50.attn_q.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_v.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.51.ffn_gate_inp.weight         f32     ne [7168, 896, 1]     25690112 B  K=11
+  blk.51.ffn_routed_down.weight      iq4_xs  ne [7168, 3584, 1]     13647872 B  K=20
+  blk.51.ffn_routed_up.weight        iq4_xs  ne [3584, 7168, 1]     13647872 B  K=20
+  blk.51.ffn_down_shexp.weight       q5_K    ne [6144, 7168, 1]     30277632 B  K=9
+  blk.51.ffn_gate_shexp.weight       q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.51.ffn_up_shexp.weight         q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.51.attn_gate.weight            iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.51.attn_kv_a_mqa.weight        iq4_xs  ne [7168, 576, 1]      2193408 B  K=123
+  blk.51.attn_k_b.weight             iq4_nl  ne [128, 512, 96]      3538944 B  K=76
+  blk.51.attn_v_b.weight             iq4_xs  ne [512, 128, 96]      3342336 B  K=81
+  blk.51.attn_output.weight          iq4_xs  ne [12288, 7168, 1]     46792704 B  K=6
+  blk.51.attn_q_a.weight             iq4_xs  ne [7168, 1536, 1]      5849088 B  K=46
+  blk.51.attn_q_b.weight             iq4_xs  ne [1536, 18432, 1]     15040512 B  K=18
+  output.weight                      q6_K    ne [7168, 163840, 1]    963379200 B  K=1
+  blk.50.ffn_gate_exps.weight@0      iq1_s   ne [3584, 3072, 1]      2150400 B  K=125
+  blk.50.ffn_down_exps.weight@0      iq1_s   ne [3072, 3584, 1]      2150400 B  K=125
+  blk.5.ffn_down_exps.weight@0       q2_K    ne [3072, 3584, 1]      3612672 B  K=75
+  blk.50.ffn_gate_exps.weight@0:16   iq1_s   ne [3584, 3072, 16]     34406400 B  K=8
+  blk.50.ffn_down_exps.weight@0:16   iq1_s   ne [3072, 3584, 16]     34406400 B  K=8
+load avg 1.98, VRAM free 10.23 / 11.60 GiB, CUDA graphs on, host ptr usable 1, register 1, read-only register 1
+host copies: 269.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_inp.weight f32 [7168, 896, 1] 25.690 MB, K=11 (footprint 269.5 MiB)
+  b         K=11   R=10      0.0316 ms (min    0.0315)    813.17 GB/s (at min   816.03)  NMSE 1.61e-14 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_routed_down.weight iq4_xs [7168, 3584, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  b         K=20   R=7       0.0193 ms (min    0.0191)    706.16 GB/s (at min   716.36)  NMSE 1.43e-05 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_routed_up.weight iq4_xs [3584, 7168, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  b         K=20   R=8       0.0193 ms (min    0.0193)    705.85 GB/s (at min   706.90)  NMSE 1.43e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_shexp.weight q5_K [6144, 7168, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  b         K=9    R=10      0.0389 ms (min    0.0383)    778.03 GB/s (at min   789.63)  NMSE 1.44e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  b         K=9    R=11      0.0391 ms (min    0.0384)    775.11 GB/s (at min   787.68)  NMSE 1.45e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_up_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  b         K=9    R=10      0.0391 ms (min    0.0385)    775.21 GB/s (at min   785.92)  NMSE 1.45e-05 OK
+host copies: 258.4 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_beta.weight iq4_xs [7168, 96, 1] 0.366 MB, K=735 (footprint 258.4 MiB)
+  b         K=735  R=1       0.0040 ms (min    0.0040)     92.04 GB/s (at min    92.11)  NMSE 1.41e-05 OK
+host copies: 256.1 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_f_a.weight iq4_xs [7168, 128, 1] 0.487 MB, K=551 (footprint 256.1 MiB)
+  b         K=551  R=1       0.0040 ms (min    0.0040)    121.44 GB/s (at min   121.61)  NMSE 1.41e-05 OK
+host copies: 257.7 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_f_b.weight iq4_nl [128, 12288, 1] 0.885 MB, K=304 (footprint 257.7 MiB)
+  b         K=304  R=1       0.0071 ms (min    0.0071)    124.30 GB/s (at min   124.42)  NMSE 1.40e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_g.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  b         K=6    R=10      0.0579 ms (min    0.0573)    808.60 GB/s (at min   816.94)  NMSE 1.42e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_k.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  b         K=6    R=11      0.0579 ms (min    0.0573)    808.56 GB/s (at min   816.56)  NMSE 1.48e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_output.weight iq4_xs [12288, 7168, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  b         K=6    R=11      0.0579 ms (min    0.0573)    808.65 GB/s (at min   816.14)  NMSE 1.41e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_q.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  b         K=6    R=11      0.0579 ms (min    0.0573)    808.54 GB/s (at min   816.87)  NMSE 1.44e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_v.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  b         K=6    R=12      0.0579 ms (min    0.0573)    808.71 GB/s (at min   816.80)  NMSE 1.46e-05 OK
+host copies: 269.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_gate_inp.weight f32 [7168, 896, 1] 25.690 MB, K=11 (footprint 269.5 MiB)
+  b         K=11   R=11      0.0314 ms (min    0.0314)    817.14 GB/s (at min   818.37)  NMSE 1.64e-14 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_routed_down.weight iq4_xs [7168, 3584, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  b         K=20   R=9       0.0193 ms (min    0.0189)    706.04 GB/s (at min   720.98)  NMSE 1.43e-05 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_routed_up.weight iq4_xs [3584, 7168, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  b         K=20   R=8       0.0197 ms (min    0.0193)    694.44 GB/s (at min   706.75)  NMSE 1.43e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_down_shexp.weight q5_K [6144, 7168, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  b         K=9    R=10      0.0389 ms (min    0.0384)    777.82 GB/s (at min   788.38)  NMSE 1.42e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_gate_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  b         K=9    R=11      0.0391 ms (min    0.0385)    774.04 GB/s (at min   787.16)  NMSE 1.44e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_up_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  b         K=9    R=11      0.0391 ms (min    0.0385)    774.52 GB/s (at min   786.85)  NMSE 1.43e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_gate.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  b         K=6    R=11      0.0578 ms (min    0.0573)    809.30 GB/s (at min   816.00)  NMSE 1.42e-05 OK
+host copies: 257.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_kv_a_mqa.weight iq4_xs [7168, 576, 1] 2.193 MB, K=123 (footprint 257.5 MiB)
+  b         K=123  R=2       0.0058 ms (min    0.0058)    377.95 GB/s (at min   378.48)  NMSE 1.43e-05 OK
+host copies: 256.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_k_b.weight iq4_nl [128, 512, 96] 3.539 MB, K=76 (footprint 256.8 MiB)
+  b         K=76   R=2       0.0203 ms (min    0.0202)    174.00 GB/s (at min   175.42)  NMSE 1.42e-05 OK
+host copies: 258.2 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_v_b.weight iq4_xs [512, 128, 96] 3.342 MB, K=81 (footprint 258.2 MiB)
+  b         K=81   R=3       0.0121 ms (min    0.0118)    276.74 GB/s (at min   282.27)  NMSE 1.42e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_output.weight iq4_xs [12288, 7168, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  b         K=6    R=11      0.0579 ms (min    0.0573)    808.79 GB/s (at min   816.33)  NMSE 1.39e-05 OK
+host copies: 256.6 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_q_a.weight iq4_xs [7168, 1536, 1] 5.849 MB, K=46 (footprint 256.6 MiB)
+  b         K=46   R=6       0.0099 ms (min    0.0098)    591.57 GB/s (at min   599.19)  NMSE 1.41e-05 OK
+host copies: 258.2 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_q_b.weight iq4_xs [1536, 18432, 1] 15.041 MB, K=18 (footprint 258.2 MiB)
+  b         K=18   R=9       0.0226 ms (min    0.0216)    664.44 GB/s (at min   695.53)  NMSE 1.43e-05 OK
+host copies: 918.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+output.weight q6_K [7168, 163840, 1] 963.379 MB, K=1 (footprint 918.8 MiB)
+  b         K=1    R=5       1.1176 ms (min    1.1159)    861.99 GB/s (at min   863.35)  NMSE 1.11e-05 OK
+host copies: 256.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_exps.weight@0 iq1_s [3584, 3072, 1] 2.150 MB, K=125 (footprint 256.3 MiB)
+  b         K=125  R=3       0.0081 ms (min    0.0080)    264.66 GB/s (at min   269.57)  NMSE 3.99e-05 OK
+host copies: 256.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_exps.weight@0 iq1_s [3072, 3584, 1] 2.150 MB, K=125 (footprint 256.3 MiB)
+  b         K=125  R=3       0.0078 ms (min    0.0077)    277.24 GB/s (at min   277.68)  NMSE 3.88e-05 OK
+host copies: 258.4 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.5.ffn_down_exps.weight@0 q2_K [3072, 3584, 1] 3.613 MB, K=75 (footprint 258.4 MiB)
+  b         K=75   R=3       0.0105 ms (min    0.0099)    343.98 GB/s (at min   365.34)  NMSE 1.41e-05 OK
+host copies: 262.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_exps.weight@0:16 iq1_s [3584, 3072, 16] 34.406 MB, K=8 (footprint 262.5 MiB)
+  b         K=8    R=8       0.0721 ms (min    0.0643)    477.36 GB/s (at min   535.37)  NMSE 3.10e-05 OK
+host copies: 262.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_exps.weight@0:16 iq1_s [3072, 3584, 16] 34.406 MB, K=8 (footprint 262.5 MiB)
+  b         K=8    R=8       0.0707 ms (min    0.0632)    486.78 GB/s (at min   544.64)  NMSE 4.18e-05 OK
+
+per type and path (GB/s = sum bytes / sum median ms; NMSE-passing paths only)
+  b       f32           n=2         51.4 MB     0.0630 ms    815.15 GB/s
+  b       iq1_s         n=2          4.3 MB     0.0159 ms    270.80 GB/s
+  b       iq1_s MMID    n=2         68.8 MB     0.1428 ms    482.02 GB/s
+  b       iq4_nl        n=2          4.4 MB     0.0275 ms    161.12 GB/s
+  b       iq4_xs        n=17       409.4 MB     0.5411 ms    756.71 GB/s
+  b       q2_K          n=1          3.6 MB     0.0105 ms    343.98 GB/s
+  b       q5_K          n=6        181.7 MB     0.2342 ms    775.79 GB/s
+  b       q6_K          n=1        963.4 MB     1.1176 ms    861.99 GB/s
+
+wrote kimi-k3/tools/out/partB-graphs.json
+
+OK: 0 path(s) failed the NMSE < 0.0005 check

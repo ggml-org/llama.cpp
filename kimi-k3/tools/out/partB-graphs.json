@@ -1,0 +1,92 @@
+{
+ "cuda_graphs": 1,
+ "reps": 20,
+ "warmup": 3,
+ "footprint_mib": 256,
+ "min_graph_ms": 5,
+ "can_use_host_ptr": 1,
+ "nmse_max": 0.0005,
+ "load_avg": 1.98,
+ "load_warning": "",
+ "omp_proc_bind": "",
+ "omp_places": "",
+ "weights": [
+  {"name": "blk.50.ffn_gate_inp.weight", "type": "f32", "ne": [7168, 896, 1], "bytes": 25690112, "K": 11, "hugepage": false, "anon_huge_kib": 0, "host_kib": 275968, "paths": [
+   {"path": "b", "threads": 0, "K": 11, "R": 10, "med_ms": 0.0315927, "min_ms": 0.0314818, "gbs": 813.165, "gbs_at_min": 816.032, "noisy": false, "nmse": 1.6093e-14, "ok": true}]},
+  {"name": "blk.50.ffn_routed_down.weight", "type": "iq4_xs", "ne": [7168, 3584, 1], "bytes": 13647872, "K": 20, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266560, "paths": [
+   {"path": "b", "threads": 0, "K": 20, "R": 7, "med_ms": 0.019327, "min_ms": 0.0190516, "gbs": 706.158, "gbs_at_min": 716.364, "noisy": false, "nmse": 1.42588e-05, "ok": true}]},
+  {"name": "blk.50.ffn_routed_up.weight", "type": "iq4_xs", "ne": [3584, 7168, 1], "bytes": 13647872, "K": 20, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266560, "paths": [
+   {"path": "b", "threads": 0, "K": 20, "R": 8, "med_ms": 0.0193353, "min_ms": 0.0193067, "gbs": 705.852, "gbs_at_min": 706.9, "noisy": false, "nmse": 1.42776e-05, "ok": true}]},
+  {"name": "blk.50.ffn_down_shexp.weight", "type": "q5_K", "ne": [6144, 7168, 1], "bytes": 30277632, "K": 9, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266112, "paths": [
+   {"path": "b", "threads": 0, "K": 9, "R": 10, "med_ms": 0.0389156, "min_ms": 0.0383443, "gbs": 778.034, "gbs_at_min": 789.625, "noisy": false, "nmse": 1.43944e-05, "ok": true}]},
+  {"name": "blk.50.ffn_gate_shexp.weight", "type": "q5_K", "ne": [7168, 6144, 1], "bytes": 30277632, "K": 9, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266112, "paths": [
+   {"path": "b", "threads": 0, "K": 9, "R": 11, "med_ms": 0.0390623, "min_ms": 0.0384388, "gbs": 775.112, "gbs_at_min": 787.685, "noisy": false, "nmse": 1.4506e-05, "ok": true}]},
+  {"name": "blk.50.ffn_up_shexp.weight", "type": "q5_K", "ne": [7168, 6144, 1], "bytes": 30277632, "K": 9, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266112, "paths": [
+   {"path": "b", "threads": 0, "K": 9, "R": 10, "med_ms": 0.0390573, "min_ms": 0.0385252, "gbs": 775.21, "gbs_at_min": 785.918, "noisy": false, "nmse": 1.44549e-05, "ok": true}]},
+  {"name": "blk.50.ssm_beta.weight", "type": "iq4_xs", "ne": [7168, 96, 1], "bytes": 365568, "K": 735, "hugepage": false, "anon_huge_kib": 0, "host_kib": 264600, "paths": [
+   {"path": "b", "threads": 0, "K": 735, "R": 1, "med_ms": 0.00397197, "min_ms": 0.00396865, "gbs": 92.037, "gbs_at_min": 92.114, "noisy": false, "nmse": 1.41208e-05, "ok": true}]},
+  {"name": "blk.50.ssm_f_a.weight", "type": "iq4_xs", "ne": [7168, 128, 1], "bytes": 487424, "K": 551, "hugepage": false, "anon_huge_kib": 0, "host_kib": 262276, "paths": [
+   {"path": "b", "threads": 0, "K": 551, "R": 1, "med_ms": 0.00401375, "min_ms": 0.00400795, "gbs": 121.439, "gbs_at_min": 121.614, "noisy": false, "nmse": 1.40741e-05, "ok": true}]},
+  {"name": "blk.50.ssm_f_b.weight", "type": "iq4_nl", "ne": [128, 12288, 1], "bytes": 884736, "K": 304, "hugepage": false, "anon_huge_kib": 0, "host_kib": 263872, "paths": [
+   {"path": "b", "threads": 0, "K": 304, "R": 1, "med_ms": 0.00711765, "min_ms": 0.00711073, "gbs": 124.302, "gbs_at_min": 124.423, "noisy": false, "nmse": 1.40293e-05, "ok": true}]},
+  {"name": "blk.50.ssm_g.weight", "type": "iq4_xs", "ne": [7168, 12288, 1], "bytes": 46792704, "K": 6, "hugepage": false, "anon_huge_kib": 0, "host_kib": 274176, "paths": [
+   {"path": "b", "threads": 0, "K": 6, "R": 10, "med_ms": 0.057869, "min_ms": 0.0572783, "gbs": 808.597, "gbs_at_min": 816.936, "noisy": false, "nmse": 1.424e-05, "ok": true}]},
+  {"name": "blk.50.attn_k.weight", "type": "iq4_xs", "ne": [7168, 12288, 1], "bytes": 46792704, "K": 6, "hugepage": false, "anon_huge_kib": 0, "host_kib": 274176, "paths": [
+   {"path": "b", "threads": 0, "K": 6, "R": 11, "med_ms": 0.0578715, "min_ms": 0.0573047, "gbs": 808.562, "gbs_at_min": 816.56, "noisy": false, "nmse": 1.47578e-05, "ok": true}]},
+  {"name": "blk.50.attn_output.weight", "type": "iq4_xs", "ne": [12288, 7168, 1], "bytes": 46792704, "K": 6, "hugepage": false, "anon_huge_kib": 0, "host_kib": 274176, "paths": [
+   {"path": "b", "threads": 0, "K": 6, "R": 11, "med_ms": 0.0578652, "min_ms": 0.0573344, "gbs": 808.65, "gbs_at_min": 816.137, "noisy": false, "nmse": 1.409e-05, "ok": true}]},
+  {"name": "blk.50.attn_q.weight", "type": "iq4_xs", "ne": [7168, 12288, 1], "bytes": 46792704, "K": 6, "hugepage": false, "anon_huge_kib": 0, "host_kib": 274176, "paths": [
+   {"path": "b", "threads": 0, "K": 6, "R": 11, "med_ms": 0.0578734, "min_ms": 0.0572828, "gbs": 808.535, "gbs_at_min": 816.872, "noisy": false, "nmse": 1.43615e-05, "ok": true}]},
+  {"name": "blk.50.attn_v.weight", "type": "iq4_xs", "ne": [7168, 12288, 1], "bytes": 46792704, "K": 6, "hugepage": false, "anon_huge_kib": 0, "host_kib": 274176, "paths": [
+   {"path": "b", "threads": 0, "K": 6, "R": 12, "med_ms": 0.0578608, "min_ms": 0.0572877, "gbs": 808.711, "gbs_at_min": 816.802, "noisy": false, "nmse": 1.46194e-05, "ok": true}]},
+  {"name": "blk.51.ffn_gate_inp.weight", "type": "f32", "ne": [7168, 896, 1], "bytes": 25690112, "K": 11, "hugepage": false, "anon_huge_kib": 0, "host_kib": 275968, "paths": [
+   {"path": "b", "threads": 0, "K": 11, "R": 11, "med_ms": 0.0314391, "min_ms": 0.0313919, "gbs": 817.139, "gbs_at_min": 818.368, "noisy": false, "nmse": 1.6404e-14, "ok": true}]},
+  {"name": "blk.51.ffn_routed_down.weight", "type": "iq4_xs", "ne": [7168, 3584, 1], "bytes": 13647872, "K": 20, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266560, "paths": [
+   {"path": "b", "threads": 0, "K": 20, "R": 9, "med_ms": 0.0193303, "min_ms": 0.0189296, "gbs": 706.036, "gbs_at_min": 720.98, "noisy": false, "nmse": 1.43126e-05, "ok": true}]},
+  {"name": "blk.51.ffn_routed_up.weight", "type": "iq4_xs", "ne": [3584, 7168, 1], "bytes": 13647872, "K": 20, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266560, "paths": [
+   {"path": "b", "threads": 0, "K": 20, "R": 8, "med_ms": 0.0196531, "min_ms": 0.0193107, "gbs": 694.439, "gbs_at_min": 706.75, "noisy": false, "nmse": 1.42614e-05, "ok": true}]},
+  {"name": "blk.51.ffn_down_shexp.weight", "type": "q5_K", "ne": [6144, 7168, 1], "bytes": 30277632, "K": 9, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266112, "paths": [
+   {"path": "b", "threads": 0, "K": 9, "R": 10, "med_ms": 0.0389262, "min_ms": 0.038405, "gbs": 777.822, "gbs_at_min": 788.378, "noisy": false, "nmse": 1.42108e-05, "ok": true}]},
+  {"name": "blk.51.ffn_gate_shexp.weight", "type": "q5_K", "ne": [7168, 6144, 1], "bytes": 30277632, "K": 9, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266112, "paths": [
+   {"path": "b", "threads": 0, "K": 9, "R": 11, "med_ms": 0.0391161, "min_ms": 0.0384642, "gbs": 774.044, "gbs_at_min": 787.164, "noisy": false, "nmse": 1.44328e-05, "ok": true}]},
+  {"name": "blk.51.ffn_up_shexp.weight", "type": "q5_K", "ne": [7168, 6144, 1], "bytes": 30277632, "K": 9, "hugepage": false, "anon_huge_kib": 0, "host_kib": 266112, "paths": [
+   {"path": "b", "threads": 0, "K": 9, "R": 11, "med_ms": 0.0390923, "min_ms": 0.0384797, "gbs": 774.517, "gbs_at_min": 786.847, "noisy": false, "nmse": 1.4298e-05, "ok": true}]},
+  {"name": "blk.51.attn_gate.weight", "type": "iq4_xs", "ne": [7168, 12288, 1], "bytes": 46792704, "K": 6, "hugepage": false, "anon_huge_kib": 0, "host_kib": 274176, "paths": [
+   {"path": "b", "threads": 0, "K": 6, "R": 11, "med_ms": 0.0578189, "min_ms": 0.0573437, "gbs": 809.298, "gbs_at_min": 816.004, "noisy": false, "nmse": 1.41998e-05, "ok": true}]},
+  {"name": "blk.51.attn_kv_a_mqa.weight", "type": "iq4_xs", "ne": [7168, 576, 1], "bytes": 2193408, "K": 123, "hugepage": false, "anon_huge_kib": 0, "host_kib": 263712, "paths": [
+   {"path": "b", "threads": 0, "K": 123, "R": 2, "med_ms": 0.00580343, "min_ms": 0.00579537, "gbs": 377.95, "gbs_at_min": 378.476, "noisy": false, "nmse": 1.42841e-05, "ok": true}]},
+  {"name": "blk.51.attn_k_b.weight", "type": "iq4_nl", "ne": [128, 512, 96], "bytes": 3538944, "K": 76, "hugepage": false, "anon_huge_kib": 0, "host_kib": 262960, "paths": [
+   {"path": "b", "threads": 0, "K": 76, "R": 2, "med_ms": 0.0203382, "min_ms": 0.0201744, "gbs": 174.004, "gbs_at_min": 175.418, "noisy": false, "nmse": 1.41527e-05, "ok": true}]},
+  {"name": "blk.51.attn_v_b.weight", "type": "iq4_xs", "ne": [512, 128, 96], "bytes": 3342336, "K": 81, "hugepage": false, "anon_huge_kib": 0, "host_kib": 264384, "paths": [
+   {"path": "b", "threads": 0, "K": 81, "R": 3, "med_ms": 0.0120777, "min_ms": 0.0118411, "gbs": 276.736, "gbs_at_min": 282.266, "noisy": false, "nmse": 1.41614e-05, "ok": true}]},
+  {"name": "blk.51.attn_output.weight", "type": "iq4_xs", "ne": [12288, 7168, 1], "bytes": 46792704, "K": 6, "hugepage": false, "anon_huge_kib": 0, "host_kib": 274176, "paths": [
+   {"path": "b", "threads": 0, "K": 6, "R": 11, "med_ms": 0.057855, "min_ms": 0.0573209, "gbs": 808.793, "gbs_at_min": 816.328, "noisy": false, "nmse": 1.38652e-05, "ok": true}]},
+  {"name": "blk.51.attn_q_a.weight", "type": "iq4_xs", "ne": [7168, 1536, 1], "bytes": 5849088, "K": 46, "hugepage": false, "anon_huge_kib": 0, "host_kib": 262752, "paths": [
+   {"path": "b", "threads": 0, "K": 46, "R": 6, "med_ms": 0.00988738, "min_ms": 0.00976159, "gbs": 591.571, "gbs_at_min": 599.194, "noisy": false, "nmse": 1.41049e-05, "ok": true}]},
+  {"name": "blk.51.attn_q_b.weight", "type": "iq4_xs", "ne": [1536, 18432, 1], "bytes": 15040512, "K": 18, "hugepage": false, "anon_huge_kib": 0, "host_kib": 264384, "paths": [
+   {"path": "b", "threads": 0, "K": 18, "R": 9, "med_ms": 0.0226364, "min_ms": 0.0216246, "gbs": 664.44, "gbs_at_min": 695.528, "noisy": false, "nmse": 1.42547e-05, "ok": true}]},
+  {"name": "output.weight", "type": "q6_K", "ne": [7168, 163840, 1], "bytes": 963379200, "K": 1, "hugepage": false, "anon_huge_kib": 0, "host_kib": 940800, "paths": [
+   {"path": "b", "threads": 0, "K": 1, "R": 5, "med_ms": 1.11762, "min_ms": 1.11586, "gbs": 861.994, "gbs_at_min": 863.35, "noisy": false, "nmse": 1.10752e-05, "ok": true}]},
+  {"name": "blk.50.ffn_gate_exps.weight@0", "type": "iq1_s", "ne": [3584, 3072, 1], "bytes": 2150400, "K": 125, "hugepage": false, "anon_huge_kib": 0, "host_kib": 262500, "paths": [
+   {"path": "b", "threads": 0, "K": 125, "R": 3, "med_ms": 0.00812525, "min_ms": 0.00797705, "gbs": 264.656, "gbs_at_min": 269.573, "noisy": false, "nmse": 3.99401e-05, "ok": true}]},
+  {"name": "blk.50.ffn_down_exps.weight@0", "type": "iq1_s", "ne": [3072, 3584, 1], "bytes": 2150400, "K": 125, "hugepage": false, "anon_huge_kib": 0, "host_kib": 262500, "paths": [
+   {"path": "b", "threads": 0, "K": 125, "R": 3, "med_ms": 0.00775652, "min_ms": 0.00774422, "gbs": 277.238, "gbs_at_min": 277.678, "noisy": false, "nmse": 3.88373e-05, "ok": true}]},
+  {"name": "blk.5.ffn_down_exps.weight@0", "type": "q2_K", "ne": [3072, 3584, 1], "bytes": 3612672, "K": 75, "hugepage": false, "anon_huge_kib": 0, "host_kib": 264600, "paths": [
+   {"path": "b", "threads": 0, "K": 75, "R": 3, "med_ms": 0.0105024, "min_ms": 0.00988841, "gbs": 343.984, "gbs_at_min": 365.344, "noisy": false, "nmse": 1.413e-05, "ok": true}]},
+  {"name": "blk.50.ffn_gate_exps.weight@0:16", "type": "iq1_s", "ne": [3584, 3072, 16], "bytes": 34406400, "K": 8, "hugepage": false, "anon_huge_kib": 0, "host_kib": 268800, "paths": [
+   {"path": "b", "threads": 0, "K": 8, "R": 8, "med_ms": 0.0720769, "min_ms": 0.0642661, "gbs": 477.357, "gbs_at_min": 535.374, "noisy": false, "nmse": 3.09555e-05, "ok": true}]},
+  {"name": "blk.50.ffn_down_exps.weight@0:16", "type": "iq1_s", "ne": [3072, 3584, 16], "bytes": 34406400, "K": 8, "hugepage": false, "anon_huge_kib": 0, "host_kib": 268800, "paths": [
+   {"path": "b", "threads": 0, "K": 8, "R": 8, "med_ms": 0.0706823, "min_ms": 0.063173, "gbs": 486.775, "gbs_at_min": 544.638, "noisy": false, "nmse": 4.18323e-05, "ok": true}]}
+ ],
+ "per_type": [
+  {"path": "b", "type": "f32", "n": 2, "bytes": 5.13802e+07, "ms": 0.0630318, "gbs": 815.147},
+  {"path": "b", "type": "iq1_s", "n": 2, "bytes": 4.3008e+06, "ms": 0.0158818, "gbs": 270.801},
+  {"path": "b", "type": "iq1_s MMID", "n": 2, "bytes": 6.88128e+07, "ms": 0.142759, "gbs": 482.02},
+  {"path": "b", "type": "iq4_nl", "n": 2, "bytes": 4.42368e+06, "ms": 0.0274559, "gbs": 161.119},
+  {"path": "b", "type": "iq4_xs", "n": 17, "bytes": 4.09419e+08, "ms": 0.54105, "gbs": 756.711},
+  {"path": "b", "type": "q2_K", "n": 1, "bytes": 3.61267e+06, "ms": 0.0105024, "gbs": 343.984},
+  {"path": "b", "type": "q5_K", "n": 6, "bytes": 1.81666e+08, "ms": 0.23417, "gbs": 775.787},
+  {"path": "b", "type": "q6_K", "n": 1, "bytes": 9.63379e+08, "ms": 1.11762, "gbs": 861.994}
+ ],
+ "n_fail": 0
+}

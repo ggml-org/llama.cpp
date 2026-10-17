@@ -1,0 +1,44 @@
+## Part A: kimi-k3-trace-simple.json (simple layout, 8 tokens, n_threads 14)
+
+A1 / A2 need per-op records (LLAMA_TRACE_DETAIL=2); this trace gives A3 and a reduced A4 only.
+
+### A3 routed experts per slice type (CPU, 14 threads)
+
+per-thread compute = record dur - stall_ns (one thread's share of one expert); aggregate = expert bytes / (MUL_MAT_ID dur - mean per-thread stall of the op), as a ratio of sums over all ops; 'crit' uses the slowest thread's compute instead.
+
+| slice type | MB/slice | ops/token | thread us med | p90 | thread GB/s | x14 | AGGREGATE GB/s | agg med/op | agg crit GB/s | GB/token | compute ms/token |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| down IQ1_S L11-92 | 2.150 | 82 | 153.0 | 208.3 | 1.00 | 14.1 | 13.2 | 13.5 | 13.3 | 2.821 | 213.8 |
+| down Q2_K L1-10 | 3.613 | 10 | 179.2 | 310.9 | 1.44 | 20.2 | 18.6 | 18.9 | 18.7 | 0.578 | 31.1 |
+| gate/up IQ1_S L1-10 | 2.150 | 20 | 260.1 | 374.6 | 0.59 | 8.3 | 5.9 | 5.9 | 6.0 | 0.688 | 117.3 |
+| gate/up IQ1_S L11-92 | 2.150 | 164 | 133.2 | 226.1 | 1.15 | 16.1 | 9.6 | 9.6 | 9.3 | 5.643 | 590.4 |
+
+Layers 1-10 (dense part on the GPU) and 11-92 are split: in layers 1-10 the same IQ1_S slices run slower per thread, so the Q2_K down slices (only in layers 1-10) are not comparable with a standalone benchmark of Q2_K.
+All experts: 9.73 GB/token, compute 952.6 ms/token -> AGGREGATE 10.2 GB/s (the number the go rule uses).
+Stall per token (sum over ops of the mean per-thread stall): step 0: 642.1 ms, step 1: 616.5 ms, step 2: 483.9 ms, step 3: 464.7 ms, step 4: 515.4 ms, step 5: 422.1 ms, step 6: 543.8 ms, step 7: 464.1 ms
+
+### A4 token budget (ms per step)
+
+| item | step 0 | step 1 | step 2 | step 3 | step 4 | step 5 | step 6 | step 7 | median |
+|---|---|---|---|---|---|---|---|---|---|
+| wall (TOKEN + output SYNC) | 2536.5 | 2493.0 | 2315.1 | 2258.9 | 2375.4 | 2233.7 | 2400.5 | 2283.6 | 2345.2 |
+| CPU dense MUL_MAT | - | - | - | - | - | - | - | - | - |
+| MUL_MAT_ID compute (dur - stall) | 975.9 | 976.6 | 948.8 | 919.2 | 969.1 | 922.7 | 971.7 | 936.7 | 959.0 |
+| stall (mean per-thread, sum over expert ops) | 642.1 | 616.5 | 483.9 | 464.7 | 515.4 | 422.1 | 543.8 | 464.1 | 499.6 |
+| CPU non-expert ops (incl. dense matmuls) | 857.1 | 847.7 | 832.4 | 824.0 | 840.3 | 839.3 | 835.1 | 831.1 | 837.2 |
+| GPU ops of layers 0-10 + output | 21.5 | 16.5 | 14.8 | 16.2 | 14.5 | 13.7 | 15.3 | 15.5 | 15.4 |
+| GPU ops of CPU layers (KV / recurrent cache) | 64.8 | 55.3 | 55.8 | 54.4 | 56.2 | 61.3 | 54.1 | 60.5 | 56.0 |
+|   count | 3152 | 3152 | 3152 | 3152 | 3152 | 3152 | 3152 | 3152 | 3152 |
+| SYNC (host, excl. output) | 12.5 | 13.6 | 13.5 | 13.1 | 13.9 | 13.4 | 13.1 | 13.5 | 13.4 |
+|   count | 5497 | 5497 | 5497 | 5497 | 5497 | 5497 | 5497 | 5497 | 5497 |
+|   SYNC not overlapped by GPU ops | - | - | - | - | - | - | - | - | - |
+| COPY | 33.0 | 32.6 | 32.7 | 32.6 | 32.4 | 33.4 | 31.5 | 33.7 | 32.6 |
+|   count | 1735 | 1735 | 1735 | 1735 | 1735 | 1735 | 1735 | 1735 | 1735 |
+| host launch (info, not added) | - | - | - | - | - | - | - | - | - |
+| unaccounted | -57.9 | -52.1 | -53.2 | -52.3 | -52.7 | -58.8 | -51.0 | -57.9 | -52.9 |
+| today_compute = wall - stall | 1894.4 | 1876.5 | 1831.3 | 1794.2 | 1860.0 | 1811.5 | 1856.7 | 1819.6 | 1844.0 |
+
+B4 baselines: today = wall 2.537 s step 0, 2.345 s median (0.426 tok/s); today, zero stall = wall - stall 1.894 s step 0, 1.844 s median (0.542 tok/s).
+The 1.37 s all-cached figure is in no trace: unverified.
+Simple layout: the worker 0 spans merge consecutive ops with the gaps between them and the expert op wall is first thread start .. last thread end, so 'unaccounted' can be negative.
+

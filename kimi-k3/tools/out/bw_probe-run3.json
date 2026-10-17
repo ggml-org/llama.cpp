@@ -1,0 +1,11 @@
+{
+ "load_avg": 1.930000,
+ "load_warning": "",
+ "cpu_read_gbs": {"7": 63.573, "14": 67.937, "28": 65.981},
+ "pcie": {"idle": {"gen_min": 1, "gen_max": 3, "width_min": 16, "width_max": 16, "n": 9}, "h2d": {"gen_min": 3, "gen_max": 3, "width_min": 16, "width_max": 16, "n": 20}, "zero_copy_hostalloc": {"gen_min": 3, "gen_max": 3, "width_min": 16, "width_max": 16, "n": 9}, "zero_copy_registered": {"gen_min": 3, "gen_max": 3, "width_min": 16, "width_max": 16, "n": 13}, "vram": {"gen_min": 3, "gen_max": 3, "width_min": 16, "width_max": 16, "n": 19}},
+ "h2d_gbs": 10.949,
+ "zero_copy_hostalloc": {"gbs": 10.308, "grid_mult": 1, "streams": 1},
+ "zero_copy_registered": {"gbs": 10.711, "grid_mult": 1, "streams": 1, "read_only": 1},
+ "vram_read": {"gbs": 866.513, "grid_mult": 1, "streams": 1},
+ "gpu_bytes": 999997440, "cpu_bytes": 3999997952, "sms": 80
+}

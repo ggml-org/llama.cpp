@@ -1,0 +1,59 @@
+WARNING: The version of the system or its configuration does not allow enabling CPU profiling:
+- CPU IP/backtrace sampling will be disabled.
+- CPU context switch tracing will be disabled.
+Try the 'nsys status --environment' command to learn more.
+
+load avg 10.53 >= 2, waiting (0 / 300 s)
+load avg 9.69 >= 2, waiting (5 / 300 s)
+load avg 8.91 >= 2, waiting (10 / 300 s)
+load avg 8.28 >= 2, waiting (15 / 300 s)
+load avg 7.62 >= 2, waiting (20 / 300 s)
+load avg 7.09 >= 2, waiting (25 / 300 s)
+load avg 6.60 >= 2, waiting (30 / 300 s)
+load avg 6.07 >= 2, waiting (35 / 300 s)
+load avg 5.58 >= 2, waiting (40 / 300 s)
+load avg 5.14 >= 2, waiting (45 / 300 s)
+load avg 4.72 >= 2, waiting (50 / 300 s)
+load avg 4.35 >= 2, waiting (55 / 300 s)
+load avg 4.00 >= 2, waiting (60 / 300 s)
+load avg 3.68 >= 2, waiting (65 / 300 s)
+load avg 3.46 >= 2, waiting (70 / 300 s)
+load avg 3.18 >= 2, waiting (75 / 300 s)
+load avg 3.01 >= 2, waiting (80 / 300 s)
+load avg 2.77 >= 2, waiting (85 / 300 s)
+load avg 2.55 >= 2, waiting (90 / 300 s)
+load avg 2.34 >= 2, waiting (95 / 300 s)
+load avg 2.15 >= 2, waiting (100 / 300 s)
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11878 MiB):
+  Device 0: NVIDIA GeForce RTX 3080 Ti, compute capability 8.6, VMM: yes, VRAM: 11878 MiB
+weights (2), cold footprint 256 MiB: K = max(1, ceil(footprint / bytes))
+  blk.50.attn_q.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.ffn_gate_exps.weight@0:16   iq1_s   ne [3584, 3072, 16]     34406400 B  K=8
+load avg 1.98, VRAM free 10.23 / 11.60 GiB, CUDA graphs off (GGML_CUDA_DISABLE_GRAPHS=1), host ptr usable 1, register 1, read-only register 1
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_q.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=6    R=1       9.4201 ms (min    9.3900)      4.97 GB/s (at min     4.98)  NMSE 1.44e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=6    R=1       8.5412 ms (min    8.3819)      5.48 GB/s (at min     5.58)  NMSE 1.44e-05 OK  "instances": 4
+host copies: 262.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_exps.weight@0:16 iq1_s [3584, 3072, 16] 34.406 MB, K=8 (footprint 262.5 MiB)
+        poison control (weights = 0xFF VRAM): NMSE nan -> fails as expected
+        c vs b: {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c         K=8    R=1       6.9671 ms (min    6.9428)      4.94 GB/s (at min     4.96)  NMSE 3.10e-05 OK  "poison_control_nmse": null, "poison_control_failed": true, "read_only_register": 1, "vs_b": {"identical": true, "n_diff": 0, "max_abs_diff": 0}
+  c4        K=8    R=1       5.3777 ms (min    4.9502)      6.40 GB/s (at min     6.95)  NMSE 3.10e-05 OK  "instances": 4
+
+per type and path (GB/s = sum bytes / sum median ms; NMSE-passing paths only)
+  c       iq1_s MMID    n=1         34.4 MB     6.9671 ms      4.94 GB/s
+  c       iq4_xs        n=1         46.8 MB     9.4201 ms      4.97 GB/s
+  c4      iq1_s MMID    n=1         34.4 MB     5.3777 ms      6.40 GB/s
+  c4      iq4_xs        n=1         46.8 MB     8.5412 ms      5.48 GB/s
+
+OK: 0 path(s) failed the NMSE < 0.0005 check
+Collecting data...
+Generating '/tmp/nsys-report-369d.qdstrm'
+[1/1] [0%                          ] nsys_c.nsys-rep[1/1] [0%                          ] nsys_c.nsys-rep[1/1] [====27%                     ] nsys_c.nsys-rep[1/1] [=======36%                  ] nsys_c.nsys-rep[1/1] [=========46%                ] nsys_c.nsys-rep[1/1] [==========47%               ] nsys_c.nsys-rep[1/1] [==========48%               ] nsys_c.nsys-rep[1/1] [==========49%               ] nsys_c.nsys-rep[1/1] [===========50%              ] nsys_c.nsys-rep[1/1] [===========51%              ] nsys_c.nsys-rep[1/1] [===========52%              ] nsys_c.nsys-rep[1/1] [===========53%              ] nsys_c.nsys-rep[1/1] [============54%             ] nsys_c.nsys-rep[1/1] [============55%             ] nsys_c.nsys-rep[1/1] [============56%             ] nsys_c.nsys-rep[1/1] [============57%             ] nsys_c.nsys-rep[1/1] [=============58%            ] nsys_c.nsys-rep[1/1] [=============59%            ] nsys_c.nsys-rep[1/1] [=============60%            ] nsys_c.nsys-rep[1/1] [==============61%           ] nsys_c.nsys-rep[1/1] [==============62%           ] nsys_c.nsys-rep[1/1] [==============63%           ] nsys_c.nsys-rep[1/1] [==============64%           ] nsys_c.nsys-rep[1/1] [===============65%          ] nsys_c.nsys-rep[1/1] [===============66%          ] nsys_c.nsys-rep[1/1] [===============67%          ] nsys_c.nsys-rep[1/1] [================68%         ] nsys_c.nsys-rep[1/1] [================69%         ] nsys_c.nsys-rep[1/1] [================70%         ] nsys_c.nsys-rep[1/1] [================71%         ] nsys_c.nsys-rep[1/1] [=================72%        ] nsys_c.nsys-rep[1/1] [========================100%] nsys_c.nsys-rep[1/1] [========================100%] nsys_c.nsys-rep
+Generated:
+	/tmp/claude-1000/-home-aaronzhong-Projects-llama-cpp/9bbbffdd-0d58-401e-a700-32b343899505/scratchpad/bench/matmul/nsys_c.nsys-rep

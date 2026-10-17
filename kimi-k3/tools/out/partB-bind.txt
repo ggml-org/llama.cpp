@@ -1,0 +1,263 @@
+weights (33), cold footprint 256 MiB: K = max(1, ceil(footprint / bytes))
+  blk.50.ffn_gate_inp.weight         f32     ne [7168, 896, 1]     25690112 B  K=11
+  blk.50.ffn_routed_down.weight      iq4_xs  ne [7168, 3584, 1]     13647872 B  K=20
+  blk.50.ffn_routed_up.weight        iq4_xs  ne [3584, 7168, 1]     13647872 B  K=20
+  blk.50.ffn_down_shexp.weight       q5_K    ne [6144, 7168, 1]     30277632 B  K=9
+  blk.50.ffn_gate_shexp.weight       q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.50.ffn_up_shexp.weight         q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.50.ssm_beta.weight             iq4_xs  ne [7168, 96, 1]       365568 B  K=735
+  blk.50.ssm_f_a.weight              iq4_xs  ne [7168, 128, 1]       487424 B  K=551
+  blk.50.ssm_f_b.weight              iq4_nl  ne [128, 12288, 1]       884736 B  K=304
+  blk.50.ssm_g.weight                iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_k.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_output.weight          iq4_xs  ne [12288, 7168, 1]     46792704 B  K=6
+  blk.50.attn_q.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.50.attn_v.weight               iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.51.ffn_gate_inp.weight         f32     ne [7168, 896, 1]     25690112 B  K=11
+  blk.51.ffn_routed_down.weight      iq4_xs  ne [7168, 3584, 1]     13647872 B  K=20
+  blk.51.ffn_routed_up.weight        iq4_xs  ne [3584, 7168, 1]     13647872 B  K=20
+  blk.51.ffn_down_shexp.weight       q5_K    ne [6144, 7168, 1]     30277632 B  K=9
+  blk.51.ffn_gate_shexp.weight       q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.51.ffn_up_shexp.weight         q5_K    ne [7168, 6144, 1]     30277632 B  K=9
+  blk.51.attn_gate.weight            iq4_xs  ne [7168, 12288, 1]     46792704 B  K=6
+  blk.51.attn_kv_a_mqa.weight        iq4_xs  ne [7168, 576, 1]      2193408 B  K=123
+  blk.51.attn_k_b.weight             iq4_nl  ne [128, 512, 96]      3538944 B  K=76
+  blk.51.attn_v_b.weight             iq4_xs  ne [512, 128, 96]      3342336 B  K=81
+  blk.51.attn_output.weight          iq4_xs  ne [12288, 7168, 1]     46792704 B  K=6
+  blk.51.attn_q_a.weight             iq4_xs  ne [7168, 1536, 1]      5849088 B  K=46
+  blk.51.attn_q_b.weight             iq4_xs  ne [1536, 18432, 1]     15040512 B  K=18
+  output.weight                      q6_K    ne [7168, 163840, 1]    963379200 B  K=1
+  blk.50.ffn_gate_exps.weight@0      iq1_s   ne [3584, 3072, 1]      2150400 B  K=125
+  blk.50.ffn_down_exps.weight@0      iq1_s   ne [3072, 3584, 1]      2150400 B  K=125
+  blk.5.ffn_down_exps.weight@0       q2_K    ne [3072, 3584, 1]      3612672 B  K=75
+  blk.50.ffn_gate_exps.weight@0:16   iq1_s   ne [3584, 3072, 16]     34406400 B  K=8
+  blk.50.ffn_down_exps.weight@0:16   iq1_s   ne [3072, 3584, 16]     34406400 B  K=8
+load avg 1.83, VRAM free 0.00 / 0.00 GiB, CUDA graphs off (GGML_CUDA_DISABLE_GRAPHS=1), host ptr usable 0, register 0, read-only register 0
+host copies: 269.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_inp.weight f32 [7168, 896, 1] 25.690 MB, K=11 (footprint 269.5 MiB)
+  a       7 K=11   R=1       0.6297 ms (min    0.6126)     40.80 GB/s (at min    41.94)  NMSE 7.82e-14 OK
+  a      14 K=11   R=1       0.4226 ms (min    0.4040)     60.78 GB/s (at min    63.59)  NMSE 7.82e-14 OK
+  a      28 K=11   R=2       0.4164 ms (min    0.3934)     61.69 GB/s (at min    65.29)  NMSE 7.82e-14 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_routed_down.weight iq4_xs [7168, 3584, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.5567 ms (min    0.5474)     24.52 GB/s (at min    24.93)  NMSE 1.54e-05 OK
+  a      14 K=20   R=1       0.3139 ms (min    0.3100)     43.48 GB/s (at min    44.02)  NMSE 1.54e-05 OK
+  a      28 K=20   R=1       0.2860 ms (min    0.2543)     47.72 GB/s (at min    53.66)  NMSE 1.54e-05 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_routed_up.weight iq4_xs [3584, 7168, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.5373 ms (min    0.5290)     25.40 GB/s (at min    25.80)  NMSE 1.53e-05 OK
+  a      14 K=20   R=1       0.3366 ms (min    0.3311)     40.55 GB/s (at min    41.22)  NMSE 1.53e-05 OK
+  a      28 K=20   R=1       0.3468 ms (min    0.3189)     39.35 GB/s (at min    42.79)  NMSE 1.53e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_shexp.weight q5_K [6144, 7168, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.9541 ms (min    0.9221)     31.73 GB/s (at min    32.84)  NMSE 1.53e-05 OK
+  a      14 K=9    R=1       0.5832 ms (min    0.5609)     51.92 GB/s (at min    53.98)  NMSE 1.53e-05 OK
+  a      28 K=9    R=1       0.5901 ms (min    0.4904)     51.31 GB/s (at min    61.75)  NMSE 1.53e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.9255 ms (min    0.9107)     32.71 GB/s (at min    33.25)  NMSE 1.56e-05 OK
+  a      14 K=9    R=1       0.5872 ms (min    0.5642)     51.56 GB/s (at min    53.66)  NMSE 1.56e-05 OK
+  a      28 K=9    R=1       0.5513 ms (min    0.5122)     54.92 GB/s (at min    59.11)  NMSE 1.56e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_up_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.9435 ms (min    0.9231)     32.09 GB/s (at min    32.80)  NMSE 1.55e-05 OK
+  a      14 K=9    R=1       0.5805 ms (min    0.5596)     52.16 GB/s (at min    54.11)  NMSE 1.55e-05 OK
+  a      28 K=9    R=1       0.5550 ms (min    0.4960)     54.56 GB/s (at min    61.05)  NMSE 1.55e-05 OK
+host copies: 258.4 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_beta.weight iq4_xs [7168, 96, 1] 0.366 MB, K=735 (footprint 258.4 MiB)
+  a       7 K=735  R=1       0.0244 ms (min    0.0238)     14.99 GB/s (at min    15.39)  NMSE 1.51e-05 OK
+  a      14 K=735  R=1       0.0191 ms (min    0.0189)     19.12 GB/s (at min    19.35)  NMSE 1.51e-05 OK
+  a      28 K=735  R=1       0.0216 ms (min    0.0205)     16.89 GB/s (at min    17.83)  NMSE 1.51e-05 OK
+host copies: 256.1 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_f_a.weight iq4_xs [7168, 128, 1] 0.487 MB, K=551 (footprint 256.1 MiB)
+  a       7 K=551  R=1       0.0316 ms (min    0.0309)     15.43 GB/s (at min    15.79)  NMSE 1.53e-05 OK
+  a      14 K=551  R=1       0.0283 ms (min    0.0280)     17.21 GB/s (at min    17.40)  NMSE 1.53e-05 OK
+  a      28 K=551  R=1       0.0254 ms (min    0.0245)     19.22 GB/s (at min    19.88)  NMSE 1.53e-05 OK
+host copies: 256.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_f_b.weight iq4_nl [128, 12288, 1] 0.885 MB, K=304 (footprint 256.5 MiB)
+  a       7 K=304  R=1       0.0719 ms (min    0.0705)     12.31 GB/s (at min    12.55)  NMSE 1.40e-05 OK
+  a      14 K=304  R=1       0.0422 ms (min    0.0420)     20.99 GB/s (at min    21.09)  NMSE 1.40e-05 OK
+  a      28 K=304  R=1       0.0259 ms (min    0.0247)     34.11 GB/s (at min    35.84)  NMSE 1.40e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ssm_g.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.7498 ms (min    1.6870)     26.74 GB/s (at min    27.74)  NMSE 1.55e-05 OK
+  a      14 K=6    R=1       1.0277 ms (min    1.0047)     45.53 GB/s (at min    46.57)  NMSE 1.55e-05 OK
+  a      28 K=6    R=1       1.6939 ms (min    0.7561)     27.62 GB/s (at min    61.89)  NMSE 1.55e-05 OK NOISY (median > 1.5 x min)
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_k.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.7167 ms (min    1.6680)     27.26 GB/s (at min    28.05)  NMSE 1.63e-05 OK
+  a      14 K=6    R=1       1.0235 ms (min    1.0155)     45.72 GB/s (at min    46.08)  NMSE 1.63e-05 OK
+  a      28 K=6    R=1       0.7983 ms (min    0.7511)     58.62 GB/s (at min    62.30)  NMSE 1.63e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_output.weight iq4_xs [12288, 7168, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.7494 ms (min    1.7122)     26.75 GB/s (at min    27.33)  NMSE 1.55e-05 OK
+  a      14 K=6    R=1       1.0012 ms (min    0.9831)     46.74 GB/s (at min    47.60)  NMSE 1.55e-05 OK
+  a      28 K=6    R=1       0.8164 ms (min    0.7351)     57.32 GB/s (at min    63.66)  NMSE 1.55e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_q.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.7284 ms (min    1.7153)     27.07 GB/s (at min    27.28)  NMSE 1.61e-05 OK
+  a      14 K=6    R=1       1.0347 ms (min    1.0257)     45.22 GB/s (at min    45.62)  NMSE 1.61e-05 OK
+  a      28 K=6    R=1       0.8021 ms (min    0.7547)     58.34 GB/s (at min    62.00)  NMSE 1.61e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.attn_v.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.7504 ms (min    1.6908)     26.73 GB/s (at min    27.68)  NMSE 1.55e-05 OK
+  a      14 K=6    R=1       1.0273 ms (min    1.0164)     45.55 GB/s (at min    46.04)  NMSE 1.55e-05 OK
+  a      28 K=6    R=1       0.7879 ms (min    0.7496)     59.39 GB/s (at min    62.42)  NMSE 1.55e-05 OK
+host copies: 269.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_gate_inp.weight f32 [7168, 896, 1] 25.690 MB, K=11 (footprint 269.5 MiB)
+  a       7 K=11   R=1       0.6210 ms (min    0.6162)     41.37 GB/s (at min    41.69)  NMSE 7.84e-14 OK
+  a      14 K=11   R=1       0.4330 ms (min    0.4025)     59.33 GB/s (at min    63.82)  NMSE 7.84e-14 OK
+  a      28 K=11   R=1       0.4348 ms (min    0.3981)     59.08 GB/s (at min    64.53)  NMSE 7.84e-14 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_routed_down.weight iq4_xs [7168, 3584, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.5614 ms (min    0.5524)     24.31 GB/s (at min    24.71)  NMSE 1.54e-05 OK
+  a      14 K=20   R=1       0.3147 ms (min    0.3114)     43.37 GB/s (at min    43.83)  NMSE 1.54e-05 OK
+  a      28 K=20   R=1       0.2778 ms (min    0.2566)     49.14 GB/s (at min    53.19)  NMSE 1.54e-05 OK
+host copies: 260.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_routed_up.weight iq4_xs [3584, 7168, 1] 13.648 MB, K=20 (footprint 260.3 MiB)
+  a       7 K=20   R=1       0.5424 ms (min    0.5253)     25.16 GB/s (at min    25.98)  NMSE 1.54e-05 OK
+  a      14 K=20   R=1       0.3228 ms (min    0.3193)     42.27 GB/s (at min    42.74)  NMSE 1.54e-05 OK
+  a      28 K=20   R=1       0.2897 ms (min    0.2641)     47.12 GB/s (at min    51.67)  NMSE 1.54e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_down_shexp.weight q5_K [6144, 7168, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.9553 ms (min    0.9235)     31.70 GB/s (at min    32.78)  NMSE 1.53e-05 OK
+  a      14 K=9    R=1       0.5793 ms (min    0.5510)     52.26 GB/s (at min    54.95)  NMSE 1.53e-05 OK
+  a      28 K=9    R=2       0.5029 ms (min    0.4893)     60.21 GB/s (at min    61.88)  NMSE 1.53e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_gate_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.9433 ms (min    0.9249)     32.10 GB/s (at min    32.74)  NMSE 1.54e-05 OK
+  a      14 K=9    R=1       0.6009 ms (min    0.5574)     50.39 GB/s (at min    54.32)  NMSE 1.54e-05 OK
+  a      28 K=9    R=1       0.5157 ms (min    0.4919)     58.71 GB/s (at min    61.55)  NMSE 1.54e-05 OK
+host copies: 259.9 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.ffn_up_shexp.weight q5_K [7168, 6144, 1] 30.278 MB, K=9 (footprint 259.9 MiB)
+  a       7 K=9    R=1       0.9554 ms (min    0.9420)     31.69 GB/s (at min    32.14)  NMSE 1.56e-05 OK
+  a      14 K=9    R=1       0.5916 ms (min    0.5577)     51.18 GB/s (at min    54.29)  NMSE 1.56e-05 OK
+  a      28 K=9    R=1       0.5276 ms (min    0.4894)     57.38 GB/s (at min    61.86)  NMSE 1.56e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_gate.weight iq4_xs [7168, 12288, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.7312 ms (min    1.6895)     27.03 GB/s (at min    27.70)  NMSE 1.52e-05 OK
+  a      14 K=6    R=1       1.0295 ms (min    1.0207)     45.45 GB/s (at min    45.84)  NMSE 1.52e-05 OK
+  a      28 K=6    R=1       0.8170 ms (min    0.7439)     57.27 GB/s (at min    62.90)  NMSE 1.52e-05 OK
+host copies: 257.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_kv_a_mqa.weight iq4_xs [7168, 576, 1] 2.193 MB, K=123 (footprint 257.5 MiB)
+  a       7 K=123  R=1       0.1037 ms (min    0.1006)     21.16 GB/s (at min    21.81)  NMSE 1.52e-05 OK
+  a      14 K=123  R=1       0.0719 ms (min    0.0713)     30.50 GB/s (at min    30.78)  NMSE 1.52e-05 OK
+  a      28 K=123  R=1       0.0796 ms (min    0.0722)     27.55 GB/s (at min    30.40)  NMSE 1.52e-05 OK
+host copies: 256.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_k_b.weight iq4_nl [128, 512, 96] 3.539 MB, K=76 (footprint 256.5 MiB)
+  a       7 K=76   R=1       0.3136 ms (min    0.3085)     11.28 GB/s (at min    11.47)  NMSE 1.42e-05 OK
+  a      14 K=76   R=1       0.1787 ms (min    0.1782)     19.80 GB/s (at min    19.86)  NMSE 1.42e-05 OK
+  a      28 K=76   R=1       0.1078 ms (min    0.1047)     32.82 GB/s (at min    33.81)  NMSE 1.42e-05 OK
+host copies: 258.2 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_v_b.weight iq4_xs [512, 128, 96] 3.342 MB, K=81 (footprint 258.2 MiB)
+  a       7 K=81   R=1       0.2402 ms (min    0.2365)     13.92 GB/s (at min    14.13)  NMSE 1.53e-05 OK
+  a      14 K=81   R=1       0.1824 ms (min    0.1808)     18.33 GB/s (at min    18.48)  NMSE 1.53e-05 OK
+  a      28 K=81   R=1       0.1438 ms (min    0.1402)     23.24 GB/s (at min    23.84)  NMSE 1.53e-05 OK
+host copies: 267.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_output.weight iq4_xs [12288, 7168, 1] 46.793 MB, K=6 (footprint 267.8 MiB)
+  a       7 K=6    R=1       1.7450 ms (min    1.7166)     26.81 GB/s (at min    27.26)  NMSE 1.50e-05 OK
+  a      14 K=6    R=1       1.0046 ms (min    0.9868)     46.58 GB/s (at min    47.42)  NMSE 1.50e-05 OK
+  a      28 K=6    R=1       0.8098 ms (min    0.7402)     57.78 GB/s (at min    63.22)  NMSE 1.50e-05 OK
+host copies: 256.6 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_q_a.weight iq4_xs [7168, 1536, 1] 5.849 MB, K=46 (footprint 256.6 MiB)
+  a       7 K=46   R=1       0.2470 ms (min    0.2406)     23.68 GB/s (at min    24.31)  NMSE 1.55e-05 OK
+  a      14 K=46   R=1       0.1489 ms (min    0.1463)     39.28 GB/s (at min    39.98)  NMSE 1.55e-05 OK
+  a      28 K=46   R=1       0.1399 ms (min    0.1349)     41.82 GB/s (at min    43.36)  NMSE 1.55e-05 OK
+host copies: 258.2 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.51.attn_q_b.weight iq4_xs [1536, 18432, 1] 15.041 MB, K=18 (footprint 258.2 MiB)
+  a       7 K=18   R=1       0.5985 ms (min    0.5864)     25.13 GB/s (at min    25.65)  NMSE 1.52e-05 OK
+  a      14 K=18   R=1       0.3455 ms (min    0.3442)     43.53 GB/s (at min    43.70)  NMSE 1.52e-05 OK
+  a      28 K=18   R=1       0.2533 ms (min    0.2425)     59.39 GB/s (at min    62.01)  NMSE 1.52e-05 OK
+host copies: 918.8 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+output.weight q6_K [7168, 163840, 1] 963.379 MB, K=1 (footprint 918.8 MiB)
+  a       7 K=1    R=1      21.7743 ms (min   21.5716)     44.24 GB/s (at min    44.66)  NMSE 1.19e-05 OK
+  a      14 K=1    R=1      14.9859 ms (min   14.9453)     64.29 GB/s (at min    64.46)  NMSE 1.19e-05 OK
+  a      28 K=1    R=1      14.5505 ms (min   14.5102)     66.21 GB/s (at min    66.39)  NMSE 1.19e-05 OK
+host copies: 256.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_exps.weight@0 iq1_s [3584, 3072, 1] 2.150 MB, K=125 (footprint 256.3 MiB)
+  a       7 K=125  R=1       0.4073 ms (min    0.3989)      5.28 GB/s (at min     5.39)  NMSE 1.53e-05 OK
+  a      14 K=125  R=1       0.3025 ms (min    0.3009)      7.11 GB/s (at min     7.15)  NMSE 1.53e-05 OK
+  a      28 K=125  R=1       0.3440 ms (min    0.3326)      6.25 GB/s (at min     6.47)  NMSE 1.53e-05 OK
+host copies: 256.3 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_exps.weight@0 iq1_s [3072, 3584, 1] 2.150 MB, K=125 (footprint 256.3 MiB)
+  a       7 K=125  R=1       0.3867 ms (min    0.3806)      5.56 GB/s (at min     5.65)  NMSE 1.53e-05 OK
+  a      14 K=125  R=1       0.2842 ms (min    0.2811)      7.57 GB/s (at min     7.65)  NMSE 1.53e-05 OK
+  a      28 K=125  R=1       0.2622 ms (min    0.2538)      8.20 GB/s (at min     8.47)  NMSE 1.53e-05 OK
+host copies: 258.4 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.5.ffn_down_exps.weight@0 q2_K [3072, 3584, 1] 3.613 MB, K=75 (footprint 258.4 MiB)
+  a       7 K=75   R=1       0.1653 ms (min    0.1630)     21.86 GB/s (at min    22.16)  NMSE 1.53e-05 OK
+  a      14 K=75   R=1       0.1367 ms (min    0.1333)     26.43 GB/s (at min    27.10)  NMSE 1.53e-05 OK
+  a      28 K=75   R=1       0.1677 ms (min    0.1601)     21.55 GB/s (at min    22.56)  NMSE 1.53e-05 OK
+host copies: 262.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_gate_exps.weight@0:16 iq1_s [3584, 3072, 16] 34.406 MB, K=8 (footprint 262.5 MiB)
+  a       7 K=8    R=1       5.7582 ms (min    5.6509)      5.98 GB/s (at min     6.09)  NMSE 1.54e-05 OK
+  a      14 K=8    R=1       3.4443 ms (min    3.4299)      9.99 GB/s (at min    10.03)  NMSE 1.54e-05 OK
+  a      28 K=8    R=1       1.9994 ms (min    1.9468)     17.21 GB/s (at min    17.67)  NMSE 1.54e-05 OK
+host copies: 262.5 MiB, 4 KiB aligned, AnonHugePages +0 KiB (0% of the copies)
+
+blk.50.ffn_down_exps.weight@0:16 iq1_s [3072, 3584, 16] 34.406 MB, K=8 (footprint 262.5 MiB)
+  a       7 K=8    R=1       5.7430 ms (min    5.6846)      5.99 GB/s (at min     6.05)  NMSE 1.53e-05 OK
+  a      14 K=8    R=1       3.3881 ms (min    3.3847)     10.15 GB/s (at min    10.17)  NMSE 1.53e-05 OK
+  a      28 K=8    R=1       1.7985 ms (min    1.7441)     19.13 GB/s (at min    19.73)  NMSE 1.53e-05 OK
+
+per type and path (GB/s = sum bytes / sum median ms; NMSE-passing paths only)
+  a@14    f32           n=2         51.4 MB     0.8557 ms     60.05 GB/s
+  a@14    iq1_s         n=2          4.3 MB     0.5867 ms      7.33 GB/s
+  a@14    iq1_s MMID    n=2         68.8 MB     6.8325 ms     10.07 GB/s
+  a@14    iq4_nl        n=2          4.4 MB     0.2209 ms     20.03 GB/s
+  a@14    iq4_xs        n=17       409.4 MB     9.2325 ms     44.35 GB/s
+  a@14    q2_K          n=1          3.6 MB     0.1367 ms     26.43 GB/s
+  a@14    q5_K          n=6        181.7 MB     3.5228 ms     51.57 GB/s
+  a@14    q6_K          n=1        963.4 MB    14.9859 ms     64.29 GB/s
+  a@28    f32           n=2         51.4 MB     0.8512 ms     60.36 GB/s
+  a@28    iq1_s         n=2          4.3 MB     0.6062 ms      7.09 GB/s
+  a@28    iq1_s MMID    n=2         68.8 MB     3.7979 ms     18.12 GB/s
+  a@28    iq4_nl        n=2          4.4 MB     0.1338 ms     33.07 GB/s
+  a@28    iq4_xs        n=17       409.4 MB     8.3893 ms     48.80 GB/s
+  a@28    q2_K          n=1          3.6 MB     0.1677 ms     21.55 GB/s
+  a@28    q5_K          n=6        181.7 MB     3.2427 ms     56.02 GB/s
+  a@28    q6_K          n=1        963.4 MB    14.5505 ms     66.21 GB/s
+  a@7     f32           n=2         51.4 MB     1.2507 ms     41.08 GB/s
+  a@7     iq1_s         n=2          4.3 MB     0.7940 ms      5.42 GB/s
+  a@7     iq1_s MMID    n=2         68.8 MB    11.5013 ms      5.98 GB/s
+  a@7     iq4_nl        n=2          4.4 MB     0.3855 ms     11.48 GB/s
+  a@7     iq4_xs        n=17       409.4 MB    15.6143 ms     26.22 GB/s
+  a@7     q2_K          n=1          3.6 MB     0.1653 ms     21.86 GB/s
+  a@7     q5_K          n=6        181.7 MB     5.6771 ms     32.00 GB/s
+  a@7     q6_K          n=1        963.4 MB    21.7743 ms     44.24 GB/s
+
+wrote kimi-k3/tools/out/partB-bind.json
+
+OK: 0 path(s) failed the NMSE < 0.0005 check
