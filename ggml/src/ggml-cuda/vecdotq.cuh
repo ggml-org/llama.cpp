@@ -28,6 +28,15 @@ static __device__ __forceinline__ int get_int_b4(const void * x, const int & i32
     return ((const int *) x)[i32]; // assume at least 4 byte alignment
 }
 
+static __device__ __forceinline__ int get_int_from_table_u8_ph(const int & q, const int8_t * table, const int & ph) {
+    return  ((table[(q >>  0) & 0xFF] + ph) & 0xFF)        | (((table[(q >>  8) & 0xFF] + ph) & 0xFF) <<  8) |
+           (((table[(q >> 16) & 0xFF] + ph) & 0xFF) << 16) | (((table[(q >> 24) & 0xFF] + ph) & 0xFF) << 24);
+}
+
+static __device__ __forceinline__ int get_int_from_table_u8(const int & q, const int8_t * table) {
+    return get_int_from_table_u8_ph(q, table, 0);
+}
+
 // q4 contains 8 indices with 4 bit each.
 // This function selects those bytes from table that are at those indices and returns them as int2.
 // The first int contains the bytes with even indices in q4, the second int contains the bytes with odd indices in q4.
@@ -1419,5 +1428,191 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     sumi *= ls - 32;
 
     const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
+    return d * sumi;
+}
+
+#define VDR_IQ2_K_Q8_1_MMVQ 2
+#define VDR_IQ2_K_Q8_1_MMQ  2
+
+static __device__ __forceinline__ float vec_dot_iq2_k_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq2_k * bq2 = (const block_iq2_k *) vbq + kbx;
+
+    const int g   = iqs/VDR_IQ2_K_Q8_1_MMVQ; // 32-weight group, 0...7
+    const int qs0 = 8*(g/4);                 // first qs int of the group
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < 2; ++l) { // the two sub-blocks of the group
+        const int ib = 2*g + l;
+        const int ls = ((bq2->scales[g] >> 4*l) & 0xF) - 8;
+        const int ph = (bq2->extra >> ib) & 1 ? IQ2K_PHASE : 0;
+
+        int sumq = 0; // dot product against the base codebook
+        int sumy = 0; // sum of the q8 values, what the phase offset multiplies
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int q = (get_int_b4(bq2->qs, qs0 + 4*l + j) >> 2*(g%4)) & 0x03030303;
+            const int u = get_int_b4(bq8_1[g].qs, 4*l + j);
+
+            sumq = ggml_cuda_dp4a(get_int_from_table_u8(q, kvalues_iq2k), u, sumq);
+            sumy = ggml_cuda_dp4a(0x01010101, u, sumy);
+        }
+        sumi += ls*(sumq + ph*sumy);
+    }
+
+    const float d = __half2float(bq2->d) * __low2float(bq8_1[g].ds);
+    return d * sumi;
+}
+
+#define VDR_IQ3_K_Q8_1_MMVQ 2
+#define VDR_IQ3_K_Q8_1_MMQ  2
+
+static __device__ __forceinline__ float vec_dot_iq3_k_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq3_k * bq3 = (const block_iq3_k *) vbq + kbx;
+
+    const int g   = iqs/VDR_IQ3_K_Q8_1_MMVQ;
+    const int qs0 = 8*(g/4);
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < 2; ++l) {
+        const int ib = 2*g + l;
+        const int m  = (bq3->scales_l[g] >> 4*l) & 0xF;
+        const int ls = (bq3->scales_h >> ib) & 1 ? -(2*m + 1) : 2*m + 1; // odd magnitudes only
+        const int ph = (bq3->extra >> ib) & 1 ? IQ3K_PHASE : 0;
+
+        int sumq = 0;
+        int sumy = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            // sizeof(block_iq3_k) is 110, which is 2 mod 4, so the qs and qh offsets are only
+            // ever 2-byte aligned and get_int_b4 would fault or read the wrong words.
+            const int lo = (get_int_b2(bq3->qs, qs0 + 4*l + j) >> 2*(g%4)) & 0x03030303;
+            const int hi = (get_int_b2(bq3->qh,       4*l + j) >> g)       & 0x01010101;
+            const int q  = lo | (hi << 2);
+            const int u  = get_int_b4(bq8_1[g].qs, 4*l + j);
+
+            sumq = ggml_cuda_dp4a(get_int_from_table_u8(q, kvalues_iq3k), u, sumq);
+            sumy = ggml_cuda_dp4a(0x01010101, u, sumy);
+        }
+        sumi += ls*(sumq + ph*sumy);
+    }
+
+    const float d = __half2float(bq3->d) * __low2float(bq8_1[g].ds);
+    return d * sumi;
+}
+
+#define VDR_IQ4_K_Q8_1_MMVQ 4
+#define VDR_IQ4_K_Q8_1_MMQ  2
+
+static __device__ __forceinline__ float vec_dot_iq4_k_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq4_k * bq4 = (const block_iq4_k *) vbq + kbx;
+
+    const int g  = iqs/VDR_IQ4_K_Q8_1_MMVQ;
+    const int hs = bq4->scales_h[g/2] >> 4*(g%2); // the group's two 2-bit scale halves
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < 2; ++l) {
+        const int ib = 2*g + l;
+        const int ls = (((bq4->scales_l[g] >> 4*l) & 0xF) | (((hs >> 2*l) & 3) << 4)) - 32;
+        const int ph = (bq4->extra >> ib) & 1 ? IQ4K_PHASE : 0;
+
+        int sumq = 0;
+        int sumy = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int q = (get_int_b4(bq4->qs, 4*g + j) >> 4*l) & 0x0F0F0F0F;
+            const int u = get_int_b4(bq8_1[g].qs, 4*l + j);
+
+            sumq = ggml_cuda_dp4a(get_int_from_table_u8(q, kvalues_iq4k), u, sumq);
+            sumy = ggml_cuda_dp4a(0x01010101, u, sumy);
+        }
+        sumi += ls*(sumq + ph*sumy);
+    }
+
+    const float d = __half2float(bq4->d) * __low2float(bq8_1[g].ds);
+    return d * sumi;
+}
+
+#define VDR_IQ5_K_Q8_1_MMVQ 4
+#define VDR_IQ5_K_Q8_1_MMQ  2
+
+static __device__ __forceinline__ float vec_dot_iq5_k_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq5_k * bq5 = (const block_iq5_k *) vbq + kbx;
+
+    const int g   = iqs/VDR_IQ5_K_Q8_1_MMVQ;
+    const int qs0 = 8*(g/2);
+    const int hs  = bq5->scales_h[g/2] >> 4*(g%2);
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < 2; ++l) {
+        const int ib = 2*g + l;
+        const int ls = (((bq5->scales_l[g] >> 4*l) & 0xF) | (((hs >> 2*l) & 3) << 4)) - 32;
+        const int ph = (bq5->extra >> ib) & 1 ? IQ5K_PHASE : 0;
+
+        int sumq = 0;
+        int sumy = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int lo = (get_int_b4(bq5->qs, qs0 + 4*l + j) >> 4*(g%2)) & 0x0F0F0F0F;
+            const int hi = (get_int_b4(bq5->qh,       4*l + j) >> g)       & 0x01010101;
+            const int q  = lo | (hi << 4);
+            const int u  = get_int_b4(bq8_1[g].qs, 4*l + j);
+
+            sumq = ggml_cuda_dp4a(get_int_from_table_u8(q, kvalues_iq5k), u, sumq);
+            sumy = ggml_cuda_dp4a(0x01010101, u, sumy);
+        }
+        sumi += ls*(sumq + ph*sumy);
+    }
+
+    const float d = __half2float(bq5->d) * __low2float(bq8_1[g].ds);
+    return d * sumi;
+}
+
+#define VDR_IQ6_K_Q8_1_MMVQ 4
+#define VDR_IQ6_K_Q8_1_MMQ  2
+
+static __device__ __forceinline__ float vec_dot_iq6_k_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq6_k * bq6 = (const block_iq6_k *) vbq + kbx;
+
+    const int g   = iqs/VDR_IQ6_K_Q8_1_MMVQ;
+    const int qs0 = 8*(g/2);
+    const int qh0 = 8*(g/4);
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < 2; ++l) {
+        const int ib = 2*g + l;
+        const int ls = bq6->scales[ib];
+        const int ph = (bq6->extra >> ib) & 1 ? IQ6K_PHASE : 0;
+
+        int sumq = 0;
+        int sumy = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int lo = (get_int_b4(bq6->qs, qs0 + 4*l + j) >> 4*(g%2)) & 0x0F0F0F0F;
+            const int hi = (get_int_b4(bq6->qh, qh0 + 4*l + j) >> 2*(g%4)) & 0x03030303;
+            const int q  = lo | (hi << 4);
+            const int u  = get_int_b4(bq8_1[g].qs, 4*l + j);
+
+            sumq = ggml_cuda_dp4a(get_int_from_table_u8(q, kvalues_iq6k), u, sumq);
+            sumy = ggml_cuda_dp4a(0x01010101, u, sumy);
+        }
+        sumi += ls*(sumq + ph*sumy);
+    }
+
+    const float d = __half2float(bq6->d) * __low2float(bq8_1[g].ds);
     return d * sumi;
 }

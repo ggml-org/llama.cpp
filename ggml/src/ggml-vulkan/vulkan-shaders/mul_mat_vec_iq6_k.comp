@@ -1,0 +1,116 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+#include "mul_mat_vec_base.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+// dedicated iq6_k mat-vec, mirrors mul_mat_vec_iq5_k.comp
+// a 32-element chunk splits into two halves of 16, each with its own signed scale and phase;
+// the codebook index takes 4 bits from one nibble of qs and bits 4-5 from one bit pair of qh,
+// so the payload is assembled from two planes
+
+void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, const uint i, const uint num_blocks_per_row, const uint first_row, const uint num_rows) {
+    const uint y_idx = i * QUANT_K + 32 * ib32;
+
+    // two chunks share a 32-byte qs run, one nibble each; four share a 32-byte qh run, one bit pair each
+    const uint qsw    = 8 * (ib32 / 2);
+    const uint qhw    = 8 * (ib32 / 4);
+    const uint qshift = 4 * (ib32 & 1);
+    const uint hshift = 2 * (ib32 & 3);
+
+    uint ibi = a_offset + first_row * num_blocks_per_row + i;
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        // scales are signed, one per 16-element group, with no bias
+        const float d = float(data_a[ibi].d);
+        const float dscale0 = d * float(data_a[ibi].scales[2 * ib32]);
+        const float dscale1 = d * float(data_a[ibi].scales[2 * ib32 + 1]);
+
+        const uint extra = uint(data_a[ibi].extra) >> (2 * ib32);
+        const FLOAT_TYPE ph0 = FLOAT_TYPE(( extra       & 1) * IQ6K_PHASE);
+        const FLOAT_TYPE ph1 = FLOAT_TYPE(((extra >> 1) & 1) * IQ6K_PHASE);
+
+        FLOAT_TYPE sum0[NUM_COLS];
+        FLOAT_TYPE sum1[NUM_COLS];
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            sum0[j] = FLOAT_TYPE(0);
+            sum1[j] = FLOAT_TYPE(0);
+        }
+
+        [[unroll]] for (uint l = 0; l < 4; ++l) {
+            const uint w0 = (data_a_packed32[ibi].qs[qsw + l]     >> qshift) & 0x0F0F0F0F;
+            const uint w1 = (data_a_packed32[ibi].qs[qsw + 4 + l] >> qshift) & 0x0F0F0F0F;
+            const uint h0 = (data_a_packed32[ibi].qh[qhw + l]     >> hshift) & 0x03030303;
+            const uint h1 = (data_a_packed32[ibi].qh[qhw + 4 + l] >> hshift) & 0x03030303;
+            const u8vec4 q0 = unpack8(w0 | (h0 << 4));
+            const u8vec4 q1 = unpack8(w1 | (h1 << 4));
+
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                const vec4 b0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + l]);
+                const vec4 b1 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 4 + l]);
+
+                sum0[j] = fma(FLOAT_TYPE(b0.x), FLOAT_TYPE(kvalues_iq6k[q0.x]) + ph0,
+                          fma(FLOAT_TYPE(b0.y), FLOAT_TYPE(kvalues_iq6k[q0.y]) + ph0,
+                          fma(FLOAT_TYPE(b0.z), FLOAT_TYPE(kvalues_iq6k[q0.z]) + ph0,
+                          fma(FLOAT_TYPE(b0.w), FLOAT_TYPE(kvalues_iq6k[q0.w]) + ph0,
+                          sum0[j]))));
+
+                sum1[j] = fma(FLOAT_TYPE(b1.x), FLOAT_TYPE(kvalues_iq6k[q1.x]) + ph1,
+                          fma(FLOAT_TYPE(b1.y), FLOAT_TYPE(kvalues_iq6k[q1.y]) + ph1,
+                          fma(FLOAT_TYPE(b1.z), FLOAT_TYPE(kvalues_iq6k[q1.z]) + ph1,
+                          fma(FLOAT_TYPE(b1.w), FLOAT_TYPE(kvalues_iq6k[q1.w]) + ph1,
+                          sum1[j]))));
+            }
+        }
+
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            temp[j][n] = fma(dscale0, sum0[j], fma(dscale1, sum1[j], temp[j][n]));
+        }
+
+        ibi += num_blocks_per_row;
+    }
+}
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+
+    // 8 threads are used to process each block
+    const uint blocks_per_wg = gl_WorkGroupSize.x/8;
+    const uint tid = gl_LocalInvocationID.x;
+    const uint itid = tid % 8;  // 0...7
+    const uint ix = tid / 8;
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
+            temp[j][i] = FLOAT_TYPE(0);
+        }
+    }
+
+    [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += blocks_per_wg)
+        calc_superblock(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    init_iq_shmem(gl_WorkGroupSize);
+
+    // do NUM_ROWS at a time, unless there aren't enough remaining rows
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

@@ -69,6 +69,21 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_IQ4_NL:
             mul_mat_q_case<GGML_TYPE_IQ4_NL, GGML_PREC_Q8>(ctx, args, stream);
             break;
+        case GGML_TYPE_IQ2_K:
+            mul_mat_q_case<GGML_TYPE_IQ2_K, GGML_PREC_Q8>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ3_K:
+            mul_mat_q_case<GGML_TYPE_IQ3_K, GGML_PREC_Q8>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ4_K:
+            mul_mat_q_case<GGML_TYPE_IQ4_K, GGML_PREC_Q8>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ5_K:
+            mul_mat_q_case<GGML_TYPE_IQ5_K, GGML_PREC_Q8>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ6_K:
+            mul_mat_q_case<GGML_TYPE_IQ6_K, GGML_PREC_Q8>(ctx, args, stream);
+            break;
 // -----------------------------------------------------------------------
         case GGML_TYPE_MXFP4:
             // src1 at Q4 uses the native FP4 instructions, which are Blackwell-only
@@ -382,6 +397,12 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_NL:
+// -------------------------------------------------
+        case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ3_K:
+        case GGML_TYPE_IQ4_K:
+        case GGML_TYPE_IQ5_K:
+        case GGML_TYPE_IQ6_K:
 // -------------------------------------------------
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:

@@ -1,0 +1,40 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_iq3_k data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    // Each thread handles one 16-element group: its own scale, phase and qs run
+    const uint ib = gl_WorkGroupID.x * 16 + gl_LocalInvocationID.x / 16;
+
+    init_iq_shmem(gl_WorkGroupSize);
+
+    if (ib >= p.nel / 256) {
+        return;
+    }
+
+    const uint ib16 = gl_LocalInvocationID.x % 16;
+    const uint g    = ib16 / 2;
+
+    // Scales are odd magnitudes 2m+1 with a separate sign bit
+    const uint m   = (data_a[ib].scales_l[ib16 / 2] >> (4 * (ib16 & 1))) & 0xF;
+    const int  mag = int(2 * m + 1);
+    const int  ls  = ((uint(data_a[ib].scales_h) >> ib16) & 1) != 0 ? -mag : mag;
+
+    const float dl = float(data_a[ib].d) * float(ls);
+    const float ph = float(((uint(data_a[ib].extra) >> ib16) & 1) * IQ3K_PHASE);
+
+    const uint b_idx = 256 * ib + 16 * ib16;
+    const uint q_idx = 32 * (g / 4) + 16 * (ib16 & 1);
+    const uint h_idx = 16 * (ib16 & 1);
+    const uint qsh   = 2 * (g % 4);
+
+    [[unroll]] for (uint l = 0; l < 16; ++l) {
+        const uint q = ((data_a[ib].qs[q_idx + l] >> qsh) & 3) | (((data_a[ib].qh[h_idx + l] >> g) & 1) << 2);
+        data_b[b_idx + l] = D_TYPE(dl * (float(kvalues_iq3k[q]) + ph));
+    }
+}

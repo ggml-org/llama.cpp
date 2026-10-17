@@ -755,3 +755,107 @@ vec2 get_dm(uint ib, uint a_offset) {
     return vec2(1, 0);
 }
 #endif
+
+#if defined(DATA_A_IQ2_K)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint ib16 = iqs / 16;
+    const uint g    = ib16 / 2;
+    const int  ls   = int((data_a[a_offset + ib].scales[ib16 / 2] >> (4 * (ib16 & 1))) & 0xF) - 8;
+    const float ph  = float(((uint(data_a[a_offset + ib].extra) >> ib16) & 1) * IQ2K_PHASE);
+    const uint qi   = 32 * (g / 4) + 16 * (ib16 & 1) + (iqs % 16);
+    const uint qsh  = 2 * (g % 4);
+
+    const uint q0 = (data_a[a_offset + ib].qs[qi    ] >> qsh) & 3;
+    const uint q1 = (data_a[a_offset + ib].qs[qi + 1] >> qsh) & 3;
+
+    return float(ls) * vec2(float(kvalues_iq2k[q0]) + ph, float(kvalues_iq2k[q1]) + ph);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
+#if defined(DATA_A_IQ3_K)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint ib16 = iqs / 16;
+    const uint g    = ib16 / 2;
+    const uint m    = (data_a[a_offset + ib].scales_l[ib16 / 2] >> (4 * (ib16 & 1))) & 0xF;
+    const int  mag  = int(2 * m + 1);
+    const int  ls   = ((uint(data_a[a_offset + ib].scales_h) >> ib16) & 1) != 0 ? -mag : mag;
+    const float ph  = float(((uint(data_a[a_offset + ib].extra) >> ib16) & 1) * IQ3K_PHASE);
+    const uint qi   = 32 * (g / 4) + 16 * (ib16 & 1) + (iqs % 16);
+    const uint qhi  = 16 * (ib16 & 1) + (iqs % 16);
+    const uint qsh  = 2 * (g % 4);
+
+    const uint q0 = ((data_a[a_offset + ib].qs[qi    ] >> qsh) & 3) | (((data_a[a_offset + ib].qh[qhi    ] >> g) & 1) << 2);
+    const uint q1 = ((data_a[a_offset + ib].qs[qi + 1] >> qsh) & 3) | (((data_a[a_offset + ib].qh[qhi + 1] >> g) & 1) << 2);
+
+    return float(ls) * vec2(float(kvalues_iq3k[q0]) + ph, float(kvalues_iq3k[q1]) + ph);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
+#if defined(DATA_A_IQ4_K)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint ib16 = iqs / 16;
+    const uint sl   = (data_a[a_offset + ib].scales_l[ib16 / 2] >> (4 * (ib16 & 1))) & 0xF;
+    const uint sh   = (data_a[a_offset + ib].scales_h[ib16 / 4] >> (2 * (ib16 % 4))) & 3;
+    const int  ls   = int(sl | (sh << 4)) - 32;
+    const float ph  = float(((uint(data_a[a_offset + ib].extra) >> ib16) & 1) * IQ4K_PHASE);
+    const uint qi   = 16 * (ib16 / 2) + (iqs % 16);
+    const uint qsh  = 4 * (ib16 & 1);
+
+    const uint q0 = (data_a[a_offset + ib].qs[qi    ] >> qsh) & 0xF;
+    const uint q1 = (data_a[a_offset + ib].qs[qi + 1] >> qsh) & 0xF;
+
+    return float(ls) * vec2(float(kvalues_iq4k[q0]) + ph, float(kvalues_iq4k[q1]) + ph);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
+#if defined(DATA_A_IQ5_K)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint ib16 = iqs / 16;
+    const uint g    = ib16 / 2;
+    const uint sl   = (data_a[a_offset + ib].scales_l[ib16 / 2] >> (4 * (ib16 & 1))) & 0xF;
+    const uint sh   = (data_a[a_offset + ib].scales_h[ib16 / 4] >> (2 * (ib16 % 4))) & 3;
+    const int  ls   = int(sl | (sh << 4)) - 32;
+    const float ph  = float(((uint(data_a[a_offset + ib].extra) >> ib16) & 1) * IQ5K_PHASE);
+    const uint qi   = 32 * (g / 2) + 16 * (ib16 & 1) + (iqs % 16);
+    const uint qhi  = 16 * (ib16 & 1) + (iqs % 16);
+    const uint qsh  = 4 * (g % 2);
+
+    const uint q0 = ((data_a[a_offset + ib].qs[qi    ] >> qsh) & 0xF) | (((data_a[a_offset + ib].qh[qhi    ] >> g) & 1) << 4);
+    const uint q1 = ((data_a[a_offset + ib].qs[qi + 1] >> qsh) & 0xF) | (((data_a[a_offset + ib].qh[qhi + 1] >> g) & 1) << 4);
+
+    return float(ls) * vec2(float(kvalues_iq5k[q0]) + ph, float(kvalues_iq5k[q1]) + ph);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
+#if defined(DATA_A_IQ6_K)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint ib16 = iqs / 16;
+    const uint g    = ib16 / 2;
+    const float ls  = float(data_a[a_offset + ib].scales[ib16]);
+    const float ph  = float(((uint(data_a[a_offset + ib].extra) >> ib16) & 1) * IQ6K_PHASE);
+    const uint qi   = 32 * (g / 2) + 16 * (ib16 & 1) + (iqs % 16);
+    const uint qhi  = 32 * (g / 4) + 16 * (ib16 & 1) + (iqs % 16);
+    const uint qsh  = 4 * (g % 2);
+    const uint hsh  = 2 * (g % 4);
+
+    const uint q0 = ((data_a[a_offset + ib].qs[qi    ] >> qsh) & 0xF) | (((data_a[a_offset + ib].qh[qhi    ] >> hsh) & 3) << 4);
+    const uint q1 = ((data_a[a_offset + ib].qs[qi + 1] >> qsh) & 0xF) | (((data_a[a_offset + ib].qh[qhi + 1] >> hsh) & 3) << 4);
+
+    return ls * vec2(float(kvalues_iq6k[q0]) + ph, float(kvalues_iq6k[q1]) + ph);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif

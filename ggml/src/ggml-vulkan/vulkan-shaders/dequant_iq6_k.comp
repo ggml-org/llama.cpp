@@ -1,0 +1,37 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_iq6_k data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    // Each thread handles one 16-element group: its own scale, phase and qs run
+    const uint ib = gl_WorkGroupID.x * 16 + gl_LocalInvocationID.x / 16;
+
+    init_iq_shmem(gl_WorkGroupSize);
+
+    if (ib >= p.nel / 256) {
+        return;
+    }
+
+    const uint ib16 = gl_LocalInvocationID.x % 16;
+    const uint g    = ib16 / 2;
+
+    // Scales are stored signed, one per group, with no bias
+    const float dl = float(data_a[ib].d) * float(data_a[ib].scales[ib16]);
+    const float ph = float(((uint(data_a[ib].extra) >> ib16) & 1) * IQ6K_PHASE);
+
+    const uint b_idx = 256 * ib + 16 * ib16;
+    const uint q_idx = 32 * (g / 2) + 16 * (ib16 & 1);
+    const uint h_idx = 32 * (g / 4) + 16 * (ib16 & 1);
+    const uint qsh   = 4 * (g % 2);
+    const uint hsh   = 2 * (g % 4);
+
+    [[unroll]] for (uint l = 0; l < 16; ++l) {
+        const uint q = ((data_a[ib].qs[q_idx + l] >> qsh) & 0xF) | (((data_a[ib].qh[h_idx + l] >> hsh) & 3) << 4);
+        data_b[b_idx + l] = D_TYPE(dl * (float(kvalues_iq6k[q]) + ph));
+    }
+}

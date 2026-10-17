@@ -70,6 +70,11 @@ const std::vector<std::string> type_names = {
     "iq3_s",
     "iq4_xs",
     "iq4_nl",
+    "iq2_k",
+    "iq3_k",
+    "iq4_k",
+    "iq5_k",
+    "iq6_k",
     "mxfp4",
     "nvfp4",
     "tq1_0",
@@ -238,12 +243,12 @@ bool is_legacy_quant(const std::string& type_name) {
     return type_name == "q2_0" || type_name == "q4_0" || type_name == "q4_1" || type_name == "q5_0" || type_name == "q5_1" || type_name == "q8_0";
 }
 
-bool is_k_quant(const std::string& type_name) {
-    return string_ends_with(type_name, "_k");
-}
-
 bool is_iq_quant(const std::string& type_name) {
     return string_starts_with(type_name, "iq");
+}
+
+bool is_k_quant(const std::string& type_name) {
+    return string_ends_with(type_name, "_k") && !is_iq_quant(type_name);
 }
 
 bool is_lut_quant(const std::string& type_name) {
