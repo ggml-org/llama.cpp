@@ -935,6 +935,12 @@ void process_shaders() {
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     string_to_spv("fa_decode_ph1", "flash_attn_decode_phase_1.comp", {}, true, true, false, false);
     string_to_spv("fa_decode_ph2", "flash_attn_decode_phase_2.comp", {}, true, true, false, false);
+    // Native q8_0/q4_0 variants of the same kernels: dequantize inline during K/V staging
+    // instead of requiring a separate dequant-to-F16 pre-pass before dispatch.
+    string_to_spv("fa_decode_ph1_q8_0", "flash_attn_decode_phase_1.comp", {{"KV_Q8_0", "1"}}, true, true, false, false);
+    string_to_spv("fa_decode_ph2_q8_0", "flash_attn_decode_phase_2.comp", {{"KV_Q8_0", "1"}}, true, true, false, false);
+    string_to_spv("fa_decode_ph1_q4_0", "flash_attn_decode_phase_1.comp", {{"KV_Q4_0", "1"}}, true, true, false, false);
+    string_to_spv("fa_decode_ph2_q4_0", "flash_attn_decode_phase_2.comp", {{"KV_Q4_0", "1"}}, true, true, false, false);
 #endif
 
     string_to_spv("fa_sparse_compact", "flash_attn_sparse_compact.comp", {});

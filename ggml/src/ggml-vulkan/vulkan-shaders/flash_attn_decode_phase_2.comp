@@ -4,6 +4,11 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#if defined(KV_Q8_0) || defined(KV_Q4_0)
+#define KV_QUANT 1
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#endif
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_ballot : enable
@@ -14,8 +19,14 @@
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer P {f16vec4 pStateVec4[];};
+#if defined(KV_QUANT)
+#include "flash_attn_decode_quant.glsl"
+#define KV_SCALE KV_BLOCK_SIZE
+#else
 layout (binding = 1) readonly buffer V {float16_t vState[];};
 layout (binding = 1) readonly buffer V_VEC4 {f16vec4 vStateVec4[];};
+#define KV_SCALE 1
+#endif
 layout (binding = 2) buffer MAX_FP32 {float max_f32[];};
 layout (binding = 3) buffer SINK_FP32 {float sink_f32[];};
 layout (binding = 4) buffer OUT_FP32 {float out_f32[];};
@@ -90,8 +101,26 @@ shared slm_pool_block {
   float slm_pool_o[GLOBAL_MAX_SIZE + SLM_POOL_SIZE_SOFTMAX_SUM + SLM_POOL_SIZE_O];
 } slm_pool_f32;
 
+#define SLM_ALIAS_BASE_SIZE (GLOBAL_MAX_SIZE * 2 + SLM_POOL_SIZE_SOFTMAX_SUM * 2 + SLM_POOL_SIZE_LOCAL_MAX * 2 * 2 + SLM_POOL_SIZE_P * 2)
+
+#if defined(KV_QUANT)
+// The V tile must live inside this block: all shared blocks start at the same address, so a
+// separate block would overwrite the max/P data. Offset is 64-aligned for coopMatLoad.
+#define SLM_VSH_SIZE (MATP_PER_LOOP * WARP_V_DIM)
+#define SLM_OFFSET_VSH ((SLM_ALIAS_BASE_SIZE + 63) / 64 * 64)
+#define SLM_ALIAS_SIZE (SLM_OFFSET_VSH + SLM_VSH_SIZE)
+#define FA_V_SRC slm_pool_alias_f16.slm_pool_pv
+#define FA_V_OFS(cc) (SLM_OFFSET_VSH + splitIdx * TK * WARP_V_DIM + TM * (cc))
+#define FA_V_STRIDE WARP_V_DIM
+#else
+#define SLM_ALIAS_SIZE SLM_ALIAS_BASE_SIZE
+#define FA_V_SRC vState
+#define FA_V_OFS(cc) (offsetV + TM * (cc))
+#define FA_V_STRIDE kvDim
+#endif
+
 shared slm_pool_alias_block {
-  float16_t slm_pool_pv[GLOBAL_MAX_SIZE * 2 + SLM_POOL_SIZE_SOFTMAX_SUM * 2 + SLM_POOL_SIZE_LOCAL_MAX * 2 * 2 + SLM_POOL_SIZE_P * 2];
+  float16_t slm_pool_pv[SLM_ALIAS_SIZE];
 } slm_pool_alias_f16;
 
 void main() {
@@ -109,7 +138,7 @@ void main() {
   const uint oDim = p.qHead * HEAD_DIM;
   const uint offsetBaseP = (d * p.activationLength * p.qHead + v * GQA_RATIO + outTokIdx * N_TOKS_PER_GROUP * p.qHead) * pDim / 4;
   const uint offsetBaseMax = (d * p.activationLength * p.qHead + v * GQA_RATIO + outTokIdx * N_TOKS_PER_GROUP * p.qHead) * maxDim;
-  const uint offsetBaseV = (d * p.batchStrideV + v * p.kvStride2 + vWarpIdx * WARP_V_DIM + splitIdx * TK * kvDim);
+  const uint offsetBaseV = ((d * p.batchStrideV + v * p.kvStride2) * KV_SCALE + vWarpIdx * WARP_V_DIM + splitIdx * TK * kvDim * KV_SCALE);
   const uint offsetSlmP = (SLM_OFFSET_P + wgLane * 4);
   const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
   const float fp32Max = uintBitsToFloat(0x7EFFFFFF);
@@ -243,6 +272,26 @@ void main() {
       }
     }
 
+#if defined(KV_QUANT)
+    // Stage the V tile (column-major, stride WARP_V_DIM): one TK-wide column slice per subgroup.
+    {
+      const uint vshColBase = splitIdx * TK;
+      [[unroll]] for (uint c = 0; c < TK; c++) {
+        [[unroll]] for (uint r0 = 0; r0 < WARP_V_DIM; r0 += WARPSIZE * 4) {
+          const uint r = r0 + lane * 4;
+          if (r < WARP_V_DIM) {
+            const vec4 vv4 = dequant_kv_4(offsetV + c * kvDim * KV_BLOCK_SIZE + r);
+            const uint base = SLM_OFFSET_VSH + (vshColBase + c) * WARP_V_DIM + r;
+            slm_pool_alias_f16.slm_pool_pv[base + 0] = float16_t(vv4.x);
+            slm_pool_alias_f16.slm_pool_pv[base + 1] = float16_t(vv4.y);
+            slm_pool_alias_f16.slm_pool_pv[base + 2] = float16_t(vv4.z);
+            slm_pool_alias_f16.slm_pool_pv[base + 3] = float16_t(vv4.w);
+          }
+        }
+      }
+    }
+#endif
+
     barrier();
 
     {
@@ -251,9 +300,9 @@ void main() {
       [[unroll]] for (uint cc = 0; cc < MAT_O_N; cc++) {
         coopMatLoad(
           matV[cc],
-          vState,
-          offsetV + TM * cc,
-          kvDim,
+          FA_V_SRC,
+          FA_V_OFS(cc),
+          FA_V_STRIDE,
           gl_CooperativeMatrixLayoutColumnMajor);
       }
       [[unroll]] for (uint mo = 0; mo < ALIGNED_P_M; mo++) {
@@ -271,7 +320,12 @@ void main() {
       }
     }
 
-    offsetV += MATP_PER_LOOP * kvDim;
+#if defined(KV_QUANT)
+    // V tile is rewritten next iteration.
+    barrier();
+#endif
+
+    offsetV += MATP_PER_LOOP * kvDim * KV_SCALE;
     if (loop * MATP_PER_LOOP + splitIdx * TK >= p.kvSeqLen) {
       offsetV = 0;
     }
