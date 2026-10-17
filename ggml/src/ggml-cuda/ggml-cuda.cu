@@ -1612,6 +1612,18 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
         const int64_t smb = ne12 == 1 ? s13 : s12;
 
         // there is no broadcast and src0, src1 are contiguous across dims 2, 3
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+        // cublas*Ex is not supported below CC 5.0 (Kepler), use typed SGEMM there
+        if (compute_type == GGML_TYPE_F32 && GGML_CUDA_CC_IS_NVIDIA(cc) && cc < 500) {
+            CUBLAS_CHECK(
+            cublasSgemmStridedBatched(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                    ne01, ne11, ne10,
+                    (const float *) alpha, (const float *) src0_ptr, s01, sma,
+                                           (const float *) src1_ptr, s11, smb,
+                    (const float *) beta,  (float       *)  dst_ptr, ne0, ne1*ne0,
+                    ne12*ne13));
+        } else
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         // use cublasGemmStridedBatchedEx
         CUBLAS_CHECK(
         cublasGemmStridedBatchedEx(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
@@ -1651,6 +1663,18 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
 
         CUDA_CHECK(cudaGetLastError());
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+        // cublas*Ex is not supported below CC 5.0 (Kepler), use typed SGEMM there
+        if (compute_type == GGML_TYPE_F32 && GGML_CUDA_CC_IS_NVIDIA(cc) && cc < 500) {
+            CUBLAS_CHECK(
+            cublasSgemmBatched(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                    ne01, ne11, ne10,
+                    (const float *) alpha, (const float **) (ptrs_src.get() + 0*ne23), s01,
+                                           (const float **) (ptrs_src.get() + 1*ne23), s11,
+                    (const float *) beta,  (      float **) (ptrs_dst.get() + 0*ne23), ne0,
+                    ne23));
+        } else
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         CUBLAS_CHECK(
         cublasGemmBatchedEx(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
                 ne01, ne11, ne10,
@@ -1733,6 +1757,11 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
             }
             return;
         }
+    }
+
+    // cublas*Ex is not supported below CC 5.0 (Kepler), only the F32 path with typed SGEMM works there
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc < 500) {
+        compute_type = GGML_TYPE_F32;
     }
 
     switch (compute_type) {
@@ -5501,6 +5530,17 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (op->op == GGML_OP_MUL_MAT_ID && ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
                     return false;
                 }
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+                {
+                    // no MMQ below DP4A: non-contiguous quantized src0 goes to cuBLAS and needs a nc converter
+                    const int cc_mm = ggml_cuda_info().devices[dev_ctx->device].cc;
+                    if (ggml_is_quantized(a->type) && !ggml_is_contiguously_allocated(a) &&
+                            ggml_cuda_highest_compiled_arch(cc_mm) < GGML_CUDA_CC_DP4A &&
+                            ggml_get_to_fp32_nc_cuda(a->type) == nullptr) {
+                        return false;
+                    }
+                }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #ifdef GGML_USE_MUSA
                 const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
                 if (b->ne[2]*b->ne[3] > 1 && !ggml_is_transposed(a) && !ggml_is_transposed(b)) {
