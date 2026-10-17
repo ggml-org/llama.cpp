@@ -428,6 +428,27 @@ def test_router_reload_models():
         os.remove(preset_path)
 
 
+def test_router_load_on_startup_unlimited_models_max():
+    """--models-max 0 means no limit, so a load-on-startup model must still load"""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_startup.ini")
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-startup]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            "load-on-startup = true\n"
+        )
+
+    server.models_preset = preset_path
+    server.models_max = 0
+    try:
+        server.start()
+        _wait_for_model_status("model-startup", {"loaded"}, timeout=120)
+    finally:
+        os.remove(preset_path)
+
+
 def test_router_dedup_cache_models():
     """dedup-cache-models hides the cache entry backing a preset from GET /models"""
     global server

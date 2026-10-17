@@ -885,7 +885,7 @@ void server_models::load_models() {
                     models_to_load.push_back(name);
                 }
             }
-            if ((int)models_to_load.size() > base_params.models_max) {
+            if (base_params.models_max > 0 && (int)models_to_load.size() > base_params.models_max) {
                 throw std::runtime_error(string_format(
                     "number of models to load on startup (%zu) exceeds models_max (%d)",
                     models_to_load.size(), base_params.models_max));
