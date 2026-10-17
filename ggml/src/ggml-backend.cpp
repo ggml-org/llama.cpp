@@ -1888,11 +1888,6 @@ static void ggml_backend_sched_trace_copy(ggml_backend_t split_backend, const st
     ev.detail  = async ? GGML_TRACE_COPY_ASYNC : GGML_TRACE_COPY_SYNC;
     ev.backend = ggml_trace_backend_id(ggml_backend_name(split_backend));
     ev.bytes   = (int64_t) ggml_nbytes(input);
-    // a weight: the flag, since a long name may be cut in the record
-    ggml_backend_buffer_t buf = input->view_src ? input->view_src->buffer : input->buffer;
-    if (buf != NULL && ggml_backend_buffer_get_usage(buf) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-        ev.flags |= GGML_TRACE_FLAG_WEIGHT_SRC;
-    }
     ggml_trace_event_set_name(&ev, input->name);
     ggml_trace_emit(&ev);
 }

@@ -6,10 +6,7 @@ Each check prints PASS / FAIL with the numbers behind it; the exit status is 1 i
 
   python3 -I trace_check.py /tmp/k3.json [--tokens 8] [--gpu-layers 11] [--moe-layers 92] [--n-used 16]
 
-Both layouts are read: the default simple one (LLAMA_TRACE_DETAIL=1: process "simple", rows token / GPU / worker N
-/ load N / copy N, the exact per-step counts in the token spans' args) and the detailed one (LLAMA_TRACE_DETAIL=2).
-
-Checks (per traced token unless noted; per piece / per sync / per IO_ISSUE ones need the detailed layout):
+Checks (per traced token unless noted):
   * TOKEN spans: the expected count, consecutive steps and positions
   * exactly one output SYNC after the TOKEN span, exactly one SAMPLE after it whose token is the next TOKEN's input
   * no event of a traced step outside its TOKEN span, no IDLE (step -1) event inside one, no compute or prefetch
@@ -26,14 +23,12 @@ Checks (per traced token unless noted; per piece / per sync / per IO_ISSUE ones 
   * XFER input before the first op, output after the last split
   * coverage: worker 0 ops + syncs + copies + GPU split launches >= 90% of TOKEN span + output SYNC
   * overhead: counted trace syscalls x measured per-call cost < 5% of the token time
-  * with the python 'perfetto' module: no expert / io slice on an async (global) track, all of them on the lanes of
-    the "expert compute" / "expert I/O" processes, lane counts bounded, slices per category == JSON events
+  * with the python 'perfetto' module: trace_processor sees as many slices as there are X + b (+ instant) events
 """
 
 import argparse
 import json
 import os
-import re
 import statistics
 import sys
 from collections import Counter, defaultdict
@@ -48,9 +43,6 @@ COST_CLOCK_US = 0.03
 COST_CUDA_EVENT_US = 2.0
 
 
-thread_names = {}  # (pid, tid) -> name, of the last file loaded
-
-
 def load_trace(path):
     """All events of the file; a file truncated after any line (crashed process) loads too."""
     with open(path, "r") as f:
@@ -62,11 +54,8 @@ def load_trace(path):
         events = json.loads(s + "]")
     meta = {}
     out = []
-    thread_names.clear()
     for e in events:
         if e.get("ph") == "M":
-            if e.get("name") == "thread_name":
-                thread_names[(e["pid"], e["tid"])] = e["args"]["name"]
             continue
         if e.get("name") == "meta" and e.get("cat") == "meta":
             meta = e.get("args", {})
@@ -88,8 +77,6 @@ class Trace:
 
     def __init__(self, path):
         self.meta, self.events = load_trace(path)
-        self.thread_names = dict(thread_names)
-        self.layout = self.meta.get("layout") or ("simple" if any(e.get("cat") == "simple" for e in self.events) else "detailed")
         self.tokens = sorted((e for e in self.events if e.get("cat") == "token"), key=lambda e: e["args"]["step"])
         self.by_step = {e["args"]["step"]: e for e in self.tokens}
         self.syncs = [e for e in self.events if e.get("cat") == "sync"]
@@ -101,47 +88,37 @@ class Trace:
         self.ops_gpu = [e for e in self.events if e.get("cat") == "op" and e["pid"] not in (PID_HOST, PID_EXPERT, PID_IO)]
         self.launches = [e for e in self.events if e.get("cat") == "launch"]
         self.predicts = [e for e in self.events if e.get("cat") == "predict"]
-        self.issues = [e for e in self.events if e.get("cat") == "io_issue"]
+        self.issues = [e for e in self.events if e.get("cat") == "io" and e["ph"] == "X"]
         self.residency = [e for e in self.events if e.get("cat") == "residency"]
         self.expert_threads = [e for e in self.events if e.get("cat") == "expert_thread"]
         self.detail = self.meta.get("config", {}).get("detail", 1)
 
-        # EXPERT spans: complete events on the lanes of the expert compute process
+        # EXPERT spans: b args + e time
+        e_ts = {e["id"]: e["ts"] for e in self.events if e.get("cat") == "expert" and e["ph"] == "e"}
         self.experts = []
         for e in self.events:
-            if e.get("cat") == "expert" and e["ph"] == "X":
+            if e.get("cat") == "expert" and e["ph"] == "b":
                 a = dict(e["args"])
                 a["t0"] = e["ts"]
-                a["t1"] = e["ts"] + e["dur"]
+                a["t1"] = e_ts.get(e["id"])
                 self.experts.append(a)
 
-        # issue -> resident spans on the lanes of the expert I/O process (per slice at detail 1, per piece at
-        # detail 2); the resolution (unresolved, resolution, t_prev_poll_ns, partial) is in the args
+        # I/O spans on the expert I/O tracks: b args + e args/time (per slice at detail 1, per piece at detail 2)
+        io_e = {}
+        for e in self.events:
+            if e.get("cat") == "io" and e["pid"] == PID_IO and e["ph"] == "e":
+                io_e[e["id"]] = e
         self.io_spans = []
         for e in self.events:
-            if e.get("cat") == "io" and e["pid"] == PID_IO and e["ph"] == "X":
+            if e.get("cat") == "io" and e["pid"] == PID_IO and e["ph"] == "b":
                 a = dict(e["args"])
                 a["t0"] = e["ts"]
-                a["t1"] = None if a.get("partial") else e["ts"] + e["dur"]
-                a["end"] = e["args"]
+                end = io_e.get(e["id"])
+                a["t1"] = end["ts"] if end else None
+                a["end"] = end["args"] if end else None
+                a["id"] = e["id"]
                 self.io_spans.append(a)
-        if self.layout == "simple":
-            self._simple()
-
-    def _simple(self):
-        """The rows of the simple layout (process "simple"): token, GPU, worker N, load N, copy N."""
-        self.rows = defaultdict(list)
-        for e in self.events:
-            if e.get("cat") == "simple":
-                self.rows[self.thread_names.get((e["pid"], e["tid"]), "?")].append(e)
-        self.tokens = sorted(self.rows.get("token", []), key=lambda e: e["args"]["step"])
-        self.by_step = {e["args"]["step"]: e for e in self.tokens}
-        self.workers = {int(r.split()[1]): v for r, v in self.rows.items() if r.startswith("worker ")}
-        self.worker_experts = [e for v in self.workers.values() for e in v if "expert" in e["args"]]
-        self.worker_dense = [e for v in self.workers.values() for e in v if "expert" not in e["args"]]
-        self.gpu = self.rows.get("GPU", [])
-        self.loads = [e for r, v in self.rows.items() if r.startswith("load ") for e in v]
-        self.copies_s = [e for r, v in self.rows.items() if r.startswith("copy ") for e in v]
+        self.io_e_unmatched = len(io_e) - len({a["id"] for a in self.io_spans} & set(io_e))
 
     def step_of_time(self, ts):
         """The traced step whose TOKEN span contains ts, else None."""
@@ -152,11 +129,6 @@ class Trace:
 
     def output_sync(self, step):
         return [e for e in self.syncs if e["args"].get("output") and e["args"]["step"] == step]
-
-
-def is_weight(a):
-    """A copied tensor is a weight: the tracer's flag, else (older traces) the name"""
-    return bool(a.get("weight")) or ".weight" in a.get("tensor", a.get("name", ""))
 
 
 def kind_of(name):
@@ -196,167 +168,6 @@ class Checker:
         print(f"INFO  {what}" + (f": {detail}" if detail else ""))
 
 
-
-def check_simple(tr, args, c):
-    """The checks on the default (simple) layout: the exact per-step counts are in the token spans' args, the spans
-    of the worker / GPU / load / copy rows carry layer, expert, tensor, bytes and the residency sample."""
-    meta = tr.meta
-    c.info("layout", "simple (LLAMA_TRACE_DETAIL=1); per-piece and per-sync checks need LLAMA_TRACE_DETAIL=2")
-    c.check(bool(meta), "metadata record present")
-    c.check(meta.get("dropped", 0) == 0, "no dropped records", f"dropped {meta.get('dropped')}, emitted {meta.get('records_emitted')}")
-    c.check(meta.get("ring_drops", 0) == 0, "no dropped residency requests", f"{meta.get('ring_drops')}")
-    rows = set(tr.rows)
-    bad_rows = [r for r in rows if not (r in ("token", "GPU") or r.split(" ")[0] in ("worker", "load", "copy") and r.split(" ")[-1].isdigit())]
-    c.check(not bad_rows and "token" in rows and any(r.startswith("worker ") for r in rows) and any(r.startswith("copy ") for r in rows),
-            "rows token / GPU / worker N / load N / copy N", f"{sorted(rows)[:8]}..., unexpected {bad_rows}")
-    overlap = []
-    for r, v in tr.rows.items():
-        v = sorted(v, key=t0)
-        overlap += [r for a, b in zip(v, v[1:]) if t0(b) < t1(a) - 1e-3][:1]
-    c.check(not overlap, "no overlap within a row", f"{overlap}")
-    names_ok = all(re.fullmatch(r"L\d+ e\d+", e["name"]) for e in tr.worker_experts + tr.loads) and \
-        all(re.fullmatch(r"L\d+", e["name"]) for e in tr.worker_dense) and \
-        all(re.fullmatch(r"L\d+|output", e["name"]) for e in tr.gpu) and \
-        all(re.fullmatch(r"L\d+|input|output", e["name"]) for e in tr.copies_s)
-    c.check(names_ok, "span names exactly L<layer> e<expert> / L<layer> (input / output for copies, output on the GPU)")
-
-    n_tok = args.tokens
-    if n_tok is None:
-        n_tok = meta.get("config", {}).get("tokens") or meta.get("tokens_traced")
-    steps = [t["args"]["step"] for t in tr.tokens]
-    c.check(len(tr.tokens) == n_tok, "TOKEN count", f"{len(tr.tokens)}, expected {n_tok}")
-    c.check(steps == list(range(len(steps))), "consecutive steps", f"{steps[:4]}...")
-    pos = [t["args"]["pos"] for t in tr.tokens]
-    c.check(all(b == a + 1 for a, b in zip(pos, pos[1:])), "consecutive positions", f"{pos[:4]}...")
-    want_exp = args.moe_layers * 3 * args.n_used
-    first = t0(tr.tokens[0]) if tr.tokens else 0.0
-    early = [e for e in tr.events if e.get("cat") == "simple" and t0(e) < first - 1e-3]
-    c.check(not early, "nothing before the first TOKEN (prompt and skipped steps not traced)", f"{len(early)}")
-
-    ex_by = defaultdict(list)
-    for e in tr.worker_experts:
-        ex_by[e["args"]["step"]].append(e)
-    load_names_all = {e["name"] for e in tr.loads}
-    comp_names_all = {e["name"] for e in tr.worker_experts}
-    for i, tok in enumerate(tr.tokens):
-        a = tok["args"]
-        s = a["step"]
-        nxt = tr.tokens[i + 1]["args"]["token"] if i + 1 < len(tr.tokens) else None
-        out_ok = a.get("n_out_sync") == 1 and a.get("out_sync_ts", -1) >= t1(tok) - 1e-3
-        smp_ok = a.get("n_sample") == 1 and a.get("sample_ts", -1) >= a.get("out_sync_ts", 0) + a.get("out_sync_dur", 0) - 1e-3
-        c.check(out_ok, f"step {s}: one output SYNC after the TOKEN", f"{a.get('n_out_sync')}")
-        c.check(smp_ok, f"step {s}: one SAMPLE after the output SYNC", f"{a.get('n_sample')}")
-        c.check(a["token_out"] == a.get("sample_token") and (nxt is None or a["token_out"] == nxt),
-                f"step {s}: sampled token stamped and is the next TOKEN's input", f"{a['token_out']} -> {nxt}")
-
-        ex = ex_by.get(s, [])
-        keys = Counter((e["args"]["layer"], e["args"]["expert"], kind_of(e["args"]["tensor"])) for e in ex)
-        n_threads = ex[0]["args"]["n_threads"] if ex else 0
-        sets = defaultdict(set)
-        for (l, x, k) in keys:
-            sets[(l, k)].add(x)
-        layers = sorted({l for l, _ in sets})
-        bad_l = [l for l in layers if any(len(sets[(l, k)]) != args.n_used for k in ("gate", "up", "down"))]
-        bad_same = [l for l in layers if not (sets[(l, "gate")] == sets[(l, "up")] == sets[(l, "down")])]
-        c.check(len(keys) == want_exp and a["n_experts"] == want_exp, f"step {s}: EXPERT count", f"{len(keys)} in the rows, {a['n_experts']} counted, expected {want_exp}")
-        c.check(all(n == n_threads for n in keys.values()) and a["n_expert_threads"] == want_exp * n_threads,
-                f"step {s}: one span per thread and expert", f"{a['n_expert_threads']}, {n_threads} threads")
-        c.check(len(layers) == args.moe_layers and not bad_l, f"step {s}: {args.n_used} distinct experts per MoE layer and tensor", f"bad {bad_l[:5]}")
-        c.check(not bad_same, f"step {s}: same expert set on gate/up/down", f"bad layers {bad_same[:5]}")
-        res = {}
-        for e in ex:
-            if isinstance(e["args"].get("resident_frac"), (int, float)):
-                res[(e["args"]["layer"], e["args"]["expert"], kind_of(e["args"]["tensor"]))] = e["args"]["sample_delay_ns"]
-        c.check(a["n_residency"] == want_exp, f"step {s}: EXPERT_RESIDENCY count", f"{a['n_residency']}")
-        c.check(len(keys) - len(res) <= 0.01 * max(1, len(keys)), f"step {s}: EXPERT not sampled < 1%", f"{len(keys) - len(res)}")
-        if res:
-            med = statistics.median(res.values()) / 1000.0
-            c.check(med < 200.0, f"step {s}: median residency sample delay < 200 us", f"{med:.1f} us")
-        if meta.get("moe_predictor", 1) != 0:
-            c.check(a["n_predict"] == args.moe_layers, f"step {s}: PREDICT count", f"{a['n_predict']}")
-        bytes_of = {}
-        for e in ex:
-            bytes_of[(e["args"]["layer"], e["args"]["expert"], kind_of(e["args"]["tensor"]))] = e["args"]["bytes"]
-        want_pieces = sum(-(-b // PIECE) for b in bytes_of.values())
-        c.check(a["n_pieces_prefetch"] == want_pieces, f"step {s}: prefetch pieces", f"{a['n_pieces_prefetch']}, expected {want_pieces}")
-
-        g = [e for e in tr.gpu if e["args"]["step"] == s]
-        gl = {e["args"]["layer"] for e in g}
-        missing = [l for l in range(args.gpu_layers) if l not in gl]
-        c.check(not missing, f"step {s}: GPU spans for every layer 0..{args.gpu_layers - 1}", f"missing {missing}")
-        c.check(any(e["name"] == "output" for e in g), f"step {s}: GPU span for the output")
-        wrong = [e["name"] for e in g if e["args"]["layer"] >= args.gpu_layers and e["args"].get("n_weight_ops", 0) > 0]
-        c.check(not wrong, f"step {s}: no op with a weight on the GPU for CPU layers", f"{wrong[:3]}")
-        if s == tr.tokens[0]["args"]["step"]:
-            cpu_l = sorted(l for l in gl if l >= args.gpu_layers)
-            c.info(f"step {s}: GPU spans of CPU layers", f"{sum(e['args'].get('n_ops', 1) for e in g if e['args']['layer'] >= args.gpu_layers)} ops in {len(cpu_l)} layers")
-
-        cp = [e for e in tr.copies_s if e["args"]["step"] == s]
-        cbytes = sum(e["args"]["bytes"] for e in cp)
-        c.check(len(cp) == a["n_copies"] and cbytes == a["copy_bytes"], f"step {s}: copy row == COPY + XFER of the step",
-                f"{len(cp)} spans / {cbytes} bytes, counted {a['n_copies']} / {a['copy_bytes']}")
-        big = [e["args"]["tensor"] for e in cp if is_weight(e["args"]) and e["args"]["bytes"] > (1 << 20)]
-        c.check(not big, f"step {s}: no weight matrix (> 1 MiB) copied to a device", f"{big[:3]}")
-        if s == tr.tokens[0]["args"]["step"]:
-            small = [e for e in cp if is_weight(e["args"])]
-            c.info(f"step {s}: copies", f"{len(cp)} ({cbytes} bytes), of which small weights {len(small)} "
-                   f"({sum(e['args']['bytes'] for e in small)} bytes, {sum(e['dur'] for e in small) / 1000:.2f} ms)")
-        host = [e for e in ex + [e for e in tr.worker_dense if e["args"]["step"] == s] + cp]
-        outside = sum(1 for e in host if t0(e) < t0(tok) - 1e-3 or t1(e) > t1(tok) + 1e-3)
-        c.check(outside == 0, f"step {s}: worker and copy spans inside the TOKEN span", f"{outside} outside")
-        # any worker: worker 0 waits at the barrier of a MUL_MAT_ID while other threads finish their experts
-        wk = [(t0(e), t1(e)) for v in tr.workers.values() for e in v if e["args"]["step"] == s]
-        iv = wk + [(t0(e), t1(e)) for e in cp] + [(t0(e), t1(e)) for e in g]
-        covered = union_len(iv, t0(tok), t1(tok))
-        total = tok["dur"] + a.get("out_sync_dur", 0.0)
-        # the share of the token in which some CPU worker computes (worker 0's merged runs of a layer's other ops
-        # include the barrier waits between them), a copy runs or the GPU runs (device time)
-        cov = (covered + a.get("out_sync_dur", 0.0)) / total if total > 0 else 0.0
-        c.check(cov >= 0.90, f"step {s}: coverage (workers + copies + GPU device time) of TOKEN + output SYNC",
-                f"{100 * cov:.1f}%, unaccounted {(total - covered - a.get('out_sync_dur', 0.0)) / 1000:.2f} ms; host sync waits {a['sync_ms']:.2f} ms")
-        c.check(a.get("n_split", 0) > 0 and a.get("n_sync", 0) > 0, f"step {s}: SPLIT / SYNC counted", f"{a.get('n_split')} splits, {a.get('n_sync')} syncs")
-        n_threads_m = meta.get("n_threads", 14) or 14
-        n_pieces = a["n_pieces_prefetch"] + a["n_pieces_predict_high"] + a["n_pieces_predict_low"]
-        cost_us = (2 * n_pieces * COST_READ_BYTES_US + 4 * a["n_expert_threads"] * COST_CLOCK_US) / n_threads_m + 2 * a["n_gpu_ops"] * COST_CUDA_EVENT_US
-        c.check(cost_us < 0.05 * total, f"step {s}: estimated trace overhead < 5%", f"{cost_us / 1000:.2f} ms of {total / 1000:.2f} ms")
-
-    # a load is a hint or the prefetch of a node: a prefetched expert is computed in its step by definition, a
-    # predictor guess may be wrong (then nothing computes it: a wasted read)
-    comp = defaultdict(set)
-    for e in tr.worker_experts:
-        comp[e["args"]["step"]].add(e["name"])
-    not_comp = [e for e in tr.loads if e["name"] not in comp.get(e["args"]["step"], set())]
-    bad_pf = [e["name"] for e in not_comp if "prefetch" in e["args"].get("sources", "")]
-    flag_bad = [e["name"] for e in tr.loads if "computed" in e["args"] and e["args"]["computed"] != (e["name"] in comp.get(e["args"]["step"], set()))]
-    c.check(not bad_pf, "every load with source prefetch has a worker span of the same name in its step", f"{len(bad_pf)}, e.g. {bad_pf[:3]}")
-    c.check(not flag_bad, "load 'computed' flags match the worker rows", f"{len(flag_bad)}, e.g. {flag_bad[:3]}")
-    by_src = Counter(e["args"].get("sources", "?") for e in not_comp)
-    c.info("loads not computed in their step (wrong guesses)", f"{len(not_comp)} of {len(tr.loads)}: {dict(by_src)}")
-    unres = sum(1 for e in tr.loads if e["args"].get("unresolved"))
-    c.info("loads", f"{len(tr.loads)} spans in {sum(1 for r in tr.rows if r.startswith('load '))} rows, {unres} unresolved; "
-           f"{len(load_names_all & comp_names_all)} names also on worker rows; late records {meta.get('late_records', 0)}")
-
-
-def perfetto_simple(tr, args, c):
-    try:
-        from perfetto.trace_processor import TraceProcessor  # type: ignore
-    except ImportError:
-        c.info("perfetto python module not installed: trace_processor checks skipped (pip install perfetto)")
-        return
-    tp = TraceProcessor(trace=args.trace)
-    q = lambda sql: list(tp.query(sql))  # noqa: E731
-    n_async = q("select count(*) as n from track where type like '%async%'")[0].n
-    c.check(n_async == 0, "trace_processor: no async tracks", f"{n_async}")
-    rows = q("select t.name as tname, p.name as pname, count(*) as n from slice s join thread_track tt on s.track_id = tt.id "
-             "join thread t using (utid) left join process p using (upid) group by 1, 2")
-    got = {r.tname: r.n for r in rows if r.pname == "simple"}
-    other = [(r.tname, r.pname) for r in rows if r.pname != "simple"]
-    want = {r: len(v) for r, v in tr.rows.items()}
-    c.check(got == want and not other, "trace_processor: every span on its row of process 'simple'",
-            f"{len(got)} rows ({sum(got.values())} slices), json {len(want)} rows ({sum(want.values())}); other {other[:3]}")
-    tp.close()
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trace")
@@ -371,11 +182,6 @@ def main():
     tr = Trace(args.trace)
     c = Checker()
     meta = tr.meta
-    if tr.layout == "simple":
-        check_simple(tr, args, c)
-        perfetto_simple(tr, args, c)
-        print(f"\n{'FAILED' if c.n_fail else 'OK'}: {c.n_fail} check(s) failed")
-        return 1 if c.n_fail else 0
 
     c.check(bool(meta), "metadata record present")
     c.check(meta.get("dropped", 0) == 0, "no dropped records", f"dropped {meta.get('dropped')}, emitted {meta.get('records_emitted')}")
@@ -424,7 +230,7 @@ def main():
                 if tok is None or t0(e) < t0(tok) - 1e-3 or t1(e) > t1(tok) + 1e-3:
                     outside += 1
         else:
-            if e["ph"] == "X" and e["pid"] == PID_HOST and tr.step_of_time(t0(e)) is not None and tr.step_of_time(t1(e)) == tr.step_of_time(t0(e)):
+            if e["ph"] == "X" and tr.step_of_time(t0(e)) is not None and tr.step_of_time(t1(e)) == tr.step_of_time(t0(e)):
                 idle_inside += 1
             if e.get("cat") in ("op", "expert", "expert_thread") or e["args"].get("source") == "prefetch":
                 untraced_compute += 1
@@ -489,7 +295,7 @@ def main():
         bad = [k for k in set(want) | set(got_pieces) if got_pieces.get(k, 0) != want.get(k, 0)]
         c.check(not bad and len(pf) == sum(want.values()), f"step {s}: prefetch pieces",
                 f"{len(pf)} pieces, expected {sum(want.values())} for {len(want)} slices; mismatched slices {sorted(bad)[:3]}")
-        if tr.detail == 1:  # legacy detailed trace at detail 1 (before the simple layout): one span per slice
+        if tr.detail == 1:
             spans = [a for a in tr.io_spans if a["step"] == s and a["source"] == "prefetch"]
             c.check(len(spans) == want_exp, f"step {s}: prefetch slice spans on the I/O track", f"{len(spans)}")
 
@@ -508,7 +314,7 @@ def main():
         mmid = [e["args"]["name"] for e in g_ops if e["args"]["op"] == "MUL_MAT_ID"]
         c.check(not mmid, f"step {s}: no expert matmul on the GPU", f"{mmid[:3]}")
         # small CPU-layer weights (norm vectors of the cache ops above) are copied per token; a matrix must not be
-        wcopy = [e for e in tr.copies if e["args"]["step"] == s and is_weight(e["args"])]
+        wcopy = [e for e in tr.copies if e["args"]["step"] == s and ".weight" in e["args"]["name"]]
         big = [e["args"]["name"] for e in wcopy if e["args"]["bytes"] > (1 << 20)]
         c.check(not big, f"step {s}: no weight matrix (> 1 MiB) copied to a device", f"{len(big)}, e.g. {big[:3]}")
         if s == tr.tokens[0]["args"]["step"] and wcopy:
@@ -560,12 +366,10 @@ def main():
         cost_us = (2 * n_pieces * COST_READ_BYTES_US) / n_threads + (n_clock * COST_CLOCK_US) / n_threads + n_cuda * COST_CUDA_EVENT_US
         c.check(cost_us < 0.05 * total, f"step {s}: estimated trace overhead < 5%", f"{cost_us / 1000:.2f} ms of {total / 1000:.2f} ms")
 
-    # I/O resolution; tr.detail == 1 with this (detailed) layout: a legacy trace written before the simple layout
-    # became the default (one span per slice instead of per piece)
+    # I/O resolution
     if tr.detail == 1:
         no_end = sum(1 for a in tr.io_spans if a["t1"] is None)
-        dup_id = sum(n - 1 for n in Counter(a["id"] for a in tr.io_spans).values())
-        c.check(no_end == 0 and dup_id == 0, "every I/O slice span ends exactly once", f"{no_end} open, {dup_id} repeated ids")
+        c.check(no_end == 0 and tr.io_e_unmatched == 0, "every I/O slice span ends exactly once", f"{no_end} open, {tr.io_e_unmatched} unmatched ends")
     else:
         nondup = [i for i in tr.issues if not i["args"]["duplicate"]]
         cookies = Counter(a["id"] for a in tr.io_spans if a["t1"] is not None)
@@ -574,49 +378,19 @@ def main():
     unresolved = sum(1 for a in tr.io_spans if a["end"] and a["end"].get("unresolved") or (a["end"] or {}).get("resolution") == "unresolved")
     c.info("unresolved I/O spans", f"{unresolved} of {len(tr.io_spans)}")
 
-    # Perfetto: the spans that may overlap must land on lanes (thread tracks) of their process, not on the global
-    # async tracks that "b"/"e" events become, and every category must import completely
+    # Perfetto
     try:
         from perfetto.trace_processor import TraceProcessor  # type: ignore
     except ImportError:
-        c.info("perfetto python module not installed: trace_processor checks skipped (pip install perfetto)")
+        c.info("perfetto python module not installed: trace_processor check skipped (pip install perfetto)")
     else:
+        # instants are imported as zero-length slices too (the metadata record included)
+        n_x_b = sum(1 for e in tr.events if e["ph"] in ("X", "b"))
+        n_i = sum(1 for e in tr.events if e["ph"] == "i") + (1 if meta else 0)
         tp = TraceProcessor(trace=args.trace)
-
-        def q(sql):
-            return list(tp.query(sql))
-
-        n_async = q("select count(*) as n from slice s join track t on s.track_id = t.id "
-                    "where s.category in ('expert', 'io') and t.type like '%async%'")[0].n
-        c.check(n_async == 0, "trace_processor: no expert / io slice on an async track", f"{n_async}")
-        rows = q("select s.category as cat, p.name as pname, count(*) as n, count(distinct tt.utid) as lanes "
-                 "from slice s join thread_track tt on s.track_id = tt.id join thread using (utid) "
-                 "left join process p using (upid) where s.category in ('expert', 'io') group by 1, 2")
-        by = {(r.cat, r.pname): (r.n, r.lanes) for r in rows}
-        want_proc = {"expert": "expert compute", "io": "expert I/O"}
-        for cat, pname in want_proc.items():
-            n_json = sum(1 for e in tr.events if e.get("cat") == cat)
-            n_on, lanes = by.get((cat, pname), (0, 0))
-            elsewhere = sum(n for (k, p), (n, _) in by.items() if k == cat and p != pname)
-            c.check(n_on == n_json and elsewhere == 0, f"trace_processor: all {cat} slices on the '{pname}' process",
-                    f"{n_on} there, {elsewhere} elsewhere, {n_json} in the JSON; {lanes} lanes")
-        exp_lanes = by.get(("expert", "expert compute"), (0, 0))[1]
-        io_lanes = by.get(("io", "expert I/O"), (0, 0))[1]
-        c.check(exp_lanes <= 3 * args.n_used, "trace_processor: expert compute lanes <= 3 x n-used", f"{exp_lanes}")
-        c.check(io_lanes <= 512, "trace_processor: expert I/O lanes bounded (<= 512)", f"{io_lanes}")
-        per_track = q("select t.name as tname from slice s join thread_track tt on s.track_id = tt.id join thread t using (utid) "
-                      "where s.category = 'io' group by t.name")
-        kinds = Counter(r.tname.rsplit(" ", 1)[0] for r in per_track)
-        c.info("expert I/O lanes per track", f"{dict(kinds)}")
-
-        # every category imports completely: complete and instant events become slices (global instants included)
-        json_cnt = Counter(e.get("cat") for e in tr.events if e["ph"] in ("X", "i"))
-        json_cnt["meta"] += 1 if meta else 0
-        tp_cnt = {r.cat: r.n for r in q("select category as cat, count(*) as n from slice group by 1")}
-        bad = {k: (v, tp_cnt.get(k, 0)) for k, v in json_cnt.items() if tp_cnt.get(k, 0) != v}
-        bad.update({k: (0, v) for k, v in tp_cnt.items() if k not in json_cnt})
-        c.check(not bad, "trace_processor: slices per category == JSON events", f"mismatch (json, tp): {bad}" if bad else f"{dict(json_cnt)}")
+        n_slice = next(iter(tp.query("select count(*) as n from slice"))).n
         tp.close()
+        c.check(n_slice == n_x_b + n_i, "trace_processor slices == X + b + i events", f"{n_slice} vs {n_x_b} X/b + {n_i} i")
 
     print(f"\n{'FAILED' if c.n_fail else 'OK'}: {c.n_fail} check(s) failed")
     return 1 if c.n_fail else 0

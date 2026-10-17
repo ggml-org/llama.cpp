@@ -48,7 +48,6 @@
 #define GGML_TRACE_CHUNK_BYTES (64*1024)
 #define GGML_TRACE_RING_SIZE   4096
 #define GGML_TRACE_WRITER_MS   100
-#define GGML_TRACE_GPU_GAP_NS  100000 // simple layout: GPU ops of a layer further apart are separate spans
 
 enum { TRACE_OFF = 0, TRACE_IDLE = 1, TRACE_SUSPENDED = 2, TRACE_TRACED = 3 };
 
@@ -210,7 +209,7 @@ struct ggml_trace_state {
 
     // metadata rewrite
     long   meta_offset = 0;
-    size_t meta_pos_emitted = 0, meta_pos_dropped = 0, meta_pos_ring = 0, meta_pos_adapt = 0, meta_pos_written = 0, meta_pos_tokens = 0, meta_pos_late = 0;
+    size_t meta_pos_emitted = 0, meta_pos_dropped = 0, meta_pos_ring = 0, meta_pos_adapt = 0, meta_pos_written = 0, meta_pos_tokens = 0;
 };
 
 static std::atomic<int> g_state{TRACE_OFF};
@@ -598,7 +597,6 @@ int64_t ggml_trace_io_issue(int step, const void * addr, size_t len, int source,
     ggml_trace_event ev;
     ggml_trace_event_init(&ev, GGML_TRACE_IO_ISSUE, tid);
     ev.step    = step;
-    ev.pos     = step >= 0 ? step : g_last_step.load(std::memory_order_relaxed) + 1; // the step a hint in IDLE is for
     ev.t0_ns   = t0;
     ev.t1_ns   = t1;
     ev.detail  = source;
@@ -1023,15 +1021,14 @@ struct ggml_trace_expert_agg {
     int64_t res_pages = 0, res_total = 0, res_delay = 0;
 };
 
-// one piece of the detailed layout: its I/O span from the issue to resident
+// the pieces of one slice (detail 1): one I/O span from the first issue to the last piece resident
 struct ggml_trace_slice_agg {
     int     n_pieces = 0, n_issued = 0, n_resident = 0;
     int64_t t0 = INT64_MAX, t1 = 0, issue_dur = 0, bytes = 0, read_bytes = 0;
     int64_t t_res = 0, t_prev_poll = INT64_MAX;
     int64_t res_pages = 0, res_total = 0;
-    bool    all_cached = true, any_dup = false, any_unresolved = false, all_issued = false;
+    bool    all_cached = true, any_dup = false, any_unresolved = false, b_emitted = false;
     int64_t id = 0;
-    int32_t piece = -1; // the piece, with cookie = id
     int32_t layer = -1, expert = -1, source = 0, rank = -1, step = -1;
     char    name[32] = {};
     std::vector<int64_t> cookies;
@@ -1041,46 +1038,6 @@ struct ggml_trace_resident {
     int64_t t = 0, t_prev = 0, pages = 0, resident = 0;
     int     detail = 0;
 };
-
-// spans that may overlap (expert compute, issue -> resident) go on lanes: Perfetto shows "X" events of one thread
-// as a stack, so each logical track (e.g. gate, or up/prefetch) gets as many thread tracks as it needs at once.
-// a span takes the first lane where it overlaps nothing; spans arrive out of order, so a lane keeps its intervals
-struct ggml_trace_lanes {
-    std::vector<std::map<int64_t, int64_t>> lanes; // t0 -> t1
-
-    static bool overlaps(const std::map<int64_t, int64_t> & l, int64_t t0, int64_t t1) {
-        auto it = l.lower_bound(t0);
-        if (it != l.end() && it->first < t1) {
-            return true;
-        }
-        return it != l.begin() && std::prev(it)->second > t0;
-    }
-
-    int place(int64_t t0, int64_t t1) {
-        t1 = std::max(t1, t0 + 1); // a zero-length span still occupies its instant
-        for (size_t i = 0; i < lanes.size(); ++i) {
-            if (!overlaps(lanes[i], t0, t1)) {
-                lanes[i][t0] = t1;
-                return (int) i;
-            }
-        }
-        lanes.emplace_back();
-        lanes.back()[t0] = t1;
-        return (int) lanes.size() - 1;
-    }
-
-    // intervals that ended before horizon cannot meet new spans any more (the writer's lag is far below that)
-    void prune(int64_t horizon) {
-        for (auto & l : lanes) {
-            for (auto it = l.begin(); it != l.end() && it->first < horizon; ) {
-                it = it->second < horizon ? l.erase(it) : std::next(it);
-            }
-        }
-    }
-};
-
-// tids on the expert compute / expert I/O processes: logical track*100 + lane, residency instants 1000 + kind
-enum { TID_LANES = 100, TID_RESIDENCY = 1000 };
 
 struct ggml_trace_writer {
     ggml_trace_state * st;
@@ -1095,14 +1052,6 @@ struct ggml_trace_writer {
     std::unordered_map<int64_t, std::vector<std::string>> cookie_slices;
     std::unordered_map<int64_t, ggml_trace_resident>      resolved; // by cookie, for issues read after their resolution
     int64_t t_newest = 0; // latest resolution seen
-    int64_t t_span_newest = 0; // latest span start placed on a lane
-    std::map<std::pair<int, int>, ggml_trace_lanes> lanes; // (pid, logical track)
-
-    // the tid of a span on its logical track
-    int lane_tid(int pid, int track, int64_t t0, int64_t t1) {
-        t_span_newest = std::max(t_span_newest, t0);
-        return track*TID_LANES + lanes[{ pid, track }].place(t0, t1);
-    }
 
     explicit ggml_trace_writer(ggml_trace_state * st) : st(st) {}
 
@@ -1133,19 +1082,10 @@ struct ggml_trace_writer {
             }
         } else if (pid == PID_EXPERT) {
             pname = "expert compute";
-            if (tid >= TID_RESIDENCY) {
-                tname = std::string(ggml_trace_kind_name(tid - TID_RESIDENCY)) + " residency";
-            } else {
-                const int lane = tid % TID_LANES;
-                tname = ggml_trace_kind_name(tid / TID_LANES);
-                if (lane > 0) {
-                    tname += " " + std::to_string(lane);
-                }
-            }
+            tname = ggml_trace_kind_name(tid);
         } else if (pid == PID_IO) {
             pname = "expert I/O";
-            const int track = tid / TID_LANES;
-            tname = std::string(ggml_trace_kind_name(track / 4)) + "/" + ggml_trace_source_name(track % 4) + " " + std::to_string(tid % TID_LANES);
+            tname = std::string(ggml_trace_kind_name(tid / 4)) + "/" + ggml_trace_source_name(tid % 4);
         } else {
             pname = ggml_trace_backend_name(pid - PID_DEVICE0 + 1);
             tname = tid == 1 ? "device" : "launch";
@@ -1207,9 +1147,10 @@ struct ggml_trace_writer {
 
     void write_expert(const std::string & key, ggml_trace_expert_agg & a, const char * name, int expert, int step, bool partial) {
         const int kind = ggml_trace_tensor_kind(name);
+        const int64_t id = next_id++;
         char label[64];
         snprintf(label, sizeof(label), "L%d e%d", a.layer, expert);
-        head(label, "expert", 'X', a.t0, a.t1, PID_EXPERT, lane_tid(PID_EXPERT, kind, a.t0, a.t1));
+        head(label, "expert", 'b', a.t0, 0, PID_EXPERT, kind, id);
         j.raw("\"step\":%d,\"layer\":%d,\"expert\":%d,\"name\":", step, a.layer, expert);
         j.str(name);
         j.raw(",\"bytes\":%" PRId64 ",\"stall_ns\":%" PRId64 ",\"t_first_touch_ns\":%" PRId64 ",\"n_threads\":%d",
@@ -1225,6 +1166,8 @@ struct ggml_trace_writer {
         if (partial) {
             j.raw(",\"partial\":true");
         }
+        tail();
+        head(label, "expert", 'e', a.t1, 0, PID_EXPERT, kind, id);
         tail();
         experts.erase(key);
     }
@@ -1262,7 +1205,7 @@ struct ggml_trace_writer {
         const int layer = ggml_trace_parse_layer(ev.name);
         char label[64];
         snprintf(label, sizeof(label), "RES L%d e%d", layer, ev.expert);
-        head(label, "residency", 'i', ev.t0_ns, 0, PID_EXPERT, TID_RESIDENCY + kind);
+        head(label, "residency", 'i', ev.t0_ns, 0, PID_EXPERT, kind);
         j.raw("\"step\":%d,\"layer\":%d,\"expert\":%d,\"name\":", ev.step, layer, ev.expert);
         j.str(ev.name);
         j.raw(",\"resident_pages\":%" PRId64 ",\"pages\":%" PRId64 ",\"resident_frac\":%.4f,\"sample_delay_ns\":%" PRId64,
@@ -1307,7 +1250,7 @@ struct ggml_trace_writer {
         const int tid = ggml_trace_host_tid(ev.tid);
         char label[64];
         snprintf(label, sizeof(label), "ISSUE L%d e%d p%d", ev.layer, ev.expert, ev.piece);
-        head(label, "io_issue", 'X', ev.t0_ns, ev.t1_ns, PID_HOST, tid);
+        head(label, "io", 'X', ev.t0_ns, ev.t1_ns, PID_HOST, tid);
         j.raw("\"step\":%d,\"layer\":%d,\"expert\":%d,\"name\":", ev.step, ev.layer, ev.expert);
         j.str(ev.name);
         j.raw(",\"source\":\"%s\"", ggml_trace_source_name(ev.detail));
@@ -1323,32 +1266,27 @@ struct ggml_trace_writer {
         return ggml_trace_tensor_kind(name)*4 + (source & GGML_TRACE_IO_SOURCE_MASK);
     }
 
-    // the issue -> resident span of a slice (detail 1) or piece (detail 2), once its end is known
-    void write_slice(const std::string & key, ggml_trace_slice_agg & a, bool partial) {
-        const int64_t t_end = a.n_resident > 0 ? std::max(a.t_res, a.t1) : a.t1;
+    void write_slice_b(ggml_trace_slice_agg & a) {
         char label[64];
-        if (a.piece >= 0) {
-            snprintf(label, sizeof(label), "L%d e%d p%d", a.layer, a.expert, a.piece);
-        } else {
-            snprintf(label, sizeof(label), "L%d e%d", a.layer, a.expert);
-        }
-        const int track = io_tid(a.name, a.source);
-        head(label, "io", 'X', a.t0, t_end, PID_IO, lane_tid(PID_IO, track, a.t0, t_end));
+        snprintf(label, sizeof(label), "L%d e%d", a.layer, a.expert);
+        head(label, "io", 'b', a.t0, 0, PID_IO, io_tid(a.name, a.source), a.id);
         j.raw("\"step\":%d,\"layer\":%d,\"expert\":%d,\"name\":", a.step, a.layer, a.expert);
         j.str(a.name);
         j.raw(",\"source\":\"%s\"", ggml_trace_source_name(a.source));
         arg_rank(a.rank);
-        j.raw(",\"id\":%" PRId64 ",\"n_pieces\":%d,\"bytes\":%" PRId64 ",\"issue_dur_ns\":%" PRId64
-              ",\"read_bytes\":%" PRId64 ",\"cached\":%s,\"duplicate\":%s,\"unresolved\":%s",
-                a.id, a.n_pieces, a.bytes, a.issue_dur, a.read_bytes,
-                a.all_cached ? "true" : "false", a.any_dup ? "true" : "false", a.any_unresolved ? "true" : "false");
-        if (a.piece >= 0) {
-            j.raw(",\"piece\":%d,\"cookie\":%" PRId64 ",\"resolution\":\"%s\"", a.piece, a.id,
-                    a.n_resident == 0 ? "none" : a.any_unresolved ? "unresolved" : a.all_cached ? "cached" : "resolved");
-        }
-        if (a.n_resident > 0) {
-            j.raw(",\"t_resident_ns\":%" PRId64, a.t_res - st->t_base);
-        }
+        j.raw(",\"n_pieces\":%d,\"bytes\":%" PRId64 ",\"issue_dur_ns\":%" PRId64
+              ",\"read_bytes\":%" PRId64 ",\"cached\":%s,\"duplicate\":%s",
+                a.n_pieces, a.bytes, a.issue_dur, a.read_bytes,
+                a.all_cached ? "true" : "false", a.any_dup ? "true" : "false");
+        tail();
+        a.b_emitted = true;
+    }
+
+    void write_slice_e(const std::string & key, ggml_trace_slice_agg & a, bool partial) {
+        char label[64];
+        snprintf(label, sizeof(label), "L%d e%d", a.layer, a.expert);
+        head(label, "io", 'e', a.n_resident > 0 ? a.t_res : a.t1, 0, PID_IO, io_tid(a.name, a.source), a.id);
+        j.raw("\"unresolved\":%s", a.any_unresolved ? "true" : "false");
         if (a.any_unresolved) {
             j.raw(",\"resident_frac\":%.4f", a.res_total > 0 ? (double) a.res_pages/a.res_total : -1.0);
         }
@@ -1386,16 +1324,43 @@ struct ggml_trace_writer {
     void on_io_issue(const ggml_trace_event & ev) {
         write_io_issue_x(ev);
 
-        // the detailed layout: one span per piece, keyed by its cookie (a duplicate only shows on the issuing
-        // thread; the simple layout merges the pieces per layer, expert and step instead)
-        if (ev.detail & GGML_TRACE_IO_DUPLICATE) {
+        if (st->params.detail >= 2) {
+            if (!(ev.detail & GGML_TRACE_IO_DUPLICATE)) {
+                char label[64];
+                snprintf(label, sizeof(label), "L%d e%d p%d", ev.layer, ev.expert, ev.piece);
+                head(label, "io", 'b', ev.t0_ns, 0, PID_IO, io_tid(ev.name, ev.detail), ev.aux);
+                j.raw("\"step\":%d,\"layer\":%d,\"expert\":%d,\"name\":", ev.step, ev.layer, ev.expert);
+                j.str(ev.name);
+                j.raw(",\"source\":\"%s\"", ggml_trace_source_name(ev.detail));
+                arg_rank(ev.rank);
+                j.raw(",\"piece\":%d,\"bytes\":%" PRId64 ",\"issue_dur_ns\":%" PRId64
+                      ",\"cookie\":%" PRId64 ",\"cached\":%s",
+                        ev.piece, ev.bytes, ev.t1_ns - ev.t0_ns, ev.aux,
+                        (ev.detail & GGML_TRACE_IO_CACHED_FLAG) ? "true" : "false");
+                tail();
+            }
             return;
         }
-        const std::string key = "c|" + std::to_string(ev.aux);
+
+        const std::string key = std::to_string(ev.step) + "|" + std::to_string(ev.layer) + "|" + std::to_string(ev.expert) +
+                "|" + ev.name + "|" + std::to_string(ev.detail & GGML_TRACE_IO_SOURCE_MASK);
+        auto old = slices.find(key);
+        if (old != slices.end() && old->second.b_emitted) {
+            // all pieces of that slice were issued and it waits for residency: a new issue of the same slice
+            // (e.g. a predictor guess in IDLE again) starts a new span, the old one keeps waiting under its id
+            const std::string moved = key + "#" + std::to_string(old->second.id);
+            for (int64_t c : old->second.cookies) {
+                auto it = cookie_slices.find(c);
+                if (it != cookie_slices.end()) {
+                    std::replace(it->second.begin(), it->second.end(), key, moved);
+                }
+            }
+            slices[moved] = std::move(old->second);
+            slices.erase(key);
+        }
         ggml_trace_slice_agg & a = slices[key];
         if (a.n_issued == 0) {
-            a.id     = ev.aux;
-            a.piece  = ev.piece;
+            a.id     = next_id++;
             a.layer  = ev.layer;
             a.expert = ev.expert;
             a.source = ev.detail & GGML_TRACE_IO_SOURCE_MASK;
@@ -1403,7 +1368,7 @@ struct ggml_trace_writer {
             a.step   = ev.step;
             memcpy(a.name, ev.name, sizeof(a.name));
         }
-        a.n_pieces   = 1;
+        a.n_pieces   = ev.n_parts;
         a.n_issued++;
         a.t0         = std::min(a.t0, ev.t0_ns);
         a.t1         = std::max(a.t1, ev.t1_ns);
@@ -1421,14 +1386,28 @@ struct ggml_trace_writer {
             cookie_slices[ev.aux].push_back(key);
         }
         if (a.n_issued >= a.n_pieces) {
-            a.all_issued = true;
+            write_slice_b(a);
             if (a.n_resident >= a.n_pieces) {
-                write_slice(key, a, false);
+                write_slice_e(key, a, false);
             }
         }
     }
 
     void on_io_resident(const ggml_trace_event & ev) {
+        if (st->params.detail >= 2) {
+            char label[64];
+            snprintf(label, sizeof(label), "L%d e%d p%d", ev.layer, ev.expert, ev.piece);
+            head(label, "io", 'e', ev.t0_ns, 0, PID_IO, io_tid(ev.name, ev.rank), ev.aux);
+            j.raw("\"resolution\":\"%s\"", ev.detail == GGML_TRACE_IO_CACHED ? "cached" : ev.detail == GGML_TRACE_IO_RESOLVED ? "resolved" : "unresolved");
+            if (ev.detail == GGML_TRACE_IO_RESOLVED) {
+                j.raw(",\"t_prev_poll_ns\":%" PRId64, ev.aux2 - st->t_base);
+            } else if (ev.detail == GGML_TRACE_IO_UNRESOLVED) {
+                j.raw(",\"resident_frac\":%.4f", ev.bytes > 0 && ev.aux2 >= 0 ? (double) ev.aux2/ev.bytes : -1.0);
+            }
+            tail();
+            return;
+        }
+
         ggml_trace_resident r;
         r.t        = ev.t0_ns;
         r.detail   = ev.detail;
@@ -1451,458 +1430,13 @@ struct ggml_trace_writer {
             }
             ggml_trace_slice_agg & a = sit->second;
             slice_add_resident(a, r);
-            if (a.all_issued && a.n_resident >= a.n_pieces) {
-                write_slice(key, a, false);
+            if (a.b_emitted && a.n_resident >= a.n_pieces) {
+                write_slice_e(key, a, false);
             }
-        }
-    }
-
-
-    //
-    // simple layout (detail 1): one process "simple" with the rows token, GPU, worker N, load N, copy N; every span
-    // of a layer and expert is named exactly "L<layer> e<expert>", every other span of a layer "L<layer>", so that
-    // Perfetto gives them the same color in every row. the records of a step are collected until the step is
-    // complete (its TOKEN record has arrived and two more writer passes have run), then its rows are written;
-    // loads are written once all their pieces are resident. the per-step counts the checks need are in the args
-    // of the token span
-    //
-
-    struct simple_step {
-        bool    have_token = false;
-        int     hold       = 0;
-        ggml_trace_event token;
-        std::vector<ggml_trace_event> expert_threads;
-        std::vector<ggml_trace_event> ops;    // worker 0, not MUL_MAT_ID
-        std::vector<ggml_trace_event> gpu;
-        std::vector<ggml_trace_event> copies; // COPY and XFER
-        std::map<std::pair<std::string, int>, std::pair<double, int64_t>> residency; // (node, expert) -> frac, delay
-        int     n_residency = 0, n_sync = 0, n_out_sync = 0, n_sample = 0, n_split = 0, n_predict = 0;
-        int64_t sync_ns = 0, out_t0 = 0, out_t1 = 0, sample_t0 = 0, sample_t1 = 0, sample_token = -1;
-        int64_t n_pieces[3] = { 0, 0, 0 }, n_pieces_cached = 0, n_pieces_dup = 0;
-    };
-
-    struct simple_load {
-        int64_t t0 = INT64_MAX, t_issue_end = 0, t_res = 0, bytes = 0;
-        int     n_pieces = 0, n_cached = 0, n_dup = 0;
-        unsigned sources = 0;
-        bool    unresolved = false;
-        std::set<std::string> tensors;
-        std::set<int64_t>     pending; // cookies not resident yet
-    };
-
-    using load_key = std::tuple<int, int, int>; // (step, layer, expert)
-
-    std::map<int, simple_step> s_steps;
-    std::set<int>              s_done; // steps whose rows have been written
-    std::map<load_key, simple_load> s_loads;
-    std::unordered_map<int64_t, std::vector<load_key>> s_cookie_loads;
-    ggml_trace_lanes s_load_lanes, s_copy_lanes;
-    int64_t s_newest = 0; // end of the latest written TOKEN
-
-    enum { S_TID_TOKEN = 1, S_TID_GPU = 2, S_TID_WORKER0 = 100, S_TID_LOAD0 = 1000, S_TID_COPY0 = 2000 };
-
-    void simple_track(int tid) {
-        if (!named_tracks.insert({ PID_HOST, tid }).second) {
-            return;
-        }
-        std::string tname;
-        if (tid == S_TID_TOKEN) {
-            tname = "token";
-        } else if (tid == S_TID_GPU) {
-            tname = "GPU";
-        } else if (tid >= S_TID_COPY0) {
-            tname = "copy " + std::to_string(tid - S_TID_COPY0);
-        } else if (tid >= S_TID_LOAD0) {
-            tname = "load " + std::to_string(tid - S_TID_LOAD0);
-        } else {
-            tname = "worker " + std::to_string(tid - S_TID_WORKER0);
-        }
-        name_pid(PID_HOST, "simple");
-        j.raw("{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":%d,\"tid\":%d,\"args\":{\"name\":", PID_HOST, tid);
-        j.str(tname.c_str());
-        j.raw("}},\n");
-        j.raw("{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":%d,\"tid\":%d,\"args\":{\"sort_index\":%d}},\n", PID_HOST, tid, tid);
-    }
-
-    // a span of the simple layout; args are written by the caller, then tail()
-    void simple_head(const std::string & name, int64_t t0, int64_t t1, int tid) {
-        simple_track(tid);
-        j.raw("{\"name\":");
-        j.str(name.c_str());
-        j.raw(",\"cat\":\"simple\",\"ph\":\"X\",\"ts\":%.3f,\"dur\":%.3f,\"pid\":%d,\"tid\":%d,\"args\":{",
-                us(t0), (double) std::max<int64_t>(0, t1 - t0)/1000.0, PID_HOST, tid);
-    }
-
-    static std::string simple_name(int layer, int expert) {
-        char buf[48];
-        if (expert >= 0) {
-            snprintf(buf, sizeof(buf), "L%d e%d", layer, expert);
-        } else {
-            snprintf(buf, sizeof(buf), "L%d", layer);
-        }
-        return buf;
-    }
-
-    void simple_on_event(const ggml_trace_event & ev) {
-        // a record of a step whose rows are written already (e.g. a residency sample that came very late): dropped
-        // and counted (late_records in the metadata); I/O records go to the loads, which are written separately
-        if (ev.type != GGML_TRACE_IO_ISSUE && ev.type != GGML_TRACE_IO_RESIDENT && ev.step >= 0 && s_done.count(ev.step)) {
-            s_late++;
-            return;
-        }
-        switch (ev.type) {
-            case GGML_TRACE_TOKEN:
-                {
-                    simple_step & s = s_steps[ev.step];
-                    s.have_token = true;
-                    s.token      = ev;
-                } break;
-            case GGML_TRACE_SYNC:
-                {
-                    if (ev.step < 0) {
-                        break;
-                    }
-                    simple_step & s = s_steps[ev.step];
-                    if (ev.detail == GGML_TRACE_OUTPUT) {
-                        s.n_out_sync++;
-                        s.out_t0 = ev.t0_ns;
-                        s.out_t1 = ev.t1_ns;
-                    } else {
-                        s.n_sync++;
-                        s.sync_ns += ev.t1_ns - ev.t0_ns;
-                    }
-                } break;
-            case GGML_TRACE_SAMPLE:
-                {
-                    if (ev.step < 0) {
-                        break;
-                    }
-                    simple_step & s = s_steps[ev.step];
-                    s.n_sample++;
-                    s.sample_t0    = ev.t0_ns;
-                    s.sample_t1    = ev.t1_ns;
-                    s.sample_token = ev.aux;
-                } break;
-            case GGML_TRACE_XFER:
-            case GGML_TRACE_COPY:
-                if (ev.step >= 0) {
-                    s_steps[ev.step].copies.push_back(ev);
-                } break;
-            case GGML_TRACE_SPLIT:
-                if (ev.step >= 0) {
-                    s_steps[ev.step].n_split++;
-                } break;
-            case GGML_TRACE_OP_CPU:
-                if (ev.step >= 0 && ev.op != GGML_OP_MUL_MAT_ID) {
-                    s_steps[ev.step].ops.push_back(ev);
-                } break;
-            case GGML_TRACE_OP_GPU:
-                if (ev.step >= 0) {
-                    s_steps[ev.step].gpu.push_back(ev);
-                } break;
-            case GGML_TRACE_EXPERT_THREAD:
-                if (ev.step >= 0) {
-                    s_steps[ev.step].expert_threads.push_back(ev);
-                } break;
-            case GGML_TRACE_EXPERT_RESIDENCY:
-                if (ev.step >= 0) {
-                    simple_step & s = s_steps[ev.step];
-                    s.n_residency++;
-                    s.residency[{ ev.name, ev.expert }] = { ev.aux > 0 && ev.bytes >= 0 ? (double) ev.bytes/ev.aux : -1.0, ev.aux2 };
-                } break;
-            case GGML_TRACE_PREDICT:
-                if (ev.step >= 0) {
-                    s_steps[ev.step].n_predict++;
-                } break;
-            case GGML_TRACE_IO_ISSUE:   simple_io_issue(ev);    break;
-            case GGML_TRACE_IO_RESIDENT: simple_io_resident(ev); break;
-            default:
-                break;
-        }
-    }
-
-    void simple_io_issue(const ggml_trace_event & ev) {
-        const int src = ev.detail & GGML_TRACE_IO_SOURCE_MASK;
-        const bool cached = (ev.detail & GGML_TRACE_IO_CACHED_FLAG) != 0;
-        const bool dup    = (ev.detail & GGML_TRACE_IO_DUPLICATE) != 0;
-        if (ev.pos >= 0) {
-            simple_step & s = s_steps[ev.pos];
-            s.n_pieces[std::min(src, 2)]++;
-            s.n_pieces_cached += cached;
-            s.n_pieces_dup    += dup;
-        }
-        const load_key key { ev.pos, ev.layer, ev.expert };
-        simple_load & l = s_loads[key];
-        l.t0          = std::min(l.t0, ev.t0_ns);
-        l.t_issue_end = std::max(l.t_issue_end, ev.t1_ns);
-        l.bytes      += ev.bytes;
-        l.n_pieces++;
-        l.n_cached   += cached;
-        l.n_dup      += dup;
-        l.sources    |= 1u << src;
-        l.tensors.insert(ev.name);
-        if (cached) {
-            return;
-        }
-        auto it = resolved.find(ev.aux);
-        if (it != resolved.end()) {
-            simple_load_resident(l, it->second);
-        } else {
-            l.pending.insert(ev.aux);
-            s_cookie_loads[ev.aux].push_back(key);
-        }
-    }
-
-    void simple_load_resident(simple_load & l, const ggml_trace_resident & r) {
-        l.t_res = std::max(l.t_res, r.t);
-        l.unresolved = l.unresolved || r.detail == GGML_TRACE_IO_UNRESOLVED;
-    }
-
-    void simple_io_resident(const ggml_trace_event & ev) {
-        ggml_trace_resident r;
-        r.t      = ev.t0_ns;
-        r.detail = ev.detail;
-        resolved[ev.aux] = r;
-        t_newest = std::max(t_newest, r.t);
-        auto it = s_cookie_loads.find(ev.aux);
-        if (it == s_cookie_loads.end()) {
-            return;
-        }
-        for (const load_key & key : it->second) {
-            auto lit = s_loads.find(key);
-            if (lit != s_loads.end()) {
-                simple_load_resident(lit->second, r);
-                lit->second.pending.erase(ev.aux);
-            }
-        }
-        s_cookie_loads.erase(it);
-    }
-
-    void simple_write_step(int step, simple_step & s) {
-        // token: the counts the checks need are in its args
-        int n_experts = 0;
-        {
-            std::set<std::pair<std::string, int>> ex;
-            for (const auto & e : s.expert_threads) {
-                ex.insert({ e.name, e.expert });
-            }
-            n_experts = (int) ex.size();
-        }
-        int64_t copy_bytes = 0;
-        for (const auto & c : s.copies) {
-            copy_bytes += c.bytes;
-        }
-        int n_loads = 0, n_loads_cached = 0;
-        for (auto it = s_loads.lower_bound(load_key { step, INT_MIN, INT_MIN }); it != s_loads.end() && std::get<0>(it->first) == step; ++it) {
-            n_loads++;
-            n_loads_cached += it->second.n_cached == it->second.n_pieces;
-        }
-        // the experts this step computed, for the loads written later ("computed" in their args)
-        {
-            auto & comp = s_computed[step];
-            for (const auto & e : s.expert_threads) {
-                comp.insert({ ggml_trace_parse_layer(e.name), e.expert });
-            }
-        }
-        if (s.have_token) {
-            const ggml_trace_event & t = s.token;
-            char name[64];
-            snprintf(name, sizeof(name), "token %d -> %" PRId64, step, t.aux);
-            simple_head(name, t.t0_ns, t.t1_ns, S_TID_TOKEN);
-            j.raw("\"step\":%d,\"token\":%d,\"pos\":%d,\"token_out\":%" PRId64, step, t.token, t.pos, t.aux);
-            // the output SYNC and the SAMPLE of the step (the last one if there were several; counted)
-            j.raw(",\"n_out_sync\":%d,\"n_sample\":%d,\"sample_token\":%" PRId64, s.n_out_sync, s.n_sample, s.sample_token);
-            if (s.n_out_sync > 0) {
-                j.raw(",\"out_sync_ts\":%.3f,\"out_sync_dur\":%.3f", us(s.out_t0), (s.out_t1 - s.out_t0)/1000.0);
-            }
-            if (s.n_sample > 0) {
-                j.raw(",\"sample_ts\":%.3f,\"sample_dur\":%.3f", us(s.sample_t0), (s.sample_t1 - s.sample_t0)/1000.0);
-            }
-            j.raw(",\"n_sync\":%d,\"sync_ms\":%.3f,\"n_split\":%d,\"n_predict\":%d", s.n_sync, s.sync_ns/1e6, s.n_split, s.n_predict);
-            j.raw(",\"n_experts\":%d,\"n_expert_threads\":%zu,\"n_residency\":%d", n_experts, s.expert_threads.size(), s.n_residency);
-            j.raw(",\"n_pieces_prefetch\":%" PRId64 ",\"n_pieces_predict_high\":%" PRId64 ",\"n_pieces_predict_low\":%" PRId64
-                  ",\"n_pieces_cached\":%" PRId64 ",\"n_pieces_dup\":%" PRId64 ",\"n_loads\":%d,\"n_loads_cached\":%d",
-                    s.n_pieces[0], s.n_pieces[1], s.n_pieces[2], s.n_pieces_cached, s.n_pieces_dup, n_loads, n_loads_cached);
-            j.raw(",\"n_copies\":%zu,\"copy_bytes\":%" PRId64 ",\"n_gpu_ops\":%zu", s.copies.size(), copy_bytes, s.gpu.size());
-            tail();
-        }
-
-        // workers: the expert each thread computes; on worker 0 also the layer's other ops, merged per layer run
-        struct item { int64_t t0, t1; int layer, expert; const ggml_trace_event * ev; };
-        std::map<int, std::vector<item>> rows;
-        for (const auto & e : s.expert_threads) {
-            rows[e.tid].push_back({ e.t0_ns, e.t1_ns, ggml_trace_parse_layer(e.name), e.expert, &e });
-        }
-        for (const auto & o : s.ops) {
-            if (o.layer >= 0) {
-                rows[o.tid].push_back({ o.t0_ns, o.t1_ns, o.layer, -1, &o });
-            }
-        }
-        for (auto & kv : rows) {
-            auto & v = kv.second;
-            std::sort(v.begin(), v.end(), [](const item & a, const item & b) { return a.t0 < b.t0; });
-            std::vector<item> merged;
-            std::vector<int> n_merged;
-            for (const item & it : v) {
-                if (it.expert < 0 && !merged.empty() && merged.back().expert < 0 && merged.back().layer == it.layer) {
-                    merged.back().t1 = std::max(merged.back().t1, it.t1);
-                    n_merged.back()++;
-                    continue;
-                }
-                merged.push_back(it);
-                n_merged.push_back(1);
-            }
-            int64_t prev_end = INT64_MIN;
-            for (size_t i = 0; i < merged.size(); ++i) {
-                item & it = merged[i];
-                const int64_t t0 = std::max(it.t0, prev_end);
-                if (it.t1 < t0) {
-                    continue;
-                }
-                prev_end = it.t1;
-                simple_head(simple_name(it.layer, it.expert), t0, it.t1, S_TID_WORKER0 + kv.first);
-                if (it.expert >= 0) {
-                    const ggml_trace_event & e = *it.ev;
-                    j.raw("\"layer\":%d,\"expert\":%d,\"step\":%d,\"tensor\":", it.layer, it.expert, step);
-                    j.str(e.name);
-                    j.raw(",\"bytes\":%" PRId64 ",\"stall_ns\":%" PRId64 ",\"n_threads\":%d", e.bytes, e.aux, e.n_parts);
-                    auto r = s.residency.find({ e.name, e.expert });
-                    if (r != s.residency.end()) {
-                        j.raw(",\"resident_frac\":%.4f,\"sample_delay_ns\":%" PRId64, r->second.first, r->second.second);
-                    }
-                } else {
-                    j.raw("\"layer\":%d,\"step\":%d,\"n_ops\":%d", it.layer, step, n_merged[i]);
-                }
-                tail();
-            }
-        }
-
-        // GPU: device time per layer run (consecutive ops of a layer less than GGML_TRACE_GPU_GAP_NS apart); the
-        // output ops (result_*) as "output"
-        {
-            auto & v = s.gpu;
-            std::sort(v.begin(), v.end(), [](const ggml_trace_event & a, const ggml_trace_event & b) { return a.t0_ns < b.t0_ns; });
-            struct run { int64_t t0, t1; int key, n, n_weight; };
-            std::vector<run> runs;
-            for (const auto & g : v) {
-                const int key = strncmp(g.name, "result_", 7) == 0 ? -2 : g.layer;
-                if (key == -1) {
-                    continue;
-                }
-                const int w = (g.flags & GGML_TRACE_FLAG_WEIGHT_SRC) != 0;
-                // the same layer, and the GPU did not idle in between (a gap would show a busy GPU that waits)
-                if (!runs.empty() && runs.back().key == key && g.t0_ns - runs.back().t1 < GGML_TRACE_GPU_GAP_NS) {
-                    runs.back().t1 = std::max(runs.back().t1, g.t1_ns);
-                    runs.back().n++;
-                    runs.back().n_weight += w;
-                    continue;
-                }
-                runs.push_back({ g.t0_ns, g.t1_ns, key, 1, w });
-            }
-            int64_t prev_end = INT64_MIN;
-            for (const run & r : runs) {
-                const int64_t t0 = std::max(r.t0, prev_end);
-                if (r.t1 < t0) {
-                    continue;
-                }
-                prev_end = r.t1;
-                simple_head(r.key == -2 ? std::string("output") : simple_name(r.key, -1), t0, r.t1, S_TID_GPU);
-                j.raw("\"layer\":%d,\"step\":%d,\"n_ops\":%d,\"n_weight_ops\":%d", r.key, step, r.n, r.n_weight);
-                tail();
-            }
-        }
-
-        // copies between host and device
-        for (const auto & c : s.copies) {
-            const bool xfer = c.type == GGML_TRACE_XFER;
-            const bool h2d  = xfer ? c.detail == GGML_TRACE_INPUT : c.backend != 0;
-            const bool async = !xfer && c.detail == GGML_TRACE_COPY_ASYNC;
-            const int layer = xfer ? ggml_trace_parse_layer(c.name) : c.layer;
-            const std::string name = layer >= 0 ? simple_name(layer, -1) : std::string(h2d ? "input" : "output");
-            const int64_t t1 = c.t1_ns > 0 ? c.t1_ns : c.t0_ns;
-            s_newest = std::max(s_newest, c.t0_ns);
-            simple_head(name, c.t0_ns, t1, S_TID_COPY0 + s_copy_lanes.place(c.t0_ns, t1));
-            j.raw("\"layer\":%d,\"step\":%d,\"direction\":\"%s\",\"bytes\":%" PRId64 ",\"kind\":\"%s\",\"async\":%s,\"weight\":%s,\"tensor\":",
-                    layer, step, h2d ? "h2d" : "d2h", c.bytes, xfer ? "xfer" : "copy", async ? "true" : "false",
-                    (c.flags & GGML_TRACE_FLAG_WEIGHT_SRC) ? "true" : "false");
-            j.str(c.name);
-            j.raw(",\"backend\":");
-            j.str(ggml_trace_backend_name(c.backend).c_str());
-            tail();
-        }
-    }
-
-    void simple_write_load(const load_key & key, simple_load & l, const std::map<int, std::pair<int64_t, int64_t>> & token_span) {
-        if (l.n_cached == l.n_pieces) {
-            return; // no read at all: counted in the token's n_loads_cached
-        }
-        int64_t t1 = std::max(l.t_res, l.t_issue_end);
-        if (l.unresolved) {
-            // still not resident when the trace stopped: up to the end of its step, or the end of the issue if the
-            // step was never traced (the guesses after the last traced token)
-            auto it = token_span.find(std::get<0>(key));
-            t1 = it != token_span.end() ? std::min(t1, std::max(it->second.second, l.t_issue_end)) : l.t_issue_end;
-        }
-        auto cit = s_computed.find(std::get<0>(key));
-        const bool computed = cit != s_computed.end() && cit->second.count({ std::get<1>(key), std::get<2>(key) }) > 0;
-        s_newest = std::max(s_newest, l.t0);
-        simple_head(simple_name(std::get<1>(key), std::get<2>(key)), l.t0, t1, S_TID_LOAD0 + s_load_lanes.place(l.t0, t1));
-        std::string src;
-        for (int i = 0; i < 3; ++i) {
-            if (l.sources & (1u << i)) {
-                src += src.empty() ? "" : ",";
-                src += ggml_trace_source_name(i);
-            }
-        }
-        j.raw("\"layer\":%d,\"expert\":%d,\"step\":%d,\"pieces\":%d,\"cached_pieces\":%d,\"duplicate_pieces\":%d,\"bytes\":%" PRId64
-              ",\"tensors\":%zu,\"sources\":\"%s\",\"unresolved\":%s,\"computed\":%s",
-                std::get<1>(key), std::get<2>(key), std::get<0>(key), l.n_pieces, l.n_cached, l.n_dup, l.bytes,
-                l.tensors.size(), src.c_str(), l.unresolved ? "true" : "false", computed ? "true" : "false");
-        if (l.t_res > 0) {
-            j.raw(",\"t_resident_ns\":%" PRId64, l.t_res - st->t_base);
-        }
-        tail();
-    }
-
-    std::map<int, std::pair<int64_t, int64_t>> s_token_span; // written steps: TOKEN t0, t1
-    std::map<int, std::set<std::pair<int, int>>> s_computed; // written steps: (layer, expert) computed
-    uint64_t s_late = 0; // records of a step that had already been written (dropped)
-
-    void simple_flush(bool final) {
-        for (auto it = s_steps.begin(); it != s_steps.end(); ) {
-            simple_step & s = it->second;
-            const bool ready = final || (s.have_token && ++s.hold > 2);
-            if (!ready) {
-                ++it;
-                continue;
-            }
-            if (s.have_token) {
-                s_token_span[it->first] = { s.token.t0_ns, s.token.t1_ns };
-                s_newest = std::max(s_newest, s.token.t1_ns);
-            }
-            simple_write_step(it->first, s);
-            s_done.insert(it->first);
-            it = s_steps.erase(it);
-        }
-        for (auto it = s_loads.begin(); it != s_loads.end(); ) {
-            const bool step_done = s_done.count(std::get<0>(it->first)) > 0;
-            if (final || (step_done && it->second.pending.empty())) {
-                simple_write_load(it->first, it->second, s_token_span);
-                it = s_loads.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        if (final) {
-            s_cookie_loads.clear();
         }
     }
 
     void on_event(const ggml_trace_event & ev) {
-        if (st->params.detail == 1) {
-            simple_on_event(ev);
-            return;
-        }
         switch (ev.type) {
             case GGML_TRACE_TOKEN:
                 {
@@ -1955,8 +1489,7 @@ struct ggml_trace_writer {
                     head((std::string("COPY ") + ev.name).c_str(), "copy", ev.t1_ns ? 'X' : 'i', ev.t0_ns, ev.t1_ns, PID_HOST, tid);
                     j.raw("\"step\":%d,\"backend\":", ev.step);
                     j.str(be.c_str());
-                    j.raw(",\"bytes\":%" PRId64 ",\"async\":%s,\"weight\":%s,\"name\":", ev.bytes, ev.detail == GGML_TRACE_COPY_ASYNC ? "true" : "false",
-                            (ev.flags & GGML_TRACE_FLAG_WEIGHT_SRC) ? "true" : "false");
+                    j.raw(",\"bytes\":%" PRId64 ",\"async\":%s,\"name\":", ev.bytes, ev.detail == GGML_TRACE_COPY_ASYNC ? "true" : "false");
                     j.str(ev.name);
                     arg_layer(layer, inferred);
                     tail();
@@ -2037,9 +1570,6 @@ struct ggml_trace_writer {
                 flush();
             }
         }
-        if (st->params.detail == 1) {
-            simple_flush(final);
-        }
         flush_experts(final);
         prune();
         if (final) {
@@ -2047,7 +1577,10 @@ struct ggml_trace_writer {
                 const std::string key = it->first;
                 ggml_trace_slice_agg & a = it->second;
                 ++it;
-                write_slice(key, a, true);
+                if (!a.b_emitted) {
+                    write_slice_b(a);
+                }
+                write_slice_e(key, a, true);
             }
         }
         flush();
@@ -2055,42 +1588,7 @@ struct ggml_trace_writer {
 
     // the records of all threads of one moment are serialized within a few writer passes: resolutions older than
     // 10 s have met their issues, and cookies whose slice is gone point nowhere
-    // lane intervals: a span still held (a slice, expert or load waiting for its end, a step not written yet)
-    // may start as early as its t0, so no interval that ends at or after the earliest such t0 may go
     void prune() {
-        int64_t held = INT64_MAX;
-        for (const auto & kv : slices) {
-            held = std::min(held, kv.second.t0);
-        }
-        for (const auto & kv : experts) {
-            held = std::min(held, kv.second.t0);
-        }
-        for (auto & kv : lanes) {
-            kv.second.prune(std::min<int64_t>(t_span_newest - 10000000000LL, held));
-        }
-        int64_t s_held = INT64_MAX;
-        for (const auto & kv : s_loads) {
-            s_held = std::min(s_held, kv.second.t0);
-        }
-        for (const auto & kv : s_steps) {
-            for (const auto & c : kv.second.copies) {
-                s_held = std::min(s_held, c.t0_ns);
-            }
-        }
-        s_load_lanes.prune(std::min<int64_t>(s_newest - 10000000000LL, s_held));
-        // the computed sets are needed until the loads of their step are written
-        const int min_load_step = s_loads.empty() ? INT_MAX : std::get<0>(s_loads.begin()->first);
-        while (!s_computed.empty() && s_computed.begin()->first < min_load_step) {
-            s_computed.erase(s_computed.begin());
-        }
-        s_copy_lanes.prune(std::min<int64_t>(s_newest - 10000000000LL, s_held));
-        for (auto it = s_cookie_loads.begin(); it != s_cookie_loads.end(); ) {
-            bool live = false;
-            for (const auto & k : it->second) {
-                live = live || s_loads.count(k) > 0;
-            }
-            it = live ? std::next(it) : s_cookie_loads.erase(it);
-        }
         const int64_t horizon = t_newest - 10000000000LL;
         for (auto it = resolved.begin(); it != resolved.end(); ) {
             it = it->second.t < horizon ? resolved.erase(it) : std::next(it);
@@ -2147,7 +1645,6 @@ static void ggml_trace_writer_loop(ggml_trace_state * st) {
     patch(st->meta_pos_adapt,   st->poll_adaptations.load());
     patch(st->meta_pos_written, w.n_written);
     patch(st->meta_pos_tokens,  (uint64_t) st->n_traced);
-    patch(st->meta_pos_late,    w.s_late);
     fflush(st->f);
 }
 
@@ -2178,10 +1675,9 @@ static void ggml_trace_write_meta(ggml_trace_state * st) {
     j.raw(",\"stall_metric\":\"per thread wall - CLOCK_THREAD_CPUTIME_ID: page fault and I/O wait plus preemption (the poller and writer share hyperthreads with the compute threads)\"");
     j.raw(",\"gpu_time_note\":\"device times are anchored by one synchronized event per flush: constant shift of about 5-20 us\"");
     j.raw(",\"ts_unit\":\"us since t_base_ns\"");
-    j.raw(",\"layout\":\"%s\"", st->params.detail == 1 ? "simple" : "detailed");
     j.raw(",\"io_notes\":\"cached = no read_bytes caused by the hint and the tail page resident; the windowed expert prefetch (more used experts than GGML_CPU_MOE_PREFETCH_WINDOW_MB, prompt batches) is not traced\"");
     // fixed width, right-aligned with spaces (JSON allows no leading zeros); valid before the rewrite too
-    const char * tags = ",\"records_emitted\":         0,\"dropped\":         0,\"ring_drops\":         0,\"poll_adaptations\":         0,\"events_written\":         0,\"tokens_traced\":         0,\"late_records\":         0}},\n";
+    const char * tags = ",\"records_emitted\":         0,\"dropped\":         0,\"ring_drops\":         0,\"poll_adaptations\":         0,\"events_written\":         0,\"tokens_traced\":         0}},\n";
     const size_t base = j.s.size() - st->meta_offset;
     j.raw("%s", tags);
     const std::string t(tags);
@@ -2191,7 +1687,6 @@ static void ggml_trace_write_meta(ggml_trace_state * st) {
     st->meta_pos_adapt   = base + t.find("\"poll_adaptations\":") + strlen("\"poll_adaptations\":");
     st->meta_pos_written = base + t.find("\"events_written\":")   + strlen("\"events_written\":");
     st->meta_pos_tokens  = base + t.find("\"tokens_traced\":")    + strlen("\"tokens_traced\":");
-    st->meta_pos_late    = base + t.find("\"late_records\":")     + strlen("\"late_records\":");
     fwrite(j.s.data(), 1, j.s.size(), st->f);
     fflush(st->f);
 }

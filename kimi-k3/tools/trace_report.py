@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Summarize a decode trace (LLAMA_TRACE / run-server.sh TRACE=): where the time of each token goes.
-Reads the default simple layout (a reduced table) and the detailed one (LLAMA_TRACE_DETAIL=2, the full table).
 
   python3 -I trace_report.py /tmp/k3.json [--layers] [--json out.json]
 
@@ -44,82 +43,6 @@ def rank_bucket(rank):
     return f"{'router' if kind == 'r' else 'popular'} {lo}-{lo + 3}"
 
 
-
-def report_simple(tr, args):
-    """The same summary from the default (simple) layout: rows token / GPU / worker N / load N / copy N."""
-    meta = tr.meta
-    print(f"trace {args.trace} (simple layout): {meta.get('model', '?')}, {meta.get('tokens_traced')} tokens, "
-          f"{meta.get('events_written')} events, {meta.get('dropped')} dropped records, residency valid: {meta.get('residency_valid')}")
-    rows = []
-    print("\nper token (ms unless noted; io wait = sum over threads and experts; load = issue -> resident of read experts)")
-    print(f"{'step':>4} {'token':>7} {'pos':>6} {'wall ms':>8} {'w0 dense':>8} {'w0 exp':>7} {'gpu':>7} {'res mean':>8} {'not res':>7} "
-          f"{'io wait':>8} {'sync':>6} {'loads':>6} {'cached':>6} {'load med':>8} {'load p95':>8} {'copies':>6} {'copy KiB':>8}")
-    for tok in tr.tokens:
-        a = tok["args"]
-        s = a["step"]
-        ex = [e for e in tr.worker_experts if e["args"]["step"] == s]
-        w0 = [e for e in tr.workers.get(0, []) if e["args"]["step"] == s]
-        res = {}
-        for e in ex:
-            if isinstance(e["args"].get("resident_frac"), (int, float)):
-                res[(e["args"]["layer"], e["args"]["expert"], kind_of(e["args"]["tensor"]))] = e["args"]["resident_frac"]
-        lds = [e for e in tr.loads if e["args"]["step"] == s]
-        lat = [e["dur"] / 1000 for e in lds]
-        cp = [e for e in tr.copies_s if e["args"]["step"] == s]
-        row = {
-            "step": s, "token": a["token"], "pos": a["pos"], "token_out": a["token_out"],
-            "wall_ms": (tok["dur"] + a.get("out_sync_dur", 0.0)) / 1000,
-            "w0_dense_ms": sum(e["dur"] for e in w0 if "expert" not in e["args"]) / 1000,
-            "w0_expert_ms": sum(e["dur"] for e in w0 if "expert" in e["args"]) / 1000,
-            "gpu_ms": sum(e["dur"] for e in tr.gpu if e["args"]["step"] == s) / 1000,
-            "res_mean": statistics.mean(res.values()) if res else float("nan"),
-            "not_resident": sum(1 for v in res.values() if v < 1.0),
-            "io_wait_ms": sum(e["args"].get("stall_ns", 0) for e in ex) / 1e6,
-            "sync_ms": a.get("sync_ms", 0.0) + a.get("out_sync_dur", 0.0) / 1000,
-            "loads": len(lds), "loads_cached": a.get("n_loads_cached", 0),
-            "loads_not_computed": sum(1 for e in lds if e["args"].get("computed") is False), "load_ms_median": med(lat), "load_ms_p95": pct(lat, 0.95),
-            "copies": len(cp), "copy_kib": sum(e["args"]["bytes"] for e in cp) / 1024,
-        }
-        rows.append(row)
-        print(f"{s:>4} {row['token']:>7} {row['pos']:>6} {row['wall_ms']:>8.1f} {row['w0_dense_ms']:>8.1f} {row['w0_expert_ms']:>7.1f} "
-              f"{row['gpu_ms']:>7.1f} {row['res_mean']:>8.3f} {row['not_resident']:>7} {row['io_wait_ms']:>8.1f} {row['sync_ms']:>6.2f} "
-              f"{row['loads']:>6} {row['loads_cached']:>6} {row['load_ms_median']:>8.2f} {row['load_ms_p95']:>8.2f} {row['copies']:>6} {row['copy_kib']:>8.1f}")
-    by_src = defaultdict(list)
-    wasted = defaultdict(int)
-    for e in tr.loads:
-        src = e["args"].get("sources", "?")
-        src = ",".join(src) if isinstance(src, list) else str(src)  # older converter output: a list
-        by_src[src].append(e["dur"] / 1000)
-        wasted[src] += e["args"].get("computed") is False
-    print("\nloads (issue -> resident, merged over pieces, tensors and sources) by source set; not computed = wrong guesses")
-    for src, v in sorted(by_src.items()):
-        print(f"{src:>34} {len(v):>7} spans  median {med(v):8.2f} ms  p95 {pct(v, 0.95):8.2f} ms  not computed {wasted[src]:>6}")
-    layer_rows = {}
-    if args.layers:
-        n_tok = max(1, len(tr.tokens))
-        agg = defaultdict(lambda: {"exp": 0.0, "dense": 0.0, "gpu": 0.0, "stall": 0.0, "loads": 0})
-        for e in tr.worker_experts:
-            agg[e["args"]["layer"]]["exp"] += e["dur"] / 1000
-            agg[e["args"]["layer"]]["stall"] += e["args"].get("stall_ns", 0) / 1e6
-        for e in tr.worker_dense:
-            agg[e["args"]["layer"]]["dense"] += e["dur"] / 1000
-        for e in tr.gpu:
-            agg[e["args"]["layer"]]["gpu"] += e["dur"] / 1000
-        for e in tr.loads:
-            agg[e["args"]["layer"]]["loads"] += 1
-        print("\nper layer (mean over traced tokens; expert ms summed over workers)")
-        print(f"{'layer':>5} {'expert':>8} {'dense w0':>8} {'gpu':>8} {'io wait':>8} {'loads':>6}")
-        for l in sorted(agg):
-            d = agg[l]
-            layer_rows[l] = {k: v / n_tok for k, v in d.items()}
-            r = layer_rows[l]
-            print(f"{l:>5} {r['exp']:>8.2f} {r['dense']:>8.2f} {r['gpu']:>8.3f} {r['stall']:>8.2f} {r['loads']:>6.1f}")
-    if args.json:
-        with open(args.json, "w") as f:
-            json.dump({"meta": meta, "tokens": rows, "layers": layer_rows}, f, indent=1)
-    return 0
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trace")
@@ -129,8 +52,6 @@ def main():
 
     tr = Trace(args.trace)
     meta = tr.meta
-    if tr.layout == "simple":
-        return report_simple(tr, args)
     print(f"trace {args.trace}: {meta.get('model', '?')}, {meta.get('tokens_traced')} tokens, detail {tr.detail}, "
           f"{meta.get('events_written')} events, {meta.get('dropped')} dropped records, "
           f"poll {meta.get('config', {}).get('poll_us')} us ({meta.get('poll_adaptations')} adaptations), "
