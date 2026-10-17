@@ -1490,8 +1490,9 @@ private:
             batch.init(ctx_tgt, std::max(n_batch, params_base.n_parallel), n_embd);
         }
 
-        // decision requests rarely repeat a state, the prompt cache is opt-in for decision models
-        if (decision.type != COMMON_DECISION_TYPE_NONE && !params_base.cache_ram_explicit) {
+        // decision requests rarely repeat a state, the prompt cache is opt-in for decision-only models
+        const auto & output_modalities = server_model_output_modalities(decision.type);
+        if (output_modalities.size() == 1 && output_modalities[0] == "decision" && !params_base.cache_ram_explicit) {
             SRV_INF("%s", "decision model: prompt cache disabled by default, use `--cache-ram N` to enable it\n");
             params_base.cache_ram_mib    = 0;
             params_base.cache_idle_slots = false;
