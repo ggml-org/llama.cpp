@@ -317,6 +317,63 @@ def test_router_queue_two_waiters_share_one_eviction():
     assert _get_model_status(MODEL_A) == "unloaded"
 
 
+@pytest.mark.parametrize("models_max", [1, 2, 3])
+def test_router_queue_cold_start_burst(models_max: int):
+    """concurrent cold requests are queued before bounded loads reserve a slot"""
+    global server
+    server.models_max = models_max
+    server.start()
+
+    waiters = [
+        _Bg(lambda model=model: _tokenize(model)).start()
+        for model in (MODEL_A, MODEL_B, MODEL_C)
+    ]
+
+    peak_active = 0
+    peak_loading = 0
+    while any(waiter._thread.is_alive() for waiter in waiters):
+        response = requests.get(
+            f"http://{server.server_host}:{server.server_port}/models", timeout=5
+        )
+        assert response.status_code == 200
+        statuses = [item["status"]["value"] for item in response.json()["data"]]
+        peak_active = max(
+            peak_active,
+            sum(status in {"loaded", "loading", "sleeping"} for status in statuses),
+        )
+        peak_loading = max(peak_loading, statuses.count("loading"))
+        time.sleep(0.01)
+
+    for i, waiter in enumerate(waiters):
+        waiter.join(90)
+        waiter.assert_ok(f"cold-start request {i}")
+
+    assert peak_active <= models_max
+    assert peak_loading == models_max
+
+
+def test_router_queue_protects_successful_handoff():
+    """a ready model stays pinned until its queued request takes ownership"""
+    global server
+    server.models_max = 1
+    server.start()
+
+    first = _Bg(lambda: _tokenize(MODEL_A)).start()
+    # The debug-only handoff delay starts after MODEL_A is ready and before its
+    # request increments req_count.  Queueing more models in that window must
+    # not evict MODEL_A.
+    _wait_for_model_status(MODEL_A, {"loaded"}, timeout=DEFAULT_REQUEST_TIMEOUT)
+    second = _Bg(lambda: _tokenize(MODEL_B)).start()
+    third = _Bg(lambda: _tokenize(MODEL_C)).start()
+
+    first.join(DEFAULT_REQUEST_TIMEOUT)
+    second.join(DEFAULT_REQUEST_TIMEOUT)
+    third.join(DEFAULT_REQUEST_TIMEOUT)
+    first.assert_ok("request completing the model handoff")
+    second.assert_ok("first queued request")
+    third.assert_ok("second queued request")
+
+
 def test_router_no_models_autoload():
     global server
     server.no_models_autoload = True
