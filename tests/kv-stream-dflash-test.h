@@ -3,6 +3,20 @@
 #include "kv-stream-bit-exact-test.h"
 #include "../src/llama-kv-cache-iswa.h"
 
+static std::vector<std::array<size_t,3>> dflash_exact_profiles(
+        bool lifecycle, bool context_end, bool sustained, bool short_profile, ggml_type key, ggml_type value) {
+    if (short_profile) {
+        if (lifecycle || context_end || sustained) throw std::runtime_error("short DFlash profile cannot replace lifecycle/context-end coverage");
+        const size_t bytes = ggml_row_size(key,1024)+ggml_row_size(value,1024);
+        const size_t capacity = bytes > 4096 ? 4096 : 8192;
+        return {{1,2047,capacity},{3,2047,capacity},{7,2047,capacity},{7,capacity-192,capacity}};
+    }
+    return sustained ? std::vector<std::array<size_t,3>>{{7,8176,8448}} : context_end ?
+        std::vector<std::array<size_t,3>>{{1,8176,8192},{3,8176,8192},{7,8176,8192}} : lifecycle ?
+        std::vector<std::array<size_t,3>>{{7,2047,16384},{7,2048,16384},{7,2049,16384},{7,2304,16384},{7,16000,16384}} :
+        std::vector<std::array<size_t,3>>{{1,2304,8192},{3,2304,8192},{7,2304,8192},{7,16000,16384}};
+}
+
 // Sort candidate axes by vocabulary ID without changing or rounding any selector score.
 static std::vector<uint32_t> dflash_exact_lattice(const float * data,size_t rows,size_t width,size_t k,size_t vocab) {
     if (!data || rows < 2 || rows > 8 || !k || k > 16 || width < k+k*k || width > 5120)
@@ -37,17 +51,15 @@ static std::vector<uint32_t> dflash_exact_lattice(const float * data,size_t rows
 }
 
 // Match the same block execution and force decisions independently of sampler acceptance.
-static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const char * sidecar,bool lifecycle=false,bool context_end=false,bool sustained_rejection=false) {
+static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const char * sidecar,bool lifecycle=false,bool context_end=false,bool sustained_rejection=false,
+        ggml_type key=GGML_TYPE_Q8_0,ggml_type value=GGML_TYPE_Q4_0,bool matching_cache=false,bool short_profile=false) {
     const auto vocabulary=llama_model_get_vocab(model);
     const auto vocab=llama_vocab_n_tokens(vocabulary);
     const auto seed=common_tokenize(vocabulary,"A controlled comparison of windowed drafting and target recovery. ",true);
-    const std::vector<std::array<size_t,3>> profiles=sustained_rejection ?
-        std::vector<std::array<size_t,3>>{{7,8176,8448}} : context_end ?
-        std::vector<std::array<size_t,3>>{{1,8176,8192},{3,8176,8192},{7,8176,8192}} : lifecycle ?
-        std::vector<std::array<size_t,3>>{{7,2047,16384},{7,2048,16384},{7,2049,16384},{7,2304,16384},{7,16000,16384}} :
-        std::vector<std::array<size_t,3>>{{1,2304,8192},{3,2304,8192},{7,2304,8192},{7,16000,16384}};
+    const auto profiles = dflash_exact_profiles(lifecycle,context_end,sustained_rejection,short_profile,key,value);
     for (const auto profile : profiles) {
         for (bool quantized : {false,true}) {
+            if (matching_cache && !quantized) continue;
             if (lifecycle && !quantized && profile[1] != 2049) continue;
             kv_stream_bit_oracle oracle;
             for (bool streaming : {false,true}) {
@@ -55,9 +67,12 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
                 auto cp=llama_context_default_params();
                 cp.n_ctx=uint32_t(profile[2]); cp.n_batch=cp.n_ubatch=256;
                 cp.n_seq_max=1; cp.n_rs_seq=uint32_t(profile[0]); cp.n_outputs_max=uint32_t(profile[0]+1);
-                cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+                cp.type_k=key; cp.type_v=value;
                 cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
-                if (streaming) cp.shared_device_memory_bytes=(context_end ? 224u : 512u)*1024u*1024u;
+                if (streaming) {
+                    const bool wide = ggml_row_size(key,1024)+ggml_row_size(value,1024) > 4096;
+                    cp.shared_device_memory_bytes=(short_profile ? (wide ? 384u : 228u) : context_end ? 224u : matching_cache ? 384u : 512u)*1024u*1024u;
+                }
                 context_ptr target(llama_init_from_model(model,cp),llama_free);
                 if (!t.assert_true(bool(target))) return;
                 common_params base;
@@ -66,8 +81,8 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
                 base.speculative.types={COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
                 base.speculative.draft.n_max=int(profile[0]); base.speculative.draft.n_min=0; base.speculative.draft.p_min=0;
                 base.speculative.draft.n_gpu_layers=999; base.speculative.draft.mparams.path=sidecar;
-                base.speculative.draft.cache_type_k=quantized ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
-                base.speculative.draft.cache_type_v=quantized ? GGML_TYPE_Q4_0 : GGML_TYPE_F16;
+                base.speculative.draft.cache_type_k=matching_cache ? key : quantized ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
+                base.speculative.draft.cache_type_v=matching_cache ? value : quantized ? GGML_TYPE_Q4_0 : GGML_TYPE_F16;
                 auto params=common_base_params_to_speculative(base);
                 auto draft=common_speculative_init_from_params(params,model,target.get());
                 if (!t.assert_true(draft && draft->context())) return;
@@ -290,7 +305,7 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
                     if (accepted < predicted.size() && anchor == predicted[accepted]) anchor=(anchor+1)%vocab;
                 }
                 if (streaming) {
-                    if (profile[1] == 16000 && !t.assert_true(observed_streaming)) return;
+                    if ((profile[1] == 16000 || (short_profile && profile == profiles.back())) && !t.assert_true(observed_streaming)) return;
                     oracle.finish();
                 }
                 t.out << "DFlash exact D=" << profile[0] << " prefix=" << profile[1] << " quant=" << quantized

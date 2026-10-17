@@ -218,30 +218,49 @@ static void kv_stream_exact_kv(kv_stream_bit_oracle & oracle, const std::string 
 }
 
 struct kv_stream_exact_config {
-    size_t prefill = 16381, rounds = 8, pool_mib = 16;
+    size_t prefill = 16381, rounds = 8, pool_mib = 32;
+    size_t batch_rows = 256, length = 0;
+    ggml_type key = GGML_TYPE_Q8_0, value = GGML_TYPE_Q4_0;
     std::filesystem::path corpus = std::filesystem::path(__FILE__).parent_path().parent_path()/"benchmarks/data/online-articles-262144-words.txt";
 };
+
+// Test fixtures use the same public cache names without interpreting weight formats as KV types.
+static ggml_type kv_stream_exact_cache_type(const std::string & name) {
+    for (auto type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_0,
+            GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL}) {
+        if (name == ggml_type_name(type)) return type;
+    }
+    throw std::runtime_error("unknown test KV cache type: " + name);
+}
 
 static kv_stream_exact_config kv_stream_exact_arguments(int argc, char ** argv) {
     kv_stream_exact_config cfg;
     for (int i = 3; i < argc; ++i) {
         const std::string name = argv[i];
         if (name == "--mtp-bit-exact") continue;
-        if (name != "--exact-prefill" && name != "--exact-rounds" && name != "--exact-pool-mib" && name != "--exact-prefill-file")
+        if (name != "--exact-prefill" && name != "--exact-rounds" && name != "--exact-pool-mib" && name != "--exact-prefill-file" &&
+                name != "--test-cache-k" && name != "--test-cache-v" &&
+                name != "--exact-batch-size" && name != "--exact-length")
             throw std::runtime_error("unknown bit-exact test option: " + name);
         if (++i == argc) throw std::runtime_error("missing bit-exact option value");
         if (name == "--exact-prefill-file") { cfg.corpus = argv[i]; continue; }
+        if (name == "--test-cache-k") { cfg.key = kv_stream_exact_cache_type(argv[i]); continue; }
+        if (name == "--test-cache-v") { cfg.value = kv_stream_exact_cache_type(argv[i]); continue; }
         size_t parsed = 0;
         const std::string input = argv[i];
         const auto value = std::stoull(input, &parsed);
-        const size_t maximum = name == "--exact-prefill" ? 32768 : name == "--exact-rounds" ? 32 : 1024;
+        const size_t maximum = name == "--exact-prefill" ? 32768 : name == "--exact-rounds" ? 32 :
+            name == "--exact-batch-size" ? 256 : name == "--exact-length" ? 3 : 1024;
         if (input.empty() || input[0] == '-' || parsed != input.size() || !value || value > maximum)
             throw std::runtime_error("invalid bit-exact option value: " + name);
         if (name == "--exact-prefill") cfg.prefill = size_t(value);
         else if (name == "--exact-rounds") cfg.rounds = size_t(value);
+        else if (name == "--exact-batch-size") cfg.batch_rows = size_t(value);
+        else if (name == "--exact-length") cfg.length = size_t(value);
         else cfg.pool_mib = size_t(value);
     }
     if (cfg.prefill < 512 || cfg.rounds < 4) throw std::runtime_error("bit-exact test needs at least 512 prefill tokens and four rounds");
+    if (cfg.batch_rows < 5) throw std::runtime_error("bit-exact test needs more than four batch rows for recurrent rollback");
     return cfg;
 }
 
@@ -268,7 +287,9 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
     prompt.resize(cfg.prefill);
     const size_t vocabulary = llama_vocab_n_tokens(llama_model_get_vocab(model));
     bool observed_mtp_streaming = false;
-    for (size_t length : {1u, 2u, 3u}) t.test("strict_mtp_length_" + std::to_string(length), [&](testing & t) {
+    for (size_t length : {1u, 2u, 3u}) {
+        if (cfg.length && length != cfg.length) continue;
+        t.test("strict_mtp_length_" + std::to_string(length), [&](testing & t) {
         kv_stream_bit_oracle oracle;
         for (bool streaming : {false, true}) {
             if (streaming) oracle.compare();
@@ -276,10 +297,10 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
             kv_stream_exact_trace target_trace{oracle, "target"}, draft_trace{oracle, "draft"};
             auto p = llama_context_default_params();
             p.n_ctx = uint32_t(((cfg.prefill + cfg.rounds*4 + 255)/256)*256);
-            p.n_batch = p.n_ubatch = 256; p.n_seq_max = 1; p.n_rs_seq = 3;
+            p.n_batch = p.n_ubatch = uint32_t(cfg.batch_rows); p.n_seq_max = 1; p.n_rs_seq = 3;
             p.n_outputs_max = p.n_outputs_max_per_seq = 256;
             p.n_threads = p.n_threads_batch = 8;
-            p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
+            p.type_k = cfg.key; p.type_v = cfg.value;
             p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             p.kv_stream_pool_bytes = streaming ? cfg.pool_mib*1048576 : 0;
             p.kv_stream_auxiliary_layers = streaming ? 1 : 0;
@@ -343,8 +364,8 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
                 if (!common_speculative_process(spec.get(), batch)) { check(); throw std::runtime_error("exact MTP catch-up failed: " + name); }
                 drain();
             };
-            for (size_t first = 0; first < prompt.size(); first += 256) {
-                const size_t count = std::min(size_t(256), prompt.size()-first);
+            for (size_t first = 0; first < prompt.size(); first += cfg.batch_rows) {
+                const size_t count = std::min(cfg.batch_rows, prompt.size()-first);
                 submit("prefill/" + std::to_string(first), {prompt.begin()+first, prompt.begin()+first+count}, first, false);
             }
             common_speculative_begin(spec.get(), 0, history);
@@ -452,6 +473,7 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
         }
         t.assert_true(oracle.records() >= cfg.rounds*4);
     });
+    }
     t.assert_true(observed_mtp_streaming);
 }
 
@@ -526,6 +548,44 @@ static void test_kv_stream_bit_exact_comparator(testing & t) {
         try { split.write(nullptr, 1); } catch (const std::runtime_error &) { rejected = true; }
         t.assert_true(rejected);
     });
+    t.test("default_exact_pool_can_hold_the_complete_auxiliary_history", [&](testing & t) {
+        const kv_stream_exact_config config;
+        const size_t capacity = (config.prefill+config.rounds*4+255)/256*256;
+        ggml_kv_stream_layout layer;
+        t.assert_true(ggml_kv_stream_layout_make({config.key,config.value,256,256,4,256,128},capacity,layer).status ==
+            ggml_kv_stream_status::success);
+        t.assert_true(config.pool_mib*1048576 >= layer.bytes);
+    });
+    t.test("bit_exact_arguments_accept_explicit_cache_formats", [&](testing & t) {
+        std::vector<std::string> fields{"test", "--model", "model", "--mtp-bit-exact",
+            "--test-cache-k", "q5_1", "--test-cache-v", "q8_0"};
+        std::vector<char *> arguments;
+        for (auto & field : fields) arguments.push_back(field.data());
+        const auto config = kv_stream_exact_arguments(int(arguments.size()), arguments.data());
+        t.assert_equal(size_t(16381), config.prefill);
+        t.assert_equal(size_t(256), config.batch_rows);
+        t.assert_equal(size_t(0), config.length);
+        t.assert_true(config.key == GGML_TYPE_Q5_1 && config.value == GGML_TYPE_Q8_0);
+        for (auto key : {"f32", "f16", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl"})
+            for (auto value : {"f32", "f16", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl"}) {
+                fields[5] = key; fields[7] = value;
+                arguments.clear();
+                for (auto & field : fields) arguments.push_back(field.data());
+                const auto pair = kv_stream_exact_arguments(int(arguments.size()), arguments.data());
+                t.assert_equal(std::string(key), std::string(ggml_type_name(pair.key)));
+                t.assert_equal(std::string(value), std::string(ggml_type_name(pair.value)));
+            }
+    });
+    t.test("exact_microbatch_profile_can_isolate_ring_from_reclaimed_prefill_memory", [&](testing & t) {
+        std::vector<std::string> fields{"test", "--model", "model", "--mtp-bit-exact",
+            "--exact-batch-size", "8", "--exact-length", "3"};
+        std::vector<char *> arguments;
+        for (auto & field : fields) arguments.push_back(field.data());
+        const auto config = kv_stream_exact_arguments(int(arguments.size()), arguments.data());
+        t.assert_equal(size_t(16381), config.prefill);
+        t.assert_equal(size_t(8), config.batch_rows);
+        t.assert_equal(size_t(3), config.length);
+    });
     t.test("bit_exact_arguments_reject_unbounded_or_incomplete_profiles", [&](testing & t) {
         const auto rejects = [](std::vector<std::string> fields) {
             std::vector<char *> argv;
@@ -538,8 +598,14 @@ static void test_kv_stream_bit_exact_comparator(testing & t) {
             t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--exact-prefill", value}));
         t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--exact-rounds", "3"}));
         t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--exact-pool-mib", "1025"}));
+        for (const char * value : {"0", "3", "4", "257"})
+            t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--exact-batch-size", value}));
+        for (const char * value : {"0", "4"})
+            t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--exact-length", value}));
         t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--exact-prefill"}));
         t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--unknown"}));
+        for (const char * value : {"q8_1", "q2_k", "i32", "", "unknown"})
+            t.assert_true(rejects({"test", "--model", "model", "--mtp-bit-exact", "--test-cache-k", value}));
     });
     t.test("bit_exact_corpus_is_bounded_before_allocation", [&](testing & t) {
         std::istringstream valid("article");

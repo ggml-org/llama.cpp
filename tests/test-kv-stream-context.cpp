@@ -44,6 +44,9 @@ static bool mtp_bit_exact_control = false;
 static const char * dflash_native_model = nullptr;
 static bool dflash_shared_workspace_control = false;
 static bool dflash_exact_control = false;
+static bool dflash_short_control = false;
+static bool test_cache_explicit = false;
+static ggml_type test_cache_k = GGML_TYPE_Q8_0, test_cache_v = GGML_TYPE_Q4_0;
 
 // Qualify ordinary feature injection without a stream pool or a shared phase arena.
 static void test_dflash_native(testing & t, llama_model * model) {
@@ -634,14 +637,15 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
 
 int main(int argc,char ** argv) {
     int baseline=0;
-    bool exact_options = false;
+    bool exact_options = false, cache_options = false;
     for (int i = 1; i < argc; ++i) {
         mtp_bit_exact_control |= !std::strcmp(argv[i], "--mtp-bit-exact");
         exact_options |= !std::strncmp(argv[i], "--exact-", 8);
+        cache_options |= !std::strncmp(argv[i], "--test-cache-", 13);
     }
-    if ((mtp_bit_exact_control && (argc < 3 || std::strcmp(argv[1], "--model"))) ||
+    if (((mtp_bit_exact_control || cache_options) && (argc < 3 || std::strcmp(argv[1], "--model"))) ||
             (exact_options && !mtp_bit_exact_control)) {
-        std::fprintf(stderr, "strict MTP usage: %s --model GGUF --mtp-bit-exact [--exact-prefill N --exact-rounds N --exact-pool-mib N --exact-prefill-file FILE]\n", argv[0]);
+        std::fprintf(stderr, "strict MTP usage: %s --model GGUF --mtp-bit-exact [--test-cache-k TYPE --test-cache-v TYPE --exact-prefill N --exact-rounds N --exact-pool-mib N --exact-batch-size N --exact-length N --exact-prefill-file FILE]\n", argv[0]);
         return 1;
     }
     for (int i=3;i<argc;++i) {
@@ -658,6 +662,24 @@ int main(int argc,char ** argv) {
 #endif
     testing t;
     test_kv_stream_bit_exact_comparator(t);
+    t.test("short_dflash_profiles_keep_native_controls_physically_bounded", [&](testing & t) {
+        const auto original = dflash_exact_profiles(false, false, false, false, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0);
+        t.assert_equal(size_t(16000), original.back()[1]);
+        t.assert_equal(size_t(16384), original.back()[2]);
+        const ggml_type types[] = {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1};
+        for (auto key : types) for (auto value : types) {
+            const auto profiles = dflash_exact_profiles(false, false, false, true, key, value);
+            t.assert_equal(size_t(4), profiles.size());
+            const size_t maximum = ggml_row_size(key,1024)+ggml_row_size(value,1024) > 4096 ? 4096 : 8192;
+            for (const auto & profile : profiles) {
+                t.assert_true(profile[2] <= maximum && profile[1]+64 <= profile[2]);
+                t.assert_true(profile[0] == 1 || profile[0] == 3 || profile[0] == 7);
+            }
+            t.assert_equal(size_t(2047), profiles.front()[1]);
+            t.assert_equal(maximum-192, profiles.back()[1]);
+        }
+    });
     t.test("selector_lattice_permutations_preserve_scores_but_one_bit_changes_do_not",[](testing & t) {
         std::vector<float> a{0,0,0,0,0,0,4,2,0.2f,0.4f,0.2f,0.4f};
         auto b=a;
@@ -679,9 +701,26 @@ int main(int argc,char ** argv) {
     });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--test-cache-k") || !std::strcmp(argv[i], "--test-cache-v")) {
+            const bool key = !std::strcmp(argv[i], "--test-cache-k");
+            if (++i == argc) {
+                std::fprintf(stderr, "missing test cache type\n");
+                return 1;
+            }
+            try {
+                const auto type = kv_stream_exact_cache_type(argv[i]);
+                (key ? test_cache_k : test_cache_v) = type;
+                test_cache_explicit = true;
+            } catch (const std::exception & error) {
+                std::fprintf(stderr, "%s\n", error.what());
+                return 1;
+            }
+            continue;
+        }
         if (!std::strcmp(argv[i], "--dflash-native") && i+1 < argc) dflash_native_model = argv[++i];
         if (!std::strcmp(argv[i], "--dflash-shared-workspace")) dflash_shared_workspace_control = true;
         if (!std::strcmp(argv[i], "--dflash-bit-exact")) dflash_exact_control = true;
+        if (!std::strcmp(argv[i], "--dflash-short")) dflash_short_control = dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-lifecycle")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-context-end")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-rejection-long")) dflash_exact_control = true;
@@ -713,6 +752,10 @@ int main(int argc,char ** argv) {
         serial_workspace_growth = serial_workspace_growth || !std::strcmp(argv[i],"--serial-workspace-growth");
     }
     embedded_mtp_control |= vision_mtp_handoff;
+    if (test_cache_explicit && !mtp_bit_exact_control && !dflash_exact_control && !vision_mtp_handoff) {
+        std::fprintf(stderr, "test cache types require a numerical oracle or vision handoff profile\n");
+        return 1;
+    }
     ggml_backend_load_all(); llama_backend_init();
     ggml_backend_ptr baseline_backend;
 #ifdef KV_STREAM_TILE_NATIVE_TEST
@@ -742,7 +785,10 @@ int main(int argc,char ** argv) {
         const bool lifecycle=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-lifecycle"); });
         const bool context_end=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-context-end"); });
         const bool sustained=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-rejection-long"); });
-        t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) { test_kv_stream_dflash_exact(t,model.get(),dflash_native_model,lifecycle,context_end || sustained,sustained); });
+        t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) {
+            test_kv_stream_dflash_exact(t,model.get(),dflash_native_model,lifecycle,context_end || sustained,sustained,
+                test_cache_k,test_cache_v,test_cache_explicit || dflash_short_control,dflash_short_control);
+        });
         return t.summary();
     }
     if (wide_rollback_control) {
@@ -1536,6 +1582,8 @@ int main(int argc,char ** argv) {
         p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
         p.kv_stream_pool_bytes = 16*1048576;
         if (vision_mtp_handoff) {
+            p.type_k = test_cache_k;
+            p.type_v = test_cache_v;
             p.n_ctx = 8192;
             p.kv_stream_pool_bytes = 0;
             p.shared_device_memory_bytes = 640*1048576;
@@ -1747,7 +1795,12 @@ int main(int argc,char ** argv) {
         if (!t.assert_true(append_mtp(0, 256))) return;
         t.assert_equal(size_t(256), mtp->tokens());
         t.assert_equal(size_t(0), mtp->frontiers().device);
-        if (!t.assert_true(target->acquire_mtp_layer())) return;
+        if (vision_mtp_handoff) {
+            auto * owner = llama_context_compute_memory(context.get());
+            if (!t.assert_true(owner && owner->text_phase().phase == llama_memory_text_phase::prefill)) return;
+            if (!t.assert_true(llama_kv_stream_mtp_prepare(context.get(), 0))) return;
+            if (!t.assert_true(owner->text_phase().phase == llama_memory_text_phase::decode)) return;
+        } else if (!t.assert_true(target->acquire_mtp_layer())) return;
         const auto initial_upload = target->mtp_layer_population();
         t.assert_true(initial_upload.bytes > 0);
         if (!t.assert_true(append_mtp(256, 1))) return;
