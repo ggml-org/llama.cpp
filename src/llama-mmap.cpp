@@ -10,6 +10,12 @@
 #include <stdexcept>
 #include <cerrno>
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -69,6 +75,7 @@ static std::string llama_format_win_err(DWORD err) {
 struct llama_file::impl {
 #if defined(_WIN32)
     HANDLE fp_win32;
+    std::string fname;
     std::string GetErrorMessageWin32(DWORD error_code) const {
         std::string ret;
         LPSTR lpMsgBuf = NULL;
@@ -84,7 +91,7 @@ struct llama_file::impl {
         return ret;
     }
 
-    impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
+    impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) : fname(fname) {
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
@@ -95,7 +102,7 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    impl(FILE * file) : owns_fp(false) {
+    impl(FILE * file) : fname("(file*)"), owns_fp(false) {
         fp = file;
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
         seek(0, SEEK_END);
@@ -418,6 +425,7 @@ llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }
 size_t llama_file::size() const { return pimpl->size; }
+const std::string & llama_file::name() const { return pimpl->fname; }
 
 size_t llama_file::read_alignment() const { return pimpl->read_alignment(); }
 bool llama_file::has_direct_io() const { return pimpl->has_direct_io(); }
@@ -976,3 +984,395 @@ void llama_copy_ranges_prefetched(const void * base, const std::vector<llama_byt
 size_t llama_path_max() {
     return PATH_MAX;
 }
+
+//
+// direct reads of lazily mapped tensors
+//
+
+static size_t llama_align_down(size_t v, size_t a) { return v & ~(a - 1); }
+static size_t llama_align_up  (size_t v, size_t a) { return (v + a - 1) & ~(a - 1); }
+
+std::vector<llama_fill> llama_gather_fills(const std::vector<llama_byte_range> & runs, size_t capacity, size_t align,
+        size_t base, size_t split) {
+    GGML_ASSERT(align > 0 && (align & (align - 1)) == 0 && split % align == 0 && capacity >= 2*align + split);
+
+    std::vector<llama_fill> fills;
+    llama_fill cur;
+
+    auto place = [&](size_t offs, size_t size) {
+        const size_t f   = base + offs;
+        const size_t lo  = llama_align_down(f, align);
+        const size_t ext = llama_align_up(f + size, align) - lo;
+        size_t at = llama_align_up(cur.bytes, align);
+        if (at + ext > capacity && !cur.segs.empty()) {
+            fills.push_back(std::move(cur));
+            cur = {};
+            at  = 0;
+        }
+        GGML_ASSERT(at + ext <= capacity);
+        cur.segs.push_back({ offs, size, at });
+        cur.bytes = at + ext;
+    };
+
+    // a run that does not fit a buffer is split at absolute multiples of `split` in the file
+    const size_t limit = capacity - 2*align;
+    for (const auto & r : runs) {
+        if (r.size == 0) {
+            continue;
+        }
+        const size_t end = r.offs + r.size;
+        for (size_t pos = r.offs; pos < end; ) {
+            size_t cut = end;
+            if (end - pos > limit) {
+                cut = llama_align_down(base + pos + limit, split) - base;
+                if (cut <= pos) {
+                    cut = pos + limit;
+                }
+            }
+            place(pos, cut - pos);
+            pos = cut;
+        }
+    }
+    if (!cur.segs.empty()) {
+        fills.push_back(std::move(cur));
+    }
+    return fills;
+}
+
+#ifdef __linux__
+#include <sys/stat.h>
+
+struct llama_direct_reader::impl {
+    struct file_t {
+        int         fd   = -1;
+        size_t      size = 0;
+        std::string path;
+    };
+    struct fill_state {
+        std::atomic<int>  remaining{0};
+        std::atomic<bool> failed{false};
+    };
+    struct piece_t {
+        bool         hit;       // true: memcpy from `src` (resident pages); false: pread from `fd`
+        int          fd;
+        size_t       file_size;
+        size_t       foff;      // aligned file offset
+        size_t       len;       // aligned length (may extend past EOF)
+        void       * dst;
+        const void * src;
+        std::shared_ptr<fill_state> fs;
+    };
+
+    std::vector<file_t> files;
+    size_t align   = 4096;
+    size_t piece   = 2u*1024*1024;
+    bool   enabled = false;
+    bool   hits_ok = false;
+    bool   hits    = false;
+
+    std::mutex              mtx;
+    std::condition_variable cv_work;
+    std::condition_variable cv_done;
+    std::deque<piece_t>     queue;
+    std::vector<std::thread> threads;
+    bool                    stopping = false;
+
+    uint64_t next_id = 1;
+    std::unordered_map<uint64_t, std::shared_ptr<fill_state>> pending;
+
+    std::atomic<uint64_t> bytes_read{0}, bytes_hit{0}, pieces_read{0}, pieces_hit{0}, errors{0};
+
+    ~impl() {
+        stop();
+        close_files();
+    }
+
+    static bool is_eintr() { return errno == EINTR; }
+
+    // one direct read of `len` aligned bytes at `foff`; short reads are only legal at the end of the file, or
+    // when the read can be resumed at an aligned position
+    bool read_piece(const piece_t & p) {
+        size_t done = 0;
+        while (done < p.len) {
+            if (done % align != 0) {
+                LLAMA_LOG_WARN("%s: short read stopped at %zu, not aligned to %zu\n", __func__, p.foff + done, align);
+                return false;
+            }
+            const ssize_t r = pread(p.fd, (char *) p.dst + done, p.len - done, p.foff + done);
+            if (r < 0) {
+                if (is_eintr()) {
+                    continue;
+                }
+                LLAMA_LOG_WARN("%s: pread(%zu bytes at %zu) failed: %s\n", __func__, p.len - done, p.foff + done, strerror(errno));
+                return false;
+            }
+            done += (size_t) r;
+            if (p.foff + done >= p.file_size) {
+                // the tail of the last piece lies past the end of the file: the tensor itself never does
+                memset((char *) p.dst + done, 0, p.len - done);
+                return true;
+            }
+            if (r == 0 || (size_t) r % 512 != 0) {
+                LLAMA_LOG_WARN("%s: short read of %zd bytes at %zu before the end of the file\n", __func__, r, p.foff + done - r);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void worker() {
+        for (;;) {
+            piece_t p;
+            {
+                std::unique_lock<std::mutex> lock(mtx);
+                cv_work.wait(lock, [&] { return !queue.empty() || stopping; });
+                if (queue.empty()) {
+                    return;
+                }
+                p = std::move(queue.front());
+                queue.pop_front();
+            }
+            bool ok = true;
+            if (p.hit) {
+                memcpy(p.dst, p.src, p.len);
+                bytes_hit  += p.len;
+                pieces_hit += 1;
+            } else {
+                ok = read_piece(p);
+                if (ok) {
+                    bytes_read  += p.len;
+                    pieces_read += 1;
+                }
+            }
+            if (!ok) {
+                errors += 1;
+                p.fs->failed = true;
+            }
+            if (p.fs->remaining.fetch_sub(1) == 1) {
+                std::lock_guard<std::mutex> lock(mtx);
+                cv_done.notify_all();
+            }
+        }
+    }
+
+    void stop() {
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            if (threads.empty()) {
+                return;
+            }
+            stopping = true;
+        }
+        cv_work.notify_all();
+        for (auto & t : threads) {
+            t.join();
+        }
+        threads.clear();
+        pending.clear();
+        enabled  = false;
+        stopping = false;
+    }
+
+    void close_files() {
+        for (auto & f : files) {
+            if (f.fd != -1) {
+                close(f.fd);
+            }
+        }
+        files.clear();
+    }
+};
+
+llama_direct_reader::llama_direct_reader() : pimpl(std::make_unique<impl>()) {}
+llama_direct_reader::~llama_direct_reader() = default;
+
+bool llama_direct_reader::init(const std::vector<std::string> & paths, void * probe_buf, size_t probe_size, int n_threads, size_t piece) {
+    auto & d = *pimpl;
+    GGML_ASSERT(d.threads.empty() && !d.enabled);
+    if (paths.empty() || n_threads < 1) {
+        return false;
+    }
+    if (piece == 0 || (piece & (piece - 1)) != 0) {
+        LLAMA_LOG_WARN("%s: piece size must be a power of two; direct expert reads disabled\n", __func__);
+        return false;
+    }
+    d.piece   = piece;
+    d.hits_ok = true;
+    struct close_on_fail { impl & d; bool ok = false; ~close_on_fail() { if (!ok) { d.close_files(); d.hits_ok = false; } } } guard{ d };
+    size_t align = 512;
+    for (const auto & path : paths) {
+        impl::file_t f;
+        f.path = path;
+        f.fd   = open(path.c_str(), O_RDONLY | O_DIRECT);
+        if (f.fd == -1) {
+            LLAMA_LOG_WARN("%s: open(%s, O_DIRECT) failed: %s; direct expert reads disabled\n", __func__, path.c_str(), strerror(errno));
+            return false;
+        }
+        struct stat st{};
+        if (fstat(f.fd, &st) != 0) {
+            LLAMA_LOG_WARN("%s: fstat(%s) failed: %s; direct expert reads disabled\n", __func__, path.c_str(), strerror(errno));
+            close(f.fd);
+            return false;
+        }
+        f.size = (size_t) st.st_size;
+        // mincore reports every page as resident for a file the caller neither owns nor may write
+        if (st.st_uid != geteuid() && access(path.c_str(), W_OK) != 0) {
+            d.hits_ok = false;
+        }
+#if defined(STATX_DIOALIGN) && (!defined(__ANDROID__) || __ANDROID_API__ >= 30)
+        struct statx sx{};
+        if (statx(f.fd, "", AT_EMPTY_PATH, STATX_DIOALIGN, &sx) == 0 && (sx.stx_mask & STATX_DIOALIGN)) {
+            align = std::max<size_t>(align, std::max<size_t>(sx.stx_dio_offset_align, sx.stx_dio_mem_align));
+        } else {
+            align = 4096;
+        }
+#else
+        align = 4096;
+#endif
+        d.files.push_back(f);
+    }
+    // page granularity is the natural upper bound (hits are decided per page); never st_blksize (the stripe width)
+    d.align = std::min<size_t>(std::max<size_t>(align, 512), 4096);
+    if (d.align & (d.align - 1)) {
+        d.align = 4096;
+    }
+    if (piece % d.align != 0 || probe_buf == nullptr || ((uintptr_t) probe_buf % d.align) != 0 || probe_size < d.align) {
+        LLAMA_LOG_WARN("%s: buffer or piece size not aligned to %zu; direct expert reads disabled\n", __func__, d.align);
+        return false;
+    }
+    // one real read decides up front whether O_DIRECT works into this kind of buffer
+    {
+        impl::piece_t p = { false, d.files[0].fd, d.files[0].size, 0, d.align, probe_buf, nullptr, nullptr };
+        if (!d.read_piece(p)) {
+            LLAMA_LOG_WARN("%s: probe read failed; direct expert reads disabled\n", __func__);
+            return false;
+        }
+    }
+    impl * dp = &d;
+    for (int i = 0; i < n_threads; ++i) {
+        d.threads.emplace_back([dp] { dp->worker(); });
+    }
+    d.enabled = true;
+    guard.ok  = true;
+    LLAMA_LOG_INFO("%s: %zu files, %d reader threads, %zu MiB pieces, alignment %zu%s\n", __func__, d.files.size(),
+            n_threads, piece >> 20, d.align, d.hits_ok ? "" : " (hit detection unavailable: not the file owner)");
+    return true;
+}
+
+bool   llama_direct_reader::enabled()      const { return pimpl->enabled; }
+size_t llama_direct_reader::alignment()    const { return pimpl->align; }
+bool   llama_direct_reader::hits_enabled() const { return pimpl->hits_ok && pimpl->hits; }
+void   llama_direct_reader::set_hits(bool want)  { pimpl->hits = want; }
+
+llama_direct_reader::ticket llama_direct_reader::submit(const llama_fill & fill, int file_idx, size_t file_offs, const void * map, void * buf) {
+    auto & d = *pimpl;
+    GGML_ASSERT(d.enabled && file_idx >= 0 && (size_t) file_idx < d.files.size());
+    GGML_ASSERT(((uintptr_t) buf % d.align) == 0);
+    const auto & f = d.files[file_idx];
+    const bool hits = hits_enabled();
+    const size_t page = (size_t) sysconf(_SC_PAGESIZE);
+
+    auto fs = std::make_shared<impl::fill_state>();
+    std::vector<impl::piece_t> pieces;
+    for (const auto & seg : fill.segs) {
+        const size_t foff = file_offs + seg.offs;
+        const size_t lo   = llama_align_down(foff, d.align);
+        const size_t hi   = llama_align_up(foff + seg.size, d.align);
+        GGML_ASSERT(foff + seg.size <= f.size && seg.buf_offs + (hi - lo) <= fill.bytes);
+        for (size_t a = lo; a < hi; ) {
+            // pieces end on absolute multiples of the piece size: one stripe of the array each
+            const size_t b = std::min(hi, llama_align_down(a + d.piece, d.piece));
+            impl::piece_t p = { false, f.fd, f.size, a, b - a, (char *) buf + seg.buf_offs + (a - lo), nullptr, fs };
+            if (hits) {
+                // page-granular cover of the piece in the mapping (the mapping covers the whole file)
+                const char * src = (const char *) map + ((ptrdiff_t) a - (ptrdiff_t) file_offs);
+                const uintptr_t beg = llama_align_down((uintptr_t) src, page);
+                const uintptr_t end = llama_align_up((uintptr_t) src + (b - a), page);
+                const size_t n = (end - beg) / page;
+                std::vector<unsigned char> vec(n);
+                if (mincore((void *) beg, end - beg, vec.data()) == 0 &&
+                        std::all_of(vec.begin(), vec.end(), [](unsigned char v) { return v & 1; })) {
+                    p.hit = true;
+                    p.src = src;
+                }
+            }
+            pieces.push_back(std::move(p));
+            a = b;
+        }
+    }
+    fs->remaining = (int) pieces.size();
+
+    ticket t;
+    {
+        std::lock_guard<std::mutex> lock(d.mtx);
+        t.id = d.next_id++;
+        d.pending.emplace(t.id, fs);
+        for (auto & p : pieces) {
+            d.queue.push_back(std::move(p));
+        }
+    }
+    d.cv_work.notify_all();
+    return t;
+}
+
+bool llama_direct_reader::wait(ticket t) {
+    auto & d = *pimpl;
+    std::shared_ptr<impl::fill_state> fs;
+    {
+        std::lock_guard<std::mutex> lock(d.mtx);
+        auto it = d.pending.find(t.id);
+        GGML_ASSERT(it != d.pending.end() && "llama_direct_reader: unknown or already waited ticket");
+        fs = it->second;
+        d.pending.erase(it);
+    }
+    std::unique_lock<std::mutex> lock(d.mtx);
+    d.cv_done.wait(lock, [&] { return fs->remaining.load() == 0; });
+    return !fs->failed.load();
+}
+
+void llama_direct_reader::stop() {
+    auto & d = *pimpl;
+    // everything queued is still processed: the workers only exit once the queue is empty
+    {
+        std::unique_lock<std::mutex> lock(d.mtx);
+        d.cv_done.wait(lock, [&] {
+            for (const auto & kv : d.pending) {
+                if (kv.second->remaining.load() != 0) {
+                    return false;
+                }
+            }
+            return true;
+        });
+    }
+    d.stop();
+}
+
+llama_direct_reader::counters llama_direct_reader::get_counters() const {
+    const auto & d = *pimpl;
+    return { d.bytes_read.load(), d.bytes_hit.load(), d.pieces_read.load(), d.pieces_hit.load(), d.errors.load() };
+}
+
+void llama_direct_reader::reset_counters() {
+    auto & d = *pimpl;
+    d.bytes_read = d.bytes_hit = d.pieces_read = d.pieces_hit = d.errors = 0;
+}
+
+#else // !__linux__
+
+struct llama_direct_reader::impl {};
+
+llama_direct_reader::llama_direct_reader() : pimpl(std::make_unique<impl>()) {}
+llama_direct_reader::~llama_direct_reader() = default;
+
+bool llama_direct_reader::init(const std::vector<std::string> &, void *, size_t, int, size_t) { return false; }
+bool   llama_direct_reader::enabled()      const { return false; }
+size_t llama_direct_reader::alignment()    const { return 4096; }
+bool   llama_direct_reader::hits_enabled() const { return false; }
+void   llama_direct_reader::set_hits(bool)       {}
+llama_direct_reader::ticket llama_direct_reader::submit(const llama_fill &, int, size_t, const void *, void *) { GGML_ABORT("direct reads are not available on this platform"); }
+bool llama_direct_reader::wait(ticket) { return false; }
+void llama_direct_reader::stop() {}
+llama_direct_reader::counters llama_direct_reader::get_counters() const { return {}; }
+void llama_direct_reader::reset_counters() {}
+
+#endif

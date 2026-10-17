@@ -44,6 +44,20 @@ Hardware facts: Gen3 x4 per drive (CPU has no Gen4), ~3.5 GB/s each; random read
 ~1 GB/s per drive, so the array ceiling is ~4 GB/s (5.7 on the freshly written IQ1 shards, still partly in SLC);
 HMB already at the firmware maximum (64 MiB); TRIM made no difference; load is balanced within 1% across drives.
 
+## Update 2026-10-16: 256 GB RAM, direct reads for the prompt pass (plan v18.1, change D)
+
+- The ~4 GB/s "array ceiling" was the read method, not the drives: llama.cpp's mmap + WILLNEED + memcpy path reads
+  2.5 GB/s on every shard; O_DIRECT preads (8 threads x 2 MiB) read 7-12 GB/s. Prompt batches now read the expert
+  runs with O_DIRECT into a ring of 4 pinned buffers (llama_direct_reader), pieces already in the page cache are
+  copied from memory, and the pass leaves the page cache to decode.
+- Measured (IQ1, 1.6k-token document review + 128 tokens, evicted cache, 4 requests): prompt 285 s -> 108 s
+  (129 s on the first request after a start), decode unchanged at 0.53-0.54 tok/s, whole request 535 s -> 346 s.
+  With CHECKPOINTS=0 (single prompt batch; right for single-turn requests): prompt 70-76 s, whole request ~305 s.
+  Generated text byte-identical to the old path.
+- Knobs: LLAMA_COPY_DIRECT=0 (old path), LLAMA_COPY_DIRECT_HITS=0, _THREADS (8), _PIECE_MB (2), _LOG=1; launcher
+  CHECKPOINTS. Unit test tests/test-copy-direct.cpp. Follow-up (D3): the small first batch reads at 5.8 GB/s
+  (fragmented runs + per-tensor drain), and the reader idles during each layer's GPU compute.
+
 ## Remaining levers, ranked by expected gain
 1. **Prompt processing on the GPU (IQ1 first).** Prefill is CPU-compute-bound with the GPU idle. With 2048-token
    batches every expert is used, so copying each layer's three expert tensors to the GPU (upstream op-offload,

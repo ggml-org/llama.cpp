@@ -1330,6 +1330,26 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
     pimpl->has_tensor_overrides = params.tensor_buft_overrides && params.tensor_buft_overrides[0].pattern;
 }
 
+bool llama_model::lazy_src(const ggml_tensor * t, int & file_idx, size_t & file_offs) const {
+    if (t == nullptr || t->data == nullptr || lazy_file_paths.size() != pimpl->mappings.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < pimpl->mappings.size(); ++i) {
+        const auto & m = pimpl->mappings[i];
+        if (!m) {
+            continue;
+        }
+        const char * beg = (const char *) m->addr();
+        const char * end = beg + m->size();
+        if ((const char *) t->data >= beg && (const char *) t->data + ggml_nbytes(t) <= end) {
+            file_idx  = (int) i;
+            file_offs = (size_t) ((const char *) t->data - beg);
+            return true;
+        }
+    }
+    return false;
+}
+
 llama_model::~llama_model() {
     // its worker hints addresses in the mappings and saves the learned state: stop it before they go away
     moe_predictor.reset();
@@ -2025,6 +2045,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
+        }
+        if (ml.lazy.any()) {
+            GGML_ASSERT(pimpl->mappings.size() == ml.files.size());
+            for (const auto & file : ml.files) {
+                lazy_file_paths.push_back(file->name());
+            }
         }
     }
 

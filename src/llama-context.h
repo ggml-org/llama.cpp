@@ -4,6 +4,7 @@
 #include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
+#include "llama-mmap.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
@@ -392,6 +393,58 @@ private:
     bool   copy_prefetch           = false;
     bool   copy_prefetch_logged    = false;
     size_t copy_prefetch_lookahead = 256u*1024*1024;
+
+    // the uploads go through a ring of pinned host buffers: filling one buffer (memcpy from the mapping, or direct
+    // reads from disk) overlaps the DMA of the previous ones (a cudaMemcpy from pageable memory is host-synchronous
+    // and much slower). LLAMA_COPY_STAGING=0 disables; falls back to plain uploads when the device has no pinned
+    // host memory
+    struct upload_ring {
+        static constexpr int    n_bufs = 4;
+        static constexpr size_t chunk  = 64u*1024*1024;        // payload per fill
+        static constexpr size_t size   = chunk + 2u*1024*1024; // + alignment slop of the direct reads
+
+        ggml_backend_t          backend = nullptr; // the ring serves one backend
+        ggml_backend_buffer_ptr bufs[n_bufs];
+        ggml_backend_event_ptr  events[n_bufs];
+        bool                    pending[n_bufs] = {};
+        int                     next  = 0;
+        bool                    tried = false;
+
+        bool   ready() const { return bufs[0] != nullptr; }
+        bool   init(ggml_backend_t backend);
+        int    acquire();                            // the next buffer, once the DMA that last read it is done
+        void * base(int i) const;
+        void   record(ggml_backend_t backend, int i); // after the uploads from buffer i were issued
+        void   copy(ggml_backend_t backend, ggml_tensor * dst, const void * src, size_t offs, size_t size);
+        void   release();
+    };
+    upload_ring copy_ring;
+    bool        copy_staging = true;
+
+    // direct reads (O_DIRECT) of the expert runs into the ring, bypassing the page cache and the kernel's readahead
+    // path: LLAMA_COPY_DIRECT=0 disables, LLAMA_COPY_DIRECT_HITS=0 stops copying pieces already in the page cache
+    // from memory (measured: -14 s per 1.6k-token prompt), LLAMA_COPY_DIRECT_THREADS / _PIECE_MB tune the reader,
+    // LLAMA_COPY_DIRECT_LOG=1 logs per-batch totals
+    llama_direct_reader copy_reader;
+    bool   copy_direct         = true;
+    bool   copy_direct_hits    = true;
+    bool   copy_direct_log     = false;
+    bool   copy_direct_tried   = false;
+    bool   copy_direct_failed  = false; // a read failed mid-pass: back to the mapping from the next tensor on
+    int    copy_direct_threads = 8;
+    size_t copy_direct_piece   = 2u*1024*1024;
+    bool   direct_reader_init(ggml_backend_t backend);
+    void   copy_direct_runs(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst,
+                            const std::vector<llama_byte_range> & runs, int file_idx, size_t file_offs);
+
+    // per-batch totals of the expert uploads (LLAMA_COPY_DIRECT_LOG=1)
+    struct copy_stats_t {
+        int      calls   = 0;
+        int64_t  time_us = 0;
+        uint64_t bytes   = 0;
+    };
+    copy_stats_t copy_stats;
+    void copy_stats_log();
 
     // graph reallocations during inference where the backend assignments did not change, split by whether the
     // graph size is the same as the previously scheduled one (unexpected) or different

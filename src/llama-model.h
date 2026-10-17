@@ -838,6 +838,10 @@ struct llama_model {
 
     // tensors read lazily from the file mapping (TENSOR_READ_LAZY): their uploads to a device are streamed
     std::unordered_set<const ggml_tensor *> lazy_tensors;
+    // the files of the lazily read tensors, in mapping order (one mapping per file whenever lazy ranges exist)
+    std::vector<std::string> lazy_file_paths;
+    // the file index (into lazy_file_paths / the mappings) and the offset in that file of a mapped tensor's data
+    bool lazy_src(const ggml_tensor * t, int & file_idx, size_t & file_offs) const;
 
     // next-layer expert prediction for lazy experts (LLAMA_MOE_PREDICT), null when disabled
     std::unique_ptr<llama_moe_predictor> moe_predictor;

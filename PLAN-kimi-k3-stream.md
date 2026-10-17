@@ -461,3 +461,291 @@ S re-measured: 1.05x same doc. llama-perplexity now built.
   offload, ~0.16 SE) -> accepted, OFFLOAD=1 stays the IQ1 default; the 0.5% bound is a soft target for a 2-chunk
   estimate. Launcher IQ1 defaults (GL 11, OFFLOAD 1) verified live: prefill 229.6 s / 6.8 tok/s, decode 0.458
   tok/s, VRAM free min 914 MiB. IQ1 is the user's main model (launcher default MODEL).
+
+## v16: IQ1 as the main model - next levers
+Measured: prefill 230 s is bound by the pageable host->GPU copy (~2.2 GB/s, disk ceiling 5.7); decode 0.46 tok/s
+with ~12 threads "running" but 3 in D (page-fault wait) on average and the disk at 34%: ggml threads spin at
+barriers while one thread waits on a missed expert page, so per-layer miss latency (not bandwidth) may dominate.
+### Change W (llama-context.cpp): pinned double-buffered staging for expert uploads
+In sched_copy_experts (prefetch path), instead of ggml_backend_tensor_set_async from the pageable mapping:
+two pinned host buffers of CHUNK (64 MiB) allocated once per context from the backend's host buffer type
+(ggml_backend_dev_host_buffer_type of the dst device; fall back to the current path if unavailable); for each
+chunk: wait for the event of the DMA that last used this buffer, memcpy(mapping -> pinned) (page faults block on
+folios already in flight thanks to the WILLNEED window), ggml_backend_tensor_set_async from the pinned buffer,
+record an event; the window logic of llama_copy_ranges_prefetched is reused (its copy callback does the staging).
+Expected: copy at min(memcpy ~8 GB/s, PCIe ~12) with memcpy(i+1) overlapping DMA(i) -> disk-bound (~5.7 GB/s):
+prefill ~140-150 s. Numerics unchanged (same bytes). Opt-in via the existing switch; env LLAMA_COPY_STAGING=0
+disables (A/B). Unit: extend test-copy-prefetch with a staging callback mock (copy order/bytes identical).
+Assert on IQ1: prefill >= 1.4x the current 230 s, md0 >= 4 GB/s during prefill, perplexity identical to the
+non-staged offload run (same kernels -> bit-identical logits expected: assert max |dlogprob| == 0 over 129 tokens).
+### Measurement X (no code): where IQ1 decode time goes
+(a) short prompt (~20 tokens), 32 greedy tokens, run twice without eviction: run 2's experts are cached -> its
+decode tok/s is the compute floor; report cold vs warm; (b) utime/stime split of the server per phase (from
+/proc/PID/stat) for cold and warm; (c) thread scaling on the warm run: THREADS=7 vs 14 vs 28 (28 = hyperthreads;
+the worker note applies); (d) per-layer D-state time: sample /proc/PID/task/*/stat states at 10 Hz during cold
+decode and report mean threads in D and the fraction of samples with >= 1 thread in D.
+Decision rule: if warm decode >= 2x cold -> decode is miss-latency-bound: next lever is cutting miss latency
+(larger folios / fewer, bigger reads per miss; or an io_uring+O_DIRECT expert cache) or raising recall; if warm
+~= cold -> CPU-bound: next lever is kernel speed (IQ1_S/Q2_K dot products, thread count) or more GPU layers.
+- v16.1 (graph APPROVE w/ details; traceability CHANGES): W details: host buft via ggml_backend_dev_host_buffer_type
+  of the dst device, 2 x 64 MiB buffers + one event each (ggml_backend_event_new/record/synchronize; null event ->
+  ggml_backend_synchronize fallback), detect the silent plain-CPU fallback (buffer type != host buft -> staging off,
+  log), free in ~llama_context after synchronizing the backends, chunk == staging size (assert), lookahead >= 2x
+  chunk, INFO line "staged uploads via <buft>". Assertions same-session: interleave STAGING=1/0 (evicted cache),
+  staged prefill >= 1.4x non-staged, md0 >= 0.75x the same-session fio ceiling, |dlogprob| == 0 (same bytes incl.
+  the 512-byte MMQ padding - the unit mock asserts the padding is copied). X: warmness asserted (run-2 read/token
+  < 5% of run-1, pgmajfault ~0, shrink n_predict until true), ids identical, PREDICT=0 warm arm, iowait, per-token
+  latencies; thresholds warm <= 1.15x cold = CPU-bound, >= 2x = latency-bound, else mixed.
+- v16.2 (I/O): W: if measured md0 < ~5 GB/s during staged prefill, move the WILLNEED submission off the copy thread
+  (second thread); optional later: pread() from the fd into the pinned buffer (no faults/PTE churn). X: warmth also
+  by pgmajfault (run 2 < 1% of run 1); record per-drive r_await/aqu-sz at 1 Hz (r_await > ~1 ms = queueing, else
+  latency-bound), predictor hit rate next to the D-state samples, max_sectors_kb per nvme. Decode levers if X says
+  I/O-bound: earlier issue (recall, L+2 speculation) or an O_DIRECT+io_uring host expert cache (2 MiB reads straight
+  into user memory; high complexity, only after X). Bigger folios / MADV_HUGEPAGE do not apply (MADV_RANDOM path,
+  order-0 WILLNEED).
+
+## v17: keep decode's experts in the page cache across prompts (change E)
+
+### Measured problem (2026-10-16, 256 GB RAM, IQ1 launcher defaults, bench/ harness: 1.6k-token doc review x3)
+Prompt 281-294 s, decode 0.52-0.53 tok/s on every request, including the third (same document as the first):
+each request reads ~900 GB from md0 and the page cache sits full at ~255 GB. A prompt pass streams all 92 layers'
+experts (~511 GB) in layer order through the mapping; that scan is larger than the cache (~215 GB available), so
+it evicts both the previous pass's tail and every expert decode had accumulated. Decode therefore always starts
+cold (warm compute floor measured earlier: 0.73 tok/s vs 0.50 cold at 160 GB). Staging (W) changed nothing
+(< 1% on all metrics, arms A/B), so W stays uncommitted and default-on until E is measured with and without it.
+
+### Change E: drop prompt-streamed expert pages that were not already cached
+Policy: the page cache belongs to decode. The prompt path (sched_copy_experts, prefetch branch) must leave the
+cache exactly as it found it: pages that were resident before the pass are touched (so they stay young) and kept;
+pages the pass brought in are dropped right after they were copied. Decode's own faults/WILLNEEDs are the only
+writers of the cache, so over time it holds decode's most recently used (~popular) experts, up to the full ~215 GB.
+Prompt also gains: those resident bytes are hits on every pass (today ~0% hits because of the scan order), so a
+pass reads ~511 GB - cache instead of ~511 GB.
+
+Mechanism (Linux only, no-op elsewhere; env `LLAMA_COPY_EVICT=0` disables; on by default with the prefetch switch):
+1. Snapshot at hint time. llama_copy_ranges_prefetched already issues hints in 2 MiB pieces `lookahead` ahead of
+   the copy, through the optional `hint` callback (llama-context passes nullptr today). E passes a hint lambda:
+   `mincore()` over the page-aligned cover of the piece -> bitmap of pages resident BEFORE the read, stored in a
+   per-copy map keyed by piece offset (`copy_experts.snap`), then `llama_prefetch` (WILLNEED) as before.
+   The snapshot precedes the hint, so readahead triggered by the hint cannot be mistaken for prior residency; the
+   lazy ranges are MADV_RANDOM, so faults bring in single pages and no readahead crosses into un-snapshotted pieces.
+2. Evict after copy. copy_chunk (64 MiB) after the copy returns (staged: memcpy into pinned done; unstaged:
+   cudaMemcpy from pageable memory is host-synchronous): pop every snapshot piece inside [offs, offs+size)
+   (pieces nest in chunks: both start at the run offset in multiples of 2 MiB) and hand them to a worker.
+3. Worker thread (`page_evictor` in llama_context: thread + mutex/cv + deque, started on first use with the
+   stager, stopped in ~llama_context before the mappings go away). For each piece: coalesce the pages whose
+   snapshot bit is 0 into runs and `madvise(MADV_PAGEOUT)` each run. Measured on a shard mapping: 0.21 ms/MiB,
+   99.7% of pages dropped (the rest are in-flight folios the kernel skips; irrelevant). At ~310 GB dropped per
+   pass that is ~65 s of CPU - on the side thread, not the copy thread (the kernel's kswapd does this reclaim
+   asynchronously today; E must not move it onto the critical path). Queue bounded (e.g. 64 chunks): the copy
+   thread blocks if the worker falls behind, which also bounds the memory the un-evicted pages take.
+   MADV_PAGEOUT on a shared file mapping needs the caller to own the file (or CAP_SYS_ADMIN): kernel
+   can_do_file_pageout; true here (uid 1000 owns /mnt/k3). If the first call fails (EINVAL on kernels < 5.4,
+   EPERM), log once and turn E off for the rest of the run. Alternative kept in reserve: MADV_DONTNEED (drop PTEs
+   of the file mapping, no data loss) + posix_fadvise(DONTNEED) on the fd (needs the fd kept; 100% effective,
+   measured 2x cheaper).
+4. Boundary pages: a page shared between the piece and a neighbour (tensor starts are 32-byte aligned) is
+   snapshotted/evicted as part of the cover; dropping a neighbour's cold page is harmless (hint only).
+5. Log once on first use: "prompt expert pages are dropped after upload; the page cache is kept for decode".
+Not changed: decode paths (CPU MUL_MAT_ID prefetch, predictor), numerics (same bytes copied), W, the launcher
+(E is on whenever GGML_CPU_MOE_PREFETCH=1; it adds `LLAMA_COPY_EVICT` to the unset list only if it fixes it - no).
+Optional later (not in E): posix_fadvise(DONTNEED) on the dense ranges after the `-lm none` read-load frees ~58 GB
+of never-reused cache immediately instead of waiting for LRU.
+
+### Expected results (assert)
+Unit (tests/test-copy-prefetch.cpp, extended or a sibling): a 48 MiB file mapping, runs as today; pre-populate a
+known subset P of pages (touch them), evict the rest; run the copy with E's snapshot/evict hooks (synchronous
+worker in the test, or wait_idle); assert (a) copy saw exactly the runs' bytes, (b) every page in P is still
+resident, (c) >= 98% of the pages not in P are NOT resident, (d) the untouched 10 MiB region stays non-resident.
+Skip (77) if MADV_PAGEOUT returns EINVAL/EPERM (CI kernels/filesystems), like the existing residency tests.
+End-to-end (Sonnet, bench harness, evicted cache, sequence doc, docB, doc, docB, 128 tokens, temperature 0;
+arms run back to back: C = launcher defaults + E; A = LLAMA_COPY_EVICT=0):
+- cache kept: md0 bytes read for C's requests 3-4 <= 0.75x C's request 1 (~900 GB -> <= ~675 GB; expected lower:
+  prompt ~511 - ~200 = ~310 GB + decode);  A's stay ~900 GB.
+- decode: C's gen tok/s on requests 3-4 >= 0.62 (A: ~0.53), i.e. moving toward the 0.73 warm floor; cold request 1
+  of C within 5% of A (E must not slow the first pass: eviction is off the critical path).
+- prompt: C's requests 3-4 prompt_s <= A's (no regression; a gain if prompt is disk-bound).
+- text identical between C and A for the same doc (same kernels; |dlogprob| == 0 expected).
+- ECC counters unchanged; no "evict disabled" log line; server RSS steady (snapshots freed).
+Decision: if C's decode gain on warm requests < 10%, decode is not cache-bound at this cache size -> report and
+stop (the lever is CPU kernels).
+
+### Review history (v17)
+- v17 reviewed by 3 lenses (Linux mm, llama.cpp integration, traceability): all CHANGES REQUESTED. Key points
+  kept for the record: mincore/MADV_PAGEOUT are silent no-ops for a non-owner (probe needed); PAGEOUT is
+  PTE-driven; coalesce per chunk; queue <= 16 chunks; put the primitives in llama-mmap so the unit test runs the
+  real code; the predictor not hinting during prompt batches (n_tokens > 4) is load-bearing; expert set is
+  544.9 GB (not 511), 9.73 GB/token selected; decode ALREADY gets ~70% of its bytes from cache (scan tail + 128-token
+  self-warming) so E's decode gain is only +2-4%; E's real lever is prompt bytes (545 -> ~320 GB) and only if the
+  pass is disk-bound; decide on total wall of requests 2-4, not decode alone.
+- Gate measurement (readprobe.c, 2 GB cold region of shard 12): the pass's method (mmap + 2 MiB WILLNEED 256 MiB
+  ahead + memcpy) reads at 2.45 GB/s = the pass's 2.1 GB/s -> the prompt IS bound by the read method, not by the
+  disk: O_DIRECT pread, 16 threads x 2 MiB = 9.27 GB/s on the same shard (page cache untouched); preadv2
+  RWF_DONTCACHE 16 threads = 3.4 GB/s; plain buffered 16 threads = 3.6 GB/s. Per-drive max_hw_sectors_kb = 128
+  (firmware), so the 113 KB requests are not tunable; the gain comes from queue depth. => E is superseded by D.
+
+## v18.1: direct reads for the prompt pass (change D, supersedes E)
+
+### Why
+The prompt pass copies the experts to the GPU through the mapping (WILLNEED readahead of order-0 pages + faults +
+memcpy) at 2.1-2.5 GB/s on every shard; the array delivers 7-12 GB/s to 8 concurrent 2 MiB O_DIRECT preads (sweep over
+8-32 GiB cold regions of shards 05-34: mmap path 2.54-2.56 GB/s everywhere; O_DIRECT 2 MiB pieces: 4 threads 7.4,
+8 threads 9.0-11.6 with a tight spread, 16 threads 4.2-13.9 bimodal, 32 threads 3.3-8.5 GB/s; per drive ~1.5 GB/s at
+127 KB requests (max_hw_sectors_kb 128, firmware); preadv2 RWF_DONTCACHE 3.3-3.4, plain buffered 3.6 GB/s). O_DIRECT
+reads bypass the page cache, so the pass stops evicting decode's experts (E's goal) with no mincore/PAGEOUT/worker.
+Verified on this host by two reviewers' probes: O_DIRECT pread straight into cudaMallocHost memory works (plain shmem
+VMA, GUP pins normal pages), bytes identical to buffered reads, cudaMemcpyAsync from the buffer afterwards fine;
+a 64 MiB barrier between fills costs ~0 at 8 threads on contiguous data but the sweep's throughput needs a continuous
+piece queue (per-chunk drain: -18% at 8 threads, -45% at 16); on the fragmented first batch (one 2 MiB expert every
+6 MiB) per-run requests give 1.8 GB/s vs 6.6-8.5 GB/s when gathered into 64 MiB fills.
+
+The prompt is TWO expert passes: the server splits the batch at the user-turn start to create a context checkpoint
+(KDA model; server-context.cpp:4095, `--ctx-checkpoints`): batch 1 = 67 tokens (~1/3 of the experts, fragmented
+runs, 175 GB, 82 s today) then batch 2 = 1569 tokens (all experts, 545 GB of which ~173 GB were hits on batch 1's
+pages, 190 s). Under D (no page-cache hits) a request reads ~720 GB; with `--ctx-checkpoints 0` only ~545 GB.
+GPU-side floor (serial with the reads: DMA and compute share one stream, one layer of GPU expert buffers, ids
+readback synchronizes per layer): DMA 720 GB / 12.3 GB/s (Gen3 x16) = 59 s + compute 10-40 s (152 TFLOP; <= 42 s
+inferred from A's disk-idle time). Expected D prompt: batch 1 21-27 s + ~10 s sync, batch 2 ~57 s + 10-40 s compute
+-> ~100-135 s (vs 285 s); ~75-110 s with the checkpoint split disabled.
+
+Decode today reads ~2.6 GB/token (73% hits) because the pass leaves the LAST ~200 GB of layers resident and 128
+tokens self-warm. Plain D leaves nothing from the pass: request 1 decodes from a cold cache (expected slower than
+0.53 tok/s), later requests depend on the overlap between consecutive decodes (unknown). D therefore includes a
+hit-aware mode (D2, behind env LLAMA_COPY_DIRECT_HITS=1; D0 = plain direct reads is implemented first): pieces whose
+pages are all resident are memcpy'd from the mapping instead of read from disk. Derived expectation: an O_DIRECT pass
+already leaves decode's cached set untouched (D0 keeps it too), so D2 only (a) saves disk bytes for hits - at most
+decode's cached set (<= ~200 GB) per prompt, and a hit still goes page cache -> memcpy -> pinned -> DMA at the same
+~12 GB/s DMA bound as a miss at ~9.6 GB/s, so <= ~5 s saved per prompt, minus ~1-5 s of mincore on the copy thread
+(~360k calls/pass) - and (b) re-promotes resident pages in the LRU (small, unknown effect on decode). Expected D vs
+D0: prompt -5..+5 s, decode ~equal. D2 becomes the default only if measured >= 3 s/prompt faster with equal decode.
+
+### Change D
+1. Model (src/llama-model.{h,cpp}, src/llama-mmap.{h,cpp} llama_file::name()): the loader keeps one mapping per file
+   in file order in pimpl->mappings whenever lazy ranges exist (also with -lm none); add `lazy_file_paths` captured
+   in load_tensors from ml.files[i]->name(), and `lazy_src(const ggml_tensor *) -> { file idx, file offset }` =
+   the mapping whose [addr, addr+size) contains src->data, offs = data - addr (per-tensor table not needed).
+2. Fill gathering (src/llama-mmap.{h,cpp}, pure function, unit-tested): `llama_gather_fills(runs, capacity,
+   align)`: walks the runs in order, packs segments {run offs, size, buffer offset} into fills of <= capacity bytes
+   where each segment occupies [align_down(offs) .. align_up(offs+size)) of the buffer (head/tail slop < align each);
+   `capacity` is the buffer's total aligned bytes INCLUDING slop: segments are placed at align_up(prev_end) and a
+   fill closes when the next segment's aligned extent would not fit (a segment larger than the capacity is split at
+   absolute 2 MiB file offsets). Ring buffers are a fixed 64 MiB + 2 MiB; no "max segments" figure exists. Pieces: each segment is read in pieces split at ABSOLUTE 2 MiB file offsets
+   (first/last partial), so pieces stay 4 KiB aligned internally and mostly map to one drive (md chunk 2 MiB).
+   The D path does NOT call llama_copy_ranges_prefetched (that helper issues WILLNEED; prefetch=false would pass
+   whole 6 GB runs). No hint of any kind is issued on the D path (asserted by the unit test: zero madvise via the
+   test's mapping residency).
+3. Reader (src/llama-mmap.{h,cpp}, `llama_direct_reader`, compiled on Linux only): opens the lazy files via
+   `llama_file(path, "rb", /*direct*/ true)` lazily; has_direct_io() false -> disabled; file_id(), size(),
+   alignment = statx(STATX_DIOALIGN).stx_dio_offset_align when available else 4096, clamped to [512, 4096]
+   (never st_blksize: XFS reports the stripe width, 8 MiB here, under `largeio`; page size is the natural upper bound
+   since hits are page-granular). N threads (env LLAMA_COPY_DIRECT_THREADS,
+   default 8; piece size env LLAMA_COPY_DIRECT_PIECE_MB default 2, sweep 1 once) pull pieces FIFO from one shared
+   queue. API: `submit(fill, buffer) -> ticket` (appends the fill's pieces; each piece is {kind: pread|memcpy, fd,
+   aligned file offset, aligned length, dst}), `wait(ticket)` (per-fill counter), `stop()` (drain + join).
+   pread rules (measured: shard sizes are not sector multiples): always issue the full aligned length even past
+   EOF; a short count r is accepted only if aligned_off + r == file size (fstat at open) and covers the requested
+   end (zero-fill the slop); r == 0, or r % 512 != 0 before EOF -> error; mid-file short read -> retry at off+r.
+   EINTR retry. Init probe: one aligned 4 KiB pread of the first file into the pinned buffer; EINVAL/EFAULT/
+   EOPNOTSUPP -> disabled (log once) before any fill is issued. Mid-pass error on a piece: the fill is marked
+   failed; after wait() the caller re-does that fill's segments with llama_prefetch + memcpy from the mapping into
+   the same buffer (never partial data) and logs once. The current tensor finishes through the fill loop (every
+   already-submitted fill is still wait()ed and used or redone before its buffer is reused or released); D is off
+   from the next sched_copy_experts call on.
+   D2 hits: at submit time the caller runs mincore over each piece's page cover (mapping address); all resident ->
+   kind memcpy (worker memcpy's from the mapping; pages are resident so no faults from disk), else pread. Owner gate
+   at init: mincore reports ALL pages resident for a file the caller neither owns nor can write (kernel
+   can_do_mincore), which would turn every piece into a faulting memcpy; D2 is enabled only if, for every lazy file,
+   fstat(fd).st_uid == geteuid() || access(path, W_OK) == 0; otherwise log once "hit detection unavailable (not file
+   owner), reading everything" and run plain D. E2E asserts hit bytes ~0 on request 1 (evicted cache). Counters
+   per pass: bytes read / bytes hit, logged at INFO at the end of each sched_copy_experts call under a debug env
+   (LLAMA_COPY_DIRECT_LOG=1) and accumulated for the one-line per-batch summary.
+4. Context (src/llama-context.cpp sched_copy_experts prefetch branch; W's stager generalised): ring of 4 pinned
+   host buffers of 64 MiB + 2*align*(max segments per fill) (host buft of the dst device; if unavailable -> today's
+   path), one event each. Loop over fills: acquire buffer b (wait its event = the DMA that last read it), submit
+   fill k+2 (reads run ahead of DMA by two fills: k DMAing, k+1 reading, k+2 queued), wait fill k, one
+   ggml_backend_tensor_set_async per segment from buffer + segment buffer offset + head slop, record event.
+   Per-tensor drain at the end of the call (~1 fill-time x 276 tensors ~ 2 s/pass, accepted). Debug env also logs
+   the cumulative wall time spent inside sched_copy_experts per batch (prompt_s - copy_s = compute + sync).
+   Switches: GGML_CPU_MOE_PREFETCH unset or non-lazy tensor -> unchanged; LLAMA_COPY_DIRECT=0, no host buft,
+   reader disabled, non-Linux (stub llama_direct_reader with enabled() == false, so llama-context.cpp has no
+   #ifdef) -> today's WILLNEED + memcpy (+W) path. Log once on first use: "expert uploads read
+   directly from <n> files with <N> threads (page cache untouched; hits copied from memory)".
+   ~llama_context: synchronize(); reader.stop(); then the stager/ring release (threads write into those buffers).
+5. Not changed: decode paths, predictor, launcher defaults (D on whenever prefetch is on), numerics (same bytes:
+   the 512-byte MMQ padding is inside the run size; unit test asserts byte equality). Zero-code lever to measure:
+   `--ctx-checkpoints 0` removes the 175 GB first pass under D (bench arm variant; not a launcher default until
+   measured - checkpoints matter for multi-turn reuse).
+Contingency D1b (pre-registered; trigger: requests 2-4 gen < 0.98x A on the better of D/D0, or request 1 total > 0.95x A): read the last
+LLAMA_COPY_DIRECT_TAIL_GB of each pass buffered (today's path) so the scan-tail hits for decode remain (~+35-80 s).
+
+### Expected results (assert)
+Unit (tests/test-copy-direct.cpp, LINK llama, Linux only in CMake, SKIP_RETURN_CODE 77): temp file of 48 MiB + 32 B
+of seeded pseudo-random bytes in TMPDIR (skip 77 if O_DIRECT open fails, e.g. tmpfs); runs as in test-copy-prefetch
+(unaligned start 40 MiB + 100, the 512-byte padding) plus a fragmented set (2 MiB every 6 MiB) and a run ending at
+the last byte of the file. Through the real gather + reader into 4 KiB-aligned buffers, assert: (a) bytes identical
+to the file for every segment, all cases, threads 1 and 8; (b) one fill covers many runs in the fragmented case
+(fill count <= ceil(total/64 MiB) + 1); (c) mincore over a mapping of the file: 0 pages resident after the reads
+(fdatasync + FADV_DONTNEED before) - no hints issued; (d) the EOF run: full aligned length issued, short count
+accepted, bytes exact; (e) D2: pre-fault a subset of pieces through the mapping -> those pieces are served by
+memcpy (counter) and the rest by pread, bytes identical, and the pre-faulted pages are still resident afterwards
+while the others are not; (f) init refuses a misaligned probe buffer, a missing file and a non-power-of-two piece size
+(tmpfs accepts O_DIRECT on kernels >= 6.6, so it is not a "disabled" case: the test skips (77) on tmpfs/ramfs and
+when the page cache cannot be evicted); (g) the init probe runs before the first fill.
+End-to-end (Sonnet, bench harness extended: 1 Hz /proc/diskstats + Cached sampler attributed to phases by the
+server-log timestamps, per-batch prompt times from the server progress lines, nvidia-smi dmon -s um 1 Hz, per-task
+utime of the copy thread, full reasoning_content + content saved per request and diffed; evicted cache per arm;
+doc, docB, doc, docB, 128 tokens, temperature 0; arms back to back): D = launcher defaults; A = LLAMA_COPY_DIRECT=0;
+D0 = D with LLAMA_COPY_DIRECT_HITS=0; Dc = D with `--ctx-checkpoints 0`; one-off thread sweep 4/8/16 on D's prompt.
+- prompt: D prompt_s <= 0.6x A on every request (<= 170 s; expected 100-135; Dc 75-110); batch 1 <= 40 s, batch 2
+  <= 130 s (Dc: single batch, the batch-1 bar does not apply). Throughput with defined denominators: reader
+  throughput = bytes read / copy_s (the debug counter of time inside sched_copy_experts) >= 7 GB/s (expected ~9.6);
+  batch average = bytes / batch wall >= 4 GB/s.
+- bytes: D0 ~720 GB + decode per request; Dc ~545 GB + decode; A ~900 GB. D (hits): hit bytes ~0 on request 1
+  (evicted cache; catches an all-ones mincore), on requests 2-4 reported, expected 50-220 GB, > 0 asserted. Cached growth during D's prompt phases <= 2 GB (sampled at prompt end).
+- decode: request 1 gen reported (cold cache expected: slower than A's 0.53); requests 2-4: gen tok/s >= 0.98x A
+  (A vs B agreed within 0.3%, so the bar is noise-safe); decode md0 bytes/token reported as the hit-rate observable
+  (A: ~2.6 GB/token).
+- total wall (prompt_s + gen_s): requests 2-4 D <= 0.75x A; request 1 (every first request after a restart):
+  expected prompt -150..-185 s, decode +50..+120 s -> 0.80-0.94x A; bar: request 1 total <= 0.95x A.
+- D1b trigger: requests 2-4 gen < 0.98x A on the better of D/D0, or request 1 total > 0.95x A.
+- text: reasoning_content + content identical D vs A per document (|dlogprob| == 0).
+- ECC counters unchanged; RssAnon steady; no "disabled"/"fallback" log line.
+Decision (observable-based): batch 1 > 40 s -> gathering/concurrency of small runs; md0 < 6 GB/s with prompt > 150 s
+-> reader pattern/threads/piece size; md0 >= 8 GB/s and prompt > 150 s -> GPU-side serialization -> D3 (larger ring
+so reads continue during compute, or double-buffered GPU expert buffers). D vs D0: D2 default on only if >= 3 s/prompt
+faster on requests 2-4 with equal decode, else off. Dc: if Dc prompt <= D prompt - 20 s with identical text, record
+the trade-off (the user-turn checkpoint only helps multi-turn reuse with cache_prompt) and set the launcher default
+per workload (single-turn book-writer style -> --ctx-checkpoints 0; chat -> keep).
+
+### Review history (v18)
+- v18.1 round 2: integration APPROVE; I/O and traceability CHANGES REQUESTED (text-only): owner gate for D2's
+  mincore, alignment from statx(STATX_DIOALIGN) clamped to [512, 4096] (not st_blksize), fixed 64 MiB + 2 MiB ring
+  buffers with capacity including slop, drain of submitted fills after a mid-pass disable, md0 bars with defined
+  denominators (reader >= 7 GB/s by copy_s, batch average >= 4 GB/s), D2 expectation derived (-5..+5 s prompt;
+  default on only if >= 3 s/prompt faster), request-1 bar (total <= 0.95x A) and D1b trigger, Dc launcher branch.
+- v18 reviewed by 3 lenses (I/O, integration, traceability): all CHANGES REQUESTED -> v18.1. Folded in: no WILLNEED
+  on the D path (blocker: prefetch=true + hint=nullptr would read everything twice and refill the cache; prefetch=false
+  passes 6 GB runs), ticketed FIFO reader with a 4-buffer ring instead of a per-chunk barrier, fills gathered across
+  runs (batch 1 is fragmented: 1.8 vs 6.6-8.5 GB/s), pieces at absolute 2 MiB offsets, exact EOF/short-read rules
+  (shard sizes are not sector multiples), init probe + EFAULT/EOPNOTSUPP, mid-pass fallback = llama_prefetch + memcpy
+  of the failed fill, lazy_src from the mappings + file paths via llama_file::name(), reader owned by the context and
+  stopped before the buffers are released, two-batch prompt (checkpoint split) in the byte and time model, GPU-side
+  serial floor, decode request-1 regression made explicit and D2 hit-aware mode added, per-batch thresholds (6 GB/s,
+  40 s / 130 s), observables (1 Hz sampler, dmon, copy-thread time, full-text diff), observable-based decision rule,
+  test file 48 MiB + 32 B with EOF and fragmented cases, Linux-only CMake gate.
+- v18.1 implemented (commit pending). Code review round 1: correctness/concurrency NO BUGS (hardening suggestions
+  applied); integration BUGS FOUND (test failed instead of skipping on tmpfs: fixed with fstatfs + residency
+  precondition; ring buffers 1-3 alignment check; unaligned short-read retry; probe into an acquired buffer; fds
+  closed on init failure; Android statx guard). E2E round 1 (4 arms, evicted cache, doc/docB/doc/docB, 128 tokens):
+  A (old path) prompt 282-293 s, gen 0.52-0.53, wall 523-537 s, 901-920 GB/request;
+  D prompt 122-130 s (batch 1 40-41 s at 5.8 GB/s, batch 2 75-76 s at 8.2 GB/s), gen 0.53-0.54, wall 359-371 s,
+  ~1030 GB/request, Cached flat during the prompt; DH (hits) prompt 107-109 s from request 2 (hits 170-175 GB),
+  wall 345-347 s; Dc (--ctx-checkpoints 0) prompt 75.6-75.9 s single batch at 8.4 GB/s, wall 304-311 s.
+  All correctness bars PASS (text byte-identical D = A = DH; Dc differs deterministically: one batch instead of
+  67 + 1569 tokens); request-1 decode did not regress (D 0.529 vs A 0.526), so D1b is not needed. Misses: D batch 1
+  40.9 s vs the 40 s bar and 5.8 GB/s vs 7 (fragmented runs + per-tensor drain; DH passes both) - follow-up D3.
+  Decisions by the pre-registered rules: hits default ON (-14 s/prompt, decode equal); CHECKPOINTS launcher knob,
+  default unchanged (the checkpoint is what lets a continued conversation reuse its prefix).
+  Naming from here on: D = direct reads with hits (the default), D0 = LLAMA_COPY_DIRECT_HITS=0. The e2e keeps the
+  "hit bytes ~0 on request 1 (evicted cache)" check: it is the only guard against mincore reporting all pages resident.
+  Code review round 2 (both lenses): NO BUGS FOUND.

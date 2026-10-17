@@ -182,6 +182,24 @@ llama_context::llama_context(
         // the same switch as the CPU backend's expert prefetch: both hint experts that are read from disk
         const char * env = getenv("GGML_CPU_MOE_PREFETCH");
         copy_prefetch = env != nullptr && atoi(env) == 1;
+        if (const char * st = getenv("LLAMA_COPY_STAGING"); st != nullptr && atoi(st) == 0) {
+            copy_staging = false;
+        }
+        if (const char * v = getenv("LLAMA_COPY_DIRECT"); v != nullptr && atoi(v) == 0) {
+            copy_direct = false;
+        }
+        if (const char * v = getenv("LLAMA_COPY_DIRECT_HITS"); v != nullptr && atoi(v) == 0) {
+            copy_direct_hits = false;
+        }
+        if (const char * v = getenv("LLAMA_COPY_DIRECT_LOG"); v != nullptr && atoi(v) == 1) {
+            copy_direct_log = true;
+        }
+        if (const char * v = getenv("LLAMA_COPY_DIRECT_THREADS"); v != nullptr && atoi(v) > 0) {
+            copy_direct_threads = std::min(atoi(v), 64);
+        }
+        if (const char * v = getenv("LLAMA_COPY_DIRECT_PIECE_MB"); v != nullptr && atoi(v) > 0) {
+            copy_direct_piece = (size_t) std::min(atoi(v), 32) << 20;
+        }
         if (const char * mb = getenv("LLAMA_COPY_PREFETCH_MB"); mb != nullptr && atoi(mb) > 0) {
             copy_prefetch_lookahead = (size_t) atoi(mb) << 20;
         }
@@ -587,6 +605,11 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
+
+    // the reader threads write into the ring buffers, which an upload in flight may still read: stop the threads,
+    // then (synchronized above) free the buffers before the backends
+    copy_reader.stop();
+    copy_ring.release();
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.hparams.no_alloc && !opt_ctx) {
@@ -1836,6 +1859,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         return encode(batch_inp);
     }
 
+    // the expert upload totals of this batch are logged when it is done (LLAMA_COPY_DIRECT_LOG=1)
+    struct copy_stats_guard {
+        llama_context & ctx;
+        ~copy_stats_guard() { ctx.copy_stats_log(); }
+    } copy_stats_guard{ *this };
+
     if (batch_inp.tokens.empty()) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
@@ -2771,6 +2800,177 @@ ggml_status llama_context::graph_compute(
     return status;
 }
 
+//
+// staged uploads
+//
+
+bool llama_context::upload_ring::init(ggml_backend_t be) {
+    if (tried) {
+        return ready() && backend == be;
+    }
+    tried   = true;
+    backend = be;
+
+    ggml_backend_dev_t dev = ggml_backend_get_device(be);
+    ggml_backend_buffer_type_t buft = dev ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
+    if (buft == nullptr) {
+        LLAMA_LOG_INFO("%s: %s has no pinned host memory, uploads are not staged\n", __func__, ggml_backend_name(be));
+        return false;
+    }
+    for (int i = 0; i < n_bufs; ++i) {
+        bufs[i].reset(ggml_backend_buft_alloc_buffer(buft, size));
+        // the host buffer type silently falls back to plain memory when pinning fails: that would make the
+        // uploads host-synchronous again, so staging is not worth it then
+        if (bufs[i] == nullptr || ggml_backend_buffer_get_type(bufs[i].get()) != buft) {
+            LLAMA_LOG_WARN("%s: could not allocate pinned staging memory, uploads are not staged\n", __func__);
+            for (int k = 0; k < n_bufs; ++k) {
+                bufs[k].reset();
+            }
+            return false;
+        }
+        events[i].reset(ggml_backend_event_new(dev)); // may be null: then the backend is synchronized instead
+    }
+    LLAMA_LOG_INFO("%s: staged uploads via %s (%d x %zu MiB%s)\n", __func__, ggml_backend_buft_name(buft), n_bufs,
+            size >> 20, events[0] ? "" : ", no events");
+    return true;
+}
+
+int llama_context::upload_ring::acquire() {
+    const int i = next;
+    next = (next + 1) % n_bufs;
+
+    // the DMA that last read this buffer must be done before it is overwritten
+    if (pending[i]) {
+        if (events[i]) {
+            ggml_backend_event_synchronize(events[i].get());
+        } else {
+            ggml_backend_synchronize(backend);
+        }
+        pending[i] = false;
+    }
+    return i;
+}
+
+void * llama_context::upload_ring::base(int i) const {
+    return ggml_backend_buffer_get_base(bufs[i].get());
+}
+
+void llama_context::upload_ring::record(ggml_backend_t be, int i) {
+    GGML_ASSERT(be == backend);
+    if (events[i]) {
+        ggml_backend_event_record(events[i].get(), be);
+    }
+    pending[i] = true;
+}
+
+void llama_context::upload_ring::copy(ggml_backend_t be, ggml_tensor * dst, const void * src, size_t offs, size_t size) {
+    GGML_ASSERT(size <= chunk && be == backend);
+    const int i = acquire();
+    void * buf = base(i);
+    memcpy(buf, src, size); // pages still being read block here, briefly: they are already in flight
+    ggml_backend_tensor_set_async(be, dst, buf, offs, size);
+    record(be, i);
+}
+
+void llama_context::upload_ring::release() {
+    for (int i = 0; i < n_bufs; ++i) {
+        if (pending[i]) {
+            if (events[i]) {
+                ggml_backend_event_synchronize(events[i].get());
+            } else if (backend) {
+                ggml_backend_synchronize(backend);
+            }
+            pending[i] = false;
+        }
+        events[i].reset();
+        bufs[i].reset();
+    }
+    backend = nullptr;
+}
+
+bool llama_context::direct_reader_init(ggml_backend_t backend) {
+    if (copy_direct_tried) {
+        return copy_reader.enabled();
+    }
+    copy_direct_tried = true;
+    if (!copy_ring.ready() || copy_ring.backend != backend) {
+        return false;
+    }
+    // every ring buffer is a direct-read target: all of them must be aligned, not just the probed one
+    for (int i = 0; i < upload_ring::n_bufs; ++i) {
+        if (((uintptr_t) copy_ring.base(i)) % 4096 != 0) {
+            LLAMA_LOG_WARN("%s: pinned buffers are not page aligned, expert uploads fall back to the file mapping\n", __func__);
+            return false;
+        }
+    }
+    copy_reader.set_hits(copy_direct_hits);
+    // the probe reads into a buffer no DMA is reading: acquire it like any fill
+    void * probe = copy_ring.base(copy_ring.acquire());
+    if (!copy_reader.init(model.lazy_file_paths, probe, upload_ring::size, copy_direct_threads, copy_direct_piece)) {
+        LLAMA_LOG_WARN("%s: expert uploads fall back to the file mapping\n", __func__);
+        return false;
+    }
+    LLAMA_LOG_INFO("%s: expert uploads read directly from %zu files with %d threads (page cache untouched%s)\n", __func__,
+            model.lazy_file_paths.size(), copy_direct_threads, copy_reader.hits_enabled() ? "; cached pieces copied from memory" : "");
+    return true;
+}
+
+// the runs of one tensor: gathered into fills of the ring, read two fills ahead of the upload
+void llama_context::copy_direct_runs(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst,
+        const std::vector<llama_byte_range> & runs, int file_idx, size_t file_offs) {
+    const size_t align = copy_reader.alignment();
+    const auto fills = llama_gather_fills(runs, upload_ring::size, align, file_offs);
+    const size_t n = fills.size();
+
+    std::vector<llama_direct_reader::ticket> tickets(n);
+    std::vector<int> bufs(n);
+    auto issue = [&](size_t k) {
+        bufs[k]    = copy_ring.acquire();
+        tickets[k] = copy_reader.submit(fills[k], file_idx, file_offs, src->data, copy_ring.base(bufs[k]));
+    };
+    for (size_t k = 0; k < std::min<size_t>(2, n); ++k) {
+        issue(k);
+    }
+    for (size_t k = 0; k < n; ++k) {
+        if (k + 2 < n) {
+            issue(k + 2);
+        }
+        char * buf = (char *) copy_ring.base(bufs[k]);
+        if (!copy_reader.wait(tickets[k])) {
+            // never upload partial data: this fill is produced from the mapping instead, and the direct reads
+            // stop with this tensor
+            if (!copy_direct_failed) {
+                LLAMA_LOG_WARN("%s: a direct read failed, expert uploads fall back to the file mapping\n", __func__);
+                copy_direct_failed = true;
+            }
+            for (const auto & seg : fills[k].segs) {
+                const char * from = (const char *) src->data + seg.offs;
+                llama_prefetch({ { from, seg.size } });
+                memcpy(buf + seg.buf_offs + (file_offs + seg.offs) % align, from, seg.size);
+            }
+        }
+        for (const auto & seg : fills[k].segs) {
+            ggml_backend_tensor_set_async(backend, dst, buf + seg.buf_offs + (file_offs + seg.offs) % align, seg.offs, seg.size);
+        }
+        copy_ring.record(backend, bufs[k]);
+    }
+}
+
+void llama_context::copy_stats_log() {
+    if (copy_stats.calls == 0) {
+        return;
+    }
+    if (copy_direct_log) {
+        const auto c = copy_reader.get_counters();
+        LLAMA_LOG_INFO("%s: %d expert uploads, %.1f GB in %.1f s inside the copies (%.2f GB/s), direct reads %.1f GB, cached %.1f GB, errors %llu\n",
+                __func__, copy_stats.calls, copy_stats.bytes / 1e9, copy_stats.time_us / 1e6,
+                copy_stats.time_us > 0 ? copy_stats.bytes / 1e3 / copy_stats.time_us : 0.0,
+                c.bytes_read / 1e9, c.bytes_hit / 1e9, (unsigned long long) c.errors);
+        copy_reader.reset_counters();
+    }
+    copy_stats = {};
+}
+
 bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph, void * user_data) {
     auto * lctx = static_cast<llama_context *>(user_data);
 
@@ -2794,15 +2994,42 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         LLAMA_LOG_INFO("%s: expert upload prefetch active (first tensor: %s)\n", __func__, ggml_get_name(src));
     }
 
+    // the chunked copy: through the pinned ring buffers when available, else straight from the mapping
+    const bool staged = prefetch && lctx->copy_staging && lctx->copy_ring.init(backend);
+    auto copy_chunk = [&](size_t offs, size_t size) {
+        if (staged) {
+            lctx->copy_ring.copy(backend, dst, (const uint8_t *) src->data + offs, offs, size);
+        } else {
+            ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offs, offs, size);
+        }
+    };
+
+    // direct reads from the file into the ring, when the tensor's file is known
+    int    file_idx  = -1;
+    size_t file_offs = 0;
+    const bool direct = staged && lctx->copy_direct && !lctx->copy_direct_failed && lctx->direct_reader_init(backend) &&
+                        lctx->model.lazy_src(src, file_idx, file_offs);
+
+    auto upload_runs = [&](const std::vector<llama_byte_range> & runs) {
+        const int64_t t0 = ggml_time_us();
+        if (direct) {
+            lctx->copy_direct_runs(backend, src, dst, runs, file_idx, file_offs);
+        } else {
+            llama_copy_ranges_prefetched(src->data, runs, prefetch, upload_ring::chunk, lctx->copy_prefetch_lookahead, copy_chunk);
+        }
+        lctx->copy_stats.calls   += 1;
+        lctx->copy_stats.time_us += ggml_time_us() - t0;
+        for (const auto & r : runs) {
+            lctx->copy_stats.bytes += r.size;
+        }
+    };
+
     if (node->op != GGML_OP_MUL_MAT_ID || node->src[0] != dst) {
         if (!prefetch) {
             return false;
         }
         // not the first node of its split: the whole tensor is uploaded, but still streamed
-        llama_copy_ranges_prefetched(src->data, { { 0, ggml_nbytes(src) } }, true, 64u*1024*1024,
-                lctx->copy_prefetch_lookahead, [&](size_t offs, size_t size) {
-            ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offs, offs, size);
-        });
+        upload_runs({ { 0, ggml_nbytes(src) } });
         return true;
     }
 
@@ -2871,10 +3098,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         first = last + 1;
     }
 
-    llama_copy_ranges_prefetched(src->data, runs, prefetch, 64u*1024*1024, lctx->copy_prefetch_lookahead,
-            [&](size_t offs, size_t size) {
-        ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offs, offs, size);
-    });
+    upload_runs(runs);
 
     return true;
 }

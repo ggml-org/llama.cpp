@@ -19,6 +19,11 @@
 #               model fits (default: 1 for an IQ1 model file, 0 otherwise)
 #   PREDICT_STATS  where the learned prediction state is kept across restarts
 #               (default: ${XDG_STATE_HOME:-~/.local/state}/llama.cpp/<model file name>.predict.bin, one per model)
+#   CHECKPOINTS context checkpoints per slot (llama-server --ctx-checkpoints; default: the server's). The server
+#               splits a prompt at the user-turn start to create one, which costs a second pass over the experts
+#               (~1.6k-token prompt: 108 s with, 76 s without). 0 is right for single-turn requests; keep the
+#               default when conversations continue across requests (the checkpoint is what lets the next turn
+#               reuse the processed prefix)
 #
 # THREADS should stay at the physical core count: the prediction worker runs on a spare hyperthread
 #
@@ -26,8 +31,9 @@
 # streaming cannot evict them; the routed experts stay on disk (--lazy-mode on) and are read per token through
 # the page cache with GGML_CPU_MOE_PREFETCH=1. --no-warmup: the warmup run would route all 896 experts per layer.
 #
-# expected decode speed on 4x Gen3 990 RAID0 + 160 GB RAM: ~0.1-0.15 tok/s, bound by ~26 GB of experts per token
-# at the ~4 GB/s random-read ceiling of these DRAM-less drives
+# measured 2026-10-16 (IQ1 model, 256 GB RAM, 1.6k-token prompt + 128 tokens): prompt ~108 s (76 s with CHECKPOINTS=0),
+# decode ~0.53 tok/s; prompt batches read the experts with O_DIRECT at 8-9 GB/s (LLAMA_COPY_DIRECT=0 for the old
+# page-cache path: ~285 s)
 
 set -euo pipefail
 
@@ -52,6 +58,7 @@ THREADS="${THREADS:-14}"
 UBATCH="${UBATCH:-2048}"
 PREDICT="${PREDICT:-2}"
 PREDICT_STATS="${PREDICT_STATS:-${XDG_STATE_HOME:-$HOME/.local/state}/llama.cpp/$(basename "$MODEL" .gguf).predict.bin}"
+CHECKPOINTS="${CHECKPOINTS:-}"
 N_LAYER=93
 
 die() { echo "run-server.sh: $*" >&2; exit 1; }
@@ -75,6 +82,8 @@ for a in "$@"; do
             die "refusing '$a': set it with the MODEL / CTX / THREADS / PORT / UBATCH environment variables" ;;
         -fa|--flash-attn|-np|--parallel|--host)
             die "refusing '$a': fixed by this script" ;;
+        -ctxcp|--ctx-checkpoints|--swa-checkpoints)
+            die "refusing '$a': set it with the CHECKPOINTS environment variable" ;;
     esac
 done
 
@@ -96,6 +105,7 @@ done
 [[ "$UBATCH" =~ ^[1-9][0-9]*$ && "$UBATCH" -ge 32 && "$UBATCH" -le 8192 ]] || die "UBATCH must be 32..8192"
 [[ "$PREDICT" =~ ^[012]$ ]] || die "PREDICT must be 0, 1 or 2"
 [[ "$OFFLOAD" =~ ^[01]$ ]] || die "OFFLOAD must be 0 or 1"
+[[ -z "$CHECKPOINTS" || "$CHECKPOINTS" =~ ^(0|[1-9][0-9]*)$ ]] || die "CHECKPOINTS must be a non-negative integer"
 
 # another llama process competes for the same 160 GB of RAM and page cache
 if others="$(pgrep -a -x 'llama-[a-z0-9-]+' || true)"; [[ -n "$others" ]]; then
@@ -114,7 +124,7 @@ if [[ -n "$cpu_layers" ]]; then
 fi
 
 echo "run-server.sh: GPU dense layers 0..$((GPU_LAYERS - 1)), ctx $CTX, threads $THREADS, port $PORT"
-echo "run-server.sh: expected decode ~0.1-0.15 tok/s; loading reads ~58 GB of dense weights first"
+echo "run-server.sh: loading reads ~58 GB of dense weights first"
 
 export GGML_CPU_MOE_PREFETCH=1
 if [[ "$PREDICT" != 0 ]]; then
@@ -129,9 +139,13 @@ if [[ "$OFFLOAD" == 1 ]]; then
 else
     OFFLOAD_FLAG="--no-op-offload"
 fi
+CHECKPOINTS_FLAG=()
+if [[ -n "$CHECKPOINTS" ]]; then
+    CHECKPOINTS_FLAG=(--ctx-checkpoints "$CHECKPOINTS")
+fi
 exec "$BIN" "$@" \
     -m "$MODEL" \
-    -lm none --lazy-mode on $OFFLOAD_FLAG -fit off --no-warmup \
+    -lm none --lazy-mode on $OFFLOAD_FLAG -fit off --no-warmup "${CHECKPOINTS_FLAG[@]}" \
     -ngl 999 -ot "$OT" \
     -t "$THREADS" -fa on -c "$CTX" -b "$UBATCH" -ub "$UBATCH" -np 1 \
     --host 127.0.0.1 --port "$PORT"
