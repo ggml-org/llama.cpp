@@ -39,6 +39,28 @@ using llama_kv_stream_complete_layer_lease_t = llama_kv_stream_complete_layer_le
 
 struct layer_lease_state;
 
+// Prepared device-local queue; upload metadata remains owned until transfer completion.
+// Borrowed producer/consumer backends outlive the transfer and its retained leases.
+class llama_kv_stream_transfer : public std::enable_shared_from_this<llama_kv_stream_transfer> {
+public:
+    static std::shared_ptr<llama_kv_stream_transfer> create(ggml_backend_t producer);
+    ~llama_kv_stream_transfer();
+    bool begin(ggml_backend_t previous);
+    bool upload(ggml_backend_buffer_t buffer, size_t offset, const void * data, size_t bytes);
+    bool seal();
+    bool wait(ggml_backend_t consumer);
+    bool finish();
+    // Order a new consumer behind the last reader using the already prepared fence.
+    bool order(ggml_backend_t previous, ggml_backend_t consumer);
+    ggml_backend_t backend() const noexcept;
+private:
+    friend class llama_kv_stream_layer_lease_owner;
+    bool retain_storage(ggml_backend_memory_lease_t pool, const llama_kv_stream_logical_cache & cache);
+    llama_kv_stream_transfer();
+    struct implementation;
+    std::unique_ptr<implementation> impl;
+};
+
 class llama_kv_stream_ring_guard {
 public:
     ~llama_kv_stream_ring_guard();
@@ -72,6 +94,12 @@ public:
     llama_kv_stream_complete_layer_lease_t acquire_populated(ggml_backend_t backend,
         const llama_kv_stream_complete_layer_request & request, const llama_kv_stream_logical_cache & cache,
         bool reuse_resident = false);
+    // Pending leases retain the transfer, canonical host storage, and arena through readiness and final use.
+    llama_kv_stream_complete_layer_lease_t prefetch(llama_kv_stream_transfer & transfer,
+        ggml_backend_t previous, const llama_kv_stream_complete_layer_request & request,
+        const llama_kv_stream_logical_cache & cache, bool reuse_resident = false);
+    bool wait_population(llama_kv_stream_complete_layer_lease_t lease, ggml_backend_t consumer,
+        const llama_kv_stream_logical_cache & cache);
     // Rebase a populated prefix after logical suffix rejection without moving its
     // unchanged device bytes or releasing occupied ring slots.
     bool adopt_truncated_prefix(llama_kv_stream_complete_layer_lease_t previous,

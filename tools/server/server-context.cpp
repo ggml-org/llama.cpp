@@ -1142,13 +1142,20 @@ private:
             return false;
         }
         const bool streamed_mtp = common_params_uses_streamed_mtp(params);
+        const bool streamed_dflash = common_params_uses_streamed_dflash(params);
+        if (const auto * error=common_streamed_dflash_config_error(params)) {
+            SRV_ERR("%s\n",error); return false;
+        }
+        if (streamed_dflash && !has_draft) {
+            SRV_ERR("%s", "adaptive DFlash2 requires a matching separate draft model\n"); return false;
+        }
         if (params.kv_stream_auxiliary_layers && !streamed_mtp) {
             SRV_ERR("%s", "auxiliary KV layers require embedded draft-mtp and a KV stream pool or arena\n");
             return false;
         }
         if (streaming && (params.fit_params ||
-                (has_spec && !streamed_mtp))) {
-            SRV_ERR("%s", "KV streaming requires --fit off and embedded draft-mtp for text speculation\n");
+                (has_spec && !streamed_mtp && !streamed_dflash))) {
+            SRV_ERR("%s", "KV streaming requires --fit off and an admitted embedded MTP or DFlash2 pairing\n");
             return false;
         }
         if (streamed_mtp && (!streaming || !spec_mtp || has_draft ||

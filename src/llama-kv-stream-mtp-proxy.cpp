@@ -36,6 +36,9 @@ struct llama_kv_stream_mtp_proxy::implementation {
     bool armed = false;
     bool failed = false;
     bool initialized = false;
+    bool next_target=false;
+    bool finish_phase=false;
+    ggml_backend_t last_reader=nullptr;
     bool plane(const ggml_tensor * tensor, bool & value) const {
         llama_kv_stream_host_layer host;
         if (!tensor || !cache->host()->layer(0, host)) return false;
@@ -75,6 +78,7 @@ struct llama_kv_stream_mtp_proxy::implementation {
         for (size_t i = 0; i < count; ++i)
             if (indices[i] != int64_t(next + i)) return GGML_STATUS_FAILED;
         if (!value) {
+            if (armed && !target->wait_auxiliary_population(backend)) return GGML_STATUS_FAILED;
             if (pending_k) return GGML_STATUS_FAILED;
             if (attention_completion && !attention_completion->synchronize()) {
                 failed = true;
@@ -170,6 +174,9 @@ struct llama_kv_stream_mtp_proxy::implementation {
         staged_pending = false;
         staged = {};
         armed = false;
+        next_target=false;
+        finish_phase=false;
+        last_reader=nullptr;
         if (had_pending) {
             writer.reset();
             writer_scratch = nullptr;
@@ -285,6 +292,13 @@ struct llama_kv_stream_mtp_proxy::implementation {
             failed = true;
             return GGML_STATUS_FAILED;
         }
+        last_reader=backend;
+        if (next_target) {
+            finish_phase=true;
+            if (!target->prefetch_target_after(backend))
+                LLAMA_LOG_DEBUG("%s: next target prefetch deferred\n",__func__);
+        }
+        next_target=false;
         ++calls;
         if (calls == 1)
             LLAMA_LOG_INFO("%s: adaptive MTP span attention active (first TG%u, reserved=%zu tokens)\n", __func__, rows, target->mtp_reserved_tokens());
@@ -361,6 +375,25 @@ ggml_tensor * llama_kv_stream_mtp_proxy::key() const noexcept { return key_root;
 ggml_tensor * llama_kv_stream_mtp_proxy::value() const noexcept { return value_root; }
 bool llama_kv_stream_mtp_proxy::complete_publication() {
     return impl && impl->complete_publication();
+}
+
+void llama_kv_stream_mtp_proxy::set_next_target(bool final_use) {
+    if (impl) impl->next_target=final_use;
+}
+
+// Early stopping is known only after sampling; complete its handoff at that boundary.
+bool llama_kv_stream_mtp_proxy::finish_access() {
+    if (!impl || !impl->last_reader || !impl->target->has_mtp_layer()) return true;
+    impl->target->prefetch_target_after(impl->last_reader);
+    return impl->target->release_mtp_layer();
+}
+
+// Publication validation still needs the final span; retire it only after that validation succeeds.
+bool llama_kv_stream_mtp_proxy::retire_final_access() {
+    if (!impl || !impl->finish_phase) return true;
+    if (!impl->target->release_mtp_layer()) return false;
+    impl->finish_phase=false;
+    return true;
 }
 
 bool llama_kv_stream_mtp_proxy::arm(size_t first, uint32_t rows) {

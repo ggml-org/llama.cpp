@@ -903,6 +903,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --kv-stream-auxiliary-layers requires a KV stream pool or shared arena\n");
     }
     const bool streamed_mtp = common_params_uses_streamed_mtp(params);
+    if (const auto * error=common_streamed_dflash_config_error(params)) throw std::invalid_argument(error);
     if (streamed_mtp &&
             params.speculative.need_n_rs_seq() > 3) {
         throw std::invalid_argument("error: attached MTP KV streaming supports at most 3 draft tokens\n");

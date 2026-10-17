@@ -4,6 +4,8 @@
 #include "../src/llama-kv-stream-model.h"
 #include "../src/llama-kv-stream-logical-cache.h"
 #include "../src/llama-memory-recurrent-spill.h"
+#include "../src/llama-memory-bounded-kv.h"
+#include "../src/llama-kv-cache-iswa.h"
 #include "../src/llama-io.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "testing.h"
@@ -24,6 +26,7 @@ bool kv_stream_test_native_graphs_enabled();
 
 using context_ptr = std::unique_ptr<llama_context,decltype(&llama_free)>;
 using model_ptr = std::unique_ptr<llama_model,decltype(&llama_model_free)>;
+#include "kv-stream-dflash-test.h"
 static bool auxiliary_control = false, embedded_mtp_control = false, target_tg3_control = false, target_stream_tg4_control = false;
 static bool suspend_control = false;
 static bool suspend_resident_only = false;
@@ -34,9 +37,179 @@ static bool resident_control = false, trace_control = false;
 static bool mtp_memory_probe = false, mtp_sustained_control = false, mtp_sustained_rs_control = false;
 static bool target_drift_control = false, target_drift_rs_control = false;
 static bool rollback_probe = false;
+static bool wide_rollback_control = false;
 static bool vision_mtp_handoff = false;
 static bool serial_workspace_growth = false;
 static bool mtp_bit_exact_control = false;
+static const char * dflash_native_model = nullptr;
+static bool dflash_shared_workspace_control = false;
+static bool dflash_exact_control = false;
+
+// Qualify ordinary feature injection without a stream pool or a shared phase arena.
+static void test_dflash_native(testing & t, llama_model * model) {
+    auto cp = llama_context_default_params();
+    cp.n_ctx = 4096;
+    cp.n_batch = cp.n_ubatch = 256;
+    cp.n_seq_max = 1;
+    cp.n_rs_seq = 1;
+    cp.type_k = GGML_TYPE_Q8_0;
+    cp.type_v = GGML_TYPE_Q4_0;
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    if (dflash_shared_workspace_control) {
+        cp.shared_device_memory_bytes=512u*1024u*1024u;
+        cp.n_rs_seq=3;
+    }
+    context_ptr target(llama_init_from_model(model, cp), llama_free);
+    if (!t.assert_true(bool(target))) return;
+    common_params params;
+    params.n_ctx = 4096;
+    params.n_batch = params.n_ubatch = 256;
+    params.n_parallel = 1;
+    params.n_gpu_layers = 999;
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    params.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+    params.speculative.draft.n_max = 1;
+    params.speculative.draft.n_min = 0;
+    params.speculative.draft.p_min = 0;
+    params.speculative.draft.n_gpu_layers = 999;
+    params.speculative.draft.mparams.path = dflash_native_model;
+    auto draft = common_speculative_init_from_params(params, model, target.get());
+    if (!t.assert_true(bool(draft) && draft->context())) return;
+    if (dflash_shared_workspace_control) {
+        auto * target_owner=llama_context_compute_memory(target.get());
+        auto * draft_owner=llama_context_compute_memory(draft->context());
+        if (!t.assert_true(target_owner && draft_owner && draft_owner->borrows_serial_parent())) return;
+        t.assert_true(!draft->context()->get_cparams().mtp_publish_host);
+        t.assert_true(target_owner->shared_parent() == draft_owner->shared_parent());
+    }
+    auto * stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(draft->context()));
+    if (!t.assert_true(stock && stock->get_base()->get_layer_ids().empty())) return;
+    if (dflash_shared_workspace_control) {
+        auto * k=stock->get_swa()->get_k_storage(0);
+        auto * parent=llama_context_compute_memory(target.get())->shared_parent();
+        const auto base=uintptr_t(ggml_backend_buffer_get_base(parent));
+        const auto bytes=ggml_backend_buffer_get_size(parent);
+        if (!t.assert_true(ggml_backend_buffer_is_view(k->buffer) && uintptr_t(k->data) >= base &&
+                uintptr_t(k->data)-base < bytes && ggml_nbytes(k) <= bytes-(uintptr_t(k->data)-base))) return;
+        auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
+        const auto * bank=hybrid->get_mem_recr()->spill_bank();
+        auto * stage=bank ? bank->staging_tensor(0,true,1) : nullptr;
+        if (!t.assert_true(stage && ggml_backend_buffer_is_view(stage->buffer) && uintptr_t(stage->data) >= base &&
+                uintptr_t(stage->data)-base < bytes && ggml_nbytes(stage) <= bytes-(uintptr_t(stage->data)-base))) return;
+    }
+    llama_memory_bounded_kv_layout storage;
+    if (!t.assert_true(stock->get_swa()->describe_bounded_storage(903,1,4096,256,storage))) return;
+    t.assert_equal(uint32_t(2304),storage.allocation.capacity_rows);
+    t.assert_equal(size_t(5),storage.layers.size());
+    t.assert_equal(uint32_t(128),storage.cache.format.key_head_dim);
+    t.assert_equal(uint32_t(8),storage.cache.format.kv_heads);
+    t.assert_true(!stock->get_base()->describe_bounded_storage(904,1,4096,256,storage));
+    auto cache_owner=stock->get_swa()->retain_bounded_storage(903,1,4096,256);
+    if (!t.assert_true(bool(cache_owner))) return;
+    auto source=cache_owner->read({903,1});
+    if (!t.assert_true(bool(source))) return;
+    t.assert_equal(storage.allocation.bytes,ggml_backend_buffer_get_size(source.buffer()));
+    t.assert_equal(uint64_t(0),cache_owner->begin_write({903,1}));
+    source.reset();
+    params.speculative.draft.ctx_tgt = target.get();
+    params.speculative.draft.ctx_dft = draft->context();
+    common_speculative_ptr spec(common_speculative_init(params.speculative, 1));
+    if (!t.assert_true(bool(spec))) return;
+    const auto tokens = common_tokenize(target.get(), "An ordinary DFlash2 feature injection control. ", true);
+    common_batch batch(target.get());
+    for (int i = 0; i < 256; ++i) batch.add(tokens[size_t(i)%tokens.size()], i, 0, i == 255);
+    if (dflash_shared_workspace_control) t.assert_true(!llama_serial_features_match(target.get(),batch.get()));
+    if (!t.assert_equal(0, llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()))) return;
+    if (dflash_shared_workspace_control) {
+        t.assert_true(llama_serial_features_match(target.get(),batch.get()));
+        common_batch wrong_position(target.get());
+        for (int i=0;i<256;++i) wrong_position.add(tokens[size_t(i)%tokens.size()],i+1,0,i == 255);
+        t.assert_true(!llama_serial_features_match(target.get(),wrong_position.get()));
+    }
+    const auto injection=cache_owner->begin_write({903,1});
+    if (!t.assert_true(injection != 0)) return;
+    const auto injected=common_speculative_process(spec.get(), batch);
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(injection,injected));
+    if (!t.assert_true(injected)) return;
+    t.assert_equal(llama_pos(255), llama_memory_seq_pos_max(llama_get_memory(draft->context()), 0));
+    llama_tokens proposals;
+    auto & dp = common_speculative_get_draft_params(spec.get(), 0);
+    dp.drafting = true;
+    dp.n_max = 1;
+    dp.pos0 = 256;
+    dp.id_last = tokens[0];
+    dp.prompt = &tokens;
+    dp.result = &proposals;
+    const auto prediction=cache_owner->begin_write(cache_owner->identity());
+    if (!t.assert_true(prediction != 0)) return;
+    auto * draft_workspace=llama_context_compute_memory(draft->context());
+    if (dflash_shared_workspace_control) t.assert_equal(int32_t(0),llama_set_adapter_cvec(draft->context(),nullptr,0,0,-1,-1));
+    common_speculative_draft(spec.get());
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(prediction,proposals.size() == 1));
+    t.assert_equal(size_t(1), proposals.size());
+    source=cache_owner->read(cache_owner->identity());
+    t.assert_true(bool(source));
+    source.reset();
+    const size_t state_bytes=llama_state_seq_get_size(draft->context(),0);
+    std::vector<uint8_t> saved(state_bytes);
+    if (!t.assert_true(state_bytes && llama_state_seq_get_data(draft->context(),saved.data(),saved.size(),0) == state_bytes)) return;
+    if (dflash_shared_workspace_control) {
+        t.assert_true(draft_workspace == llama_context_compute_memory(draft->context()));
+        auto * parent=llama_context_compute_memory(target.get());
+        auto * allocation=parent->shared_parent();
+        t.assert_equal(int32_t(0),llama_set_adapter_cvec(target.get(),nullptr,0,0,-1,-1));
+        batch.clear(); batch.add(tokens[0],256,0,true);
+        llama_set_kv_stream_decode(target.get(),true);
+        if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        batch.clear(); for (int i=0;i<256;++i) batch.add(tokens[0],257+i,0,i == 255);
+        llama_set_kv_stream_decode(target.get(),false);
+        if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        t.assert_true(parent == llama_context_compute_memory(target.get()) && allocation == parent->shared_parent());
+        std::vector<uint8_t> retained(state_bytes);
+        t.assert_equal(state_bytes,llama_state_seq_get_data(draft->context(),retained.data(),retained.size(),0));
+        t.assert_true(retained == saved);
+        common_batch oversized(draft->context());
+        for (int i=0;i<9;++i) oversized.add(tokens[0],258+i,0,true);
+        t.assert_true(llama_process(draft->context(),LLAMA_PROCESS_TYPE_DECODE,oversized.get()) != 0);
+    }
+    const auto restore=cache_owner->begin_write(cache_owner->identity());
+    if (!t.assert_true(restore != 0)) return;
+    const bool restored=llama_state_seq_set_data(draft->context(),saved.data(),saved.size(),0) == state_bytes;
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(restore,restored));
+    t.assert_true(restored);
+    std::vector<uint8_t> readback(state_bytes);
+    t.assert_equal(state_bytes,llama_state_seq_get_data(draft->context(),readback.data(),readback.size(),0));
+    t.assert_true(saved == readback);
+    const auto reset=cache_owner->begin_write(cache_owner->identity());
+    if (!t.assert_true(reset != 0)) return;
+    llama_memory_clear(llama_get_memory(draft->context()),true);
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(reset,true));
+    source=cache_owner->read(cache_owner->identity());
+    auto full_params=cp;
+    full_params.n_rs_seq=0;
+    full_params.swa_full=true;
+    full_params.ctx_other=target.get();
+    full_params.shared_device_memory_bytes=0;
+    context_ptr full(llama_init_from_model(draft->model(),full_params),llama_free);
+    if (dflash_shared_workspace_control) {
+        t.assert_true(!full);
+        cache_owner.reset(); spec.reset(); draft.reset();
+        t.assert_true(bool(source));
+        return;
+    }
+    if (!t.assert_true(bool(full))) return;
+    auto * full_stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(full.get()));
+    if (!t.assert_true(full_stock != nullptr)) return;
+    t.assert_true(!full_stock->get_swa()->describe_bounded_storage(905,1,4096,256,storage));
+    t.assert_true(!full_stock->get_swa()->retain_bounded_storage(905,1,4096,256));
+    full.reset();
+    cache_owner.reset(); spec.reset(); draft.reset();
+    t.assert_true(bool(source) && source.layout()->allocation.bytes == storage.allocation.bytes);
+}
 
 // Fail one candidate view after the draft's initial view, then permit parent recovery.
 struct serial_parent_view_failure {
@@ -77,6 +250,116 @@ struct run_result {
     recurrent_snapshot recurrent;
     std::vector<std::pair<std::string,std::vector<float>>> trace;
 };
+
+// Compare matching target forwards, selected rollback state and replay without allocating a draft context.
+static void test_wide_target_rollback(testing & t,llama_model * model) {
+    kv_stream_exact_config cfg;
+    std::ifstream input(cfg.corpus,std::ios::binary);
+    if (!t.assert_true(bool(input))) return;
+    const std::string article((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
+    const auto * vocabulary=llama_model_get_vocab(model);
+    const int count=-llama_tokenize(vocabulary,article.data(),int(article.size()),nullptr,0,false,false);
+    if (!t.assert_true(count >= 16381)) return;
+    std::vector<llama_token> corpus(size_t(count),0);
+    if (!t.assert_equal(count,llama_tokenize(vocabulary,article.data(),int(article.size()),corpus.data(),count,false,false))) return;
+    const size_t vocab_size=llama_vocab_n_tokens(vocabulary);
+    for (uint32_t depth : {1u,3u,7u}) for (size_t prefix : {249u,505u,2041u,16381u}) {
+        kv_stream_bit_oracle oracle;
+        for (bool streamed : {false,true}) {
+            if (streamed) oracle.compare();
+            auto params=llama_context_default_params();
+            params.n_ctx=uint32_t((prefix+6*(depth+2)+255)/256*256);
+            params.n_batch=params.n_ubatch=256; params.n_seq_max=1; params.n_rs_seq=depth;
+            params.n_threads=params.n_threads_batch=8;
+            params.n_outputs_max=params.n_outputs_max_per_seq=depth+1;
+            params.type_k=GGML_TYPE_Q8_0; params.type_v=GGML_TYPE_Q4_0;
+            params.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            // Include a real phase-arena handoff while other streamed cases force a small physical ring.
+            if (streamed && depth == 7 && prefix == 505) params.shared_device_memory_bytes=size_t(2240)*1048576;
+            else params.kv_stream_pool_bytes=streamed ? 16*1048576 : 0;
+            context_ptr ctx(llama_init_from_model(model,params),llama_free);
+            if (!t.assert_true(bool(ctx))) return;
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+            if (!t.assert_true(hybrid != nullptr)) return;
+            auto * recurrent=hybrid->get_mem_recr();
+            auto * kv=hybrid->get_mem_attn();
+            auto * stream=kv->get_kv_stream();
+            t.assert_equal(streamed,recurrent->spill_enabled());
+            if (streamed) {
+                if (!t.assert_true(stream && !stream->auxiliary_cache())) return;
+                t.out << "rollback D=" << depth << " prefix=" << prefix << " stage MiB=" <<
+                    double(recurrent->spill_bank()->staged_device_bytes())/1048576 << '\n';
+            }
+            const auto drain=[&] {
+                llama_synchronize(ctx.get());
+                if (!recurrent->complete_spill() || !recurrent->complete_restore_spill())
+                    throw std::runtime_error("failed to drain rollback test");
+            };
+            const auto state=[&](const std::string & name) {
+                drain();
+                kv_stream_exact_state snapshot;
+                recurrent->state_write(snapshot,0,0);
+                snapshot.compare_with(oracle,name+"/state");
+            };
+            const auto submit=[&](size_t first,size_t tokens,bool decode,bool proposals=false) {
+                common_batch batch(ctx.get());
+                for (size_t i=0;i<tokens;++i) {
+                    // A rejected proposal differs from its correction, exercising actual KV overwrite.
+                    const auto token=proposals && i ? llama_token((size_t(corpus[first+i])+1+i)%vocab_size) : corpus[first+i];
+                    batch.add(token,llama_pos(first+i),0,decode || i+1==tokens);
+                }
+                llama_set_kv_stream_decode(ctx.get(),decode);
+                return llama_process(ctx.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get());
+            };
+            for (size_t first=0;first<prefix;first+=256)
+                if (!t.assert_equal(0,submit(first,std::min(size_t(256),prefix-first),false))) return;
+            state("prefill");
+            kv_stream_exact_kv(oracle,"prefill/KV",kv,0,prefix);
+            size_t position=prefix;
+            const uint32_t short_widths[6]={8,5,7,6,2,4};
+            for (uint32_t round=0;round<6;++round) {
+                const auto name="round/"+std::to_string(round);
+                const size_t width=depth == 7 && prefix == 2041 ? short_widths[round] : depth+1;
+                if (!t.assert_equal(0,submit(position,width,true,true))) return;
+                drain();
+                for (size_t q=0;q<width;++q) {
+                    const auto * logits=llama_get_logits_ith(ctx.get(),int32_t(q));
+                    if (!t.assert_true(logits != nullptr)) return;
+                    oracle.bytes(name+"/logits/"+std::to_string(q),logits,vocab_size*sizeof(float));
+                }
+                state(name+"/verify");
+                const size_t proposals=width-1;
+                const size_t accepted=round == 0 || round == 3 ? 0 : round == 1 ? proposals/2 : round == 4 ? proposals-1 : proposals;
+                const size_t kept=accepted+1;
+                if (kept < width && !t.assert_true(llama_memory_seq_rm(llama_get_memory(ctx.get()),0,llama_pos(position+kept),-1))) return;
+                t.assert_equal(llama_pos(position+kept-1),llama_memory_seq_pos_max(llama_get_memory(ctx.get()),0));
+                state(name+"/selected");
+                kv_stream_exact_kv(oracle,name+"/retained_KV",kv,position,kept);
+                position+=kept;
+                if (!t.assert_equal(0,submit(position,1,true))) return;
+                drain();
+                oracle.bytes(name+"/correction_logits",llama_get_logits_ith(ctx.get(),0),vocab_size*sizeof(float));
+                state(name+"/correction");
+                kv_stream_exact_kv(oracle,name+"/corrected_KV",kv,position,1);
+                ++position;
+                if (streamed) t.assert_equal(position,stream->tokens());
+            }
+            const size_t capacity=llama_n_ctx(ctx.get());
+            for (;position<capacity;) {
+                const size_t rows=std::min(size_t(256),capacity-position);
+                if (!t.assert_equal(0,submit(position,rows,false))) return;
+                position+=rows;
+            }
+            state("context_end");
+            if (!t.assert_true(submit(position,depth+1,true) != 0)) return;
+            t.assert_equal(llama_pos(capacity-1),llama_memory_seq_pos_max(llama_get_memory(ctx.get()),0));
+            state("rejected_context_end");
+            if (streamed) oracle.finish();
+        }
+        t.out << "D=" << depth << " prefix=" << prefix << " native/spilled rollback bits match (" <<
+            oracle.records() << " records, " << oracle.byte_count() << " bytes)\n";
+    }
+}
 
 static run_result evaluate(testing & t,llama_model * model,const std::vector<llama_token> & prompt,
         uint32_t ubatch,size_t pool,const std::vector<llama_token> & forced) {
@@ -375,6 +658,19 @@ int main(int argc,char ** argv) {
 #endif
     testing t;
     test_kv_stream_bit_exact_comparator(t);
+    t.test("selector_lattice_permutations_preserve_scores_but_one_bit_changes_do_not",[](testing & t) {
+        std::vector<float> a{0,0,0,0,0,0,4,2,0.2f,0.4f,0.2f,0.4f};
+        auto b=a;
+        b[6]=2; b[7]=4; b[8]=b[10]=0.4f; b[9]=b[11]=0.2f;
+        const auto canonical=dflash_exact_lattice(a.data(),2,6,2,16);
+        t.assert_true(canonical == dflash_exact_lattice(b.data(),2,6,2,16));
+        uint32_t bits; std::memcpy(&bits,&b[8],sizeof(bits)); bits^=1;
+        std::memcpy(&b[8],&bits,sizeof(bits)); b[10]=b[8];
+        t.assert_true(canonical != dflash_exact_lattice(b.data(),2,6,2,16));
+        a.insert(a.end(),{3,5,0.1f,0.2f,0.3f,0.4f});
+        b={0,0,0,0,0,0,2,4,0.4f,0.2f,0.4f,0.2f,5,3,0.4f,0.3f,0.2f,0.1f};
+        t.assert_true(dflash_exact_lattice(a.data(),3,6,2,16) == dflash_exact_lattice(b.data(),3,6,2,16));
+    });
     t.test("streaming_is_disabled_by_default", [&](testing & t) {
         const auto defaults = llama_context_default_params();
         t.assert_equal(size_t(0),defaults.kv_stream_pool_bytes);
@@ -383,6 +679,12 @@ int main(int argc,char ** argv) {
     });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--dflash-native") && i+1 < argc) dflash_native_model = argv[++i];
+        if (!std::strcmp(argv[i], "--dflash-shared-workspace")) dflash_shared_workspace_control = true;
+        if (!std::strcmp(argv[i], "--dflash-bit-exact")) dflash_exact_control = true;
+        if (!std::strcmp(argv[i], "--dflash-lifecycle")) dflash_exact_control = true;
+        if (!std::strcmp(argv[i], "--dflash-context-end")) dflash_exact_control = true;
+        if (!std::strcmp(argv[i], "--dflash-rejection-long")) dflash_exact_control = true;
         f16_control = f16_control || !std::strcmp(argv[i],"--f16");
         resident_control = resident_control || !std::strcmp(argv[i],"--resident");
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
@@ -406,6 +708,7 @@ int main(int argc,char ** argv) {
         target_drift_rs_control = target_drift_rs_control || !std::strcmp(argv[i],"--mtp-target-drift-rs");
         target_drift_control = target_drift_control || target_drift_rs_control;
         rollback_probe = rollback_probe || !std::strcmp(argv[i],"--mtp-rs-rollback-probe");
+        wide_rollback_control = wide_rollback_control || !std::strcmp(argv[i],"--target-rs-rollback");
         vision_mtp_handoff = vision_mtp_handoff || !std::strcmp(argv[i],"--vision-mtp-handoff");
         serial_workspace_growth = serial_workspace_growth || !std::strcmp(argv[i],"--serial-workspace-growth");
     }
@@ -428,7 +731,26 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    if (dflash_native_model && !dflash_exact_control) {
+        if (!t.assert_true(bool(model))) return t.summary();
+        t.test("ordinary_dflash_feature_workspace", [&](testing & t) { test_dflash_native(t, model.get()); });
+        return t.summary();
+    }
     if (!t.assert_true(bool(model))) return t.summary();
+    if (dflash_exact_control) {
+        if (!t.assert_true(dflash_native_model != nullptr)) return t.summary();
+        const bool lifecycle=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-lifecycle"); });
+        const bool context_end=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-context-end"); });
+        const bool sustained=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-rejection-long"); });
+        t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) { test_kv_stream_dflash_exact(t,model.get(),dflash_native_model,lifecycle,context_end || sustained,sustained); });
+        return t.summary();
+    }
+    if (wide_rollback_control) {
+        t.test("target_TG1_TG8_rollback_matches_native_without_draft_KV", [&](testing & t) {
+            test_wide_target_rollback(t,model.get());
+        });
+        return t.summary();
+    }
     if (mtp_bit_exact_control) {
         t.test("streamed_and_native_mtp_bit_exact", [&](testing & t) {
             test_kv_stream_mtp_bit_exact(t, model.get(), kv_stream_exact_arguments(argc, argv));
@@ -529,7 +851,7 @@ int main(int argc,char ** argv) {
             p.kv_stream_auxiliary_layers=1;
             p.n_rs_seq=3;
             auto invalid=p;
-            invalid.kv_stream_auxiliary_layers=0;
+            invalid.n_rs_seq=8;
             context_ptr unsafe(llama_init_from_model(model.get(),invalid),llama_free);
             t.assert_true(!unsafe);
             invalid=p;
@@ -560,6 +882,44 @@ int main(int argc,char ** argv) {
             llama_set_kv_stream_decode(ctx.get(),true);
             t.assert_equal(0,llama_decode(ctx.get(),batch));
             llama_batch_free(batch);
+        });
+        t.test("independent_target_rollback_needs_no_auxiliary_kv_layer", [&](testing & t) {
+            auto p=llama_context_default_params();
+            p.n_ctx=1024; p.n_batch=p.n_ubatch=256; p.n_seq_max=1;
+            p.n_threads=p.n_threads_batch=8;
+            p.n_rs_seq=3;
+            p.n_outputs_max=p.n_outputs_max_per_seq=4;
+            p.type_k=GGML_TYPE_Q8_0; p.type_v=GGML_TYPE_Q4_0;
+            p.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            p.kv_stream_pool_bytes=16*1048576;
+            context_ptr ctx(llama_init_from_model(model.get(),p),llama_free);
+            if (!t.assert_true(bool(ctx))) return;
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+            if (!t.assert_true(hybrid && hybrid->get_mem_recr()->spill_enabled())) return;
+            auto * target=hybrid->get_mem_attn()->get_kv_stream();
+            if (!t.assert_true(target && !target->auxiliary_cache())) return;
+            t.assert_equal(uint32_t(4),ctx->get_cparams().kv_stream_decode_rows());
+            auto batch=llama_batch_init(256,0,1);
+            struct release { llama_batch & batch; ~release() { llama_batch_free(batch); } } guard{batch};
+            const auto submit=[&](uint32_t width,llama_pos first,bool decode) {
+                batch.n_tokens=int32_t(width);
+                for (uint32_t i=0;i<width;++i) {
+                    batch.token[i]=1; batch.pos[i]=first+llama_pos(i);
+                    batch.n_seq_id[i]=1; batch.seq_id[i][0]=0; batch.logits[i]=decode || i+1==width;
+                }
+                llama_set_kv_stream_decode(ctx.get(),decode);
+                return llama_decode(ctx.get(),batch);
+            };
+            if (!t.assert_equal(0,submit(256,0,false))) return;
+            llama_pos position=256;
+            for (uint32_t width : {1u,2u,3u,4u}) {
+                if (!t.assert_equal(0,submit(width,position,true))) return;
+                position+=llama_pos(width);
+                t.assert_equal(size_t(position),target->tokens());
+            }
+            t.assert_true(llama_memory_seq_rm(llama_get_memory(ctx.get()),0,position-3,-1));
+            t.assert_equal(size_t(position-3),target->tokens());
+            t.assert_equal(0,submit(1,position-3,true));
         });
         return t.summary();
     }

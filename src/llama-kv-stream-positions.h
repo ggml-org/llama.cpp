@@ -23,3 +23,7 @@ bool llama_kv_stream_validate_cells(const llama_kv_cells & cells, size_t count, 
 // Translate an interval in a validated monotone prefix into a suffix, without scanning the whole cache.
 bool llama_kv_stream_suffix(const llama_kv_cells & cells, size_t count,
     llama_pos begin, llama_pos end, size_t & retained) noexcept;
+struct llama_ubatch;
+// Derive exact serial causal visibility from cache positions, including repeated M-RoPE positions.
+bool llama_kv_stream_mask_bounds(const llama_kv_cells & cells, size_t count, size_t padded,
+    const llama_ubatch & batch, bool causal, std::vector<int32_t> & bounds);

@@ -26,9 +26,9 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share) :
+    const  layer_share_cb & share, const llama_memory_params * bounded) :
     llama_kv_cache_iswa(model, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified,
-            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share) {
+            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share, bounded) {
 }
 
 llama_kv_cache_iswa::llama_kv_cache_iswa(
@@ -47,7 +47,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share) : unified(unified) {
+    const  layer_share_cb & share, const llama_memory_params * bounded) : unified(unified) {
 
     // chain filters
     const layer_filter_cb filter_base = [&](int32_t il) {
@@ -102,7 +102,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     kv_swa = std::make_unique<llama_kv_cache>(
             model, hparams, type_k, type_v,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
-            hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share);
+            hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share, "", bounded);
 }
 
 void llama_kv_cache_iswa::clear(bool data) {

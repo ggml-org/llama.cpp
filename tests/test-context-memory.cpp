@@ -4,6 +4,7 @@
 #include "ggml-cpp.h"
 #include "ggml-cpu.h"
 #include "../ggml/src/ggml-backend-impl.h"
+#include "../src/llama-memory-bounded-kv.h"
 
 #include <algorithm>
 #include <cstring>
@@ -184,6 +185,51 @@ int main(int argc, char ** argv) {
         owner.reset();
         for (auto * backend : f.backends) t.assert_equal(size_t(0), ggml_backend_sched_get_buffer_size(f.sched.get(), backend));
     });
+    t.test("bounded_cache_stays_in_parent_across_workspace_handoff_and_cleanup", [&](testing & t) {
+        fixture f(dev);
+        llama_compute_workspace_plan plan;
+        plan.groups=f.groups;
+        plan.phase_sizes.assign(2,std::vector<size_t>(f.groups.size()));
+        for (auto & phase : plan.phase_sizes) for (size_t i=0;i<f.groups.size();++i) phase[i]=f.groups[i].size;
+        auto parent=llama_context_memory::create(f.sched.get(),f.backends,plan,nullptr,nullptr,false,{},16384);
+        if (!t.assert_true(bool(parent))) return;
+        llama_memory_cache_requirement cache;
+        cache.identity={704,1}; cache.role=llama_memory_cache_role::bounded_resident;
+        cache.layers=1; cache.history_rows=4096; cache.window_rows=16; cache.headroom_rows=16; cache.row_padding=32;
+        cache.format={GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,32,32,1,false}; cache.row_bytes=52;
+        llama_memory_bounded_kv_layout layout;
+        if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,{9},f.groups[0].buft,layout))) return;
+        auto stage=parent->reserve_staging(1024);
+        if (!t.assert_true(bool(stage))) return;
+        auto grant=parent->reserve_bounded_cache(layout);
+        if (!t.assert_true(bool(grant))) return;
+        t.assert_true(parent->has_bounded_cache() && parent->covers_workspace(plan));
+        auto oversized=plan;
+        for (auto & group : oversized.groups) group.size*=2;
+        for (auto & phase : oversized.phase_sizes) for (auto & bytes : phase) bytes*=2;
+        t.assert_true(!parent->covers_workspace(oversized));
+        t.assert_true(!parent->reserve_bounded_cache(layout));
+        auto * buffer=ggml_backend_memory_lease_buffer(grant->lease());
+        ggml_backend_buffer_clear(buffer,0x5a);
+        f.rebuild(); f.run(t,*parent,4);
+        ggml_context_ptr storage(ggml_init({4096+ggml_tensor_overhead(),nullptr,true}));
+        auto * bytes_tensor=ggml_new_tensor_1d(storage.get(),GGML_TYPE_F32,layout.allocation.bytes/4);
+        t.assert_true(ggml_backend_tensor_alloc(buffer,bytes_tensor,ggml_backend_buffer_get_base(buffer)) == GGML_STATUS_SUCCESS);
+        std::vector<uint8_t> contents(layout.allocation.bytes);
+        ggml_backend_tensor_get(bytes_tensor,contents.data(),0,contents.size());
+        t.assert_true(std::all_of(contents.begin(),contents.end(),[](uint8_t x){return x == 0x5a;}));
+        auto * retained=ggml_backend_memory_lease_retain(grant->lease());
+        grant.reset();
+        t.assert_true(!parent->reserve_bounded_cache(layout));
+        ggml_backend_memory_lease_free(retained);
+        t.assert_true(parent->release_bounded_cache());
+        grant=parent->reserve_bounded_cache(layout);
+        t.assert_true(bool(grant));
+        parent.reset();
+        t.assert_true(ggml_backend_memory_lease_buffer(grant->lease()) != nullptr);
+        grant.reset();
+        stage.reset();
+    });
 
     t.test("repeated_graph_rebuild_and_workspace_recreation", [&](testing & t) {
         fixture f(dev);
@@ -308,6 +354,46 @@ int main(int argc, char ** argv) {
         t.assert_true("adjacent parent guard",!guard.empty() && std::all_of(guard.begin(),guard.end(),[](uint8_t value) { return value == 0xa5; }));
     });
 
+    t.test("cancelled_serial_graph_retires_pins_and_can_recapture", [&](testing & t) {
+        fixture target(dev),draft(dev);
+        auto parent=llama_context_memory::create(target.sched.get(),target.backends,target.groups);
+        if (!t.assert_true(bool(parent))) return;
+        llama_compute_workspace_plan plan;
+        plan.groups=draft.groups;
+        plan.phase_sizes.assign(2,std::vector<size_t>(draft.groups.size()));
+        for (auto & phase : plan.phase_sizes)
+            for (size_t i=0;i<draft.groups.size();++i) phase[i]=draft.groups[i].size;
+        auto child=llama_context_memory::create(draft.sched.get(),draft.backends,plan,nullptr,parent.get());
+        if (!t.assert_true(bool(child) && child->prepare_serial_draft(text_phase::prefill))) return;
+        draft.rebuild(); draft.run(t,*child,2);
+        struct forced_compute {
+            ggml_backend_t backend;
+            decltype(ggml_backend_i::graph_compute) original;
+            explicit forced_compute(ggml_backend_t backend,bool cancel=true) : backend(backend),original(backend->iface.graph_compute) {
+                if (cancel) backend->iface.graph_compute=[](ggml_backend_t,ggml_cgraph *) { return GGML_STATUS_ABORTED; };
+                else backend->iface.graph_compute=[](ggml_backend_t,ggml_cgraph *) { return GGML_STATUS_FAILED; };
+            }
+            ~forced_compute() { backend->iface.graph_compute=original; }
+        };
+        {
+            forced_compute abort(draft.device.get());
+            t.assert_true(child->compute_async(draft.graph) == GGML_STATUS_ABORTED);
+        }
+        t.assert_true(parent->valid() && child->valid());
+        if (!t.assert_true(child->prepare_serial_draft(text_phase::prefill) && child->serial_ready())) return;
+        draft.rebuild(); draft.run(t,*child,7);
+        if (!t.assert_true(parent->prepare_serial_target())) return;
+        target.rebuild(); target.run(t,*parent,3);
+        if (!t.assert_true(child->prepare_serial_draft(text_phase::decode))) return;
+        draft.rebuild(); draft.run(t,*child,5);
+        {
+            forced_compute failure(draft.device.get(),false);
+            t.assert_true(child->compute_async(draft.graph) == GGML_STATUS_FAILED);
+        }
+        t.assert_true(!child->serial_ready() && !child->prepare_serial_draft(text_phase::decode));
+        if (!t.assert_true(child->retire_graph() && child->prepare_serial_draft(text_phase::decode))) return;
+        draft.rebuild(); draft.run(t,*child,11);
+    });
     t.test("three_serial_schedulers_share_scratch_without_overlapping_admission", [&](testing & t) {
         fixture target(dev), draft(dev), vision(dev);
         auto parent = llama_context_memory::create(target.sched.get(), target.backends, target.groups);

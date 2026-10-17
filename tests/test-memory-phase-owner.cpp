@@ -2,10 +2,247 @@
 #include "../src/llama-memory-phase-owner.h"
 #include "../src/llama-memory-workspace.h"
 #include "../src/llama-memory-recurrent-spill.h"
+#include "../src/llama-memory-bounded-kv.h"
+#include "../ggml/src/ggml-backend-impl.h"
+#include "ggml-alloc.h"
 
 #include <cstring>
+#include <type_traits>
+
+static_assert(!std::is_copy_constructible<llama_memory_bounded_kv>::value,"a cache must have one write owner");
+static_assert(!std::is_move_constructible<llama_memory_bounded_kv>::value,"pending preparations borrow the owner address");
 int main(int argc, char ** argv) {
     testing t;
+    t.test("bounded_KV_rejects_inconsistent_backend_quotes_and_invalid_geometry", [](testing & t) {
+        llama_memory_cache_requirement cache;
+        cache.identity={605,1}; cache.role=llama_memory_cache_role::bounded_resident;
+        cache.layers=2; cache.history_rows=4096; cache.window_rows=16; cache.headroom_rows=16; cache.row_padding=32;
+        cache.format={GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,32,32,1,false};
+        cache.row_bytes=52;
+        auto padded=*ggml_backend_cpu_buffer_type();
+        padded.iface.get_alloc_size=[](ggml_backend_buffer_type_t,const ggml_tensor * tensor) { return ggml_nbytes(tensor)+13; };
+        llama_memory_bounded_kv_layout layout;
+        if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,{3,9},&padded,layout))) return;
+        t.assert_true(layout.allocation.bytes > cache.row_bytes*32*2);
+        t.assert_true(layout.layers[0].v_offset >= layout.layers[0].k_offset+layout.layers[0].k_bytes+13);
+        const auto before=layout;
+        padded.iface.get_alloc_size_n=[](ggml_backend_buffer_type_t,ggml_tensor **,int) { return size_t(1); };
+        t.assert_true(!llama_memory_bounded_kv_layout_make(cache,{3,9},&padded,layout));
+        t.assert_equal(before.allocation.bytes,layout.allocation.bytes);
+        auto * cpu=ggml_backend_cpu_buffer_type();
+        t.assert_true(!llama_memory_bounded_kv_layout_make(cache,{3,3},cpu,layout));
+        t.assert_true(!llama_memory_bounded_kv_layout_make(cache,{3},cpu,layout));
+        auto bad=cache; bad.role=llama_memory_cache_role::full_history;
+        t.assert_true(!llama_memory_bounded_kv_layout_make(bad,{3,9},cpu,layout));
+        bad=cache; bad.format.key_head_dim=31;
+        t.assert_true(!llama_memory_bounded_kv_layout_make(bad,{3,9},cpu,layout));
+        bad=cache; bad.row_padding=3;
+        t.assert_true(!llama_memory_bounded_kv_layout_make(bad,{3,9},cpu,layout));
+        bad=cache; bad.window_rows=UINT32_MAX;
+        t.assert_true(!llama_memory_bounded_kv_layout_make(bad,{3,9},cpu,layout));
+        bad=cache; bad.format.kv_heads=UINT32_MAX; bad.format.key_head_dim=UINT32_MAX-31;
+        t.assert_true(!llama_memory_bounded_kv_layout_make(bad,{3,9},cpu,layout));
+        t.assert_equal(before.allocation.bytes,layout.allocation.bytes);
+    });
+    t.test("bounded_KV_measures_stock_window_geometry_and_backend_padding", [](testing & t) {
+        for (bool gemma : {false,true}) for (ggml_type key : {GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1})
+            for (ggml_type value : {GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1}) {
+                llama_memory_cache_requirement cache;
+                cache.identity={601,1}; cache.role=llama_memory_cache_role::bounded_resident;
+                cache.layers=gemma ? 3 : 5; cache.history_rows=262144;
+                cache.window_rows=gemma ? 1024 : 2048; cache.headroom_rows=256; cache.row_padding=256;
+                cache.format={key,value,gemma ? 256u : 128u,gemma ? 256u : 128u,gemma ? 16u : 8u,false};
+                cache.row_bytes=ggml_row_size(key,cache.format.key_head_dim*cache.format.kv_heads)+
+                    ggml_row_size(value,cache.format.value_head_dim*cache.format.kv_heads);
+                std::vector<uint32_t> ids(cache.layers);
+                for (uint32_t i=0;i<cache.layers;++i) ids[i]=i*3;
+                llama_memory_bounded_kv_layout layout;
+                if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,ids,ggml_backend_cpu_buffer_type(),layout))) return;
+                t.assert_equal(gemma ? 1280u : 2304u,layout.allocation.capacity_rows);
+                t.assert_true(layout.allocation.bytes >= cache.row_bytes*cache.layers*layout.allocation.capacity_rows);
+                const auto bytes=layout.allocation.bytes;
+                cache.history_rows=131072;
+                t.assert_true(llama_memory_bounded_kv_layout_make(cache,ids,ggml_backend_cpu_buffer_type(),layout));
+                t.assert_equal(bytes,layout.allocation.bytes);
+                const auto before=layout.allocation;
+                ++cache.row_bytes;
+                t.assert_true(!llama_memory_bounded_kv_layout_make(cache,ids,ggml_backend_cpu_buffer_type(),layout));
+                t.assert_equal(before.bytes,layout.allocation.bytes);
+            }
+    });
+    t.test("bounded_KV_pins_preserve_storage_and_close_stale_writer_admission", [](testing & t) {
+        auto * buft=ggml_backend_cpu_buffer_type();
+        llama_memory_cache_requirement cache;
+        cache.identity={602,1}; cache.role=llama_memory_cache_role::bounded_resident;
+        cache.layers=1; cache.history_rows=4096; cache.window_rows=16; cache.headroom_rows=16; cache.row_padding=32;
+        cache.format={GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,32,32,1,false};
+        cache.row_bytes=ggml_row_size(GGML_TYPE_Q8_0,32)+ggml_row_size(GGML_TYPE_Q4_0,32);
+        llama_memory_bounded_kv_layout layout;
+        if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,{17},buft,layout))) return;
+        const size_t a=layout.allocation.alignment, bytes=layout.allocation.bytes;
+        const auto make=[&](size_t size,uint32_t flags) {
+            arena_ptr arena(ggml_backend_memory_arena_new(buft,bytes+2*a),ggml_backend_memory_arena_free);
+            if (!arena || !ggml_backend_memory_arena_begin(arena.get(),0) ||
+                    !ggml_backend_memory_arena_reserve_at(arena.get(),88,a,size,a,flags,nullptr) ||
+                    !ggml_backend_memory_arena_commit(arena.get())) return arena_ptr(nullptr,ggml_backend_memory_arena_free);
+            return arena;
+        };
+        auto arena=make(bytes,GGML_BACKEND_MEMORY_REGION_PERSISTENT);
+        if (!t.assert_true(bool(arena))) return;
+        lease_ptr grant(ggml_backend_memory_arena_acquire(arena.get(),88),ggml_backend_memory_lease_free);
+        for (int mutation=0;mutation<5;++mutation) {
+            auto forged=layout;
+            switch (mutation) {
+                case 0: --forged.allocation.bytes; break;
+                case 1: ++forged.layers[0].v_offset; break;
+                case 2: ++forged.allocation.capacity_rows; break;
+                case 3: forged.allocation.format.value_type=GGML_TYPE_F16; break;
+                case 4: ++forged.allocation.cache.generation; break;
+            }
+            llama_memory_bounded_kv invalid(std::move(forged));
+            t.assert_true(!invalid.bind(grant.get()) && !invalid.read({602,1}));
+        }
+        auto consumer=std::make_unique<llama_memory_bounded_kv>(layout);
+        if (!t.assert_true(consumer->bind(grant.get()))) return;
+        auto * buffer=ggml_backend_memory_lease_buffer(grant.get());
+        ggml_backend_buffer_clear(ggml_backend_memory_arena_parent(arena.get()),0x5a);
+        auto read=consumer->read({602,1});
+        t.assert_true(bool(read) && read.buffer() == buffer);
+        t.assert_true(!consumer->read({602,2}) && !consumer->read({603,1}));
+        t.assert_equal(uint64_t(0),consumer->begin_write({602,1}));
+        t.assert_true(!consumer->reconstruct({602,1}));
+        t.assert_true(consumer->bind(grant.get()));
+        read.reset();
+        const auto ticket=consumer->begin_write({602,1});
+        if (!t.assert_true(ticket != 0)) return;
+        ggml_context_ptr tensors(ggml_init({4096+3*ggml_tensor_overhead(),nullptr,true}));
+        auto * k=ggml_new_tensor_3d(tensors.get(),cache.format.key_type,32,32,1);
+        auto * v=ggml_new_tensor_3d(tensors.get(),cache.format.value_type,32,32,1);
+        ggml_tallocr allocator{};
+        if (!t.assert_true(ggml_tallocr_new_range(&allocator,buffer,0,bytes))) return;
+        if (!t.assert_true(ggml_tallocr_alloc(&allocator,k) == GGML_STATUS_SUCCESS &&
+                ggml_tallocr_alloc(&allocator,v) == GGML_STATUS_SUCCESS)) return;
+        const auto base=uintptr_t(ggml_backend_buffer_get_base(buffer));
+        t.assert_equal(layout.layers[0].k_offset,uintptr_t(k->data)-base);
+        t.assert_equal(layout.layers[0].v_offset,uintptr_t(v->data)-base);
+        std::vector<uint8_t> payload(std::max(ggml_nbytes(k),ggml_nbytes(v)),0xf7);
+        ggml_backend_tensor_set(k,payload.data(),0,ggml_nbytes(k));
+        ggml_backend_tensor_set(v,payload.data(),0,ggml_nbytes(v));
+        auto * overflow=ggml_new_tensor_1d(tensors.get(),GGML_TYPE_F32,32);
+        const auto offset=allocator.offset;
+        t.assert_true(ggml_tallocr_alloc(&allocator,overflow) == GGML_STATUS_ALLOC_FAILED && !overflow->data);
+        t.assert_equal(offset,allocator.offset);
+        const auto * parent=static_cast<const uint8_t *>(ggml_backend_buffer_get_base(ggml_backend_memory_arena_parent(arena.get())));
+        t.assert_true(std::all_of(parent,parent+a,[](uint8_t value){return value == 0x5a;}));
+        t.assert_true(std::all_of(parent+a+bytes,parent+2*a+bytes,[](uint8_t value){return value == 0x5a;}));
+        ggml_backend_buffer_clear(buffer,0x5a);
+        t.assert_true(!consumer->read({602,1}) && !consumer->bind(grant.get()));
+        t.assert_true(!consumer->finish_write(ticket+1,true));
+        if (!t.assert_true(consumer->finish_write(ticket,true))) return;
+        t.assert_equal(uint64_t(2),consumer->identity().generation);
+        t.assert_true(!consumer->read({602,1}));
+        const auto failed=consumer->begin_write({602,2});
+        t.assert_true(failed && consumer->finish_write(failed,false));
+        t.assert_true(!consumer->read({602,2}) && !consumer->begin_write({602,2}));
+        t.assert_true(consumer->reconstruct({602,2}));
+        auto moved=make(bytes,GGML_BACKEND_MEMORY_REGION_PERSISTENT);
+        lease_ptr other(ggml_backend_memory_arena_acquire(moved.get(),88),ggml_backend_memory_lease_free);
+        t.assert_true(!consumer->bind(other.get()));
+        read=consumer->read({602,3});
+        grant.reset(); consumer.reset(); arena.reset();
+        t.assert_true(bool(read) && read.layout()->cache.identity.generation == 3);
+        const auto * data=static_cast<const uint8_t *>(ggml_backend_buffer_get_base(read.buffer()));
+        t.assert_true(data && std::all_of(data,data+bytes,[](uint8_t v){return v == 0x5a;}));
+        read.reset();
+        for (auto invalid : {std::pair{bytes-1,uint32_t(GGML_BACKEND_MEMORY_REGION_PERSISTENT)},std::pair{bytes,uint32_t(0)}}) {
+            auto bad=make(invalid.first,invalid.second);
+            lease_ptr short_grant(ggml_backend_memory_arena_acquire(bad.get(),88),ggml_backend_memory_lease_free);
+            llama_memory_bounded_kv fresh(layout);
+            t.assert_true(!fresh.bind(short_grant.get()) && !fresh.read({602,1}));
+        }
+    });
+    t.test("bounded_KV_participates_in_phase_changes_without_moving_or_clearing", [](testing & t) {
+        fixture f(t,false);
+        llama_memory_cache_requirement cache;
+        cache.identity={606,1}; cache.role=llama_memory_cache_role::bounded_resident;
+        cache.layers=1; cache.history_rows=4096; cache.window_rows=16; cache.headroom_rows=16; cache.row_padding=32;
+        cache.format={GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,32,32,1,false}; cache.row_bytes=52;
+        llama_memory_bounded_kv_layout layout;
+        if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,{7},ggml_backend_cpu_buffer_type(),layout))) return;
+        const auto a=layout.allocation.alignment, bytes=layout.allocation.bytes;
+        arena_ptr arena(ggml_backend_memory_arena_new(layout.buft,bytes+4*a),ggml_backend_memory_arena_free);
+        if (!t.assert_true(arena && ggml_backend_memory_arena_begin(arena.get(),0) &&
+                ggml_backend_memory_arena_reserve_at(arena.get(),55,0,bytes,a,GGML_BACKEND_MEMORY_REGION_PERSISTENT,nullptr) &&
+                ggml_backend_memory_arena_commit(arena.get()))) return;
+        lease_ptr grant(ggml_backend_memory_arena_acquire(arena.get(),55),ggml_backend_memory_lease_free);
+        llama_memory_bounded_kv owner(layout,{55,1,LLAMA_MEMORY_ALLOCATION_HOST,llama_memory_content::preserve});
+        if (!t.assert_true(owner.bind(grant.get()))) return;
+        auto target=f.target;
+        target.plan.stages.push_back({11,{10},{{11,f.a,f.a,f.a,LLAMA_MEMORY_ACCESS_WRITE,0},
+            {12,2*f.a,2*f.a,f.a,LLAMA_MEMORY_ACCESS_READ_WRITE,0}}});
+        if (!t.assert_true(owner.register_resources(target.plan,{10,11}))) return;
+        target.budgets[0].capacity=bytes+4*a;
+        target.fixed.clear();
+        ggml_backend_memory_region region{};
+        if (!t.assert_true(ggml_backend_memory_lease_get_region(grant.get(),&region))) return;
+        target.fixed.push_back({0,region});
+        ggml_backend_buffer_clear(ggml_backend_memory_arena_parent(arena.get()),0x5a);
+        auto pin=owner.read({606,1});
+        llama_memory_transition transition({&owner});
+        const std::vector<llama_memory_transition_arena> arenas={{1,LLAMA_MEMORY_ALLOCATION_HOST,arena.get()}};
+        for (auto stage : {10u,11u,10u}) {
+            target.stage=stage;
+            if (!t.assert_true(transition.prepare(target).status == status::prepared)) return;
+            t.assert_equal(uint64_t(0),owner.begin_write({606,1}));
+            if (!t.assert_true(transition.activate(arenas).status == status::activated)) return;
+            const auto * data=static_cast<const uint8_t *>(ggml_backend_buffer_get_base(pin.buffer()));
+            t.assert_true(std::all_of(data,data+bytes,[](uint8_t value){return value == 0x5a;}));
+        }
+        target.stage=11;
+        pin.reset();
+        t.assert_true(transition.prepare(target).status == status::prepared);
+        t.assert_equal(uint64_t(0),owner.begin_write({606,1}));
+        t.assert_true(transition.cancel());
+        t.assert_true(bool(owner.read({606,1})));
+        struct failing_participant : llama_memory_consumer {
+            bool fail=false;
+            struct work : llama_memory_preparation {
+                failing_participant & owner;
+                explicit work(failing_participant & owner) : owner(owner) {}
+                bool quiesce(const std::vector<llama_memory_resource_id> &) override { return true; }
+                bool drain() override { return true; }
+                bool invalidate() override { return true; }
+                bool release() override { return true; }
+                bool bind(const std::vector<llama_memory_region_binding> &) override { return true; }
+                bool activate() override { return !owner.fail; }
+                bool prepare_recovery(std::unique_ptr<llama_memory_preparation> &) override { return true; }
+            };
+            bool prepare(const llama_memory_transition_target &,const llama_memory_layout &,
+                    std::unique_ptr<llama_memory_preparation> & output) override {
+                output=std::make_unique<work>(*this); return true;
+            }
+        } failure;
+        llama_memory_transition recovery({&owner,&failure});
+        target.stage=10;
+        if (!t.assert_true(recovery.prepare(target).status == status::prepared &&
+                recovery.activate(arenas).status == status::activated)) return;
+        failure.fail=true; target.stage=11;
+        if (!t.assert_true(recovery.prepare(target).status == status::prepared &&
+                recovery.activate(arenas).status == status::activation_failed)) return;
+        t.assert_true(recovery.recover().status == status::recovered);
+        t.assert_true(bool(owner.read({606,1})));
+        const auto ticket_after_recovery=owner.begin_write({606,1});
+        if (!t.assert_true(ticket_after_recovery != 0)) return;
+        t.assert_true(owner.finish_write(ticket_after_recovery,true));
+        t.assert_true(!owner.read({606,1}) && owner.read({606,2}));
+        target.fixed.front().region.offset=a;
+        t.assert_true(transition.prepare(target).status == status::consumer_failed);
+        t.assert_true(bool(owner.read({606,2})));
+        pin.reset(); grant.reset();
+        const auto ticket=owner.begin_write({606,2});
+        t.assert_true(ticket && owner.finish_write(ticket,true));
+        t.assert_true(transition.prepare(target).status == status::consumer_failed);
+    });
     t.test("serial_target_and_mtp_handoff_reuses_one_arena", [](testing & t) {
         fixture f(t,false);
         auto target=f.target;
@@ -329,6 +566,125 @@ int main(int argc, char ** argv) {
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(parent.get()));
     });
 
+
+    t.test("measured_workloads_fit_exactly_and_report_missing_kernels_separately", [](testing & t) {
+        using phase = llama_memory_work_phase;
+        llama_memory_cache_requirement cache{{201, 1}, {}, llama_memory_cache_role::bounded_resident,
+                                           5, 262144, 2048, 256, 256, 1664};
+        cache.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,128,128,8,false};
+        std::vector<llama_memory_workload_requirement> work{
+            {phase::draft_feature_injection,cache.identity,256,0,0,0,256,true,true,false},
+            {phase::draft_block_prediction,cache.identity,8,8,8,0,256,true,true,false},
+            {phase::target_verify,cache.identity,8,8,8,7,256,true,true,true}};
+        std::vector<llama_memory_workload_measurement> measured;
+        const std::vector<llama_memory_cache_allocation_measurement> allocation{{cache.identity,19169280,16,2304,cache.format}};
+        for (const auto & r : work) measured.push_back({r, 100, 20, 25, 16, true, false, false});
+        measured[1].graph_bytes = 200;
+        measured[2].live_device_bytes = 80;
+        llama_memory_workload_budget budget;
+        auto result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(19169280), budget.persistent_cache_bytes);
+        t.assert_equal(size_t(224), budget.workspace_peak_bytes);
+        t.assert_equal(size_t(19169504), budget.parent_minimum_bytes);
+        t.assert_equal(size_t(25), budget.host_feature_peak_bytes);
+        const auto before = budget;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169503, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::insufficient_budget);
+        t.assert_equal(size_t(1), result.additional_bytes);
+        t.assert_equal(before.parent_minimum_bytes, budget.parent_minimum_bytes);
+        measured[1].execution_available = false;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 1, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::missing_kernel);
+        t.assert_equal(size_t(1), result.workload);
+        measured[1].execution_available = true;
+        measured[1].workload.query_rows = 4;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::missing_measurement);
+        measured[1].workload = work[1];
+        measured[1].fallback_selected = true;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::unbudgeted_fallback);
+        measured[1].fallback_measured = true;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget).status ==
+                      llama_memory_workload_budget_status::success);
+        measured[1].live_device_bytes = SIZE_MAX;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, SIZE_MAX, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::invalid_measurement);
+        auto padded_allocation = allocation;
+        padded_allocation[0].alignment = 64;
+        measured[1].live_device_bytes = 20;
+        result = llama_memory_workload_budget_make({cache}, padded_allocation, work, measured, 1, 19169567, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::insufficient_budget);
+        t.assert_equal(size_t(1), result.additional_bytes);
+    });
+
+    t.test("workload_admission_rejects_stale_and_duplicate_cache_catalogs", [](testing & t) {
+        llama_memory_cache_requirement cache{{201, 2}, {}, llama_memory_cache_role::full_history,
+                                           16, 262144, 0, 0, 256, 1664};
+        cache.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,256,256,4,false};
+        llama_memory_workload_requirement work{llama_memory_work_phase::target_verify,cache.identity,8,8,8,7,256,true,true,true};
+        llama_memory_workload_measurement measured{work, 100, 20, 25, 16, true, false, false};
+        const std::vector<llama_memory_cache_allocation_measurement> allocation{{cache.identity,0,16,262144,cache.format}};
+        llama_memory_workload_budget budget;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(0), budget.persistent_cache_bytes);
+        const auto padded = llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 1, 143, budget);
+        t.assert_true(padded.status == llama_memory_workload_budget_status::insufficient_budget);
+        t.assert_equal(size_t(1), padded.additional_bytes);
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 1, 144, budget).status ==
+                      llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(144), budget.parent_minimum_bytes);
+        t.assert_true(llama_memory_workload_budget_make({cache,cache}, {allocation[0],allocation[0]}, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::invalid_cache);
+        work.cache.generation++;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::stale_cache);
+        work.cache.id++;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::missing_cache);
+    });
+
+    t.test("measured_cache_padding_and_aliases_are_accounted_once", [](testing & t) {
+        llama_memory_cache_requirement source{{201,2},{},llama_memory_cache_role::bounded_resident,
+                                            5,262144,2048,256,256,1664};
+        source.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,128,128,8,false};
+        auto alias = source;
+        alias.identity = {202,1};
+        alias.role = llama_memory_cache_role::read_only_source;
+        alias.source = source.identity;
+        alias.layers = 1;
+        llama_memory_workload_requirement work{llama_memory_work_phase::target_verify,alias.identity,8,8,8,0,256,true,false,false};
+        llama_memory_workload_measurement measurement{work,100,20,0,64,true,false,false};
+        std::vector<llama_memory_cache_allocation_measurement> allocations{
+            {source.identity,19169312,64,2304,source.format},{alias.identity,0,64,2304,alias.format}};
+        llama_memory_workload_budget budget;
+        auto result = llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,19169472,budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(19169312), budget.persistent_cache_bytes);
+        t.assert_equal(size_t(19169472), budget.parent_minimum_bytes);
+        allocations[1].bytes = 1;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::invalid_measurement);
+        allocations[1].bytes = 0;
+        allocations[0].bytes = 19169279;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::invalid_measurement);
+        allocations[0].bytes = 19169312;
+        allocations[0].cache.generation++;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::missing_measurement);
+        allocations[0].cache = source.identity;
+        allocations[0].capacity_rows--;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::missing_measurement);
+        allocations[0].capacity_rows++;
+        allocations[0].format.key_head_dim *= 2;
+        allocations[0].format.kv_heads /= 2;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::missing_measurement);
+    });
 
     return t.summary();
 }

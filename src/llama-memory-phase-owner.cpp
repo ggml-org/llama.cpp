@@ -39,6 +39,84 @@ static bool same_identity(llama_memory_phase_cache_identity a, llama_memory_phas
     return a.id == b.id && a.generation == b.generation;
 }
 
+static bool same_workload(const llama_memory_workload_requirement & a, const llama_memory_workload_requirement & b) {
+    return a.phase == b.phase && same_identity(a.cache, b.cache) && a.input_rows == b.input_rows &&
+        a.query_rows == b.query_rows && a.output_rows == b.output_rows && a.rollback_depth == b.rollback_depth &&
+        a.microbatch_rows == b.microbatch_rows && a.serial == b.serial && a.writes_cache == b.writes_cache && a.causal == b.causal;
+}
+
+llama_memory_workload_budget_result llama_memory_workload_budget_make(
+        const std::vector<llama_memory_cache_requirement> & caches,
+        const std::vector<llama_memory_cache_allocation_measurement> & cache_allocations,
+        const std::vector<llama_memory_workload_requirement> & workloads,
+        const std::vector<llama_memory_workload_measurement> & measurements,
+        size_t persistent_extra_bytes, size_t capacity, llama_memory_workload_budget & output) noexcept {
+    using status = llama_memory_workload_budget_status;
+    if (caches.empty()) return {status::invalid_cache};
+    if (workloads.empty()) return {status::invalid_workload};
+    if (measurements.size() != workloads.size() || cache_allocations.size() != caches.size()) return {status::missing_measurement};
+    try {
+        llama_memory_workload_budget next;
+        size_t persistent = persistent_extra_bytes;
+        const auto find_cache = [&](uint64_t id) -> const llama_memory_cache_requirement * {
+            for (const auto & cache : caches) if (cache.identity.id == id) return &cache;
+            return nullptr;
+        };
+        for (size_t i = 0; i < caches.size(); ++i) {
+            const auto & cache = caches[i];
+            const auto & allocation = cache_allocations[i];
+            for (size_t j = 0; j < i; ++j) if (caches[j].identity.id == cache.identity.id) return {status::invalid_cache};
+            const auto * source = cache.role == llama_memory_cache_role::read_only_source ? find_cache(cache.source.id) : nullptr;
+            llama_memory_cache_bound bound;
+            if (!llama_memory_cache_bound_make(cache, source, bound)) return {status::invalid_cache};
+            if (!same_identity(cache.identity, allocation.cache) || allocation.capacity_rows != bound.capacity_rows ||
+                    !llama_memory_cache_format_equal(cache.format, allocation.format)) return {status::missing_measurement};
+            if (!allocation.alignment || (allocation.alignment & (allocation.alignment-1)) ||
+                    (cache.role == llama_memory_cache_role::bounded_resident && allocation.bytes < bound.storage_bytes) ||
+                    (cache.role == llama_memory_cache_role::read_only_source && allocation.bytes)) return {status::invalid_measurement};
+            if (!allocation.bytes) continue;
+            if (persistent > SIZE_MAX-(allocation.alignment-1)) return {status::invalid_measurement};
+            const size_t aligned = (persistent+allocation.alignment-1)&~(allocation.alignment-1);
+            if (allocation.bytes > SIZE_MAX-aligned) return {status::invalid_measurement};
+            persistent = aligned+allocation.bytes;
+            next.persistent_cache_bytes = persistent-persistent_extra_bytes;
+        }
+        next.workload_bytes.reserve(workloads.size());
+        for (size_t i = 0; i < workloads.size(); ++i) {
+            const auto & workload = workloads[i];
+            const auto & measurement = measurements[i];
+            const auto * cache = find_cache(workload.cache.id);
+            if (!cache) return {status::missing_cache, i};
+            if (!same_identity(cache->identity, workload.cache)) return {status::stale_cache, i};
+            if (!llama_memory_workload_requirement_valid(workload, *cache)) return {status::invalid_workload, i};
+            if (!same_workload(workload, measurement.workload)) return {status::missing_measurement, i};
+            if (!measurement.execution_available) return {status::missing_kernel, i};
+            if (measurement.fallback_selected && !measurement.fallback_measured) return {status::unbudgeted_fallback, i};
+            const auto alignment = measurement.alignment;
+            if (!measurement.graph_bytes || !alignment || (alignment & (alignment-1)) ||
+                    measurement.live_device_bytes > SIZE_MAX-measurement.graph_bytes) return {status::invalid_measurement, i};
+            const size_t bytes = measurement.graph_bytes+measurement.live_device_bytes;
+            if (bytes > SIZE_MAX-(alignment-1)) return {status::invalid_measurement, i};
+            const size_t aligned = (bytes+alignment-1)&~(alignment-1);
+            next.workload_bytes.push_back(aligned);
+            next.workspace_peak_bytes = std::max(next.workspace_peak_bytes, aligned);
+            next.host_feature_peak_bytes = std::max(next.host_feature_peak_bytes, measurement.host_feature_bytes);
+        }
+        for (size_t i = 0; i < measurements.size(); ++i) {
+            const size_t alignment = measurements[i].alignment;
+            if (persistent > SIZE_MAX-(alignment-1)) return {status::invalid_measurement, i};
+            const size_t aligned = (persistent+alignment-1)&~(alignment-1);
+            if (next.workload_bytes[i] > SIZE_MAX-aligned) return {status::invalid_measurement, i};
+            next.parent_minimum_bytes = std::max(next.parent_minimum_bytes, aligned+next.workload_bytes[i]);
+        }
+        if (next.parent_minimum_bytes > capacity) return {status::insufficient_budget, 0, next.parent_minimum_bytes-capacity};
+        output = std::move(next);
+        return {};
+    } catch (const std::bad_alloc &) {
+        return {status::allocation_failed};
+    }
+}
+
 struct llama_memory_phase_owner::implementation {
     std::vector<llama_memory_phase_target> targets;
     std::vector<llama_memory_transition_arena> arenas;

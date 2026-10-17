@@ -11,6 +11,7 @@
 #include "sampling.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
+#include "../src/llama-context-memory.h"
 
 #include <algorithm>
 #include <cassert>
@@ -1001,6 +1002,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool    is_dflash2     = false;
     bool    is_mrope       = false;
+    bool    serial_features = false;
     int32_t selector_top_k = 0;
 
     // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
@@ -1027,6 +1029,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         const llama_model * model_dft = llama_get_model(ctx_dft);
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
+        const auto * target_owner=llama_context_compute_memory(ctx_tgt);
+        serial_features=target_owner && target_owner->shares_kv_memory();
 
         target_layer_ids   = llama_model_target_layer_ids  (model_dft);
         target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
@@ -1189,6 +1193,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
+        if (serial_features) {
+            common_batch source(ctx_tgt);
+            source.tokens=batch_in.tokens;
+            if (!llama_serial_features_match(ctx_tgt,source.get(),target_layer_ids,target_layer_ids_n)) {
+                LOG_ERR("%s: stale or mismatched target features for serial draft injection\n",__func__);
+                return false;
+            }
+        }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_batch_beg[seq_id] < 0) {
@@ -1259,7 +1271,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             const int32_t n = (int32_t) dp.pos0;
 
-            const int32_t n_draft = params.n_max;
+            int32_t n_draft = params.n_max;
+            if (is_dflash2) {
+                const uint32_t capacity = llama_n_ctx_seq(ctx_dft);
+                if (dp.pos0 < 0 || uint64_t(dp.pos0) >= capacity) continue;
+                const uint32_t remaining = capacity-uint32_t(dp.pos0);
+                if (remaining <= 1) continue;
+                n_draft = std::min(n_draft, int32_t(remaining-1));
+            }
 
             const int32_t n_block_tokens = n_draft + (is_dspark && sample_from_anchor ? 0 : 1);
             i_block_beg[seq_id] = batch.size();
@@ -1503,9 +1522,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
+        llama_kv_stream_schedule_next(ctx_tgt,ctx_dft,uint32_t(std::max(0,this->params.n_max)));
     }
 
     ~common_speculative_impl_draft_mtp() override {
+        llama_kv_stream_schedule_next(this->params.ctx_tgt,nullptr,0);
         auto * ctx_dft = this->params.ctx_dft;
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) backend_chains.size(); ++seq_id) {
             if (backend_chains[seq_id] == nullptr) {
@@ -1746,6 +1767,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_set_nextn_layer_offset(ctx_dft, i);
             }
 
+            llama_kv_stream_schedule_next(ctx_dft,i+1 >= params.n_max ? params.ctx_tgt : nullptr,0);
             int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
             if (ret != 0) {
                 SPC_ERR("llama_process[%d] returned %d\n", i, ret);
@@ -1834,6 +1856,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             ++i;
         }
 
+        llama_kv_stream_finish_access(ctx_dft);
         if (chain_heads) {
             llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
         }
@@ -2674,6 +2697,13 @@ common_speculative_init_result::common_speculative_init_result(
     const bool spec_mtp = std::find(params.speculative.types.begin(),
                                     params.speculative.types.end(),
                                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    auto * target_memory=llama_context_compute_memory(ctx_tgt);
+    const bool streamed_block=target_memory && target_memory->shares_kv_memory() &&
+        std::find(params.speculative.types.begin(),params.speculative.types.end(),COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
+    if (streamed_block && (!has_draft ||
+            llama_n_rs_seq(ctx_tgt) < uint32_t(params.speculative.draft.n_max))) {
+        throw std::invalid_argument("adaptive DFlash2 requires a separate drafter and target rollback depth covering all proposals");
+    }
 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
@@ -2693,6 +2723,15 @@ common_speculative_init_result::common_speculative_init_result(
     std::string model_path;
     if (has_draft) {
         model_path = params.speculative.draft.mparams.path;
+        if (streamed_block) {
+            auto * device=llama_model_get_device(model_tgt,0);
+            size_t before=0,after=0,total=0;
+            ggml_backend_dev_memory(device,&before,&total);
+            if (!target_memory->retire_graph()) throw std::runtime_error("cannot retire target warmup graphs before loading serial draft weights");
+            ggml_backend_dev_memory(device,&after,&total);
+            LOG_INF("%s: retired target warmup graphs before draft load: device free %.2f -> %.2f MiB\n",
+                    __func__,double(before)/1048576,double(after)/1048576);
+        }
         LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
 
         llama_model * model_dft = llama_model_load_from_file(model_path.c_str(), mparams);

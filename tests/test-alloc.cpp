@@ -9,6 +9,7 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <string>
 #include <vector>
 
 //
@@ -1809,6 +1810,28 @@ static void test_tallocr_range_shared_workspace(ggml_backend_t target) {
     GGML_ASSERT(ggml_backend_buffer_get_usage(buffer.get()) == GGML_BACKEND_BUFFER_USAGE_ANY);
 }
 
+// Backend extras must appear in peak diagnostics, not only the tensor payload.
+static void test_allocator_debug_quotes() {
+    auto backend = dummy_backend_init(1024);
+    backend.buffer_type.iface.get_alloc_size = [](ggml_backend_buffer_type_t, const ggml_tensor * tensor) {
+        return ggml_nbytes(tensor)+(tensor->op == GGML_OP_NONE ? 32 : 0);
+    };
+    auto context = make_context();
+    auto * input = make_input_1d(context.ctx,4);
+    ggml_set_name(input,"debug_payload");
+    ggml_build_forward_expand(context.graph,ggml_dup(context.ctx,input));
+    std::string log;
+    ggml_log_set([](ggml_log_level,const char * text,void * data) {
+        static_cast<std::string *>(data)->append(text);
+    },&log);
+    ggml_gallocr_ptr alloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_reserve(alloc.get(),context.graph));
+    ggml_log_set(nullptr,nullptr);
+    GGML_ASSERT(log.find("debug_payload") != std::string::npos);
+    GGML_ASSERT(log.find("payload=16 reserved=48") != std::string::npos);
+    GGML_ASSERT(log.find("peak_bytes=64") != std::string::npos);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1817,6 +1840,10 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main(int argc,char ** argv) {
+    if (argc == 2 && !std::strcmp(argv[1],"--debug-quotes")) {
+        run("test_allocator_debug_quotes",test_allocator_debug_quotes);
+        return 0;
+    }
     if (argc == 2 && !std::strcmp(argv[1],"--borrowed-tail")) {
         run("test_borrowed_buffer_exhausted_tail_matches_measurement",test_borrowed_buffer_exhausted_tail_matches_measurement);
         return 0;

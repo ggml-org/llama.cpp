@@ -4,6 +4,8 @@
 #include "testing.h"
 #include <cstring>
 #include <stdexcept>
+#include <vector>
+#include <climits>
 
 struct read_probe {
     inline static decltype(ggml_backend_buffer_i::get_tensor) original = nullptr;
@@ -25,6 +27,81 @@ static const ggml_backend_execution_ops ops{
 int main(int argc, char ** argv) {
     testing t;
     ggml_backend_ptr backend(ggml_backend_cpu_init());
+    t.test("compact_mask_preserves_bits_and_rejects_noninterval_rows", [&](testing & t) {
+        for (size_t tokens : {size_t(1), size_t(255), size_t(256), size_t(257), size_t(1024)}) {
+            for (size_t begin : {size_t(0), tokens/2, tokens}) {
+                for (size_t end : {begin, tokens}) {
+                    std::vector<ggml_fp16_t> dense(tokens, 0xfc00);
+                    for (size_t i=begin; i<end; ++i) dense[i]=0;
+                    ggml_backend_execution_mask_interval interval{7,9,11,13};
+                    if (!t.assert_true(ggml_backend_execution_mask_interval_encode(dense.data(), tokens, interval))) return;
+                    t.assert_equal(int32_t(tokens), interval.tokens);
+                    t.assert_equal(int32_t(1), interval.version);
+                    for (size_t i=0; i<tokens; ++i)
+                        if (!t.assert_equal(dense[i], ggml_backend_execution_mask_interval_value(interval, int32_t(i)))) return;
+                }
+            }
+        }
+        for (auto dense : {std::vector<ggml_fp16_t>{0,0xfc00,0}, std::vector<ggml_fp16_t>{0x8000},
+                std::vector<ggml_fp16_t>{0x3c00}, std::vector<ggml_fp16_t>{0x7e00}, std::vector<ggml_fp16_t>{0x7c00}}) {
+            ggml_backend_execution_mask_interval interval{7,9,11,13}, previous=interval;
+            t.assert_true(!ggml_backend_execution_mask_interval_encode(dense.data(),dense.size(),interval));
+            t.assert_true(!std::memcmp(&interval,&previous,sizeof(interval)));
+        }
+        ggml_backend_execution_mask_interval interval{7,9,11,13}, previous=interval;
+        const ggml_fp16_t value=0;
+        t.assert_true(!ggml_backend_execution_mask_interval_encode(nullptr,1,interval));
+        t.assert_true(!ggml_backend_execution_mask_interval_encode(&value,0,interval));
+        t.assert_true(!ggml_backend_execution_mask_interval_encode(&value,size_t(INT32_MAX)+1,interval));
+        t.assert_true(!std::memcmp(&interval,&previous,sizeof(interval)));
+    });
+    t.test("compact_mask_is_typed_bounded_and_only_attached_to_private_attention", [&](testing & t) {
+        ggml_context_ptr ctx(ggml_init({16384,nullptr,true}));
+        auto * q=ggml_new_tensor_4d(ctx.get(),GGML_TYPE_F32,256,129,12,1);
+        auto * k=ggml_new_tensor_4d(ctx.get(),GGML_TYPE_Q8_0,256,32768,2,1);
+        auto * v=ggml_new_tensor_4d(ctx.get(),GGML_TYPE_Q4_0,256,32768,2,1);
+        auto * bounds=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_I32,4,129);
+        auto * op=ggml_flash_attn_ext(ctx.get(),q,k,v,nullptr,1.f/16,0,0);
+        int32_t arithmetic[5]; std::memcpy(arithmetic,op->op_params,sizeof(arithmetic));
+        t.assert_true(ggml_backend_execution_set_mask_bounds(op,bounds));
+        t.assert_true(op->src[3] == nullptr && op->src[5] == bounds);
+        ggml_backend_buffer_t owner=nullptr;
+        t.assert_true(!ggml_backend_execution_owner(op,owner) && !owner);
+        t.assert_true(!ggml_backend_supports_op(backend.get(),op));
+        t.assert_equal(size_t(129*16),ggml_nbytes(bounds));
+        t.assert_true(!std::memcmp(arithmetic,op->op_params,sizeof(arithmetic)));
+        ggml_tensor logical{}, mask{};
+        t.assert_true(ggml_backend_execution_mask_metadata(op,logical,mask));
+        t.assert_true(logical.src[3] == &mask && logical.src[5] == bounds && mask.type == GGML_TYPE_F16);
+        t.assert_true(mask.ne[0] == k->ne[1] && mask.ne[1] == q->ne[1]);
+        t.assert_true(mask.data == nullptr && mask.buffer == nullptr);
+        t.assert_true(op->src[3] == nullptr && op->src[5] == bounds);
+        const auto saved=*bounds;
+        bounds->type=GGML_TYPE_F16;
+        t.assert_true(!ggml_backend_execution_mask_metadata(op,logical,mask));
+        *bounds=saved; bounds->ne[0]=3;
+        t.assert_true(!ggml_backend_execution_mask_metadata(op,logical,mask));
+        *bounds=saved; bounds->ne[1]=128;
+        t.assert_true(!ggml_backend_execution_mask_metadata(op,logical,mask));
+        *bounds=saved; bounds->nb[1]+=4;
+        t.assert_true(!ggml_backend_execution_mask_metadata(op,logical,mask));
+        *bounds=saved; op->src[3]=&mask;
+        t.assert_true(!ggml_backend_execution_mask_metadata(op,logical,mask));
+        t.assert_true(!ggml_backend_execution_set_mask_bounds(op,bounds));
+        op->src[3]=nullptr; op->src[4]=q;
+        t.assert_true(!ggml_backend_execution_mask_metadata(op,logical,mask));
+        t.assert_true(!ggml_backend_execution_set_mask_bounds(op,bounds));
+        t.assert_true(!ggml_backend_execution_set_mask_bounds(q,bounds));
+        execution_probe probe;
+        ggml_backend_buffer_ptr backing(ggml_backend_alloc_buffer(backend.get(),1024));
+        ggml_backend_buffer_ptr managed(ggml_backend_execution_buffer_new(ggml_backend_get_device(backend.get()),backing.get(),ops,&probe));
+        if (!t.assert_true(bool(managed))) return;
+        op->src[4]=nullptr;
+        t.assert_true(!ggml_backend_execution_owner(op,owner) && !owner);
+        k->buffer=managed.get();
+        t.assert_true(ggml_backend_execution_owner(op,owner) && owner == managed.get());
+        t.assert_true(!ggml_backend_execution_supports(owner,ggml_backend_get_device(backend.get()),op));
+    });
     t.test("attention_workspace_hint_preserves_arithmetic_parameters", [&](testing & t) {
         ggml_context_ptr ctx(ggml_init({8192, nullptr, true}));
         auto * q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 32, 4, 2, 1);
@@ -215,6 +292,9 @@ int main(int argc, char ** argv) {
         }
         ggml_backend_execution_set_external_workspace(prefill_attention, true);
         t.assert_equal(stock_prefill, ggml_backend_buft_get_alloc_size(buft, prefill_attention));
+        ggml_backend_execution_set_verified_workspace(prefill_attention);
+        t.assert_true(ggml_backend_execution_has_verified_workspace(prefill_attention));
+        t.assert_equal(ggml_nbytes(prefill_attention),ggml_backend_buft_get_alloc_size(buft,prefill_attention));
         managed_ops.supports = [](void *, const ggml_tensor *) { return false; };
         ggml_backend_buffer_ptr unsupported(ggml_backend_execution_buffer_new(dev, backing.get(), managed_ops, &probe));
         if (!t.assert_true(bool(unsupported))) return;

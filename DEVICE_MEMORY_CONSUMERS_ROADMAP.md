@@ -1,5 +1,11 @@
 # Device memory consumers: implementation roadmap
 
+Gemma 4 31B target and shared-KV assistant extension: [GEMMA4_ADAPTIVE_KV_ROADMAP.md](GEMMA4_ADAPTIVE_KV_ROADMAP.md). Its G1-G6 stages are independent of the milestone identifiers below; the extension is planned, not implemented or qualified.
+
+Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). D1-D4 are qualified on RTX 5070 Ti, including wrapped-wave batching, inactive-block exclusion, address resolution, checkpoint compaction and two-slot target rollback through depth seven. The 5-10 percent routing-overhead goal is met in the sampled 128K FP16 cases, not every short-history path. Older-device execution and D5-D7 remain pending; live DFlash2 streaming remains unimplemented and unqualified.
+
+D4a-D4c qualify target rollback independent of auxiliary KV ownership. The approved two-slot layout uses 43.640625 MiB device staging at depth seven, with unchanged current-state storage. CPU/CUDA lifecycle/failure tests, sanitizers and twelve matching-stock IQ4_XS cases through a 16381-token prefix pass, including TG1-TG8, changed corrections, repeated rejection, context-end checks and shared-arena handoff. These are target-component gates, not live DFlash2 or full-native-context qualification; see the DFlash2 roadmap for exact scope and evidence.
+
 Saved: 2026-09-10
 
 Last source review: 2026-10-06 for C5b qualification after the shared-workspace hardening rebase; earlier checkpoint evidence is unchanged.

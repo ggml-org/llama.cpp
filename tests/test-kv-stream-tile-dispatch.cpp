@@ -54,7 +54,7 @@ int main(int argc, char ** argv) {
             }
         }
         size_t untouched=77;
-        t.assert_true(!get()->decode_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,24,4,5,1280,untouched));
+        t.assert_true(!get()->decode_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,24,4,9,1280,untouched));
         t.assert_equal(size_t(77),untouched);
     });
     if (pascal) t.test("target_tile_decode_survives_narrow_ring_refills_and_all_resident",[&](testing & t) {

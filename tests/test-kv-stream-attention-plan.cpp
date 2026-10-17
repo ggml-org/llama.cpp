@@ -1,5 +1,6 @@
 #include "../ggml/src/ggml-cuda/kv-stream-attention-plan.h"
 #include "../ggml/src/ggml-cuda/kv-stream-attention-dispatch.h"
+#include "../ggml/src/ggml-cuda/fattn-plan-cache.h"
 #include "testing.h"
 
 #include <limits>
@@ -32,6 +33,149 @@ struct fixture {
 
 int main() {
     testing t;
+    t.test("prepared_attention_cache_is_bounded_and_preserves_miss_output", [](testing & t) {
+        ggml_cuda_fattn_plan_cache<size_t> cache;
+        ggml_cuda_fattn_plan_key key{};
+        size_t output=77;
+        t.assert_true(!cache.find(key,output));
+        t.assert_equal(size_t(77),output);
+        for (uint32_t tokens=1;tokens<=1000;++tokens) {
+            key.tokens=tokens;
+            cache.store(key,size_t(tokens)*16);
+            t.assert_true(cache.find(key,output));
+            t.assert_equal(size_t(tokens)*16,output);
+        }
+        key.tokens=1; output=77;
+        t.assert_true(!cache.find(key,output));
+        t.assert_equal(size_t(77),output);
+        key.tokens=1000;
+        cache.store(key,9999);
+        t.assert_true(cache.find(key,output));
+        t.assert_equal(size_t(9999),output);
+    });
+    t.test("prepared_attention_cache_separates_devices_geometry_and_resource_caps", [](testing & t) {
+        ggml_cuda_fattn_plan_cache<size_t> cache;
+        ggml_cuda_fattn_plan_key original{0,1200,1200,70,32,101376,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,24,4,4,131072,3,1,true,true};
+        cache.store(original,4096);
+        for (int field=0;field<16;++field) {
+            auto key=original;
+            switch (field) {
+                case 0: ++key.device; break;
+                case 1: ++key.cc; break;
+                case 2: ++key.compiled_arch; break;
+                case 3: ++key.sms; break;
+                case 4: ++key.warp; break;
+                case 5: --key.shared_limit; break;
+                case 6: key.key=GGML_TYPE_F16; break;
+                case 7: key.value=GGML_TYPE_F16; break;
+                case 8: ++key.heads; break;
+                case 9: ++key.kv_heads; break;
+                case 10: ++key.queries; break;
+                case 11: ++key.tokens; break;
+                case 12: ++key.spans; break;
+                case 13: ++key.family; break;
+                case 14: key.resume=false; break;
+                case 15: key.dense_strided=false; break;
+            }
+            size_t output=77;
+            t.assert_true(!cache.find(key,output));
+            t.assert_equal(size_t(77),output);
+        }
+        size_t output=0;
+        t.assert_true(cache.find(original,output));
+        t.assert_equal(size_t(4096),output);
+    });
+    t.test("dense_mma_specialization_preserves_mask_and_conversion_modes", [](testing & t) {
+        for (uint32_t flags : {0u,1u,2u,3u,4u,UINT32_MAX}) {
+            t.assert_true(ggml_cuda_kv_stream_mma_dense_strided(false,flags) == (flags == 0));
+            t.assert_true(!ggml_cuda_kv_stream_mma_dense_strided(true,flags));
+        }
+    });
+    t.test("all_cache_types_and_prefill_widths_have_geometry_based_metadata", [](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};
+        for (auto key : types) for (auto value : types) for (int64_t rows : {1,8,64,129,256,512,1024}) {
+            fixture f;
+            f.metadata.type_k=key; f.metadata.type_v=value; f.metadata.queries=rows;
+            f.metadata.active_tokens=262143; f.metadata.padded_tokens=262144;
+            size_t bytes=0;
+            t.assert_true(ggml_cuda_kv_stream_attention_metadata_validate(f.metadata,bytes) == status::success);
+            t.assert_equal(size_t(rows)*256*24*sizeof(float),bytes);
+            f.support.streamed_compiled=false;
+            f.reject(t,status::missing_streamed_implementation,family::mma,style::resumable);
+        }
+    });
+    t.test("wide_mma_queries_use_stock_column_groups", [](testing & t) {
+        for (uint32_t queries = 1; queries <= 8; ++queries) {
+            for (int ratio : {2, 6, 8}) {
+                const int columns = ratio > 4 ? 8 : 2;
+                const int expected = queries <= uint32_t(8/columns) ? 8/columns :
+                    queries <= uint32_t(16/columns) ? 16/columns :
+                    queries <= uint32_t(32/columns) ? 32/columns : 64/columns;
+                t.assert_equal(expected, ggml_cuda_kv_stream_mma_ncols1(queries, ratio));
+                t.assert_equal(1, ggml_cuda_kv_stream_mma_query_tiles(queries, ratio));
+            }
+        }
+    });
+    t.test("prefill_mma_widths_preserve_stock_buckets_and_multiple_query_tiles", [](testing & t) {
+        for (uint32_t queries : {9u,16u,17u,32u,33u,64u,65u,129u,256u,512u,1024u}) {
+            for (int ratio : {2,6,8}) for (bool turing : {false,true}) {
+                const int groups=ratio > 4 ? 8 : 2;
+                const int expected=queries <= uint32_t(8/groups) ? 8/groups :
+                    queries <= uint32_t(16/groups) ? 16/groups :
+                    queries <= uint32_t(32/groups) || turing ? 32/groups : 64/groups;
+                t.assert_equal(expected,ggml_cuda_kv_stream_mma_ncols1(queries,ratio,turing));
+                t.assert_equal(int((queries+uint32_t(expected)-1)/uint32_t(expected)),
+                    ggml_cuda_kv_stream_mma_query_tiles(queries,ratio,turing));
+            }
+        }
+    });
+    t.test("invalid_mma_widths_and_groups_do_not_select_a_tile", [](testing & t) {
+        for (uint32_t queries : {0u, std::numeric_limits<uint32_t>::max()})
+            for (int ratio : {2, 6, 8})
+                t.assert_equal(0, ggml_cuda_kv_stream_mma_ncols1(queries, ratio));
+        for (int ratio : {-1, 0, 1, 3, 4, std::numeric_limits<int>::max()})
+            for (uint32_t queries : {1u, 4u, 5u, 8u})
+                t.assert_equal(0, ggml_cuda_kv_stream_mma_ncols1(queries, ratio));
+        t.assert_equal(0, ggml_cuda_kv_stream_mma_query_tiles(0, 6));
+        t.assert_equal(0, ggml_cuda_kv_stream_mma_query_tiles(std::numeric_limits<uint32_t>::max(), 6));
+        t.assert_equal(0, ggml_cuda_kv_stream_mma_query_tiles(8, std::numeric_limits<int>::max()));
+    });
+    t.test("turing_only_mma_keeps_stock_multiple_query_tiles", [](testing & t) {
+        for (uint32_t queries = 1; queries <= 8; ++queries) {
+            for (int ratio : {2, 6, 8}) {
+                const int columns = ratio > 4 ? 8 : 2;
+                const int expected = queries <= uint32_t(8/columns) ? 8/columns :
+                    queries <= uint32_t(16/columns) ? 16/columns : 32/columns;
+                t.assert_equal(expected, ggml_cuda_kv_stream_mma_ncols1(queries, ratio, true));
+                t.assert_equal(int((queries+uint32_t(expected)-1)/uint32_t(expected)),
+                    ggml_cuda_kv_stream_mma_query_tiles(queries, ratio, true));
+            }
+        }
+    });
+    t.test("wide_query_requirements_preserve_checked_failure_contracts", [](testing & t) {
+        for (int64_t queries : {5, 6, 7, 8}) {
+            fixture f;
+            f.metadata.queries = queries;
+            f.metadata.active_tokens = 122879;
+            f.metadata.padded_tokens = 122880;
+            ggml_cuda_kv_stream_attention_plan output;
+            t.assert_true(ggml_cuda_kv_stream_attention_plan_make(f.metadata, family::mma,
+                style::spanned, f.support, f.requirements, output) == status::success);
+            t.assert_equal(size_t(256*24*queries*sizeof(float)), output.output_allocation_bytes);
+            f.support.streamed_compiled = false;
+            f.reject(t, status::missing_streamed_implementation, family::mma, style::spanned);
+            f.support.streamed_compiled = true;
+            f.support.launch_resources = false;
+            f.reject(t, status::unsupported_launch_resources, family::mma, style::spanned);
+            f.support.launch_resources = true;
+            f.requirements.scratch_bytes = SIZE_MAX;
+            f.reject(t, status::overflow, family::mma, style::spanned);
+            f.requirements.scratch_bytes = 4096;
+            f.metadata.active_tokens = queries-1;
+            f.reject(t, status::invalid_metadata, family::mma, style::spanned);
+        }
+    });
     t.test("vector_bulk_leaves_only_the_incomplete_native_tile_guarded", [](testing & t) {
         for (size_t first : {size_t(0),size_t(128),size_t(256),size_t(131072)}) {
             for (size_t tokens : {size_t(0),size_t(1),size_t(127),size_t(128),size_t(129),size_t(255),

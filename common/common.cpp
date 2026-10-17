@@ -1240,6 +1240,42 @@ bool common_params_uses_streamed_mtp(const common_params & params) {
             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 }
 
+bool common_params_uses_streamed_dflash(const common_params & params) {
+    return (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) &&
+        std::find(params.speculative.types.begin(),params.speculative.types.end(),COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
+}
+
+const char * common_streamed_dflash_config_error(const common_params & params) {
+    if (!common_params_uses_streamed_dflash(params)) return nullptr;
+    if (!params.shared_device_memory_bytes || params.kv_stream_pool_bytes || params.fit_params)
+        return "adaptive DFlash2 requires a declared --kv-stream-arena-mib budget and --fit off";
+    if (params.n_parallel != 1 || params.kv_stream_auxiliary_layers ||
+            std::any_of(params.speculative.types.begin(),params.speculative.types.end(),[](auto type) {
+                return type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            })) return "adaptive DFlash2 requires one serial slot, no auxiliary MTP layers and no other speculative mode";
+    if (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 7)
+        return "adaptive DFlash2 supports 1-7 draft tokens";
+    if (!params.mmproj.path.empty()) return "adaptive DFlash2 currently supports text only, without mmproj";
+    if (params.n_batch <= 0 || params.n_ubatch < 0 || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
+        return "adaptive DFlash2 requires a positive batch, nonnegative microbatch limit and -fa on";
+    const int32_t microbatch=params.n_ubatch == 0 ? params.n_batch : std::min(params.n_batch,params.n_ubatch);
+    if (microbatch < params.speculative.draft.n_max+1)
+        return "adaptive DFlash2 verification block must fit the effective target microbatch";
+    const auto & draft=params.speculative.draft;
+    const auto cache_type=[](ggml_type type) {
+        switch (type) {
+            case GGML_TYPE_F32: case GGML_TYPE_F16: case GGML_TYPE_BF16: case GGML_TYPE_Q8_0:
+            case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1: case GGML_TYPE_IQ4_NL:
+            case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1: return true;
+            default: return false;
+        }
+    };
+    if (!cache_type(params.cache_type_k) || !cache_type(params.cache_type_v) ||
+            !cache_type(draft.cache_type_k) || !cache_type(draft.cache_type_v))
+        return "adaptive DFlash2 requires upstream KV cache types; backend kernels are checked during context initialization";
+    return nullptr;
+}
+
 uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers) {
     if (!common_params_uses_streamed_mtp(params)) {
         if (params.kv_stream_auxiliary_layers) {

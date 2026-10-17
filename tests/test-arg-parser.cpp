@@ -19,6 +19,63 @@ static void test(void) {
     common_params params;
 
     {
+        common_params dflash;
+        dflash.shared_device_memory_bytes=1536*1024*1024ULL;
+        dflash.speculative.types={COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+        dflash.speculative.draft.mparams.path="draft.gguf";
+        dflash.speculative.draft.n_max=7;
+        dflash.n_parallel=1; dflash.n_batch=dflash.n_ubatch=256;
+        dflash.fit_params=false; dflash.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        dflash.cache_type_k=GGML_TYPE_Q8_0; dflash.cache_type_v=GGML_TYPE_Q4_0;
+        assert(common_params_uses_streamed_dflash(dflash));
+        assert(!common_params_uses_streamed_mtp(dflash));
+        assert(!common_streamed_dflash_config_error(dflash));
+        const ggml_type cache_types[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};
+        for (auto key : cache_types) for (auto value : cache_types) {
+            auto configured=dflash;
+            configured.cache_type_k=key; configured.cache_type_v=value;
+            configured.speculative.draft.cache_type_k=value; configured.speculative.draft.cache_type_v=key;
+            assert(!common_streamed_dflash_config_error(configured));
+        }
+        for (auto limits : {std::pair{128,64}, {256,128}, {256,256}, {512,128}, {512,256},
+                {512,512}, {1024,256}, {1024,512}, {1024,1024}, {513,129}, {128,256}, {256,0}}) {
+            auto configured=dflash;
+            configured.n_batch=limits.first; configured.n_ubatch=limits.second;
+            assert(!common_streamed_dflash_config_error(configured));
+        }
+        for (int change=0; change<5; ++change) {
+            auto invalid=dflash;
+            switch (change) {
+                case 0: invalid.n_batch=0; break;
+                case 1: invalid.n_ubatch=-1; break;
+                case 2: invalid.cache_type_k=GGML_TYPE_I32; break;
+                case 3: invalid.speculative.draft.cache_type_v=GGML_TYPE_Q2_K; break;
+                case 4: invalid.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_DISABLED; break;
+            }
+            assert(common_streamed_dflash_config_error(invalid));
+        }
+        assert(common_context_params_to_llama(dflash).n_rs_seq == 7);
+        assert(common_kv_stream_auxiliary_layers(dflash,1) == 0);
+        const auto draft=common_base_params_to_speculative(dflash);
+        assert(draft.cache_type_k == GGML_TYPE_F16 && draft.cache_type_v == GGML_TYPE_F16);
+        assert(!draft.shared_device_memory_bytes && !draft.kv_stream_pool_bytes && !draft.kv_stream_auxiliary_layers);
+        for (int change=0;change<7;++change) {
+            auto invalid=dflash;
+            switch (change) {
+                case 0: invalid.n_parallel=2; break;
+                case 1: invalid.speculative.draft.n_max=8; break;
+                case 2: invalid.kv_stream_auxiliary_layers=1; break;
+                case 3: invalid.fit_params=true; break;
+                case 4: invalid.mmproj.path="vision.gguf"; break;
+                case 5: invalid.n_ubatch=4; break;
+                case 6: invalid.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP); break;
+            }
+            assert(common_streamed_dflash_config_error(invalid));
+        }
+    }
+
+    {
         common_params automatic;
         automatic.shared_device_memory_bytes = 2240*1024*1024ULL;
         automatic.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};

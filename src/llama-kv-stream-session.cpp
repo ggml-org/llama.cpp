@@ -31,7 +31,7 @@ static bool decode_workspace_bytes(ggml_backend_t backend, const llama_kv_stream
     const auto * ops=get ? get() : nullptr;
     if (ops && ops->version >= 10 && ops->decode_workspace) return ops->decode_workspace(
         backend,config.policy.shape.type_k,config.policy.shape.type_v,config.query_heads,
-        config.policy.shape.heads,std::min(4u,config.max_batch_rows),tokens,bytes);
+        config.policy.shape.heads,std::min(config.max_decode_rows,config.max_batch_rows),tokens,bytes);
     ggml_kv_stream_resume_plan plan;
     if (!ops || ops->version < 5 || !ops->resume_plan) return false;
     const uint32_t queries = std::min(2u,config.max_batch_rows);
@@ -86,6 +86,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     bool running = false, produced = false, poisoned = false, busy = false;
     bool direct_mode = false, report_layout = false, primed = false;
     size_t primed_active = 0;
+    uint32_t primed_queries = 1;
     pool_rebind * transition = nullptr;
     bool transition_closed = false;
     bool device_suspended = false;
@@ -110,14 +111,17 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     }
 
     // Start only a layout-stable next-token decode; failure is an optimization miss, not session failure.
-    bool prime_next() {
-        if (!config.cross_token_prefetch || !config.resume_decode || primed || poisoned || !resident || !binding ||
+    bool prime_next(uint32_t queries=1) {
+        const uint32_t maximum=queries ? queries : config.max_decode_rows;
+        if (!maximum || maximum > config.max_decode_rows || !config.resume_decode || primed || poisoned || !resident || !binding ||
                 committed >= content->host()->config().context_tokens || !state.ring_slots) return false;
-        const size_t active=committed+1;
+        if (maximum > content->host()->config().context_tokens-committed) return false;
+        const size_t active=committed+maximum;
+        if (!queries && committed/256 != (active-1)/256) return false;
         llama_kv_stream_policy_decision decision;
         const bool trace_policy=std::getenv("LLAMA_KV_STREAM_TRACE_POLICY") != nullptr;
         const auto observed_feedback=trace_policy ? resident->feedback() : llama_kv_stream_feedback{};
-        if (!resident->recommend_policy(state,active,1,decision,true,false)) return false;
+        if (!resident->recommend_policy(state,active,maximum,decision,true,false)) return false;
         if (trace_policy && observed_feedback.available) {
             const uint64_t samples=observed_feedback.samples >= state.samples ? observed_feedback.samples-state.samples : 0;
             const uint64_t misses=observed_feedback.misses >= state.misses ? observed_feedback.misses-state.misses : 0;
@@ -134,14 +138,14 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         if (decision.layout_changed || decision.next.decode_active_pages <= decision.next.resident_pages_per_layer) return false;
         const size_t next_span=std::max(size_t(1),resident->suggested_span_pages());
         if (!pin) pin=binding->acquire();
-        if (!pin || !resident->prime_sequence(order,active,next_span,committed,{1,true},ring_guard)) {
+        if (!pin || !resident->prime_sequence(order,active,next_span,committed,{queries,true},ring_guard)) {
             pin.reset(); return false;
         }
-        state=decision.next; span=next_span; primed=true; primed_active=active;
+        state=decision.next; span=next_span; primed=true; primed_active=active; primed_queries=queries;
         return true;
     }
     bool attention_bytes(bool decode, size_t & bytes) const {
-        bytes = content->host()->layout().bytes;
+        bytes = config.prefill_span_bytes ? config.prefill_span_bytes : content->host()->layout().bytes;
         if (!decode || !config.resume_decode) return true;
         return decode_workspace_bytes(backend,config,content->host()->layout().tokens,bytes);
     }
@@ -166,6 +170,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
             next.grant += bytes;
         }
         auto * buffer = ggml_backend_memory_lease_buffer(pool);
+        if (ggml_backend_buffer_get_size(ggml_backend_memory_lease_buffer(writer)) < config.writer_workspace_bytes) return false;
         next.binding = std::make_unique<llama_kv_stream_binding>(
             content->host()->cache_id(),ggml_backend_buffer_get_type(buffer),previous_revision);
         if (!next.binding->bind(pool,policy,[&](const auto & view) {
@@ -174,7 +179,8 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         }) || !next.resident->configure_writes(config.max_batch_rows,next.leases[1].get()) ||
                 !next.resident->configure_feedback(config.measure) ||
                 !next.resident->configure_native_graph_attention(config.native_graph_attention) ||
-                !next.resident->configure_resumed_decode(config.resume_decode)) return false;
+                !next.resident->configure_resumed_decode(config.resume_decode) ||
+                !next.resident->configure_prefill_workspace(config.prefill_span_bytes)) return false;
         next.policy = policy;
         next.state = candidate;
         output = std::move(next);
@@ -228,6 +234,8 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
             auto * query = alias(q); auto * causal = alias(mask);
             if (!query || !causal) return false;
             auto * attention = resident->attention(next->context.get(),layer,query,causal,target,scale);
+            // This address belongs to a model output slot, not the rest of its graph workspace.
+            if (attention && ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(output->buffer),attention) > ggml_nbytes(output)) return false;
             if (!attention || ggml_backend_tensor_alloc(output->buffer,attention,output->data) != GGML_STATUS_SUCCESS) return false;
             auto * graph = ggml_new_graph_custom(next->context.get(),64,false); ggml_build_forward_expand(graph,attention);
             auto owner = binding->acquire();
@@ -587,6 +595,8 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
                 config.attention_resource == config.pool_resource ||
                 config.writer_resource == config.attention_resource)))) return {};
     if (!backend || !content || !config.max_batch_rows || config.max_batch_rows > INT32_MAX || !config.query_heads ||
+            !config.max_decode_rows || config.max_decode_rows > 8 ||
+            (config.max_decode_rows > 4 && (!config.native_graph_attention || !config.resume_decode)) ||
             config.query_heads > SIZE_MAX/config.max_batch_rows || config.policy.shape.head_dim_k != 256 ||
             config.policy.shape.head_dim_v != 256 || config.policy.shape.heads <= 0 ||
             config.query_heads%config.policy.shape.heads) return {};
@@ -610,11 +620,14 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
         for (size_t j = 0; j < i; ++j) if (regions[i].id == regions[j].id ||
                 (addresses[i] < addresses[j]+regions[j].size && addresses[j] < addresses[i]+regions[i].size)) return {};
     }
-    size_t partial_bytes = config.native_graph_attention ? content->host()->layout().bytes : work.bytes;
+    if (config.prefill_span_bytes > SIZE_MAX-content->host()->layout().bytes) return {};
+    size_t partial_bytes = config.native_graph_attention ?
+        (config.prefill_span_bytes ? config.prefill_span_bytes : content->host()->layout().bytes) : work.bytes;
     if (config.initial_decode && config.resume_decode) {
         if (!decode_workspace_bytes(backend,config,content->host()->layout().tokens,partial_bytes)) return {};
     }
-    if (regions[0].size < config.policy.pool_bytes || regions[2].size < partial_bytes) return {};
+    if (!config.writer_workspace_bytes || regions[0].size < config.policy.pool_bytes ||
+            regions[1].size < config.writer_workspace_bytes || regions[2].size < partial_bytes) return {};
     try {
         std::unique_ptr<llama_kv_stream_session> result(new llama_kv_stream_session);
         result->impl = std::make_unique<implementation>(); auto & s = *result->impl;
@@ -633,22 +646,25 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
 bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode) {
     auto & s = *impl;
     if (s.busy || s.transition_closed || s.running || s.poisoned || !s.publications || s.publications->failed() || s.publication.pending() || !s.leases[2] ||
-            !queries || queries > s.config.max_batch_rows || (decode && queries > 4) ||
+            !queries || queries > s.config.max_batch_rows || (decode && queries > s.config.max_decode_rows) ||
             active < s.committed || active-s.committed != queries || active > s.content->host()->config().context_tokens) return false;
     session_operation guard(s.busy);
     if (s.content->generation() != s.expected_generation) { s.drain(); s.poisoned = true; return false; }
     try {
         bool adopted=false;
         if (s.primed) {
-            bool policy_stable=decode && queries == 1;
+            bool policy_stable=decode && (!s.primed_queries || queries == s.primed_queries);
             if (policy_stable) {
                 llama_kv_stream_policy_decision decision;
                 policy_stable=s.resident->recommend_policy(s.state,active,queries,decision,true,false) &&
                     !decision.layout_changed;
                 if (policy_stable) s.state=decision.next;
             }
-            adopted=policy_stable && active == s.primed_active && bool(s.pin) &&
+            adopted=policy_stable && (!s.primed_queries || active == s.primed_active) && bool(s.pin) &&
                 s.resident->adopt_sequence(s.order,active,s.span,s.committed,{queries,decode},s.ring_guard);
+            if (std::getenv("LLAMA_KV_STREAM_TRACE_POLICY"))
+                LLAMA_LOG_WARN("%s: next-cache adoption active=%zu queries=%u stable=%d adopted=%d\n",
+                    __func__,active,queries,int(policy_stable),int(adopted));
             if (!adopted) {
                 s.resident->cancel_sequence(); s.pin.reset();
             }
@@ -675,7 +691,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
                 if (planned) mma_bytes = s.config.span_workspace_bytes;
                 else if (capable && ops->version >= 10 && ops->decode_workspace) planned=ops->decode_workspace(s.backend,
                     s.config.policy.shape.type_k,s.config.policy.shape.type_v,s.config.query_heads,
-                    s.config.policy.shape.heads,std::min(4u,s.config.max_batch_rows),s.content->host()->layout().tokens,mma_bytes);
+                    s.config.policy.shape.heads,std::min(s.config.max_decode_rows,s.config.max_batch_rows),s.content->host()->layout().tokens,mma_bytes);
                 else if (capable) planned = ops->mma_workspace(s.backend,
                     s.config.policy.shape.type_k, s.config.policy.shape.type_v,
                     s.config.query_heads, s.config.policy.shape.heads,
@@ -730,8 +746,8 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
             s.span = std::max(size_t(1),s.resident->suggested_span_pages());
             s.pin = s.binding->acquire();
             llama_kv_stream_capture_stamp stamp;
-            s.direct_mode = !s.ring_guard && queries == 1 && s.config.native_graph_attention && !s.graph_bindings.empty() &&
-                s.resident->capture_state(s.backend,active,stamp);
+            s.direct_mode = decode && !s.ring_guard && queries == 1 && s.config.native_graph_attention && !s.graph_bindings.empty() &&
+                s.resident->capture_state(s.backend,active,stamp) && s.resident->capture_without_output_extras(s.config.query_heads,active);
             if (s.direct_mode) {
                 if (!s.pin || !s.resident->synchronize(active)) {
                     s.drain(); s.poisoned = true; return false;
@@ -872,7 +888,7 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
             if (!s.resident->advance_feedback_identity()) {
                 s.drain(); s.poisoned=true; return false;
             }
-            if (!s.prime_next()) s.pin.reset();
+            if (!s.config.cross_token_prefetch || !s.prime_next()) s.pin.reset();
         }
         return true;
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
@@ -943,6 +959,32 @@ bool llama_kv_stream_session::set_ring_guard(
 size_t llama_kv_stream_session::granted_bytes() const noexcept { return impl->grant; }
 uint64_t llama_kv_stream_session::layout_revision() const noexcept { return impl->revision; }
 bool llama_kv_stream_session::prefetch_primed() const noexcept { return impl->primed; }
+
+// Storage membership does not choose execution order; the coordinator declares external consumers.
+bool llama_kv_stream_session::set_automatic_prefetch(bool enable) {
+    auto & s=*impl;
+    if (s.busy || s.running || s.transition || s.transition_closed) return false;
+    session_operation operation(s.busy);
+    if (!enable && s.primed && !s.drain()) { s.poisoned=true; return false; }
+    s.config.cross_token_prefetch=enable;
+    return true;
+}
+
+bool llama_kv_stream_session::release_ring_guard_ordered() {
+    auto & s=*impl;
+    if (s.busy || s.running || s.primed || s.transition || s.transition_closed ||
+            s.publication.pending() || (s.resident && s.resident->sequence_active())) return false;
+    s.ring_guard.reset();
+    return true;
+}
+
+// Only an idle owner can announce the next access; an unavailable lookahead is not an execution failure.
+bool llama_kv_stream_session::prefetch_decode(uint32_t query_tokens) {
+    auto & s=*impl;
+    if (s.busy || s.running || s.transition || s.transition_closed || s.publication.pending()) return false;
+    session_operation operation(s.busy);
+    return s.prime_next(query_tokens);
+}
 
 bool llama_kv_stream_session::grow_pool(
         ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode) {
@@ -1114,7 +1156,7 @@ bool llama_kv_stream_session::prepare(
     size_t attention_needed = 0;
     if (!suspend && coordinated_scratch &&
             (!s.attention_bytes(decode,attention_needed) ||
-             desired[1].size < 32768 ||
+             desired[1].size < s.config.writer_workspace_bytes ||
              desired[2].size < attention_needed)) return false;
 
     llama_kv_stream_policy_rebind replacement;
@@ -1197,7 +1239,7 @@ bool llama_kv_stream_session::set_attention_workspace(ggml_backend_memory_lease_
         const auto base = uintptr_t(ggml_backend_buffer_get_base(buffer));
         bytes = ggml_backend_buffer_get_size(buffer);
         if (!base || base%128 || bytes != region.size || base > UINTPTR_MAX-bytes) return false;
-        size_t needed = s.content->host()->layout().bytes;
+        size_t needed = s.config.prefill_span_bytes ? s.config.prefill_span_bytes : s.content->host()->layout().bytes;
         if (!s.config.native_graph_attention) {
             ggml_kv_stream_block_layout partial;
             if (ggml_kv_stream_block_layout_make(size_t(s.config.query_heads)*s.config.max_batch_rows,256,partial).status != ggml_kv_stream_partial_status::success) return false;

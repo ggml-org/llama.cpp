@@ -1,4 +1,5 @@
 #include "../src/llama-kv-stream-resident.h"
+#include "../src/llama-kv-stream-writer.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 #include "../src/llama-memory-executor-cuda.h"
 #include "ggml-alloc.h"
@@ -174,8 +175,22 @@ int main(int argc, char ** argv) {
             writer_fixture f(backend.get(), true); encoder e(f, rows, GGML_TYPE_Q8_0);
             std::vector<uint8_t> bytes(rows*e.row_bytes);
             if (!baseline_only) GGML_ASSERT(f.resident->configure_writes(512));
-            for (int mode = 0; mode < (baseline_only ? 2 : 3); ++mode) {
-                const bool rowwise = mode == 1, staged = mode == 2;
+            for (int mode = 0; mode < (baseline_only ? 2 : 4); ++mode) {
+                const bool rowwise = mode == 1, staged = mode >= 2;
+                arena_ptr page_arena{nullptr,ggml_backend_memory_arena_free};
+                lease_ptr page_lease{nullptr,ggml_backend_memory_lease_free};
+                if (staged) {
+                    auto * type=llama_kv_stream_device_buffer_type(ggml_backend_get_device(backend.get()));
+                    size_t scratch=0;
+                    GGML_ASSERT(llama_kv_stream_writer::requirements(type,f.host->config().shape,512,scratch));
+                    if (mode == 2) scratch=32768;
+                    page_arena.reset(ggml_backend_memory_arena_new(type,scratch));
+                    GGML_ASSERT(page_arena && ggml_backend_memory_arena_begin(page_arena.get(),0) &&
+                        ggml_backend_memory_arena_reserve_at(page_arena.get(),93,0,scratch,128,0,nullptr) &&
+                        ggml_backend_memory_arena_commit(page_arena.get()));
+                    page_lease.reset(ggml_backend_memory_arena_acquire(page_arena.get(),93));
+                    GGML_ASSERT(f.resident->configure_writes(512,page_lease.get()));
+                }
                 std::vector<double> times;
                 for (int repeat = 0; repeat < 110; ++repeat) {
                     const auto start = std::chrono::steady_clock::now();
@@ -188,7 +203,7 @@ int main(int argc, char ** argv) {
                 }
                 std::sort(times.begin(), times.end());
                 const auto stats = f.resident->last_write_stats();
-                std::cout << (staged ? "staged" : rowwise ? "rowwise" : "coalesced") << ',' << rows << ',' << times[50] << ',' << times[95] << ','
+                std::cout << (mode == 3 ? "staged_page" : staged ? "staged" : rowwise ? "rowwise" : "coalesced") << ',' << rows << ',' << times[50] << ',' << times[95] << ','
                     << bytes.size() << ',' << (staged ? stats.d2h_calls : rowwise ? rows : 1) << ',' << f.resident->last_upload_bytes() << ',' << f.resident->last_upload_calls()
                     << ',' << (staged ? stats.d2d_bytes : 0) << ',' << (staged ? stats.d2d_calls : 0) << '\n';
             }
@@ -196,6 +211,31 @@ int main(int argc, char ** argv) {
         return 0;
     }
     testing t;
+    t.test("writer_quote_uses_independent_row_traits_and_bounded_tiles", [&](testing & t) {
+        const ggml_type types[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};
+        auto * type=ggml_backend_get_default_buffer_type(backend.get());
+        for (auto key : types) for (auto value : types) for (size_t maximum : {64u,256u,512u,1024u}) {
+            const ggml_kv_stream_shape shape{key,value,256,256,4,256,128};
+            size_t bytes=17;
+            if (!t.assert_true(llama_kv_stream_writer::requirements(type,shape,maximum,bytes))) return;
+            const size_t rows=std::min(maximum,size_t(256));
+            const size_t encoded=std::max(ggml_row_size(key,1024),ggml_row_size(value,1024))*rows;
+            t.assert_equal((encoded+127)/128*128+rows*sizeof(int64_t),bytes);
+            if (maximum <= 256 && key == GGML_TYPE_Q8_0 && value == GGML_TYPE_Q4_0) {
+                ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(type,bytes));
+                auto writer=llama_kv_stream_writer::create(backend.get(),buffer.get(),bytes,shape,maximum);
+                if (!t.assert_true(bool(writer))) return;
+            }
+        }
+        size_t bytes=17;
+        ggml_kv_stream_shape shape{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,256,256,4,256,128};
+        t.assert_true(!llama_kv_stream_writer::requirements(type,shape,0,bytes));
+        t.assert_true(!llama_kv_stream_writer::requirements(type,shape,SIZE_MAX,bytes));
+        shape.heads=INT64_MAX;
+        t.assert_true(!llama_kv_stream_writer::requirements(type,shape,256,bytes));
+        t.assert_equal(size_t(17),bytes);
+    });
     t.test("ordinary_set_rows_baseline_populates_authoritative_cache", [&](testing & t) {
         writer_fixture f(backend.get(), cuda); encoder e(f, 33, GGML_TYPE_Q8_0);
         std::vector<uint8_t> bytes(e.rows*e.row_bytes);

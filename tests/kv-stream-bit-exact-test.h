@@ -154,14 +154,21 @@ struct kv_stream_exact_trace {
     std::string role, phase;
     size_t outputs = 0;
     std::exception_ptr failure;
+    std::function<void()> prediction_attention;
     kv_stream_exact_trace(kv_stream_bit_oracle & oracle, std::string role) : oracle(oracle), role(std::move(role)) {}
     static bool callback(ggml_tensor * tensor, bool ask, void * opaque) {
         auto & trace = *static_cast<kv_stream_exact_trace *>(opaque);
-        if (trace.phase.empty() || trace.failure ||
-                (std::strcmp(tensor->name, "result_output") && std::strcmp(tensor->name, "h_nextn") &&
+        const bool attention = trace.prediction_attention && tensor && tensor->op == GGML_OP_FLASH_ATTN_EXT &&
+            trace.phase.find("/predict") != std::string::npos;
+        if (!tensor || trace.phase.empty() || trace.failure ||
+                (!attention && std::strcmp(tensor->name, "result_output") && std::strcmp(tensor->name, "h_nextn") &&
                  (trace.role != "target" || std::strcmp(tensor->name, "result_norm")))) return false;
         if (ask) return true;
         try {
+            if (attention) {
+                trace.prediction_attention();
+                return true;
+            }
             trace.oracle.tensor(trace.phase + "/" + trace.role + "/" + tensor->name, tensor, true);
             if (!std::strcmp(tensor->name, "result_output")) ++trace.outputs;
         } catch (...) {
@@ -260,6 +267,7 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
     if (prompt.size() < cfg.prefill) throw std::runtime_error("bit-exact corpus is too short");
     prompt.resize(cfg.prefill);
     const size_t vocabulary = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    bool observed_mtp_streaming = false;
     for (size_t length : {1u, 2u, 3u}) t.test("strict_mtp_length_" + std::to_string(length), [&](testing & t) {
         kv_stream_bit_oracle oracle;
         for (bool streaming : {false, true}) {
@@ -346,6 +354,20 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
             if (!logits) throw std::runtime_error("missing initial target logits");
             llama_token next = llama_token(std::max_element(logits, logits+vocabulary)-logits);
             bool target_streamed = false, draft_streamed = false;
+            if (streaming) draft_trace.prediction_attention = [&] {
+                ggml_kv_stream_span_plan_view view;
+                if (!stream->has_mtp_layer() || !ggml_kv_stream_span_plan_get_view(stream->mtp_layer_plan(1), view))
+                    throw std::runtime_error("prediction attention has no live MTP span lease");
+                llama_kv_stream_runtime_diagnostics status;
+                ggml_kv_stream_layout ring;
+                if (!stream->runtime_diagnostics(status) || view.shape.page_tokens <= 0 ||
+                        status.ring_slots > SIZE_MAX/size_t(view.shape.page_tokens) ||
+                        ggml_kv_stream_layout_make(view.shape,size_t(status.ring_slots)*size_t(view.shape.page_tokens),ring).status !=
+                            ggml_kv_stream_status::success)
+                    throw std::runtime_error("invalid live MTP ring geometry");
+                for (size_t i=0;i<view.count;++i)
+                    draft_streamed |= view.spans[i].k_offset < ring.k_bytes && draft_kv->mtp_span_attention_calls() > 0;
+            };
             for (size_t round = 0; round < cfg.rounds; ++round) {
                 const auto name = "round/" + std::to_string(round);
                 common_prompt_checkpoint checkpoint;
@@ -363,10 +385,8 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
                 oracle.bytes(name + "/prediction_ids", predicted.data(), predicted.size()*sizeof(predicted[0]));
                 kv_stream_exact_kv(oracle, name + "/predicted_KV", draft_kv, position, length);
                 if (streaming) {
-                    ggml_kv_stream_span_plan_view view;
-                    if (!stream->has_mtp_layer() || !ggml_kv_stream_span_plan_get_view(stream->mtp_layer_plan(1), view))
-                        throw std::runtime_error("prediction did not retain its MTP span lease");
-                    draft_streamed |= view.count > 1 && draft_kv->mtp_span_attention_calls() > 0;
+                    if (stream->has_mtp_layer())
+                        throw std::runtime_error("prediction did not retire its MTP span lease after the final reader");
                 }
                 if (!llama_memory_seq_rm(llama_get_memory(draft.get()), 0, llama_pos(position), -1))
                     throw std::runtime_error("cannot discard predicted draft KV before catch-up");
@@ -411,24 +431,28 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
             }
             kv("final", 0, position); recurrent("final"); carry("final");
             if (streaming) {
-                if (!target_streamed || !draft_streamed) {
+                if (!target_streamed) {
                     llama_kv_stream_runtime_diagnostics status;
                     stream->runtime_diagnostics(status);
-                    throw std::runtime_error("strict test never forced both target and MTP streaming; pool=" +
+                    throw std::runtime_error("strict test never forced target streaming; pool=" +
                         std::to_string(status.pool_bytes) + " resident=" + std::to_string(status.resident_pages_per_layer) +
                         " active=" + std::to_string(status.active_pages) + " target=" + std::to_string(target_streamed) +
                         " draft=" + std::to_string(draft_streamed) + "; grow --exact-prefill or lower --exact-pool-mib");
                 }
+                // Concentrated placement can keep the auxiliary cache resident for an individual mode.
+                observed_mtp_streaming |= draft_streamed;
                 oracle.finish();
             }
             if (!llama_kv_stream_mtp_release(target.get())) throw std::runtime_error("cannot release final strict MTP lease");
             phase("");
             t.out << (streaming ? "streamed" : "control") << " MTP=" << length << " prefix=" << cfg.prefill
                   << " rounds=" << cfg.rounds << " records=" << oracle.records() << " spool MiB="
-                  << double(oracle.byte_count())/1048576 << '\n';
+                  << double(oracle.byte_count())/1048576 << " target_ring=" << target_streamed
+                  << " mtp_ring=" << draft_streamed << '\n';
         }
         t.assert_true(oracle.records() >= cfg.rounds*4);
     });
+    t.assert_true(observed_mtp_streaming);
 }
 
 static void test_kv_stream_bit_exact_comparator(testing & t) {

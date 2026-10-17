@@ -2,6 +2,18 @@
 
 #include "kv-stream-span.h"
 #include "fattn-mma-quant.cuh"
+#include "fattn-mma-quant-chunk.cuh"
+#include "fattn-mma-resume.h"
+
+// Copy register fragments as integer words, without floating-point conversion or arithmetic.
+template<size_t bytes>
+static __device__ __forceinline__ void ggml_cuda_fattn_mma_checkpoint_copy(void * destination, const void * source) {
+    static_assert(bytes%4 == 0, "checkpoint must contain complete words");
+    auto * dst=static_cast<uint32_t *>(destination);
+    const auto * src=static_cast<const uint32_t *>(source);
+#pragma unroll
+    for (size_t i=0;i<bytes/4;++i) dst[i]=src[i];
+}
 
 // Resolve an ordered logical token without using physical span order.
 static __device__ __forceinline__ int flash_attn_ext_f16_span_index(
@@ -34,7 +46,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_span_tile(
     if (index >= 0 && live == nbatch_fa && nbatch_fa <= spans[index].tokens-(first-spans[index].first) &&
             (value ? spans[index].v_token_stride : spans[index].k_token_stride)/sizeof(half2) <= INT32_MAX) {
         const auto & span = spans[index];
-        const auto * source = flash_attn_ext_f16_span_row(spans, count, value, head, first, feature);
+        const half2 * source;
+        // Keep the wider-query/smaller-tile route lean; holding this cached address increased TG8 spills.
+        if constexpr (nbatch_fa >= 64) source=reinterpret_cast<const half2 *>((value ? span.v : span.k)+
+            int64_t(first-span.first)*(value ? span.v_token_stride : span.k_token_stride)+
+            int64_t(head)*(value ? span.v_head_stride : span.k_head_stride))+feature;
+        else source=flash_attn_ext_f16_span_row(spans,count,value,head,first,feature);
         flash_attn_ext_f16_load_tile<stride_tile,nwarps,nbatch_fa,use_cp_async,false,false>(
             source, tile, width, int((value ? span.v_token_stride : span.k_token_stride)/sizeof(half2)), 0, live, nullptr);
         return;
@@ -117,6 +134,16 @@ static __device__ __forceinline__ void ggml_cuda_fattn_prefetch_encoded_tile(
     const int bytes = ggml_cuda_fattn_encoded_traits<type>::row_bytes(full_width), chunks = bytes/16;
     const unsigned int shared = ggml_cuda_cvta_generic_to_shared(staging);
     const int4 zero = {};
+    const int first_index=flash_attn_ext_f16_span_index(spans,count,first);
+    const bool interior=first_index >= 0 && live == rows && rows <= spans[first_index].tokens-(first-spans[first_index].first);
+    const char * base=nullptr;
+    int64_t pitch=0;
+    if (interior) {
+        const auto & span=spans[first_index];
+        pitch=value ? span.v_token_stride : span.k_token_stride;
+        base=(value ? span.v : span.k)+int64_t(first-span.first)*pitch+
+            int64_t(head)*(value ? span.v_head_stride : span.k_head_stride);
+    }
     auto load = [&] __device__ (const int n) {
         const int step = warp >> n, begin = step == warp ? 0 : chunks-chunks%(2*step), end = chunks-chunks%step;
         const int stride_i = warp/step;
@@ -125,9 +152,9 @@ static __device__ __forceinline__ void ggml_cuda_fattn_prefetch_encoded_tile(
         for (int i0 = 0; i0 < rows; i0 += warps*stride_i) {
             const int row = i0+threadIdx.y*stride_i+(step == warp ? 0 : threadIdx.x/step);
             if (i0+warps*stride_i > rows && row >= rows) break;
-            const int index = row < live ? flash_attn_ext_f16_span_index(spans,count,first+row) : -1;
-            const char * source = nullptr;
-            if (index >= 0) {
+            const int index = row < live && !interior ? flash_attn_ext_f16_span_index(spans,count,first+row) : -1;
+            const char * source = interior ? base+int64_t(row)*pitch : nullptr;
+            if (!interior && index >= 0) {
                 const auto & span = spans[index];
                 source = (value ? span.v : span.k)+int64_t(first+row-span.first)*(value ? span.v_token_stride : span.k_token_stride)+
                     int64_t(head)*(value ? span.v_head_stride : span.k_head_stride);
@@ -144,7 +171,7 @@ static __device__ __forceinline__ void ggml_cuda_fattn_prefetch_encoded_tile(
 }
 
 // Expand completed compressed rows into the FP16 swizzle after their readers have retired.
-template<ggml_type type, int stride, int warps, int rows>
+template<ggml_type type, int stride, int warps, int rows, bool group_strided = false>
 static __device__ __forceinline__ void ggml_cuda_fattn_finish_encoded_tile(
         const char * staging, half2 * tile, int full_width, int feature, int width, bool contiguous) {
     constexpr int warp = ggml_cuda_get_physical_warp_size();
@@ -161,9 +188,13 @@ static __device__ __forceinline__ void ggml_cuda_fattn_finish_encoded_tile(
             for (int k0 = begin; k0 < end; k0 += step) {
                 const int k = k0+(step == warp ? threadIdx.x : threadIdx.x%step);
                 half2 decoded[4];
+                if constexpr (group_strided) {
+                    ggml_cuda_fattn_decode_strided_chunk8<type>(staging+row*bytes,2*feature+8*k,decoded);
+                } else {
 #pragma unroll
-                for (int pair = 0; pair < 4; ++pair) decoded[pair] = ggml_cuda_fattn_decode_pair<type>(
-                    staging+row*bytes,2*feature+8*k+2*pair,contiguous);
+                    for (int pair = 0; pair < 4; ++pair) decoded[pair] = ggml_cuda_fattn_decode_pair<type>(
+                        staging+row*bytes,2*feature+8*k+2*pair,contiguous);
+                }
                 ggml_cuda_memcpy_1<16>(swizzle<stride>(tile,row*stride+k*4,row),decoded);
             }
         }
@@ -175,7 +206,12 @@ static __device__ __forceinline__ void ggml_cuda_fattn_finish_encoded_tile(
 struct ggml_cuda_fattn_mma_contiguous_kv {
     static constexpr bool spanned = false;
     static constexpr bool staged = false;
+    static constexpr bool resumable = false;
+    __device__ __forceinline__ const int32_t * mask_bounds() const { return nullptr; }
+    __device__ __forceinline__ uint32_t block_index() const { return blockIdx.x; }
+    __device__ __forceinline__ uint32_t block_count() const { return gridDim.x; }
     __device__ __forceinline__ ggml_cuda_fattn_mma_contiguous_kv with_head(int) const { return {}; }
+    __device__ __forceinline__ ggml_cuda_fattn_mma_contiguous_kv with_slice(int) const { return {}; }
     __device__ __forceinline__ const half2 * offset(const half2 * source, int feature) const { return source+feature; }
     template<int stride, int warps, int rows, bool asynchronous, bool bounds, bool sparse>
     __device__ __forceinline__ void load(bool, const half2 * source, half2 * tile, int width, int row_stride,
@@ -186,16 +222,33 @@ struct ggml_cuda_fattn_mma_contiguous_kv {
 };
 
 // Change source addresses only; sparse attention is not implemented over spans.
-template<ggml_type key = GGML_TYPE_F16, ggml_type value_type = GGML_TYPE_F16>
+template<ggml_type key = GGML_TYPE_F16, ggml_type value_type = GGML_TYPE_F16, bool resume = false>
 struct ggml_cuda_fattn_mma_typed_span_kv {
     static constexpr bool spanned = true;
     static constexpr bool staged = key != GGML_TYPE_F16 || value_type != GGML_TYPE_F16;
+    static constexpr bool resumable = resume;
     static constexpr ggml_type key_type = key, v_type = value_type;
     const ggml_cuda_kv_span * spans;
     int count;
     int head;
     uint32_t conversion_flags = 3;
-    __device__ __forceinline__ ggml_cuda_fattn_mma_typed_span_kv with_head(int next) const { return {spans,count,next,conversion_flags}; }
+    ggml_cuda_fattn_mma_resume_control control;
+    __device__ __forceinline__ const int32_t * mask_bounds() const { return control.mask_bounds; }
+    int slice = 0;
+    __device__ __forceinline__ uint32_t block_index() const {
+        if constexpr (resume) return control.block_ids ? control.block_ids[blockIdx.x] : blockIdx.x;
+        return blockIdx.x;
+    }
+    __device__ __forceinline__ uint32_t block_count() const {
+        if constexpr (resume) return control.native_blocks ? control.native_blocks : gridDim.x;
+        return gridDim.x;
+    }
+    __device__ __forceinline__ ggml_cuda_fattn_mma_typed_span_kv with_head(int next) const {
+        auto result=*this; result.head=next; return result;
+    }
+    __device__ __forceinline__ ggml_cuda_fattn_mma_typed_span_kv with_slice(int next) const {
+        auto result=*this; result.slice=next; return result;
+    }
     __device__ __forceinline__ const half2 * offset(const half2 *, int) const { return nullptr; }
     template<int stride, int warps, int rows, bool asynchronous, bool bounds, bool sparse>
     __device__ __forceinline__ void load(bool value, const half2 *, half2 * tile, int width, int,

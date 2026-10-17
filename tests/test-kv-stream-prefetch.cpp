@@ -294,6 +294,25 @@ int main(int argc, char ** argv) {
             t.assert_true(!f.resident->sequence_active());
         }
     });
+    t.test("query_width_changes_preserve_only_same_extent_immutable_prefetch", [](testing & t) {
+        for (size_t active : {size_t(514),size_t(515),size_t(516),size_t(517),size_t(518),size_t(519),size_t(520),size_t(521)}) {
+            llama_kv_stream_prefetch_plan plan;
+            t.assert_true(plan.start({256,256},521,768,256,4,1,513));
+            llama_kv_stream_prefetch_request request;
+            t.assert_true(plan.reserve(request));
+            t.assert_true(request.stable && plan.mark_submitted(0));
+            const auto original=*plan.front();
+            t.assert_true(!plan.retarget(513));
+            t.assert_true(!plan.retarget(769));
+            t.assert_true(plan.retarget(active));
+            const auto current=*plan.front();
+            t.assert_true(current.first == original.first && current.tokens == original.tokens &&
+                current.slot == original.slot && current.submitted);
+            t.assert_equal(size_t(1),plan.pending());
+            t.assert_true(plan.consume(1));
+        }
+    });
+
     t.test("bounded_reservations_preserve_order_despite_deferred_readiness", [](testing & t) {
         llama_kv_stream_prefetch_plan p;
         t.assert_true(p.start({256,256,256,256,256,256,256,256},257,512,256,8,2,256));
@@ -331,6 +350,108 @@ int main(int argc, char ** argv) {
             t.assert_equal(size_t(24),consumed);
             t.assert_equal(size_t(0),p.used());
         }
+    });
+    t.test("ready_wave_groups_wrapped_runs_without_releasing_dma_fences",[](testing & t) {
+        llama_kv_stream_prefetch_plan p;
+        if (!t.assert_true(p.start({0},4096,4096,256,5,2,4096))) return;
+        llama_kv_stream_prefetch_request request;
+        for (size_t i=0;i<3;++i) {
+            t.assert_true(p.reserve(request)); t.assert_true(p.mark_submitted(i));
+        }
+        t.assert_true(p.consume(2));
+        t.assert_true(p.reserve(request));
+        llama_kv_stream_prefetch_wave wave;
+        t.assert_true(p.ready_wave(96,2,wave));
+        t.assert_equal(size_t(2),wave.requests); t.assert_equal(size_t(3),wave.pages);
+        t.assert_true(p.mark_submitted(2));
+        t.assert_true(p.ready_wave(96,2,wave));
+        t.assert_equal(size_t(3),wave.requests); t.assert_equal(size_t(5),wave.pages);
+        t.assert_equal(size_t(2),wave.spans); t.assert_equal(size_t(5*256),wave.tokens);
+        t.assert_equal(size_t(5),p.used()); t.assert_equal(size_t(3),p.pending());
+        t.assert_true(p.ready_wave(96,1,wave));
+        t.assert_equal(size_t(2),wave.requests); t.assert_equal(size_t(3),wave.pages);
+        t.assert_true(p.ready_wave(2,3,wave)); t.assert_equal(size_t(1),wave.requests);
+        const auto saved=wave;
+        t.assert_true(!p.ready_wave(0,2,wave)); t.assert_equal(saved.requests,wave.requests);
+        t.assert_true(!p.ready_wave(96,0,wave)); t.assert_equal(saved.pages,wave.pages);
+        for (size_t i=0;i<3;++i) { const auto pages=p.front()->pages; t.assert_true(p.consume(pages)); }
+        t.assert_equal(size_t(0),p.used());
+        t.assert_true(!p.ready_wave(96,3,wave));
+    });
+    t.test("ready_wave_keeps_oversized_transfer_fences_whole", [](testing & t) {
+        for (const size_t slots : {size_t(97),size_t(812)}) {
+            llama_kv_stream_prefetch_plan p;
+            if (!t.assert_true(p.start({256,256},261881,261888,256,slots,slots,261873))) return;
+            llama_kv_stream_prefetch_request request;
+            if (!t.assert_true(p.reserve(request) && p.mark_submitted(0))) return;
+            t.assert_equal(slots,request.pages);
+            llama_kv_stream_prefetch_wave wave;
+            if (!t.assert_true(p.ready_wave(96,2,wave))) return;
+            t.assert_equal(size_t(1),wave.requests);
+            t.assert_equal(slots,wave.pages);
+            t.assert_equal(slots*256,wave.tokens);
+            t.assert_equal(size_t(1),wave.spans);
+            t.assert_equal(slots,p.used());
+            t.assert_equal(request.first,p.front()->first);
+            t.assert_equal(request.pages,p.front()->pages);
+            t.assert_true(p.ready_wave(1,1,wave));
+            t.assert_equal(slots,wave.pages);
+            t.assert_true(p.consume(wave.pages));
+            t.assert_equal(size_t(0),p.used());
+        }
+    });
+    t.test("oversized_wave_does_not_skip_deferred_tails_or_merge_layers", [](testing & t) {
+        llama_kv_stream_prefetch_plan p;
+        if (!t.assert_true(p.start({0,0},25617,25856,256,128,128,25600))) return;
+        llama_kv_stream_prefetch_request request;
+        for (size_t i=0;i<3;++i) if (!t.assert_true(p.reserve(request))) return;
+        if (!t.assert_true(p.mark_submitted(0) && p.mark_submitted(2))) return;
+        llama_kv_stream_prefetch_wave wave;
+        if (!t.assert_true(p.ready_wave(96,3,wave))) return;
+        t.assert_equal(size_t(100),wave.pages);
+        t.assert_equal(size_t(1),wave.requests);
+        const auto saved=wave;
+        t.assert_true(!p.ready_wave(0,3,wave));
+        t.assert_equal(saved.pages,wave.pages);
+        t.assert_true(p.consume(100));
+        t.assert_true(!p.ready_wave(96,3,wave));
+        t.assert_equal(saved.pages,wave.pages);
+        if (!t.assert_true(p.make_ready(0) && p.mark_submitted(0) && p.ready_wave(96,3,wave))) return;
+        t.assert_equal(size_t(1),wave.pages);
+        t.assert_equal(size_t(1),wave.requests);
+        t.assert_true(p.consume(1));
+        t.assert_true(p.ready_wave(SIZE_MAX,3,wave));
+        t.assert_equal(size_t(27),wave.pages);
+        t.assert_equal(size_t(1),wave.requests);
+        t.assert_equal(size_t(1),p.front()->layer);
+    });
+    t.test("oversized_wave_progresses_after_ring_wrap", [](testing & t) {
+        llama_kv_stream_prefetch_plan p;
+        if (!t.assert_true(p.start({0},131072,131072,256,200,128,131072))) return;
+        llama_kv_stream_prefetch_request request;
+        if (!t.assert_true(p.reserve(request) && p.mark_submitted(0) && p.reserve(request) && p.mark_submitted(1))) return;
+        t.assert_equal(size_t(200),p.used());
+        llama_kv_stream_prefetch_wave wave;
+        if (!t.assert_true(p.ready_wave(96,2,wave))) return;
+        t.assert_equal(size_t(128),wave.pages);
+        t.assert_equal(size_t(1),wave.requests);
+        t.assert_true(p.consume(128));
+        if (!t.assert_true(p.reserve(request) && p.mark_submitted(1))) return;
+        t.assert_equal(size_t(0),request.slot);
+        if (!t.assert_true(p.ready_wave(96,2,wave))) return;
+        t.assert_equal(size_t(72),wave.pages);
+        t.assert_equal(size_t(1),wave.requests);
+        t.assert_true(p.ready_wave(SIZE_MAX,2,wave));
+        t.assert_equal(size_t(200),wave.pages);
+        t.assert_equal(size_t(2),wave.requests);
+        t.assert_equal(size_t(2),wave.spans);
+        t.assert_true(p.ready_wave(96,2,wave) && p.consume(wave.pages));
+        t.assert_equal(size_t(200*256),p.front()->first);
+        if (!t.assert_true(p.ready_wave(96,1,wave))) return;
+        t.assert_equal(size_t(128),wave.pages);
+        t.assert_equal(size_t(128*256),wave.tokens);
+        t.assert_true(p.consume(wave.pages));
+        t.assert_equal(size_t(0),p.used());
     });
     t.test("invalid_padding_does_not_create_a_wholly_empty_source_page", [](testing & t) {
         llama_kv_stream_prefetch_plan p;

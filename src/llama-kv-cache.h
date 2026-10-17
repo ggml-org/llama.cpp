@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-memory-requirements.h"
 
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,8 @@ struct llama_context;
 class llama_kv_stream_model;
 class llama_kv_stream_logical_cache;
 class llama_kv_stream_mtp_proxy;
+struct llama_memory_bounded_kv_layout;
+class llama_memory_bounded_kv;
 
 //
 // llama_kv_cache
@@ -128,6 +131,9 @@ public:
         llama_kv_stream_model * target);
     bool set_mtp_span_mode(bool enable, size_t first = 0, uint32_t rows = 0);
     bool complete_mtp_publication();
+    void set_next_target(bool final_use);
+    bool finish_serial_access();
+    bool retire_serial_access();
     size_t mtp_span_attention_calls() const noexcept;
     std::shared_ptr<llama_kv_stream_logical_cache> mtp_auxiliary_cache() const noexcept {
         return attached_mtp_cache;
@@ -181,10 +187,17 @@ public:
     ggml_type type_v() const;
 
     std::vector<uint32_t> get_layer_ids() const;
+    // Describe one serial homogeneous SWA allocation without changing stock cells, tensors or masks.
+    bool describe_bounded_storage(uint64_t identity,uint64_t generation,uint32_t history_rows,
+            uint32_t headroom_rows,llama_memory_bounded_kv_layout & output) const;
+    // Retain existing SWA bytes without another device allocation. The caller gates writes and their completion.
+    std::unique_ptr<llama_memory_bounded_kv> retain_bounded_storage(uint64_t identity,uint64_t generation,
+            uint32_t history_rows,uint32_t headroom_rows,llama_memory_resource resource = {}) const;
     ggml_tensor * get_k_storage(int32_t il) const;
     ggml_tensor * get_v_storage(int32_t il) const;
 
     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
+    bool supports_mask_bounds() const;
 
     // The stream holding seq_id's cells.
     uint32_t get_stream(llama_seq_id seq_id) const;
@@ -317,6 +330,7 @@ private:
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> bounded_lease{nullptr,ggml_backend_memory_lease_free};
 
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
@@ -420,6 +434,7 @@ public:
 
     uint32_t get_n_kv() const;
     bool kv_stream_begin(const llama_ubatch & ubatch, bool decode) const;
+    bool prepare_mask_bounds(const llama_ubatch & ubatch, bool causal) const;
     bool mtp_span_append(const llama_ubatch & ubatch) const;
 
     ggml_type type_k() const;
@@ -492,4 +507,5 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+    mutable std::vector<int32_t> mask_bounds;
 };

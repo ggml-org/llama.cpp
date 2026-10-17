@@ -177,6 +177,7 @@ struct ggml_dyn_tallocr {
     struct {
         const struct ggml_tensor * tensor;
         struct buffer_address addr;
+        size_t size;
     } allocated_tensors[1024];
 #endif
 };
@@ -227,11 +228,12 @@ static int ggml_dyn_tallocr_new_chunk(struct ggml_dyn_tallocr * alloc, size_t mi
 }
 
 #ifdef GGML_ALLOCATOR_DEBUG
-static void add_allocated_tensor(struct ggml_dyn_tallocr * alloc, struct buffer_address addr, const struct ggml_tensor * tensor) {
+static void add_allocated_tensor(struct ggml_dyn_tallocr * alloc, struct buffer_address addr, const struct ggml_tensor * tensor, size_t size) {
     for (int i = 0; i < 1024; i++) {
         if (alloc->allocated_tensors[i].tensor == NULL) {
             alloc->allocated_tensors[i].tensor = tensor;
             alloc->allocated_tensors[i].addr = addr;
+            alloc->allocated_tensors[i].size = size;
             return;
         }
     }
@@ -321,7 +323,7 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
     AT_PRINTF("block %d, offset %zu, chunk %d\n", best_fit_block, addr.offset, addr.chunk);
 
 #ifdef GGML_ALLOCATOR_DEBUG
-    add_allocated_tensor(alloc, addr, tensor);
+    add_allocated_tensor(alloc, addr, tensor, size);
     size_t cur_max = addr.offset + size;
     if (cur_max > chunk->max_size) {
         // sort allocated_tensors by chunk/offset
@@ -330,21 +332,24 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
                 if (ggml_buffer_address_less(alloc->allocated_tensors[j].addr, alloc->allocated_tensors[i].addr)) {
                     const struct ggml_tensor * tmp_tensor = alloc->allocated_tensors[i].tensor;
                     struct buffer_address tmp_addr = alloc->allocated_tensors[i].addr;
+                    size_t tmp_size = alloc->allocated_tensors[i].size;
                     alloc->allocated_tensors[i].tensor = alloc->allocated_tensors[j].tensor;
                     alloc->allocated_tensors[i].addr = alloc->allocated_tensors[j].addr;
+                    alloc->allocated_tensors[i].size = alloc->allocated_tensors[j].size;
                     alloc->allocated_tensors[j].tensor = tmp_tensor;
                     alloc->allocated_tensors[j].addr = tmp_addr;
+                    alloc->allocated_tensors[j].size = tmp_size;
                 }
             }
         }
-        GGML_LOG_DEBUG("max_size[%d] = %.2f MB: tensors: ", addr.chunk, cur_max / 1024.0 / 1024.0);
+        GGML_LOG_DEBUG("max_size[%d] = %.2f MB: allocator=%p peak_bytes=%zu tensors: ", addr.chunk, cur_max / 1024.0 / 1024.0, (void *) alloc, cur_max);
         for (int i = 0; i < 1024; i++) {
             if (alloc->allocated_tensors[i].tensor) {
-                GGML_LOG_DEBUG("%s [%d: %zx-%zx] (%.2f MB) ", alloc->allocated_tensors[i].tensor->name,
+                GGML_LOG_DEBUG("%s [%d: %zx-%zx] (payload=%zu reserved=%zu) ", alloc->allocated_tensors[i].tensor->name,
                     alloc->allocated_tensors[i].addr.chunk,
                     alloc->allocated_tensors[i].addr.offset,
-                    alloc->allocated_tensors[i].addr.offset + ggml_nbytes(alloc->allocated_tensors[i].tensor),
-                    ggml_nbytes(alloc->allocated_tensors[i].tensor) / 1024.0 / 1024.0);
+                    alloc->allocated_tensors[i].addr.offset + alloc->allocated_tensors[i].size,
+                    ggml_nbytes(alloc->allocated_tensors[i].tensor),alloc->allocated_tensors[i].size);
             }
         }
         GGML_LOG_DEBUG("\n");

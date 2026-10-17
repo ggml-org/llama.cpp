@@ -1,4 +1,5 @@
 #include "ggml-kv-stream.h"
+#include "ggml-backend-execution.h"
 
 #include <algorithm>
 #include <atomic>
@@ -138,11 +139,16 @@ static bool dense_scalar(const ggml_tensor & tensor, size_t element_size) {
     return true;
 }
 
-// Validate public attention metadata, not device pointers or private per-query kernel descriptors.
+// Validate logical attention metadata; compact descriptors are normalized without attaching storage.
 ggml_kv_stream_result ggml_kv_stream_attention_validate(
         const ggml_tensor * dst, const ggml_kv_stream_attention_limits & limits,
         const ggml_kv_stream_capabilities & caps, size_t span_tokens, ggml_kv_stream_execution & output) {
     if (!dst || dst->op != GGML_OP_FLASH_ATTN_EXT || dst->type != GGML_TYPE_F32) return {status::invalid_tensor};
+    if (dst->src[5] && !dst->src[3]) {
+        ggml_tensor logical{}, mask{};
+        if (!ggml_backend_execution_mask_metadata(dst,logical,mask)) return {status::unsupported_mask};
+        return ggml_kv_stream_attention_validate(&logical,limits,caps,span_tokens,output);
+    }
     const auto * q = dst->src[0], * k = dst->src[1], * v = dst->src[2], * mask = dst->src[3];
     if (!q || !k || !v || q->type != GGML_TYPE_F32) return {status::invalid_tensor};
     if (dst->src[4]) return {status::unsupported_sinks};

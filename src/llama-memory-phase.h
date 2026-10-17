@@ -1,6 +1,56 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
+#include "ggml.h"
+
+struct llama_memory_phase_cache_identity {
+    uint64_t id = 0;
+    uint64_t generation = 0;
+};
+
+enum class llama_memory_cache_role {
+    full_history,
+    bounded_resident,
+    read_only_source,
+};
+
+struct llama_memory_cache_format {
+    ggml_type key_type = GGML_TYPE_COUNT;
+    ggml_type value_type = GGML_TYPE_COUNT;
+    uint32_t key_head_dim = 0;
+    uint32_t value_head_dim = 0;
+    uint32_t kv_heads = 0;
+    bool value_transposed = false;
+};
+
+bool llama_memory_cache_format_equal(const llama_memory_cache_format & a, const llama_memory_cache_format & b) noexcept;
+
+// row_bytes is encoded K+V bytes per position per layer, not an element count.
+struct llama_memory_cache_requirement {
+    llama_memory_phase_cache_identity identity;
+    llama_memory_phase_cache_identity source;
+    llama_memory_cache_role role = llama_memory_cache_role::full_history;
+    uint32_t layers = 0;
+    uint32_t history_rows = 0;
+    uint32_t window_rows = 0;
+    uint32_t headroom_rows = 0;
+    uint32_t row_padding = 1;
+    size_t row_bytes = 0;
+    uint32_t source_first_layer = 0;
+    llama_memory_cache_format format;
+};
+
+struct llama_memory_cache_bound {
+    uint32_t capacity_rows = 0;
+    size_t storage_bytes = 0;
+    bool writable = false;
+};
+
+// Describe storage only. This does not allocate, admit kernels or retain the source lease.
+// A read-only alias requires its current owning source descriptor. Failure preserves output.
+bool llama_memory_cache_bound_make(const llama_memory_cache_requirement & requirement,
+        const llama_memory_cache_requirement * source, llama_memory_cache_bound & output) noexcept;
 
 enum class llama_memory_text_phase {
     unspecified,
@@ -58,7 +108,27 @@ enum class llama_memory_work_phase {
     recurrent_restore,
     mtp_catchup,
     mtp_draft,
+    draft_feature_injection,
+    draft_block_prediction,
 };
+
+// Physical graph workload, distinct from a logical batch or a model's auxiliary-layer count.
+struct llama_memory_workload_requirement {
+    llama_memory_work_phase phase = llama_memory_work_phase::none;
+    llama_memory_phase_cache_identity cache;
+    uint32_t input_rows = 0;
+    uint32_t query_rows = 0;
+    uint32_t output_rows = 0;
+    uint32_t rollback_depth = 0;
+    uint32_t microbatch_rows = 0;
+    bool serial = false;
+    bool writes_cache = false;
+    bool causal = true;
+};
+
+// Check metadata against a separately validated cache descriptor; backend admission is separate.
+bool llama_memory_workload_requirement_valid(const llama_memory_workload_requirement & requirement,
+        const llama_memory_cache_requirement & cache) noexcept;
 
 struct llama_memory_work_phase_signal {
     llama_memory_work_phase phase = llama_memory_work_phase::none;

@@ -5,9 +5,9 @@
 #include "fattn-stock-conversion-test.h"
 
 // Compare native split accumulators and final reduction while repeatedly rebinding a guarded ring.
-template<int width, int columns, int groups, ggml_type key, ggml_type value>
+template<int width, int columns, int groups, ggml_type key, ggml_type value, int heads = 12>
 static void check_tile(ggml_backend_t backend, int active, int queries, int splits, int wave_tiles, int span_count, bool interleaved, uint32_t flags) {
-    constexpr int heads = 12, kv_heads = 2, guard = 128;
+    constexpr int kv_heads = 2, guard = 128;
     const int capacity = (active+255)/256*256, extent = groups > 1 ? capacity : active;
     const int k_row = int(ggml_row_size(key,width)), v_row = int(ggml_row_size(value,width));
     std::vector<char> encoded[2];

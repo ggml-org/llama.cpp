@@ -1,5 +1,9 @@
 # Adaptive KV Streaming and MTP Integration Roadmap
 
+Gemma's read-only assistant cache sharing follows a separate extension plan in [GEMMA4_ADAPTIVE_KV_ROADMAP.md](GEMMA4_ADAPTIVE_KV_ROADMAP.md). It does not add four Qwen-style auxiliary KV layers; the existing Qwen milestone identifiers and qualification remain unchanged.
+
+The separate Qwen3.8-27B DFlash2 drafter follows [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). Its window-bounded draft caches stay resident rather than adding full-history auxiliary layers to the target ring.
+
 ## Background
 
 This branch already provides a backend-neutral device-memory infrastructure, adaptive KV streaming for a single serial target context, phase-aware sharing between prefill compute workspace and decode KV storage, asynchronous target and attached-MTP K/V publication, cross-token prefetch, and sparse deadline feedback.
@@ -37,6 +41,58 @@ The first production integration is intentionally restricted to the measured Qwe
 The common contracts must not encode these restrictions. Unsupported configurations fail closed at the model integration gate.
 
 ## Core execution model
+
+### Cross-consumer prefetch follow-up (complete for attached MTP)
+
+The next cache access must be declared by the serial execution coordinator, not inferred as another TG1 target token. Target KV completion should start auxiliary-cache population; the final auxiliary KV reader should return ring capacity and start target-prefix prefetch. A retained auxiliary suffix is reused throughout catch-up and sequential predictions, but is not protected throughout the following target execution.
+
+Common scheduling and transport contracts use cache identities, actual participant order, query widths, and completion dependencies. They must not encode Qwen's layer count or assume every assistant owns an independent full-attention cache. Gemma shared-cache readers and Muse Glimmer/DFlash consumers need model-specific integration and qualification, not a different common ownership protocol.
+
+Implementation checkpoints, without separate commits:
+
+1. Explicit next-consumer lookahead and immutable-prefix adoption for TG1-TG8. CPU planner and CUDA session tests cover every width; no query-dependent arithmetic changes.
+2. Prepared backend-neutral upload queue, retained metadata, batched readiness fence, and stale-identity rejection. CPU and CUDA focused lease tests pass.
+3. Start auxiliary population after the final declared target KV layer; retain and update its tail during the auxiliary phase.
+4. Fence final auxiliary reads/writes before returning ring slots; prefetch target history independently of the eventual verification width. Early stopping uses the host-discovered boundary.
+5. Qualify rejection, cancellation, page crossings, repartition, prompt reuse, and native-backend ordering before performance acceptance.
+6. Compare matched unprofiled baseline/candidate runs at all-resident, light, moderate, and heavy streaming. Require unchanged outputs and arena budget, no material target-only regression, and repeatable streamed-MTP improvement. Fewer copies alone are not acceptance.
+
+Current status: all six checkpoints are complete for the existing attached-MTP integration. Tests cover all eight target query widths with stock-exact attention, arbitrary target layer counts, encoded-cache formats, retained upload lifetimes, partial failure/retry, and final-span validation before retirement. The full CUDA model suite passes 31 tests / 3876 assertions; the full session suite and final TG1-TG8 tests pass. CPU ASan/UBSan and CUDA memcheck are clean.
+
+#### Performance qualification (2026-10-14)
+
+Matched runs use Qwen3.8-27B-UD-IQ4_XS on an RTX 5070 Ti, Q8_0 K / Q4_0 V for both target and draft, a fixed 2240 MiB phase arena, batch/ubatch 256/256, and one request. UVM and mmproj are disabled. Each run uses a context-matched capacity, the repository Wikipedia corpus, greedy sampling, and 256 generated output tokens. Rates below are unprofiled server-reported decode throughput; Ki denotes 1024 tokens. The baseline is the implementation immediately before this cross-consumer handoff change, not stock llama.cpp or V1.
+
+| Context capacity | Maximum MTP draft length | Baseline decode tok/s | New decode tok/s | Change |
+| --- | ---: | ---: | ---: | ---: |
+| 16 Ki | 0 | 44.75 | 44.48 | -0.62% |
+| 8 Ki | 1 | 65.73 | 65.81 | +0.12% |
+| 8 Ki | 2 | 79.72 | 79.31 | -0.52% |
+| 96 Ki | 3 | 73.06 | 74.91 | +2.53% |
+| 160 Ki | 3 | 36.25 | 37.94 | +4.65% |
+| 192 Ki | 3 | 29.38 | 30.72 | +4.56% |
+
+All six baseline/candidate pairs generate identical 256 output token IDs and identical generated/accepted draft counts within the same MTP mode. This does not assert output equality between different MTP modes. Short target-only/MTP=1/MTP=2 controls differ by less than 0.7%; single samples do not establish a meaningful change at that scale. At 160 Ki, a repeated baseline measures 36.25 tok/s versus the original 36.31; successful candidate measurements are 37.85 and 37.94 tok/s.
+
+Prefill throughput remains essentially unchanged:
+
+| Context capacity | Maximum MTP draft length | Baseline prefill tok/s | New prefill tok/s |
+| --- | ---: | ---: | ---: |
+| 96 Ki | 3 | 962.94 | 964.38 |
+| 160 Ki | 3 | 691.90 | 692.51 |
+| 192 Ki | 3 | 592.72 | 593.20 |
+
+At the 160 Ki health-ready checkpoint, both variants use 15776 MiB of GPU memory, measured at MiB resolution. This is a startup observation, not a bound on every transient allocation. The change adds no second KV buffer.
+
+A diagnostic 160 Ki trace over 81 steady target rounds shows 12.21 GiB less H2D traffic from cancelled target lookahead, with cancellation/draining outside decode calls reduced from 129.08 ms to 0.09 ms. Kernel-active time is essentially unchanged (3362.10 ms versus 3361.69 ms). This trace uses the earlier successful pinned candidate; final acceptance measurements above use the completed narrow-event-retirement implementation and are unprofiled.
+
+Validation includes the full CUDA model suite (31 tests / 3876 assertions), full CUDA session suite (21 tests / 2269 assertions), focused TG1-TG8 stock-exact attention checks (232 assertions), and final CUDA transport/population tests (20 tests / 315 assertions). CPU ASan/UBSan with leak detection and focused CUDA memcheck report no errors. Tests exercise varying target layer counts, encoded-cache formats, stale identities, partial upload failures and retry, retained ownership, and final-span publication/retirement ordering.
+
+Detailed commands, frozen runtimes, outputs, rejected intermediate measurements, and trace analysis are recorded in [the qualification report](benchmarks/results/cross-phase-handoff-20261014-RkUd0l/REPORT.md); the adjacent `comparison.json` records exact measurements and output comparisons. These local benchmark artifacts are not staged with this documentation. Production was restored with its existing image and configuration; the candidate was not deployed.
+
+The arithmetic kernels are unchanged. The common transport/adoption path supports TG1-TG8; this does not increase the existing attached-MTP draft-length limit or add Gemma/Muse model admission. Those model pairings still need their own adapters and qualification.
+
+The prepared transfer uses separate upload-completion and last-reader handoff events. A completion recorded immediately after the next queue's wait retires the handoff dependency without draining later target work. A test first exposed a broad-backend retirement wait; the narrowed event path fixes that regression. Final MTP spans remain available for host-publication validation before their metadata is retired, while queued target copies may already reuse the bytes after the last-reader fence.
 
 ### Logical ownership
 
@@ -306,6 +362,24 @@ After the initial configuration is correct and useful:
 - add native span-aware execution adapters for ROCm, SYCL, Vulkan, OpenCL, and other accelerators;
 - evaluate parallel slots, multiple devices, and split-mode layer placement;
 - generalize retained logical-layer leases for paged attention and other cache policies.
+
+### Deferred: phase-scoped recurrent publication staging (2026-10-14)
+
+Status: planned only; implementation is deferred at the user's request. This is not a prerequisite for extending the attached-MTP draft length, provided its external staging remains explicitly budgeted.
+
+The attached-MTP two-slot recurrent publication stage currently uses a separate device allocation. DFlash can bind that stage through `reserve_staging()` inside the shared parent, but that API reserves a fixed persistent region in every phase. Moving MTP to that API alone would improve arena accounting without enabling cross-phase reuse.
+
+The intended common design makes the two device staging slots phase-scoped arena resources. Current recurrent state stays persistent, and authoritative pinned host snapshots survive until acceptance/recovery no longer needs them. Releasing device staging must not discard either kind of state.
+
+Implementation plan:
+
+1. Quote exact staging bytes from the requested rollback depth, model geometry and backend alignment. Include them in the declared arena budget for every phase that actually produces snapshots; do not assume all prefill paths can omit staging.
+2. Adapt the common spill bank to borrow phase-scoped leases without retaining a second device backing allocation. Keep prepared copy queues/events reusable across lease changes and preserve backend-neutral ownership.
+3. At phase boundaries, complete outstanding staging reads, retire graphs referencing old staging addresses, and release the lease before another consumer reuses the region. Reacquire/rebind staging and rebuild affected graph bindings before publication resumes. Avoid per-layer allocation or phase replanning.
+4. Let phases without publication requirements reuse the released bytes for workspace or KV storage. Expose active staging and effective KV bytes in phase diagnostics, including preflight requirements.
+5. Qualify pending D2H, stale graph/lease generations, cancellation, rejection recovery, repeated phase changes, exact-fit/undersized budgets and failed rebinds with CPU/CUDA tests and sanitizers. Compare stock-matched outputs and unprofiled throughput before acceptance.
+
+Memory accounting: with an unchanged arena size, staging becomes part of that budget rather than an additional external allocation. This does not automatically enlarge decode KV; benefits depend on phase overlap and on whether the total device budget permits increasing the arena after removing external staging. For the current Qwen geometry, two-slot staging is 18.703125 MiB at depth three and 43.640625 MiB at depth seven; current recurrent state and host snapshot storage are separate.
 
 ## Cross-cutting correctness rules
 

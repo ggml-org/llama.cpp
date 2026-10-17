@@ -11,6 +11,10 @@ struct llama_kv_stream_prefetch_request {
     bool stable = false, submitted = false;
 };
 
+struct llama_kv_stream_prefetch_wave {
+    size_t requests = 0, pages = 0, tokens = 0, spans = 0;
+};
+
 // Owner-thread FIFO reservations. Deferred tails occupy slots, so speculative work cannot starve demand.
 class llama_kv_stream_prefetch_plan {
 public:
@@ -60,6 +64,13 @@ public:
         output = r; return true;
     }
     bool make_ready(size_t i) { if (i >= ready.size()) return false; ready[i] = true; return true; }
+    // Historical uploads are query-independent when the padded extent does not change.
+    bool retarget(size_t next_active) {
+        if (next_active <= stable || next_active > padded || !page ||
+                (next_active-1)/page != (padded-1)/page) return false;
+        active=next_active;
+        return true;
+    }
     bool can_submit(const llama_kv_stream_prefetch_request & r) const { return r.layer < ready.size() && (r.stable || ready[r.layer]); }
     bool mark_submitted(size_t i) {
         if (i >= count) return false;
@@ -82,6 +93,26 @@ public:
     const llama_kv_stream_prefetch_request * front() const { return count ? &records[head] : nullptr; }
     size_t pending() const { return count; }
     size_t used() const { return used_pages; }
+    // Keep the first transfer whole above the grouping target so demand always makes progress.
+    bool ready_wave(size_t preferred_pages, size_t max_spans, llama_kv_stream_prefetch_wave & output) const {
+        if (!preferred_pages || !max_spans || max_spans > 3 || !count) return false;
+        llama_kv_stream_prefetch_wave next;
+        const auto * first=request(0);
+        size_t logical=first->first, physical=first->slot;
+        for (size_t i=0;i<count;++i) {
+            const auto * r=request(i);
+            if (!r->submitted || r->layer != first->layer || r->first != logical ||
+                    !r->pages || r->pages > records.size() || r->slot > records.size()-r->pages ||
+                    !r->tokens || r->tokens > SIZE_MAX-logical) break;
+            if (next.requests && (next.pages >= preferred_pages || r->pages > preferred_pages-next.pages)) break;
+            const bool separate=!next.requests || r->slot != physical;
+            if (separate && next.spans == max_spans) break;
+            next.spans+=separate; ++next.requests; next.pages+=r->pages; next.tokens+=r->tokens;
+            logical+=r->tokens; physical=r->slot+r->pages;
+        }
+        if (!next.requests) return false;
+        output=next; return true;
+    }
 private:
     std::vector<size_t> prefixes;
     std::vector<uint8_t> ready, occupied;

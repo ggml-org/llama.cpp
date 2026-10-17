@@ -38,6 +38,7 @@ struct llama_kv_stream_resident::implementation {
     bool fallback = false;
     bool native_graph_attention = false;
     bool resumed_decode = false;
+    size_t prefill_scratch_bytes = 0;
     std::vector<llama_kv_stream_rows> ranges;
     std::vector<llama_kv_stream_rows> layer_ranges{{0,ggml_kv_stream_operand::k,0,0},{0,ggml_kv_stream_operand::v,0,0}};
     size_t active = 0, bytes = 0, calls = 0;
@@ -289,11 +290,13 @@ struct llama_kv_stream_resident::implementation {
     }
 
     // Refresh only the capacity assigned to each layer; concentrated layouts may assign zero rows.
-    bool refresh(size_t padded, uint32_t only_layer = UINT32_MAX) {
+    bool refresh(size_t padded, uint32_t only_layer = UINT32_MAX, bool defer_clean_sync = false) {
         const bool cold = !initialized;
         const auto start_us = cold ? ggml_time_us() : 0;
         bytes = calls = 0;
-        ggml_backend_synchronize(backend);
+        bool drained=false;
+        const auto drain=[&]() { if (!drained) { ggml_backend_synchronize(backend); drained=true; } };
+        if (cold || !defer_clean_sync) drain();
         const auto drained_us = cold ? ggml_time_us() : 0;
         if (!initialized) {
             if (!content->reset_mirror()) return false;
@@ -306,6 +309,7 @@ struct llama_kv_stream_resident::implementation {
         }
         const auto upload_start_us = cold ? ggml_time_us() : 0;
         if (!content->flush(selected, [&](const llama_kv_stream_copy_span & span) {
+            drain();
             const bool value = span.rows.operand == ggml_kv_stream_operand::v;
             const auto & planes = placement(span.rows.layer).planes;
             const size_t stride = value ? planes.v_token_bytes : planes.k_token_bytes;
@@ -373,6 +377,17 @@ bool llama_kv_stream_resident::configure_resumed_decode(bool enable) {
     if (s.busy || s.sequence || s.capturing()) return false;
     s.resumed_decode = enable; return true;
 }
+bool llama_kv_stream_resident::configure_prefill_workspace(size_t bytes) {
+    auto & s=*impl;
+    if (s.busy || s.sequence || s.capturing() || bytes > SIZE_MAX-s.content->host()->layout().bytes) return false;
+    if (bytes) {
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend)),"ggml_backend_kv_stream_partial_ops"));
+        if (!get || !get() || get()->version < 13 || !get()->prefill_workspace || !get()->resume_plan ||
+                !get()->resume || !get()->resume_spans) return false;
+    }
+    s.prefill_scratch_bytes=bytes; return true;
+}
 size_t llama_kv_stream_resident::suggested_span_pages() const noexcept {
     (void) feedback();
     const auto & s = *impl;
@@ -414,7 +429,7 @@ llama_kv_stream_resident::~llama_kv_stream_resident() = default;
 // Establish a serial execution order and the host prefix that is already immutable for every layer.
 bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & layers, size_t active,
         size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context,
-        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard) {
+        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard, bool defer_clean_sync) {
     auto & s = *impl;
     if (s.busy || s.sequence || s.capturing() || s.poisoned || !s.compatible() || layers.empty() || layers.size() > s.physical_layers.size() || !active || !span ||
             active > size_t(INT32_MAX)-255 || active > s.content->host()->config().context_tokens) return false;
@@ -465,7 +480,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
             s.feedback_epoch == s.content->mirror_epoch();
         s.busy = true; s.valid = false;
         struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
-        if (!s.refresh(seq->padded)) return false;
+        if (!s.refresh(seq->padded,UINT32_MAX,defer_clean_sync)) return false;
         seq->generation = s.content->generation(); seq->epoch = s.content->mirror_epoch();
         if (feedback_tracked) {
             s.feedback_generation=seq->generation;
@@ -480,7 +495,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
 bool llama_kv_stream_resident::prime_sequence(const std::vector<uint32_t> & layers, size_t active,
         size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context,
         std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard) {
-    if (!begin_sequence(layers,active,span,stable,feedback_context,std::move(ring_guard))) return false;
+    if (!begin_sequence(layers,active,span,stable,feedback_context,std::move(ring_guard),true)) return false;
     impl->sequence->primed = true;
     impl->sequence->stats.primed = true;
     return true;
@@ -494,9 +509,15 @@ bool llama_kv_stream_resident::adopt_sequence(const std::vector<uint32_t> & laye
     if (s.busy || s.capturing() || s.poisoned || !s.sequence || !s.sequence->primed) return false;
     if (!s.sequence_valid()) { s.stop_sequence(); return false; }
     auto & seq=*s.sequence;
-    if (seq.next || seq.layers != layers || seq.active != active || seq.span != span || seq.stable != stable ||
-            seq.queries != feedback_context.query_tokens || seq.decode != feedback_context.decode ||
+    const bool flexible=seq.queries == 0;
+    if (seq.next || seq.layers != layers || (!flexible && seq.active != active) || seq.span != span || seq.stable != stable ||
+            (!flexible && seq.queries != feedback_context.query_tokens) || seq.decode != feedback_context.decode ||
             seq.ring_guard != ring_guard) return false;
+    if (flexible) {
+        if (!feedback_context.query_tokens || !seq.plan.retarget(active)) return false;
+        seq.active=active;
+        seq.queries=feedback_context.query_tokens;
+    }
     seq.primed = false;
     seq.stats.primed = false;
     seq.stats.adopted = true;
@@ -669,6 +690,24 @@ bool llama_kv_stream_resident::capture_state(ggml_backend_t backend, size_t toke
     if (backend != s.backend || !s.query_capture || s.busy || s.sequence || s.fallback || !s.extent(tokens,padded)) return false;
     output = {s.binding.buffer,s.binding.revision,s.residency_revision,s.content->mirror_epoch(),padded};
     return true;
+}
+
+// Ask the backend for the native allocation, not the managed node's reduced output quote.
+bool llama_kv_stream_resident::capture_without_output_extras(uint32_t query_heads, size_t tokens) const {
+    const auto & s = *impl;
+    llama_kv_stream_capture_stamp state;
+    if (!query_heads || query_heads > INT32_MAX || query_heads%uint32_t(s.binding.config.shape.heads) ||
+            !capture_state(s.backend, tokens, state)) return false;
+    ggml_context_ptr context(ggml_init({65536, nullptr, true}));
+    if (!context) return false;
+    auto * q = ggml_new_tensor_3d(context.get(), GGML_TYPE_F32, s.binding.config.shape.head_dim_k, 1, query_heads);
+    auto * mask = ggml_new_tensor_2d(context.get(), GGML_TYPE_F16, state.padded_tokens, 1);
+    auto k = s.descriptor(0, false, state.padded_tokens);
+    auto v = s.descriptor(0, true, state.padded_tokens);
+    auto * op = ggml_flash_attn_ext(context.get(), q, &k, &v, mask, 1.0f, 0, 0);
+    ggml_flash_attn_ext_set_prec(op, GGML_PREC_F32);
+    return ggml_backend_supports_op(s.backend, op) &&
+        ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(s.binding.buffer), op) == ggml_nbytes(op);
 }
 
 // Only ordinary native TG1 attention over this consumer's exact resident planes is capturable here.
@@ -1035,14 +1074,19 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     if (!active_tokens) return false;
     if (cross && s.sequence->queries && q->ne[1] != s.sequence->queries) return false;
     const size_t padded = (active_tokens+255)/256*256;
+    const bool compact_mask=mask->type == GGML_TYPE_I32;
     const size_t prefix = std::min(padded,s.placement(layer).planes.tokens);
     const size_t slots = s.binding.initial_policy.ring_slots;
     if (!slots || !span_pages || slots > s.layout.ring.bytes/s.page.bytes) return false;
     const size_t blocks = (padded-prefix)/s.page.tokens + ((padded-prefix)%s.page.tokens != 0);
     const auto width = [&](size_t block) { return ggml_kv_stream_contiguous_pages(block,blocks,slots,span_pages); };
-    if (padded > s.content->host()->layout().tokens || mask->ne[0] < int64_t(padded) ||
+    if (compact_mask) {
+        if (mask->ne[0] != 4 || mask->ne[1] != q->ne[1] || mask->ne[2] != 1 || mask->ne[3] != 1 ||
+                !mask->data || !ggml_is_contiguous(mask)) return false;
+    } else if (mask->ne[0] < int64_t(padded) ||
             mask->type != GGML_TYPE_F16 || !mask->data || mask->nb[0] != sizeof(ggml_fp16_t) ||
             mask->ne[0] > INT32_MAX || mask->nb[1] < size_t(mask->ne[0])*sizeof(ggml_fp16_t)) return false;
+    if (padded > s.content->host()->layout().tokens) return false;
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend));
     auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
     const auto * ops = get ? get() : nullptr;
@@ -1051,18 +1095,21 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     ggml_kv_stream_layout gathered;
     ggml_kv_stream_resume_plan resume_plan;
     const bool prefill = cross && !s.sequence->decode;
-    const bool resumed = s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 4 && !s.fallback &&
+    const bool bounded_prefill=prefill && s.prefill_scratch_bytes;
+    if (compact_mask && (!bounded_prefill || ops->version < 14)) return false;
+    const bool resumed = ((s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 8) || bounded_prefill) && !s.fallback &&
         ops->version >= 5 && ops->resume_plan && ops->resume &&
         ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
             uint32_t(q->ne[2]),uint32_t(s.binding.config.shape.heads),uint32_t(q->ne[1]),padded,resume_plan);
-    const bool span_shape = q->ne[1] <= 2 ||
-        (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0) ||
-        (s.binding.config.shape.type_k == GGML_TYPE_F16 && s.binding.config.shape.type_v == GGML_TYPE_F16);
-    const bool segmented = span_shape && s.native_graph_attention && cross && !prefill && !s.fallback &&
-        q->ne[1] <= 4 && blocks <= slots && ops->version >= 8 && ops->spans && ops->spans_workspace &&
-        (q->ne[1] != 2 || resumed ||
-         (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0)) &&
-        (prefix == padded || !resumed) && (!resumed || !resume_plan.resume_resident);
+    if (bounded_prefill && !resumed) return false;
+    const bool segmented = s.native_graph_attention && cross && !prefill && !s.fallback &&
+        q->ne[1] <= 8 && blocks <= slots && ops->version >= 8 && ops->spans && ops->spans_workspace &&
+        (((prefix == padded || !resumed) && (!resumed || !resume_plan.resume_resident)) ||
+         (resumed && resume_plan.kernel_config[0] == 2));
+    const bool span_resume=resumed && cross && !segmented && ops->version >= 11 &&
+        ops->resume_spans && resume_plan.span_resume && s.pool_lease && s.copy_ops &&
+        s.copy_ops->version >= 10 && s.copy_ops->acquire_span && s.copy_ops->release_span;
+    bool prefix_pending=span_resume && prefix && blocks;
     // Short prefills use the same encoded gather and stock kernel as longer prefills.
     const bool native = s.native_graph_attention && !resumed && (prefill || q->ne[1] != 2 || segmented || !s.resumed_decode);
     if (ggml_kv_stream_block_layout_make(size_t(q->ne[1])*size_t(q->ne[2]),size_t(output->ne[0]),work).status !=
@@ -1072,7 +1119,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         lease(ggml_backend_memory_lease_retain(workspace),ggml_backend_memory_lease_free);
     auto * wb = ggml_backend_memory_lease_buffer(lease.get());
     ggml_backend_memory_region region;
-    const size_t required_workspace = (native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded ?
+    const size_t required_workspace = bounded_prefill ? s.prefill_scratch_bytes :
+        (native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded ?
         0 : resumed ? resume_plan.bytes : native && !segmented ? gathered.bytes : work.bytes;
     if (!wb || !ggml_backend_memory_lease_get_region(lease.get(),&region) ||
             region.size != ggml_backend_buffer_get_size(wb) || region.size < required_workspace ||
@@ -1111,14 +1159,21 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             }
             if (!ops->supports_conversion(s.backend,&k,&ck) || !ops->supports_conversion(s.backend,&v,&cv)) return false;
         }
-        slice = *mask; slice.ne[0] = int64_t(count);
-        if (uintptr_t(mask->data) > UINTPTR_MAX-first*sizeof(ggml_fp16_t)) return false;
-        slice.data = reinterpret_cast<void *>(uintptr_t(mask->data)+first*sizeof(ggml_fp16_t));
+        slice = *mask;
+        if (!compact_mask) {
+            slice.ne[0] = int64_t(count);
+            if (uintptr_t(mask->data) > UINTPTR_MAX-first*sizeof(ggml_fp16_t)) return false;
+            slice.data = reinterpret_cast<void *>(uintptr_t(mask->data)+first*sizeof(ggml_fp16_t));
+        }
         op = *output; op.op = GGML_OP_FLASH_ATTN_EXT;
         std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
         std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
         ggml_backend_execution_set_external_workspace(&op, ggml_backend_execution_has_external_workspace(output));
-        op.src[0] = q; op.src[1] = s.fallback ? &ck : &k; op.src[2] = s.fallback ? &cv : &v; op.src[3] = &slice;
+        if (bounded_prefill) ggml_backend_execution_set_stock_conversion(&op,true);
+        op.src[0] = q; op.src[1] = s.fallback ? &ck : &k; op.src[2] = s.fallback ? &cv : &v;
+        if (compact_mask) {
+            if (!ggml_backend_execution_set_mask_bounds(&op,&slice)) return false;
+        } else op.src[3]=&slice;
         return ops->supports(s.backend,&op);
     };
     const size_t resident_chunk = s.fallback ? s.page.tokens : prefix;
@@ -1222,7 +1277,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         return true;
     };
     if (prefetch && !cross) for (size_t block = 0; block < std::min(slots,blocks); block += width(block)) if (!enqueue(block)) return false;
-    if ((native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded && !segmented) {
+    if (!bounded_prefill && (native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded && !segmented) {
         if (!describe(0,prefix,0,true) || !ops->direct(s.backend,&op)) return false;
         ++s.attention_calls; direct_result = true; return finish();
     }
@@ -1359,8 +1414,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         return !s.fallback || (ops->convert(s.backend,&k,&ck) && ops->convert(s.backend,&v,&cv));
     };
     if (resumed) {
-        if (prefix && (!describe(0,prefix,0,true) || !ops->resume(s.backend,&op,wb,resume_plan,padded,0,prefix == padded))) return false;
-        s.attention_calls += prefix != 0;
+        if (prefix && !prefix_pending && (!describe(0,prefix,0,true) || !ops->resume(s.backend,&op,wb,resume_plan,padded,0,prefix == padded))) return false;
+        s.attention_calls += prefix != 0 && !prefix_pending;
         if (prefix == padded) {direct_result=true; return finish();}
     } else if (native) {
         if (prefix && !gather(s.roots[layer].first->data,s.roots[layer].second->data,0,prefix)) return false;
@@ -1378,6 +1433,66 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     }
     for (size_t block = 0; block < blocks;) {
         const size_t first = prefix+block*s.page.tokens;
+        if (span_resume) {
+            llama_kv_stream_prefetch_wave wave;
+            if (!s.sequence->plan.ready_wave(96,prefix_pending ? 2 : 3,wave)) return false;
+            std::vector<ggml_kv_stream_span> sources;
+            std::vector<llama_kv_stream_prefetch_request> requests;
+            sources.reserve(3); requests.reserve(wave.requests);
+            const auto append=[&](size_t token,size_t count,size_t ko,size_t vo) {
+                if (!count) return true;
+                if (!sources.empty()) {
+                    auto & previous=sources.back();
+                    if (previous.token_begin+previous.tokens == token &&
+                            previous.k_offset+previous.tokens*s.page.k_token_bytes == ko &&
+                            previous.v_offset+previous.tokens*s.page.v_token_bytes == vo) {
+                        previous.tokens+=count; return true;
+                    }
+                }
+                if (sources.size() == 3) return false;
+                sources.push_back({s.binding.buffer,s.binding.buffer,token,count,ko,vo}); return true;
+            };
+            const size_t wave_first=prefix_pending ? 0 : first;
+            if (prefix_pending) {
+                const auto & planes=s.placement(layer);
+                if (!append(0,prefix,planes.offset,planes.offset+planes.planes.v_offset)) return false;
+            }
+            size_t end=first;
+            for (size_t i=0;i<wave.requests;++i) {
+                const auto * request=s.sequence->plan.request(i);
+                if (!request || request->layer != s.sequence->next || request->first != end || !request->submitted ||
+                        request->tokens > padded-end || request->pages > slots || request->slot > slots-request->pages) return false;
+                if (!append(request->first,request->tokens,request->slot*s.page.k_bytes,
+                        s.layout.ring.v_offset+request->slot*s.page.v_bytes)) return false;
+                requests.push_back(*request); end+=request->tokens;
+            }
+            k=s.descriptor(layer,false,padded); v=s.descriptor(layer,true,padded);
+            k.buffer=v.buffer=s.binding.buffer;
+            if (!k.data) k.data=s.binding.base;
+            if (!v.data) v.data=s.binding.base;
+            op=*output; op.op=GGML_OP_FLASH_ATTN_EXT;
+            std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
+            std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
+            ggml_backend_execution_set_external_workspace(&op,ggml_backend_execution_has_external_workspace(output));
+            if (bounded_prefill) ggml_backend_execution_set_stock_conversion(&op,true);
+            op.src[0]=q; op.src[1]=&k; op.src[2]=&v;
+            if (compact_mask) {
+                if (!ggml_backend_execution_set_mask_bounds(&op,mask)) return false;
+            } else op.src[3]=mask;
+            for (const auto & request : requests)
+                if (!s.copy_ops->acquire_span(s.copies.get(),request.slot,request.pages)) return false;
+            const ggml_kv_stream_span_plan_view view{s.binding.config.shape,sources.data(),sources.size(),padded,size_t(q->ne[1])};
+            if (!ops->resume_spans(s.backend,&op,wb,resume_plan,view,wave_first,end)) return false;
+            ++s.attention_calls; prefix_pending=false;
+            for (const auto & request : requests)
+                if (!s.copy_ops->release_span(s.copies.get(),request.slot,request.pages)) return false;
+            for (const auto & request : requests)
+                if (!s.sequence->plan.consume(request.pages)) return false;
+            if (!s.fill_sequence()) return false;
+            block+=wave.pages;
+            if (end == padded) { direct_result=true; return finish(); }
+            continue;
+        }
         size_t pages = width(block), slot = block%slots;
         size_t grouped_requests = 0;
         if (cross) {

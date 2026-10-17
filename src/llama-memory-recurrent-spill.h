@@ -2,11 +2,24 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "../ggml/src/ggml-backend-memory.h"
 
 #include <cstddef>
 #include <memory>
 #include <cstdint>
 #include <vector>
+
+struct llama_recurrent_rollback_plan {
+    uint32_t depth = 0;
+    uint32_t verification_rows = 1;
+    uint32_t workspace_rows = 4;
+    bool host_spill = false;
+    uint32_t stage_slots = 0;
+};
+
+// Plan target rollback independently of draft cache ownership; keep the embedded-MTP depth limit.
+bool llama_recurrent_rollback_plan_make(uint32_t depth, bool embedded_mtp, uint32_t microbatch_rows,
+        llama_recurrent_rollback_plan & output) noexcept;
 
 struct llama_recurrent_spill_layer {
     ggml_type type_r = GGML_TYPE_F32;
@@ -65,12 +78,14 @@ class llama_recurrent_stage_buffer {
 public:
     static std::unique_ptr<llama_recurrent_stage_buffer> create(
             const llama_recurrent_spill_layout & snapshots, uint32_t slots,
-            ggml_backend_buffer_type_t device_type);
+            ggml_backend_buffer_type_t device_type, ggml_backend_memory_lease_t borrowed = nullptr);
     ~llama_recurrent_stage_buffer();
     llama_recurrent_stage_buffer(const llama_recurrent_stage_buffer &) = delete;
     llama_recurrent_stage_buffer & operator=(const llama_recurrent_stage_buffer &) = delete;
 
     ggml_tensor * tensor(size_t layer, bool value, uint32_t snapshot, uint32_t slot) const noexcept;
+    // A prebound raw span is available only when snapshot rows have no physical padding.
+    ggml_tensor * plane_span(size_t layer, bool value, uint32_t slot) const noexcept;
     ggml_backend_buffer_t buffer() const noexcept;
     size_t bytes() const noexcept;
     const llama_recurrent_stage_layout & layout() const noexcept;
@@ -99,8 +114,13 @@ public:
     bool enable_publication(ggml_backend_dev_t device, ggml_backend_buffer_type_t stage_type, uint32_t slots);
     bool staged_publication_enabled() const noexcept;
     size_t staged_device_bytes() const noexcept;
+    // Retire graph users first; only idle publication can replace its ephemeral staging addresses.
+    bool bind_publication_stage(ggml_backend_memory_lease_t lease);
     ggml_tensor * publication_tensor(size_t layer, bool value, uint32_t snapshot) const noexcept;
     ggml_tensor * staging_tensor(size_t layer, bool value, uint32_t snapshot) const noexcept;
+    // Publish a complete produced plane with one boundary when its physical rows are packed.
+    bool publish_staged(ggml_context * ctx, ggml_cgraph * graph, size_t layer, bool value,
+            const std::vector<ggml_tensor *> & copies) const;
     bool begin_staged_capture(llama_recurrent_spill_identity identity, uint32_t tokens);
     bool stage_ready();
 

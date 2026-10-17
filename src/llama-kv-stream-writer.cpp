@@ -69,6 +69,40 @@ struct llama_kv_stream_writer::implementation {
 // The cached executor drains and retires before roots in the shared scratch context are released.
 llama_kv_stream_writer::~llama_kv_stream_writer() = default;
 
+bool llama_kv_stream_writer::requirements(ggml_backend_buffer_type_t type, const ggml_kv_stream_shape & shape,
+        size_t max_rows, size_t & bytes) {
+    if (!type || !max_rows || max_rows > INT32_MAX || shape.page_tokens <= 0) return false;
+    ggml_kv_stream_layout row;
+    if (ggml_kv_stream_layout_make(shape,1,row).status != ggml_kv_stream_status::success) return false;
+    const uint64_t dim=uint64_t(std::max(shape.head_dim_k,shape.head_dim_v));
+    const uint64_t maximum=std::min(uint64_t(INT32_MAX),uint64_t(SIZE_MAX/sizeof(float)));
+    if (dim > maximum/max_rows || uint64_t(shape.heads) > maximum/max_rows/dim) return false;
+    const size_t rows=std::min(max_rows,size_t(shape.page_tokens));
+    ggml_kv_stream_layout layout;
+    if (ggml_kv_stream_layout_make(shape,rows,layout).status != ggml_kv_stream_status::success) return false;
+    size_t encoded=0;
+    for (bool value : {false,true}) {
+        ggml_tensor tensor{};
+        tensor.type=ggml_type(value ? shape.type_v : shape.type_k);
+        tensor.ne[0]=(value ? shape.head_dim_v : shape.head_dim_k)*shape.heads*int64_t(rows);
+        tensor.ne[1]=tensor.ne[2]=tensor.ne[3]=1;
+        tensor.nb[0]=ggml_type_size(tensor.type);
+        tensor.nb[1]=tensor.nb[2]=tensor.nb[3]=value ? layout.v_bytes : layout.k_bytes;
+        const size_t allocated=ggml_backend_buft_get_alloc_size(type,&tensor);
+        if (allocated < tensor.nb[1]) return false;
+        encoded=std::max(encoded,allocated);
+    }
+    if (encoded > SIZE_MAX-127) return false;
+    const size_t index_offset=(encoded+127)/128*128;
+    ggml_tensor index{};
+    index.type=GGML_TYPE_I64; index.ne[0]=int64_t(rows); index.ne[1]=index.ne[2]=index.ne[3]=1;
+    index.nb[0]=sizeof(int64_t); index.nb[1]=index.nb[2]=index.nb[3]=rows*sizeof(int64_t);
+    const size_t indices=ggml_backend_buft_get_alloc_size(type,&index);
+    if (indices < index.nb[1] || indices > SIZE_MAX-index_offset) return false;
+    bytes=index_offset+indices;
+    return true;
+}
+
 // Use actual backend padding costs, then reserve aligned indices after both possible encoded layouts.
 std::unique_ptr<llama_kv_stream_writer> llama_kv_stream_writer::create(ggml_backend_t backend, ggml_backend_buffer_t buffer,
         size_t scratch_bytes, const ggml_kv_stream_shape & shape, size_t max_rows) {

@@ -1,0 +1,1029 @@
+# Qwen3.8 DFlash2 Adaptive KV Streaming Roadmap
+
+Enable the separate Qwen3.8-27B DFlash2 drafter alongside the existing target KV streaming and shared phase arena. Preserve upstream block drafting, attention masks and acceptance semantics. Keep bounded draft sliding-window KV resident; extend target streamed verification from TG4 through TG8.
+
+Status: PF0-PF6 are complete for the qualified RTX 5070 Ti/head-256 Qwen target configurations recorded below. D6's full-length non-UVM anchor gate is met, including prefill, verification and recovery. Both PF6 full sweeps pass; the native UVM numerical control matches the streamed full-context output. D7a/D7b lifecycle and startup-safety qualification pass for the recorded profile; D7c's current-runtime comparison sweep and sustained qualification remain in progress. Older-device execution remains a separate follow-up. This does not qualify every upstream KV pair, model geometry, backend or physical budget. Updated: 2026-10-14. Source baseline: `feature/adaptive-kv-stream-v2` at `1240f34c7744`, rebased onto upstream `10a60cf30`; current D7 closeout baseline is recorded below. Development branch: `feature/adaptive-kv-dflash2`. These stages do not renumber existing consumer, MTP, Gemma or attention-port stages.
+
+Saving this plan does not start implementation, download models, change branches, stop production or authorize commits. Each lettered stage below is a reviewable implementation/test unit. Stage completed work and its progress entry for user review.
+
+## Scope and acceptance
+
+The first pairing is the current Unsloth Qwen3.8-27B `UD-IQ4_XS` target and a matching Qwen3.8-27B DFlash2 GGUF sidecar. Start artifact qualification with Q4_K_M sidecar weights; pin the exact filename, revision and checksum in D1. File size is not proof that actual device allocations fit.
+
+Initial hardware profile: one serial request, one CUDA GPU, Flash Attention, GPU KV offload, target Q8_0 K / Q4_0 V and batch/ubatch 256/256. Disable UVM for physical-budget qualification. Use draft F16/F16 as the initial native correctness control; qualify independent draft Q8_0/Q4_0 before using it for deployment comparisons. Unlike embedded streamed MTP, these independent caches do not require matching target/draft KV types.
+
+Acceptance requires:
+
+- Draft lengths 1-7 and every target verification/replay width TG1-TG8.
+- Native context capacity 262144, with physical fit and context-end behavior measured rather than assumed.
+- Bounded resident draft KV, ordinary stock draft SWA attention and no permanent draft reservation in the target ring.
+- One declared arena for participating target/draft KV, temporary compute and staging. Report weights, persistent target recurrent state, host storage and native driver/executable allocations separately.
+- Stock-order streamed target arithmetic, matched-mode numerical qualification and preserved current no-speculation/embedded-MTP behavior.
+- Correct serial requests, truncation, window wrap, prompt-state restoration, cancellation and failure cleanup.
+
+Initial non-goals: Gemma/Muse target execution, draft KV streaming, DFlash2 media inputs, parallel slots, multi-GPU, DSpark/Eagle3, changing the selector, and probabilistic rejection-sampling qualification. Preserve ordinary non-streaming behavior for other modes. Other accelerator streaming adapters and actual older-card qualification remain separate work.
+
+## Verified model profile
+
+Published drafter settings, to be checked against the selected GGUF:
+
+| Property | Qwen3.8-27B DFlash2 |
+| --- | --- |
+| Block | Eight positions: anchor plus at most seven proposals |
+| Draft layers | Five, all sliding-window attention |
+| Window | 2048 positions per layer |
+| K/V head dimension and KV heads | 128 and eight KV heads |
+| Query heads | 32 |
+| Publisher target feature indices | Zero-based 5, 19, 33, 47, 61 |
+| Draft attention | Non-causal block attention with its trained SWA mask |
+| Drafting | One block forward, then selector path extraction |
+
+Sources: [publisher configuration](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/blob/main/config.json) and [GGUF model card](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2-GGUF/blob/main/README.md). D1 pins immutable artifact references.
+
+The converter writes block size, SWA, causal and selector metadata. It adds one to publisher feature indices because llama.cpp extracts layer inputs rather than indexed layer outputs. Test this mapping; do not hardcode the five indices in common memory code.
+
+The target still owns 16 full-attention KV histories and 48 recurrent blocks. Do not add five auxiliary layers to its homogeneous pool: the draft has independent 128-dimensional windowed caches, unlike the target's 256-dimensional full-history caches.
+
+### Widths and microbatches
+
+For requested draft length D, upstream predicts D+1 positions, capped by the trained block size. Confidence cutoff can return fewer proposals. Target verification processes the anchor plus the returned proposals; rejection and context-end handling produce intermediate widths.
+
+Qualify TG1-TG8, not only powers of two. Keep each complete non-causal draft block in one microbatch; validate its batch/ubatch limits before execution. Do not implement TG8 as two TG4 forwards: that changes draft attention, dynamic convolution and selector behavior, and can change target recurrent arithmetic.
+
+Prefill feature injection can process 256-row batches but does not run draft attention. It is a separate workload, not TG256 block prediction.
+
+## Original implementation gaps (baseline before D1-D6)
+
+| Area | Current boundary | Extension |
+| --- | --- | --- |
+| Server admission | Streaming speculation admits only embedded draft-mtp | Admit this DFlash2 pairing after its complete path passes |
+| Rollback | Host spill tied to one auxiliary MTP layer and depth at most three | Derive rollback from target recurrent state and verification workload |
+| Streamed decode | Model/session admission, workspace queries and CUDA resume stop at four query rows | Capability-driven target widths through eight |
+| Phase planning | Four-entry verification/catch-up arrays and MTP-specific phases | Measure admitted operation/width without equating all speculation with MTP |
+| Draft workspace | Live borrowing tied to `mtp_publish_host` | Separate serial consumers can borrow without auxiliary host-backed MTP KV |
+| Feature extraction | Enabled by speculative initialization | Include required outputs in construction/reservation and retain them across handoff |
+| Draft KV | Stock SWA cache owns separate backend allocations | Bounded persistent arena leases preserve stock cache semantics |
+
+The upstream DFlash2 driver is the algorithmic reference. Do not rewrite its convolution, selector, projections or trained mask to simplify allocation. Missing support must not trigger an unbudgeted second workspace or a full-history target decode gather.
+
+## Common contracts for three model families
+
+Reuse existing owners, consumers, transitions, views and backend operations. Extend the smallest descriptors needed for these cache roles:
+
+| Cache role | Ownership | Examples |
+| --- | --- | --- |
+| Streamed full-history producer | Owns authoritative history; publishes writes; device pages are reconstructible | Qwen target; future Gemma/Muse full caches |
+| Bounded resident producer | Owns window-sized device storage with stock position/truncation semantics | Qwen/Muse DFlash2; future target SWA |
+| Shared read-only consumer | Retains source identity/generation and leases; adds no KV history | Future Gemma assistant |
+| Independent full-history auxiliary producer | Owns a host history and temporarily borrows the ring | Existing embedded Qwen MTP |
+
+A serial workload describes its operation, cache access, input/query width, retained outputs and rollback needs. Distinguish target prefill, verification, draft feature injection and block prediction. Eight-row drafting is not prefill merely because eight exceeds four; injection occurs during both prefill and verification.
+
+Make measurements extensible to Muse's TG16 and Gemma's geometry without admitting either prematurely. Backend support depends on actual width, dimensions, KV types, masks and launch resources. Do not replace every literal four with sixteen or introduce a model registry for this port.
+
+Common code owns policy and lifetimes; model adapters describe feature/cache relationships; backends execute kernels, copies and completion. Keep common ownership tests usable without CUDA. Reuse [the Gemma plan](GEMMA4_ADAPTIVE_KV_ROADMAP.md) for future shared-reader and mixed-attention requirements.
+
+### Shared bounded resident KV consumer
+
+D5a implements one backend-neutral bounded resident KV consumer, not a DFlash2-specific allocator. It wraps existing stock cache storage and exposes exact requirements, persistent regions, identities, leases and completion to the arena owner. The stock cache keeps responsibility for cells, logical positions, masks, writes and truncation; this consumer does not reimplement SWA attention or infer acceptance from a memory operation.
+
+Derive requirements from the cache group's actual layer IDs, K/V dimensions and head counts, quant types, window, microbatch headroom, padding and alignment. Do not bake in five layers, a 2048-token window or 128-dimensional heads. Resident KV survives all participating phase layouts. Keep its region stable when possible; relocation requires drained readers and explicit content preservation, not reconstruction from only the newest features.
+
+| Responsibility | Shared implementation | Model-specific behavior |
+| --- | --- | --- |
+| Capacity and byte accounting | Checked geometry, bounds, stock sizing inputs and exact arena requirements | Actual window, cache groups, geometry and admitted full-size SWA behavior |
+| Storage lifetime | Persistent leases, content identity, completion, rebind and teardown | Which phases write or retain the cache |
+| State lifetime | Ownership hooks for reset, save/restore and validation | Stock cell/position updates and which suffix is discarded |
+| Attention and writes | Existing backend operations over valid leased storage | Causal target attention versus non-causal draft blocks and feature injection |
+| Read-only sharing | Stable source identity and generation-valid read leases | Gemma assistant source mapping and fixed drafting position |
+
+Use synthetic layouts for both profiles in common tests: Qwen DFlash2's window 2048, dimension 128 and eight KV heads; Gemma target SWA's window 1024, dimension 256 and sixteen KV heads. Vary layer count, KV encodings, microbatch, padding and alignment independently. These are infrastructure fixtures, not Gemma model qualification.
+
+The next Gemma G3a stage reuses this consumer for its target SWA group. Gemma still needs mixed SWA/full-cache coordination and separate causal-mask, truncation and assistant-reader tests. Its assistant aliases target caches rather than creating another bounded cache. Muse can later use the same consumer for both its target SWA and its DFlash2 draft SWA groups, each with its own identity.
+
+## Execution and state lifetime
+
+```mermaid
+sequenceDiagram
+    participant T as Target with streamed KV
+    participant H as Retained target features
+    participant I as Draft injection graph
+    participant K as Resident draft SWA KV
+    participant D as Draft block graph
+    participant A as Acceptance and recovery
+    T->>H: Preserve selected features during prefill
+    H->>I: Inject prompt features in bounded batches
+    I->>K: Write windowed KV
+    loop Speculative rounds
+        D->>K: Read retained prefix and temporary block rows
+        D->>D: Predict anchor plus mask block
+        D->>A: Return selector proposals
+        A->>K: Retire temporary prediction suffix
+        T->>T: Verify anchor and proposals with TG1-TG8
+        T->>H: Preserve features before scratch reuse
+        H->>I: Inject rows in upstream process order
+        I->>K: Write provisional verification history
+        A->>A: Select accepted prefix and correction
+        A->>T: Truncate or restore and replay recurrent state
+        A->>K: Truncate rejected injection rows
+    end
+```
+
+Confirm callback/acceptance timing in the server fixture. Verification can inject rows later rejected; injected history is not automatically accepted history. Replay must not double-commit rows or consume features from a rejected branch.
+
+Persistent injected KV survives phase changes even though graph scratch is recyclable. Temporary mask rows and injected feature rows are different content generations at overlapping positions. SWA headroom must prevent speculative writes from destroying a prefix needed after rejection.
+
+Keep upstream's host feature path initially. Copy or retain required outputs before draft work reuses target scratch. Optimize this transport only after exact ordering and lifetime tests pass.
+
+## Memory budget
+
+```mermaid
+flowchart TD
+    P["One declared device arena"] --> K["Persistent bounded draft SWA KV"]
+    P --> R["Adaptive target resident KV and ring"]
+    P --> W["Phase workspace and bounded staging"]
+    W --> F["Target prefill"]
+    W --> V["Target verification and replay"]
+    W --> I["Draft injection"]
+    W --> D["Draft block prediction"]
+    H["Authoritative target KV in pinned RAM"] --> R
+```
+
+For every admitted phase:
+
+```text
+arena capacity >= preserved bounded draft KV
+                + target KV working set required by that phase
+                + phase graph, attention and writer workspace
+                + live handoff and rollback staging
+                + alignment and owned metadata
+```
+
+Only mutually exclusive lifetimes share storage. Reserve measured maxima rather than sums while preserving persistent regions. On transition, resize and repartition target KV to use available space; avoid stranded scratch or unnecessary ring growth.
+
+Stock serial SWA capacity is padded to 256 from `min(n_ctx, window + n_ubatch)`. Window 2048 and ubatch 256 normally produce 2304 positions. Five layers with eight KV heads and dimension 128 give these illustrative encoded-data sizes:
+
+| Draft KV | Encoded data at 2304 positions |
+| --- | ---: |
+| F16/F16 | 45 MiB |
+| Q8_0/Q4_0 | 18.28125 MiB |
+
+These are calculations, not total allocation measurements. Check tensor/buffer alignment, metadata, empty full-cache groups and scratch in D1/D5. Different ubatch or full-size SWA changes the requirement. Initially reject full-size SWA for the bounded-cache profile.
+
+Sidecar weights, feature buffers, selector/convolution workspace, rollback snapshots and native graph resources may dominate extra memory. Measure them before claiming fit or speedup. Report permanent VRAM increases or quantization changes for user approval. Do not introduce an arbitrary safety reserve or silently reduce target layers, context or batch size.
+
+## Dependencies
+
+```mermaid
+flowchart TD
+    D1["D1 Artifacts and controls"] --> D2["D2 Common workloads and cache roles"]
+    D2 --> D3["D3 Target TG1-TG8"]
+    D2 --> D4["D4 Recurrent rollback"]
+    D2 --> D5["D5 Draft KV and phase arena"]
+    D3 --> D6["D6 Live DFlash2 integration"]
+    D4 --> D6
+    D5 --> D6
+    D6 --> D7["D7 Lifecycle and performance"]
+    D7 --> G["Gemma target and assistant"]
+    G --> M["Muse target and TG16 DFlash2"]
+```
+
+D3-D5 have independent tests/commits; keep live admission disabled until D6. A fitting D=3 pairing is the first live checkpoint. D=7 and native-context acceptance are required for completion.
+
+## D1 Artifacts and ordinary controls
+
+| Stage | Boundary | Required evidence |
+| --- | --- | --- |
+| D1a | Pin artifacts and inspect converted block, SWA, feature-layer, tokenizer and selector metadata. | Valid/missing/malformed/overflow fixtures, correct index mapping, wrong sidecar/incompatible target rejection. `ctx_other` does not imply KV aliasing. |
+| D1b | Run ordinary non-streaming DFlash2 with D=1,3,7 at fitting contexts; trace its separate workloads. | Actual widths, masks, stock kernels, features, lattice, proposals, logits and visible SWA rows. Measure weights, KV, compute, features, rollback and native resources. |
+| D1c | Establish matched-control fixture and physical-fit ledger before choosing the arena layout. | Independent runs with pinned settings; changed-block negative tests. Report whether the intended 16 GiB/native-context profile is feasible without UVM. |
+
+Retain native controls with the same artifacts and KV encodings; published performance is not local evidence.
+
+## D2 Common workloads and cache roles
+
+| Stage | Boundary | Required TDD evidence |
+| --- | --- | --- |
+| D2a | Describe verification widths, injection rows, prediction blocks and rollback independently of auxiliary MTP layers. Define bounded-cache requirements without model-specific geometry; reuse phase/measurement infrastructure. | Current paths unchanged; producer/reader roles; independent cache generations; distinct Qwen/Gemma bounded groups; read-only aliases do not add storage or publish; extensible TG16 metadata without false kernel admission. |
+| D2b | Admit actual workspace, feature/output lifetimes and capabilities for every workload. Validate block microbatch limits. | Exact-fit/one-byte-short, overflow, missing kernel versus quota shortage, invalid ubatch and width eight not inferred as prefill. Any allowed fallback must be budgeted. |
+
+Do not add user flags for draft cache count or force five draft layers into the target ring policy.
+
+## D3 Target TG1 through TG8 span and resume attention
+
+| Stage | Boundary | Required TDD evidence |
+| --- | --- | --- |
+| D3a | Extend checked geometry, launch/workspace queries and selected-pair dispatch to widths 5-8 using stock family selection. | Widths 1-8, odd widths, tails, compiled-code and device/resource limits, overflow and transactional failure. Existing TG1-TG4 budgets unchanged. |
+| D3b | Extend wide spanned MMA and resumed SIMT execution through TG8, preserving stock arithmetic and pipeline. | Native comparisons for resident/mixed/wrapped layouts, odd widths, history tails, multiple query tiles and short-workspace rejection. No context-sized gather or query-batch splitting. This completed checkpoint does not qualify progressive MMA execution. |
+| D3c | Implement progressive MMA resume with raw accumulator checkpoints at complete K-tile boundaries. Preserve native Stream-K destination/split order and finalize each slice once. | Failing tests first for checkpoint/resume, delayed copies, history larger than the ring and wave boundaries. Checked, bounded scratch sizing; exact-fit/one-byte-short and overflow rejection; no premature normalization or final reduction. Measure added scratch before common-budget integration. |
+| D3d | Qualify progressive attention correctness, lifecycle safety and routing overhead before target integration. | Stock-equivalent comparisons across TG1-TG8 and admitted families, resident/mixed/wrapped layouts, delayed transfers, cancellation, stale metadata and exactly-once finalization. CUDA memory/synchronization sanitizers, immutable stock snapshots and narrow-width regressions. Measure equal-residency overhead outside unit tests against the 5-10 percent goal; distinguish actual older-device execution from compile/plan coverage. |
+| D3e | Connect new widths through session/model admission, encoded writes, scratch planning and capture. | End-to-end synthetic widths, append/repartition/cancellation, malformed spans, canaries, CUDA sanitizers, immutable ordinary snapshots and current MTP regressions. Budget all admitted target widths, not only TG8. Keep embedded MTP's separately qualified width limits unchanged. |
+
+The former D3b scope is split into D3b-D3d; the former D3c integration stage is now D3e. Complete these stages in order. D3 completion qualifies target attention infrastructure, not live DFlash2 drafting; D4-D7 remain required.
+
+Require byte identity where the matching native family already has exact qualification. Preserve accepted family-specific older-architecture bounds; investigate new differences without silently relaxing thresholds. Measure kernel overhead outside unit tests, retaining the prior 5-10 percent routing-overhead goal at equal residency.
+
+## D4 Recurrent rollback independent of draft KV
+
+| Stage | Boundary | Required TDD evidence |
+| --- | --- | --- |
+| D4a | Select host-spilled target rollback from verification requirements, allowing zero auxiliary cache layers. | Depths 1-7, depth-zero baseline, embedded MTP depths 1-3 and actual history reservation. Unsupported depth fails before execution. |
+| D4b | Extend bounded device staging and host snapshot lifecycle for TG1-TG8; reuse spill/publication infrastructure. | Zero/partial/full acceptance, current versus candidate state, pending D2H, stale generation, stage wrap, failed copy, cancellation and exact restore/replay. Report device/pinned-host growth before choosing larger staging. |
+| D4c | Qualify rollback at page/window boundaries and long prefixes. | Matching-mode state/logits, repeated rejection, context-end headroom and no accumulation of obsolete snapshots across rounds. |
+
+A pre-round checkpoint/replay path may serve as an explicitly labeled diagnostic control, not a silent replacement for the admitted fast rollback path.
+
+## D5 Resident draft cache and shared phase arena
+
+| Stage | Boundary | Required TDD evidence |
+| --- | --- | --- |
+| D5a | Implement the common bounded resident KV consumer and attach stock DFlash2 SWA storage. Keep capacity/lifetime logic model-neutral and retain stock cells, positions and masks. | Synthetic Qwen/Gemma geometry, varying groups/quants/headroom/alignment, context-independent byte bound, exact-fit/canaries, persistent content across rebind, cancellation/reset/save-restore hooks, read-only source lifetimes, no unused full-cache tensor storage and this profile's full-size SWA rejection. |
+| D5b | Let separate serial draft contexts borrow measured scratch without `mtp_publish_host`. Register injection/block workloads. | CPU/mock then CUDA handoff, retained outputs, scheduler replacement, graph retirement, lease lifetimes, pending publication and failed rebind recovery. No unbudgeted separate-workspace fallback. |
+| D5c | Fit persistent draft KV, phase-specific target/draft scratch, staging and target KV grants in one parent. | Low/high/low contexts, all widths, phase minima, correct target pool shrink/grow/repartition, preserved cache bytes and prepared copy resources. No stale captured addresses. |
+
+Draft weights stay resident outside the parent initially. Deferred weight loading or per-round eviction requires a separate measured tradeoff and approval.
+
+## D6 Live DFlash2 integration
+
+| Stage | Boundary | Required TDD evidence |
+| --- | --- | --- |
+| D6a | Add construction-time feature extraction and connect upstream injection/selector calls to explicit handoff. | Missing/stale/permuted features, index conversion, 256-row injection, text-position transport, bounded outputs and intact non-causal blocks. Text tests do not qualify media. |
+| D6b | Admit the narrow server pairing, first D=3 then D=7; preserve temporary-suffix removal and acceptance/replay ordering. | Real D=1/3/7, all returned widths, empty proposals, partial/full/zero acceptance, correction, provisional writes and replay. No second target pool or embedded MTP head allocation. |
+| D6c | Extend strict numerical fixture and serial server state integration. | Independent native/streamed comparisons of features, lattice, proposals, logits, logical KV and recurrent state. Inject one-bit/mask/order/publication faults. Existing embedded-MTP checks pass. |
+
+Force acceptance patterns in lifecycle fixtures and run ordinary acceptance in server controls. Streamed TG8 versus no-speculation TG1 is not an exactness oracle: widths/history must match. A resident-only run cannot qualify streaming.
+
+Keep short-prefix native controls physically resident when they fit. A full-context native control may exceed this card's VRAM even when the streamed pairing fits; a separately labeled UVM control can qualify arithmetic at that length if it retains the same GPU kernel and execution mode. Its timing and residency are not the non-UVM physical-budget benchmark. If no matching control is feasible, report the numerical coverage limit rather than substituting a different-family CPU result or claiming full-context bit identity.
+
+## PF Bounded prefill footprint and performance
+
+This workstream addresses the open D6 physical-fit gate after the completed D5 ownership/integration checkpoint and generalizes the bounded-prefill implementation to configurable batch/microbatch limits and KV types. It also implements the relevant bounded-prefill portion of consumer follow-up 5.8; it does not mark all of 5.7-5.9 complete or renumber D5-D7. Complete numerical and memory boundaries first, measuring performance at each step, then tune the resulting pipeline. Saving this roadmap does not begin implementation or complete D6.
+
+### Measured motivation and attribution
+
+At context capacity 262144, the target bootstrap phase rejects a 1536 MiB parent because its minimum is 1704159488 bytes, or 1625.213 MiB. This is a prefill/startup reservation, not steady-state decode usage. The larger 1728 MiB probe records graph compute of 1260677376 bytes and strict attention gathering of 436207616 bytes. The 16384-context control records graph compute of 128215296 bytes. These graph measurements differ by exactly 4608 bytes per context token.
+
+| Component | Full-context bytes / MiB | Current scaling | Planned replacement |
+| --- | --- | --- | --- |
+| Stock MMA FP16 K and V conversion extras | 1073741824 / 1024 | Two FP16 planes, each 256 features x four KV heads x context tokens | Bounded conversion tiles with stock rounding |
+| F16 attention mask for 256 queries | 134217728 / 128 | Context tokens x microbatch queries | Bounded mask tiles or qualified compact causal description |
+| Remaining graph workspace | 52717824 / 50.276 | Residual after the two known terms, not yet tensor-attributed | Audit liveness; retain initially rather than promise further savings |
+| Encoded strict-prefill gathering buffer | 436207616 / 416 | One full layer of Q8_0 K and Q4_0 V, reused across layers | Resident/ring wave execution without a full-layer destination |
+| Minimum target KV pool | 7241728 / 6.906 | Minimum page geometry, not a performant long-context pool | Keep separately budgeted elastic target KV |
+| KV writer scratch | 32768 / 0.031 | Current fixed scratch | Preserve and revalidate bounds |
+
+The stock allocation helper explicitly appends full FP16 planes for MMA/tile attention. The mask shape and these terms account for the observed graph-size delta exactly, but PF0 must verify the actual peak tensor lifetimes, scheduler copies and native temporary allocations. Do not present the residual as a proven universally constant allocation. The theoretical context-linear opportunity is 1568 MiB at this profile; it is not a measured net saving after replacement staging/checkpoint memory.
+
+The phase arena already returns prefill-only storage to the target KV pool during decode. Reducing prefill memory within the same parent does not automatically add another 1568 MiB to the decode pool. The primary benefit is a lower startup/prefill minimum and better full-context fit. Compare decode grants explicitly after sidecar attachment; draft weights, current recurrent state and driver/executable allocations remain outside this arena.
+
+### Scope and invariants
+
+- The first regression anchor is the admitted CUDA Qwen profile: serial text, Q8_0 K / Q4_0 V, b/ub 256/256 and Flash Attention. The implementation must not specialize common sizing or execution contracts to that batch or quant pair. Generalized batch/microbatch and independently selected K/V types are part of PF acceptance, gated by actual compiled, device-valid counterparts for the stock-selected family. Disable UVM for physical-fit measurements. Draft KV remains independently bounded as in D5. Model, device, parallel-request and multi-GPU expansion remain outside this workstream.
+- A constant footprint means a checked upper bound independent of populated/context-capacity token count for fixed model geometry, microbatch ceiling, staging capacity and device resources. Native launch choices may vary with history; reserve a bounded maximum rather than forcing a different launch to keep an exact byte count identical. Host KV, host metadata and work/transfer volume may still grow with context.
+- Retain the original logical query batch, native family, column grouping, KV tile sizes, Stream-K destinations/splits, FP16 conversion rounding, mask values, softmax recurrence and final fixup/reduction. Do not run a 256-row prefill as independent TG8 calls, independently normalize chunks, merge new partial softmax results, change precision or substitute a different kernel family to fit.
+- Pause only at qualified native tile boundaries. Save and restore raw accumulator bits and required pipeline state; retain native last-tile/finalization behavior. Copy/conversion may run ahead, but attention traverses the original logical tile order within each native work partition.
+- Publish new KV before its reader begins. Retain resident/ring/cache generations and prepared resources until the last actual consumer completes. A prefetched slot is not reusable merely because its H2D copy finished.
+- Common owners describe capacity, leases, producer/consumer completion and scheduling. Backends describe supported geometry, stock-equivalent execution, conversion, mask delivery and exact workspace requirements. Reuse the existing private execution/copy contracts; do not put CUDA events or Qwen constants into common policy.
+- A different-memory fallback must be planned and validated before launch. A strict-gather diagnostic may remain available in a separate validated configuration; no silent full-context gather/conversion fallback in a bounded grant. Reject unsupported mask or kernel requirements with a concrete reason before submission.
+- Preserve existing TG1-TG8 decode and embedded-MTP paths. Shared source edits need explicit decode regression tests; reduced memory alone is not proof of unchanged performance.
+
+### Generalized batch and KV configuration
+
+Keep upstream's distinction between logical batch limit (`-b`) and physical microbatch limit (`-ub`). Use the effective limits after ordinary context normalization, not raw CLI values or a new normalization rule. A logical batch can cover several microbatches; bounded attention uses each actual microbatch's query count while reservations cover its admitted maximum. Do not artificially split a microbatch to force it into the existing TG8 path. Keep output retention, recurrent rollback and feature injection sized for their own workloads rather than assuming that all use the prefill width.
+
+The common plan takes independent K/V types, head geometry, effective batch/microbatch ceilings, cache padding, backend alignment, selected native family and staging capacity. Use GGML row/block traits and actual backend allocation quotes, checked before arithmetic. Derive encoded K and V strides independently; do not assume equal block sizes, equal compression, a fixed bytes-per-token value or that the 32 KiB writer scratch is valid for every configuration. FP16 conversion capacity depends on which input planes the selected native kernel actually converts; F16 input need not acquire an unnecessary conversion plane. Mask/checkpoint capacity depends on admitted query tiles and native work partitions. Changing any plan-defining type, width or geometry invalidates retained plans/captures and requires re-admission before writes.
+
+Reconcile all boundaries, not just the attention kernel: SET_ROWS/writer production, host/page layout, ring sizing, conversion, mask delivery, scratch queries, GGML external-output allocation, scheduler reservation, shared-arena phases and serial sidecar construction. Remove blanket 256/256 or Q8_0/Q4_0 admission restrictions only after these boundaries pass for the requested profile. Draft feature injection follows its actual admitted microbatch; complete non-causal draft blocks must still fit their own effective batch/microbatch limits. Report that semantic limit instead of silently splitting a block. Target and independent DFlash2 draft KV types need not match; keep the existing embedded-MTP compatibility rules unless separately qualified.
+
+Use a capability matrix rather than an unconditional promise of every Cartesian pair. Enumerate the upstream CLI cache types (currently F32, F16, BF16, Q8_0, Q4_0, Q4_1, IQ4_NL, Q5_0 and Q5_1) and ask separately whether the backend provides the native family, exact converter/writer, bounded span/resume executor and valid launch resources. Existing encoded readers cover most, but not IQ4_NL; a native converter alone does not establish a bounded counterpart. Missing readers/counterparts require implementation and qualification before admission, or an explicit unsupported result. Common size accounting must still handle all upstream-valid types without a pair-specific formula. Honor both all-quants and selective-pair builds; name the missing stage/type/family rather than reporting every failure as a missing build flag.
+
+Do not change the original stock family/tuning for a requested pair or width to simplify this implementation. Exactness is relative to the matching stock execution for that same configuration, not Q8_0/Q4_0 or 256/256 output. Changing KV quantization or `ub` can legitimately change model output even when the streamed implementation is correct.
+
+The bounded VRAM target is constant with respect to context length for a fixed admitted configuration. It can legitimately increase with `ub`, encoded row size, query/head geometry or other declared workload requirements; no one-size arena minimum is promised. Stock tensor quant blocks, cache/page padding and query tiles are distinct alignment constraints. A fixed number of staging bytes must cover complete native tiles for both K and V, otherwise preflight reports the exact shortage rather than overrunning or changing arithmetic.
+
+### Pipeline to qualify
+
+```mermaid
+flowchart LR
+    H[Authoritative host KV] --> U[Prefetch bounded ring wave]
+    R[Resident KV prefix] --> C[Stock-rounded bounded conversion]
+    U --> C
+    M[Exact mask tile] --> A[Continue native attention state]
+    C --> A
+    A --> S[Raw checkpoint if another wave is needed]
+    S --> A
+    A --> F[Native final fixup and reduction once]
+    A --> E[Completion permits slot reuse]
+    E --> U
+```
+
+The diagram is a lifetime/data-flow contract, not a new attention reduction. Independent copies and conversions can overlap current computation. Reuse a converted wave across its consuming query tiles before overwriting it; avoid multiplying H2D or conversion work by query tile count. Checkpoint memory must be bounded by admitted query tiles and native work partitions, not allocated per historical KV tile.
+
+### Reviewable TDD checkpoints
+
+| Stage | Implementation boundary | Required evidence before closing |
+| --- | --- | --- |
+| PF0 Baseline and allocation attribution | Pin current/native controls; expose test-side tensor allocation and peak-lifetime accounting, including backend extras and resources outside the parent. Audit batch normalization and every pair/width-specific admission rule; save numerical, memory, prefill and decode baselines. | Reproduce 16K and 262K size accounting; distinguish capacity from used tokens, prefill from decode and target from attached sidecar. Identify allocator padding/copies and native pool high-water marks. Build the batch/quant capability matrix and capture expected unsupported cases before changing gates. Existing short controls pass. |
+| PF1 Bounded conversion, strict gather retained | Extend stock-compatible wide-query planning/execution for configurable prefill ceilings, initially through the MMA counterpart and admitting other selected families only when qualified. Consume bounded converted tiles with type-specific stock rounding; retain full encoded gathering. Register actual external scratch instead of the above-four-query native-extra rule. | First fail on unsupported width/pair, full-plane allocation, inadequate grants or conversion mismatch. Qualify actual full/short microbatches, multiple query tiles, native launch/split/fixup order, no-conversion F16 and independent K/V geometry. Keep gather/masks unchanged. Stock-equivalent conversion tests, all-type accounting and existing TG1-TG8 controls pass without an unbudgeted fallback. |
+| PF2 Progressive ring prefill and event-based lifetime | Remove the full encoded gathering destination. Consume resident plus bounded ring waves with PF1 native continuation; derive both planes/page capacity from actual KV types. Extend writer/SET_ROWS admission to effective microbatch ceilings. Replace host waits only where completion dependencies prove safe reuse. | First fail on unavailable/overwritten waves, writer-width overflow, quant-block misalignment, unsafe conversion reuse or boundary/finalization errors. Test asymmetric K/V types, history larger than the ring, mixed/wrapped layouts, short tails, delayed producer/copy/consumer, cancellation and retry. Match controls and bound copies/conversion across query tiles; common and CUDA safety tests pass. |
+| PF3 Bounded mask delivery | Remove context-by-query GPU mask allocation/copy for variable microbatch widths. Preserve exact values through qualified compact metadata or bounded explicit tiles, including stock padding. Keep logical semantics in the cache/model adapter. | First fail on allocation growth or a changed mask bit. Cover padded tails, positions/cache holes, serial prompt reuse, non-power-of-two widths and short final batches. Reject unsupported custom paths before launch. GGML must not silently upload a full mask. Mask/state/output and lifetime tests pass. |
+| PF4 Shared-arena/preflight integration and generalized admission | Include configuration-derived staging, conversion, writer, checkpoint, mask and native extras in every admitted phase. Reserve checked maxima using the same requirements as execution; keep persistent draft KV/stage disjoint. Replace blanket batch/pair gates with qualified capabilities. | Exact-fit/one-byte-short per admitted configuration, overflow, stale captures, no second-buffer fallback, low/high/low phases and prepared-resource failures. Test differing logical/physical batch limits and independent target/draft KV. Non-UVM 262144 anchor pairing fits prefill/verification/recovery. Report peak VRAM/decode grant and any other configuration's real capacity limits; startup alone is not a pass. |
+| PF5 Pipeline performance tuning | Tune waves/lookahead, batched retirement, conversion reuse, submission gaps and execution-island/capture reuse using actual row sizes and query tiles, not a Q8/Q4 or 256-row special policy. Keep event-based ownership from PF2 and original arithmetic. | Profile resident/onset/moderate/heavy streaming at the anchor and representative other batches/quants. Attribute H2D, conversion, MMA, checkpoint, waits and launches separately. Each change gets matched outputs and equal-budget throughput; keep only measured benefit or an explicitly accepted tradeoff. No percentage speedup promises. |
+| PF6 Numerical, memory and performance acceptance | Compare the generalized bounded-prefill implementation against unchanged matching strict/native controls, then resume D6/D7 gates. Publish tested batch/quant/device/build support and specific rejection reasons. | Complete the matrix below, bounded allocation evidence across contexts for each admitted configuration, safety suites and 256-token samples plus longer lifecycle controls. No-speculation, embedded-MTP and DFlash2 D=1/3/7 pass where admitted. Unsupported combinations and unqualified native-context/older-device cases stay explicit. |
+
+PF1 may need separate planner/contract and executor/qualification commits if it exceeds a reviewable change. Retain the checkpoint's acceptance gate rather than calling planner-only coverage complete. The same rule applies to new mask delivery contracts. Completed evidence is recorded below; planning alone does not complete a checkpoint.
+
+PF1 is split into PF1a (stock wide-query bucket planning and bounded MMA kernel qualification) and PF1b (common workspace declaration/ownership, GGML allocation recognition and actual strict-gather prefill routing). PF1a does not remove production FP16 reservations. PF1b must connect and validate all three before PF1 is complete; do not remove the allocator's native extras based only on a query width or unqualified external-workspace hint.
+
+### Numerical and boundary qualification matrix
+
+- Keep unchanged native/strict-gather controls compiled from the same pinned source/toolchain/options; compare identical input KV, mask, query width, positions, scale and native execution family. Compare immediate attention outputs before whole-model outputs. TG256 prefill versus TG8/TG1 is not a numerical oracle.
+- Batch coverage: start with effective b/ub pairs 128/64, 256/128, 256/256, 512/128, 512/256, 512/512, 1024/256, 1024/512 and 1024/1024, plus a valid non-power-of-two case after stock normalization. Verify logical batches spanning multiple microbatches and short final batches. Planner-only negative tests cover zero/overflow, requested limits normalized by stock, insufficient workspace and complete draft blocks that cannot fit; do not introduce new CLI semantics. A physically oversized but otherwise valid configuration must produce a precise quota/availability error rather than an unexplained 256-only restriction.
+- Query coverage: actual full/partial microbatches at every admitted ceiling, every stock query-column boundary and existing verification widths TG1-TG8. Do not compile an independent specialization for every numeric width if stock already uses a shared tile bucket. Qualify preserved stock family/column grouping instead. Unsupported widths/geometries remain explicit.
+- KV coverage: enumerate every upstream-valid K/V Cartesian pair for size/planner/capability tests. Run device conversion/writer tests for each admitted type and stock-order attention tests for each admitted pair. Include all nine Q8_0/Q5_0/Q4_0 pairs, F16/BF16 controls, F32 where native support exists, Q4_1/Q5_1 and asymmetric bit widths; IQ4_NL needs its own qualified bounded reader/counterpart or an explicit negative case. Missing selectively compiled pairs and missing device resources must not allocate a fallback. No quant gets a hidden fixed-size path.
+- Run the batch and pair axes separately at the anchor, then crossed corner cases (largest admitted ub, largest encoded planes, asymmetric pairs and short final batches) to catch coupled assumptions without requiring a full-context sweep for every Cartesian cell. This sampling rule does not replace pair-specific kernel correctness tests. Target and draft types are tested independently only within each mode's admitted semantics.
+- History coverage: just below/at/above native K-tile, 256-token page and staging-wave boundaries; large history requiring repeated reuse; first/last padded tile; resident prefix, all-streamed, wrapped ring and transition back to resident operation.
+- Deliberate faults: one-bit converted KV or mask mutation, swapped logical tiles, stale generation, early slot reuse, missing checkpoint state, duplicate normalization/finalization and failed completion. These must trip the corresponding tests rather than only producing plausible text.
+- Compare FP16 conversion and mask bits, attention outputs, retained target features, logits, logical accepted KV, serialized recurrent state, draft proposals and token-conditioned selector scores. Preserve existing canonical handling of top-k candidate permutations. Require bit identity for the initially exact-qualified matching family; existing legacy bounds are not permission to loosen a new prefill result.
+- Use CPU/mock tests for bounds, plan identity, source retention, completion ordering, cancellation and phase ownership; CUDA tests for conversion, pipeline state and native arithmetic. Use existing tests/fixtures, ASan/UBSan and CUDA memcheck/synccheck/racecheck where applicable; do not add timing assertions to unit tests.
+- When a physically resident full-context native reference cannot fit, use a separately labeled same-kernel UVM numerical control if feasible. Keep physical-budget/performance runs non-UVM. If neither control is feasible, report the coverage limit; successful short exact controls do not establish full-context exactness.
+
+### Memory and performance measurement rules
+
+Run focused points after each checkpoint before the full sweep: all-resident, streaming onset, moderate ring and heavy ring. Choose onset/ring points from actual active/resident/ring counts, not fixed labels that may become wrong after memory changes. Include 16K as the small control and 262144 as the capacity endpoint; reserve room for generated tokens inside the context.
+
+At PF6, reuse the existing realistic article source and sweep harness for 8K through 192K in 8K increments, then named 224K/248K/256K capacity points, with at least 256 generated tokens where capacity permits. Keep successful results and use new output directories. Use the same prompt IDs and generated-token budget for comparisons. Follow with longer continuations crossing page/repartition boundaries and rejection-heavy recovery.
+
+Report prefill throughput separately from target/draft decode throughput, acceptance, phase-transition cost, total GPU high-water mark, graph tensor workspace, conversion/gather/mask/checkpoint bytes, effective decode KV pool, persistent draft KV, publication staging, backend-native temporaries and host footprint. Count H2D/D2H/D2D bytes/calls, repeated conversion and CPU/device waits; Nsight instrumentation is separate from uninstrumented timings.
+
+Maintain two comparisons: equal declared parent with observed decode grants recorded, and independently maximum-fit parents for each configuration. Do not attribute a larger resident pool or changed acceptance to faster kernels. Auto-max must exercise graph instantiation and admitted recovery workloads with UVM disabled, not just startup. Short-context prefill and TG1-TG8 decode are explicit regression checks. Any statistically credible regression must be investigated, fixed or presented for user acceptance; noise from one short sample is not a performance verdict.
+
+Run the full context sweep for the anchor configuration; use focused resident/onset/moderate/heavy points for the additional batch/quant axes and crossed corners, extending sweeps when results expose a regression. Compare each configuration to its own stock arithmetic baseline. Publish requested and effective b/ub, target/draft KV types, admitted family and measured arena requirements with every result; a type or batch change can alter both output and the context where streaming begins.
+
+Completion means generalized configuration-derived sizing and capability admission are implemented, tested batch/quant profiles are documented, admitted prefill workspaces have context-independent upper bounds, the full-context anchor pairing fits real execution and matching-mode controls pass. It does not promise identical footprint across different microbatches/quants, every native pair having a streamed kernel, constant host memory, unchanged attention compute/PCIe work, guaranteed driver availability or a particular speedup. A plan/preflight rejection must be distinguishable from runtime device failure; retained driver resources and other GPU users remain part of physical-fit testing.
+
+## D7 Lifecycle and performance qualification
+
+| Stage | Boundary | Required evidence |
+| --- | --- | --- |
+| D7a | Complete window-wrap, serial reuse, prompt-state restoration and cancellation. | Below/at/above 2048, wrap during prediction/rejection, cell reuse, ring repartition, different prompts, cached append, low/high/low reuse, serialized draft KV/carry and recovered output. |
+| D7b | Qualify startup/runtime failures and native context under declared physical budgets. | Missing kernels, undersized grants, driver/allocation failures, context-end partial blocks, teardown/restart and no stale events/leases or growing memory. No-MTP/MTP controls pass. |
+| D7c | Benchmark no speculation, embedded MTP=3 and DFlash2 D=3/7 with realistic prompts; document reproduction. | 256 generated-token sweeps, resident/light/moderate/heavy ring, native-context endpoint and longer rejection-heavy continuations. Label equal-budget versus independent maximum-fit comparisons. |
+
+Reuse the sweep harness. Auto-max probes each mode without UVM when requested; launch success alone does not prove block prediction, graph instantiation and recovery fit. Exercise admitted workloads, keep successful data points and distinguish quota shortages, true OOM and correctness failures.
+
+Record accepted-token throughput, prefill, acceptance, proposals/verification, effective target KV grant, persistent draft bytes, target/draft compute, feature D2H, target H2D, replay and phase-transition costs. Control artifact versions and budgets; do not attribute acceptance or pool-size changes to kernel speed.
+
+Speedup is an empirical gate, not a promise. If draft weights or execution cost outweigh savings, report the hardware/workload result before proposing offload, different quantization or a new memory policy.
+
+## Reusable outcomes and later models
+
+Gemma G3a reuses D5a's bounded resident KV consumer; it does not implement a second SWA allocator. Gemma adds mixed target-cache coordination and causal model behavior around that storage. Its assistant remains a read-only source-KV consumer, not a DFlash2 model with independent draft history. DFlash2 injection, temporary mask rows and selector behavior stay in the draft adapter.
+
+Muse reuses feature injection, block/selector phases, bounded draft SWA and acceptance fixtures. Its target needs mixed-attention integration and geometry/mask qualification. TG1-TG16 is a named follow-up; Qwen TG8 tests do not qualify Muse.
+
+Other backends provide capability queries, stock-equivalent attention and completion semantics behind the same contracts. Common memory tests do not prove that streamed kernels exist.
+
+## Source and test references
+
+| Area | Starting point |
+| --- | --- |
+| Driver and context creation | [common/speculative.cpp](common/speculative.cpp), [common/common.cpp](common/common.cpp) |
+| Injection and selector | [src/models/dflash.cpp](src/models/dflash.cpp), [conversion/qwen.py](conversion/qwen.py) |
+| SWA sizing and state | [src/llama-kv-cache-iswa.cpp](src/llama-kv-cache-iswa.cpp), [src/llama-kv-cache.cpp](src/llama-kv-cache.cpp) |
+| Server verification and recovery | [tools/server/server-context.cpp](tools/server/server-context.cpp) |
+| Phase ownership | [src/llama-memory-phase-owner.h](src/llama-memory-phase-owner.h), [src/llama-context-memory.h](src/llama-context-memory.h) |
+| Rollback | [src/llama-memory-recurrent-spill.h](src/llama-memory-recurrent-spill.h) |
+| Streaming and CUDA execution | [src/llama-kv-stream-session.cpp](src/llama-kv-stream-session.cpp), [ggml/src/ggml-cuda/kv-stream-partial.cu](ggml/src/ggml-cuda/kv-stream-partial.cu), [ggml/src/ggml-cuda/fattn.cu](ggml/src/ggml-cuda/fattn.cu) |
+| Strict numerical fixture | [tests/kv-stream-bit-exact-test.h](tests/kv-stream-bit-exact-test.h), [tests/test-kv-stream-context.cpp](tests/test-kv-stream-context.cpp) |
+| Existing design and qualification | [DEVICE_MEMORY_INFRASTRUCTURE.md](DEVICE_MEMORY_INFRASTRUCTURE.md), [MTP_ADAPTIVE_KV_ROADMAP.md](MTP_ADAPTIVE_KV_ROADMAP.md), [UPSTREAM_ATTENTION_PORT_ROADMAP.md](UPSTREAM_ATTENTION_PORT_ROADMAP.md) |
+
+Reuse phase-owner/context-memory, recurrent-spill, batch-allocation, geometry/dispatch, session/publication, span/resume and server suites. Prefer adding cases to existing tests. No new test framework or timing-sensitive CI assertions.
+
+## TDD workflow and progress
+
+Add failing tests first and retain the red result; implement the minimum coherent change; run affected and existing regressions. Find the first numerical/state mismatch instead of relying only on decoded text. Update exact checks, measurements and limitations; stage related work and let the user commit.
+
+| Milestone | Status | Completion gate |
+| --- | --- | --- |
+| D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b at `1cd9036ce`; D1c complete | Pinned metadata, controls and physical-fit ledger |
+| D2 Common contracts | D2a at `4db05567e`; D2b contracts complete | Neutral workload/cache roles and unchanged current paths |
+| D3 Target TG1-TG8 | D3a at `0f9c78645`; D3b at `89baa844f`; D3c-D3e at `dd6c33716`/`80223bf7a`/`eb43fd0fe`, plus the qualified optimization checkpoint below | Native order, bounds, integration and measured performance pass; short-history overhead and older-device execution limits remain explicit |
+| D4 Recurrent rollback | D4a at `ea48f3bc7`; D4b at `983f878d4`; D4c qualified below | Two-slot depth-seven recovery passes matching-mode target, shorter-width and long-prefix qualification |
+| D5 Draft KV and phase arena | Qualified ownership/integration checkpoints below | Persistent draft KV, publication staging and phase grants in one physical parent; no unbudgeted draft workspace fallback |
+| D6 Live DFlash2 integration | Complete for the qualified PF6 anchor configuration | D=1/3/7, TG1-TG8, forced decisions, full-context physical execution and matching native numerical controls |
+| D7 Lifecycle and performance | D7a/D7b complete for the recorded profile; D7c in progress | Lifecycle, failure/recovery, streaming boundaries and full-native-context HTTP endpoint pass; comparison sweep and sustained qualification remain in progress |
+
+No stage completes merely because startup succeeds or output looks plausible. D3a was implemented independently at the user's request. D3's optimization gate, D4's rollback qualification and D5's ownership/integration checkpoints are complete. PF0-PF6 resolve D6's original full-context fit gate for the recorded anchor pairing. D7a qualifies serial restoration and cancellation, and D7b adds the failure/end-context gates recorded in the closeout entry. D7c must still complete performance and sustained-qualification evidence. These results do not qualify other devices or every performance goal.
+
+### D1a pinned artifacts and offline metadata audit
+
+Implemented on 2026-10-11 for user review. The [artifact manifest](benchmarks/data/dflash2-qwen27b-artifacts.json) pins immutable repository revisions, filenames, byte lengths and SHA-256 hashes for the existing Unsloth IQ4_XS target, the Inco Q4_K_M DFlash2 sidecar and its publisher configuration. The sidecar and configuration are cached in `llama-cache`; no model binary is added to Git.
+
+| Input | Revision | Verified file bytes |
+| --- | --- | ---: |
+| Unsloth Qwen3.8-27B UD-IQ4_XS | `4ca720788d1e01f1bff70c033e0d0028fd02e502` | 14252845984 |
+| Inco Qwen3.8-27B DFlash2 Q4_K_M | `51962825493a48b846b40126d35c799ac4093ad0` | 1143006816 |
+| Inco DFlash2 publisher configuration | `015e795645c74b1a0eeef3b570031fb62e769bc5` | 1239 |
+
+[inspect_dflash_artifacts.py](benchmarks/inspect_dflash_artifacts.py) reuses the repository's GGUFReader, not a new binary parser. It verifies all input hashes before metadata inspection, validates required field/array types, bounds and checked products, and rejects replaced/changed inputs before publishing a report. CLI paths are configurable; no host path is embedded in the manifest. Dependencies are already declared by `gguf-py`; the audit loads neither model weights into an inference context nor any accelerator.
+
+The real inputs pass: target trunk 64, draft layers five, block size eight, window 2048, K/V head dimension 128, eight KV heads, 32 query heads and encoded feature width 25600. Publisher outputs `[5,19,33,47,61]` map in order to GGUF input layers `[6,20,34,48,62]`. Required projections, convolution bases and selector shapes match. The sidecar has no token-embedding or output-projection tensor, so it borrows those target weights; its KV remains independent rather than aliasing the target cache.
+
+Both files have the same 248320 ordered tokens/types and tokenizer model. Their fingerprint is `b9878640053a6c13f1a46e2982a770d86b41f56aae027b0d6f9f0601fe69793b`. One conversion difference is retained explicitly: publisher EOS 248044 names `<|endoftext|>`, while both GGUF EOS flags use 248046, `<|im_end|>`. The audit warns on this recognized end-marker alias, requires target/draft converted EOS flags to agree, and still rejects arbitrary EOS or mask mismatches. Mask ID 248070 matches the trained configuration; its token spelling is not used to invent a different mask.
+
+The sidecar tensor payload totals 1132057600 bytes (1079.614 MiB). This is artifact accounting, not a measured GPU allocation or a fit guarantee. The report deliberately retains `runtime_qualified: false`. D1b/D1c must still establish ordinary execution, kernel/mask behavior, stopping/rejection and physical memory requirements.
+
+```sh
+# Install the existing GGUF tools' dependencies in your Python environment.
+python -m pip install -e ./gguf-py
+python benchmarks/inspect_dflash_artifacts.py \
+  --target /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --draft /path/to/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \
+  --draft-config /path/to/pinned/config.json
+python -m unittest discover -s benchmarks/server-ab/tests -p test_dflash_artifacts.py
+```
+
+The initial profile stub failed 89 assertions. Follow-up tests failed before end-marker handling, manifest validation and stable-input orchestration existed. All 22 tests now pass, including a real small GGUF round trip, feature-order conversion, wrong target/sidecar, missing or malformed fields/tensors, integer/type/size bounds, vocabulary identity, checksums, duplicate/oversized JSON and replacement after hashing. The project's pinned ty check passes for both new Python files. Existing sweep and qualification suites pass 32 and 18 tests.
+
+Evidence: `/tmp/dflash2-d1a-red-profile-tests.log`, `/tmp/dflash2-d1a-red-integrity-tests.log`, `/tmp/dflash2-d1a-red-stable-input-tests.log`, `/tmp/dflash2-d1a-final-tests.log`, `/tmp/dflash2-d1a-typecheck.log` and `/tmp/dflash2-d1a-real-artifact-audit.json`. Production was not stopped or reconfigured for this stage. No runtime admission, loader, kernel or arena behavior changed.
+
+### D1b ordinary controls and workload tracing
+
+Completed on 2026-10-11. Ordinary DFlash2 runs initially failed on the first 256-row feature injection: the borrowed CPU workspace had been measured using token graphs only. Its feature graph needs a wider input. The native regression failed before the fix and passes afterward (43 assertions including existing exact-fixture checks). Commit `cca0dd3c6` measures the injection graph before creating the workspace; it does not enable streaming, change attention arithmetic, or add a fallback allocation.
+
+[run_dflash_controls.py](benchmarks/run_dflash_controls.py) reuses the existing corpus, artifact auditor, server environment and SSE collector. It runs only the ordinary DFlash2 path: one slot, 256/256, target Q8_0/Q4_0, explicit draft quants, all-layer offload requested, fit disabled, no mmproj, no stream pool, no UVM and no host-spill override. It saves complete successful results and explicitly records capacity failures. It never changes quants/offload to make a point fit. Timing, captured tensors and Nsight run in separate server processes; captured/profiler timing is not the performance control. The script does not stop production itself.
+
+[dflash-control-trace.cpp](benchmarks/dflash-control-trace.cpp) is an optional Linux-only, test-side interposer, not a runtime API or backend adapter. It labels ordinary `llama_process` calls, distinguishes startup warmup from real blocks, records actual tokens/positions and memory breakdowns, and captures bounded feature, logits, selector-lattice, K/V and mask payloads. It retains physical visible-column indices and the stock SWA cell-to-position map. SHA-256 and byte-length checks detect changed/truncated payloads. Captures are limited to two occurrences per selected tensor and 512 MiB per process; this is attribution evidence, not exhaustive long-run numerical qualification. D1c/D6 add matched controls and lifecycle coverage.
+
+All requested D=1/3/7 controls complete without UVM at capacities 1024 and 4096 using F16/F16 draft KV. Independent Q8_0/Q4_0 draft KV also completes at 4096. The latter is not compared numerically with F16; matching controls must use the same encoding. The 4096-capacity controls use the same 2304-token Wikipedia prefix and generate 64 tokens. These are ordinary-path smoke/measurement controls, not the later 256-token streaming sweep.
+
+| Ordinary draft KV | D=1 decode tok/s | D=3 decode tok/s | D=7 decode tok/s |
+| --- | ---: | ---: | ---: |
+| F16/F16 | 75.34 | 92.18 | 100.60 |
+| Q8_0/Q4_0 | 72.89 | 91.33 | 100.73 |
+
+Actual injected batches range from one to 256 rows, each with feature width 25600. Prediction widths are exactly 2/4/8; verification/replay also visits smaller widths. The independent draft cache has five SWA layers, zero full-history layers and capacity 2304 beyond the window. Non-causal blocks expose 2048 through 2048+D visible positions, not just 2048 for every query: earlier block queries can also see their future block positions. Both cache cells and mask columns are recorded instead of assuming a contiguous logical window.
+
+Nsight confirms native head-256 target attention and native head-128 draft attention, with the stock split-fixup kernels. Its NVTX ranges separate target tokens, feature injection and draft blocks. Successful 1024-capacity profiles cover all three draft depths. F16 D=7 at capacity 4096 completes unprofiled and under tensor capture, but Nsight adds enough footprint to hit genuine OOM after one generated token. That failed point is retained, not retried or substituted with a smaller/offloaded profile.
+
+Measured device allocations at capacity 4096:
+
+| Component | F16/F16 draft | Q8_0/Q4_0 draft |
+| --- | ---: | ---: |
+| Target GPU weights, excluding unused embedded MTP | 12726.348 MiB | same |
+| Target CPU-mapped weights (stock input embedding placement) | 520.996 MiB | same |
+| Separate draft GPU weights | 1079.615 MiB | same |
+| Target full-history KV | 104 MiB | same |
+| Draft bounded SWA KV | 45 MiB | 18.281 MiB |
+| Draft maximum reserved GPU compute | 274.902 MiB | 278.731 MiB |
+| Draft CPU workspace for injection | 25.008 MiB | 25.086 MiB |
+| Target recurrent state including ordinary GPU rollback, D=1/3/7 | 299.25 / 598.50 / 1197 MiB | same |
+
+Target GPU compute is about 93.276 MiB for D=1/3 and 97.510 MiB for D=7 in these captured controls. Feature payloads reach 25 MiB per 256-row injection; that does not count all host vector capacity/output allocations. Native resources are separate from the allocator totals: the successful 1024/D=7 Nsight run observes 18 event creations, two stream creations and three graph instantiations. Its CUDA allocation timeline reports peaks of 15482.001 MiB device allocations and 84.311 MiB pinned host allocations; CUDA-internal/library overhead is not all represented in those tracked allocations. Do not add the context/model totals twice, assume graph-resource bytes from event counts, or treat a sampled free-memory reading as a guaranteed deployment margin.
+
+The captured 4096/D=7 run ends with only 17.375 MiB CUDA-reported free memory (39.375 MiB with quantized draft KV). Ordinary GPU rollback costs roughly 149.625 MiB per additional depth; D4 must qualify host spill rather than carry this growing GPU history into the intended long-context budget. D5 must also measure actual injection/block workloads rather than blindly reserve a 256-row prediction graph. A full-context fit claim remains pending.
+
+Reproduction, after stopping any conflicting GPU workload and building the full server target:
+
+```sh
+build=build-upstream-attention-port
+cmake --build "$build" --target llama-server test-kv-stream-context --parallel
+g++ -std=c++17 -O2 -fPIC -shared benchmarks/dflash-control-trace.cpp \
+  -Iinclude -Iggml/include -I/usr/local/cuda/include \
+  -L"$build/bin" -Wl,-rpath,"$PWD/$build/bin" -lllama -lggml-base -lggml \
+  "$build/vendor/hash/libvendor-hash.a" -ldl -o /tmp/dflash-control-trace.so
+python benchmarks/run_dflash_controls.py \
+  --target /path/to/pinned/UD-IQ4_XS.gguf \
+  --draft /path/to/pinned/DFlash2-Q4_K_M.gguf \
+  --draft-config /path/to/pinned/config.json \
+  --server "$build/bin/llama-server" --output /path/to/new/results \
+  --contexts 1024,4096 --depths 1,3,7 \
+  --trace-library /tmp/dflash-control-trace.so
+# Optional separate profiling pass: add --nsys /path/to/nsys.
+# Independent quantized-draft control: add --draft-k q8_0 --draft-v q4_0.
+```
+
+TDD evidence: 27 Python tests (artifact integrity, ordinary commands, complete responses, workload coverage, warmup exclusion, payload integrity and failure classification), nine CPU trace-helper assertions (masks, bounds, NaN and empty output), the native feature-workspace regression, five focused host CTests, and the existing 32 sweep / 18 qualification tests pass. The pinned ty check passes with the existing server-ab import directory. Full native controls, raw payloads and Nsight reports are under `benchmarks/results/dflash2-d1b-qualified-f16`, `dflash2-d1b-native-ledger` and `dflash2-d1b-native-quantized-draft`. Initial red evidence is in `/tmp/dflash2-d1b-red-tests.log` and `/tmp/dflash2-d1b-red-native.log`; green/regression logs use the same prefix. Production is restored and healthy with its existing configuration.
+
+### D1c matched native fixtures and physical-fit ledger
+
+Completed on 2026-10-11. The control harness now supports `--compare-to /path/to/independent/control`. It rejects different artifact hashes, quants, batch/microbatch settings, draft limits, context/prompt/decode lengths and UVM mode. It verifies payload files before comparing trace records, returns the first mismatching record and keeps failed results rather than retrying them. Device free-memory observations and payload filenames are not arithmetic outputs and are excluded from equality.
+
+Stock CUDA top-k is intentionally unordered (`ggml/src/ggml-cuda/top-k.cu` uses CUB's unsorted output and an atomic radix gather). Independent ordinary runs therefore produce permutations of the same selector lattice, even when raw logits and final token IDs are identical. The fixture compares each candidate's F32 score by its successor/predecessor token IDs, keeping the exact score bits. It checks unique valid candidate IDs, zero anchor/padding, repeated anchor-score blocks and every transition score. This is not a numerical tolerance or a change to the stock selector. Different candidate sets, changed scores, proposals, masks, positions or tensor data fail qualification; raw lattice hashes remain available for integrity checks. Ties can still change upstream argmax behavior, so generated/proposed token IDs must also match.
+
+Independent F16/F16 controls at capacity 4096 with a 2304-token prefix and 64 generated tokens match 212/157/127 non-memory trace records for D=1/3/7. Independent Q8_0/Q4_0 controls pass both the 64-token fixture and a 256-token fixture. The latter matches all 256 output token IDs and 705/452/357 records for D=1/3/7, including the complete recorded process/token/position/cell-map sequence and the bounded captured tensors. This proves native-fixture repeatability within that scope; it does not qualify streamed attention or claim that every tensor in all 256 rounds was captured.
+
+The fit ledger uses measured model/cache components rather than file sizes. At 262144 positions, the target's ordinary Q8_0/Q4_0 full-history KV alone requires 6656 MiB. With Q8_0/Q4_0 draft KV, the ordinary device-allocation lower bounds are 20779.494 / 21078.744 / 21677.244 MiB for D=1/3/7, before compute, outputs/features and native resources, against 15880.625 MiB CUDA-usable memory. Ordinary full-context execution cannot fit without paging/offload. Thus short resident native controls are necessary; an eventual full-context numerical control will need the separately labeled UVM path described under D6.
+
+After keeping weights and one current recurrent state outside the future shared parent, its optimistic upper bound is 1925.037 MiB. Reserving the bounded 18.281 MiB draft KV leaves at most 1906.756 MiB for target elastic KV and shared scratch/staging, before output buffers and native/library resources. Neither value is an admitted arena size. The ledger explicitly returns `streamed_fit_qualified: false`; D2/D4/D5 must measure actual workloads, depth-seven staging and retained native resources before selecting a deployable budget. Sharing serial workspace and spilling rollback are required budget changes, not optional assumptions hidden in a benchmark.
+
+Reproduce matching controls with the D1b command, adding `--compare-to /path/to/previous/results --decode-tokens 256`. Both runs must use 256 decode tokens; draft quant settings must match. Evidence is under `benchmarks/results/dflash2-d1c-256-control`, `dflash2-d1c-256-match` and `dflash2-d1c-matched-q8-q4`. Initial negative-test logs are `/tmp/dflash2-d1c-red-tests.log`, `-red-lattice-tests.log` and `-red-fit-tests.log`; all 30 artifact/control tests and the pinned ty check pass. Negative cases cover altered blocks/positions, mask columns, artifacts, numerical scores, candidate IDs, padding and incompatible workload settings. Production is restored and healthy.
+
+Next: D2a's backend-neutral workload/cache contracts. D3a remains the existing independent planning checkpoint; do not skip D2 admission or treat TG5-TG8 as executable merely because their geometry can be described.
+
+### D2a common workload and cache-role contracts
+
+Implemented on 2026-10-11. Existing phase infrastructure now distinguishes feature injection and block prediction without a DFlash architecture check or an auxiliary-MTP-layer count. `llama_memory_workload_requirement` carries physical input/query/output rows, a microbatch limit, independent rollback depth, causal intent, cache generation and reader/writer intent. A one-row prefill is not inferred to be decode; describing TG16 does not imply backend/kernel availability. D2b owns measured capability and budget admission.
+
+`llama_memory_cache_requirement` describes full-history storage, bounded resident windows and read-only source aliases. The encoded K+V bytes per row are supplied by the geometry adapter; common code does not assume a quant pair or head dimension. Bounded capacity is the padded minimum of configured history and window plus producer headroom. Qwen and Gemma window groups have independent identities, generations and bounds. Read-only aliases validate the owning source generation, layer range and layout, contribute zero new storage and cannot publish writes. This is a metadata contract, not a new source-lease owner: D5 must retain actual source storage through the existing lease infrastructure.
+
+The existing phase cache-identity type is reused, and current MTP/target enum values and paths remain unchanged. No server admission, runtime allocation, CUDA kernel, target ring policy or current MTP budgeting changes in this stage. Overflow/padding/type/range failures preserve the output descriptor.
+
+TDD: the initial build failed because the new contracts did not exist. The phase suite now passes 224 assertions across ten tests, including independent synthetic Qwen/Gemma groups, short/long window bounds, source aliases, stale generations, layer/geometry mismatches, zero sizes, padding and multiplication overflow, invalid enums, writer rejection, distinct injection/block/verification widths, metadata TG16 and microbatch limits. ASan/UBSan passes this suite and the 88-assertion owner suite. Five focused host CTests and four CUDA-build CTests pass; a full CUDA server rebuild and the 43-assertion real-model native regression also pass. Logs use `/tmp/dflash2-d2a-*`. Production is restored and healthy.
+
+### D2b measured primary-arena admission
+
+Implemented on 2026-10-11. `llama_memory_workload_budget_make` checks a complete declared workload catalog against matching cache and execution measurements. It distinguishes missing/stale caches, missing measurements, unavailable execution, unmeasured fallback, invalid/overflowing measurements and insufficient arena capacity. Exact-fit succeeds; one-byte-short reports the additional byte without modifying the previous budget. A cached TG4 measurement cannot satisfy TG8, and a selected fallback must supply its own validated measurements.
+
+Cache allocation measurements include backend padding, byte alignment, capacity, generation and format. Encoded payload size is a lower bound, not an allocation quote. Equal row-byte counts can hide different formats: Qwen's target 256-dimensional/four-head KV and draft 128-dimensional/eight-head KV have equal flattened row lengths. Aliases and cached allocation quotes now also compare K/V types, head dimensions, KV-head count and V transposition. This closes a metadata ambiguity discovered while implementing measured admission; no runtime alias is introduced.
+
+The budget keeps measured persistent cache storage live, places it after any preplanned persistent prefix, aligns workspace after that storage, and takes the maximum serial workload rather than summing all graph workspaces. Separately live target KV grants, staging and retained device outputs must appear in each quote. Read-only aliases add no storage. Full-history host backing adds no implicit device allocation; any persistent device part must be explicitly measured. Host-feature peak is reported separately and still needs host-domain capacity/lifetime validation during integration.
+
+This is the backend-neutral admission contract, not a hardware probe or new resource owner. Adapters must supply measurements from the exact compiled/device-valid path and retain prepared native resources. D3e/D5/D6 connect those adapters and leases to the live model. The current server's DFlash2-streaming rejection and existing MTP/native allocation paths remain unchanged; passing a synthetic metadata budget does not qualify execution or full-context fit.
+
+TDD evidence: missing-contract builds failed first, and alignment tests then exposed three failures (persistent-prefix alignment) plus two failures (cache-allocation alignment). Those cases now pass. The phase suite passes 239 assertions and the owner/budget suite 121, including same-byte/different-format aliases, measured backend padding, duplicate/stale cache catalogs, exact/short quota, width-eight versus width-four quotes, fallback rejection and checked byte addition/alignment. Both suites pass ASan/UBSan; five focused host and four CUDA-build CTests pass. The full CUDA server is rebuilt, and its 43-assertion ordinary real-model regression passes. Logs use `/tmp/dflash2-d2b-*`. Production is restored and healthy.
+
+At this checkpoint, the next work was real TG5-TG8 span/resume kernels and matched numerical qualification, now divided into D3b-D3d. D3a's geometry descriptions and D2's budget contracts must not be mistaken for that implementation.
+
+### D3a checked launch planning
+
+Implemented on 2026-10-11 and committed at `0f9c78645`:
+
+- Head-256 MMA query-column selection follows stock through eight rows for the existing admitted grouped-head ratios. Turing-only builds retain 32-column tiles and can require multiple query tiles. Invalid widths/groups select no tile.
+- Span launch planning derives query-tile count rather than assuming one, checks destination/work and fixup-size arithmetic, and looks up the actual selected-pair kernel before reporting resources.
+- Workspace probes use the requested query width and checked tensor strides. A wide request cannot publish a narrower TG4 grant when its own compiled plan is missing.
+- Valid TG5-TG8 requests distinguish missing streamed implementations from malformed geometry. TG9 remains outside this streamed profile; native metadata queries retain stock behavior.
+
+No wide typed MMA/tile instances or new attention arithmetic were added in D3a. At that checkpoint the RTX 5070 Ti provider reported missing streamed implementations for TG5-TG8, not successful execution. D3b-D3d add and numerically qualify those kernels and progressive execution; D3e connects them to the model/session. Existing model/session TG4 limits and the server's DFlash2 rejection remain intact.
+
+TDD evidence: the initial host run failed 50 assertions; the initial CUDA metadata run failed eight. The query-tile-count tests also failed to build before their checked helper was added. The host planning suite now passes 17 tests / 910 assertions, including odd widths, invalid inputs, resource/overflow failure preservation, Turing geometry and query-tile counts. ASan/UBSan passes the same suite. Nine focused host CTests pass. The CUDA planning fixture passes 129 assertions for configured and absent pairs, malformed strides, stale query metadata and unchanged failed output. Its first attempted green fixture used legal native head-major KV but invalid streaming-owner strides; correcting it to production token-major storage preserved the validator rather than weakening it.
+
+All 70 ordinary attention cases remain bit-identical to the immutable stock CUDA snapshot. Existing span, resume and dispatch suites pass 1463, 328 and 10 assertions respectively, without skips or widened tolerances. This is TG1-TG4 regression evidence, not TG5-TG8 numerical qualification. No speed or older-hardware execution claim is added.
+
+Logs: `/tmp/dflash2-d3a-red-host-tests.log`, `/tmp/dflash2-d3a-red-cuda-tests.log`, `/tmp/dflash2-d3a-green-host-tests.log`, `/tmp/dflash2-d3a-sanitize-tests.log`, `/tmp/dflash2-d3a-host-regressions.log`, `/tmp/dflash2-d3a-final-cuda-tests.log`, `/tmp/dflash2-d3a-native-snapshot.log` and the `vector-spans`/`resume`/`dispatch` regression logs with the same prefix. Production is restored with its existing configuration and a healthy `/health` response.
+
+### D3b checkpoint: wide spans and resumed SIMT
+
+Qualified on 2026-10-11 at `89baa844f`. This completes the narrowed D3b scope after splitting progressive MMA implementation and qualification into D3c/D3d; it did not complete the original combined D3b scope. Selected-pair MMA registries now instantiate the native eight-column variants and the launcher dispatches those exact variants rather than a four-column case. The existing stock arithmetic, shared-memory pipeline, occupancy-based Stream-K selection and final fixup are retained. Wide queries are not split into smaller forwards and no context-sized gather is introduced.
+
+The SIMT tile path accepts queries through eight, adds the required eight-row variants and retains stock's head-256 32-column ceiling. With grouped heads, it can therefore use more than one query tile instead of rejecting the request. Resume-state sizing accounts for those query tiles; for example, the synthetic two-tile host case needs twice the per-tile accumulator storage. Existing narrow budgets stay unchanged.
+
+Tests first failed on missing wide dispatch/planning and on rejected wide resume metadata. The actual backend dispatcher now matches stock output bits for TG5/TG6/TG7/TG8, GQA ratios 2/6/8, resident or wrapped three-span input, and padded history tails. A short workspace is rejected without touching output. Missing selected pairs, TG9 and malformed/stale metadata still fail. The model/session admission ceiling remains four until D3e.
+
+Full CUDA qualification passes: 1746 dispatcher assertions, 672 encoded-conversion cases, 80640 staging cases, 3360 encoded-MMA cases, 11520 tile-load probes, 1152 FP16 span-MMA cases, 2432 bit-exact resumed-SIMT cases and 130 resumed-vector cases. The 70 ordinary cases still match the immutable pre-port stock snapshot. Wide-dispatch memory and synchronization sanitizers report zero errors; the 104-assertion tile layout/cursor suite passes ASan/UBSan. Logs use `/tmp/dflash2-d3b-*`. Production is restored and healthy.
+
+Next is D3c: the re-ported stock MMA family does not have progressive resume, including existing TG3/TG4. Its `resumable` query deliberately still reports `missing_streamed_implementation`; the tests retain that rejection rather than claiming wide spans qualify progressive operation. Implement raw native accumulator checkpoints across complete K-tile boundaries, preserve Stream-K destination/split order and suppress premature finalization. Measure the added scratch before integrating it into the common budget. D3d then completes delayed-copy, history-larger-than-ring, exactly-once reduction and routing-overhead qualification. Older-device execution remains pending; no throughput or older-hardware claim is made from the numerical suite alone. D3e connects the qualified target paths to session/model admission.
+
+### D3c-D3e native-order resume and target integration qualification
+
+MMA resume retains native Stream-K slices and stores raw per-thread fragments before final reduction. Caller-owned scratch also protects partial output; singleton slices that cannot cross a complete K-tile boundary need neither checkpoint storage nor a separate output plane. The target owner has an explicit private `max_decode_rows` limit, defaulting to four; opting into eight quotes all reachable widths. Embedded MTP's four retained plans are unchanged. Existing native helpers retain their pipeline, split assignments and fixup order; no query splitting or context-sized decode gather is introduced. Live DFlash2 remains rejected pending D4-D7.
+
+The final full numerical matrix passes 3196 cases, comparing native contiguous, ordinary spans, one-wave resumed and repeatedly rebound small-ring execution. Deterministically delayed copy/read-fence checks pass 80 cases with zero CUDA memory, synchronization and race-check errors. After removing excess singleton scratch, existing model/session regressions pass 3152/1433 assertions, and ordinary model-graph TG5-TG8 verification passes 268 assertions with exact stock output checks. Host layout/wave tests pass 258 assertions; 70 immutable stock attention snapshots remain unchanged. The 648-assertion TG3-TG8 session test also passes CUDA memcheck with zero errors. Production is restored with its existing configuration and a healthy `/health` response.
+
+Qualification exposed a test-harness race, not an arithmetic error: device ring clearing used the default stream while uploads and attention used nonblocking streams. Ordering the clear on the copy stream and completing initial output clearing before cross-stream work restores exact results, including high-gain stress cases. The one-wave resumed control isolated transfer reuse from checkpoint arithmetic; no numerical thresholds were relaxed. `--case-mma-checkpoint` and `--case-mma-checkpoint-tg2` retain the regressions, and singleton waves assert that output remains unpublished before the final wave.
+
+The optional `test-cuda-fattn-mma-resume --benchmark` uses warm CUDA events and page-aligned 8192-token spans. FP16 address-routing overhead was roughly 9-13 percent for TG3/TG4/TG8 in this sample, not a guarantee of the 5-10 percent goal. Quantized span timings include tile-local conversion, whereas the contiguous control already has converted FP16 inputs; those ratios are not end-to-end native conversion-plus-attention comparisons. Short unaligned Nsight fixtures also overrepresent boundary handling and are diagnostic, not deployment throughput claims. Further candidates are batching ready spans across ring wrap, preserving native block identities while excluding idle wave blocks, eliminating unnecessary checkpoints and reducing repeated address resolution. No arithmetic/reduction-order changes are proposed.
+
+Evidence logs: `/tmp/dflash2-d3c-singleton-host.log`, `/tmp/dflash2-d3d-final-full.log`, `/tmp/dflash2-d3d-final-stock.log`, `/tmp/dflash2-d3d-memcheck.log`, `/tmp/dflash2-d3d-synccheck.log`, `/tmp/dflash2-d3d-racecheck-red.log` (zero hazards), `/tmp/dflash2-d3e-memcheck.log`, `/tmp/dflash2-d3e-wide-model.log`, `/tmp/dflash2-d3e-session-regression.log` and `/tmp/dflash2-d3e-model-regression.log`. The warm benchmark is `/tmp/dflash2-d3d-benchmark.log`; the diagnostic Nsight report is `/tmp/dflash2-d3d-mma-quick.nsys-rep`. These local files are not checked into Git. Older-device runtime qualification and long-context DFlash2 performance/fit remain unclaimed.
+
+### Reopened D3 optimization gate
+
+Apply these in order, with failing tests first and matched before/after measurements at each checkpoint. Preserve native Stream-K split identities, per-tile arithmetic and final fixup order. The prior functional qualification remains a reference, not permission to relax numerical thresholds.
+
+1. Batch ready spans across ring wrap through a private backend-neutral resume-wave hook. Include a resident prefix when it fits the same three-span wave; preserve every original DMA readiness/read-completion fence and retained source grant. Reject gaps, unsubmitted requests, overlaps and short scratch before launching.
+2. Exclude native blocks that do no work in the current wave. Keep original block IDs/counts visible to arithmetic, checkpoint indexing and final reduction; compact launch indices must not become new split IDs.
+3. Resolve physical source addresses once per interior K/V tile. Keep boundary/tail handling and encoded conversion order unchanged; measure register pressure and reject unhelpful variants.
+4. Compact checkpoint storage to slices that can actually cross a native tile boundary. Validate exact-fit/one-byte-short and overflow behavior, preserve empty/singleton cases and final-only publication, and report workspace changes.
+
+Compare full-wave native/spanned/resumed attention separately from progressively streamed waves. Quantized comparisons must distinguish already-converted FP16 controls from native conversion-plus-attention cost. Require the bit-exact oracle, immutable stock snapshots, deterministic delayed-copy tests, sanitizers and current owner/MTP regressions to remain green. Do not close D3c-D3e until these requested changes and their measurements are recorded.
+
+### D3 optimization checkpoint: implementation and qualification
+
+All four requested changes are implemented and qualified on RTX 5070 Ti. No native arithmetic, split assignment or final reduction order changed. This closes the requested D3c-D3e optimization gate, not D4-D7, older-device execution, or a universal performance guarantee.
+
+1. **Wrapped ready-wave batching.** The backend-neutral FIFO describes a submitted logical prefix spanning at most three physical intervals. An optional private version-11 `resume_spans` hook consumes that bounded view; adapters without it retain the existing path. The owner can include the resident prefix in the first wave, but still acquires and retires every original DMA batch fence. No whole-layer readiness requirement or extra ring allocation is introduced. Across TG3/TG4/TG8, the three-layer, five-slot, 8193-token fixture reduces attention launches from 43 to 21 for all seven compiled test pairs: Q8_0/Q4_0, Q8_0/Q8_0, Q4_0/Q4_0, Q5_1/Q4_1, Q4_0/F16, F16/F16 and BF16/BF16. Each output matches both the unbatched path and stock bits. Gaps, malformed offsets, unaligned sources, forged quotes and one-byte-short scratch are rejected without changing output.
+2. **Inactive native-block exclusion.** A checked host intersection selects only native CTAs that overlap the current wave. Their original IDs and original total count still determine destination slices, checkpoint identities and all fixup offsets. The original reduction grid/order is unchanged. In the one-native-tile wave stress fixture, 35840 launched CTAs become 512; with 128K history and 32-page waves, 2240 become 168. These are launch-work counts, not proportional speedup claims. GPU kernel intervals improve by about 5-15 percent in the small-wave fixture and 10-31 percent in the 128K fixture; copy and host-submission time are excluded.
+3. **Interior tile address resolution.** Encoded prefetch resolves a wholly contained tile once, then advances row addresses by its stride. Boundary and padded-tail tiles retain row-specific resolution, and conversion/swizzle order is unchanged. The FP16 address-caching experiment increased TG8 kernel time, so that wider-query route retains the lean prior resolver. A larger-tile route can reuse its known span directly. At 8K, BF16 span kernel time improves roughly 7-16 percent relative to the pre-change run; Q8_0/Q4_0 TG3/TG4 improves about 1-3 percent, while TG8 differences are small. Register/local-memory metrics are printed by the optional benchmark; an unhelpful universal FP16 variant was not kept.
+4. **Compact native checkpoints.** Only CTA/output-tile intersections spanning two or more native K tiles receive checkpoint storage. Mixed schedules use a bounded immutable ID table initialized on the first wave and retained with the operation's scratch. Uniform schedules use the original CTA ID directly, avoiding the table and its repeated uploads. Singleton slices still allocate no checkpoint or private output plane and cannot publish early. The sampled checkpoint plane shrinks from 4909056 to 4874240 bytes, with no table for that uniform schedule; this is a modest 34 KiB saving, not a large new KV pool. Near-singleton mixed schedules save more: the two-destination/three-tile/four-block host fixture needs two rather than five checkpoint slots. Every quoted table, alignment, fragment and output byte remains included in the measured scratch grant.
+
+The warm equal-residency benchmark reports attention-kernel time, excluding final fixup and transfers. Representative FP16 results at 128K are:
+
+| Query width | Native contiguous | Three-span | One-wave resumed | Span / resumed overhead |
+| --- | ---: | ---: | ---: | ---: |
+| TG3 | 331.152 us | 332.400 us | 333.160 us | 0.38% / 0.61% |
+| TG4 | 332.272 us | 333.240 us | 334.200 us | 0.29% / 0.58% |
+| TG8 | 342.520 us | 346.584 us | 346.344 us | 1.19% / 1.12% |
+
+At 8K, the span path still has roughly 8-13 percent FP16 overhead and the one-wave resume path roughly 8-17 percent, depending on width. Thus the 5-10 percent goal is not met everywhere. Quantized-span timings include tile-local conversion, whereas the contiguous oracle has preconverted FP16 data: do not present that comparison as stock end-to-end quantized attention or DFlash2 token throughput. Progressive-wave benchmarks are separate controls and include checkpoint work, but their summed GPU intervals exclude ring copies and CPU scheduling. None of these measurements qualifies live DFlash2 performance.
+
+TDD/qualification evidence:
+
+- Missing FIFO-wave, active-block and compact-layout interfaces produced the initial failing builds. The host brute-force intersection/layout oracle now passes 55555 assertions, and FIFO planning passes 1183; both pass ASan/UBSan.
+- Six-way native/spanned/full-grid-wave/one-wave/active-grid/compact-state comparison passes all 3196 numerical cases with exact output and split metadata. Both 8K and 128K benchmark matrices add 18 matched cases, including physically rebound ring waves, without a mismatch. The 70 immutable native snapshots remain unchanged.
+- The seven-pair owner fixture passes 610 assertions and CUDA memcheck. Full CUDA session/model suites pass 2043/3152 assertions; the separate ordinary model-graph wide-target fixture passes 268. Current embedded-MTP lifecycle and admission tests remain green.
+- CUDA memcheck, synccheck and racecheck pass the deterministic delayed-copy quick matrix with zero errors/hazards. Existing span-dispatch tests pass 1750 assertions, and legacy resumed tile/vector tests pass 2432/130 cases with their prior numerical contracts unchanged. A stale dispatch assertion that rejected TG5 was corrected to reject TG9; its TG1-TG4 checks and transactional failed-quote checks remain intact.
+
+Reproduce the warm measurements with `build-upstream-attention-port/bin/test-cuda-fattn-mma-resume --benchmark` and `--benchmark-long`, with UVM disabled and no competing GPU workload. The former uses 8K history and single-native-tile waves; the latter uses 128K history and 8192-token/32-page waves. Neither command is a server sweep or end-to-end DFlash2 benchmark. Logs are `/tmp/dflash2-opt-uniform-*`, `/tmp/dflash2-opt-long-benchmark.log`, `/tmp/dflash2-opt-legacy-spans.log`, `/tmp/dflash2-opt-legacy-resume.log` and `/tmp/dflash2-opt-dispatch-green.log`; these local artifacts are not committed. Production is restored with its existing configuration and a healthy `/health` response.
+
+### D4a implementation checkpoint: rollback without auxiliary KV
+
+The private, backend-neutral rollback planner derives verification rows from depth, not draft-cache layer count. Streaming targets admit depths 0-7, while the existing embedded-MTP profile retains depth 0-3. Depth zero allocates no host snapshot bank. Invalid depth, arithmetic-extreme values and ubatch smaller than depth+1 fail before memory construction and leave prior planning output unchanged. The existing context/device/serial/architecture restrictions remain intact; no live DFlash2 pairing is enabled.
+
+Context construction now selects host spill for an independent streaming target with rollback enabled. Its memory parameters pass the declared decode-width ceiling to the KV owner; all existing TG1-TG4 workspace quotes remain covered. Phase transitions and resume-after-vision reserve the independent target's depth+1 rows instead of assuming TG1 or attached MTP. Startup measures every reachable verification width with one and all requested logits, so a TG8 reservation is not used as an unproven bound for smaller graph shapes. These quotes are automatic and do not require the diagnostic `LLAMA_RS_HOST_SPILL` environment variable.
+
+TDD evidence: the initial build failed on the absent planning interface. Host spill/planning tests pass 196 assertions, including depths 0-7, embedded-MTP limits, exact microbatch bounds, transactional rejection and unchanged snapshot lifecycle; ASan/UBSan passes the same suite. CUDA spill tests pass 220 assertions. A real IQ4_XS test with UVM and diagnostic spill flags unset passes 62 assertions: the existing embedded-MTP depth-3 case remains valid, and a zero-auxiliary-layer target executes TG1-TG4, truncates three provisional positions and resumes through its host-spilled recurrent bank. Unsupported depth eight and embedded-MTP depth four fail at initialization. The first new integration fixture incorrectly requested 256 prefill logits despite declaring an output capacity of four; correcting that fixture preserved the runtime output bound. Logs use `/tmp/dflash2-d4a-*`. Production is restored and healthy.
+
+At this checkpoint, depth-seven metadata was tested but wider live rollback, pending-copy/failure and long-prefix tests remained D4b/D4c work. The existing two-slot layout estimates 43.640625 MiB of device staging and 1047.375 MiB of pinned snapshots at depth seven, versus 18.703125 MiB and 448.875 MiB at depth three. Current recurrent state is separate and unchanged. The user subsequently approved the two-slot design rather than chunked publication; qualification follows below. No depth-seven production deployment was performed at D4a.
+
+### D4b checkpoint: two-slot publication and failure-safe snapshot ownership
+
+The rollback plan explicitly selects two publication slots for a nonzero streaming rollback depth and none for depth zero. All recurrent layers reuse that same pair of buffers. Each slot holds one layer's R and S snapshots for the declared depth, not a second set of current recurrent states or a KV ring. The existing read-completion fences prevent overwriting a slot whose D2H copies are still pending. At depth seven, the measured Qwen staging plane is 43.640625 MiB; the 149.625 MiB current recurrent state remains unchanged, and host snapshots occupy 1047.375 MiB. These are data-buffer sizes, not a claim that native/library resources consume no memory.
+
+Publication admission now prepares its copy backend's lazy stream and records/drains its ready, reuse, stage and completion events before the phase arena takes the remaining VRAM. The same retained resources are reused during execution. A failed preparation leaves the bank without a published staging owner and permits a clean retry; a different already-bound device is rejected. This uses the existing backend-neutral event/transfer APIs, not a new CUDA-specific publication interface or an arbitrary VRAM reserve.
+
+TDD exposed a queued-copy failure bug: transfer bookkeeping was updated after the backend call, so an exception after enqueue could leave an overwritten host snapshot labeled as untouched or a partially restored current state reusable. Destination tracking now happens before enqueue, backend exceptions return failure, and a failed submission cannot be published even if it was the last plane. Cancellation drains the queues, invalidates potentially changed host planes, and keeps a failed restore unavailable until explicit reset/state reconstruction. Untouched older S snapshots retain their original generation, matching stock behavior for short forwards; this does not promise valid rollback beyond the written history of the last verification block.
+
+The synthetic suite covers TG1-TG8, seven candidate slots, disabled layers, multi-cell rows, sparse/mixed generations, stale identities, all selected restores, repeated slot reuse, queued D2H/H2D failures, cancellation, reset and preparation retry. A CPU test backend defers D2H reads until an explicit drain, so removing the reuse fence would corrupt the previous layer deterministically; this is not a timing-based race test. Normal width changes keep both bank and stage capacities constant. First tests failed on the missing slot-plan field, queued transfer exceptions, publication after failed submissions and absent preparation; the final CPU and CUDA suites each pass 1860 assertions without skips. ASan/UBSan and CUDA memcheck/synccheck/racecheck report zero errors/hazards. Logs use `/tmp/dflash2-d4b-accepted-*`; the earlier red logs retain the failure evidence. Live target matching, shared-arena handoff and longer prefixes are the D4c checkpoint.
+
+### D4c checkpoint: matching-native target recovery through TG8
+
+The optional `test-kv-stream-context --model GGUF --target-rs-rollback` fixture runs independent native and streamed target contexts sequentially, without a draft context or auxiliary KV layer. Both use the same IQ4_XS weights, Q8_0/Q4_0 KV, 256/256 batching and declared rollback depth. Controls are stored in the existing disk-backed bit oracle instead of accumulating full recurrent snapshots in RAM. UVM and diagnostic spill environment flags are unset; streaming selects the host bank automatically.
+
+Twelve paired cases cover depths 1/3/7 and prefill lengths 249/505/2041/16381. Six serial verification rounds force zero, partial and full proposal acceptance, including repeated rejection. Rejected proposal IDs differ from correction IDs, so the comparison exercises real KV overwrite rather than replaying identical cached tokens. A depth-seven case also uses verification widths 8/5/7/6/2/4, checking partially updated snapshot sets and legal rollback within the actual block's written history. Correction forwards cover TG1. Most streamed cases use a 16 MiB physical KV pool to exercise the ring; the depth-seven/505-token case instead uses a 2240 MiB shared phase arena and qualifies prefill/decode handoff. Both contexts are filled to their declared capacity and reject another verification block without changing logical positions or serialized recurrent state.
+
+Every case matches stock bytes for verification logits, current and selected recurrent state, retained/corrected encoded KV and correction logits. The suite passes 1885 assertions with no skips or numerical-tolerance changes. Each paired case compares approximately 3.3-3.8 GB of canonical data across 884-920 records. Measured staging is 6.234375/18.703125/43.640625 MiB at depths 1/3/7, consistent with the two-slot layout. The existing embedded-MTP/independent-depth-three probe passes 62 assertions after the final changes; its depth-four MTP and depth-eight target rejection checks remain intact.
+
+This closes D4a-D4c for the current target profile on RTX 5070 Ti, not live DFlash2 inference. Prefixes around 2048 exercise target position/rollback handling near the future draft-window boundary; they do not qualify draft SWA storage, which remains D5/D6. The tested maximum prefix is 16381 tokens, not a native-context or performance claim. Older-device execution, the sidecar's bounded cache, shared draft workspace and native-context live acceptance remain separate gates. Logs are `/tmp/dflash2-d4c-accepted-native.log` and `/tmp/dflash2-d4-accepted-mtp.log`; CUDA sanitizer logs use `/tmp/dflash2-d4b-accepted-*`. The full server is rebuilt locally, while production has been restored with its existing image/configuration and a healthy `/health` response.
+
+### D5a bounded resident storage checkpoint
+
+Implemented and qualified on 2026-10-12. `llama_memory_bounded_kv` is a private backend-neutral storage consumer. It measures serial homogeneous K/V roots using the declared head geometry, quantization, window, producer headroom and row padding. The quote includes backend per-tensor padding/alignment and must agree with the complete tensor-list quote. Duplicate layer IDs, incompatible quant blocks, overflow, inconsistent quotes and malformed placements fail without changing the previous result. Multiple homogeneous groups can use separate consumers; heterogeneous tensors are not silently treated as one group.
+
+The stock cache adapter verifies these measurements against actual root addresses and buffer size. `retain_bounded_storage` wraps and retains the existing stock buffer through an arena lease; it does not allocate another GPU cache or replace stock cells, masks, positions, attention or truncation. The actual DFlash2 sidecar has five SWA layers and a 2304-row bounded allocation at ubatch 256. Its F16/F16 control occupies 45 MiB. The Q8_0/Q4_0 geometry quote remains 18.28125 MiB. The unused full-history cache has no K/V roots; an actual 4096-row full-size SWA allocation is rejected as a bounded 2304-row allocation.
+
+The consumer registers its preserved resource in the serial phase plan. Once bound, it accepts only the same persistent buffer/region; it rejects moving or shrinking a live cache rather than assuming that its bytes or captured addresses can be reconstructed. Scratch-region changes can proceed while read-only source pins keep that fixed cache alive. Cancellation and failure/recovery in another phase participant do not clear or move its bytes. Write tickets require the matching cache generation, exclude retained readers and pending preparations, and advance the generation only after the caller completes successful work. Failed writes close read admission until explicit reconstruction. The stock adapter does not automatically intercept arbitrary stock cache mutations: D5b/D6 must gate those calls through the context owner and report their completion. Write tickets are not device events; outstanding work must finish before owner destruction.
+
+Qualification:
+
+- Existing `test-memory-phase-owner`: 12 tests / 707 assertions pass in CPU Release, CUDA-linked Release and CPU ASan/UBSan with leak detection. Coverage includes synthetic Qwen/Gemma window groups, all 36 pairs of F16/BF16/Q8_0/Q5_0/Q4_0/Q4_1 storage formats, context-independent long-history bounds, backend padding, exact-fit tensor placement, overrun rejection, neighboring canaries, malformed layout quotes, stale generations, reader/write exclusion, failed writes, reconstruction, unchanged rebinds, retained source lifetime, low/high/low scratch changes, cancellation and failed participant recovery. These are storage tests, not flash-attention support claims for every pair or actual Gemma model qualification.
+- Existing `test-kv-stream-context --dflash-native`: 7 tests / 72 assertions pass with the pinned IQ4_XS target and Q4_K_M sidecar on RTX 5070 Ti, UVM disabled. The retained stock buffer participates in ordinary feature injection/prediction, byte-identical sequence save/restore and reset; the source lease survives draft-context teardown. The full-size SWA negative control is included. CUDA memcheck reports zero errors. No streamed target execution is enabled by this control.
+- The full `llama-server` target is rebuilt after the internal changes. Production is restored with its existing image/configuration; no production compose or image is changed by this checkpoint.
+
+Logs: `/tmp/dflash2-d5a-final-host.log`, `/tmp/dflash2-d5a-final-cuda-owner.log`, `/tmp/dflash2-d5a-final-sanitize.log`, and `/tmp/dflash2-d5a-native-memcheck.log`. D5c must place the persistent cache and phase grants in one physical parent and qualify pool resizing, prepared resources and graph retirement. Neither shared-parent fitting nor live/full-context DFlash2 has been qualified by D5a.
+
+### D5b serial draft workspace checkpoint
+
+The separate DFlash2 context can now borrow the target's measured workspace without attaching an MTP host cache or auxiliary ring layer. It uses the parent's device-local buffer type and has no separate GPU-workspace fallback if the declared budget fails. Construction validates feature indices/width, enables extraction, and reserves the target before a child captures shared addresses. Repeating an unchanged extraction setting does not dirty the reservation. The draft reserves injection up to the microbatch limit and each complete prediction width through its metadata block size; an eight-position block is not measured as 256-token prediction. Both declared phase grants conservatively include injection and prediction peaks for this checkpoint.
+
+The real F16/F16 sidecar control passes 72 assertions at context 4096 with a 512 MiB target arena. Measured draft compute is 30.0078 MiB rather than the ordinary 274.9025 MiB reservation. The bounded draft cache still uses a separate 45 MiB allocation until D5c. The existing two/three-scheduler tests pass 667 CPU and 695 CUDA assertions, including retained asynchronous outputs, reentrant/failed drain, native capture retirement and parent-before-child teardown. Logs: `/tmp/dflash2-d5b-native.log`, `/tmp/dflash2-d5b-host.log`, `/tmp/dflash2-d5b-coordinator-cuda.log`. This is private context/workspace admission, not D6 server admission or a numerical/performance claim. Production is restored with its previous configuration.
+
+### D5c persistent-cache checkpoint (staging still pending)
+
+The draft's stock SWA tensors now use a fixed region in the target's declared physical parent. The coordinator suspends/drains and retires old addresses before materializing the region, then restores phase-specific target grants around it. Stock tensor allocation is bounded to the lease; its retained source uses the original region lease, not an independent arena alias that could escape the parent's reclamation gate. External source leases block cleanup, while returning the last lease permits transactional reclamation. Owner/loan lifetimes also handle constructor failure and parent-before-child teardown without a raw callback into a destroyed owner.
+
+Graph re-reservation keeps the owner, scheduler and persistent region when the new measurements fit the declared phase catalog. Oversized remeasurements fail rather than allocating separate scratch. The real control checks both draft and target graph rebuilds, target decode-to-prefill transitions and byte-preserved draft state across those operations. Complete prediction blocks larger than the measured metadata width are rejected before cache writes. CPU/CUDA common tests exercise the same region API and actual scheduler writes with device-readable canaries, external-reader cleanup rejection and parent-before-loan teardown. Release and ASan/UBSan suites pass; the real-model control also passes CUDA memcheck with zero errors. Logs: `/tmp/dflash2-d5c-final-native.log`, `/tmp/dflash2-d5c-final-cuda.log`, `/tmp/dflash2-d5c-host.log`, `/tmp/dflash2-d5c-sanitize.log`, `/tmp/dflash2-d5c-native-memcheck.log`.
+
+The remaining publication staging integration is qualified in the following checkpoint. A one-parent budget does not mean weights, current recurrent state or native backend/executable resources are implicitly inside that parent.
+
+### D5c publication staging and D6 live bridge checkpoint
+
+`llama_context_memory_loan` now represents either an independently leased fixed cache region or a fixed publication-staging region. The regions have separate resource IDs/lifetimes and stay disjoint from elastic target KV and graph scratch. The spill bank can bind its existing two-slot layout to a persistent lease while idle; the copy backend, prepared streams/events, snapshot geometry and arithmetic are unchanged. The prior separately allocated device stage is released after rebinding. Outstanding capture rejects rebinding; nonpersistent or one-byte-short leases reject without replacing the previous stage. Current target recurrent state and authoritative host snapshots remain outside the arena. The stage and draft KV appear separately in `memory_phase` diagnostics and are included in parent usage.
+
+The narrow live configuration admits only serial text DFlash2 with a declared arena, target Q8_0/Q4_0 KV, 256/256 batching, explicit Flash Attention, no mmproj/auxiliary MTP/other speculation, 1-7 draft tokens and independent draft F16/F16 or Q8_0/Q4_0. Metadata validates the paired target, ordered feature IDs, encoder width, bounded homogeneous SWA geometry and block microbatch bound. Every prediction width is measured and checked against device-valid stock attention; missing compiled attention cannot silently select a CPU or second-workspace fallback. The target rollback depth must cover the requested proposals. Target warmup captures are retired before sidecar weight loading; the physical-fit measurement below distinguishes retirement from actually reclaiming cached backend memory.
+
+Retained target features carry the successful invocation's token/position provenance. Missing/stale/permuted input transport, a changed ordered extraction mapping, a cleared/truncated target position or state restoration cannot reuse old outputs for injection. Input matching and ownership are common code, not CUDA logic. Injection and prediction still use upstream's feature gathering, masks, convolution, selector and temporary-suffix/acceptance behavior. No embedded MTP head or five extra target ring layers are allocated.
+
+Qualification on the pinned IQ4_XS target/Q4_K_M sidecar:
+
+- `--dflash-bit-exact` uses independent sequential native/streamed contexts and a disk-backed byte oracle, with native staged host rollback enabled to keep the control physically fitting. Eight paired profiles cover D=1/3/7 at 2304 prefill and D=7 at 16000 prefill, each with F16/F16 and Q8_0/Q4_0 draft KV. Eight rounds force shorter/empty returned proposals, TG1-TG8 verification, zero/partial/full acceptance and changed rejected/correction IDs. Proposals, token-conditioned selector scores, target features/logits, accepted logical target/draft KV and serialized recurrent state match bit-for-bit. Both 16000-prefill streamed cases must report an active ring. Final fixture: 490 assertions, no failures/skips (`/tmp/dflash2-d6-exact-final.log`).
+- Selector candidate axes can be permuted by stock top-k ties. The oracle canonicalizes axes by vocabulary ID, preserving every score bit; it does not round scores or introduce a tolerance. Its permutation/one-bit mutation tests include predecessor-axis permutations. Raw candidate-array ordering is not an arithmetic-equivalence claim. The initial uncanonicalized test detected this ordering difference while proposal IDs matched.
+- Live Wikipedia controls match 64 generated IDs/157 captured records for D=3, F16 draft KV, context 4096 and a 512 MiB arena; D=7 with Q8/Q4 draft KV, 16000 prefill/context 16384 matches all 256 generated IDs/624 captured records. The latter uninstrumented decode samples are 66.50 tok/s native and 66.41 tok/s streamed, with identical 173/565 accepted/generated draft counts. This is qualification, not a performance sweep or acceptance-rate claim for other text. Results are `benchmarks/results/dflash2-d6-{native,stream}-short-20261012` and `benchmarks/results/dflash2-d6-{native,stream}-long-q8-20261012`.
+- CPU/CUDA region and spill-bank suites, ASan/UBSan with leak detection, and CUDA memcheck pass. Logs use `/tmp/dflash2-d6-{memory,rs,phase}-*` and `/tmp/dflash2-d6-sanitize-*`. The existing unit harness is retained; no new test framework/dependency is required.
+- The existing `--mtp-memory-probe` passes 65 assertions after the integration changes (`/tmp/dflash2-d6-mtp-regression.log`). Embedded MTP's separate admission, quantization and host-cache path remain unchanged. This short regression check does not replace D7's full MTP/no-speculation performance matrix.
+
+#### Historical full-context fit gate (resolved by PF0-PF6)
+
+The failures below motivated PF0-PF6; they are not the current completion status. See PF6 and D7's progress entries for the later qualification.
+
+With UVM disabled, target context 262144 rejects a 1536 MiB arena during preflight: the measured bootstrap phase alone requires 1704159488 bytes (about 1625.2 MiB), before the sidecar's fixed KV/staging grants. At 1792 MiB the target initializes but the 1079.61 MiB sidecar weight allocation fails. A 1728 MiB probe that explicitly retires target warmup graphs reports device free memory unchanged at 949.38 MiB, still below the sidecar allocation. Driver/executable and retained native temporary resources are not zero merely because their graph captures were retired.
+
+These failures are retained in `dflash2-d6-native-context-20261012`, `dflash2-d6-native-context-1792-20261012`, and `dflash2-d6-native-context-retired-20261012`. No layers, batch/ubatch, context or quantization were reduced to hide the limit. Full-context fit/long-run numerical identity is not qualified. The user requested the PF0-PF6 bounded-prefill footprint/performance roadmap above before implementation. Current upstream-derived masks already use F16, so a hypothetical F32-to-F16 saving must not be claimed. PF0 must verify actual peak-lifetime/native-temporary attribution, and later checkpoints must qualify peak and steady-state memory, not just make sidecar loading succeed by freeing memory needed by the next forward.
+
+`run_dflash_controls.py` now optionally accepts `--arena-mib`, `--rs-host-spill` and a configurable completion timeout. The native host-spill control does not use the older fit-ledger formula that assumed GPU rollback snapshots. The harness preserves completed points and distinguishes physical OOM from preflight quota rejection; matching comparisons still require identical artifacts, operation widths and KV encodings. Production is restored after test jobs with its existing image/configuration.
+
+### PF0 allocation, configuration and numerical baseline
+
+The existing opt-in `GGML_ALLOCATOR_DEBUG` diagnostics now retain the allocator's actual aligned reservation for each live tensor instead of printing only `ggml_nbytes()`. Peak logs include exact bytes, allocator identity, payload, reserved size and physical range. This changes only the diagnostic build; ordinary allocation and kernels are unchanged. The test-side `test-alloc --debug-quotes` fixture first failed because backend extras were omitted, then passed with a 16-byte payload, 48-byte reservation and 64-byte allocator peak. Run that mode only against a build configured with `-DCMAKE_C_FLAGS=-DGGML_ALLOCATOR_DEBUG`. The full CPU allocator suite passes 52 cases; accelerator coverage is separate.
+
+New command tests first failed on silently fixed batch/quant arguments and unchecked invalid values. The control runner now takes `--batch-size`, `--ubatch-size`, independent `--target-k/v` and `--draft-k/v`, and optional `--verbosity` for attribution. It preserves raw requests for stock normalization and does not relax current runtime admission. Trace injection bounds follow the requested microbatch ceiling rather than an assumed 256. Quota failure is separate from physical CUDA OOM. All 33 Python artifact/control tests pass. Host metadata tests enumerate all 81 upstream CLI K/V pairs at widths 1/8/64/129/256/512/1024, with missing-counterpart failure preserving the output descriptor; the attention-plan suite passes 18 cases / 4879 assertions. This proves geometry accounting, not kernel availability.
+
+Current capability audit: adaptive DFlash2 still requires 256/256, target Q8_0/Q4_0 and independent draft F16/F16 or Q8_0/Q4_0 in `common_streamed_dflash_error`. The target/session/backend span and resume gates stop at TG8; the MMA column helper also rejects larger widths. Native prefill instead uses strict gathering; GGML reserves native output extras for widths above four despite an external-workspace hint. The SET_ROWS writer and separate draft construction must also be requalified before changing these gates. The current SM120 build selectively compiles f16-f16, q8_0-q4_0, q8_0-q8_0, q4_0-q4_0, bf16-bf16, q5_1-q4_1 and q4_0-f16 native pairs; missing pairs are not evidence of a generic implementation failure. PF1-PF4 must replace actual restrictions through capability evidence, not declare support from metadata success.
+
+The 16K and 262K diagnostic runs reproduce the exact 122.276 and 1202.276 MiB bootstrap graph peaks. At 262K, the live attention output has a 6291456-byte payload but a 1080033280-byte reservation, confirming 1073741824 bytes of FP16 conversion extras in the actual peak. The simultaneously live mask is 134217728 bytes. Remaining peak space includes other live tensors, alignment and allocator gaps. DFlash2's retained features raise the 16K graph peak from 122.276 to 142.276 MiB. The 1536 MiB full-context arena still fails preflight at 1625.213 MiB; no fitting claim is added. Artifacts: `benchmarks/results/pf0-allocation-16k` and `pf0-allocation-262k`. Diagnostic timings are not performance measurements.
+
+After restoring the CUDA build's ordinary C flags, matched eight-profile native/streamed tests pass all 490 assertions through TG8, both admitted draft pairs, forced acceptance/rejection and 16000-token active-ring prefixes. Native controls need `LLAMA_RS_HOST_SPILL=1 LLAMA_RS_STAGED_PUBLICATION=1` on this card; a probe without that configuration exhausts physical VRAM rather than identifying an arithmetic mismatch. Four focused CUDA/host CTest targets pass (allocator, context memory, attention plan and span contracts). Logs: `/tmp/pf0-{alloc,python,plan,ctest,exact}-*`; failing diagnostic/command tests are retained separately.
+
+The realistic article control at context 16384, prefill 16000 and 256 generated tokens records uninstrumented native 1596.06 prefill / 66.47 decode tok/s, and 512 MiB streamed 1530.18 / 66.16 tok/s. Independent captures match all 256 token IDs and 624 trace records. These are single baseline samples, not a statistical regression or speedup verdict. Separate Nsight memory passes report profiler-tracked device allocation peaks of 14917.59 MiB native and 14530.79 MiB streamed, excluding pinned host memory; these tracked peaks are not total VRAM including driver-reserved memory. The streamed trace observes 981.31 MiB device free after sidecar operations. Artifacts: `benchmarks/results/pf0-baseline-{native,stream}-16k`, including capture payloads and Nsight reports/SQLite exports. No measurements overwrite prior results or alter production configuration.
+
+### PF1a stock-order wide-query kernel foundation
+
+Host tests first failed on the eight-row column-helper ceiling, then pass for widths 9/16/17/32/33/64/65/129/256/512/1024 with stock bucket and multiple-query-tile counts, including the Turing-only cap. The full plan suite passes 19 cases / 5005 assertions. CUDA requirements first reject the valid nine-row test; the MMA adapter now uses checked index/stride/work bounds instead of rejecting every width above eight. Vector/tile family limits and target/session decode admission remain unchanged. Missing compiled MMA buckets still reject rather than selecting a different native tile; planning a GQA bucket does not prove that its streamed instance exists.
+
+The prefill qualification fixture preserves complete query batches and compares stock, spanned, one-wave resumed, progressive resumed, active-block and compact-checkpoint implementations. It exercises widths 9/16/64/129/256/512/1024 with three physical spans, F16/F16 and Q8_0/Q4_0, including both stock contiguous and strided conversion policies. All 21 attention profiles match output and split/checkpoint metadata bits; guards and source bytes remain intact. Fourteen full-context metadata requirements return caller-owned bounded scratch with no full FP16 output extras on RTX 5070 Ti. These runtime histories are at most 2047 tokens; they do not qualify full-context prefill execution or every KV pair. The CTest entry is `test-cuda-fattn-prefill`, using `test-cuda-fattn-mma-resume --prefill-only`.
+
+The first wider-query output check exposed an oracle-fixture assumption: its final reduction hardcoded one query tile in the native fast-div descriptors. Pre-reduction metadata matched, but the reduction read the wrong query/head groups. The fixture now uses the same query-tile factors as stock/native launch; no kernel arithmetic, precision or tolerance was relaxed. The existing TG1-TG8 quick matrix passes 80 native resume cases, the CUDA resident/ring suite passes 11 cases / 328 assertions and the real-model DFlash2 regression passes all 490 assertions with native host-spill controls. CUDA memcheck and synccheck report zero errors for the prefill matrix. Logs: `/tmp/pf1-{plan,mma,prefill,resume,narrow,dflash}-*`.
+
+PF1b remains necessary: target prefill still gathers encoded KV and invokes the original native path; the graph allocator still reserves its full conversion extras. Declare and retain a disjoint scratch region for the qualified prefill consumer, validate native-family/quant/width support before enabling the hint, and connect runtime dispatch to that same quote. Do not report a production memory reduction or speedup from this foundation alone. Older-device execution and wider GQA-2 buckets without a compiled counterpart remain explicit qualification gaps.
+
+### PF1b bounded conversion integration
+
+The version-12 private registry quotes each prefill width separately. Common construction checks every admitted width before declaring verified external workspace; unqualified modes retain their fully budgeted native control. MMA scratch is bounded by native resident block capacity and column geometry, not full-history FP16 planes. The encoded gather and execution scratch have disjoint views retained by the original lease. The new native-storage conversion hint preserves stock contiguous-versus-strided rounding without changing existing decode conversion policy. Wide generic external-workspace hints alone still cannot remove native extras; the graph requires the verified owner declaration. The registry-based CUDA fixture avoids linking private CUDA functions across a Windows DLL boundary.
+
+TDD first fails on the missing quote/configuration contract. The common CUDA suite then passes 12 cases / 381 assertions, including F16 and Q8/Q4 widths 9/64/129/256, wrapped/streamed content, one-byte-short scratch with unchanged output and overflow rejection. Execution/allocation tests pass 6 cases / 79 assertions; prefill CTest and backend execution controls pass. CUDA memcheck reports zero errors for the initial 373-assertion matrix. The matched real DFlash2 fixture still passes all 490 assertions, including active-ring prefixes. Logs use `/tmp/pf1b-*`.
+
+The non-UVM 262144-capacity D=7 Q8/Q4-draft pairing now starts in a 1024 MiB arena and completes a 2304-token prompt/32-token response. Bootstrap graph compute falls from 1202.276 to 199.276 MiB; attention is 424.887 MiB including the retained 416 MiB encoded gather. After feature/staging/cache attachment graph compute is 223.510 MiB. This is a capacity/startup control, not full-length prefill qualification. Results are in `benchmarks/results/pf1b-capacity-262k`. The 16K sample records 1446.84 prefill / 66.18 decode tok/s; a simultaneous small safety-test process makes that timing diagnostic only, not a clean speed comparison. PF2 must remove the encoded gather, PF3 the dense mask, and PF5/PF6 must provide isolated performance measurements.
+
+### PF2 progressive prefill without full-history gathering
+
+The version-13 quote includes raw continuation state, maps, native fixup and private final output, bounded by query tiles and the larger of native residency/output-tile counts. The common model/session now reserve that quote directly, without adding the full encoded layer. Version-12 gathered-span providers cannot be mistaken for a version-13 continuation quote. Bounded prefill uses the same ready-wave, source acquisition and consumed-event retirement contracts as decode, preserves native conversion policy and completes the original operation only on its final wave. Missing continuation support fails admission rather than allocating a gather as a runtime fallback.
+
+The new history-size test first fails because 4096 and 65536 contexts reserve different full-layer sizes, then passes with identical prefill device requirements. CUDA tests extend actual prefill through 32769-token histories, F16 and Q8/Q4, widths 9/64/129/256/512/1024, three-span/wrapped reuse, overflow and unchanged-output short-grant rejection; the full suite passes 13 cases / 479 assertions. The writer suite passes 10 cases / 609 assertions, including its existing larger-microbatch coverage. The matched DFlash2 fixture passes all 490 assertions with active-ring 16K cases. Memcheck and synccheck on the 439-assertion long-history matrix report zero errors; logs are recorded in `/tmp/pf2-*`. GPU dense-mask storage remains context-dependent until PF3; no claim of a constant total prefill workspace or full-context completion is made here.
+
+PF3 design choice is confirmed: use a private compact per-query visibility input on managed target attention. This preserves ordinary GGML attention and does not reinterpret integer metadata as a dense F16 tensor. PF3a defines the typed interval contract and fail-closed dispatch; PF3b connects exact cache-derived intervals, bounded graph inputs and native vector/MMA mask loads, then qualifies real execution. The draft's independent non-causal SWA attention keeps its own mask semantics.
+
+### PF3a compact mask contract
+
+Each query has four I32 fields: visible begin, exclusive end, padded logical KV length and descriptor version. Only positive-zero and negative-infinity F16 mask values can be encoded; a hole, signed zero, bias or NaN is rejected without modifying the previous descriptor. An empty interval masks every cell. The planning helper creates storage-free logical F16 metadata for native family/geometry selection, separate from actual I32 input range validation. The descriptor occupies private managed-attention source 5; ordinary source 3 stays null. Ordinary backend execution without a matching managed owner is rejected, including when no managed buffers exist and when an unrelated managed buffer is live.
+
+The CPU contract tests cover padded boundaries, empty/full/partial intervals, exact mask bits, overflow, type/stride/width errors, stock arithmetic parameter preservation and owner isolation. PF3a itself does not remove the runtime dense mask; PF3b connects the executor and cache adapter.
+
+### PF3b bounded target-prefill mask delivery
+
+The cache adapter derives intervals from actual sequence/cell positions, not from token indices. It validates a dense monotone serial prefix once per microbatch, uses position lookup for causal visibility and preserves the stock M-RoPE spatial comparison within equal-position groups. Padding is masked. A spatial visibility hole or invalid cache/query metadata returns a managed-prefill error before graph execution. Alibi and SWA caches do not opt into this representation. No dense F16 mask is built or copied for an admitted target prefill. The I32 descriptor is an ordinary scheduler-owned graph input, so input-copy lifetimes use existing scheduler handling. Graph reuse tracks logical K/V length separately because descriptor size no longer changes with history.
+
+Registry version 14 adds a per-configuration compact-mask capability check. Admission requires a bounded prefill workspace and a qualified native vector or MMA continuation for every effective query width; tile-family masks are not advertised. Physical validation checks the actual I32 buffer and its overlap with output, KV and scratch, never the storage-free logical mask. CUDA reconstructs positive-zero/negative-infinity in the original mask-load stage while retaining native query grouping, conversion, softmax and final reduction order. Ordinary contiguous kernels have a null descriptor path. Legacy partial/native entry points reject the private input instead of dropping its mask. `LLAMA_KV_STREAM_DENSE_MASK=1` is a diagnostic control retaining the fully budgeted dense target-prefill path; it is not needed for normal use. Target decode's small dense masks and independent DFlash2 draft SWA masks remain unchanged and accounted for.
+
+CPU mask/cell tests cover exact bits, repeated/gapped positions, M-RoPE ordering, padding, holes, bad sequence/type/shape/stride, overflow and transactional rejection. The CUDA matrix compares dense and compact prefill bit-for-bit for F16/F16 and Q8/Q4 at widths 1/2/3/4/8/9/64/129/256/512/1024 and histories 2049/32769, including wrapped ring reuse. Invalid descriptor ranges and one-byte-short scratch preserve public output. All 13 cases / 855 assertions pass; memcheck and synccheck both report zero errors. Matched real-model DFlash2 tests pass 490 assertions, including streamed 16K D=1/3/7 controls and a rerun after adding the logical-KV graph-reuse guard. Logs are `/tmp/pf3-*`.
+
+The isolated 16K server control completes 16000 prefill / 256 decode tokens at 1492.58 / 66.20 tok/s. Its separate capture matches all 256 token IDs and 624 trace records against the unchanged PF0 native control. This is one timing sample, not a statistical speedup or regression result. Results are `benchmarks/results/pf3-stream-16k`.
+
+The non-UVM 262144-capacity D=7 Q8/Q4-draft control completes a 2304-token prompt and 32-token response in a 1024 MiB arena. Bootstrap compute is 74742016 bytes (71.280 MiB), attached compute is 100153600 bytes (95.514 MiB), and bounded attention scratch is 24907776 bytes (23.754 MiB). The measured 16K and 262K-capacity prefill quotes are identical for this configuration. The previous PF1b full-capacity bootstrap/attached compute included a 128 MiB dense mask; this is replaced by small scheduler inputs. Results are `benchmarks/results/pf3-capacity-262k`. This still does not qualify a full 262K prefill or every batch/quant/device combination; PF4-PF6 remain required.
+
+### PF4 generalized admission and writer checkpoint (2026-10-13)
+
+The CLI no longer requires 256/256 or target Q8/Q4. It accepts upstream cache-type names, validates serial/speculation/FA constraints and checks the requested verification width; native and bounded counterpart availability is still decided by backend preflight. Effective limits retain stock normalization, including ub=0 inheritance and ub greater than b. The separate draft reserves its configured target verification ceiling rather than unnecessarily requiring the trained maximum block width. Embedded-MTP cache compatibility rules are unchanged.
+
+The model quotes writer storage using independent K/V row traits, a page/microbatch-bounded tile, index storage and actual backend allocation padding. The quote participates in initial and replacement arena admission, including one-byte-short rejection before writes. Direct-session callers may retain their explicitly declared smaller tiled writer; there is no silent enlargement beyond their grant. At the anchor, the model writer is 280576 bytes (274 KiB), versus the previous 32 KiB reservation. Complete-layer decode routing uses backend span capabilities rather than a Q8/Q4 or F16 whitelist.
+
+CPU tests cover all 81 cache-type pairs and batch normalization. CUDA tests cover stock-equivalent dense/compact prefill on all nine Q8/Q5/Q4 pairs, F16/BF16 and selected asymmetric pairs; complete-span TG3/TG4/TG8 decode also matches stock for all nine quant pairs. The resume matrix passes 14 cases / 2791 assertions; writer tests pass 11 cases / 1263 assertions; model tests pass 29 cases / 3154 assertions before the expanded quota matrix, and the independent exact-fit/one-byte-short quota matrix passes 6 cases / 2725 assertions across widths 64/129/256/512/1024 and three KV pairs. Session lifetime/feedback tests pass 19 cases / 2043 assertions. Selective-build errors now mention both all-quants and selective-pair compilation without claiming the build flag is the only possible cause.
+
+The live batch matrix and full-context prefill qualification remain in progress. Physical native 1024/1024 at 16K cannot fit this pairing on the test card; a labeled UVM numerical control is required for that cell. Streaming completes its uninstrumented request. Its first capture fails because the test tracer's 64 MiB per-file limit excludes the 100 MiB feature input, not because the server runs out of memory. The tracer/validator envelope is now 128 MiB per file and 1 GiB total, with boundary tests retained. Prior successful/failed runs are preserved under `benchmarks/results/pf4-*`; no numerical tolerance is relaxed.
+
+The control harness supports per-context/depth auto-max fitting through the existing arena search. Short probes establish the fit interval; the selected arena must complete the full requested prefill/decode workload before its timing result is accepted. A full-workload capacity failure lowers the upper bound; a quota failure remains a lower bound, and other failures abort without retries. All probe results are retained. Optional UVM applies only to independent native numerical controls, never physical-fit sweeps; numerical-only comparisons may differ in UVM state but retain all other profile/token/tensor checks. PF4 is not complete until live generalized/full-context qualification passes; PF5/PF6 remain open.
+
+### PF4 borrowed-output and scratch corrections (2026-10-13)
+
+The live BF16/BF16 target exposed a resident TG1 replay boundary bug at the end of a D=7 response. The managed model output had a 24576-byte grant, but replay built an ordinary native node whose backend quote required 17850368 bytes, including conversion extras. Whole-buffer address validation did not establish ownership of those trailing bytes. The native conversion overwrote a still-live recurrent row index; memcheck reported the later GET_ROWS access rather than an attention access outside the parent allocation. Disabling CUDA graphs did not prevent it.
+
+Resident replay now queries the ordinary backend allocation for the actual head geometry and padded history before choosing the borrowed-output path. Native outputs needing extras use the already quoted bounded executor instead. Replay also rejects a native allocation larger than its model output slot before binding. This is a backend allocation rule, not a BF16 or CUDA-generation blacklist. The new capture regression fails on the former predicate and passes with the quote check; BF16 TG1-TG8 kernel boundary controls pass 366 assertions. The corrected live 4000-token prefill/256-token response matches the native control's 256 token IDs and 501 captured records (`benchmarks/results/pf4-bf16-fixed`).
+
+Embedded MTP still has a separately qualified gathered-prefill path. Its single-layer encoded gather must be included in the shared serial scratch maximum even though main-model prefill is bounded. A regression reproduced the underquote; reserving the maximum of main bounded scratch and auxiliary gather passes the model suite (30 cases, 3816 assertions). This does not claim that embedded MTP's prefill scratch is now context-independent.
+
+The host sanitizer matrix also caught undefined enum loads while rejecting deliberately invalid cache metadata. Validation and format comparison now inspect numeric enum storage before checking the range; invalid owning and aliased source formats still fail transactionally. The phase suite passes ASan/UBSan with leak checking (11 cases, 244 assertions), and phase-owner/policy/prefetch/publication sanitizer controls pass. These corrections do not close the remaining full-context, independent-draft and performance gates.
+
+### PF4 small-microbatch serial rebuild correction (2026-10-13)
+
+The independent target-pair controls now match native for Q5_1/Q4_1, Q4_1/Q5_1, Q4_0/F16 and F16/Q4_0, in addition to the earlier nine Q8/Q5/Q4 pairs, F16 and corrected BF16. Independent draft KV controls match for F16/F16, Q8/Q8, Q4/Q4, Q5/Q5, BF16/BF16, Q5_1/Q4_1 and F32/F32. Each uses a 4000-token prompt, 256 generated tokens and D=7. Accepted controls remain under `benchmarks/results/pf4-tail-*`; a native draft cache is not evidence of a bounded target reader for that type.
+
+The D=1, b=256/ub=4 control exposed a separate handoff error: startup measured the admitted two-row DFlash block, but the runtime rebuild retained embedded MTP's four-row reservation. Draft warmup and the first prediction failed inside the borrowed range even though ordinary fallback completed the response. Trace validation correctly rejected those runs. A common `serial_graph_reserve_rows()` now keeps startup and rebuild aligned with the declared block width while preserving the legacy embedded-MTP ceiling. The new test reproduces both undersized two-row and wider eight-row mismatches before the fix, then passes on host and ASan/UBSan (12 phase cases, 255 assertions). The corrected control has no failed traced process and matches all 256 token IDs and 2765 records (`benchmarks/results/pf4-depth1-ub4-fixed`).
+
+The expanded CUDA attention suite passes 15 cases/3127 assertions, including the BF16 tail/page regression. Memcheck and synccheck each report zero errors. Full-context execution, further lifecycle controls and PF5/PF6 performance acceptance remain open.
+
+### PF4 full-context gate and PF5 measured publication tuning (2026-10-13)
+
+The non-UVM IQ4_XS/Q8-K/Q4-V target with a Q8/Q4 DFlash draft, D=7, b/ub=256/256 and a 1024 MiB arena completes 261873 prompt tokens and 256 generated tokens at context capacity 262144. This reserves response space rather than overflowing the native limit. The sample records 494.07 prefill and 19.96 accepted decode tok/s with no allocation or execution failure (`benchmarks/results/pf4-full-context-262k`). PF4's anchor full-execution gate is now met; this is not a claim that every type/batch/device fits that same budget.
+
+The independent target TG1-TG8 rollback control passes 1888 assertions. Embedded MTP lengths 1/2/3 match native logits, features, KV and recurrent state through 12 forced-decision rounds at 16K, with both target and MTP streaming forced by the small grant (3262/3476/3607 records per mode). The DFlash D=1/3/7 recovery control passes 490 assertions. These controls remain required after pipeline changes.
+
+PF5 profiled resident (16K), onset (40K), moderate (80K) and heavy (144K) histories with equal 1024 MiB parents. The profiler attributes GPU work by the CPU launch correlation, not completion time; it preserves unattributed events, counts overlapping device/copy intervals once and distinguishes weight matmul, recurrent compute, attention, dedicated conversion, finalization and writer kernels. Inline conversion/checkpoint work stays included in attention. CPU range duration is not a denominator for a utilization percentage when queued work finishes after that range.
+
+The trace identifies a low-risk submission optimization: staged recurrent snapshots were downloaded individually even when a plane's rows were physically contiguous. The common stage owner now prepares bounded raw read spans using the backend's normal tensor initialization. Publication waits until every row of that plane is produced, then queues one prefix read; padded layouts retain individual reads. Short captures do not overwrite untouched historical rows. The existing two-slot completion fences protect source storage and metadata until consumption; prepared stream/event resources and physical VRAM/host snapshot sizes do not grow.
+
+At 80K, target-prefill D2H calls fall from 226809 to 43065 and verification calls from 65351 to 12647, with identical transferred bytes (360.878 GB prefill, 100.230 GB verification). Total CUDA memcpy/event-record/stream-wait API time in the instrumented request falls by about 0.48 seconds. Equal-budget uninstrumented samples show only small throughput changes: prefill +0.07 to +0.16 percent and decode -0.06 to +1.16 percent across the four histories. This is a measured reduction in driver submission work, not a statistically established large token-speed gain. Results and matched captures are under `benchmarks/results/pf5-packed-*`; the 80K follow-up profile is `pf5-packed-81920-nsight-only`.
+
+TDD covers padding on either plane, partial snapshot sets, reversed publication order, three layers sharing two slots, delayed consumption, failures after either packed transfer and cancellation/retry. Host and ASan/UBSan pass 17 cases/3324 assertions; CUDA passes 19 cases/3324 assertions with zero memcheck/synccheck errors. DFlash's 490-assertion and MTP's 42-assertion exact controls remain green after batching.
+
+The page-sized writer grant added in PF4 is also measured against an explicit old 32 KiB grant, not the larger idle ring. For 256 Q8 rows, median staged write time falls from 236.11 to 64.32 microseconds (nine reads/copies to one); at 512 rows it falls from 483.30 to 125.94 microseconds (18 to two). This microbenchmark is not an end-to-end speedup claim. The grant uses generic row/backend quotes and changes no encoded bytes.
+
+Reproduce the profiling summary after exporting an existing Nsight report:
+
+```bash
+nsys export --type sqlite --output /path/to/profile.sqlite /path/to/profile.nsys-rep
+python benchmarks/analyze_dflash_profile.py /path/to/profile.sqlite
+```
+
+PF5's sampled pipeline tuning is qualified on this hardware/configuration. PF6's full sweep, maximum-fit comparisons, remaining crossed/unsupported cases and final production restoration are still open. Do not infer full-context native numerical equivalence from the successful physical-fit run alone.
+
+### PF6 fitting/control guard (2026-10-13)
+
+The small-ub failure demonstrated why a completed HTTP response alone is not a valid fitting probe: a failed draft can fall back to ordinary decoding. Both sweep harnesses now reject backend execution errors in the server log even when the response completes. DFlash controls also require generated drafts; MTP sweeps reject a sample with no recorded drafts. An explicitly handled CUDA graph-instantiation fallback to eager execution remains allowed because it keeps the admitted kernel, rather than disabling drafting or switching attention arithmetic. Failures remain classified as quota, capacity or other errors; correctness failures are not retried as OOM. New red/green controls pass with the existing fitting tests (33 sweep and 41 DFlash/profile tests). Full sweeps remain pending.
+
+### PF6 completed qualification (2026-10-13)
+
+Both non-UVM D=7 sweeps complete all 27 capacities: 8K through 192K in 8K steps, then 224K, 248K and 256K. Each point has 256 generated tokens, the same realistic corpus and seed, active drafting and no accepted execution failure. One sweep uses an equal 1024 MiB declared parent; the other independently fits the largest parent at each point and validates the winner with the full workload. Accepted maximum parents range from 1512 MiB at small capacities to 1500 MiB at 262144. Fast/capacity-failure probes remain in `fit-probes`; no safety reserve is subtracted.
+
+| Capacity | Maximum parent MiB | Maximum-fit prefill / decode tok/s | Fixed-1024 prefill / decode tok/s |
+| --- | --- | --- | --- |
+| 16K | 1512 | 1534.53 / 80.57 | 1539.32 / 81.53 |
+| 80K | 1508 | 1072.40 / 49.83 | 1032.69 / 43.75 |
+| 128K | 1506 | 832.06 / 45.39 | 799.77 / 39.92 |
+| 160K | 1504 | 731.63 / 28.10 | 693.13 / 25.36 |
+| 192K | 1502 | 643.83 / 26.69 | 611.65 / 24.46 |
+| 256K | 1500 | 515.41 / 21.26 | 494.46 / 20.01 |
+
+The 256 token IDs and generated/accepted draft counts match between the two physical budgets at every capacity. This tests different resident/ring partitions without changing the model, query mode or input. The full-context native control also completes 261873 prompt tokens plus 256 generated tokens, and its token IDs match both streamed budgets. That native control uses UVM solely because its full-history storage cannot fit physical VRAM; its timing is excluded from the performance plot. Smaller forced-decision/native controls compare logits, retained features, KV, recurrent state, proposals and selector scores exactly. This is measured equivalence for these inputs and modes, not an identical-output promise for all prompts.
+
+Long D=1 and D=3 controls each complete a 65024-token prefill and 4096 generated tokens at capacity 73728 in a 1024 MiB parent, crossing 16 layout revisions without errors. Their sampled decode rates are 29.70 and 68.34 tok/s respectively. These controls exercise sustained publication/restore and growing-context repartition, not just a 256-token startup sample.
+
+The fixed-parent prefill phase reports exactly the same component grants at 8K and 262144: compute 100153600 bytes, target KV 883470080, writer 280576, attention 24907776, bounded draft KV 19169280 and publication staging 45760512. They sum to the 1073741824-byte parent with no unused range. Decode reclaims the prefill-only portion: effective KV is 962593920 bytes at 8K and 959111552 at full context. The small difference is decode graph/mask workspace, not a return to context-sized prefill conversion/gathering. Weights, current recurrent state and native/library resources are outside this declared parent and remain part of physical fitting.
+
+Qualification coverage includes the previously recorded 12 normalized batch/microbatch settings, all nine Q8/Q5/Q4 target pairs, F16/BF16 and signed/asymmetric target samples, independent draft types, exact-fit/one-byte-short quotes, overflow and stale/lifetime/failure tests. Native/streamed widest-batch comparison uses a separately labeled UVM native oracle when the physical native control cannot fit. F32 draft support does not imply an F32 bounded target reader; IQ4_NL and other unqualified counterparts remain outside this acceptance claim. Only resource-valid compiled native families and their qualified bounded counterparts are admitted. New hardware/backends/geometries still need execution qualification; planner metadata alone is insufficient.
+
+Host/CUDA tests, ASan/UBSan, CUDA memcheck/synccheck, no-speculative rollback, embedded MTP exact controls and DFlash forced-decision controls pass as recorded above. Final Python suites pass 43 DFlash/profile/plot tests and 33 sweep tests. No numerical tolerance was relaxed. The latest plotter tests reject failed/duplicate/UVM-only performance points and use the effective decode grant rather than confusing it with the declared arena.
+
+Results:
+
+- `benchmarks/results/pf6-dflash7-auto-max-full/results.jsonl`
+- `benchmarks/results/pf6-dflash7-equal-1024-full/results.jsonl`
+- `benchmarks/results/pf6-native-uvm-full-numerical/results.jsonl` (numerical only)
+- `benchmarks/results/pf6-long-decode-depth1-depth3/results.jsonl`
+- `benchmarks/results/pf6-qualified-full-sweep/dflash7-budget-comparison.png` and matching CSV
+
+Recreate the four-panel throughput/KV-grant/acceptance plot:
+
+```bash
+python benchmarks/plot_dflash_controls.py \
+  --series maximum-fit benchmarks/results/pf6-dflash7-auto-max-full \
+  --series fixed-1024-MiB benchmarks/results/pf6-dflash7-equal-1024-full \
+  --output benchmarks/results/pf6-qualified-full-sweep/dflash7-budget-comparison.png
+```
+
+These curves are individual 256-token samples, not statistical speedup claims. Their non-monotonic decode shape follows varying draft acceptance as well as compute/transfer costs. The two budgets are distinct experiments; larger residency is not a faster-kernel proof. PCIe attribution comes from the separate Nsight profiles, not a fabricated rate from the last copy counter. PF6 is complete for this recorded configuration matrix; do not use it to mark D7 or other model pairings complete.
+
+### Post-PF6: oversized transfer requests must make demand progress
+
+A Q4_K_S target with DFlash2 D=7, Q8_0/Q4_0 target and draft KV, 256/256 batching, context 262144 and a physically fitting 446 MiB parent exposes a producer/consumer contract gap. Prefill completes, but the first TG8 target verification fails. Decode has one resident page per target layer and 812 ring slots; a layer's 1022 nonresident pages cannot fit together. The transfer tuner starts with full-ring batches, while resumable attention asks for a preferred 96-page wave. The old reader rejects the first 812-page request instead of making progress. The previous maximum-fit IQ4_XS control has 154 resident pages and 959 ring slots, so its 869 nonresident pages use complete-layer attention and avoid this path.
+
+`ready_wave` now treats the page count as a grouping preference: the first valid submitted transfer remains whole even when it exceeds that preference. Additional requests are grouped only within the preferred count. Physical ring bounds, FIFO/layer ordering, readiness and the three-span limit remain mandatory. The existing transfer fences, fixed attention workspace and native tile/reduction order are unchanged; no new VRAM allocation or kernel is introduced. The subtraction check short-circuits when an oversized first request already exceeds the grouping target.
+
+TDD reproduces the original rejection in host planner tests and in actual CUDA attention before the fix. New cases cover 97/812-page requests, a smaller grouping preference, deferred mutable tails, layer boundaries, ring wrap, unchanged rejected output and `SIZE_MAX` grouping. A small physical-ring fixture compares TG1-TG8 output bits with independent ordinary stock attention. Host prefetch passes 8 tests/1257 assertions; CUDA resume passes 16/3179, prefetch 25/3412, session 19/2043 and capture 14/174. ASan/UBSan and CUDA memcheck/synccheck pass without errors. The narrow device regression can be run with `test-kv-stream-resume --cuda-oversized-wave`.
+
+The full-context Q4_K_S rerun completes 261873 prompt tokens and all 256 generated tokens at the same 446 MiB parent, without UVM or vision. Prefill is 483.79 tok/s over 541.30 s and decode is 18.32 tok/s; draft acceptance is 180/518 (34.75%). Target KV/ring grants are 264.543 MiB during prefill and 336.680 MiB during decode, unchanged from the failed attempt. Its result is `benchmarks/results/q4-ks-dflash7-prefill-256k-fixed-20261013/results.jsonl`. The earlier failed run's last prefill progress was 484.35 tok/s; these individual samples show no visible prefill regression, not a statistical speedup claim. Production is restored and `/health` reports `ok` with its existing container configuration; this local fix is not deployed into that image.
+
+### D7a serial lifecycle and matching checkpoint-layout qualification
+
+The optional `test-kv-stream-context --model TARGET --dflash-native DRAFT --dflash-lifecycle` fixture reuses the independent native/streamed bit oracle. It covers D=7 prefixes 2047/2048/2049/2304/16000 with Q8_0/Q4_0 draft KV and a 2049-prefix F16/F16 counterpart. Each context saves both sequence states, performs prediction/verification/rejection, reuses the same contexts for another 15872-token prompt, restores the original prefix, rejects truncated target/draft state blobs, cancels each scheduler, restores again and compares recovered proposals, canonical selector scores, target logits/features, accepted logical KV and recurrent state without a tolerance. Eight subsequent rounds exercise the existing TG1-TG8/acceptance matrix. Native controls use staged host rollback to fit this card; streamed controls use a 512 MiB parent.
+
+Tests first expose two lifecycle defects. A cancelled borrowed graph closes execution admission but retains its capture; a later handoff cannot recapture it. `compute_async` now drains and retires the capture after `GGML_STATUS_ABORTED`, after closing transition admission. Retirement failure invalidates the owner; other graph errors remain quiescent until explicit retirement. The host owner regression fails before this change, then passes 10 tests/804 assertions under ASan/UBSan; CUDA passes 11/832. The second defect lets a fully resident, one-query prefill enter the ordinary TG1 decode-capture shortcut, which expects a dense F16 mask rather than compact bounds. The shortcut now requires the decode phase. A small actual CUDA session regression and a 2049-token server request fail before the fix; the session then matches stock output bits without creating a decode capture. Existing TG1 decode selection is unchanged.
+
+Stock sequence serialization omits already masked SWA rows and compacts the remaining cells. At a 2049-token prefix, the native draft cache restores 2048 cells; that changes physical reduction order and can change proposals even without streaming. The oracle therefore normalizes both baseline and recovered probes through the same stock restoration. It separately compares every retained logical draft-window KV byte and the latest target KV rows before/after normalization. This is exact equivalence to matching restored native execution, not a claim that an original un-restored layout always generates the same bits. No tolerance or selector score precision is relaxed. DFlash2 has no additional hidden-state carry: its persistent trained-window KV is saved through the ordinary draft context; its sampler is reset for each prediction.
+
+The corrected lifecycle matrix passes 8 tests/425 assertions (`/tmp/d7-lifecycle-tail-fixed.log`). Owner, transition and bounded-cache ASan/UBSan suites pass. The temporary diagnostic logging used to isolate the one-query failure is removed. D7b still needs its final device safety, server lifecycle/end-context controls, and D7c's mode comparisons remain in progress.
+
+### D7 target-only regression gate: isolate dense and compact vector masks
+
+The target-only IQ4_XS controls expose a streaming decode regression against `q4-ks-vs-iq4-comparison`: short contexts remain unchanged, but 128 Ki falls from 26.31 to 14.89 tok/s. Pool differences are only 6.67 MiB. Nsight attributes almost all additional token time to resumed vector attention, not weight matvec or extra KV traffic. PF3's runtime compact-mask choice reaches the unrolled dense-mask key loop, increasing the aligned Q8_0/Q4_0 TG1 body's static branches from 14 in the reference to 207.
+
+Dense and compact masks now select separate compiled vector bodies once per launch, for both full tiles and guarded tails. The dense body has 15 static branches. Both keep the same softmax, accumulation, split ownership, final reduction and existing scratch. The private registry still uses stock compiled-pair flags for every KV pair; no public/backend-neutral interface or data-buffer allocation is changed.
+
+A same-input, same-2600-MiB-parent comparison at 128 Ki improves 14.934 to 26.030 tok/s (74.3%), with all 256 generated token IDs identical and essentially unchanged prefill throughput. Per-process loaded-library maps verify binary isolation. An initial copied-binary comparison was rejected because its absolute RUNPATH loaded rebuilt libraries. Evidence and preserved traces are under `benchmarks/results/d7-tg1-regression-20261013`.
+
+Qualification passes 2432 exact tile cases, 146 vector-wave cases with stock maximum absolute error zero, 17 integrated streaming cases/3415 assertions, 20 session cases/2053 assertions and all 70 ordinary CUDA snapshots. New compact tests cover causal/window bounds, short tails and reused waves, with explicit stock bit-equality assertions; an integrated test alternates dense decode, compact prefill and dense decode across three KV pairs. Memcheck and synccheck report zero errors, and racecheck reports zero hazards/errors/warnings. The final rebuilt span quick matrix also passes 112 conversion, 112 staging, 1372 encoded-MMA, 48 tile-probe and 24 FP16-MMA cases without byte/output/metadata mismatches. The span test required an explicit private-interface include; no MMA arithmetic changed. This correction is complete, but does not complete all D7b/D7c gates.
+
+The independently maximum-fit target-only sweep completes at 16/64/128/192/256 Ki, with the original reference's exact prompt rule (capacity minus 260), physical allocation and no reserve. Fixed decode rates are 44.714/35.564/26.179/15.125/9.595 tok/s, versus 44.655/35.149/26.310/15.165/9.698 in the original IQ4_XS reference. All differences are within 1.2% in these single 256-token samples. Maximum parents remain 2718/2716/2712/2708/2706 MiB, exactly the same as the regressed sweep; the improvement does not come from more KV residency. Results and plots are `benchmarks/results/d7-tg1-mask-fixed-max-fit-20261013`. Production is restored healthy.
+
+### D7b/D7c closeout in progress (2026-10-14)
+
+Gemma work is deferred until D7 qualification closes. The source baseline is `45ee09caa` plus the uncommitted D7 corrections described here. Preserve previous PF6/D7 results rather than overwriting them. New logs and frozen runtime files are under `benchmarks/results/d7-closeout-20261014`; completion remains conditional on all remaining checks and comparisons passing.
+
+The HTTP lifecycle probe exposes a context-end defect: a DFlash2 drafter still submits its configured eight-position block when fewer positions remain, logs `failed to find a memory slot`, and returns no proposals. The server may finish by ordinary target generation, so a complete response alone does not establish successful speculative execution. The drafter now bounds its block by remaining draft-context capacity, including the anchor, and skips prediction when no proposal position remains. Existing serial-draft preflight already measures workspace and native attention for every width from one through the configured block, so these partial blocks do not introduce an unquoted fallback or a new device buffer. Normal full-width blocks and their arithmetic are unchanged.
+
+TDD first fails in independent native execution at configured D=3 with two expected proposals and zero returned. The new `test-kv-stream-context --model TARGET --dflash-native DRAFT --dflash-context-end` fixture then passes 676 assertions across D=1/3/7 and F16/F16 or Q8_0/Q4_0 draft KV. It forces rejection while approaching capacity, exercises all remaining widths, compares native/streamed proposal and logit bits, and checks final target/draft KV and recurrent state. The ordinary forced-decision matrix also passes its 490 assertions after this correction.
+
+The existing control harness now accepts `--spec-mode dflash|none|mtp` for unprofiled comparisons, retaining the original default DFlash command. Target-only uses depth zero and does not load a sidecar; embedded MTP supports its existing depths 1-3. DFlash capture/Nsight comparisons remain specific to DFlash. Plot loading distinguishes all three modes. The host suite passes 53 tests, and the existing sweep suite passes 35 tests.
+
+`--lifecycle` adds serial cached/changed/shorter requests, slot save/restore, oversized-prompt rejection, streaming disconnect, context-end completion and subsequent recovery/erase/repetition checks. It records process VRAM samples after requests. Only the exact observed oversized-prompt HTTP diagnostic is allowed in log validation; recovered draft execution failures remain failures. A lifecycle exception cannot leave the initial timing result marked accepted. HTTP qualification, final sanitizers, startup failures and memory-plateau review are still in progress.
+
+The six HTTP DFlash cases at 8/16 Ki and D=1/3/7 pass, as do 16 Ki target-only and MTP=3 controls. Four settled alternating requests have identical sampled process VRAM in every case; this is a plateau observation, not an instantaneous peak or universal leak bound. A separate RAM prompt-cache case and native-capacity context-end request remain queued. The strict MTP regression now observes span validity during actual prediction attention and checks release after the final reader, matching the cross-consumer handoff contract. It preserves every byte-oracle comparison and requires target streaming per mode plus actual MTP streaming across the matrix; concentrated placement may legitimately keep one mode's auxiliary history resident. Lengths 1-3 pass 43 assertions with matching predictions, logits, KV, carry and recurrent state.
+
+Focused CUDA memchecks for recurrent staging and MTP lease/population pass with zero errors. The full-model context-end memcheck was deliberately stopped after 215 seconds while still making GPU progress; its log is preserved as inconclusive, not counted as a pass. Qualification instead uses focused ring/transfer memcheck and synchronization checks alongside the uninstrumented full-model bit oracle. The final boundary fixture uses an explicit 224 MiB parent at 8 Ki and requires observed decode streaming, rather than relying only on a streaming-enabled but fully resident configuration; that strengthened run remains pending here.
+
+The strengthened boundary fixture subsequently passes 682 assertions with no skips. The oversized-wave ring fixture passes memcheck and synccheck with zero errors; recurrent publication and context-owner tests pass ASan with leak detection. These are focused safety qualifications, not a completed full-model sanitizer run. The 512 MiB RAM-cache HTTP case, startup negative/recovery cases, full-native-context HTTP boundary and performance matrix remain in progress.
+
+The RAM-cache HTTP case passes. Startup probes distinguish a too-small quota, an unavailable compiled streamed path and a deliberate 32768 MiB allocation OOM; all exit with status one rather than aborting. The missing-path probe first reveals only a generic allocation/binding diagnostic for Q5_1/Q4_0. The factory now logs the unsupported resumable path or decode-workspace quote, including K/V types and query width, before returning failure. No admission policy or success-path arithmetic changes. Injected private-capability tests first fail on the absent messages, then the full model suite passes 32 tests/3884 assertions and the admission suite passes memcheck with zero errors. Ordinary native attention can be available while its required streamed counterpart is absent; this is not automatically an arena shortage or proof of a missing all-quants flag. Final-runtime measurements use the separate `runtime-final` snapshot; earlier accepted checks and rejected/inconclusive probes remain archived.
+
+The final-runtime recovery request after all startup failures passes. At native capacity 262144, the HTTP lifecycle case completes the 262134-token near-end prompt, stops at the ordinary context limit with seven generated tokens, then serves subsequent short requests, erases the slot and repeats alternating prompts. No recovered draft/backend error is logged; four settled process samples remain 15386 MiB. D7b is qualified for these recorded settings, not arbitrary budgets or every native driver failure. D7c's four-mode maximum-fit sweep subsequently stops after 101 accepted timing points at the DFlash D=7 failure described below; full completion still requires its remaining timing points, longer continuations and separate traces.
+
+The planned current-runtime performance matrix uses context-matched capacities in 8 Ki steps from 8 Ki through 256 Ki, the same article prefix rule (capacity minus 256 outputs minus 15 headroom positions), and 256 generated tokens for target-only, MTP=3, DFlash D=3 and DFlash D=7. The primary sweep finds each context/mode's maximum full-workload arena without UVM or a reserve. This replaces the initially proposed common 1024 MiB parent: embedded MTP retains a context-sized gathered-prefill requirement, so a common small arena can reject a mode that physically fits with its own larger budget. Maximum-fit speed differences include residency and weight-footprint tradeoffs, not just kernel speed. Fixed-parent qualification controls and previous maximum-fit sweeps remain separate labeled references, not interchangeable current measurements. Longer DFlash continuations at medium/heavy streaming will report actual acceptance rather than assume the corpus is rejection-heavy; a separate matched native/streamed fixture forces zero accepted proposals across 272 teacher-forced target steps, page boundaries and context exhaustion. That oracle is not an HTTP throughput measurement. No performance or D7 completion claim is made before the runs finish.
+
+### D7c maximum-fit lazy-kernel correction (2026-10-15)
+
+Target-only, MTP=3 and DFlash D=3 each complete all 32 context points through 256 Ki. DFlash D=7 completes through 40 Ki, then fails at 48 Ki after 253 output tokens. This is not a supported-context limit: all target KV still fits in resident memory. The final three-query target batch needs an encoded token-major span kernel that the metadata-only preflight did not prepare. A diagnostic replay identifies `cudaFuncGetAttributes` returning out of memory while lazily loading that executable, rather than an undersized attention workspace. The original failure, diagnostic replays and all accepted results remain preserved under `benchmarks/results/d7-closeout-20261014`.
+
+Decode preflight now prepares both head-major and token-major MMA variants, for spanned and resumable execution, for each admitted MMA query width before arena allocation. It uses existing resource/occupancy admission and does not change the selector, mathematical order, kernels or workspace ABI. The CUDA adapter reports the original driver error if kernel preparation fails, allowing arena probing to distinguish memory exhaustion from missing support. The backend-neutral workspace contract documents executable preparation before physical-budget sizing. There is no new reserve or persistent KV allocation.
+
+The original HTTP workload is the red integration regression. After the fix, automatic fitting selects 1508 MiB instead of the previous 1510 MiB and completes all 256 outputs at 48 Ki: prefill 1283.07 tok/s, decode 70.29 tok/s. This is one unprofiled measurement, not a claimed speed improvement. A focused unit fixture checks the quoted grant against shortened TG3-TG8 batches, resident/wrapped layouts, both conversion modes and Q8_0/Q4_0 plus F16/F16; all outputs match stock bits. The full span suite passes 20 tests/1995 assertions, resume passes 18/3456, and model-owner/admission passes 32/3884. Real-model context-end equivalence passes 8 tests/682 assertions, and focused memcheck passes with zero errors. A separate maximum-fit 96 Ki replay selects 1506 MiB and completes all 256 outputs at 981.16 prefill tok/s and 59.43 decode tok/s, with actual streaming observed (383 active pages at decode transition, 202 resident pages/layer and 212 ring slots). New results use `fix-48k-qualified` and `fix-96k-qualified`; the existing production container is restored and its health endpoint returns OK. The full sweep remains stopped. D7c remains incomplete; do not silently combine pre-fix frozen-runtime data with new-runtime measurements.
+
+At the user's request, a fresh four-mode D7c pipeline starts on 2026-10-15 under `benchmarks/results/d7-fixed-runtime-20261015`. It reruns all 128 primary points, rather than merging old and fixed-build measurements, because executable preparation changes physical maximum-fit budgets. `runtime-fixed` contains the coherent rebuilt server, shared libraries and correctness fixture; `runtime-fixed.json` records their hashes, the source diff, harness/corpus hashes and matrix settings. The profiler interposer is rebuilt against that snapshot and checked for unresolved symbols; all 53 harness checks pass. `runner.log` reports phase starts, accepted-point counts and throughput, mode-specific logs report arena probes, and `status.json` records running/failure/completion and production restoration. Successful primary sweeps generate `d7-maximum-fit-comparison.png` plus CSV before the forced-rejection oracle, 1024-output DFlash continuations and separate Nsight profiles run. The existing production container is temporarily stopped and restored on ordinary completion or failure. This launch is not D7 completion. The three complete pre-fix sweeps are separately plotted as `d7-closeout-20261014/d7-previous-three-mode-comparison.png`.
+
+## Post-regression decode optimization workstream
+
+Try the following candidates in order. A candidate is accepted and committed only after useful measured improvement, unchanged numerical/lifecycle qualification and a production implementation without experimental switches. Preserve rejected measurements but remove unsuccessful runtime changes. Six commits are a goal, not a reason to keep an ineffective optimization. Remaining D7 qualification stays separate.
+
+| Step | Candidate | Status |
+| --- | --- | --- |
+| O1 | Statically select dense-mask/strided MMA conversion; retain general compact/other-layout execution | Accepted; qualified default path |
+| O2 | Reuse immutable backend launch plans and metadata; retain per-use lease/bounds/generation checks | Accepted; bounded preparation cache |
+| O3 | Combine already-ready vector spans across ring wrap, preserving global split ownership and timely ring reuse | Trial rejected; separate mask-pitch correction retained |
+| O4 | Reduce repeated encoded-block scale/value decoding within existing tile storage | Accepted; bit-exact grouped strided conversion |
+| O5 | Prune provably unused padded-query work without changing valid-query MMA arithmetic or reduction order | Trial rejected; no throughput benefit |
+| O6 | Extend stable multi-query capture/replay with correct lease generations, cancellation and quoted resource costs | Trial rejected; no end-to-end gain |
+
+Baseline and candidate measurements cover TG1-TG8 separately, full resident spans, resident/ring/wrapped layouts, short tails and histories larger than the ring. Native quantized timing must include stock conversion, not compare encoded tile conversion against an already-converted FP16 control. The kernel benchmark uses the target's 24 query/4 KV head geometry; ordinary operator tests remain independent numerical controls. Repeat measurements, use unprofiled wall time for performance and profile only for attribution. Real-model checks use equal parents, matching prompts and at least 256 generated tokens; record accepted token throughput separately from speculative-round latency and acceptance.
+
+Every retained stage keeps existing stock-output and checkpoint/recurrent tests, negative bounds/cancellation tests and relevant CUDA sanitizers green. No numerical tolerance is widened, no native split topology is changed silently, and no read-completion fence is dropped. General scheduling/ownership work remains backend neutral; CUDA loading/kernel details stay in the backend. Quote and report additional device/host resource costs before accepting any footprint tradeoff. Temporarily stopped production is restored with its existing configuration after GPU tests.
+
+### O1 qualification
+
+The backend chooses a dense/strided input-policy entry when there is no compact mask and both stock conversion flags are zero. It calls the unchanged stock MMA arithmetic implementation; compact masks and all other conversion modes keep the general entry. The same registry and compiled-pair flags apply to every accepted KV pair. Native split IDs, checkpoint/finalization ordering and arena requirements are unchanged. No data buffer or CLI experiment flag is added; compiled kernel variants are the additional resource.
+
+The new mode-selection test fails before implementation, then passes 20 host planning tests/5017 assertions. Actual span/dispatch tests pass 19/1746, resumed session tests 17/3415 and the forced shared-memory rejection probe 32 assertions. Memcheck/synccheck report zero errors, racecheck zero hazards/errors/warnings, and all 70 ordinary CUDA snapshots remain exact. The expanded benchmark compares stock output bits before every measured case. A stale wide-planning test also failed identically in the preserved baseline: it assumed only Q8/Q4 kernels and compared rejection against a superseded plan. It now queries compiled-pair capability, retains the separate eight-query decode ceiling, and checks preservation of the latest plan; no runtime admission or tolerance was changed.
+
+Three unprofiled runs use 24 query/4 KV heads and encoded Q8_0/Q4_0 inputs. At 128 Ki over three spans, median TG3/TG4 attention time falls 453.18/454.27 to 379.84/380.90 us (about 16%). TG5-TG8 improve about 1.3-3.2% there and about 10% at 16 Ki. TG1/TG2 are unchanged paths and remain within about 0.6% in those controls. Contexts 16/64/128 Ki and an unaligned 131073-token tail all pass exact-output checks. These are operator wall times including submission, not whole-model throughput or a comparison against preconverted-only stock attention.
+
+Equal-parent real IQ4_XS MTP=3 controls use a 2240 MiB physical parent, b/ub=256/256, identical article prefixes and 256 outputs, with loaded-library isolation verified. Decode improves 94.56 to 95.49 tok/s at 16 Ki and 54.32 to 55.34 at 128 Ki (about 1% and 1.9%). All 256 token IDs and accepted/generated draft counts match at both points; prefill is essentially unchanged. The effective target KV grant is unchanged. These are individual full-request samples backed by repeated operator measurements, not confidence intervals. Artifacts are `benchmarks/results/kv-decode-optimizations-20261014/o1-model` and `/tmp/kv-o1-{baseline,candidate}-spans-{1,2,3}.log`. Production is restored healthy; the optimized local binary is not deployed into its image.
+
+### O2 qualification
+
+The CUDA provider keeps fixed eight-entry per-thread preparation caches for vector split plans and MMA launch geometry. Keys include device/compiler architecture, SM/warp counts, shared-memory limits, KV types, query/KV head counts, query width, token extent, span count, family and execution mode. They retain no tensor, buffer, lease or control-state addresses. MMA entries retain code pointers only; hits reapply mutable CUDA function attributes. Metadata validation and family selection run before lookup, and live memory-range/lease validation remains in the execution entries. Successful results alone are inserted; misses preserve caller output. The backend-neutral registry contract is unchanged.
+
+TDD first fails on the absent cache header, then passes bounded eviction/update/miss tests and independent changes to all sixteen key fields. Host/ASan/UBSan planning passes 22 tests/7057 assertions. Actual span tests pass 19/1746, resumed tests 17/3415 and the warmed-cache shared-memory rejection probe 32 assertions. CUDA memcheck/synccheck report zero errors; all 70 ordinary stock snapshots remain exact. The fixed TLS symbols total 3280 host bytes per calling thread; no GPU storage, workspace, stream or event is added. Captured/repartitioned owners still validate their own generations, rather than treating cached geometry as an execution authorization.
+
+Three alternating unprofiled baseline/candidate operator runs show approximately 1-2% lower short-context MMA preparation-inclusive latency; long-context changes are mostly small/noisy. Full IQ4_XS MTP=3 controls retain all 256 token IDs, draft counts and the equal 2240 MiB parent. The initial pair is -1.1% at 16 Ki and +0.47% at 128 Ki. Three additional short-context pairs give median 95.27 to 95.69 tok/s (+0.44%); including the initial pair reduces that median gain to about 0.23%. Prefill is essentially unchanged. This is a small measured preparation optimization, not a statistically established broad token-speed gain. Artifacts are `benchmarks/results/kv-decode-optimizations-20261014/o2-model{,-repeat-1,-repeat-2,-repeat-3}` and `/tmp/kv-o2-{baseline,candidate}-spans-{1,2,3}.log`. Production is restored healthy.
+
+### O3 rejected trial and related correctness fix
+
+A prototype vector entry accepts up to three tile-aligned span descriptors by value, caching them in 176 additional shared bytes per CTA. It follows the original global split/tile order, updates source pointers at physical seams and finalizes once. The common owner combines ready ring-wrap sources but still queues resident-prefix calculation separately, so it does not wait for streamed data before starting that prefix. It adds no global GPU buffer and leaves compact prefill and MMA execution unchanged.
+
+Host bounds tests and actual wrapped TG1/TG2 checks pass. The trial passes 18 streaming tests/3468 assertions, 19 span tests/1746 assertions, 2432 raw tile and 146 vector-wave checks, plus all 70 immutable stock snapshots. Existing launch-count regressions observe the intended three-to-two reduction with unchanged outputs. Three alternating 160-Ki native ring measurements use an identical harness and isolated libraries: TG1 median falls only 8.710 to 8.695 ms, while TG2 grows 8.698 to 8.872 ms (about 2% slower). Both retain the same copy counts; last-layer launch count drops five to four. The trial is rejected and its kernel, descriptors, dispatch changes and owner grouping are removed. Logs are `/tmp/kv-o3-{baseline,candidate}-native-{1,2,3}.log`; this is not counted as a successful speed optimization.
+
+The padded-mask test independently exposes an existing vector-prefix bug. The resume entry rewinds the mask's source offset correctly but supplies the active KV length as its row pitch. For TG2 with a larger mask-row pitch, the second query reads the wrong row; observed maximum output error is about 5.6e-5. Passing the actual tensor pitch fixes it without arithmetic changes. The retained regression alternates contiguous and padded mask views across ring wrap and reused sequences, comparing stock bits for both queries/layers. A rebuilt pure host resume test also updates its obsolete invalid-width example from five to nine: the underlying SIMT helper already admits eight queries. These are correctness/test fixes, not an O3 throughput claim. Final cleanup passes the restored host planner, 18 streaming tests/3456 assertions and the focused pitch test under memcheck/synccheck with zero errors. No fusion runtime code remains. Production is restored healthy.
+
+### O4 qualification
+
+The static dense/strided policy decodes aligned groups of eight Q8_0 or Q4_0 values using one block scale and four two-byte packed loads. Selection is per cache type, not hardcoded to a K/V pair. It retains the stock strided FP32 expression followed by FP16 rounding, including signed zero; contiguous conversion keeps its distinct stock expression. Unaligned groups, missing rows and other types fall back to the original pair converter. The shared staging-expansion loop now calls this helper rather than maintaining a duplicate trial loop. The encoded/FP16 tiles, cooperative loads, native splits, checkpoints and final reduction are unchanged. No persistent host/device allocation, stream, event or extra arena reservation is added.
+
+TDD starts with a missing-helper build failure. The final converter regression compares 32,125 groups per type against the original converter's bits for Q8_0/Q4_0/Q4_1/Q5_0/Q5_1/F16/BF16/F32, including unaligned groups, quant-block crossings, null padding, signed packed extremes and zero/subnormal/negative/maximum-finite FP16 block scales. Actual backend span tests pass 19 tests/1746 assertions; resumed streaming passes 18/3456. All 70 immutable ordinary CUDA snapshots remain exact. Converter memcheck and synccheck report zero errors. No tolerance is widened.
+
+Three alternating prototype operator runs preserve exact stock outputs at all 96 measured cases (TG1–TG8, one/two/three spans, 16/64/128 Ki and an unaligned 131073-token tail). TG3/TG4 median latency improves about 2–5%; TG5–TG8 about 8–10%; TG1/TG2 are essentially unchanged. A fresh run of the integrated, nonduplicated implementation confirms the improvement (128 Ki/three spans: TG3 369.91 us, TG4 369.92 us, TG8 496.69 us, versus baseline medians 376.75/377.89/543.18 us). These are preparation-inclusive operator wall times, not whole-model gains.
+
+Equal-parent IQ4_XS MTP=3 requests use 2240 MiB, b/ub=256, no UVM, identical prompts and 256 generated tokens. Decode moves 95.13 to 95.32 tok/s at 16 Ki and 55.31 to 55.75 at 128 Ki. All 256 token IDs and draft acceptance counts match at both points; prefill is unchanged within measurement noise. These single request pairs indicate a small end-to-end benefit, not a statistical confidence interval or a DFlash throughput claim. Artifacts are `benchmarks/results/kv-decode-optimizations-20261014/o4-model`, `/tmp/kv-o4-{baseline,candidate}-spans-{1,2,3}.log` and `/tmp/kv-o4-formal-*.log`. Production is restored with its existing image; the local optimization is not deployed.
+
+### O5 rejected trial
+
+A private dense-policy prototype skips max updates and scalar exponentiation for padded query columns. It preserves cooperative MMA calls, barriers, warp reductions and valid-query arithmetic; native and compact policies compile out the gating. The column-mapping regression starts with a missing-helper build failure, then passes host/ASan/UBSan tests (23 tests/96,489 assertions). Actual span/resume suites pass 19/1746 and 18/3456, and all 70 ordinary snapshots remain exact. Each operator benchmark case must also pass stock-bit comparison before timing.
+
+Two alternating 16/64/128-Ki runs show no payoff: three-span TG3 median is 54.43 to 55.29 us at 16 Ki and 368.84 to 372.60 us at 128 Ki; TG4 is 55.04 to 55.85 and 371.21 to 373.52 us. TG5–TG8 also regress roughly 1–2%. Smaller scalar operation count does not establish a throughput gain; additional gating did not pay for itself in these measurements. The prototype, policy flags and unused helper/test are removed, with the O4 path restored. Logs are `/tmp/kv-o5-{baseline,candidate}-spans-{1,2}.log`; this is not counted as a successful optimization. Production was restored automatically after the trial.
+
+### O6 rejected trial
+
+The prototype widens the guarded resident executor's ordinary-attention admission from TG1 to validated TG1–TG8. A live session uses it only when its exact query width has no trailing native output allocation and the whole target KV fits in resident planes; otherwise it retains the span path. This allows zero-extra-output TG2 on the tested GPU, including when an auxiliary MTP suffix holds the disjoint ring. It does not allocate full dequantized KV for wider quantized MMA, bypass a ring guard, retain caller graph metadata, or capture host-driven streaming operations. The existing lease/range/generation checks and cancellation retirement remain in force.
+
+TDD first rejects wider resident binding. The session regression initially needed its test reservation corrected (future active reservation 769, current placement 256); after that correction, the old implementation passes the numerical/ownership assertions but fails the intended capture-count assertion (zero rather than two). The prototype passes 15 capture tests/258 assertions and 21 session tests/2100 assertions. Owned-scratch TG2/TG3/TG4/TG8 cases retain ordinary stock output bits and reject metadata mutation; the guarded live TG2 test reuses two captures across five rounds and releases them on abort. Span and resumed suites pass 19/1746 and 18/3456, and all 70 ordinary snapshots remain exact. No numerical tolerance is relaxed.
+
+Equal-parent IQ4_XS/2240-MiB MTP=1 requests retain identical 256 token IDs and draft counts. Three 16-Ki baseline runs give 66.20/66.30/66.28 tok/s; candidate runs give 65.91/65.81/65.94, a median regression of about 0.56%. At 128 Ki, where streaming prevents the shortcut, 33.56 versus 33.52 tok/s is effectively unchanged. An MTP=3 short-context control gives 95.97 versus 95.75 tok/s, again no gain. Sampled process VRAM rises roughly 2 MiB despite an unchanged arena grant; this measures aggregate native pool/driver/capture use, not an exact per-object allocation quote. The direct shortcut also retains its per-layer host-publication wait, so successful capture is not by itself evidence of lower speculative-round latency. All prototype runtime/API/test additions are removed. Artifacts are `benchmarks/results/kv-decode-optimizations-20261014/o6-model{,-repeat-1,-repeat-2,-mtp3}` and `/tmp/kv-o6-*.log`.
+
+### Workstream disposition
+
+All six candidates have been tried in order. O1, O2 and O4 are retained as separate qualified commits; O3, O5 and O6 are rejected rather than adding slower trial paths. The independently discovered vector mask-pitch correction is its own correctness commit, not a speed-optimization success. Operator improvements must not be summed or represented as whole-model gains. Final cleanup rebuilds the complete server and restores production's existing image; this work does not deploy or push a new image/branch.
+
+Final restored-code qualification passes host preparation (22 tests/7057 assertions), the eight-type grouped converter, capture lifecycle (14/174), serial session lifecycle (20/2053), actual spans (19/1746), resumed streaming (18/3456), the warmed resource-rejection probe (32 assertions), and all 70 immutable ordinary CUDA snapshots. Actual target-GQA span kernels pass memcheck/synccheck with zero errors and racecheck with zero hazards/errors/warnings. Logs are `/tmp/kv-final-*.log`. Trial-only query-pruning and wider replay APIs/tests are absent from the final tree; unrelated untracked user files remain untouched.
+
+### Recurrent scheduling follow-up (2026-10-16)
+
+Pristine stock DFlash D=7 reaches 98.05 tok/s at its largest fitting 5376-token capacity. The fork with native attention and device rollback reaches 98.01; native attention with host rollback reaches 84.06; the full arena path reaches 82.44. These are three-run medians with identical 256 output IDs, IQ4_XS, Q8_0/Q4_0, batch/microbatch 256 and no UVM. Separate matched 4096-capacity Nsight captures show that 97.3% of snapshot D2H time already overlaps kernels, while selected-state uploads have no kernel overlap. Managed publication also fragments CUDA graph launches. Keep these diagnostic traces separate from unprofiled throughput and the unfinished D7 sweep.
+
+Implement three separately committed changes: layer-local restore dependencies, grouped snapshot publication, then stream-ordered staging reuse. Preserve unchanged tests and numerical arithmetic, and rerun target-only/MTP/DFlash controls and the maximum-fit sweep after integration.
+
+The first change submits selected-state uploads on the existing copy backend and puts a backend-neutral dependency at each recurrent state read. Restore completion has a separate event/lifetime from the following capture. The same copy queue consumes old host rows before publishing replacement rows, without another host/device state buffer. Existing two-slot staging and its arena quote are unchanged; per-plane events are prepared before arena allocation. Non-staged users retain the original completion protocol. TDD reproduces the rejected pending-restore/capture overlap, then covers selected rows, cancellation/draining and poisoned recovery. CPU/ASan/UBSan passes 19 tests/3414 assertions, CUDA passes 21/3414, and the unchanged real-model context-end oracle passes 8/682 across D=1/3/7 and both draft cache pairs. Initial timings do not establish a gain while early staging fences remain; final performance acceptance depends on the integrated changes and regression sweep.
+
+Grouped publication keeps ordinary snapshot writes together and uses one managed boundary per packed R/S plane. Each group contains exactly the produced snapshot indices; shortened S planes never publish old or padded rows. Non-packed backend layouts retain the checked row path. Both use the same publication bookkeeping, invalidation and coalesced D2H transfer implementation. The initial row implementation fails the new boundary-count regression (42 instead of 6 for three depth-seven layers); the grouped path passes it and exact snapshot checks. Padding, short widths 1/2/4/8, duplicate/missing groups and partial transfer failures are covered without editing the existing test bodies. The unchanged model oracle passes 8 tests/682 assertions. Three 5376-capacity, 1472-MiB DFlash D=7 samples give 84.50/84.17/84.42 tok/s, all with the same 256 IDs and draft counts as stock. This is a modest measured gain over the prior 82.44 median, not elimination of the rollback penalty. No device or host data buffer is added; plane aliases only add metadata.
+
+#### Performance acceptance and final disposition
+
+The user subsequently requires meaningful end-to-end gains for each retained candidate. A correct implementation or reduced synchronization count alone does not qualify. The stream-ordered staging candidate passes a deterministic CPU event/queue regression (host waits replaced by consumer waits), malformed acquire-plan rejection, legacy graph reuse and the unchanged GPU/numerical suites. It is nevertheless rejected: at 5376 capacity its median is 84.17 versus 84.42 without it; alternating 96-Ki pairs give 60.28/60.03 with it versus 60.29/60.09 without it. Removing the global restore fence/read dependencies gives 59.97/60.01 at 96 Ki versus 60.28/60.03 with both scheduling candidates, only about 0.3% benefit. Neither scheduling change earns its complexity. The provisional layer-local restore commit is reverted; the uncommitted slot-reuse candidate is removed. The original restore-completion barrier remains the correctness path, not a new performance feature.
+
+Only grouped publication is retained. On the final simplified tree, 5376-capacity DFlash D=7 gives 84.76/85.57/84.86 tok/s, a median gain of 2.95% over the earlier 82.44 median; all 256 token IDs and proposal counts match. Target KV is resident in both configurations, so the diagnostic 1472-MiB grant versus the earlier 1508-MiB grant does not cause KV uploads. A separate final 96-Ki/1472-MiB point gives 60.30 tok/s with identical IDs to the ablation controls; no larger-context speedup is claimed from that single point. Artifacts, frozen candidate/ablation runtimes and the rejected slot-reuse source diff remain under `benchmarks/results/recurrent-optimization-20261016`.
+
+Final qualification passes 20 CPU ASan/UBSan spill tests/3769 assertions, 22 CUDA spill tests/3769 assertions, spans 20/1995, resumed streaming 18/3456, model ownership/admission 32/3884, the unchanged real-model context-end oracle 8/682, and 53 harness checks. CUDA memcheck reports zero errors. No existing baseline test body or numerical tolerance is weakened. The requested follow-up is four fresh maximum-fit, non-UVM sweeps (target-only, MTP=3, DFlash D=3/7), 8-256 Ki in 8-Ki increments and 256 generated tokens per point. Plot those runs against the earlier MTP=3 series and review flagged regressions; do not mark the sweep complete merely because its background runner was launched.

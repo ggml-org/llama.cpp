@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "llama-graph.h"
+#include "../ggml/src/ggml-backend-memory.h"
 
 #include <map>
 #include <memory>
@@ -33,6 +34,8 @@ struct llama_memory_params {
     uint32_t kv_stream_auxiliary_layers = 0;
     bool kv_stream_rs_rollback = false;
     uint32_t kv_stream_max_rows = 0;
+    uint32_t kv_stream_max_decode_rows = 4;
+    ggml_backend_memory_lease_t bounded_cache_lease = nullptr;
 };
 
 enum llama_memory_status {

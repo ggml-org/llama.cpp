@@ -1,4 +1,5 @@
 #include "kv-stream-block-test.h"
+#include "../ggml/src/ggml-backend-execution.h"
 #include "../src/llama-kv-stream-model.h"
 #include <chrono>
 #include <cstdio>
@@ -15,7 +16,7 @@ static int benchmark_ring_decode(bool long_context) {
     const size_t active=long_context ? 163840 : 25601;
     const size_t ring_slots=long_context ? 273 : 96;
     const size_t pool_pages=long_context ? 1063 : 112;
-    for (uint32_t queries : {2u,3u,4u}) for (bool native : {false,true}) {
+    for (uint32_t queries : {1u,2u,3u,4u}) for (bool native : {false,true}) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,8,pool_pages);
         f.policy.initial_ring_slots=ring_slots;
         llama_kv_stream_policy_state placement;
@@ -81,6 +82,288 @@ int main(int argc, char ** argv) {
     if (argc > 1 && !std::strcmp(argv[1],"--verify-long-ring")) return verify_long_ring_exact();
     if (argc > 1 && !std::strcmp(argv[1],"--bench-ring-decode")) return benchmark_ring_decode(argc > 2 && !std::strcmp(argv[2],"160k"));
     testing t;
+    if (argc>1 && (!std::strcmp(argv[1],"--cuda") || !std::strcmp(argv[1],"--cuda-mask-pitch")))
+        t.test("strided_vector_masks_keep_stock_bits_across_ring_wrap", [&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        if (!t.assert_true(dev != nullptr)) return;
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        constexpr size_t active=32769;
+        for (uint32_t queries : {1u,2u}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,4,81);
+            f.policy.initial_ring_slots=65;
+            ggml_kv_stream_resume_plan plan;
+            if (!t.assert_true(get && get() && get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                    24,4,queries,(active+255)/256*256,plan) && f.attach() &&
+                    f.resident->configure_native_graph_attention(true) && f.resident->configure_resumed_decode(true))) return;
+            auto pin=f.binding->acquire();
+            block_workspace workspace(f,plan.bytes,37);
+            block_inputs input(f,active,queries,false,24);
+            ggml_context_ptr context(ggml_init({8192,nullptr,true}));
+            const size_t pitch=input.padded+256;
+            auto * storage=ggml_new_tensor_2d(context.get(),GGML_TYPE_F16,int64_t(pitch),queries);
+            auto * mask=ggml_view_2d(context.get(),storage,int64_t(input.padded),queries,pitch*sizeof(ggml_fp16_t),0);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(context.get(),backend.get()));
+            if (!t.assert_true(bool(buffer))) return;
+            std::vector<ggml_fp16_t> masks(pitch*queries);
+            for (size_t row=0;row<queries;++row) for (size_t token=0;token<pitch;++token)
+                masks[row*pitch+token]=ggml_fp32_to_fp16(token < active-queries+row+1 ? 0.f : -INFINITY);
+            ggml_backend_tensor_set(storage,masks.data(),0,ggml_nbytes(storage));
+            for (int round=0;round<3;++round) {
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,32,SIZE_MAX,{queries,true}))) return;
+                for (uint32_t layer=0;layer<2;++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,round == 1 ? mask : input.mask,
+                            input.output,active,1.f/16,workspace.lease.get(),true,32))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+                t.assert_true(!f.resident->sequence_active());
+            }
+        }
+    });
+    if (argc>1 && (!std::strcmp(argv[1],"--cuda") || !std::strcmp(argv[1],"--cuda-mask-routing")))
+        t.test("dense_decode_and_compact_prefill_can_alternate_without_numerical_drift", [&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        if (!t.assert_true(dev != nullptr)) return;
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(backend && get && get() && get()->version >= 14 && get()->prefill_workspace)) return;
+        for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}, {GGML_TYPE_Q5_1,GGML_TYPE_Q4_1},
+                {GGML_TYPE_F16,GGML_TYPE_Q4_0}}) for (size_t active : {size_t(2049),size_t(8193)}) {
+            const size_t capacity=(active+255)/256*256;
+            fixture f(backend.get(),true,pair.first,pair.second,capacity,false,2,2,12);
+            size_t scratch=0;
+            if (!t.assert_true(get()->prefill_workspace(backend.get(),pair.first,pair.second,12,2,2,capacity,scratch) &&
+                    f.attach() && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true) && f.resident->configure_prefill_workspace(scratch))) return;
+            auto pin=f.binding->acquire();
+            block_workspace workspace(f,scratch,27);
+            for (uint32_t queries : {1u,2u}) {
+                block_inputs input(f,active,queries,false,12);
+                ggml_context_ptr context(ggml_init({8192,nullptr,true}));
+                auto * bounds=ggml_new_tensor_2d(context.get(),GGML_TYPE_I32,4,queries);
+                ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(context.get(),backend.get()));
+                if (!t.assert_true(bool(pin) && bool(buffer))) return;
+                std::vector<int32_t> intervals(4*queries);
+                for (size_t row=0;row<queries;++row) {
+                    intervals[4*row]=0;
+                    intervals[4*row+1]=int32_t(active-queries+row+1);
+                    intervals[4*row+2]=int32_t(capacity);
+                    intervals[4*row+3]=1;
+                }
+                ggml_backend_tensor_set(bounds,intervals.data(),0,ggml_nbytes(bounds));
+                for (bool compact : {false,true,false}) {
+                    if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,!compact}))) return;
+                    for (uint32_t layer=0;layer<2;++layer) {
+                        const auto expected=ordinary(f,input,layer);
+                        if (!t.assert_true(f.resident->compute_streamed(layer,input.q,compact ? bounds : input.mask,
+                                input.output,active,1.f/16,workspace.lease.get(),true,4))) return;
+                        ggml_backend_synchronize(backend.get());
+                        t.assert_true(same_float_bits(expected,input.read()));
+                    }
+                    t.assert_true(!f.resident->sequence_active());
+                }
+            }
+        }
+    });
+    if (argc>1 && !std::strcmp(argv[1],"--cuda")) t.test("prefill_device_requirements_do_not_grow_with_history", [&](testing & t) {
+        ggml_backend_load_all(); auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        size_t first=0;
+        for (size_t context : {size_t(4096),size_t(65536)}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,context,false,2,2,12);
+            llama_kv_stream_model_config config;
+            config.backend=backend.get(); config.host=f.host->config(); config.host.cache_id=0;
+            config.pool_bytes=f.policy.pool_bytes; config.max_batch_rows=256; config.query_heads=12;
+            auto stream=llama_kv_stream_model::create(config);
+            if (!t.assert_true(bool(stream) && stream->bounded_prefill())) return;
+            llama_kv_stream_memory_requirements requirements;
+            if (!t.assert_true(stream->memory_requirements(requirements))) return;
+            if (!first) first=requirements.attention_prefill_bytes;
+            t.assert_equal(first,requirements.attention_prefill_bytes);
+        }
+    });
+    if (argc>1 && !std::strcmp(argv[1],"--cuda")) t.test("bounded_prefill_waves_match_stock_without_gather_or_output_extras", [&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(get && get() && get()->version >= 13 && get()->prefill_workspace)) return;
+        for (auto pair : {std::pair{GGML_TYPE_F16,GGML_TYPE_F16}, {GGML_TYPE_BF16,GGML_TYPE_BF16},
+                {GGML_TYPE_Q8_0,GGML_TYPE_Q8_0}, {GGML_TYPE_Q8_0,GGML_TYPE_Q5_0}, {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},
+                {GGML_TYPE_Q5_0,GGML_TYPE_Q8_0}, {GGML_TYPE_Q5_0,GGML_TYPE_Q5_0}, {GGML_TYPE_Q5_0,GGML_TYPE_Q4_0},
+                {GGML_TYPE_Q4_0,GGML_TYPE_Q8_0}, {GGML_TYPE_Q4_0,GGML_TYPE_Q5_0}, {GGML_TYPE_Q4_0,GGML_TYPE_Q4_0},
+                {GGML_TYPE_Q5_1,GGML_TYPE_Q4_1}, {GGML_TYPE_Q4_1,GGML_TYPE_Q5_1},
+                {GGML_TYPE_Q4_0,GGML_TYPE_F16}, {GGML_TYPE_F16,GGML_TYPE_Q4_0}})
+            for (size_t active : {size_t(2049),size_t(32769)}) {
+            if (active > 2049 && pair != std::pair{GGML_TYPE_F16,GGML_TYPE_F16} &&
+                    pair != std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}) continue;
+            const size_t capacity=(active+255)/256*256;
+            fixture f(backend.get(),true,pair.first,pair.second,capacity,false,2,2,12);
+            size_t scratch=0;
+            if (!t.assert_true(get()->prefill_workspace(backend.get(),pair.first,pair.second,12,2,1024,capacity,scratch))) return;
+            if (!t.assert_true(f.attach() && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_prefill_workspace(scratch))) return;
+            t.assert_true(!f.resident->configure_prefill_workspace(SIZE_MAX));
+            auto pin=f.binding->acquire();
+            block_workspace workspace(f,scratch);
+            {
+                block_workspace short_workspace(f,scratch-1,23);
+                block_inputs input(f,active,9,false,12);
+                const auto before=input.read();
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{9,false}))) return;
+                t.assert_true(!f.resident->compute_streamed(0,input.q,input.mask,input.output,active,1.0f/16,
+                    short_workspace.lease.get(),true,4));
+                t.assert_true(same_float_bits(before,input.read()));
+            }
+            for (uint32_t queries : {1u,2u,3u,4u,8u,9u,64u,129u,256u,512u,1024u}) {
+                block_inputs input(f,active,queries,false,12);
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
+                for (uint32_t layer=0;layer<2;++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,
+                            active,1.0f/16,workspace.lease.get(),true,4))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+                ggml_context_ptr bounds_context(ggml_init({8192,nullptr,true}));
+                auto * bounds=ggml_new_tensor_2d(bounds_context.get(),GGML_TYPE_I32,4,queries);
+                ggml_backend_buffer_ptr bounds_buffer(ggml_backend_alloc_ctx_tensors(bounds_context.get(),backend.get()));
+                if (!t.assert_true(bool(bounds_buffer))) return;
+                std::vector<ggml_backend_execution_mask_interval> intervals(queries);
+                for (size_t row=0; row<queries; ++row)
+                    intervals[row]={0,int32_t(active-queries+row+1),int32_t(capacity),1};
+                ggml_backend_tensor_set(bounds,intervals.data(),0,ggml_nbytes(bounds));
+                if (queries == 9 && active == 2049) {
+                    const auto before=input.read();
+                    auto * previous=bounds->data;
+                    bounds->data=static_cast<char *>(ggml_backend_buffer_get_base(bounds_buffer.get()))+
+                        ggml_backend_buffer_get_size(bounds_buffer.get())-sizeof(int32_t);
+                    if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
+                    t.assert_true(!f.resident->compute_streamed(0,input.q,bounds,input.output,
+                        active,1.f/16,workspace.lease.get(),true,4));
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(before,input.read()));
+                    bounds->data=previous;
+                    block_workspace short_workspace(f,scratch-1,24);
+                    if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
+                    t.assert_true(!f.resident->compute_streamed(0,input.q,bounds,input.output,
+                        active,1.f/16,short_workspace.lease.get(),true,4));
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(before,input.read()));
+                }
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
+                for (uint32_t layer=0; layer<2; ++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,bounds,input.output,
+                            active,1.f/16,workspace.lease.get(),true,4))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+            }
+        }
+    });
+    if (argc>1 && (!std::strcmp(argv[1],"--cuda") || !std::strcmp(argv[1],"--cuda-oversized-wave")))
+        t.test("full_ring_transfers_above_wave_target_match_stock_tg1_tg8", [&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        constexpr size_t active=32769, ring_pages=100;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,4,116);
+        f.policy.initial_ring_slots=ring_pages;
+        llama_kv_stream_policy_state placement;
+        if (!t.assert_true(llama_kv_stream_policy_initialize(f.policy,placement).status == llama_kv_stream_policy_status::success &&
+                f.attach(&placement) && f.resident->configure_native_graph_attention(true) &&
+                f.resident->configure_resumed_decode(true))) return;
+        t.assert_equal(size_t(8),size_t(placement.resident_pages_per_layer));
+        t.assert_equal(ring_pages,size_t(placement.ring_slots));
+        auto pin=f.binding->acquire();
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        size_t bytes=0;
+        if (!t.assert_true(get && get() && get()->decode_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                24,4,8,f.host->layout().tokens,bytes))) return;
+        block_workspace workspace(f,bytes);
+        for (uint32_t queries=1;queries<=8;++queries) {
+            t.out << "queries=" << queries << '\n';
+            block_inputs input(f,active,queries,false,24);
+            if (!t.assert_true(f.resident->begin_sequence({0,1},active,ring_pages,SIZE_MAX,{queries,true}))) return;
+            for (uint32_t layer=0;layer<2;++layer) {
+                const auto expected=ordinary(f,input,layer);
+                if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,
+                        active,1.f/16,workspace.lease.get(),true,ring_pages))) return;
+                ggml_backend_synchronize(backend.get());
+                t.assert_true(same_float_bits(expected,input.read()));
+            }
+            t.assert_true(!f.resident->sequence_active());
+        }
+    });
+    if (argc>1 && !std::strcmp(argv[1],"--cuda")) t.test("compiled_decode_pairs_share_complete_span_routing", [&](testing & t) {
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        for (auto key : {GGML_TYPE_Q8_0,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0})
+            for (auto value : {GGML_TYPE_Q8_0,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0}) {
+            fixture f(backend.get(),true,key,value,2049,false,2,2,12);
+            if (!t.assert_true(f.attach() && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true))) return;
+            auto pin=f.binding->acquire();
+            size_t bytes=0;
+            if (!t.assert_true(get()->decode_workspace(backend.get(),key,value,12,2,8,2304,bytes))) return;
+            block_workspace workspace(f,bytes);
+            for (uint32_t queries : {3u,4u,8u}) {
+                block_inputs input(f,2049,queries,false,12);
+                if (!t.assert_true(f.resident->begin_sequence({0,1},2049,4,SIZE_MAX,{queries,true}))) return;
+                for (uint32_t layer=0; layer<2; ++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,
+                            2049,1.f/16,workspace.lease.get(),true,4))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                    t.assert_equal(size_t(1),f.resident->last_attention_calls());
+                }
+            }
+        }
+    });
+    if (argc>1 && (!std::strcmp(argv[1],"--cuda") || !std::strcmp(argv[1],"--cuda-bf16-regression")))
+        t.test("resident_bf16_decode_matches_stock_at_tail_and_page_boundaries", [&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        for (size_t active : {4095u,4096u,4097u,4254u,4255u,4256u,4352u,4353u}) {
+            fixture f(backend.get(),true,GGML_TYPE_BF16,GGML_TYPE_BF16,active,false,2,4,64);
+            ggml_kv_stream_layout page;
+            ggml_kv_stream_layout_make(f.policy.shape,256,page);
+            f.policy.pool_bytes=page.bytes*64;
+            if (!t.assert_true(f.attach() && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true))) return;
+            auto pin=f.binding->acquire();
+            size_t bytes=0;
+            if (!t.assert_true(get()->decode_workspace(backend.get(),GGML_TYPE_BF16,GGML_TYPE_BF16,
+                    24,4,8,f.host->layout().tokens,bytes))) return;
+            block_workspace workspace(f,bytes);
+            for (uint32_t queries : {1u,2u,3u,4u,5u,6u,7u,8u}) {
+                block_inputs input(f,active,queries,false,24);
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,true}))) return;
+                for (uint32_t layer=0; layer<2; ++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,
+                            active,1.f/16,workspace.lease.get(),true,4))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+            }
+        }
+    });
     t.test("resume_layout_is_bounded_and_transactional", [&](testing & t) {
         ggml_kv_stream_resume_plan plan;
         if (!t.assert_true(ggml_kv_stream_resume_layout_make(24,1,3,8,plan))) return;

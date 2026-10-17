@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "artifacts": {
+    "target": {
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+      "filename": "Qwen3.8-27B-UD-IQ4_XS.gguf",
+      "size": 14252845984,
+      "sha256": "40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199"
+    },
+    "draft": {
+      "repo": "incoai/Qwen3.8-27B-DFlash2-GGUF",
+      "revision": "51962825493a48b846b40126d35c799ac4093ad0",
+      "filename": "Qwen3.8-27B-DFlash2-Q4_K_M.gguf",
+      "size": 1143006816,
+      "sha256": "1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd"
+    },
+    "draft_config": {
+      "repo": "incoai/Qwen3.8-27B-DFlash2",
+      "revision": "015e795645c74b1a0eeef3b570031fb62e769bc5",
+      "filename": "config.json",
+      "size": 1239,
+      "sha256": "873e3556509b0da06e29654ba00d4944888d4b5e8a33afde25f7eb27d321e980"
+    }
+  }
+}

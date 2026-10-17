@@ -8,6 +8,7 @@
 #include "llama-io.h"
 #include "llama-memory.h"
 #include "llama-memory-hybrid.h"
+#include "llama-memory-bounded-kv.h"
 #include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
 #include "llama-kv-stream-positions.h"
@@ -36,9 +37,9 @@ static void llama_log_memory_phase(const llama_context_memory * memory) {
     llama_context_memory_diagnostics d;
     if (!memory || !memory->diagnostics(d)) return;
     const char * phase = d.kv_device_suspended ? "suspended" : d.phase == llama_memory_text_phase::decode ? "decode" : "prefill";
-    LLAMA_LOG_WARN("memory_phase: phase=%s parent=%zu compute=%zu kv_pool=%zu writer=%zu attention=%zu unused=%zu reclaimed_compute=%zu capture=external transition_us=%" PRIu64 " arena_gen=%" PRIu64 " kv_revision=%" PRIu64 " resident_pages=%u ring_slots=%u active_pages=%u streaming=%d last_h2d_bytes=%zu last_h2d_calls=%zu copy_ms=%.3f elapsed_ms=%.3f\n",
+    LLAMA_LOG_WARN("memory_phase: phase=%s parent=%zu compute=%zu kv_pool=%zu writer=%zu attention=%zu persistent_kv=%zu publication_stage=%zu unused=%zu reclaimed_compute=%zu capture=external transition_us=%" PRIu64 " arena_gen=%" PRIu64 " kv_revision=%" PRIu64 " resident_pages=%u ring_slots=%u active_pages=%u streaming=%d last_h2d_bytes=%zu last_h2d_calls=%zu copy_ms=%.3f elapsed_ms=%.3f\n",
         phase,d.parent_bytes,d.workspace_bytes,d.kv_pool_bytes,d.kv_writer_bytes,
-        d.kv_attention_bytes,d.unused_bytes,d.reclaimed_workspace_bytes,
+        d.kv_attention_bytes,d.persistent_cache_bytes,d.publication_stage_bytes,d.unused_bytes,d.reclaimed_workspace_bytes,
         d.last_transition_us,d.arena_generation,d.layout_revision,
         d.resident_pages_per_layer,d.ring_slots,d.active_pages,
         int(d.streaming_active),d.last_copy_bytes,d.last_copy_calls,
@@ -271,11 +272,6 @@ llama_context::llama_context(
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
     cparams.shared_device_memory_bytes = params.shared_device_memory_bytes;
     cparams.kv_stream_auxiliary_layers = params.kv_stream_auxiliary_layers;
-    const bool streamed_rs_rollback = cparams.kv_stream_auxiliary_layers == 1 &&
-        cparams.n_rs_seq > 0 && cparams.n_rs_seq <= 3;
-    if (cparams.kv_stream_auxiliary_layers && cparams.n_rs_seq > 3) {
-        throw std::runtime_error("KV-stream recurrent rollback supports depth 1-3");
-    }
     if (cparams.kv_stream_auxiliary_layers > 1) {
         throw std::runtime_error("model requests " + std::to_string(cparams.kv_stream_auxiliary_layers) +
             " MTP KV layers; adaptive KV currently supports only a single Qwen MTP layer");
@@ -283,6 +279,12 @@ llama_context::llama_context(
     if (cparams.kv_stream_auxiliary_layers && !cparams.kv_streaming()) {
         throw std::runtime_error("auxiliary KV cache requires an enabled KV streaming pool or arena");
     }
+    llama_recurrent_rollback_plan rollback_plan;
+    if (cparams.kv_streaming() && !llama_recurrent_rollback_plan_make(
+            cparams.n_rs_seq,cparams.kv_stream_auxiliary_layers != 0,cparams.n_ubatch,rollback_plan)) {
+        throw std::runtime_error("KV-stream target rollback requires depth 0-7 (embedded MTP: 0-3) and ubatch >= depth+1");
+    }
+    const bool streamed_rs_rollback=cparams.kv_streaming() && rollback_plan.host_spill;
     if (cparams.kv_stream_pool_bytes && cparams.shared_device_memory_bytes) {
         throw std::runtime_error("kv_stream_pool_bytes and shared_device_memory_bytes are mutually exclusive");
     }
@@ -327,6 +329,39 @@ llama_context::llama_context(
         mtp_target_ctx = params.ctx_other;
     }
     cparams.mtp_publish_host = bool(mtp_attached);
+
+    if (model.arch == LLM_ARCH_DFLASH && params.ctx_other && params.ctx_other->get_cparams().kv_streaming()) {
+        auto * target=params.ctx_other;
+        const uint32_t block_rows=target->get_cparams().kv_stream_decode_rows();
+        if (target->get_model().arch != LLM_ARCH_QWEN35 || target->get_cparams().kv_stream_auxiliary_layers ||
+                !target->get_model().hparams.n_embd ||
+                !target->compute_memory || params.swa_full || !hparams.n_swa || !hparams.dflash_selector_rank ||
+                hparams.dflash_block_size < 2 || hparams.dflash_block_size > 8 ||
+                block_rows < 2 || block_rows > hparams.dflash_block_size || block_rows > cparams.n_ubatch ||
+                cparams.n_seq_max != 1 || cparams.n_rs_seq ||
+                cparams.n_ctx != target->n_ctx() || !cparams.offload_kqv || !cparams.flash_attn ||
+                model.devices.size() != 1 || model.devices.front().dev != target->get_model().devices.front().dev ||
+                model.target_layer_ids.empty() || model.target_layer_ids.size() > INT32_MAX/target->get_model().hparams.n_embd ||
+                hparams.n_embd_inp_enc() != model.target_layer_ids.size()*target->get_model().hparams.n_embd) {
+            throw std::runtime_error("incompatible serial DFlash2 context for adaptive target arena");
+        }
+        for (size_t i=0;i<model.target_layer_ids.size();++i) {
+            const auto id=model.target_layer_ids[i];
+            if (id < 0 || uint32_t(id) > target->get_model().hparams.n_layer() ||
+                    std::find(model.target_layer_ids.begin(),model.target_layer_ids.begin()+i,id) != model.target_layer_ids.begin()+i) {
+                throw std::runtime_error("invalid DFlash2 target feature mapping");
+            }
+        }
+        // Configure every retained feature before a child can capture the target's arena addresses.
+        target->serial_feature_producer=true;
+        target->serial_feature_layers=model.target_layer_ids;
+        for (auto id : model.target_layer_ids) target->set_embeddings_layer_inp(uint32_t(id),true);
+        target->sched_reserve();
+        serial_target_ctx=target;
+        cparams.serial_block_rows=block_rows;
+        cparams.embeddings_nextn=true;
+        cparams.embeddings_nextn_masked=false;
+    }
 
     if (cparams.kv_stream_auxiliary_layers || cparams.mtp_publish_host) {
         // MTP consumes these outputs; measure their graph shape before borrowing the shared arena.
@@ -482,6 +517,57 @@ llama_context::llama_context(
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
+        if (serial_target_ctx) {
+            llama_memory_cache_requirement cache;
+            cache.identity={2,1}; cache.role=llama_memory_cache_role::bounded_resident;
+            cache.layers=hparams.n_layer(); cache.history_rows=cparams.n_ctx_seq;
+            cache.window_rows=hparams.n_swa; cache.headroom_rows=cparams.n_ubatch; cache.row_padding=256;
+            cache.format={params.type_k,params.type_v,hparams.n_embd_head_k(0),hparams.n_embd_head_v(0),hparams.n_head_kv(0),false};
+            const uint64_t kw=uint64_t(cache.format.key_head_dim)*cache.format.kv_heads;
+            const uint64_t vw=uint64_t(cache.format.value_head_dim)*cache.format.kv_heads;
+            if (params.type_k < GGML_TYPE_F32 || params.type_k >= GGML_TYPE_COUNT ||
+                    params.type_v < GGML_TYPE_F32 || params.type_v >= GGML_TYPE_COUNT ||
+                    !ggml_blck_size(params.type_k) || !ggml_blck_size(params.type_v) ||
+                    kw > INT64_MAX || vw > INT64_MAX || kw > SIZE_MAX/ggml_type_size(params.type_k) ||
+                    vw > SIZE_MAX/ggml_type_size(params.type_v) ||
+                    kw%ggml_blck_size(params.type_k) || vw%ggml_blck_size(params.type_v)) {
+                throw std::runtime_error("invalid bounded draft KV geometry");
+            }
+            const size_t kr=ggml_row_size(params.type_k,int64_t(kw)), vr=ggml_row_size(params.type_v,int64_t(vw));
+            if (kr > SIZE_MAX-vr) throw std::runtime_error("bounded draft KV row size overflow");
+            cache.row_bytes=kr+vr;
+            std::vector<uint32_t> ids;
+            for (uint32_t il=0;il<hparams.n_layer();++il) {
+                if (!hparams.is_swa(il) || !hparams.has_kv(il) ||
+                        hparams.n_embd_head_k(il) != cache.format.key_head_dim ||
+                        hparams.n_embd_head_v(il) != cache.format.value_head_dim ||
+                        hparams.n_head_kv(il) != cache.format.kv_heads || model.dev_layer(il) != model.devices.front().dev) {
+                    throw std::runtime_error("serial draft arena requires one homogeneous resident SWA group");
+                }
+                ids.push_back(il);
+            }
+            auto * parent=serial_target_ctx->compute_memory.get();
+            auto * buft=ggml_backend_buffer_get_type(parent->shared_parent());
+            llama_memory_bounded_kv_layout layout;
+            if (!llama_memory_bounded_kv_layout_make(cache,ids,buft,layout)) {
+                throw std::runtime_error("invalid bounded draft allocation quote");
+            }
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(serial_target_ctx->memory.get());
+            auto * recurrent=hybrid ? hybrid->get_mem_recr() : nullptr;
+            const auto * bank=recurrent ? recurrent->spill_bank() : nullptr;
+            if (bank && bank->staged_device_bytes() && !serial_target_ctx->publication_stage) {
+                auto stage=parent->reserve_staging(bank->staged_device_bytes());
+                if (!stage || !recurrent->bind_spill_stage(stage->lease()))
+                    throw std::runtime_error("rollback publication staging does not fit the declared serial arena");
+                serial_target_ctx->publication_stage=std::move(stage);
+                serial_target_ctx->sched_reserve_state.invalidate();
+                serial_target_ctx->sched_reserve();
+            }
+            if (!(serial_cache=parent->reserve_bounded_cache(layout))) {
+                throw std::runtime_error("bounded draft KV does not fit the declared serial arena");
+            }
+            params_mem.bounded_cache_lease=serial_cache->lease();
+        }
         params_mem.mtp_host_cache = mtp_attached.get();
         if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
             params_mem.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
@@ -489,6 +575,7 @@ llama_context::llama_context(
             params_mem.kv_stream_auxiliary_layers = cparams.kv_stream_auxiliary_layers;
             params_mem.kv_stream_rs_rollback = streamed_rs_rollback;
             params_mem.kv_stream_max_rows = cparams.n_ubatch;
+            params_mem.kv_stream_max_decode_rows = rollback_plan.workspace_rows;
             for (auto & backend : backends) if (ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 params_mem.kv_stream_backend = backend.get(); break;
             }
@@ -496,6 +583,12 @@ llama_context::llama_context(
         }
 
         memory.reset(model.create_memory(params_mem, cparams));
+        if (cparams.kv_streaming()) {
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(memory.get());
+            auto * stream=hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+            cparams.kv_stream_prefill=stream && stream->bounded_prefill();
+            cparams.kv_stream_mask=stream && stream->compact_prefill_mask() && hybrid->get_mem_attn()->supports_mask_bounds();
+        }
         if (mtp_attached) {
             auto * draft_kv = dynamic_cast<llama_kv_cache *>(memory.get());
             if (!draft_kv || !draft_kv->attach_mtp_auxiliary_cache(mtp_attached, mtp_target_stream)) {
@@ -525,7 +618,7 @@ llama_context::llama_context(
                 }
             }
 
-            if ((cparams.kv_streaming() || cparams.mtp_publish_host) &&
+            if ((cparams.kv_streaming() || cparams.mtp_publish_host || cparams.serial_block_rows) &&
                     ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 buft = llama_kv_stream_device_buffer_type(model.devices.front().dev);
                 if (!buft) throw std::runtime_error("missing device-local KV/compute buffer type");
@@ -630,6 +723,7 @@ llama_context::~llama_context() {
     // Release scheduler leases while the backend objects are still alive.
     release_kv_workspaces(true);
     compute_memory.reset();
+    if (serial_cache || publication_stage) { memory.reset(); serial_cache.reset(); publication_stage.reset(); }
     sched.reset();
     compute_arenas.clear();
 }
@@ -749,6 +843,9 @@ bool llama_context::prepare_compute_arenas(
     if (!llama_compute_workspace_plan_make(backend_buft, measurements, n_phases, plan)) {
         return false;
     }
+    if (compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache())) {
+        return compute_memory->covers_workspace(plan);
+    }
 
     llama_kv_stream_model * stream = nullptr;
     if (cparams.kv_streaming() && memory) {
@@ -757,12 +854,12 @@ bool llama_context::prepare_compute_arenas(
     }
     if (!cparams.pipeline_parallel && cparams.n_seq_max == 1 &&
             llama_context_memory::supported(backend_ptrs)) {
-        auto * serial_parent = cparams.mtp_publish_host && mtp_target_ctx ?
-            mtp_target_ctx->compute_memory.get() : nullptr;
-        if (cparams.mtp_publish_host && !serial_parent) return false;
+        auto * source = serial_target_ctx ? serial_target_ctx : cparams.mtp_publish_host ? mtp_target_ctx : nullptr;
+        auto * serial_parent = source ? source->compute_memory.get() : nullptr;
+        if ((cparams.mtp_publish_host || cparams.serial_block_rows) && !serial_parent) return false;
         compute_memory = llama_context_memory::create(
             sched.get(),backend_ptrs,plan,stream,serial_parent);
-        if (!compute_memory && serial_parent) {
+        if (!compute_memory && serial_parent && !cparams.serial_block_rows) {
             // Keep separate scratch if the shared budget cannot hold the draft graph and live KV scratch.
             LLAMA_LOG_INFO("%s: MTP graph does not fit target scratch; using a separate workspace\n", __func__);
             compute_memory = llama_context_memory::create(
@@ -796,16 +893,36 @@ void llama_context::sched_reserve() {
 
     synchronize();
     release_kv_workspaces(false);
-    compute_memory.reset();
-    sched.reset();
-    compute_arenas.clear();
+    const bool keep_parent=compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache());
+    if (keep_parent) {
+        if (!compute_memory->retire_graph()) throw std::runtime_error("failed to retire serial arena graph");
+        if (serial_cache) {
+            if (!compute_memory->prepare_serial_consumer(llama_memory_text_phase::prefill))
+                throw std::runtime_error("failed to retain serial draft workspace for remeasurement");
+        } else {
+            if (!compute_memory->prepare_serial_target()) throw std::runtime_error("failed to drain serial arena consumer");
+            const auto signal=compute_memory->signal_text_phase({llama_memory_text_phase::prefill,1,true,true,false});
+            if (signal.status != llama_memory_text_phase_status::changed && signal.status != llama_memory_text_phase_status::unchanged)
+                throw std::runtime_error("failed to retain serial arena for graph remeasurement");
+        }
+        ggml_backend_sched_reset(sched.get());
+    } else {
+        compute_memory.reset(); sched.reset(); compute_arenas.clear();
+    }
+    struct reserve_intent_restore {
+        llama_cparams & params;
+        bool decode=params.kv_stream_decode, span=params.mtp_span_attention;
+        ~reserve_intent_restore() { params.kv_stream_decode=decode; params.mtp_span_attention=span; }
+    } intent{cparams};
+    cparams.kv_stream_decode=false; cparams.mtp_span_attention=false;
 
     const int64_t t_start_us = ggml_time_us();
 
     const uint32_t n_seqs = cparams.n_seq_max;
-    const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+    const uint32_t n_injection = std::min(cparams.n_ctx, cparams.n_ubatch);
+    const uint32_t n_tokens = cparams.serial_graph_reserve_rows(false);
 
-    const size_t max_nodes = this->graph_max_nodes(n_tokens);
+    const size_t max_nodes = this->graph_max_nodes(n_injection);
 
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
@@ -815,7 +932,7 @@ void llama_context::sched_reserve() {
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
     gf_res_prev_active = nullptr;
 
-    sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+    if (!keep_parent) sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
     ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
 
     llama_memory_context_ptr mctx;
@@ -867,10 +984,38 @@ void llama_context::sched_reserve() {
             n_seqs, n_seqs, n_seqs, mctx.get(), true,
             measurements.data() + backend_ptrs.size());
         if (!gf_pp || !gf_tg) return false;
+        if (model.arch == LLM_ARCH_DFLASH && model.hparams.n_embd_inp_enc() > 0) {
+            // Injection and block prediction use different graph inputs but the same workspace.
+            std::vector<size_t> injection(backend_ptrs.size());
+            if (!graph_reserve(n_injection, n_seqs, std::min(n_injection,cparams.n_outputs_max), mctx.get(), true, injection.data(), true)) return false;
+            for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+                measurements[i] = std::max(measurements[i], injection[i]);
+                measurements[backend_ptrs.size()+i] = std::max(measurements[backend_ptrs.size()+i], injection[i]);
+            }
+        }
+        if (cparams.serial_block_rows) {
+            for (uint32_t width=1;width<=cparams.serial_block_rows;++width) {
+                std::vector<size_t> block(backend_ptrs.size());
+                auto * graph=graph_reserve(width,1,std::min(width,cparams.n_outputs_max),mctx.get(),true,block.data());
+                if (!graph) return false;
+                for (int node=0;node<ggml_graph_n_nodes(graph);++node) {
+                    auto * op=ggml_graph_node(graph,node);
+                    if (op->op != GGML_OP_FLASH_ATTN_EXT) continue;
+                    bool supported=false;
+                    for (auto * backend : backend_ptrs) if (ggml_backend_get_device(backend) == model.devices.front().dev)
+                        supported=ggml_backend_supports_op(backend,op);
+                    if (!supported) throw std::runtime_error("no compiled device-valid native attention for serial draft block");
+                }
+                for (size_t i=0;i<backend_ptrs.size();++i) {
+                    measurements[i]=std::max(measurements[i],block[i]);
+                    measurements[backend_ptrs.size()+i]=std::max(measurements[backend_ptrs.size()+i],block[i]);
+                }
+            }
+        }
         const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
-        if (cparams.n_rs_seq && spill_flag && std::strcmp(spill_flag,"1") == 0 && n_seqs == 1) {
-            const uint32_t width=std::min(n_tokens,cparams.n_rs_seq+1);
-            if (width > 1) {
+        if (cparams.n_rs_seq && (cparams.kv_streaming() || (spill_flag && std::strcmp(spill_flag,"1") == 0)) && n_seqs == 1) {
+            const uint32_t maximum=std::min(n_tokens,cparams.n_rs_seq+1);
+            for (uint32_t width=2;width<=maximum;++width) {
                 std::vector<size_t> verify(backend_ptrs.size());
                 std::vector<size_t> verify_all(backend_ptrs.size());
                 if (!graph_reserve(width,1,1,mctx.get(),true,verify.data()) ||
@@ -1073,6 +1218,24 @@ const llama_context_memory * llama_context::get_compute_memory() const noexcept 
 llama_context_memory * llama_context_compute_memory(llama_context * ctx) noexcept {
     return ctx ? const_cast<llama_context_memory *>(ctx->get_compute_memory()) : nullptr;
 }
+
+bool llama_context::serial_features_match(const llama_batch_ext & batch,const int32_t * ids,uint32_t count) const {
+    if (!serial_feature_producer || serial_feature_rows.empty() || serial_feature_rows.size() != batch.tokens.size() ||
+            !memory || memory->seq_pos_max(0) != serial_feature_rows.back().second) return false;
+    if ((ids || count) && (!ids || count != serial_feature_layers.size() ||
+            !std::equal(serial_feature_layers.begin(),serial_feature_layers.end(),ids))) return false;
+    for (auto id : serial_feature_layers) if (!cparams.embeddings_layer_inp[uint32_t(id)]) return false;
+    for (size_t i=0;i<batch.tokens.size();++i) {
+        const auto & token=batch.tokens[i];
+        if (token.has_embd || token.seq_ids.size() != 1 || !token.seq_ids.count(0) ||
+                token.id != serial_feature_rows[i].first || token.pos[0] != serial_feature_rows[i].second) return false;
+    }
+    return true;
+}
+
+bool llama_serial_features_match(llama_context * ctx,const llama_batch_ext * batch,const int32_t * ids,uint32_t count) {
+    return ctx && batch && ctx->serial_features_match(*batch,ids,count);
+}
 bool llama_context_suspend_kv_device(llama_context * ctx) noexcept {
     if (!ctx || !ctx->get_cparams().kv_streaming()) return false;
     auto * owner = llama_context_compute_memory(ctx);
@@ -1105,8 +1268,7 @@ bool llama_context::resume_kv_device(llama_memory_text_phase phase) {
         gf_res_reserve->reset();
         cparams.kv_stream_decode = phase == llama_memory_text_phase::decode;
         auto reserved = memory->init_full();
-        const uint32_t decode_width = cparams.kv_stream_auxiliary_layers ?
-            std::min(4u,std::min(cparams.n_ctx,cparams.n_ubatch)) : cparams.n_seq_max;
+        const uint32_t decode_width = std::min(cparams.kv_stream_decode_rows(),std::min(cparams.n_ctx,cparams.n_ubatch));
         const uint32_t width = phase == llama_memory_text_phase::decode ?
             decode_width : std::min(cparams.n_ctx,cparams.n_ubatch);
         return reserved && graph_reserve(width,cparams.n_seq_max,std::min(width,cparams.n_outputs_max),reserved.get());
@@ -1556,6 +1718,8 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
 
     GGML_ASSERT(lid <= model.hparams.n_layer());
 
+    if (cparams.embeddings_layer_inp[lid] == enable) return;
+
     cparams.embeddings_layer_inp[lid] = enable;
 
     // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
@@ -1742,7 +1906,7 @@ bool llama_context::publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_
     ggml_kv_stream_span_plan_view view;
     auto * plan = target_stream->mtp_layer_plan(ubatch.n_tokens);
     return plan && ggml_kv_stream_span_plan_get_view(plan, view) &&
-        view.active_tokens == cache->tokens();
+        view.active_tokens == cache->tokens() && draft->retire_serial_access();
 }
 
 llm_graph_result * llama_context::process_ubatch(
@@ -1780,6 +1944,12 @@ llm_graph_result * llama_context::process_ubatch(
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
+    if (stream && cparams.kv_stream_mask && phase == llama_memory_text_phase::prefill &&
+            !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->prepare_mask_bounds(ubatch,cparams.causal_attn)) {
+        LLAMA_LOG_ERROR("%s: managed prefill mask cannot be represented by an exact visibility interval\n",__func__);
+        ret=GGML_STATUS_FAILED;
         return nullptr;
     }
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.mtp_publish_host) {
@@ -2179,6 +2349,7 @@ int llama_decode_mtp_embeddings(llama_context * ctx, const llama_batch_ext & bat
 }
 
 int llama_context::decode(const llama_batch_ext & batch_inp) {
+    if (serial_feature_producer) serial_feature_rows.clear();
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model.arch == LLM_ARCH_QWEN35 && !mtp_visual_hidden &&
             std::any_of(batch_inp.tokens.begin(), batch_inp.tokens.end(), [](const auto & token) {
                 return token.id == LLAMA_TOKEN_NULL && token.has_embd;
@@ -2261,10 +2432,15 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
+    if (cparams.serial_block_rows && balloc->get_batch().token && n_tokens_all > cparams.serial_block_rows) {
+        LLAMA_LOG_ERROR("%s: serial draft prediction exceeds the measured intact block width\n",__func__);
+        return -1;
+    }
 
     const auto text_phase = cparams.kv_streaming() ?
         (cparams.kv_stream_decode ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
-        (cparams.mtp_publish_host ?
+        (cparams.serial_block_rows ?
+            (n_tokens_all <= cparams.serial_block_rows ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) : cparams.mtp_publish_host ?
             (n_tokens_all <= 4 ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
             llama_memory_text_phase::unspecified);
 
@@ -2300,11 +2476,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const uint64_t serial_transitions = compute_memory ? compute_memory->phase_transition_count() : 0;
     // Drain the other scheduler before reservation can discard or rewrite shared scratch.
     if (compute_memory && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT &&
+            !compute_memory->borrows_serial_parent() &&
             !compute_memory->prepare_serial_target()) {
         LLAMA_LOG_ERROR("%s: failed to hand off shared graph scratch to target\n", __func__);
         return -2;
     }
-    if (compute_memory && cparams.mtp_publish_host && compute_memory->borrows_serial_parent() &&
+    if (compute_memory && (cparams.mtp_publish_host || cparams.serial_block_rows) && compute_memory->borrows_serial_parent() &&
             !compute_memory->prepare_serial_draft(text_phase)) {
         LLAMA_LOG_ERROR("%s: failed to hand off shared graph scratch to MTP\n", __func__);
         return -2;
@@ -2313,23 +2490,21 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     sched_reserve();
     const bool shared_workspace_replanned = compute_memory &&
         compute_memory->graph_binding_revision() != compute_memory_graph_revision;
-    bool draft_graph_rebuild = !reservation_was_pending && cparams.mtp_publish_host && compute_memory &&
+    bool draft_graph_rebuild = !reservation_was_pending && (cparams.mtp_publish_host || cparams.serial_block_rows) && compute_memory &&
         (compute_memory->phase_transition_count() != serial_transitions || shared_workspace_replanned);
     if (compute_memory && reservation_was_pending) {
         // A dirty scheduler reservation replaced the coordinator. The new
         // owner must receive the handoff as well, before graph inputs are set.
         const auto after_reserve = compute_memory->phase_transition_count();
-        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT && !compute_memory->prepare_serial_target()) return -2;
-        if (cparams.mtp_publish_host && compute_memory->borrows_serial_parent() &&
+        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT && !compute_memory->borrows_serial_parent() && !compute_memory->prepare_serial_target()) return -2;
+        if ((cparams.mtp_publish_host || cparams.serial_block_rows) && compute_memory->borrows_serial_parent() &&
                 !compute_memory->prepare_serial_draft(text_phase)) return -2;
-        draft_graph_rebuild = cparams.mtp_publish_host &&
+        draft_graph_rebuild = (cparams.mtp_publish_host || cparams.serial_block_rows) &&
             compute_memory->phase_transition_count() != after_reserve;
     }
     if (draft_graph_rebuild) {
         auto reserve_context = memory->init_full();
-        const uint32_t reserve_tokens = text_phase == llama_memory_text_phase::decode ?
-            std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) :
-            std::min(cparams.n_ctx, cparams.n_ubatch);
+        const uint32_t reserve_tokens = cparams.serial_graph_reserve_rows(text_phase == llama_memory_text_phase::decode);
         const uint32_t reserve_outputs = std::min(reserve_tokens, cparams.n_outputs_max);
         ggml_cgraph * reserved;
         {
@@ -2359,16 +2534,16 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 return -2;
             }
         }
-        const bool supported_verify = cparams.kv_stream_auxiliary_layers == 1 &&
+        const bool supported_verify = (cparams.kv_stream_auxiliary_layers == 1 || cparams.n_rs_seq != 0) &&
             text_phase == llama_memory_text_phase::decode &&
-            n_tokens_all >= 2 && n_tokens_all <= 4;
+            n_tokens_all >= 2 && n_tokens_all <= cparams.kv_stream_decode_rows();
         const auto transitions = compute_memory->phase_transition_count();
         const auto phase_result = compute_memory->signal_text_phase({
             text_phase,
             n_tokens_all,
             cparams.n_seq_max == 1,
             cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT,
-            cparams.ctx_other != nullptr || (cparams.n_rs_seq != 0 && cparams.kv_stream_auxiliary_layers != 1) ||
+            cparams.ctx_other != nullptr ||
                 (text_phase == llama_memory_text_phase::decode && n_tokens_all != 1 && !supported_verify),
         });
         if (phase_result.status != llama_memory_text_phase_status::changed &&
@@ -2378,8 +2553,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
         if (compute_memory->phase_transition_count() != transitions || shared_workspace_replanned) {
             auto reserve_context = memory->init_full();
-            const uint32_t decode_width = cparams.kv_stream_auxiliary_layers ?
-                std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) : cparams.n_seq_max;
+            const uint32_t decode_width = std::min(cparams.kv_stream_decode_rows(),std::min(cparams.n_ctx,cparams.n_ubatch));
             const uint32_t reserve_tokens = text_phase == llama_memory_text_phase::decode ?
                 decode_width : std::min(cparams.n_ctx,cparams.n_ubatch);
             const uint32_t reserve_outputs = text_phase == llama_memory_text_phase::decode ?
@@ -2698,6 +2872,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    if (serial_feature_producer) {
+        serial_feature_rows.reserve(batch_inp.tokens.size());
+        for (const auto & token : batch_inp.tokens) serial_feature_rows.emplace_back(token.id,token.pos[0]);
+    }
 
     return 0;
 }
@@ -3101,7 +3280,7 @@ static void ubatch_prepare_reserve(
 }
 
 ggml_cgraph * llama_context::graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes, bool feature_input) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
@@ -3128,6 +3307,13 @@ ggml_cgraph * llama_context::graph_reserve(
 
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
+
+    // Reservation builds topology only; it does not read the dummy embedding value.
+    float dummy_feature = 0;
+    if (feature_input) {
+        ubatch.token = nullptr;
+        ubatch.embd = &dummy_feature;
+    }
 
     ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
 
@@ -4109,6 +4295,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
 }
 
 size_t llama_context::state_read_data(llama_io_read_i & io) {
+    serial_feature_rows.clear();
     LLAMA_LOG_DEBUG("%s: reading state\n", __func__);
 
     // read model info
@@ -4143,6 +4330,7 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 }
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    serial_feature_rows.clear();
 
     if (memory) {
         memory->state_read(io, seq_id, flags);
@@ -4735,6 +4923,29 @@ bool llama_kv_stream_mtp_release(llama_context * ctx) {
     if (!ctx->get_cparams().kv_stream_auxiliary_layers) return true;
     auto * stream = llama_mtp_target_stream(ctx);
     return stream && stream->release_mtp_layer();
+}
+
+bool llama_kv_stream_schedule_next(llama_context * producer, llama_context * consumer, uint32_t future_tokens) {
+    if (!producer) return false;
+    auto * target=llama_mtp_target_stream(producer);
+    if (target && !consumer) return target->schedule_next_cache(0,0);
+    if (target && producer == consumer) return target->schedule_next_cache(target->host()->cache_id(),future_tokens);
+    auto * next_cache=consumer ? dynamic_cast<llama_kv_cache *>(llama_get_memory(consumer)) : nullptr;
+    if (target && next_cache && next_cache->mtp_auxiliary_cache() == target->auxiliary_cache() && target->auxiliary_cache())
+        return target->schedule_next_cache(target->auxiliary_cache()->identity().id,future_tokens);
+    auto * current=dynamic_cast<llama_kv_cache *>(llama_get_memory(producer));
+    auto * next_target=llama_mtp_target_stream(consumer);
+    if (current && current->mtp_auxiliary_cache() && (!consumer ||
+            (next_target && current->mtp_auxiliary_cache() == next_target->auxiliary_cache()))) {
+        current->set_next_target(consumer != nullptr);
+        return true;
+    }
+    return false;
+}
+
+bool llama_kv_stream_finish_access(llama_context * producer) {
+    auto * cache=producer ? dynamic_cast<llama_kv_cache *>(llama_get_memory(producer)) : nullptr;
+    return !cache || cache->finish_serial_access();
 }
 
 

@@ -46,6 +46,8 @@ public:
     bool ready(size_t active_tokens) const noexcept;
     // Capture identity excludes ordinary data writes and live-length changes within one padded page extent.
     bool capture_state(ggml_backend_t backend, size_t active_tokens, llama_kv_stream_capture_stamp & output) const;
+    // Borrowed model outputs may replay only native kernels with no trailing allocation extras.
+    bool capture_without_output_extras(uint32_t query_heads, size_t active_tokens) const;
     bool capture_attention(const ggml_tensor * attention, size_t active_tokens) const;
     // Ordered one-block path. Hold a binding pin; Q/mask/output and the disjoint workspace lease remain live until return.
     // Caller supplies padded causal mask values. Query backend capabilities before planning native or converted K/V.
@@ -67,7 +69,7 @@ public:
     // Declare both decode intent and query count before prefetch starts. Unknown phase and single-token prompts stay unprofiled.
     bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1,
             size_t stable_tokens = SIZE_MAX, llama_kv_stream_feedback_context feedback = {},
-            std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard = {});
+            std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard = {}, bool defer_clean_sync = false);
     // Speculatively start the next append while idle; adoption validates the complete logical identity.
     // Both operations are backend-neutral and retain the existing opaque copy queue until adoption or cancellation.
     bool prime_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages,
@@ -87,6 +89,8 @@ public:
     bool configure_feedback(bool enable, size_t bounded_span_pages = 32);
     // Graph callers reserve native FA extras for their output; low-level minimal-workspace callers leave this off.
     bool configure_native_graph_attention(bool enable);
+    // Idle-only admission of a disjoint, quoted prefill execution workspace.
+    bool configure_prefill_workspace(size_t bytes);
     // Only explicitly marked decode sequences may use the optional native resumable contract.
     bool configure_resumed_decode(bool enable);
     size_t suggested_span_pages() const noexcept;

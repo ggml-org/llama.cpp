@@ -12,6 +12,9 @@ struct llama_kv_stream_writer_completion {
 class llama_kv_stream_writer {
 public:
     ~llama_kv_stream_writer();
+    // Quote one bounded page/microbatch tile with backend allocation padding for both encodings and indices.
+    static bool requirements(ggml_backend_buffer_type_t type, const ggml_kv_stream_shape & shape,
+            size_t max_rows, size_t & bytes);
     static std::unique_ptr<llama_kv_stream_writer> create(ggml_backend_t backend, ggml_backend_buffer_t buffer,
             size_t scratch_bytes, const ggml_kv_stream_shape & shape, size_t max_rows);
     bool accepts(const ggml_tensor * source, bool value) const;

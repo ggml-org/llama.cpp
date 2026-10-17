@@ -44,6 +44,8 @@ struct llama_kv_stream_model_config {
     size_t shared_device_memory_bytes = 0;
     // Opt-in one-layer MTP host cache in the same physical KV policy.
     uint32_t auxiliary_cache_layers = 0;
+    // Quote all target decode widths up to this limit before binding the phase arena.
+    uint32_t max_decode_rows = 4;
 };
 
 // Own the host-KV execution buffer and a serial session; proxy-buffer references retain the runtime state.
@@ -63,7 +65,11 @@ public:
     bool set_ring_guard(std::shared_ptr<const llama_kv_stream_ring_guard> guard);
     // Populate the MTP layer once and retain one physical reservation for TG1-TG4.
     // Borrowed plans remain valid only until release_mtp_layer().
-    bool acquire_mtp_layer(size_t future_tokens = 0);
+    bool acquire_mtp_layer(size_t future_tokens = 0, bool prefetch = false);
+    // Cache identity selects the next reader; no model layer count is encoded in the schedule.
+    bool schedule_next_cache(uint64_t cache_id, uint32_t future_tokens);
+    bool wait_auxiliary_population(ggml_backend_t consumer);
+    bool prefetch_target_after(ggml_backend_t last_reader);
     size_t mtp_reserved_tokens() const noexcept;
     // Copy only newly published MTP host rows into the retained physical lease.
     bool advance_mtp_layer_tail();
@@ -95,6 +101,8 @@ public:
     bool truncate(size_t tokens);
     size_t tokens() const noexcept;
     uint32_t max_batch_rows() const noexcept;
+    bool bounded_prefill() const noexcept;
+    bool compact_prefill_mask() const noexcept;
     size_t granted_bytes() const noexcept;
     bool set_workspaces(const std::vector<ggml_backend_memory_lease_t> & leases);
     void release_graphs();

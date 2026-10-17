@@ -49,8 +49,8 @@ static void check_vector_stock(const std::vector<char> & expected, const std::ve
 }
 
 // Each wave reuses the same physical ring only after its actual CUDA read fence.
-template<int width, int columns, ggml_type key, ggml_type value, bool tail_safe = true>
-static void check_vector(int active, int queries, int splits, int wave, bool sink) {
+template<int width, int columns, ggml_type key, ggml_type value, bool tail_safe = true, bool compact_mask = false>
+static void check_vector(int active, int queries, int splits, int wave, bool sink, int mask_first = 0) {
     constexpr int heads = 12, kv_heads = 2, guard = 128;
     const int capacity = (active+127)/128*128;
     const int k_row = int(ggml_row_size(key,width)), v_row = int(ggml_row_size(value,width));
@@ -68,16 +68,24 @@ static void check_vector(int active, int queries, int splits, int wave, bool sin
     device_allocation dense_k(encoded[0].size()), dense_v(encoded[1].size());
     check_cuda(cudaMemcpy(dense_k.data,encoded[0].data(),encoded[0].size(),cudaMemcpyHostToDevice));
     check_cuda(cudaMemcpy(dense_v.data,encoded[1].data(),encoded[1].size(),cudaMemcpyHostToDevice));
-    device_allocation q(size_t(width)*queries*heads*4), mask(size_t(capacity)*queries*2), sinks(heads*4);
+    device_allocation q(size_t(width)*queries*heads*4), mask(size_t(capacity)*queries*2), sinks(heads*4), bounds(size_t(queries)*4*sizeof(int32_t));
     std::vector<float> host_q(size_t(width)*queries*heads), host_sinks(heads);
     for (size_t i = 0; i < host_q.size(); ++i) host_q[i] = float(int((i*23)%263)-131)/128;
     for (int head = 0; head < heads; ++head) host_sinks[head] = float(head-6)/8;
     std::vector<ggml_fp16_t> host_mask(size_t(capacity)*queries);
     for (int query = 0; query < queries; ++query) for (int token = 0; token < capacity; ++token)
-        host_mask[size_t(query)*capacity+token] = ggml_fp32_to_fp16(token <= active-queries+query ? 0 : -INFINITY);
+        host_mask[size_t(query)*capacity+token] = ggml_fp32_to_fp16(token >= mask_first && token <= active-queries+query ? 0 : -INFINITY);
+    std::vector<int32_t> intervals(size_t(queries)*4);
+    for (int query = 0; query < queries; ++query) {
+        intervals[4*query] = mask_first;
+        intervals[4*query+1] = active-queries+query+1;
+        intervals[4*query+2] = capacity;
+        intervals[4*query+3] = 1;
+    }
     check_cuda(cudaMemcpy(q.data,host_q.data(),q.bytes,cudaMemcpyHostToDevice));
     check_cuda(cudaMemcpy(mask.data,host_mask.data(),mask.bytes,cudaMemcpyHostToDevice));
     check_cuda(cudaMemcpy(sinks.data,host_sinks.data(),sinks.bytes,cudaMemcpyHostToDevice));
+    check_cuda(cudaMemcpy(bounds.data,intervals.data(),bounds.bytes,cudaMemcpyHostToDevice));
     const size_t output_bytes = size_t(width)*queries*heads*splits*4, meta_bytes = size_t(queries)*heads*splits*8;
     device_allocation outputs[4] = {device_allocation(output_bytes+2*guard),device_allocation(output_bytes+2*guard),device_allocation(output_bytes+2*guard),device_allocation(output_bytes+2*guard)};
     device_allocation metadata[4] = {device_allocation(meta_bytes+2*guard),device_allocation(meta_bytes+2*guard),device_allocation(meta_bytes+2*guard),device_allocation(meta_bytes+2*guard)};
@@ -104,8 +112,10 @@ static void check_vector(int active, int queries, int splits, int wave, bool sin
             auto * out = reinterpret_cast<float *>(outputs[implementation].data+guard);
             auto * meta = reinterpret_cast<float2 *>(metadata[implementation].data+guard);
             const char * k_data = dense_k.data, * v_data = dense_v.data;
+            const char * mask_data = implementation == 0 || !compact_mask ? mask.data : nullptr;
+            const auto * mask_bounds = compact_mask ? reinterpret_cast<const int32_t *>(bounds.data) : nullptr;
             int k_head = capacity*k_row, v_head = capacity*v_row;
-#define VECTOR_ARGS q.data,k_data,v_data,mask.data,sink ? sinks.data : nullptr,nullptr,out,meta, \
+#define VECTOR_ARGS q.data,k_data,v_data,mask_data,sink ? sinks.data : nullptr,nullptr,out,meta, \
     1.0f/16,0.0f,1.0f,1.0f,0u,0.0f,width,init_fastdiv_values(queries),heads,1, \
     width*4,queries*width*4,heads*queries*width*4,width,capacity,kv_heads,1, \
     k_row,k_head,int64_t(k_head)*kv_heads,v_row,v_head,int64_t(v_head)*kv_heads, \
@@ -115,8 +125,8 @@ static void check_vector(int active, int queries, int splits, int wave, bool sin
                 check_cuda(cudaGetLastError());
                 check_cuda(cudaStreamSynchronize(stream));
             } else if (implementation == 1) {
-                flash_attn_ext_vec_resume<width,columns,key,value,tail_safe><<<grid,block,0,stream>>>(VECTOR_ARGS,
-                    reinterpret_cast<float *>(state.data+guard),0,tail_safe ? active : capacity,true,true);
+                flash_attn_ext_vec_resume<width,columns,key,value,tail_safe,compact_mask><<<grid,block,0,stream>>>(VECTOR_ARGS,
+                    reinterpret_cast<float *>(state.data+guard),0,tail_safe ? active : capacity,true,true,mask_bounds);
                 check_cuda(cudaGetLastError());
                 check_cuda(cudaStreamSynchronize(stream));
             } else {
@@ -135,14 +145,14 @@ static void check_vector(int active, int queries, int splits, int wave, bool sin
                     check_cuda(cudaStreamWaitEvent(stream,ready,0));
                     const int bulk=implementation == 3 ? int(ggml_cuda_kv_stream_vector_bulk_tokens(first,size_t(live))) : 0;
                     if (bulk) {
-                        flash_attn_ext_vec_resume<width,columns,key,value,false><<<grid,block,0,stream>>>(VECTOR_ARGS,
-                            reinterpret_cast<float *>(state.data+guard),first,first+bulk,first == 0,first+bulk == limit);
+                        flash_attn_ext_vec_resume<width,columns,key,value,false,compact_mask><<<grid,block,0,stream>>>(VECTOR_ARGS,
+                            reinterpret_cast<float *>(state.data+guard),first,first+bulk,first == 0,first+bulk == limit,mask_bounds);
                         check_cuda(cudaGetLastError());
                     }
                     if (bulk < live) {
                         k_data += bulk*k_row; v_data += bulk*v_row;
-                        flash_attn_ext_vec_resume<width,columns,key,value,tail_safe><<<grid,block,0,stream>>>(VECTOR_ARGS,
-                            reinterpret_cast<float *>(state.data+guard),first+bulk,end,first+bulk == 0,end == limit);
+                        flash_attn_ext_vec_resume<width,columns,key,value,tail_safe,compact_mask><<<grid,block,0,stream>>>(VECTOR_ARGS,
+                            reinterpret_cast<float *>(state.data+guard),first+bulk,end,first+bulk == 0,end == limit,mask_bounds);
                     }
                     check_cuda(cudaGetLastError());
                     check_cuda(cudaEventRecord(done,stream));
@@ -172,6 +182,9 @@ static void check_vector(int active, int queries, int splits, int wave, bool sin
         const auto stock_final = final[0].read(), resumed_final = final[2].read();
         check_guard(stock_final); check_guard(resumed_final);
         check_vector_stock(stock_final,resumed_final);
+        if constexpr (compact_mask) {
+            if (stock_final != resumed_final) throw std::runtime_error("compact vector mask changes stock output bits");
+        }
         for (const auto * planes : {&outputs,&metadata,&final}) {
             const auto mixed=(*planes)[3].read();
             check_guard(mixed);
@@ -271,6 +284,13 @@ int main(int argc, char ** argv) {
             return 0;
         }
         size_t tile_cases = 0;
+        for (int active : {257,1025,8193}) for (int queries : {5,6,7,8}) for (int splits : {1,3,17})
+                for (int wave : {1,4}) for (int spans : {1,2,3}) for (bool interleaved : {false,true}) {
+            if (quick && (active != 257 || splits != 3 || wave != 1 || spans != 3 || !interleaved)) continue;
+            check_tile<256,8,2,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0>(backend.get(),active,queries,splits,wave,spans,interleaved,3);
+            check_tile<256,4,8,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,16>(backend.get(),active,queries,splits,wave,spans,interleaved,3);
+            tile_cases += 2;
+        }
         for (int active : {257,1025,8193}) for (int queries : {1,2,3,4}) for (int splits : {1,3,17})
                 for (int wave : {1,4}) for (int spans : {1,2,3}) for (bool interleaved : {false,true}) for (uint32_t flags : {0u,3u}) {
             if (quick && (active != 257 || splits != 3 || wave != 1 || spans != 3 || !interleaved)) continue;
@@ -308,6 +328,13 @@ int main(int argc, char ** argv) {
         check_vector<64,1,GGML_TYPE_F16,GGML_TYPE_F16>(257,1,17,128,true);
         check_vector<128,2,GGML_TYPE_BF16,GGML_TYPE_BF16>(1025,2,17,256,false);
         cases += 2;
+        for (int active : {257,8193}) for (int first : {0,127}) {
+            check_vector<256,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,true,true>(active,1,17,256,true,first);
+            check_vector<256,2,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,true,true>(active,2,17,256,false,first);
+            check_vector<256,1,GGML_TYPE_Q5_1,GGML_TYPE_Q4_1,false,true>(active,1,3,512,false,first);
+            check_vector<256,2,GGML_TYPE_F16,GGML_TYPE_Q4_0,true,true>(active,2,3,128,true,first);
+            cases += 4;
+        }
         std::printf("Native resume vector: %zu bit-exact wave cases passed, stock max_abs=%g (existing bound 1e-6)\n",cases,double(vector_max_error));
 #endif
     } catch (const std::exception & error) {
