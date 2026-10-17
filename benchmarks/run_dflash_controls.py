@@ -28,7 +28,7 @@ SPEC = importlib.util.spec_from_file_location("dflash_sweep", ROOT / "benchmarks
 assert SPEC is not None and SPEC.loader is not None
 SWEEP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SWEEP)
-KV_TYPES = ("f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1")
+KV_TYPES = SWEEP.KV_TYPES
 
 
 def effective_microbatch(args, context):

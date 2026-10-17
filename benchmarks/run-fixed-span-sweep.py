@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
+KV_TYPES = ("f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1")
 sys.path.insert(0, str(ROOT / "benchmarks/server-ab"))
 from server_ab import request_json, stream_completion  # noqa: E402
 
@@ -53,6 +54,8 @@ def arguments() -> argparse.Namespace:
                         help="find the largest full-workload arena in 1 MiB steps for each context and MTP mode; no reserve; can be slow")
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--ubatch-size", type=int, default=256)
+    parser.add_argument("--cache-type-k", choices=KV_TYPES, default="q8_0")
+    parser.add_argument("--cache-type-v", choices=KV_TYPES, default="q4_0")
     parser.add_argument("--port", type=int, default=1246)
     parser.add_argument("--production-container", default="llm-llmster")
     parser.add_argument("--no-manage-production", action="store_true")
@@ -78,8 +81,8 @@ def server_command(args: argparse.Namespace, context: int, mtp_length: int, aren
         "--parallel", "1",
         "--n-gpu-layers", "999",
         "--flash-attn", "on",
-        "--cache-type-k", "q8_0",
-        "--cache-type-v", "q4_0",
+        "--cache-type-k", getattr(args, "cache_type_k", "q8_0"),
+        "--cache-type-v", getattr(args, "cache_type_v", "q4_0"),
         "--kv-stream-arena-mib", str(args.arena_mib if arena_mib is None else arena_mib),
         "--fit", "off",
         "--no-mmproj",
@@ -423,7 +426,7 @@ def parse_draft_acceptance(log_text: str) -> tuple[int | None, int | None]:
         r"draft acceptance\s*=\s*[0-9.]+\s*\(\s*(\d+)\s+accepted\s*/\s*(\d+)\s+generated\)",
         log_text,
     )
-    return tuple(map(int, matches[-1])) if matches else (None, None)
+    return (int(matches[-1][0]), int(matches[-1][1])) if matches else (None, None)
 
 
 def write_outputs(rows: list[dict], output: Path) -> None:
@@ -490,6 +493,8 @@ def plot(rows: list[dict], output: Path, args: argparse.Namespace) -> None:
 
 def main() -> int:
     args = arguments()
+    if args.auto_max_arena and args.uvm:
+        raise SystemExit("physical maximum-fit testing requires UVM disabled")
     if args.no_kv_stream_rs_rollback and not any(args.mtp_lengths):
         raise SystemExit("--no-kv-stream-rs-rollback requires an MTP length")
     args.model = args.model.resolve()
@@ -633,10 +638,12 @@ def main() -> int:
                 "budget_policy": "maximum-fit" if args.auto_max_arena else "fixed",
                 "command": server_command(args,context,mtp_length,arena_mib),
                 "context_capacity": context,
+                "cache_type_k": args.cache_type_k,
+                "cache_type_v": args.cache_type_v,
                 "mtp_length": mtp_length,
                 "mtp_draft_accepted": draft_accepted,
                 "mtp_draft_generated": draft_generated,
-                "mtp_acceptance_pct": 100.0 * draft_accepted / draft_generated if draft_generated else None,
+                "mtp_acceptance_pct": 100.0 * draft_accepted / draft_generated if draft_generated and draft_accepted is not None else None,
                 "prompt_tokens": prompt_tokens,
                 "prefill_source": str(args.prefill_text),
                 "decode_tokens": args.decode_tokens,

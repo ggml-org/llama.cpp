@@ -3,7 +3,7 @@
 V2 runs full-context Qwen3.8-27B on a bounded GPU KV working set. The complete KV history stays in pinned system RAM; resident GPU pages and one shared ring supply attention without dropping old tokens. V1 (`feature/kv-stream-phase-arena`) already had streaming, cross-layer prefetch, and a CUDA phase arena. V2 rebuilds those ideas on explicit memory ownership, stays closer to stock attention arithmetic, and adds long-context MTP without a second full GPU KV allocation.
 
 > [!WARNING]
-> This is experimental. End-to-end qualification uses Unsloth Qwen3.8-27B `UD-IQ4_XS` on one RTX 5070 Ti, one serial request, Flash Attention and Q8_0 K / Q4_0 V. Text and matching M-RoPE image requests support the single embedded MTP head with draft lengths 1-3. Older CUDA architectures have the build/code-path evidence below, not actual older-card qualification. Audio/video arena execution, other models and other accelerator streaming paths remain unqualified.
+> This is experimental. Full-context text qualification uses Unsloth Qwen3.8-27B `UD-IQ4_XS` on one RTX 5070 Ti, one serial request, Flash Attention and Q8_0/Q4_0, Q8_0/Q8_0 or Q5_1/Q5_1 KV. Text supports the single embedded MTP head with draft lengths 1-3. Matching M-RoPE image requests remain qualified with Q8_0 K / Q4_0 V and that MTP head. Older CUDA architectures have the build/code-path evidence below, not actual older-card qualification. Audio/video arena execution, other models and other accelerator streaming paths remain unqualified.
 
 ## Results and quick start
 
@@ -16,7 +16,7 @@ The figure compares V2 with draft lengths 0-3, not V1 against V2. On an RTX 5070
 Build from the repository root:
 
 ```sh
-cmake -S . -B build-v2 -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build-v2 -DGGML_CUDA=ON -DGGML_CUDA_FA_QUANTS=all -DCMAKE_BUILD_TYPE=Release
 cmake --build build-v2 --target llama-server -j
 ```
 
@@ -35,7 +35,7 @@ Example for the embedded-MTP `UD-IQ4_XS` GGUF. The 2,240 MiB arena fit this test
 
 With streaming and `--spec-type draft-mtp`, the server derives the auxiliary KV layer count from the loaded model's NextN/MTP metadata before allocating its context. Qwen3.8 contributes one layer, forming the shared 17-layer layout. The legacy `--kv-stream-auxiliary-layers 1` flag is optional and must match the model count. Multi-layer MTP metadata is detected, but its streaming execution is not yet supported; such models receive an explicit capability error.
 
-Attached MTP **inherits the target's K/V types**: here its K is Q8_0 and V is Q4_0. Do not add `--cache-type-k-draft` or `--cache-type-v-draft` expecting a different attached-MTP quant; the shared layout currently requires matching types. To disable MTP, remove the two speculative flags and the legacy auxiliary-layer flag if present.
+Adaptive MTP and DFlash **inherit the target's K/V types**: here K is Q8_0 and V is Q4_0. Do not add draft-cache flags such as `--spec-draft-type-k`, `--spec-draft-type-v`, `--cache-type-k-draft` or `--cache-type-v-draft`: overrides are rejected even when they name the same types. To disable MTP, remove the two speculative flags and the legacy auxiliary-layer flag if present.
 
 Recreate the fixed-arena sweep (8 Ki through 256 Ki, four MTP settings). `--no-manage-production` avoids touching the local `llm-llmster` container; omit it only if you want the script to manage that container. The included [article corpus](benchmarks/data/online-articles-262144-words.txt) is Wikipedia text under CC BY-SA 4.0 with article attributions, separate from the code license.
 
@@ -106,6 +106,39 @@ python benchmarks/plot_dflash_controls.py \
   --output benchmarks/results/speculation-comparison.png
 ```
 
+## Choosing KV cache types
+
+Set `--cache-type-k` and `--cache-type-v` on the target. The streaming owner derives page sizes, row strides, writer staging and phase budgets from that pair. Adaptive MTP uses the same format in its shared resident/ring slots; DFlash also inherits the pair for its separate bounded window. Native non-streaming drafting still allows independent draft-cache types.
+
+The CUDA reader targets combinations of `f32`, `f16`, `bf16`, `q8_0`, `q5_0`, `q5_1`, `q4_0` and `q4_1`, subject to compiled kernels and device resources. F32 storage follows stock attention's FP16 input rounding; it does not make attention arithmetic fully FP32. `iq4_nl` has a cache writer but no reader in the current stock CUDA Flash Attention selector, so streaming rejects it during context initialization. Enabling all quant pairs does not add that missing upstream reader. These are KV formats, not the much larger set of supported model-weight formats.
+
+All 64 combinations pass shorter matched native/streamed MTP and DFlash numerical controls on the RTX 5070 Ti. Q8/Q8, Q5_1/Q5_1 and Q8/Q4 also pass longer controls and lifecycle tests. Those native controls use the same staged host recurrent rollback to fit this GPU; they compare attention results, not stock VRAM footprint. The vision checks verify shared-memory suspension/restoration, not image-encoder inference for every format. These results do not guarantee identical output for every prompt, execution mode or GPU.
+
+Initialization checks row writing, native attention, streamed query widths and workspace requirements for the requested format. Missing kernels, unsupported geometry and an inadequate arena remain errors; accepting a cache-type name is not a guarantee that every build or budget can run it. The detailed test and qualification record is in [the KV quantization roadmap](KV_QUANTIZATION_ROADMAP.md).
+
+For example, reuse the MTP launch command above with `--cache-type-k q5_1 --cache-type-v q5_1`. To sweep the same formats without setting separate draft flags:
+
+```sh
+python3 benchmarks/run-fixed-span-sweep.py \
+  --server build-v2/bin/llama-server --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --cache-type-k q5_1 --cache-type-v q5_1 --mtp-lengths 0,3 \
+  --contexts 8192,65536,131072,196608,262144 --prompt-headroom 15 \
+  --decode-tokens 256 --arena-mib 2240 --auto-max-arena \
+  --no-manage-production --output benchmarks/results/q51-q51
+```
+
+Free the GPU first. Physical maximum-fit testing must disable UVM. Each context and mode finds its own arena; comparisons include the resulting differences in resident KV space. Larger encodings use more space and bandwidth, and different quantizations need not produce identical text.
+
+### Full-context cache-format comparison
+
+All 45 requested points completed: context capacities of 8, 64, 128, 192 and 256 Ki; target-only, MTP=3 and DFlash=7; Q8/Q4, Q8/Q8 and Q5_1/Q5_1. These use the same IQ4_XS model weights and checked-in article corpus, b/ub=256, 256 output tokens and 15 additional positions of headroom. Each context/mode/format independently uses its maximum-fit arena, with UVM disabled and no safety reserve. Successful startup is followed by a complete workload, not treated as sufficient proof of fit.
+
+![KV cache-format comparison: decode, prefill, effective KV grant and draft acceptance](media/kv-quant-comparison.png)
+
+[Plot data (CSV)](media/kv-quant-comparison.csv). At 256 Ki capacity, target-only / MTP=3 / DFlash=7 decode measured 9.60 / 22.27 / 21.80 tokens/s with Q8/Q4, 6.66 / 14.53 / 18.04 with Q8/Q8, and 10.56 / 23.27 / 27.71 with Q5_1/Q5_1. These are single-run measurements on this machine and prompt, not a quality comparison or a guarantee of speed on other workloads.
+
+Against the pre-generalization build, all 15 Q8/Q4 points choose identical arenas and retain all 256 output token IDs. Decode changes range from -0.67% to +0.57%; prefill changes range from -0.11% to +0.20%. No material regression is observed. Matching-mode numerical equivalence is tested separately: TG1 and multi-row speculative verification can already use different stock arithmetic, so different modes need not generate identical text.
+
 ## CUDA compatibility and qualification
 
 Streaming follows stock's attention-family selection for the device, build and tensor shape. It does not force newer GPUs through the Pascal baseline. Optional VMM, CUDA graph capture and PDL are not prerequisites for KV storage and streaming; pinned host memory and a compiled attention path are required.
@@ -121,7 +154,7 @@ Streaming follows stock's attention-family selection for the device, build and t
 
 Forward-JIT runs older-target code on a newer GPU. It does not reproduce an older card's resource limits, VRAM capacity or performance. This table is not a pass for every card in a family, Windows/MSVC or every intervening compute capability. See [build and device-check commands](docs/build.md#adaptive-kv-cuda-qualification-and-startup-errors) and the [qualification ledger](DEVICE_MEMORY_CONSUMERS_ROADMAP.md#phase-c6-end-to-end-acceptance-and-handoff).
 
-For mixed Q8_0 K / Q4_0 V, **keep `-DGGML_CUDA_FA_ALL_QUANTS=ON`**. `GGML_CUDA_FA_QUANTS=...` does not replace that option in this fork. CUDA 13 cannot compile the pre-SM75 targets; use an isolated CUDA 12.9 or earlier toolkit for those builds. A startup error naming a missing native attention query width is a kernel/build/geometry admission failure, not evidence that a larger arena will fix it.
+Use `-DGGML_CUDA_FA_QUANTS=all` for all native pairs, or select the pairs you need, such as `-DGGML_CUDA_FA_QUANTS="f16-f16;q8_0-q4_0;q8_0-q8_0;q5_1-q5_1"`. The older `GGML_CUDA_FA_ALL_QUANTS=ON` option remains a deprecated alias. F32 cache inputs use their F16 counterpart in this build list. CUDA 13 cannot compile the pre-SM75 targets; use an isolated CUDA 12.9 or earlier toolkit for those builds. A startup error naming a missing native attention query width is a kernel/build/geometry admission failure, not evidence that a larger arena will fix it.
 
 Recent compatibility checks retain stock-equivalent MMA outputs in the tested cases; regional vector reductions have a measured maximum difference of 7.45e-9 with a 1e-8 regression guard. Matched 8K/96K/128K/160K IQ4_XS, MTP=3, fixed-2,240-MiB comparisons retain all 256 output token IDs and show no material throughput regression (prefill -0.14% to -0.03%; decode +0.08% to +0.75%). These single-pair differences are not claimed as speed improvements or universal output equivalence. The opening figure is the earlier V2 MTP sweep, not this compatibility A/B test.
 
