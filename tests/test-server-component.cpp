@@ -82,34 +82,38 @@ static void test_server_tokens_common_prefix(testing & t) {
 }
 
 static void test_server_tokens_serialize(testing & t) {
-    // same packing as slot save/restore in server-context.cpp
-    auto pack = [](const std::vector<char> & data) {
-        llama_tokens packed(data.size() / sizeof(llama_token));
-        memcpy(packed.data(), data.data(), data.size());
+    // a text-only payload is a whole number of tokens
+    auto pack = [](const llama_tokens & tokens) {
+        raw_buffer packed(tokens.size() * sizeof(llama_token));
+        memcpy(packed.data(), tokens.data(), packed.size());
         return packed;
+    };
+
+    auto unpack = [](const raw_buffer & data) {
+        llama_tokens tokens(data.size() / sizeof(llama_token));
+        memcpy(tokens.data(), data.data(), data.size());
+        return tokens;
     };
 
     t.test("roundtrip", [&](testing & t) {
         server_tokens st(llama_tokens{10, 20, 30}, false);
-        std::vector<char> data = st.serialize();
-        t.assert_equal("aligned to llama_token", (size_t) 0, data.size() % sizeof(llama_token));
 
-        server_tokens restored = server_tokens::deserialize(pack(data), false);
+        server_tokens restored = server_tokens::deserialize(st.serialize(), false);
         t.assert_true("tokens", restored.get_tokens() == st.get_tokens());
     });
 
     t.test("roundtrip empty", [&](testing & t) {
         server_tokens st(llama_tokens{}, false);
-        server_tokens restored = server_tokens::deserialize(pack(st.serialize()), false);
+        server_tokens restored = server_tokens::deserialize(st.serialize(), false);
         t.assert_true("empty", restored.empty());
     });
 
     t.test("legacy plain token list", [&](testing & t) {
-        server_tokens restored = server_tokens::deserialize(llama_tokens{7, 8, 9}, false);
+        server_tokens restored = server_tokens::deserialize(pack(llama_tokens{7, 8, 9}), false);
         t.assert_true("tokens", restored.get_tokens() == llama_tokens({7, 8, 9}));
     });
 
-    auto expect_throw = [](testing & t, const std::string & msg, const llama_tokens & packed) {
+    auto expect_throw = [](testing & t, const std::string & msg, const raw_buffer & packed) {
         bool thrown = false;
         try {
             server_tokens::deserialize(packed, false);
@@ -120,25 +124,25 @@ static void test_server_tokens_serialize(testing & t) {
     };
 
     t.test("corrupted", [&](testing & t) {
-        llama_tokens good = pack(server_tokens(llama_tokens{10, 20, 30}, false).serialize());
+        llama_tokens good = unpack(server_tokens(llama_tokens{10, 20, 30}, false).serialize());
 
         llama_tokens bad_version = good;
         bad_version[1] = 999;
-        expect_throw(t, "bad version", bad_version);
+        expect_throw(t, "bad version", pack(bad_version));
 
         llama_tokens truncated = good;
         truncated.pop_back();
-        expect_throw(t, "truncated", truncated);
+        expect_throw(t, "truncated", pack(truncated));
 
         llama_tokens trailing = good;
         trailing.push_back(42);
-        expect_throw(t, "trailing data", trailing);
+        expect_throw(t, "trailing data", pack(trailing));
 
         llama_tokens huge_count = good;
         huge_count[2] = 0x7fffffff;
-        expect_throw(t, "huge token count", huge_count);
+        expect_throw(t, "huge token count", pack(huge_count));
 
-        expect_throw(t, "marker only", llama_tokens{LLAMA_TOKEN_NULL});
+        expect_throw(t, "marker only", pack(llama_tokens{LLAMA_TOKEN_NULL}));
     });
 }
 
