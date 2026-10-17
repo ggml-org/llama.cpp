@@ -1573,100 +1573,55 @@ struct tinygemm_kernel_vnni<block_q8_0, block_q8_0, float, BLOCK_M, BLOCK_N, BLO
 template <int BLOCK_M, int BLOCK_N, int BLOCK_K>
 struct tinygemm_kernel_vnni<block_q8_K, block_q4_K, float, BLOCK_M, BLOCK_N, BLOCK_K> {
     static void apply(int KB, const void * RESTRICT _A, const void * RESTRICT _B, float * RESTRICT C, int ldc) {
-
         constexpr int COLS = BLOCK_N / 16;
-        const int TILE_SIZE = TILE_N * sizeof(block_q4_K) + TILE_N * 4;
-
+        const int TILE_SIZE = get_tile_size<block_q4_K>();
         const block_q8_K * RESTRICT A = static_cast<const block_q8_K *>(_A);
         const char * RESTRICT B = static_cast<const char *>(_B);
-
-        // a.qs:   8 groups, 32 bytes each group (m256i)
-        __m512i va[8];
-        // a.bsum: 8 groups,  2 bytes each group (m128i)
-        __m512i va_bsum;
         __m512 vc[COLS];
-        __m512 vd1;
-
-        // packed_B:
-        const int offset_scales = (QK_K / 2) * TILE_N;
-        const int offset_mins   = (QK_K / 2) * TILE_N +  8 * TILE_N;
-        const int offset_d0     = (QK_K / 2) * TILE_N + 16 * TILE_N;
-        const int offset_dmin   = (QK_K / 2) * TILE_N + 16 * TILE_N + TILE_N * sizeof(ggml_half);
-
-        const __m512i lowMask = _mm512_set1_epi8(0xF);
-
-        auto loadc = [&](auto col) {
-            vc[col] = _mm512_setzero_ps();
-        };
-        Unroll<COLS>{}(loadc);
-
-        // Notes: vnni formats in QK_K
-        //   a) quants vnni format
-        //     int8  {k/4, n, 4}, viewed as 2d {k/4, 4n}, k = 32
-        //     from {16, 32} to {8, 64}
-        //
-        //   b) min vnni format
-        //     int16 {k/2, n, 2}, viewed as 2d {k/2, 2n}, k = 8
-        //     from {16,  8} to {4, 32}
-        //
-        auto compute = [&](auto col, auto i) {
-            // load a
-            if constexpr (col == 0) {
-                for (int k_group = 0; k_group < QK_K / 32; ++k_group) {
-                    va[k_group] = _mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)(A[0 * KB + i].qs + k_group * 32)));
-                }
-                const __m256i q8sums = _mm256_loadu_si256((const __m256i *)A[0 * KB + i].bsums);
-                const __m128i q8s = _mm_hadd_epi16(_mm256_extracti128_si256(q8sums, 0), _mm256_extracti128_si256(q8sums, 1));
-                va_bsum = _mm512_castsi128_si512(q8s);
-                vd1 = _mm512_set1_ps(A[0 * KB + i].d);
-            }
-
-            // step 1: accumultate the quants
-            __m512i acc = _mm512_setzero_si512();
-            const char * b_ptr = B + PACKED_INDEX(col, i, KB, TILE_SIZE);
-            const char * b_qs  = b_ptr;
-            for (int k_group = 0; k_group < QK_K / 32; ++k_group) {
-                __m512i vsum = _mm512_setzero_si512();
-                for (int k = 0; k < 8; k += 2) {
-                    __m512i va0 = _mm512_permutexvar_epi32(_mm512_set1_epi32(k + 0), va[k_group]);
-                    __m512i va1 = _mm512_permutexvar_epi32(_mm512_set1_epi32(k + 1), va[k_group]);
-
-                    __m512i bytes = _mm512_loadu_si512((const __m512i *)b_qs);
-                    __m512i vb0 = _mm512_and_si512(bytes, lowMask);
-                    vsum = _mm512_dpbusd_epi32(vsum, vb0, va0);
-                    __m512i vb1 = _mm512_and_si512(_mm512_srli_epi16(bytes, 4), lowMask);
-                    vsum = _mm512_dpbusd_epi32(vsum, vb1, va1);
-
-                    b_qs += 64;
-                }
-                // vacc += scale * (q8 @ q4)
-                const __m512i vscale = _mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)(b_ptr + offset_scales + k_group * TILE_N)));
-                acc = _mm512_add_epi32(acc, _mm512_mullo_epi32(vsum, vscale));
-            }
-            const __m512 vd0 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(b_ptr + offset_d0)));
-            vc[col] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(acc), _mm512_mul_ps(vd0, vd1), vc[col]);
-
-            // step 2: accumulate the mins
-            __m512i acc_m = _mm512_setzero_si512();
-            for (int k = 0; k < 4; ++k) {
-                __m512i vmask = _mm512_set1_epi32(k);
-                __m512i va = _mm512_permutexvar_epi32(vmask, va_bsum);
-                __m512i vb = _mm512_cvtepi8_epi16(_mm256_loadu_si256((const __m256i *)(b_ptr + offset_mins + k * 32)));
-                acc_m = _mm512_dpwssds_epi32(acc_m, va, vb);
-            }
-            const __m512 vdmin = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(b_ptr + offset_dmin)));
-            vc[col] = _mm512_fnmadd_ps(_mm512_cvtepi32_ps(acc_m), _mm512_mul_ps(vdmin, vd1), vc[col]);
-        };
-
+        __m512i acc[COLS], dots[COLS];
+        const __m512i lowMask = _mm512_set1_epi8(15);
+        Unroll<COLS>{}([&](auto col) { vc[col] = _mm512_setzero_ps(); });
         for (int i = 0; i < KB; ++i) {
-            Unroll<COLS>{}(compute, i);
+            Unroll<COLS>{}([&](auto col) { acc[col] = _mm512_setzero_si512(); });
+            for (int group = 0; group < 8; ++group) {
+                Unroll<COLS>{}([&](auto col) { dots[col] = _mm512_setzero_si512(); });
+                for (int k = 0; k < 8; k += 2) {
+                    const __m512i va0 = _mm512_broadcastd_epi32(_mm_loadu_si32(A[i].qs + group * 32 + (k + 0) * 4));
+                    const __m512i va1 = _mm512_broadcastd_epi32(_mm_loadu_si32(A[i].qs + group * 32 + (k + 1) * 4));
+                    Unroll<COLS>{}([&](auto col) {
+                        const char * p = B + PACKED_INDEX(col, i, KB, TILE_SIZE) + group * 256 + (k / 2) * 64;
+                        const __m512i bytes = _mm512_loadu_si512(p);
+                        const __m512i lo = _mm512_and_si512(bytes, lowMask);
+                        const __m512i hi = _mm512_and_si512(_mm512_srli_epi16(bytes, 4), lowMask);
+                        dots[col] = _mm512_dpbusd_epi32(dots[col], lo, va0);
+                        dots[col] = _mm512_dpbusd_epi32(dots[col], hi, va1);
+                    });
+                }
+                Unroll<COLS>{}([&](auto col) {
+                    const char * p = B + PACKED_INDEX(col, i, KB, TILE_SIZE);
+                    const __m512i scale = _mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)(p + 2048 + group * 16)));
+                    acc[col] = _mm512_add_epi32(acc[col], _mm512_mullo_epi32(dots[col], scale));
+                });
+            }
+            const __m256i sums = _mm256_loadu_si256((const __m256i *)A[i].bsums);
+            const __m128i sum32 = _mm_hadd_epi16(_mm256_extracti128_si256(sums, 0), _mm256_extracti128_si256(sums, 1));
+            const __m512i va_bsum = _mm512_castsi128_si512(sum32);
+            const __m512 da = _mm512_set1_ps(A[i].d);
+            Unroll<COLS>{}([&](auto col) {
+                const char * p = B + PACKED_INDEX(col, i, KB, TILE_SIZE);
+                const __m512 dw = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(p + 2304)));
+                vc[col] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(acc[col]), _mm512_mul_ps(dw, da), vc[col]);
+                __m512i minacc = _mm512_setzero_si512();
+                for (int k = 0; k < 4; ++k) {
+                    const __m512i av = _mm512_permutexvar_epi32(_mm512_set1_epi32(k), va_bsum);
+                    const __m512i mv = _mm512_cvtepi8_epi16(_mm256_loadu_si256((const __m256i *)(p + 2176 + k * 32)));
+                    minacc = _mm512_dpwssds_epi32(minacc, av, mv);
+                }
+                const __m512 dm = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(p + 2336)));
+                vc[col] = _mm512_fnmadd_ps(_mm512_cvtepi32_ps(minacc), _mm512_mul_ps(dm, da), vc[col]);
+            });
         }
-
-        //store to C
-        auto storec = [&](auto col) {
-            _mm512_storeu_ps((__m512i*)(C + 0 * ldc + col * 16), vc[col]);
-        };
-        Unroll<COLS>{}(storec);
+        Unroll<COLS>{}([&](auto col) { _mm512_storeu_ps(C + 0 * ldc + col * 16, vc[col]); });
     }
 };
 
@@ -1787,7 +1742,6 @@ struct tinygemm_kernel_vnni<block_q8_K, block_q6_K, float, BLOCK_M, BLOCK_N, BLO
         const char * RESTRICT B = static_cast<const char *>(_B);
 
         // load the 256 bytes from A to 4 avx512 vectors
-        __m512i va[4];
         __m512 vc[COLS];
         __m512 vd1;
 
@@ -1809,12 +1763,6 @@ struct tinygemm_kernel_vnni<block_q8_K, block_q6_K, float, BLOCK_M, BLOCK_N, BLO
 
         auto compute = [&](auto col, auto i) {
             if constexpr (col == 0) {
-                // load a
-                va[0] = _mm512_loadu_si512((const __m512i *)(A[0 * KB + i].qs +   0));
-                va[1] = _mm512_loadu_si512((const __m512i *)(A[0 * KB + i].qs +  64));
-                va[2] = _mm512_loadu_si512((const __m512i *)(A[0 * KB + i].qs + 128));
-                va[3] = _mm512_loadu_si512((const __m512i *)(A[0 * KB + i].qs + 192));
-
                 const __m256i q8sums = _mm256_loadu_si256((const __m256i *)A[0 * KB + i].bsums);
                 vcomp = _mm512_mullo_epi32(_mm512_cvtepi16_epi32(q8sums), m32s);
                 vd1 = _mm512_set1_ps(A[0 * KB + i].d);
@@ -1825,11 +1773,9 @@ struct tinygemm_kernel_vnni<block_q8_K, block_q6_K, float, BLOCK_M, BLOCK_N, BLO
             const char * b_ptr = B + PACKED_INDEX(col, i, KB, TILE_SIZE);
             const char * b_qs = b_ptr;
             const char * b_qh = b_ptr + offset_qh;
-            int mask = 0;
             for (int k_group = 0; k_group < QK_K / 16; ++k_group) {
-                int r = k_group >> 2;
-                __m512i va0 = _mm512_permutexvar_epi32(_mm512_set1_epi32(mask++), va[r]);
-                __m512i va1 = _mm512_permutexvar_epi32(_mm512_set1_epi32(mask++), va[r]);
+                __m512i va0 = _mm512_broadcastd_epi32(_mm_loadu_si32(A[i].qs + k_group * 16 + 0 * 4));
+                __m512i va1 = _mm512_broadcastd_epi32(_mm_loadu_si32(A[i].qs + k_group * 16 + 1 * 4));
 
                 __m512i vsum = _mm512_setzero_si512();
                 __m512i hmask = _mm512_set1_epi8(0x3);
@@ -1847,8 +1793,8 @@ struct tinygemm_kernel_vnni<block_q8_K, block_q6_K, float, BLOCK_M, BLOCK_N, BLO
                 vsum = _mm512_dpbusd_epi32(vsum, vb1, va1);
                 b_qs += 64;
 
-                va0 = _mm512_permutexvar_epi32(_mm512_set1_epi32(mask++), va[r]);
-                va1 = _mm512_permutexvar_epi32(_mm512_set1_epi32(mask++), va[r]);
+                va0 = _mm512_broadcastd_epi32(_mm_loadu_si32(A[i].qs + k_group * 16 + 2 * 4));
+                va1 = _mm512_broadcastd_epi32(_mm_loadu_si32(A[i].qs + k_group * 16 + 3 * 4));
 
                 bytes = _mm512_loadu_si512(b_qs);
                 vb0 = _mm512_and_si512(bytes, lowMask);
