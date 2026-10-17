@@ -183,6 +183,11 @@ function (llama_option_depr TYPE OLD)
     endif()
 endfunction()
 
+# CUDA and HIP are mutually exclusive due to symbol collisions
+if (GGML_CUDA AND GGML_HIP)
+    message(FATAL_ERROR "GGML_CUDA and GGML_HIP cannot be enabled simultaneously due to symbol collisions. Please disable one of them.")
+endif()
+
 llama_option_depr(FATAL_ERROR LLAMA_CUBLAS              GGML_CUDA)
 llama_option_depr(WARNING     LLAMA_CUDA                GGML_CUDA)
 llama_option_depr(WARNING     LLAMA_METAL               GGML_METAL)
