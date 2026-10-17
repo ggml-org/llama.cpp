@@ -689,3 +689,40 @@ def test_completion_prompt_cache():
         assert "prompt_n" in timings and timings["prompt_n"] + timings["cache_n"] == n_prompt
         assert "predicted_n" in timings and timings["predicted_n"] == n_predict
         assert "tokens" in res.body and isinstance(res.body["tokens"], list)
+
+
+# a slot that switched to an unrelated prompt must not restore a context checkpoint of the previous one
+def test_completion_checkpoint_after_unrelated_prompt():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 1
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def tokenize(content):
+        res = server.make_request("POST", "/tokenize", data={"content": content})
+        assert res.status_code == 200
+        return res.body["tokens"]
+
+    def top_logprobs(prompt, cache_prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "n_probs": 5,
+            "cache_prompt": cache_prompt,
+        })
+        assert res.status_code == 200
+        return [(p["id"], p["logprob"]) for p in res.body["completion_probabilities"][0]["top_logprobs"]]
+
+    tokens = tokenize("Purple elephants quietly compose sonnets about tax law")
+    expected = top_logprobs(tokens[:2], False)
+
+    # 5 tokens: the checkpoint 4 tokens before the end of the prompt holds only its first token
+    top_logprobs(tokenize("The quick brown fox jumps over the lazy dog")[:5], True)
+    top_logprobs(tokens[:1], True)
+    actual = top_logprobs(tokens[:2], True)
+
+    assert [tid for tid, _ in actual] == [tid for tid, _ in expected]
+    for (_, lp), (_, lp_expected) in zip(actual, expected):
+        assert lp == pytest.approx(lp_expected, abs=1e-3)
