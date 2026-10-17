@@ -3299,31 +3299,37 @@ std::string llama_vocab::impl::type_name() const{
 
 bool llama_vocab::impl::is_normal(llama_token id) const {
     GGML_ASSERT(type != LLAMA_VOCAB_TYPE_NONE);
+    GGML_ASSERT(id >= 0 && (size_t) id < id_to_token.size());
     return id_to_token[id].attr & LLAMA_TOKEN_ATTR_NORMAL;
 }
 
 bool llama_vocab::impl::is_unknown(llama_token id) const {
     GGML_ASSERT(type != LLAMA_VOCAB_TYPE_NONE);
+    GGML_ASSERT(id >= 0 && (size_t) id < id_to_token.size());
     return id_to_token[id].attr & LLAMA_TOKEN_ATTR_UNKNOWN;
 }
 
 bool llama_vocab::impl::is_control(llama_token id) const {
     GGML_ASSERT(type != LLAMA_VOCAB_TYPE_NONE);
+    GGML_ASSERT(id >= 0 && (size_t) id < id_to_token.size());
     return id_to_token[id].attr & LLAMA_TOKEN_ATTR_CONTROL;
 }
 
 bool llama_vocab::impl::is_byte(llama_token id) const {
     GGML_ASSERT(type != LLAMA_VOCAB_TYPE_NONE);
+    GGML_ASSERT(id >= 0 && (size_t) id < id_to_token.size());
     return id_to_token[id].attr & LLAMA_TOKEN_ATTR_BYTE;
 }
 
 bool llama_vocab::impl::is_user_defined(llama_token id) const {
     GGML_ASSERT(type != LLAMA_VOCAB_TYPE_NONE);
+    GGML_ASSERT(id >= 0 && (size_t) id < id_to_token.size());
     return id_to_token[id].attr & LLAMA_TOKEN_ATTR_USER_DEFINED;
 }
 
 bool llama_vocab::impl::is_unused(llama_token id) const {
     GGML_ASSERT(type != LLAMA_VOCAB_TYPE_NONE);
+    GGML_ASSERT(id >= 0 && (size_t) id < id_to_token.size());
     return id_to_token[id].attr & LLAMA_TOKEN_ATTR_UNUSED;
 }
 
