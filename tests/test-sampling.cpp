@@ -75,6 +75,39 @@ static llama_token sample_dist(llama_sampler * sampler, const std::vector<float>
     return cur_p.data[cur_p.selected].id;
 }
 
+// The reduction must keep the first maximum across lanes and the scalar tail,
+// including filtered candidate arrays whose token IDs differ from their indices.
+static void test_greedy_reduction() {
+    llama_sampler * sampler = llama_sampler_init_greedy();
+    auto check = [&](const std::vector<float> & logits, size_t expected) {
+        std::vector<llama_token_data> candidates;
+        for (size_t i = 0; i < logits.size(); ++i) {
+            candidates.push_back({llama_token(100 + 3 * i), logits[i], 0.0f});
+        }
+        llama_token_data_array cur = {candidates.data(), candidates.size(), -1, false};
+        llama_sampler_apply(sampler, &cur);
+        GGML_ASSERT(cur.selected == (int64_t) expected);
+        GGML_ASSERT(cur.size == logits.size());
+    };
+
+    for (size_t size = 1; size <= 19; ++size) {
+        for (size_t first = 0; first < size; ++first) {
+            std::vector<float> logits(size, -INFINITY);
+            logits[first] = 1.0f;
+            check(logits, first);
+            // Later equal maxima must not win when lanes are reduced out of order.
+            for (size_t later = first + 1; later < size; ++later) {
+                logits[later] = 1.0f;
+            }
+            check(logits, first);
+        }
+    }
+    check({NAN, 5.0f, INFINITY, 0.0f, 7.0f, INFINITY}, 0);
+    check({-INFINITY, NAN, 4.0f, INFINITY, NAN, INFINITY}, 3);
+    check({-0.0f, 0.0f, -1.0f, 0.0f, 0.0f}, 0);
+    llama_sampler_free(sampler);
+}
+
 static void test_dist_singleton_rng() {
     llama_sampler * singleton = llama_sampler_init_dist(4242);
     llama_sampler * control   = llama_sampler_init_dist(4242);
@@ -338,6 +371,7 @@ static void test_perf() {
 int main(void) {
     ggml_time_init();
 
+    test_greedy_reduction();
     test_dist_singleton_rng();
 
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 1.0f);
