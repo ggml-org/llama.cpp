@@ -228,6 +228,19 @@ static void test_object(testing & t) {
         t.assert_equal("minimum", 0, v.minimum);
     });
 
+    t.test("additionalProperties non-schema values are accepted", [](testing & t) {
+        auto expect_any = [](testing & t, const char * what, const std::string & schema) {
+            auto doc = parse(schema);
+            const auto & o = root<common_chat_schema_object>(t, doc);
+            as<common_chat_schema_any>(t, o.additional_properties.get(), what);
+        };
+        // draft 4/6 allowed an array of schemas, any one matching is enough
+        expect_any(t, "array", R"({"properties": {"a": {}}, "additionalProperties": [{"type": "string"}, {"type": "integer"}]})");
+        // draft 7+ ignores non-schema values
+        expect_any(t, "number", R"({"properties": {"a": {}}, "additionalProperties": 1})");
+        expect_any(t, "null", R"({"properties": {"a": {}}, "additionalProperties": null})");
+    });
+
     t.test("nested", [](testing & t) {
         auto doc = parse(R"({"properties": {"inner": {"properties": {"leaf": {"type": "null"}}, "required": ["leaf"]}}})");
         const auto & o = root<common_chat_schema_object>(t, doc);
@@ -479,7 +492,7 @@ static void test_errors(testing & t) {
         assert_error(t, R"({"type": "array", "maxItems": 1.5})", "#: maxItems must be a non-negative integer");
         assert_error(t, R"({"properties": []})", "#: properties must be an object");
         assert_error(t, R"({"properties": {"a": {"type": "nope"}}})", "#/properties/a: unrecognized type nope");
-        assert_error(t, R"({"additionalProperties": null})", "#: additionalProperties must be a boolean or a schema");
+        assert_error(t, R"({"additionalProperties": {"type": "nope"}})", "#/additionalProperties: unrecognized type nope");
     });
 }
 
