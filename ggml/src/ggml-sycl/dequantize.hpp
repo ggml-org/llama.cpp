@@ -818,61 +818,43 @@ static void dequantize_block_q4_0(const void * __restrict__ vx, dst_t * __restri
 }
 
 template<typename dst_t>
-static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
+static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
                                   const sycl::nd_item<3> &item_ct1) {
+    // one thread per qs byte, like dequantize_block<dequantize_q4_0>; the reorder layout makes the byte reads contiguous
+    // grid-stride loop because the launcher may shrink the work-group to keep the global range below INT_MAX
+    // float math, not dequantize_q4_0_reorder: that helper computes in half with GGML_SYCL_F16, which changes f32 output
+    const sycl::half * d_ptr  = (const sycl::half *) ((const uint8_t *) vx + k/2);
+    const int64_t      stride = item_ct1.get_local_range(2) * item_ct1.get_group_range(2);
 
-    const int64_t i = item_ct1.get_group(2);
-    auto k=nb32;
-    // assume 32 threads
-    const int64_t tid = item_ct1.get_local_id(2);
-    const int lane_ib = i * WARP_SIZE + tid;
+    for (int64_t iq = item_ct1.get_global_id(2); iq < k/2; iq += stride) {
+        const int64_t ib  = iq / (QK4_0/2);
+        const int64_t iqs = iq % (QK4_0/2);
+        const int     vq  = ((const uint8_t *) vx)[iq];
+        const float   d   = float(d_ptr[ib]);
 
-    if (lane_ib >= k / QK4_0) {
-        return;
+        dst_t * y = yy + ib*QK4_0 + iqs;
+        y[0]       = d * ((vq & 0xF) - 8);
+        y[QK4_0/2] = d * ((vq >>  4) - 8);
     }
-
-    dst_t * y_ptr = yy + lane_ib * QK4_0;
-
-    auto qs = (const uint8_t*)vx + lane_ib * QK4_0 / 2;
-    auto s_ptr = (const sycl::half*)((const uint8_t*)vx + k / 2) + lane_ib;
-
-    const float d = float(*s_ptr);
-
-#pragma unroll
-    for (int l = 0; l < QK4_0 / 2; ++l) {
-        int vq = qs[l];
-        y_ptr[l + 0] = d * ((vq & 0xF) - 8);
-        y_ptr[l + 16] = d * ((vq >> 4) - 8);
-    }
-
 }
 
 // Dequantize Q8_0 from reorder layout: [all qs (k bytes)][all d values]
-// Each thread handles one block of QK8_0 elements.
 template<typename dst_t>
 static void dequantize_block_q8_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
                                   const sycl::nd_item<3> &item_ct1) {
+    // two values per thread, like dequantize_block<dequantize_q8_0>; the reorder layout keeps all qs contiguous
+    // grid-stride loop because the launcher may shrink the work-group to keep the global range below INT_MAX
+    // float math, not dequantize_q8_0_reorder: that helper computes in half with GGML_SYCL_F16, which changes f32 output
+    const int8_t *     qs     = (const int8_t *) vx;
+    const sycl::half * d_ptr  = (const sycl::half *) ((const uint8_t *) vx + k);
+    const int64_t      stride = 2 * item_ct1.get_local_range(2) * item_ct1.get_group_range(2);
 
-    const int64_t i = item_ct1.get_group(2);
-    const int64_t tid = item_ct1.get_local_id(2);
-    const int lane_ib = i * WARP_SIZE + tid;
+    for (int64_t i = 2 * item_ct1.get_global_id(2); i < k; i += stride) {
+        const float d = float(d_ptr[i / QK8_0]);
 
-    if (lane_ib >= k / QK8_0) {
-        return;
+        yy[i + 0] = d * qs[i + 0];
+        yy[i + 1] = d * qs[i + 1];
     }
-
-    dst_t * y_ptr = yy + lane_ib * QK8_0;
-
-    auto qs = (const int8_t*)vx + lane_ib * QK8_0;
-    auto s_ptr = (const sycl::half*)((const uint8_t*)vx + k) + lane_ib;
-
-    const float d = float(*s_ptr);
-
-#pragma unroll
-    for (int l = 0; l < QK8_0; ++l) {
-        y_ptr[l] = d * qs[l];
-    }
-
 }
 
 template<typename dst_t>

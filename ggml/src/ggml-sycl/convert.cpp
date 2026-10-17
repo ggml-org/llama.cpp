@@ -158,16 +158,16 @@ static void dequantize_row_q4_0_sycl_reorder(const void *vx, dst_t *y, const int
     dpct::has_capability_or_fail(stream->get_device(),
                                     {sycl::aspect::fp16});
 
-    int constexpr WARP_K = WARP_SIZE * QK4_0;
-    const int n_warp = (k + WARP_K - 1) / WARP_K;
-    GGML_ASSERT(k % 2 == 0);
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
-        sycl::range<3>(1, 1, WARP_SIZE),
-        sycl::range<3>(1, 1, WARP_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+    GGML_ASSERT(k % QK4_0 == 0);
+    const int64_t n_groups = ceil_div(k / 2, SYCL_DEQUANTIZE_BLOCK_SIZE);
+    // decrease global range when it exceeds the max int; the kernel loops to cover the rest
+    const int64_t wg_size  = downsample_sycl_global_range(n_groups, SYCL_DEQUANTIZE_BLOCK_SIZE);
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_groups) *
+        sycl::range<3>(1, 1, wg_size),
+        sycl::range<3>(1, 1, wg_size)),
+        [=](sycl::nd_item<3> item_ct1) {
             dequantize_block_q4_0_reorder(vx, y, k, item_ct1);
         });
-
 }
 
 template <typename dst_t>
@@ -177,16 +177,16 @@ static void dequantize_row_q8_0_sycl_reorder(const void *vx, dst_t *y, const int
     dpct::has_capability_or_fail(stream->get_device(),
                                     {sycl::aspect::fp16});
 
-    int constexpr WARP_K = WARP_SIZE * QK8_0;
-    const int n_warp = (k + WARP_K - 1) / WARP_K;
     GGML_ASSERT(k % QK8_0 == 0);
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
-        sycl::range<3>(1, 1, WARP_SIZE),
-        sycl::range<3>(1, 1, WARP_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+    const int64_t n_groups = ceil_div(k / 2, SYCL_DEQUANTIZE_BLOCK_SIZE);
+    // decrease global range when it exceeds the max int; the kernel loops to cover the rest
+    const int64_t wg_size  = downsample_sycl_global_range(n_groups, SYCL_DEQUANTIZE_BLOCK_SIZE);
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_groups) *
+        sycl::range<3>(1, 1, wg_size),
+        sycl::range<3>(1, 1, wg_size)),
+        [=](sycl::nd_item<3> item_ct1) {
             dequantize_block_q8_0_reorder(vx, y, k, item_ct1);
         });
-
 }
 
 template <typename dst_t>
