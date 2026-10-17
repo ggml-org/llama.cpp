@@ -1247,6 +1247,56 @@ To know the `id` of the adapter, use GET `/lora-adapters`
 ]
 ```
 
+### GET `/cvectors`: Get list of all control vectors
+
+This endpoint returns the control vectors loaded at startup. You can add control vectors using `--control-vector` or `--control-vector-scaled`, for example: `--control-vector happy.gguf --control-vector-scaled honest.gguf:0.5`
+
+By default, a control vector added with `--control-vector` has scale `1.0`. Returns an empty array if no control vectors were loaded.
+
+**Response format**
+
+```json
+[
+    {
+        "id": 0,
+        "path": "happy.gguf",
+        "scale": 1.0
+    },
+    {
+        "id": 1,
+        "path": "honest.gguf",
+        "scale": 0.5
+    }
+]
+```
+
+### POST `/cvectors`: Set list of control vectors
+
+This sets the scale of each loaded control vector and re-applies the combined vector to the model. The change takes effect for subsequent requests without restarting the server.
+
+To disable a control vector, either remove it from the list below, or set scale to `0`. Vectors not present in the request are set to scale `0`.
+
+Please note that the control vector files are re-read from disk on every call, and that existing slot prompt caches are not cleared: tokens already in a slot's cache were computed with the previous control vectors, while newly generated tokens use the new ones.
+
+**Request format**
+
+To know the `id` of the control vector, use GET `/cvectors`
+
+```json
+[
+  {"id": 0, "scale": 0.2},
+  {"id": 1, "scale": 0.8}
+]
+```
+
+**Response format**
+
+```json
+{
+    "success": true
+}
+```
+
 ## OpenAI-compatible API Endpoints
 
 ### GET `/v1/models`: OpenAI-compatible Model Info API
