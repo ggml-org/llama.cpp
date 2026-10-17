@@ -2453,6 +2453,63 @@ struct test_get_rows : public test_case {
     }
 };
 
+// GGML_OP_GET_ROWS on a weight also used by GGML_OP_MUL_MAT (tied embeddings)
+// the mul_mat runs first, so a backend that changes the weight layout must still return the right rows
+struct test_get_rows_after_mul_mat : public test_case {
+    const ggml_type type;
+    const int n; // cols
+    const int m; // rows
+    const int r; // rows to get
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, n, m, r);
+    }
+
+    test_get_rows_after_mul_mat(ggml_type type = GGML_TYPE_Q8_0, int n = 256, int m = 16, int r = 4)
+        : type(type), n(n), m(m), r(r) {}
+
+    double max_nmse_err() override {
+        return 5e-4; // same as test_mul_mat
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, type, n, m);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, 1);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * rows = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, r);
+        ggml_set_name(rows, "rows");
+
+        ggml_tensor * mm = ggml_mul_mat(ctx, w, x);
+        ggml_set_name(mm, "mm");
+
+        ggml_tensor * gr = ggml_get_rows(ctx, w, rows);
+        ggml_set_name(gr, "gr");
+
+        // repeat(mm) is the first source, so mul_mat is computed before get_rows
+        ggml_tensor * out = ggml_add(ctx, ggml_repeat(ctx, mm, gr), gr);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); i++) {
+                    data[i] = rand() % m;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_GET_ROWS_BACK
 struct test_get_rows_back : public test_case {
     const ggml_type type;
@@ -9809,6 +9866,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_get_rows(GGML_TYPE_F32, 1, 8, 2, 1, 1, false));
+    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K}) {
+        test_cases.emplace_back(new test_get_rows_after_mul_mat(type));
+    }
     for (ggml_type type : all_types) {
         for (int b : {1, 7}) {
             for (bool v : {false, true}) {
