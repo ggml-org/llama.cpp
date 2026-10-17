@@ -2470,12 +2470,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 const ggml_tensor * topk  = dst->src[0];
                 const ggml_tensor * table = dst->src[1];
                 const ggml_tensor * full  = dst->src[2];
+                const ggml_tensor * look  = dst->src[3];
                 ggml_cuda_moe_slot_resolve_fn(ctx.stream(),
                     (const int32_t *) topk->data, (const int32_t *) table->data, (int32_t *) dst->data,
                     topk->ne[0], topk->ne[1], topk->nb[0], topk->nb[1], table->nb[0], dst->nb[0], dst->nb[1],
                     full ? (const int32_t *) full->data : nullptr,
                     full ? full->ne[0] : 0, full ? full->ne[1] : 0,
                     full ? full->nb[1] : 0,
+                    look ? (const int32_t *) look->data : nullptr,
+                    look ? look->ne[0] * look->ne[1] : 0,
                     ggml_get_op_params_i32(dst, 0), (int32_t) (table->ne[0] * table->ne[1]),
                     ggml_get_op_params_i32(dst, 1));
             } break;

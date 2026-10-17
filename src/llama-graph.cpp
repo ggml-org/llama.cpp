@@ -2023,7 +2023,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         ggml_tensor * lookahead_in) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -2044,7 +2045,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         up_exps_s,
         gate_exps_s,
         down_exps_s,
-        selected_experts_in
+        selected_experts_in,
+        lookahead_in
     );
 }
 
@@ -2072,7 +2074,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         ggml_tensor * lookahead_in) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -2227,7 +2230,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
             ggml_tensor * sel_c = ggml_cont(ctx0, selected_experts);
             slot_ids = ggml_moe_slot_resolve(ctx0, sel_c,
-                (ggml_tensor *) moe_table[il], sel_c, (int32_t) il, sentinel);
+                (ggml_tensor *) moe_table[il], sel_c, lookahead_in, (int32_t) il, sentinel);
             cb(slot_ids, "ffn_moe_slot_ids", il);
         } else {
             // slot_table is [1, n_expert]; gather through a flattened index so
@@ -2315,7 +2318,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 ggml_tensor * w_s = ggml_cont(ctx0, ggml_view_3d(ctx0, weights, 1, n_expert_used, chunk,
                     weights->nb[1], weights->nb[2], t0 * weights->nb[2]));
                 ggml_tensor * s_ids = ggml_moe_slot_resolve(ctx0, topk_s,
-                    (ggml_tensor *) moe_table[il], sel_c, (int32_t) il, sentinel);
+                    (ggml_tensor *) moe_table[il], sel_c, nullptr, (int32_t) il, sentinel);
                 cb(s_ids, "ffn_moe_slot_ids", il);
                 ggml_tensor * u_r = build_lora_mm_id(p_up, cur_s, s_ids, up_exps_s);
                 ggml_tensor * g_r = build_lora_mm_id(p_gate, cur_s, s_ids, gate_exps_s);

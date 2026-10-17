@@ -6624,10 +6624,12 @@ struct ggml_tensor * ggml_moe_slot_resolve(
         struct ggml_tensor  * topk,
         struct ggml_tensor  * table,
         struct ggml_tensor  * full,
+        struct ggml_tensor  * look,
         int32_t               il,
         int32_t               sentinel) {
     GGML_ASSERT(topk->type == GGML_TYPE_I32);
     GGML_ASSERT(table->type == GGML_TYPE_I32);
+    GGML_ASSERT(look == NULL || look->type == GGML_TYPE_I32);
 
     struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, topk->ne[0], topk->ne[1]);
 
@@ -6638,6 +6640,7 @@ struct ggml_tensor * ggml_moe_slot_resolve(
     result->src[0] = topk;
     result->src[1] = table;
     result->src[2] = full;
+    result->src[3] = look;
 
     return result;
 }

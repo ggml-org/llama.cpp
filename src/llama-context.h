@@ -289,6 +289,7 @@ public:
         // compute stream, no staging copy and no extra stream.
         char * host_pool = nullptr;
         size_t host_slot_bytes = 0;
+        bool host_odirect = false;
         int    host_nslots = 0;
         int    host_rr = 0;
         int    host_ring = 0;
@@ -322,6 +323,9 @@ public:
     std::atomic<bool> or_run{false};
     std::mutex or_mtx;
     std::vector<uint32_t> or_q;
+    std::vector<int32_t> look_pred;   // n_layer*6: gate-lookahead top candidates
+    std::vector<long> look_fresh;
+    long look_hit = 0, look_need = 0, look_push = 0;
     std::vector<uint16_t> coact;      // (n_layer-1)*n_expert*4: learned L+1 candidates
     std::vector<uint16_t> coact_cnt;
     std::vector<uint32_t> co_hint;    // n_layer*n_expert: token stamp of last hint
@@ -331,7 +335,7 @@ public:
     int  hot_pos = 0;
     bool hot_cycles = false;
     // persistent pool for the staging-ring preads
-    struct moe_io_job { int32_t e; int vslot; int rslot; int fd; uint64_t off; uint32_t len; uint32_t pre; };
+    struct moe_io_job { int32_t e; int vslot; int rslot; int fd; uint64_t off; uint32_t len; uint32_t pre; bool warm; };
     std::mutex io_mtx;
     std::condition_variable io_cv, io_done_cv;
     std::vector<moe_io_job> io_jobs, io_jobs_scratch;
@@ -339,6 +343,7 @@ public:
     size_t io_stride = 0, io_per = 0, io_nth = 0;
     std::atomic<size_t> io_next{0};
     std::atomic<long> io_fail{0};
+    std::atomic<long> io_warm_us{0}, io_warm_n{0}, io_cold_us{0}, io_cold_n{0};
     std::atomic<long> io_finished{0};
     long io_thr_active = 0;
     unsigned long long io_gen = 0;

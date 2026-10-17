@@ -2732,6 +2732,7 @@ extern "C" {
             struct ggml_tensor  * topk,
             struct ggml_tensor  * table,
             struct ggml_tensor  * full,
+            struct ggml_tensor  * look,
             int32_t               il,
             int32_t               sentinel);
 

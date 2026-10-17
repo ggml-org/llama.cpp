@@ -1146,6 +1146,18 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, const int il) {
     GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
 
+    ggml_tensor * lookahead = nullptr;
+    {
+        static int look_on = -1;
+        if (look_on < 0) { const char * e = getenv("MOE_LOOKAHEAD"); look_on = (e && atoi(e) != 0) ? 1 : 0; }        if (0 && look_on && cur->ne[1] == 1 && il + 1 < (int) model.layers.size() &&
+            model.layers[il + 1].ffn_gate_inp != nullptr) {
+            ggml_tensor * nl = build_lora_mm(model.layers[il + 1].ffn_gate_inp, cur);
+            cb(nl, "ffn_next_logits", il);
+            lookahead = ggml_cont(ctx0, ggml_argsort_top_k(ctx0, nl, 4));
+            cb(lookahead, "ffn_next_topk", il);
+        }
+    }
+
     ggml_tensor * moe_out =
         build_moe_ffn(cur,
             model.layers[il].ffn_gate_inp,
@@ -1160,7 +1172,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
             nullptr, model.layers[il].ffn_gate_up_exps,
             model.layers[il].ffn_up_exps_s,
             model.layers[il].ffn_gate_exps_s,
-            model.layers[il].ffn_down_exps_s);
+            model.layers[il].ffn_down_exps_s,
+            nullptr, lookahead);
     cb(moe_out, "ffn_moe_out", il);
 
     // shared experts, as in the Qwen3Next reference

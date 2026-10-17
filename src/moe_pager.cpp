@@ -625,6 +625,13 @@ bool moe_pager::use_warm_pack(const char * path, const char * index_txt, std::st
     int fd = open(path, O_RDONLY);
     if (fd < 0) { err = "open warm pack failed"; return false; }
     posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+    {
+        std::vector<char> buf(8 << 20);
+        for (;;) {
+            ssize_t r = read(fd, buf.data(), buf.size());
+            if (r <= 0) break;
+        }
+    }
     if (fd_warm_ >= 0) close(fd_warm_);
     fd_warm_ = fd;
     warm_path_ = path;
@@ -650,13 +657,16 @@ int moe_pager::warm_fd() {
 moe_pager::moe_pack_loc moe_pager::pack_loc(int il, int e) {
     moe_pack_loc L{-1, 0, 0, 0};
     if (il < 0 || il >= n_layer_ || e < 0 || e >= n_expert_) return L;
-    if (warm_has(il, e)) {
-        const moe_expert_slice & s = warm_idx_[(size_t) il * n_expert_ + e];
-        L.fd = warm_fd();
-        L.off = s.off; L.len = s.len; L.pre = 0;
-        if (L.fd >= 0) n_warm_reads_++;
-        return L;
-    }
+    if (!pack_mode_) return L;
+    const moe_expert_slice * s = slices(il, e);
+    L.fd = pack_fd_buf();
+    L.off = s->off; L.len = s->len; L.pre = s->pre;
+    return L;
+}
+
+moe_pager::moe_pack_loc moe_pager::pack_loc_buf(int il, int e) {
+    moe_pack_loc L{-1, 0, 0, 0};
+    if (il < 0 || il >= n_layer_ || e < 0 || e >= n_expert_) return L;
     if (!pack_mode_) return L;
     const moe_expert_slice * s = slices(il, e);
     L.fd = pack_fd_buf();

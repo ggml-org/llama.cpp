@@ -700,6 +700,17 @@ void llama_mmap::drop_cache() const {
 #endif
 }
 
+void llama_mmap::advise_random() const {
+#ifdef _POSIX_MAPPED_FILES
+    void * base = pimpl->addr;
+    size_t len = pimpl->size;
+    if (!base || !len) return;
+    posix_madvise(base, len, POSIX_MADV_RANDOM);
+#else
+    (void) 0;
+#endif
+}
+
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;
 #else

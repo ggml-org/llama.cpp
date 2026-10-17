@@ -2003,6 +2003,13 @@ size_t llama_model::drop_mmap_cache() const {
     return total;
 }
 
+void llama_model::advise_mmap_random() const {
+    for (auto & m : pimpl->mappings) {
+        if (!m) continue;
+        m->advise_random();
+    }
+}
+
 size_t llama_model::n_tensors() const {
     return tensors_by_name.size();
 }

@@ -113,6 +113,7 @@ public:
     bool warm_has(int il, int e) const;
     int warm_fd();
     moe_pack_loc pack_loc(int il, int e);
+    moe_pack_loc pack_loc_buf(int il, int e);
     long stats_warm_reads() const { return n_warm_reads_; }
     long stats_gguf_reads() const { return n_gguf_reads_; }
     long stats_pack_reads() const { return n_pack_reads_; }
