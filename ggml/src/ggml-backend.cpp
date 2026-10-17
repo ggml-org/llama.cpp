@@ -1820,11 +1820,22 @@ static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
         ggml_backend_buffer_is_host(t->buffer);
 }
 
-static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
+// returns true if the copy may still be reading host memory, the split backend must then be synchronized before the host data is overwritten
+static bool ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
     const int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
     ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, input);
     struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+
+    // without pipeline parallelism the input copy has a single slot, so it can be written in order on the split backend
+    ggml_backend_buffer_t input_buf = input->view_src ? input->view_src->buffer : input->buffer;
+    if (sched->events[split_backend_id][sched->cur_copy] == NULL &&
+        split_backend->iface.set_tensor_async != NULL && !ggml_backend_is_meta(split_backend) &&
+        ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU &&
+        ggml_backend_buffer_is_host(input_buf) && !ggml_backend_sched_is_host_weight(input) && ggml_nbytes(input) > 0) {
+        ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, ggml_nbytes(input));
+        return true;
+    }
 
     if (input->flags & GGML_TENSOR_FLAG_INPUT) {
         // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
@@ -1834,19 +1845,25 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
             ggml_backend_synchronize(split_backend);
         }
         ggml_backend_tensor_copy(input, input_cpy);
-        return;
+        return false;
     }
 
     // wait for the split backend to finish using the input before overwriting it
-    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-        ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
+    ggml_backend_event_t event = sched->events[split_backend_id][sched->cur_copy];
+    if (event != NULL) {
+        ggml_backend_event_wait(split_backend, event);
+        // async copies can run on the input backend (e.g. CUDA peer copies), so it has to wait too
+        if (input_backend->iface.event_wait != NULL &&
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(input_backend)) == ggml_backend_dev_backend_reg(event->device)) {
+            ggml_backend_event_wait(input_backend, event);
+        }
     } else {
         ggml_backend_synchronize(split_backend);
     }
 
     if (sched->callback_copy != NULL && ggml_backend_sched_is_host_weight(input) &&
         sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
-        return;
+        return false;
     }
 
     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
@@ -1860,6 +1877,7 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
         }
         ggml_backend_tensor_copy(input, input_cpy);
     }
+    return false;
 }
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
@@ -1885,15 +1903,21 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         // copy the input tensors to the split backend
         // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
+        bool host_read_pending = false;
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             if (!ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+                host_read_pending |= ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
             }
         }
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             if (ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+                host_read_pending |= ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
             }
+        }
+
+        // the host data of async copies can be overwritten by later splits or by the user after this function returns
+        if (host_read_pending) {
+            ggml_backend_synchronize(split_backend);
         }
 
         if (!sched->callback_eval) {
