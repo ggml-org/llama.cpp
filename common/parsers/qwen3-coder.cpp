@@ -1,5 +1,66 @@
 #include "parsers.h"
 
+#include <cstdint>
+#include <functional>
+#include <map>
+
+// Required arguments match once. Optional arguments match at most once.
+// Either kind may appear first. Past COMMON_CHAT_MAX_PERMUTE arguments, the
+// grammar keeps required arguments together and optional arguments after them.
+static common_peg_parser qwen_tool_arguments(
+    common_chat_peg_builder &                    p,
+    const std::string &                          prefix,
+    const std::vector<common_peg_parser> &       required,
+    const std::vector<common_peg_parser> &       optional) {
+    const size_t nreq = required.size();
+    const size_t nopt = optional.size();
+    if (nreq + nopt > COMMON_CHAT_MAX_PERMUTE) {
+        auto args = p.permute(prefix, required);
+        if (!optional.empty()) {
+            args = args + p.zero_or_more(p.choice(optional));
+        }
+        return args;
+    }
+    if (nreq + nopt == 0) {
+        return p.eps();
+    }
+
+    std::map<uint32_t, common_peg_parser>                         rules;
+    std::function<common_peg_parser(uint32_t, uint32_t)>          state;
+    const uint32_t req_all = nreq == 0 ? 0u : (1u << nreq) - 1u;
+    const uint32_t opt_all = nopt == 0 ? 0u : (1u << nopt) - 1u;
+
+    state = [&](uint32_t req_left, uint32_t opt_left) -> common_peg_parser {
+        // A rule wrapping only eps() renders as an empty GBNF rule, which fails to parse.
+        if (req_left == 0 && opt_left == 0) {
+            return p.eps();
+        }
+
+        const uint32_t key = (req_left << 16) | opt_left;
+        auto           cached = rules.find(key);
+        if (cached != rules.end()) {
+            return cached->second;
+        }
+
+        auto alternatives = p.choice();
+        for (size_t i = 0; i < nreq; i++) {
+            if (req_left & (1u << i)) {
+                alternatives |= required[i] + state(req_left & ~(1u << i), opt_left);
+            }
+        }
+        for (size_t j = 0; j < nopt; j++) {
+            if (opt_left & (1u << j)) {
+                alternatives |= optional[j] + state(req_left, opt_left & ~(1u << j));
+            }
+        }
+
+        auto body = req_left == 0 ? p.optional(alternatives) : alternatives;
+        return rules.emplace(key, p.rule(prefix + "-" + std::to_string(key), body)).first->second;
+    };
+
+    return state(req_all, opt_all);
+}
+
 common_chat_params common_chat_params_init_qwen3_coder(const common_chat_template &          tmpl,
                                                               const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -139,12 +200,9 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                     (param.required ? required_args : optional_args).push_back(arg_rule);
                 });
 
-                // Accept required arguments in any order, as Qwen does not always adhere to the
-                // order provided.
-                auto args = p.permute("tool-" + std::to_string(tool_index) + "-args", required_args);
-                if (!optional_args.empty()) {
-                    args = args + p.zero_or_more(p.choice(optional_args));
-                }
+                // Accept arguments in any order. Qwen does not keep declaration order,
+                // and an optional argument may appear before a required one.
+                auto args = qwen_tool_arguments(p, "tool-" + std::to_string(tool_index) + "-args", required_args, optional_args);
 
                 auto func = p.tool(p.tool_open("<function=" + p.tool_name(p.literal(name)) + ">\n") +
                                    p.tool_args(args) +
