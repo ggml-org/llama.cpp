@@ -972,6 +972,7 @@ static std::ifstream open_ifstream_binary(const std::string & fname) {
 // in test-mtmd-impl, we include woth common.h and this file, and these functions are duplicated
 // this is a quick fix to avoid compilation errors
 #ifndef DIRECTORY_SEPARATOR
+GGML_ATTRIBUTE_FORMAT(1, 2)
 static std::string string_format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
