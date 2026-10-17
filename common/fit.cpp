@@ -213,7 +213,15 @@ static void common_params_fit_impl(
             uint32_t nct_extra = 0;
             uint32_t nex_extra = 0;
 
-            extra->cparams->n_ctx = cparams->n_ctx;
+            const uint32_t nct = extra->shares_model ? hp_nct : nct_extra;
+            if (nct > 0) {
+                const uint32_t n_ctx_per_seq = std::min(cparams->n_ctx, nct);
+                extra->cparams->n_ctx = extra->cparams->kv_unified
+                    ? n_ctx_per_seq
+                    : (n_ctx_per_seq * extra->cparams->n_seq_max);
+            } else {
+                extra->cparams->n_ctx = cparams->n_ctx;
+            }
 
             LOG_TRC("%s: getting device memory data for the extra model at a context size of %" PRIu32 ":\n",
                 __func__, cparams->n_ctx);
