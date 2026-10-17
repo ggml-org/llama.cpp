@@ -35,6 +35,10 @@ template<typename dst_t, typename src_t>
  __host__ __device__ inline dst_t ggml_cuda_cast(src_t x) {
     if constexpr (std::is_same_v<dst_t, src_t>) {
         return x;
+    } else if constexpr (std::is_same_v<dst_t, ggml_fp8_e4m3_t>) {
+        return { ggml_cuda_fp32_to_f8_e4m3(ggml_cuda_cast<float>(x)) };
+    } else if constexpr (std::is_same_v<src_t, ggml_fp8_e4m3_t>) {
+        return ggml_cuda_cast<dst_t>(ggml_cuda_f8_e4m3_to_fp32(x.bits));
     } else if constexpr(std::is_same_v<dst_t, nv_bfloat16>) {
         return __float2bfloat16(float(x));
     } else if constexpr(std::is_same_v<src_t, nv_bfloat16>) {

@@ -379,6 +379,10 @@ static bool blackwell_mma_available(const int cc) {
            ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_RUBIN;
 }
 
+static bool fp8_mma_hardware_available(const int cc) {
+    return GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE && cc < GGML_CUDA_CC_RUBIN;
+}
+
 // Checks whether the tensor's base data pointer and higher-dimensional strides are byte-aligned to `alignment` bytes.
 static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignment) {
     GGML_ASSERT(tensor != nullptr);
@@ -872,6 +876,67 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     return static_cast<float>(raw / 2);
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
+}
+
+static __host__ __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    __nv_fp8_e4m3 xf;
+    xf.__x = x;
+    return static_cast<float>(xf);
+#else
+    const uint8_t magnitude = x & 0x7F;
+    if (magnitude == 0x7F) {
+        return NAN;
+    }
+
+    const int exp = (magnitude >> 3) & 0x0F;
+    const int man = magnitude & 0x07;
+    float value;
+    if (exp == 0) {
+        value = ldexpf((float) man, -9);
+    } else {
+        value = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
+    }
+    return x & 0x80 ? -value : value;
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+}
+
+static __host__ __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    return __nv_cvt_float_to_fp8(x, __NV_SATFINITE, __NV_E4M3);
+#elif !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) && !defined(__MUSA_ARCH__)
+    // ggml_cuda_cast also runs on the host, where __float2int_rn is not available.
+    return ggml_fp32_to_f8_e4m3(x);
+#else
+    const uint8_t sign = signbit(x) ? 0x80 : 0;
+    x = fabsf(x);
+
+    if (isnan(x)) {
+        return sign | 0x7F;
+    }
+    if (x == 0.0f) {
+        return sign;
+    }
+    if (isinf(x) || x >= 448.0f) {
+        return sign | 0x7E;
+    }
+    if (x < 0.015625f) {
+        return sign | (uint8_t) __float2int_rn(x * 512.0f);
+    }
+
+    int exp;
+    const float mantissa = frexpf(x, &exp) * 2.0f;
+    int encoded_exp = exp + 6;
+    int encoded_man = __float2int_rn((mantissa - 1.0f) * 8.0f);
+    if (encoded_man == 8) {
+        encoded_man = 0;
+        encoded_exp++;
+    }
+    if (encoded_exp > 15 || (encoded_exp == 15 && encoded_man > 6)) {
+        return sign | 0x7E;
+    }
+    return sign | (uint8_t) (encoded_exp << 3) | (uint8_t) encoded_man;
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
@@ -1454,6 +1519,9 @@ struct ggml_backend_cuda_context {
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     void * cublas_workspaces[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     size_t cublas_workspace_sizes[GGML_CUDA_MAX_DEVICES] = {};
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+    cublasLtHandle_t cublaslt_handles[GGML_CUDA_MAX_DEVICES] = {};
+#endif
 
     int curr_stream_no = 0;
 
@@ -1547,6 +1615,16 @@ struct ggml_backend_cuda_context {
         }
         return cublas_handles[device][curr_stream_no];
     }
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+    cublasLtHandle_t cublaslt_handle() {
+        if (cublaslt_handles[device] == nullptr) {
+            ggml_cuda_set_device(device);
+            CUBLAS_CHECK(cublasLtCreate(&cublaslt_handles[device]));
+        }
+        return cublaslt_handles[device];
+    }
+#endif
 
     // pool
     std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
