@@ -323,13 +323,15 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
         const int64_t n_sel      = kpool*n_top_pool + (hparams.indexer_kpool_select_tail ? kpool - 1 : 0);
         inp->n_sel = (uint32_t) n_sel;
 
-        // the scatter maps the dead slots of this mask to dump rows
-        inp->sel_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_sel, 1, 1, n_tokens);
-        ggml_set_input(inp->sel_mask);
-        // set_input_kpool always fills the mask, so it stays allocated in every graph
-        ggml_build_forward_expand(gf, inp->sel_mask);
-        // one view for all layers: each view of a host input is a separate upload
-        inp->sel_mask_2d = ggml_reshape_2d(ctx0, inp->sel_mask, n_sel, n_tokens);
+        // the scatter maps the dead slots of this mask to dump rows, the fused mask op reads liveness from the scores instead
+        if (!cparams.fused_kpool_mask) {
+            inp->sel_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_sel, 1, 1, n_tokens);
+            ggml_set_input(inp->sel_mask);
+            // set_input_kpool always fills the mask, so it stays allocated in every graph
+            ggml_build_forward_expand(gf, inp->sel_mask);
+            // one view for all layers: each view of a host input is a separate upload
+            inp->sel_mask_2d = ggml_reshape_2d(ctx0, inp->sel_mask, n_sel, n_tokens);
+        }
     }
 
     inp->n_new = n_new;
@@ -972,6 +974,18 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
 
         const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
         ggml_tensor * top_k = ggml_top_k(ctx0, score, n_top_pool); // [n_top_pool, n_tokens], UNORDERED
+
+        // keep the kq_mask cells of the live picked pools and the tail, -inf elsewhere
+        if (cparams.fused_kpool_mask) {
+            ggml_tensor * tail = hparams.indexer_kpool_select_tail ? inp_kpool->tail_idxs : nullptr;
+            GGML_ASSERT(kpool*n_top_pool + (tail ? tail->ne[0] : 0) == (int64_t) inp_kpool->n_sel);
+
+            ggml_tensor * sel = ggml_kpool_mask(ctx0, kq_mask, score, top_k, inp_kpool->pool_idxs, tail);
+            res->add_fused_node({LLM_FUSED_OP_KPOOL_MASK, sel, il});
+            cb(sel, "indexer_sel", il);
+
+            return sel;
+        }
 
         // The selection mask marks the first min(nv, n_top_pool) slots as the visible pools, so order the set by descending score.
         ggml_tensor * sel_score = ggml_get_rows(ctx0,

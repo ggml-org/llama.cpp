@@ -8981,6 +8981,135 @@ struct test_lightning_indexer : public test_case {
     }
 };
 
+// GGML_OP_KPOOL_MASK
+struct test_kpool_mask : public test_case {
+    const ggml_type type;
+    const int64_t n_kv;
+    const int64_t n_pool;
+    const int64_t kpool;
+    const int64_t n_top;
+    const int64_t n_tail; // 0: no tail
+    const int64_t nb;     // tokens per stream
+    const int64_t ns;     // streams
+    const bool    real;   // pools of consecutive cells and visible picks, as in a real cache
+
+    std::string vars() override {
+        return VARS_TO_STR9(type, n_kv, n_pool, kpool, n_top, n_tail, nb, ns, real);
+    }
+
+    // the result is a copy of the mask or -inf, so the finite values must match exactly
+    double max_err() override {
+        return 0.0;
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        double result = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            if (std::isfinite(a[i]) && std::isfinite(b[i])) {
+                result = std::max(result, (double) fabsf(a[i] - b[i]));
+            }
+        }
+        return result;
+    }
+
+    size_t op_size(ggml_tensor * t) override {
+        const size_t ts = ggml_type_size(type);
+        return ggml_nbytes(t) + nb*ns*(n_top*(2*sizeof(int32_t) + kpool*(sizeof(int32_t) + 2*ts)) + n_tail*(sizeof(int32_t) + 2*ts));
+    }
+
+    test_kpool_mask(ggml_type type = GGML_TYPE_F16, int64_t n_kv = 256, int64_t n_pool = 64, int64_t kpool = 4,
+            int64_t n_top = 16, int64_t n_tail = 3, int64_t nb = 32, int64_t ns = 1, bool real = false)
+        : type(type), n_kv(n_kv), n_pool(n_pool), kpool(kpool), n_top(n_top), n_tail(n_tail), nb(nb), ns(ns), real(real) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, type, n_kv, nb, 1, ns);
+        ggml_set_name(m, "m");
+
+        ggml_tensor * score = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_pool, nb*ns);
+        ggml_set_name(score, "score");
+
+        ggml_tensor * top_k = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_top, nb*ns);
+        ggml_set_name(top_k, "top_k");
+
+        ggml_tensor * pools = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kpool, n_pool);
+        ggml_set_name(pools, "pools");
+
+        ggml_tensor * tail = nullptr;
+        if (n_tail > 0) {
+            tail = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_tail, nb*ns);
+            ggml_set_name(tail, "tail");
+        }
+
+        ggml_tensor * out = ggml_kpool_mask(ctx, m, score, top_k, pools, tail);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::mt19937 gen(0x4B50);
+
+        // cells and pools sometimes fall out of range, the op skips them
+        auto init_cells = [&](ggml_tensor * t) {
+            std::vector<int32_t> data(ggml_nelements(t));
+            if (real) {
+                // pool p holds cells p*kpool..p*kpool + kpool - 1, the tail is the last cells
+                const bool is_pools = strcmp(t->name, "pools") == 0;
+                for (int64_t i = 0; i < (int64_t) data.size(); ++i) {
+                    const int64_t c = is_pools ? i : n_kv - 1 - i % t->ne[0];
+                    data[i] = c < n_kv ? (int32_t) c : (int32_t) n_kv;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+                return;
+            }
+            std::uniform_int_distribution<int32_t> cell(0, n_kv - 1);
+            for (auto & c : data) {
+                const uint32_t r = gen() % 16;
+                c = r == 0 ? (int32_t) n_kv : r == 1 ? -1 : cell(gen);
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+        };
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                if (type == GGML_TYPE_F16) {
+                    init_tensor_kq_mask(t);
+                } else {
+                    std::vector<float> data(ggml_nelements(t));
+                    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                    for (auto & v : data) {
+                        v = gen() % 4 == 0 ? -INFINITY : dis(gen);
+                    }
+                    ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(float));
+                }
+            } else if (strcmp(t->name, "score") == 0) {
+                // -inf marks the pools a token cannot see
+                std::vector<float> data(ggml_nelements(t));
+                std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+                for (auto & v : data) {
+                    v = !real && gen() % 4 == 0 ? -INFINITY : dis(gen);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(float));
+            } else if (strcmp(t->name, "top_k") == 0) {
+                std::vector<int32_t> data(ggml_nelements(t));
+                std::vector<int32_t> order(n_pool);
+                for (int64_t r = 0; r < t->ne[1]; ++r) {
+                    for (int64_t i = 0; i < n_pool; ++i) {
+                        order[i] = i;
+                    }
+                    std::shuffle(order.begin(), order.end(), gen);
+                    for (int64_t j = 0; j < n_top; ++j) {
+                        data[r*n_top + j] = !real && j == 0 && r % 5 == 0 ? (int32_t) n_pool : order[j % n_pool];
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+            } else if (strcmp(t->name, "pools") == 0 || strcmp(t->name, "tail") == 0) {
+                init_cells(t);
+            }
+        }
+    }
+};
+
 // Deserializable generic test case
 struct input_tensor {
     ggml_type type;
@@ -9764,6 +9893,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, true, true));
     test_cases.emplace_back(new test_dsv4_hc_post(2560, 21, true, true));
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, false, true));
+
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        test_cases.emplace_back(new test_kpool_mask(type));
+        test_cases.emplace_back(new test_kpool_mask(type, 1001, 70, 4, 16, 3, 7, 1));
+        test_cases.emplace_back(new test_kpool_mask(type, 256, 64, 4, 64, 0, 33, 1));
+        test_cases.emplace_back(new test_kpool_mask(type, 512, 16, 8, 32, 7, 5, 4));
+        test_cases.emplace_back(new test_kpool_mask(type, 4096, 1024, 4, 512, 3, 1, 1));
+        test_cases.emplace_back(new test_kpool_mask(type, 4096, 1024, 4, 512, 3, 64, 2));
+    }
 
     // glu ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
@@ -12566,6 +12704,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                     }
                 }
             }
+        }
+    }
+
+    // kpool_mask, Flash-Next QSA shapes: 512 pools of 4 + a 3-cell tail
+    for (int64_t n_kv : { 18432, 131072 }) {
+        for (int64_t nb : { 1, 2048 }) {
+            test_cases.emplace_back(new test_kpool_mask(GGML_TYPE_F16, n_kv, n_kv/4, 4, 512, 3, nb, 1, true));
         }
     }
 

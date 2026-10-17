@@ -585,6 +585,7 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_KPOOL_MASK,
 
         GGML_OP_UNARY,
 
@@ -2731,6 +2732,26 @@ extern "C" {
             struct ggml_tensor  * residual,
             struct ggml_tensor  * post,
             struct ggml_tensor  * comb);
+
+    // k-pool sparse attention mask: keep the mask cells of the picked pools and the tail, set the rest to -inf
+    //
+    // mask:  [n_kv,   ne1,      ne2, ne3] f16 or f32, one row per token, n_tokens = ne1*ne2*ne3
+    // score: [n_pool, n_tokens]           f32, a picked pool is live when its score is above -inf
+    // top_k: [n_top,  n_tokens]           i32, picked pools
+    // pools: [kpool,  n_pool]             i32, member cells of each pool
+    // tail:  [n_tail, n_tokens]           i32, extra cells of each token, can be NULL
+    // res:   same shape and type as mask
+    //
+    // res[c, t] = mask[c, t] when c is a member of a live picked pool of t or a tail cell of t, else -inf
+    // cells and pools out of range are skipped
+    //
+    GGML_API struct ggml_tensor * ggml_kpool_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * score,
+            struct ggml_tensor  * top_k,
+            struct ggml_tensor  * pools,
+            struct ggml_tensor  * tail);
 
     // custom operators
 
