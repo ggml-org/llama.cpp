@@ -956,7 +956,6 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
         return;
     }
 
-    GGML_ASSERT(offset == 0);
     htp_unpack_tensor_tiled(data, tensor, offset, size);
 }
 
@@ -1045,7 +1044,6 @@ static void ggml_backend_hexagon_buffer_get_tensor_2d(ggml_backend_buffer_t buff
 
     GGML_ASSERT((slice_offset % row_size_bytes) == 0 && "offset must be aligned to row boundary");
     GGML_ASSERT((temp_size % row_size_bytes)    == 0 && "temp_size must be a multiple of row size");
-    GGML_ASSERT((slice_offset / row_size_bytes) % 32 == 0 && "offset must be aligned to tile size (32 rows)");
     GGML_ASSERT((offset + temp_size) <= ggml_nbytes(tensor));
 
     std::vector<uint8_t> temp_buf(temp_size);
@@ -3769,6 +3767,8 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
     bool is_matmul_id,
     bool is_batched
 ) {
+    GGML_UNUSED(dst);
+
     if (src1->type != GGML_TYPE_F32 && (src1->type != GGML_TYPE_F16 || is_matmul_id)) {
         return false;
     }
@@ -3780,7 +3780,7 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
     const int wtype = src0->type;
 
     // HMX weight tiles accept non-32-aligned N for non-matmul_id.
-    if (ne01 % 32 != 0 && is_matmul_id) {
+    if (ne01 % HTP_TENSOR_TILE_N_ROWS != 0 && is_matmul_id) {
         return false;
     }
 
@@ -3789,8 +3789,8 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
         return false;
     }
 
-    // HMX paths require K aligned to 32.
-    if (ne00 % 32 != 0) {
+    // HMX paths require K aligned to HMX tile cols (32).
+    if (ne00 % HTP_TENSOR_TILE_N_COLS != 0) {
         return false;
     }
 
@@ -3952,7 +3952,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
         kparams->tile_size = htp_tensor_get_tile_size(wtype);
         kparams->aligned_tile_size = htp_tensor_get_tile_padded_size(wtype);
 
-        const bool k_align = (ne10 % 32 == 0);
+        const bool k_align = (ne10 % htp_tensor_get_tile_k(wtype) == 0);
 
         if (is_matmul_id) {
             kparams->kernel_type  = (src1_nrows < (int) sess->n_threads)
@@ -4124,7 +4124,7 @@ static void ggml_hexagon_precompute_matmul_params_impl(
 
     const bool is_tiled = ggml_hexagon_tensor_is_tiled(src0);
     const int wtype = (is_tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
-    const int ne00_padded = is_tiled ? hex_round_up(ne00, 32) : ne00;
+    const int ne00_padded = is_tiled ? hex_round_up(ne00, htp_tensor_get_tile_k(wtype)) : ne00;
     const int ne11_padded = hex_round_up(ne11, 32);
     // VTCM has to hold whole 32-row weight tiles, so size for the rounded-up N
     // even when the tensor itself is ragged.
@@ -5372,6 +5372,8 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     }
 
     switch (src0->type) {
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q8_0:
@@ -5381,13 +5383,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q2_K: {
             if (!ggml_is_contiguous(src0) || ggml_is_permuted(src0) || ggml_is_view(src0)) {
                 return false;
             }
 
-            if (src0->ne[0] % ((src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q4_K ||
-                                src0->type == GGML_TYPE_Q3_K || src0->type == GGML_TYPE_Q2_K) ? QK_K : 32)) {
+            const int64_t qk = ggml_blck_size(src0->type);
+            if (src0->ne[0] % qk) {
                 return false;
             }
 
@@ -5398,6 +5400,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
             break;
+        }
 
         case GGML_TYPE_F16:
             if (src0->nb[1] < src0->nb[0]) {
@@ -5467,6 +5470,8 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
     }
 
     switch (src0->type) {
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q8_0:
@@ -5481,8 +5486,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
                 return false;
             }
 
-            if (src0->ne[0] % ((src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q4_K ||
-                                src0->type == GGML_TYPE_Q3_K || src0->type == GGML_TYPE_Q2_K) ? QK_K : 32)) {
+            if (src0->ne[0] % ggml_blck_size(src0->type) != 0) {
                 return false;
             }
             break;
@@ -8316,6 +8320,10 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     static_assert((unsigned int) HTP_TYPE_Q3_K == (unsigned int) GGML_TYPE_Q3_K,
                   "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_Q2_K == (unsigned int) GGML_TYPE_Q2_K,
+                  "please update hexagon_type to match ggml_type");
+    static_assert((unsigned int) HTP_TYPE_Q1_0 == (unsigned int) GGML_TYPE_Q1_0,
+                  "please update hexagon_type to match ggml_type");
+    static_assert((unsigned int) HTP_TYPE_Q2_0 == (unsigned int) GGML_TYPE_Q2_0,
                   "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_BF16 == (unsigned int) GGML_TYPE_BF16,
                   "please update hexagon_type to match ggml_type");

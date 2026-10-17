@@ -26,6 +26,7 @@ struct tiled_dequantize_state {
 
     struct fastdiv_values     n_k_tiles_div;
     uint32_t                  n_k_tiles;
+    uint32_t                  n_weight_tiles;
     uint32_t                  n_tot_tiles;
     uint32_t                  n_tiles_per_task;
     uint32_t                  tile_size;
@@ -36,6 +37,39 @@ struct tiled_dequantize_state {
     size_t                    row_stride;
     uint32_t                  weight_type;
 };
+
+static void dequantize_tiled_weight_to_fp16_task_q1_0(
+        const tiled_dequantize_state_t *state,
+        uint32_t start_tile, uint32_t end_tile) {
+
+    const HVX_Vector v_neg_one = Q6_Vb_vsplat_R(-1);
+    const HVX_Vector v_pos_one = Q6_Vb_vsplat_R(1);
+
+    for (uint32_t t = start_tile; t < end_tile; t++) {
+        const uint8_t * tile_src = state->src + t * state->aligned_tile_size;
+        __fp16 * dst_ptr = state->dst + 4 * t * HTP_MM_HMX_TILE_N_ELMS;
+
+        const HVX_Vector v_sc = hvx_vmem(tile_src + 512);
+        const HVX_Vector v_scale = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
+
+        for (uint32_t q = 0; q < 4; q++) {
+            const HVX_Vector v_plane = hvx_vmem(tile_src + q * 128);
+            __fp16 * quarter_dst = dst_ptr + q * HTP_MM_HMX_TILE_N_ELMS;
+
+            #pragma unroll
+            for (int g = 0; g < 8; g++) {
+                const HVX_Vector     v_q  = unpack_q1_0_group(v_plane, g, v_neg_one, v_pos_one);
+                const HVX_VectorPair vp16 = Q6_Wh_vunpack_Vb(v_q);
+                const HVX_VectorPair vp_k = Q6_W_vdeal_VVR(Q6_V_hi_W(vp16), Q6_V_lo_W(vp16), -4);
+
+                hvx_vmem(quarter_dst + (2 * g + 0) * 64) =
+                    Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_k)), v_scale));
+                hvx_vmem(quarter_dst + (2 * g + 1) * 64) =
+                    Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_k)), v_scale));
+            }
+        }
+    }
+}
 
 // Dequantize a single tile from tiled weight data (already in VTCM) to tile-major FP16.
 static void dequantize_tiled_weight_to_fp16_task_q4_0(
@@ -747,6 +781,40 @@ static void dequantize_tiled_weight_to_fp16_task_q2_k(
                 Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_k)), v_scale), v_offset));
             hvx_vmem(dst_ptr + (2 * g + 1) * 64) = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(
                 Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_k)), v_scale), v_offset));
+        }
+    }
+}
+
+// Q2_0 stores codes 0..3 (value code - 1) and one fp16 scale per row, see HTP_MM_WEIGHT_TILE_SIZE_Q2_0.
+// One packed 64-k tile expands into two consecutive 32-k fp16 tiles.
+static void dequantize_tiled_weight_to_fp16_task_q2_0(
+        const tiled_dequantize_state_t *state,
+        uint32_t start_tile, uint32_t end_tile) {
+
+    const HVX_Vector mask_03 = Q6_Vb_vsplat_R(0x03);
+    const HVX_Vector i1      = Q6_Vb_vsplat_R(1);
+
+    for (uint32_t t = start_tile; t < end_tile; t++) {
+        const HVX_Vector * vptr = (const HVX_Vector *) (state->src + t * state->aligned_tile_size);
+        __fp16 * dst_base = state->dst + 2 * t * HTP_MM_HMX_TILE_N_ELMS;
+
+        HVX_Vector v_sc    = vptr[4];
+        HVX_Vector v_scale = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
+
+        for (int half = 0; half < 2; half++) {
+            __fp16 * dst_ptr = dst_base + half * HTP_MM_HMX_TILE_N_ELMS;
+
+            #pragma unroll
+            for (int g = 0; g < 8; g++) {
+                HVX_Vector     v_q  = Q6_Vb_vsub_VbVb(unpack_q3_k_low2(vptr + 2 * half, g, mask_03), i1);
+                HVX_VectorPair vp16 = Q6_Wh_vunpack_Vb(v_q);
+                HVX_VectorPair vp_k = Q6_W_vdeal_VVR(Q6_V_hi_W(vp16), Q6_V_lo_W(vp16), -4);
+
+                hvx_vmem(dst_ptr + (2 * g + 0) * 64) =
+                    Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_k)), v_scale));
+                hvx_vmem(dst_ptr + (2 * g + 1) * 64) =
+                    Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_k)), v_scale));
+            }
         }
     }
 }
