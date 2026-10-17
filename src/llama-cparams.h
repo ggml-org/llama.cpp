@@ -49,7 +49,6 @@ struct llama_cparams {
     bool fused_dsv4_hc_post;
     bool auto_fhc;
     bool no_perf;
-    bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
