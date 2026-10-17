@@ -172,6 +172,79 @@ int main(int argc, char ** argv) {
         t.assert_equal(size_t(0), ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get()));
     });
 
+    t.test("workspace_creation_distinguishes_quota_allocation_and_capture_failure", [&](testing & t) {
+        using status = llama_context_memory_create_status;
+        fixture target(dev), draft(dev);
+        auto parent = llama_context_memory::create(target.sched.get(),target.backends,target.groups);
+        if (!t.assert_true(bool(parent))) return;
+        llama_compute_workspace_plan plan;
+        plan.groups=draft.groups;
+        plan.phase_sizes.assign(2,std::vector<size_t>(draft.groups.size()));
+        for (auto & phase : plan.phase_sizes)
+            for (size_t i=0;i<draft.groups.size();++i) phase[i]=draft.groups[i].size;
+        llama_context_memory_create_result result;
+        const size_t capacity=parent->shared_parent_capacity();
+        plan.groups[0].size=capacity+4096;
+        plan.phase_sizes[0][0]=plan.phase_sizes[1][0]=plan.groups[0].size;
+        auto child=llama_context_memory::create(draft.sched.get(),draft.backends,plan,
+            nullptr,parent.get(),false,{},0,&result);
+        t.assert_true(!child && result.status == status::insufficient_budget);
+        t.assert_equal(capacity,result.available_bytes);
+        t.assert_equal(capacity+4096,result.required_bytes);
+        t.assert_equal(size_t(4096),result.additional_bytes);
+        t.assert_true(parent->valid() && parent->serial_ready());
+        plan.groups=draft.groups;
+        for (auto & phase : plan.phase_sizes) phase[0]=plan.groups[0].size;
+        child=llama_context_memory::create(draft.sched.get(),draft.backends,plan,
+            nullptr,parent.get(),false,[] { return false; },0,&result);
+        t.assert_true(!child && result.status == status::capture_failed);
+        t.assert_equal(size_t(0),result.additional_bytes);
+        t.assert_true(parent->valid() && parent->serial_ready());
+        child=llama_context_memory::create(draft.sched.get(),draft.backends,plan,
+            nullptr,parent.get(),false,{},0,&result);
+        t.assert_true(bool(child) && result.status == status::success);
+        child.reset();
+        t.assert_true(parent->prepare_serial_target());
+        struct reject_allocation {
+            ggml_backend_buffer_type_t buft;
+            decltype(ggml_backend_buffer_type_i::alloc_buffer) original;
+            explicit reject_allocation(ggml_backend_buffer_type_t buft) : buft(buft), original(buft->iface.alloc_buffer) {
+                buft->iface.alloc_buffer=[](ggml_backend_buffer_type_t,size_t) -> ggml_backend_buffer_t { return nullptr; };
+            }
+            ~reject_allocation() { buft->iface.alloc_buffer=original; }
+        };
+        {
+            reject_allocation failure(plan.groups[0].buft);
+            auto separate=llama_context_memory::create(draft.sched.get(),draft.backends,plan,
+                nullptr,nullptr,false,{},0,&result);
+            t.assert_true(!separate && result.status == status::allocation_failed);
+            t.assert_equal(size_t(0),result.additional_bytes);
+        }
+        auto separate=llama_context_memory::create(draft.sched.get(),draft.backends,plan,
+            nullptr,nullptr,false,{},0,&result);
+        t.assert_true(bool(separate) && result.status == status::success);
+        separate.reset();
+        auto short_parent=llama_context_memory::create(draft.sched.get(),draft.backends,plan,
+            nullptr,nullptr,false,{},plan.groups[0].size-plan.groups[0].alignment,&result);
+        t.assert_true(!short_parent && result.status == status::insufficient_budget);
+        t.assert_equal(plan.groups[0].alignment,result.additional_bytes);
+        for (size_t extra : {plan.groups[0].alignment,size_t(1048576)}) {
+            auto too_large=plan;
+            too_large.groups[0].size=capacity+extra;
+            too_large.phase_sizes[0][0]=too_large.phase_sizes[1][0]=capacity+extra;
+            reject_allocation failure(plan.groups[0].buft);
+            auto rejected=llama_context_memory::create(draft.sched.get(),draft.backends,too_large,
+                nullptr,parent.get(),false,{},0,&result);
+            t.assert_true(!rejected && result.status == status::insufficient_budget);
+            const auto quota=result;
+            rejected=llama_context_memory::create(draft.sched.get(),draft.backends,too_large,
+                nullptr,nullptr,false,{},0,&result);
+            t.assert_true(!rejected && result.status == status::allocation_failed);
+            t.assert_equal(extra,quota.additional_bytes);
+            t.assert_equal(capacity+extra,quota.required_bytes);
+        }
+    });
+
     t.test("scheduler_owner_preserves_measured_maximum_and_computes", [&](testing & t) {
         fixture f(dev);
         t.assert_true(llama_context_memory::supported(f.backends));

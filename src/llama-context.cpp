@@ -857,13 +857,28 @@ bool llama_context::prepare_compute_arenas(
         auto * source = serial_target_ctx ? serial_target_ctx : cparams.mtp_publish_host ? mtp_target_ctx : nullptr;
         auto * serial_parent = source ? source->compute_memory.get() : nullptr;
         if ((cparams.mtp_publish_host || cparams.serial_block_rows) && !serial_parent) return false;
+        llama_context_memory_create_result admission;
         compute_memory = llama_context_memory::create(
-            sched.get(),backend_ptrs,plan,stream,serial_parent);
-        if (!compute_memory && serial_parent && !cparams.serial_block_rows) {
+            sched.get(),backend_ptrs,plan,stream,serial_parent,false,{},0,&admission);
+        if (!compute_memory && serial_parent && !cparams.serial_block_rows &&
+                admission.status == llama_context_memory_create_status::insufficient_budget) {
             // Keep separate scratch if the shared budget cannot hold the draft graph and live KV scratch.
-            LLAMA_LOG_INFO("%s: MTP graph does not fit target scratch; using a separate workspace\n", __func__);
+            LLAMA_LOG_INFO("%s: MTP graph exceeds shared arena quota: available=%zu required=%zu additional=%zu bytes; trying a separate workspace\n",
+                __func__,admission.available_bytes,admission.required_bytes,admission.additional_bytes);
+            llama_context_memory_create_result fallback;
             compute_memory = llama_context_memory::create(
-                sched.get(),backend_ptrs,plan,stream,nullptr);
+                sched.get(),backend_ptrs,plan,stream,nullptr,false,{},0,&fallback);
+            if (!compute_memory) {
+                throw std::runtime_error("shared MTP arena quota requires " + std::to_string(admission.additional_bytes) +
+                    " additional bytes (required=" + std::to_string(admission.required_bytes) +
+                    ", available=" + std::to_string(admission.available_bytes) +
+                    "); separate-workspace fallback: " + llama_context_memory_create_status_name(fallback.status));
+            }
+        } else if (!compute_memory && admission.status != llama_context_memory_create_status::invalid_configuration) {
+            throw std::runtime_error(std::string("workspace admission: ") +
+                llama_context_memory_create_status_name(admission.status) + "; required=" +
+                std::to_string(admission.required_bytes) + ", available=" + std::to_string(admission.available_bytes) +
+                ", additional=" + std::to_string(admission.additional_bytes) + " bytes");
         }
         if (compute_memory) compute_memory_graph_revision = compute_memory->graph_binding_revision();
         return compute_memory != nullptr;

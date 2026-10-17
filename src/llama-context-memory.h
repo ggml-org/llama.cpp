@@ -2,6 +2,7 @@
 
 #include "llama-memory-executor.h"
 #include "llama-memory-phase.h"
+#include "llama-memory-plan.h"
 #include "llama-context-workspace.h"
 #include <functional>
 #include <utility>
@@ -43,6 +44,19 @@ struct llama_context_memory_diagnostics {
     size_t publication_stage_bytes = 0;
 };
 
+enum class llama_context_memory_create_status {
+    success, invalid_configuration, insufficient_budget, allocation_failed, capture_failed, transition_failed,
+};
+
+struct llama_context_memory_create_result {
+    llama_context_memory_create_status status = llama_context_memory_create_status::invalid_configuration;
+    size_t available_bytes = 0, required_bytes = 0, additional_bytes = 0;
+    llama_memory_stage_id stage = 0;
+    llama_memory_resource_id resource = 0;
+};
+
+const char * llama_context_memory_create_status_name(llama_context_memory_create_status status) noexcept;
+
 // One serial scheduler lifetime; native caches and arena leases retire before scheduler destruction.
 // The caller owns the scheduler/backends and must not submit or mutate their graph caches concurrently.
 // Callbacks may retry admission, but must not destroy owners or their schedulers.
@@ -63,7 +77,8 @@ public:
             const std::vector<ggml_backend_t> & backends,
             const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
             llama_context_memory * serial_parent = nullptr, bool suspended_workspace = false,
-            const std::function<bool()> & before_capture = {}, size_t serial_parent_bytes = 0);
+            const std::function<bool()> & before_capture = {}, size_t serial_parent_bytes = 0,
+            llama_context_memory_create_result * result = nullptr);
     // Reserve a fixed cache suffix inside the declared parent, not a second backend allocation.
     LLAMA_API std::unique_ptr<llama_context_memory_loan> reserve_bounded_cache(const llama_memory_bounded_kv_layout & layout);
     // Stable publication staging stays disjoint from both graph scratch and elastic KV.

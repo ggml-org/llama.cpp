@@ -48,6 +48,25 @@ struct serial_gate {
     ~serial_gate() { busy = false; }
 };
 
+// Preserve quota failures before any optional separate allocation can replace their cause.
+static void quota_shortage(llama_context_memory_create_result * result, size_t available, size_t required,
+        llama_memory_stage_id stage = 0, llama_memory_resource_id resource = 0) {
+    if (result) *result={llama_context_memory_create_status::insufficient_budget,
+        available,required,required > available ? required-available : 0,stage,resource};
+}
+
+const char * llama_context_memory_create_status_name(llama_context_memory_create_status status) noexcept {
+    switch (status) {
+        case llama_context_memory_create_status::success: return "success";
+        case llama_context_memory_create_status::invalid_configuration: return "invalid configuration or binding";
+        case llama_context_memory_create_status::insufficient_budget: return "insufficient arena quota";
+        case llama_context_memory_create_status::allocation_failed: return "backend or host allocation failed";
+        case llama_context_memory_create_status::capture_failed: return "execution binding capture failed";
+        case llama_context_memory_create_status::transition_failed: return "parent transition failed";
+    }
+    return "unknown creation failure";
+}
+
 struct llama_context_memory::implementation : llama_memory_executor_backend {
     ggml_backend_sched_t sched = nullptr;
     std::vector<context_cache> caches;
@@ -214,10 +233,21 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     }
 
     // Reserve the per-phase maximum of target and serial graph work before moving KV scratch.
-    bool serial_workspace_target(size_t prefill, size_t decode, llama_memory_transition_target & target) const {
+    bool serial_workspace_target(size_t prefill, size_t decode, llama_memory_transition_target & target,
+            llama_context_memory_create_result * result = nullptr) const {
         target = phase_target;
         target.stage = active_stage == decode_stage ? decode_stage : prefill_stage;
-        if (!shared_stream) return prefill <= compute_limit(prefill_stage) && decode <= compute_limit(decode_stage);
+        if (!shared_stream) {
+            for (const auto & phase : {std::make_pair(prefill_stage,prefill),std::make_pair(decode_stage,decode)}) {
+                const size_t limit=compute_limit(phase.first);
+                if (phase.second <= limit) continue;
+                const size_t additional=phase.second-limit;
+                if (additional <= SIZE_MAX-kv_parent_capacity)
+                    quota_shortage(result,kv_parent_capacity,kv_parent_capacity+additional,phase.first,kv_workspace_resource);
+                return false;
+            }
+            return true;
+        }
         for (auto & stage : target.plan.stages) {
             const size_t requested = stage.id == suspend_stage ? 0 : stage.id == prefill_stage ? prefill :
                 stage.id == decode_stage ? decode : std::max(prefill,decode);
@@ -226,8 +256,22 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
                 requirement.size_min = requirement.size_preferred = std::max(requirement.size_min,requested);
             }
             llama_memory_layout layout;
-            if (llama_memory_layout_elastic(target.plan,stage.id,target.budgets,target.fixed,layout).status !=
-                    llama_memory_layout_status::success) return false;
+            const auto admitted=llama_memory_layout_elastic(target.plan,stage.id,target.budgets,target.fixed,layout);
+            if (admitted.status != llama_memory_layout_status::success) {
+                if (result && admitted.status == llama_memory_layout_status::placement_failed && kv_arena < target.budgets.size()) {
+                    auto unlimited=target.budgets;
+                    unlimited[kv_arena].capacity=SIZE_MAX;
+                    llama_memory_layout minimum;
+                    if (llama_memory_layout_minimum(target.plan,stage.id,unlimited,target.fixed,minimum).status ==
+                            llama_memory_layout_status::success && kv_arena < minimum.arenas.size()) {
+                        size_t required=0;
+                        for (const auto & region : minimum.arenas[kv_arena].regions)
+                            required=std::max(required,region.offset+region.size);
+                        quota_shortage(result,target.budgets[kv_arena].capacity,required,stage.id,admitted.resource);
+                    }
+                }
+                return false;
+            }
         }
         return true;
     }
@@ -288,10 +332,16 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
         const std::vector<ggml_backend_t> & backends,
         const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
         llama_context_memory * serial_parent, bool suspended_workspace,
-        const std::function<bool()> & before_capture, size_t serial_parent_bytes) {
+        const std::function<bool()> & before_capture, size_t serial_parent_bytes,
+        llama_context_memory_create_result * creation) {
+    if (creation) *creation={};
     const auto & groups = plan.groups;
     if (stream && serial_parent) return {};
-    if (serial_parent_bytes && (stream || serial_parent || groups.empty() || serial_parent_bytes < groups[0].size)) return {};
+    if (serial_parent_bytes && (stream || serial_parent || groups.empty())) return {};
+    if (serial_parent_bytes && serial_parent_bytes < groups[0].size) {
+        quota_shortage(creation,serial_parent_bytes,groups[0].size);
+        return {};
+    }
     auto * borrowed_parent = serial_parent ? serial_parent->shared_parent() : nullptr;
     if (suspended_workspace && (!serial_parent || !serial_parent->kv_device_suspended())) return {};
     if (serial_parent && (!borrowed_parent || !serial_parent->valid() ||
@@ -408,6 +458,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                     if (kv.shared_device_memory_bytes < group.size) {
                         LLAMA_LOG_ERROR("%s: shared arena quota insufficient: requested=%zu bytes, compute minimum=%zu bytes\n",
                             __func__,kv.shared_device_memory_bytes,group.size);
+                        quota_shortage(creation,kv.shared_device_memory_bytes,group.size);
                         return {};
                     }
                     capacity = kv.shared_device_memory_bytes;
@@ -421,12 +472,15 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             }
             if (borrowed_group) {
                 capacity = serial_parent->shared_parent_capacity();
-                if (capacity < group.size) return {};
+                if (capacity < group.size) {
+                    quota_shortage(creation,capacity,group.size);
+                    return {};
+                }
                 borrowed_group_seen = true;
                 if (!suspended_workspace) {
                     auto & owner = *serial_parent->impl;
                     llama_memory_transition_target candidate;
-                    if (!owner.serial_workspace_target(plan.phase_sizes[0][i],plan.phase_sizes[1][i],candidate)) return {};
+                    if (!owner.serial_workspace_target(plan.phase_sizes[0][i],plan.phase_sizes[1][i],candidate,creation)) return {};
                     if (plan.phase_sizes[0][i] > owner.compute_limit(owner.prefill_stage) ||
                             plan.phase_sizes[1][i] > owner.compute_limit(owner.decode_stage)) {
                         // Existing borrowers retain independent captures into this prefix.
@@ -438,7 +492,10 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             ggml_backend_buffer_ptr parent(borrowed_group ?
                 ggml_backend_buffer_retain(borrowed_parent) :
                 ggml_backend_buft_alloc_buffer(group.buft,capacity));
-            if (!parent) return {};
+            if (!parent) {
+                if (creation) creation->status=llama_context_memory_create_status::allocation_failed;
+                return {};
+            }
             if (!ggml_backend_buffer_supports_views(parent.get())) {
                 if (carries_kv) return {};
                 continue;
@@ -459,7 +516,10 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             }
             const uint64_t id = i+1;
             llama_compute_arena_ptr arena(ggml_backend_memory_arena_new_from_buffer(parent.get()));
-            if (!arena) return {};
+            if (!arena) {
+                if (creation) creation->status=llama_context_memory_create_status::allocation_failed;
+                return {};
+            }
             llama_memory_workspace_group configured{
                 group,{id,id,allocation,llama_memory_content::discardable},{}};
             configured.allow_larger_grants = carries_kv;
@@ -552,6 +612,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                             for (const auto & region : minimum.arenas[kv_arena].regions) required = std::max(required,region.offset+region.size);
                         }
                         const size_t available = target.budgets[kv_arena].capacity;
+                        if (required > available) quota_shortage(creation,available,required,stage.id,layout.resource);
                         LLAMA_LOG_ERROR("%s: shared arena quota insufficient for phase %llu resource %llu: requested=%zu bytes, required=%zu bytes, additional=%zu bytes, decode KV minimum=%zu bytes; combined graph/KV/writer/attention minima do not fit\n",
                             __func__,(unsigned long long)stage.id,(unsigned long long)layout.resource,available,
                             required,required > available ? required-available : 0,kv.pool_decode_min_bytes);
@@ -629,11 +690,17 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             state->decode_stage = stages.size() > 2 ? stages[2] : stages[1];
             state->serial_borrowed = serial_parent != nullptr;
         }
-        if (!state->capture_execution()) return {};
+        if (!state->capture_execution()) {
+            if (creation) creation->status=llama_context_memory_create_status::capture_failed;
+            return {};
+        }
         if (serial_target) {
             auto & owner = *serial_parent->impl;
             if (owner.same_active_layout(*serial_target)) owner.active_stage = serial_target->stage;
-            else if (!owner.apply_target(*serial_target)) return {};
+            else if (!owner.apply_target(*serial_target)) {
+                if (creation) creation->status=llama_context_memory_create_status::transition_failed;
+                return {};
+            }
             owner.phase_target = std::move(*serial_target);
             for (const auto & stage : owner.phase_target.plan.stages)
                 for (const auto & requirement : stage.requirements)
@@ -648,8 +715,10 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
         result->impl->serial_active = result.get();
         if (serial_parent) serial_parent->impl->serial_children.push_back(result.get());
         handoff.complete = true;
+        if (creation) *creation={llama_context_memory_create_status::success};
         return result;
     } catch (const std::bad_alloc &) {
+        if (creation) *creation={llama_context_memory_create_status::allocation_failed};
         return {};
     }
 }
