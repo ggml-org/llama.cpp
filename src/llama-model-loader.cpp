@@ -322,7 +322,11 @@ namespace GGUFMeta {
             case GGUF_TYPE_UINT32:
             case GGUF_TYPE_INT32:   type_ok = (std::is_same<T,     int32_t>::value) ||
                                               (std::is_same<T,    uint32_t>::value); break;
-            case GGUF_TYPE_UINT64:  type_ok = (std::is_same<T,    uint64_t>::value); break;
+            case GGUF_TYPE_UINT64:
+            case GGUF_TYPE_INT64:   type_ok = (std::is_same<T,    uint64_t>::value) ||
+                                              (std::is_same<T,     int64_t>::value) ||
+                                              (std::is_same<T,    uint32_t>::value) ||
+                                              (std::is_same<T,     int32_t>::value); break;
             case GGUF_TYPE_FLOAT32: type_ok = (std::is_same<T,       float>::value); break;
             case GGUF_TYPE_STRING:  type_ok = (std::is_same<T, std::string>::value); break;
             default:
@@ -342,7 +346,19 @@ namespace GGUFMeta {
             }
         } else {
             result.resize(arr_info.length);
-            result.assign((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length);
+            if constexpr (std::is_same<T, uint32_t>::value || std::is_same<T, int32_t>::value) {
+                if (arr_info.gt == GGUF_TYPE_UINT64) {
+                    const uint64_t * values = (const uint64_t *) arr_info.data;
+                    std::transform(values, values + arr_info.length, result.begin(), [](uint64_t x) { return static_cast<T>(x); });
+                } else if (arr_info.gt == GGUF_TYPE_INT64) {
+                    const int64_t * values = (const int64_t *) arr_info.data;
+                    std::transform(values, values + arr_info.length, result.begin(), [](int64_t x) { return static_cast<T>(x); });
+                } else {
+                    result.assign((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length);
+                }
+            } else {
+                result.assign((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length);
+            }
         }
 
         return true;
@@ -369,7 +385,11 @@ namespace GGUFMeta {
             case GGUF_TYPE_UINT32:
             case GGUF_TYPE_INT32:   type_ok = (std::is_same<T,     int32_t>::value) ||
                                               (std::is_same<T,    uint32_t>::value); break;
-            case GGUF_TYPE_UINT64:  type_ok = (std::is_same<T,    uint64_t>::value); break;
+            case GGUF_TYPE_UINT64:
+            case GGUF_TYPE_INT64:   type_ok = (std::is_same<T,    uint64_t>::value) ||
+                                              (std::is_same<T,     int64_t>::value) ||
+                                              (std::is_same<T,    uint32_t>::value) ||
+                                              (std::is_same<T,     int32_t>::value); break;
             case GGUF_TYPE_FLOAT32: type_ok = (std::is_same<T,       float>::value); break;
             case GGUF_TYPE_STRING:  type_ok = (std::is_same<T, std::string>::value); break;
             default:
@@ -396,6 +416,16 @@ namespace GGUFMeta {
                 std::transform(values, values + arr_info.length, result.begin(), [](int8_t x) {
                     return static_cast<T>(x != 0);
                 });
+            } else if constexpr (std::is_same<T, uint32_t>::value || std::is_same<T, int32_t>::value) {
+                if (arr_info.gt == GGUF_TYPE_UINT64) {
+                    const uint64_t * values = (const uint64_t *) arr_info.data;
+                    std::transform(values, values + arr_info.length, result.begin(), [](uint64_t x) { return static_cast<T>(x); });
+                } else if (arr_info.gt == GGUF_TYPE_INT64) {
+                    const int64_t * values = (const int64_t *) arr_info.data;
+                    std::transform(values, values + arr_info.length, result.begin(), [](int64_t x) { return static_cast<T>(x); });
+                } else {
+                    std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
+                }
             } else {
                 std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
             }

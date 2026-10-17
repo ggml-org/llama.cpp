@@ -28,7 +28,9 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
-    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
+    if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false)) {
+        hparams.rope_sections = { 11, 11, 10, 0 };
+    }
 
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
@@ -273,8 +275,13 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         }
 
         layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", il), { n_embd, n_expert }, flags);
-        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), { n_ff_exp, n_embd, n_expert }, flags);
-        create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, flags);
+        const std::string down_name = tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il).str();
+        int64_t n_ff_exp_act = n_ff_exp;
+        if (const auto * down_w = ml.get_weight(down_name.c_str())) {
+            n_ff_exp_act = down_w->tensor->ne[0];
+        }
+        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), { n_ff_exp_act, n_embd, n_expert }, flags);
+        create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp_act, n_expert, flags);
 
         layer.ffn_gate_inp_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", il), { n_embd }, flags);
         layer.ffn_gate_shexp     = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,     "weight", il), { n_embd, n_ff_shexp }, flags);
