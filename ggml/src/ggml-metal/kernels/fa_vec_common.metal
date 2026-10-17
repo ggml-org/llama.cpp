@@ -13,6 +13,10 @@ constant int32_t FC_flash_attn_ext_vec_ns20 [[function_constant(FC_FLASH_ATTN_EX
 constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 22)]];
 constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
 constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
+// gqa: grid.y iterates KV heads, the NSG simdgroups of a threadgroup are the
+// query heads of the group and share one KV sweep (KV is read once per KV head
+// instead of once per query head)
+constant bool    FC_flash_attn_ext_vec_gqa [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
 template<
     typename q4_t,  // query types in shared memory
     typename k4_t,  // key types in shared memory
@@ -59,7 +63,8 @@ kernel void kernel_flash_attn_ext_vec(
     const short iwg = tgpig[2]%NWG;
 
     const ushort iq3 = tgpig[2]/NWG;
-    const ushort iq2 = tgpig[1];
+    // in gqa mode tgpig[1] is the KV head and sgitg the query head in its group
+    const ushort iq2 = FC_flash_attn_ext_vec_gqa ? tgpig[1]*NSG + sgitg : tgpig[1];
     const ushort iq1 = tgpig[0];
 
     constexpr short DK4 = DK/4;
@@ -115,14 +120,14 @@ kernel void kernel_flash_attn_ext_vec(
             if (iq1_q < args.ne01) {
                 for (short i = tiisg; i < PK4; i += NW) {
                     if (i < DK4) {
-                        sq4[qq*PK4 + i] = (q4_t) q4[i];
+                        sq4[(sgitg*Q + qq)*PK4 + i] = (q4_t) q4[i];
                     } else {
-                        sq4[qq*PK4 + i] = (q4_t) 0.0f;
+                        sq4[(sgitg*Q + qq)*PK4 + i] = (q4_t) 0.0f;
                     }
                 }
             } else {
                 for (short i = tiisg; i < PK4; i += NW) {
-                    sq4[qq*PK4 + i] = (q4_t) 0.0f;
+                    sq4[(sgitg*Q + qq)*PK4 + i] = (q4_t) 0.0f;
                 }
             }
         }
@@ -179,7 +184,9 @@ kernel void kernel_flash_attn_ext_vec(
 
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
-        for (int ic0 = iwg*NSG + sgitg; ; ic0 += NWG*NSG) {
+        // in gqa mode the simdgroups share the same chunk sequence so the K/V
+        // reads of one group's query heads hit the same lines
+        for (int ic0 = FC_flash_attn_ext_vec_gqa ? iwg : iwg*NSG + sgitg; ; ic0 += NWG*(FC_flash_attn_ext_vec_gqa ? 1 : NSG)) {
             int ic = ic0*C;
             if (ic >= args.ne11) {
                 break;
@@ -300,7 +307,7 @@ kernel void kernel_flash_attn_ext_vec(
                                 FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
                                     const k4_t k_elem = pk4s[ii*NL];
                                     FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                                        mqk[qq][cc] += dot((float4) k_elem, (float4) sq4[qq*PK4 + ii*NL + tx]);
+                                        mqk[qq][cc] += dot((float4) k_elem, (float4) sq4[(sgitg*Q + qq)*PK4 + ii*NL + tx]);
                                     }
                                 }
                             } else {
@@ -314,7 +321,7 @@ kernel void kernel_flash_attn_ext_vec(
                                     deq_k_t4(pk + i/nl_k, i%nl_k, mk);
 
                                     FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                                        mqk[qq][cc] += dot((float4) mk, (float4) sq4[qq*PK4 + i]);
+                                        mqk[qq][cc] += dot((float4) mk, (float4) sq4[(sgitg*Q + qq)*PK4 + i]);
                                     }
                                 }
                             }
@@ -323,7 +330,7 @@ kernel void kernel_flash_attn_ext_vec(
                         FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
                             const k4_t k_elem = pk4[cc*NE*NS10/4 + ii*NL];
                             FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                                mqk[qq][cc] += dot((float4) k_elem, (float4) sq4[qq*PK4 + ii*NL + tx]);
+                                mqk[qq][cc] += dot((float4) k_elem, (float4) sq4[(sgitg*Q + qq)*PK4 + ii*NL + tx]);
                             }
                         }
                     } else {
@@ -337,7 +344,7 @@ kernel void kernel_flash_attn_ext_vec(
                             deq_k_t4(pk + i/nl_k, i%nl_k, mk);
 
                             FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                                mqk[qq][cc] += dot((float4) mk, (float4) sq4[qq*PK4 + i]);
+                                mqk[qq][cc] += dot((float4) mk, (float4) sq4[(sgitg*Q + qq)*PK4 + i]);
                             }
                         }
                     }
@@ -546,7 +553,7 @@ kernel void kernel_flash_attn_ext_vec(
             }
         }
 
-        if (FC_flash_attn_ext_vec_has_sinks && sgitg == 0 && iwg == 0) {
+        if (FC_flash_attn_ext_vec_has_sinks && iwg == 0 && (FC_flash_attn_ext_vec_gqa || sgitg == 0)) {
             FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
                 const float m = M[qq];
                 const float s = tiisg == 0 ? ((device const float *) sinks)[iq2] : -FLT_MAX/2;
@@ -580,7 +587,10 @@ kernel void kernel_flash_attn_ext_vec(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // parallel reduce
-    for (short r = NSG/2; r > 0; r >>= 1) {
+    // skipped in gqa mode: the simdgroups hold different query heads, not
+    // partials of the same query
+    if (!FC_flash_attn_ext_vec_gqa) {
+        for (short r = NSG/2; r > 0; r >>= 1) {
         if (sgitg < r) {
             FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
                 const float S0 = ss[                2*qq + 0];
@@ -610,9 +620,11 @@ kernel void kernel_flash_attn_ext_vec(
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
+    }
 
     // final rescale with 1/S and store to global memory
-    if (sgitg == 0) {
+    // in gqa mode every simdgroup stores its own query head
+    if (sgitg == 0 || FC_flash_attn_ext_vec_gqa) {
         const int64_t nrows = args.ne3*args.ne2*args.ne1;
 
         device float4 * dst4 = (device float4 *) dst;
