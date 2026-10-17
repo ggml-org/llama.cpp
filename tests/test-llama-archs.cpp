@@ -53,33 +53,66 @@ struct tensor_data_params {
     float  stdev;
 };
 
+// fills the values of one tensor, the name carries whatever the property needs
+typedef void (*tensor_filler)(std::vector<float> & dst, const char * name, const tensor_data_params & params);
+
+// a normal draw keyed on a name, so that tensors which share a draw ask for the same key
+static void fill_normal(std::vector<float> & dst, const char * key, const tensor_data_params & params) {
+    std::mt19937 gen(params.seed ^ std::hash<std::string>{}(key));
+    std::normal_distribution<float> dis(0.0f, params.stdev);
+    for (float & v : dst) {
+        v = dis(gen);
+    }
+}
+
+// Mamba A must be negative (state decay)
+static void fill_ssm_a(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
+    fill_normal(dst, name, params);
+    for (float & v : dst) {
+        v = -fabsf(v);
+    }
+}
+
+// a norm preserving residual gate holds alpha^2 + beta^2 == 1, and the conversion resolves both from one raw weight
+// the alpha and the beta of a block share that weight, so the key drops the suffix and keeps the block
+static void fill_resid_gate(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
+    const char * suffix = strstr(name, "_resid_");
+    const bool is_beta = strstr(suffix, "_resid_beta") != nullptr;
+    fill_normal(dst, std::string(name, suffix - name).c_str(), params);
+    for (float & v : dst) {
+        const float beta = 1.0f / (1.0f + expf(-v));
+        v = is_beta ? beta : sqrtf(1.0f - beta*beta);
+    }
+}
+
+// a tensor whose values hold a property of their own, matched on a substring of its name, first match wins
+static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[] = {
+    { "ssm_a",   fill_ssm_a      },
+    { "_resid_", fill_resid_gate },
+};
+
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     const tensor_data_params & params = *(const tensor_data_params *) userdata;
-    size_t seed = params.seed;
-    std::hash<std::string> hasher;
-    seed ^= hasher(tensor->name);
-    std::mt19937 gen(seed);
-    std::normal_distribution<float> dis(0.0f, params.stdev);
 
-    // TODO: refactor per-tensor initialization logic in a cleaner way
-
-    // note: Mamba A must be negative (state decay)
-    const bool is_ssm_a = strstr(tensor->name, "ssm_a") != nullptr;
-    const int64_t ne = ggml_nelements(tensor);
-    if (tensor->type == GGML_TYPE_F32) {
-        std::vector<float> tmp(ne);
-        for (int64_t i = 0; i < ne; i++) {
-            float val = dis(gen);
-            tmp[i] = is_ssm_a ? -fabsf(val) : val;
+    tensor_filler fill = fill_normal;
+    for (const auto & filler : TENSOR_FILLERS) {
+        if (strstr(tensor->name, filler.match) != nullptr) {
+            fill = filler.fill;
+            break;
         }
+    }
+
+    std::vector<float> tmp(ggml_nelements(tensor));
+    fill(tmp, tensor->name, params);
+
+    if (tensor->type == GGML_TYPE_F32) {
         ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
     } else if (tensor->type == GGML_TYPE_F16) {
-        std::vector<ggml_fp16_t> tmp(ne);
-        for (int64_t i = 0; i < ne; i++) {
-            float val = dis(gen);
-            tmp[i] = ggml_fp32_to_fp16(is_ssm_a ? -fabsf(val) : val);
+        std::vector<ggml_fp16_t> tmp16(tmp.size());
+        for (size_t i = 0; i < tmp.size(); i++) {
+            tmp16[i] = ggml_fp32_to_fp16(tmp[i]);
         }
-        ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
+        ggml_backend_tensor_set(tensor, tmp16.data(), 0, ggml_nbytes(tensor));
     } else {
         GGML_ABORT("fatal error");
     }
