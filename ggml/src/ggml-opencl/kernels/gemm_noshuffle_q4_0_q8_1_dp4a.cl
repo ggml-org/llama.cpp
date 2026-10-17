@@ -6,23 +6,31 @@
 
 #define TILESIZE_N 32
 
-// Expand the 4 nibbles in the low 16 bits of u into 4 bytes (value 0..15),
-// packed for the int8 dp4a. The -8 zero-point is applied via the sum term.
+// Expand the 4 nibbles in the low 16 bits of u into 4 bytes (value 0..15).
 #define EXP4(u)  ( ((uint)((u) & 0x000Fu))        | \
                   (((uint)((u) & 0x00F0u)) << 4)  | \
                   (((uint)((u) & 0x0F00u)) << 8)  | \
                   (((uint)((u) & 0xF000u)) << 12) )
 
-inline int dot8_q8a(uint8 qw, __local const uint * a) {
+// The same 4 weights as signed int8 q - 8 (-8..7), so the zero-point is folded into
+// the dot product instead of a separate d * sum(a) term. That term is stored as half
+// and overflows once the activations of a 32-block average above ~2000.
+// Per byte: x = q ^ 8 holds q - 8 in its low 4 bits; sign-extend bit 3 into bits 4..7.
+inline uint exp4s(uint u) {
+    const uint x = EXP4(u) ^ 0x08080808u;
+    return x | ((x & 0x08080808u) * 0x1Fu);
+}
+
+inline int dot8_q8a(uint8 qw, uint4 a0, uint4 a1) {
     int r = 0;
-    r = dot_acc_sat_4x8packed_ss_int(qw.s0, a[0], r);
-    r = dot_acc_sat_4x8packed_ss_int(qw.s1, a[1], r);
-    r = dot_acc_sat_4x8packed_ss_int(qw.s2, a[2], r);
-    r = dot_acc_sat_4x8packed_ss_int(qw.s3, a[3], r);
-    r = dot_acc_sat_4x8packed_ss_int(qw.s4, a[4], r);
-    r = dot_acc_sat_4x8packed_ss_int(qw.s5, a[5], r);
-    r = dot_acc_sat_4x8packed_ss_int(qw.s6, a[6], r);
-    r = dot_acc_sat_4x8packed_ss_int(qw.s7, a[7], r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s0, a0.s0, r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s1, a0.s1, r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s2, a0.s2, r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s3, a0.s3, r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s4, a1.s0, r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s5, a1.s1, r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s6, a1.s2, r);
+    r = dot_acc_sat_4x8packed_ss_int(qw.s7, a1.s3, r);
     return r;
 }
 
@@ -32,7 +40,7 @@ kernel void kernel_gemm_noshuffle_q4_0_q8_1_dp4a(
         __global const half   * src0_d,    // per-32-block scale, feature-major
         __global const uint   * src1_qa,   // q8_1 activations int8 (as uint, 4/elem) [N, K]
         __global const half   * src1_da,   // q8_1 per-block scale [N, K/32]
-        __global const half   * src1_sa,   // q8_1 per-block sum*d  [N, K/32]
+        __global const half   * src1_sa,   // q8_1 per-block sum*d, unused: the zero-point is in the weights
         __global       float  * dst,
         ulong  offsetd,
         int    m,                          // output features (rows)
@@ -53,9 +61,19 @@ kernel void kernel_gemm_noshuffle_q4_0_q8_1_dp4a(
     const uint k_u = (uint)k >> 2;   // K in uint (int8x4) units
     const uint k_b = (uint)k >> 5;   // blocks-of-32 along K
 
-    __local uint sh_qa[TILESIZE_N][8];
+    // A token's 8 activation uints for one 32-K step are contiguous: stage and read
+    // them as two uint4, a quarter of the local loads of a scalar uint tile.
+#ifdef GEMM_LM_PAD
+    // E17 reads wrong values from the start of these local tiles; start each one
+    // GEMM_LM_PAD x 16 bytes in.
+    __local uint4 sh_qa_store[TILESIZE_N * 2 + GEMM_LM_PAD];
+    __local half  sh_d_store[TILESIZE_N + 8 * GEMM_LM_PAD];
+    __local uint4 (*sh_qa)[2] = (__local uint4 (*)[2])(sh_qa_store + GEMM_LM_PAD);
+    __local half * sh_d = sh_d_store + 8 * GEMM_LM_PAD;
+#else
+    __local uint4 sh_qa[TILESIZE_N][2];
     __local half sh_d[TILESIZE_N];
-    __local half sh_s[TILESIZE_N];
+#endif
 
 #define NGROUPS (TILESIZE_N / 4)
     float4 acc[NGROUPS];
@@ -71,26 +89,26 @@ kernel void kernel_gemm_noshuffle_q4_0_q8_1_dp4a(
         // src0_q[row + (k/4 + u)*m], k/4 = step/4 (= step>>2). EXP4 -> dp4a int8.
         const uint qsbase = rrow + (step >> 2) * (uint)m;
         uint8 qw;
-        qw.s0 = EXP4(src0_q[qsbase + 0 * m]);
-        qw.s1 = EXP4(src0_q[qsbase + 1 * m]);
-        qw.s2 = EXP4(src0_q[qsbase + 2 * m]);
-        qw.s3 = EXP4(src0_q[qsbase + 3 * m]);
-        qw.s4 = EXP4(src0_q[qsbase + 4 * m]);
-        qw.s5 = EXP4(src0_q[qsbase + 5 * m]);
-        qw.s6 = EXP4(src0_q[qsbase + 6 * m]);
-        qw.s7 = EXP4(src0_q[qsbase + 7 * m]);
+        qw.s0 = exp4s(src0_q[qsbase + 0 * m]);
+        qw.s1 = exp4s(src0_q[qsbase + 1 * m]);
+        qw.s2 = exp4s(src0_q[qsbase + 2 * m]);
+        qw.s3 = exp4s(src0_q[qsbase + 3 * m]);
+        qw.s4 = exp4s(src0_q[qsbase + 4 * m]);
+        qw.s5 = exp4s(src0_q[qsbase + 5 * m]);
+        qw.s6 = exp4s(src0_q[qsbase + 6 * m]);
+        qw.s7 = exp4s(src0_q[qsbase + 7 * m]);
 
         // cooperatively stage the 32-token x 32-K int8 activations to LDS
-        for (uint idx = lid; idx < TILESIZE_N * 8; idx += 64) {
-            const uint t = idx >> 3;
-            const uint u = idx & 7;
+        if (lid < TILESIZE_N * 2) {
+            const uint t = lid >> 1;
+            const uint h = lid & 1;
             const uint c = col_base + t;
-            sh_qa[t][u] = (c < (uint)n_no_padding) ? src1_qa[c * k_u + (step >> 2) + u] : 0u;
+            sh_qa[t][h] = (c < (uint)n_no_padding)
+                ? vload4(0, src1_qa + c * k_u + (step >> 2) + h * 4) : (uint4)(0u);
         }
         if (lid < TILESIZE_N) {
             const uint c = col_base + lid;
             sh_d[lid] = (c < (uint)n_no_padding) ? src1_da[c * k_b + sub] : (half)0;
-            sh_s[lid] = (c < (uint)n_no_padding) ? src1_sa[c * k_b + sub] : (half)0;
         }
         barrier(CLK_LOCAL_MEM_FENCE);
 
@@ -99,10 +117,12 @@ kernel void kernel_gemm_noshuffle_q4_0_q8_1_dp4a(
         for (int g = 0; g < NGROUPS; ++g) {
             const int b = g * 4;
             float4 rf;
-            rf.s0 = (float)dot8_q8a(qw, sh_qa[b+0]);  rf.s1 = (float)dot8_q8a(qw, sh_qa[b+1]);
-            rf.s2 = (float)dot8_q8a(qw, sh_qa[b+2]);  rf.s3 = (float)dot8_q8a(qw, sh_qa[b+3]);
-            // q4_0: w = d*(q-8) -> d_w * (a_d * dp4a(q,qa) - 8 * a_s)
-            acc[g] += d_w * (LD4(sh_d, b) * rf - 8.0f * LD4(sh_s, b));
+            rf.s0 = (float)dot8_q8a(qw, sh_qa[b+0][0], sh_qa[b+0][1]);
+            rf.s1 = (float)dot8_q8a(qw, sh_qa[b+1][0], sh_qa[b+1][1]);
+            rf.s2 = (float)dot8_q8a(qw, sh_qa[b+2][0], sh_qa[b+2][1]);
+            rf.s3 = (float)dot8_q8a(qw, sh_qa[b+3][0], sh_qa[b+3][1]);
+            // q4_0: w = d*(q-8), q-8 already in the packed weights
+            acc[g] += d_w * (LD4(sh_d, b) * rf);
         }
 #undef LD4
         barrier(CLK_LOCAL_MEM_FENCE);
