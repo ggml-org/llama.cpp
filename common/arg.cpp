@@ -903,6 +903,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --kv-stream-auxiliary-layers requires a KV stream pool or shared arena\n");
     }
     const bool streamed_mtp = common_params_uses_streamed_mtp(params);
+    if (const auto * error=common_streamed_kv_config_error(params)) throw std::invalid_argument(error);
     if (const auto * error=common_streamed_dflash_config_error(params)) throw std::invalid_argument(error);
     if (streamed_mtp &&
             params.speculative.need_n_rs_seq() > 3) {
@@ -4162,6 +4163,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         ),
         [](common_params & params, const std::string & value) {
             params.speculative.draft.cache_type_k = kv_cache_type_from_str(value);
+            params.speculative.draft.cache_type_k_explicit = true;
         }
     ).set_env("LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K"));
     add_opt(common_arg(
@@ -4175,6 +4177,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         ),
         [](common_params & params, const std::string & value) {
             params.speculative.draft.cache_type_v = kv_cache_type_from_str(value);
+            params.speculative.draft.cache_type_v_explicit = true;
         }
     ).set_env("LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V"));
     add_opt(common_arg(

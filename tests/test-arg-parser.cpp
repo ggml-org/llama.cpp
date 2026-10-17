@@ -19,6 +19,43 @@ static void test(void) {
     common_params params;
 
     {
+        common_params inherited;
+        inherited.shared_device_memory_bytes = 1536*1024*1024ULL;
+        inherited.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+        inherited.cache_type_k = GGML_TYPE_Q5_1;
+        inherited.cache_type_v = GGML_TYPE_Q8_0;
+        const auto draft = common_base_params_to_speculative(inherited);
+        assert(draft.cache_type_k == inherited.cache_type_k);
+        assert(draft.cache_type_v == inherited.cache_type_v);
+        const ggml_type types[] = {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL};
+        for (auto mode : {COMMON_SPECULATIVE_TYPE_DRAFT_MTP, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}) {
+            inherited.speculative.types = {mode};
+            for (auto key : types) for (auto value : types) {
+                inherited.cache_type_k = key;
+                inherited.cache_type_v = value;
+                assert(!common_streamed_kv_config_error(inherited));
+                const auto configured = common_base_params_to_speculative(inherited);
+                assert(configured.cache_type_k == key && configured.cache_type_v == value);
+            }
+            for (bool key : {false, true}) {
+                auto explicit_draft = inherited;
+                explicit_draft.speculative.draft.cache_type_k_explicit = key;
+                explicit_draft.speculative.draft.cache_type_v_explicit = !key;
+                assert(common_streamed_kv_config_error(explicit_draft));
+            }
+            for (auto invalid_type : {GGML_TYPE_I32, GGML_TYPE_Q8_1, GGML_TYPE_Q2_K, GGML_TYPE_COUNT}) {
+                auto invalid = inherited;
+                invalid.cache_type_k = invalid_type;
+                assert(common_streamed_kv_config_error(invalid));
+                invalid.cache_type_k = GGML_TYPE_Q8_0;
+                invalid.cache_type_v = invalid_type;
+                assert(common_streamed_kv_config_error(invalid));
+            }
+        }
+    }
+
+    {
         common_params dflash;
         dflash.shared_device_memory_bytes=1536*1024*1024ULL;
         dflash.speculative.types={COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
@@ -58,7 +95,7 @@ static void test(void) {
         assert(common_context_params_to_llama(dflash).n_rs_seq == 7);
         assert(common_kv_stream_auxiliary_layers(dflash,1) == 0);
         const auto draft=common_base_params_to_speculative(dflash);
-        assert(draft.cache_type_k == GGML_TYPE_F16 && draft.cache_type_v == GGML_TYPE_F16);
+        assert(draft.cache_type_k == dflash.cache_type_k && draft.cache_type_v == dflash.cache_type_v);
         assert(!draft.shared_device_memory_bytes && !draft.kv_stream_pool_bytes && !draft.kv_stream_auxiliary_layers);
         for (int change=0;change<7;++change) {
             auto invalid=dflash;
@@ -300,6 +337,39 @@ static void test(void) {
     };
 
     std::vector<std::string> argv;
+
+    {
+        for (const auto & mode : {"draft-mtp", "draft-dflash"}) {
+            std::vector<std::string> base = {"binary_name", "--kv-stream-arena-mib", "2240", "--spec-type", mode,
+                "--fit", "off", "--parallel", "1", "--flash-attn", "on", "--cache-type-k", "q5_1", "--cache-type-v", "q8_0"};
+            for (const auto & option : {"--spec-draft-type-k", "-ctkd", "--cache-type-k-draft",
+                    "--spec-draft-type-v", "-ctvd", "--cache-type-v-draft"}) for (bool before : {false, true}) {
+                auto overridden = base;
+                const std::vector<std::string> override = {option, "q5_1"};
+                overridden.insert(before ? overridden.begin()+1 : overridden.end(), override.begin(), override.end());
+                common_params rejected;
+                assert(!common_params_parse(overridden.size(), list_str_to_char(overridden).data(), rejected, LLAMA_EXAMPLE_SERVER));
+            }
+            common_params automatic;
+            assert(common_params_parse(base.size(), list_str_to_char(base).data(), automatic, LLAMA_EXAMPLE_SERVER));
+            const auto draft = common_base_params_to_speculative(automatic);
+            assert(draft.cache_type_k == GGML_TYPE_Q5_1 && draft.cache_type_v == GGML_TYPE_Q8_0);
+#ifndef _WIN32
+            for (const auto & name : {"LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K", "LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V"}) {
+                const std::string saved = common_get_env(name);
+                common_set_env(name, "q5_1");
+                common_params rejected;
+                assert(!common_params_parse(base.size(), list_str_to_char(base).data(), rejected, LLAMA_EXAMPLE_SERVER));
+                common_set_env(name, saved);
+            }
+#endif
+        }
+        argv = {"binary_name", "--spec-type", "draft-mtp", "-ctkd", "q5_1", "-ctvd", "q4_1"};
+        common_params native;
+        assert(common_params_parse(argv.size(), list_str_to_char(argv).data(), native, LLAMA_EXAMPLE_SERVER));
+        const auto draft = common_base_params_to_speculative(native);
+        assert(draft.cache_type_k == GGML_TYPE_Q5_1 && draft.cache_type_v == GGML_TYPE_Q4_1);
+    }
 
     {
         common_params shared;

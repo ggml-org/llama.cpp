@@ -54,14 +54,14 @@ The script writes CSV, JSONL, logs, and a plot when Matplotlib is installed. `--
 
 The separate Qwen3.8-27B DFlash2 drafter can now use the target's adaptive KV streaming and phase arena. It is different from embedded MTP: its five attention layers keep a bounded 2,048-position sliding window, rather than adding full-context histories to the target ring. Q8_0 K / Q4_0 V draft storage is about 18.3 MiB at ubatch 256. Its approximately 1,080 MiB of GPU weights remain outside the arena, and depth-seven target rollback uses about 43.6 MiB of bounded device staging inside it. Those weights can leave less space for target KV than embedded MTP does; DFlash2 is not guaranteed to be faster.
 
-The qualified pairing is the pinned Unsloth `UD-IQ4_XS` target and IncoAI `Qwen3.8-27B-DFlash2-Q4_K_M.gguf` sidecar listed in [the artifact manifest](benchmarks/data/dflash2-qwen27b-artifacts.json). Use one serial text request, CUDA Flash Attention and no mmproj. Draft lengths 1-7 are admitted; the target handles verification/replay widths TG1-TG8. Gemma/Muse pairings, media drafting and other-device execution remain separate qualification work. Unlike attached MTP, this independent drafter may use its own qualified K/V types.
+The qualified pairing is the pinned Unsloth `UD-IQ4_XS` target and IncoAI `Qwen3.8-27B-DFlash2-Q4_K_M.gguf` sidecar listed in [the artifact manifest](benchmarks/data/dflash2-qwen27b-artifacts.json). Use one serial text request, CUDA Flash Attention and no mmproj. Draft lengths 1-7 are admitted; the target handles verification/replay widths TG1-TG8. Gemma/Muse pairings, media drafting and other-device execution remain separate qualification work. Adaptive MTP and DFlash inherit the target K/V cache types; explicit draft-cache overrides are rejected. Native non-streaming drafting retains independent cache settings.
 
 ```sh
 ./build-v2/bin/llama-server \
   --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
   --model-draft /path/to/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \
   --spec-type draft-dflash --spec-draft-n-max 7 --spec-draft-n-min 0 --spec-draft-p-min 0 \
-  --spec-draft-ngl 999 --spec-draft-type-k q8_0 --spec-draft-type-v q4_0 \
+  --spec-draft-ngl 999 \
   --ctx-size 262144 --parallel 1 --batch-size 256 --ubatch-size 256 \
   --n-gpu-layers 999 --flash-attn on --cache-type-k q8_0 --cache-type-v q4_0 \
   --kv-stream-arena-mib 1500 --fit off --no-mmproj
@@ -79,7 +79,7 @@ python benchmarks/run_dflash_controls.py \
   --draft-config /path/to/DFlash2/config.json \
   --contexts 16384,65536,131072,196608,262144 --depths 3,7 \
   --prompt-tokens 262144 --prompt-headroom 15 --decode-tokens 256 \
-  --draft-k q8_0 --draft-v q4_0 --arena-mib 1500 --auto-max-arena \
+  --target-k q8_0 --target-v q4_0 --arena-mib 1500 --auto-max-arena \
   --output benchmarks/results/dflash-comparison
 ```
 
@@ -144,8 +144,7 @@ The server can now share its arena with the matching Qwen3.8 F16 vision projecto
 This requires a shared arena, not the legacy fixed KV-pool flag. To enable the single embedded Qwen MTP head, replace `--spec-type none` with:
 
 ```sh
---spec-type draft-mtp --spec-draft-n-max 3 \
---spec-draft-type-k q8_0 --spec-draft-type-v q4_0
+--spec-type draft-mtp --spec-draft-n-max 3
 ```
 
 Draft lengths 1-3 are qualified. MTP consumes the raw image embeddings and shifted target hidden rows as separate inputs; its cache tracks physical rows independently of image M-RoPE positions. Vision suspends both text schedulers and retires the MTP ring lease before borrowing the parent. Pending hidden rows also survive checkpoint and RAM prompt-cache restoration.

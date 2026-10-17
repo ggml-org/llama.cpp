@@ -1142,6 +1142,9 @@ private:
             return false;
         }
         const bool streamed_mtp = common_params_uses_streamed_mtp(params);
+        if (const auto * error=common_streamed_kv_config_error(params)) {
+            SRV_ERR("%s\n",error); return false;
+        }
         const bool streamed_dflash = common_params_uses_streamed_dflash(params);
         if (const auto * error=common_streamed_dflash_config_error(params)) {
             SRV_ERR("%s\n",error); return false;

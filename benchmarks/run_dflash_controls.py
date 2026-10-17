@@ -116,8 +116,9 @@ def server_command(args, context, depth):
     if spec_mode != "none":
         command += ["--spec-type", "draft-dflash" if spec_mode == "dflash" else "draft-mtp",
                     "--spec-draft-n-max", str(depth), "--spec-draft-n-min", "0", "--spec-draft-p-min", "0",
-                    "--spec-draft-ngl", "999", "--spec-draft-type-k", args.draft_k,
-                    "--spec-draft-type-v", args.draft_v]
+                    "--spec-draft-ngl", "999"]
+        if not getattr(args, "arena_mib", 0):
+            command += ["--spec-draft-type-k", args.draft_k, "--spec-draft-type-v", args.draft_v]
     if spec_mode == "dflash":
         command += ["--model-draft", str(args.draft)]
     arena = getattr(args, "arena_mib", 0)
@@ -313,6 +314,12 @@ def compare_control_rows(actual, control, artifacts_actual, artifacts_control, t
         values = []
         for row in (actual, control):
             command = row["command"]
+            if option.startswith("--spec-draft-type-") and option not in command and "--kv-stream-arena-mib" in command:
+                inherited = "--cache-type-"+option[-1]
+                if command.count(inherited) != 1 or command.index(inherited)+1 == len(command):
+                    raise ValueError(f"missing/ambiguous control option: {inherited}")
+                values.append(command[command.index(inherited)+1])
+                continue
             if command.count(option) != 1 or command.index(option)+1 == len(command):
                 raise ValueError(f"missing/ambiguous control option: {option}")
             values.append(command[command.index(option)+1])
@@ -536,8 +543,8 @@ def main():
                         help="use 5 for allocator diagnostics in a GGML_ALLOCATOR_DEBUG build; not for timing")
     parser.add_argument("--target-k",choices=KV_TYPES,default="q8_0")
     parser.add_argument("--target-v",choices=KV_TYPES,default="q4_0")
-    parser.add_argument("--draft-k", choices=KV_TYPES, default="f16")
-    parser.add_argument("--draft-v", choices=KV_TYPES, default="f16")
+    parser.add_argument("--draft-k", choices=KV_TYPES, help="native controls only; streamed drafts inherit target K")
+    parser.add_argument("--draft-v", choices=KV_TYPES, help="native controls only; streamed drafts inherit target V")
     parser.add_argument("--prefill-text", type=Path, default=ROOT/"benchmarks/data/online-articles-262144-words.txt")
     parser.add_argument("--trace-library", type=Path)
     parser.add_argument("--nsys", type=Path)
@@ -560,6 +567,10 @@ def main():
     parser.add_argument("--lifecycle-cache-mib", type=int, default=0,
                         help="RAM prompt cache for lifecycle tests, in MiB (default: disabled)")
     args = parser.parse_args()
+    if args.arena_mib and (args.draft_k is not None or args.draft_v is not None):
+        parser.error("streamed drafts inherit target cache types; omit --draft-k/--draft-v and set --target-k/--target-v")
+    args.draft_k = args.target_k if args.arena_mib else (args.draft_k or "f16")
+    args.draft_v = args.target_v if args.arena_mib else (args.draft_v or "f16")
     contexts = [int(value) for value in args.contexts.split(",")]
     depths = [int(value) for value in args.depths.split(",")]
     args.max_depth=max(depths)

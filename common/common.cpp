@@ -1245,8 +1245,29 @@ bool common_params_uses_streamed_dflash(const common_params & params) {
         std::find(params.speculative.types.begin(),params.speculative.types.end(),COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
 }
 
+const char * common_streamed_kv_config_error(const common_params & params) {
+    if (!params.kv_stream_pool_bytes && !params.shared_device_memory_bytes) return nullptr;
+    if ((common_params_uses_streamed_mtp(params) || common_params_uses_streamed_dflash(params)) &&
+            (params.speculative.draft.cache_type_k_explicit || params.speculative.draft.cache_type_v_explicit)) {
+        return "adaptive KV speculation inherits target cache types; remove draft KV overrides and use --cache-type-k/--cache-type-v";
+    }
+    const auto cache_type = [](ggml_type type) {
+        switch (type) {
+            case GGML_TYPE_F32: case GGML_TYPE_F16: case GGML_TYPE_BF16: case GGML_TYPE_Q8_0:
+            case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1: case GGML_TYPE_IQ4_NL:
+            case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1: return true;
+            default: return false;
+        }
+    };
+    if (!cache_type(params.cache_type_k) || !cache_type(params.cache_type_v)) {
+        return "adaptive KV streaming requires upstream cache types; backend kernels are checked during context initialization";
+    }
+    return nullptr;
+}
+
 const char * common_streamed_dflash_config_error(const common_params & params) {
     if (!common_params_uses_streamed_dflash(params)) return nullptr;
+    if (const auto * error = common_streamed_kv_config_error(params)) return error;
     if (!params.shared_device_memory_bytes || params.kv_stream_pool_bytes || params.fit_params)
         return "adaptive DFlash2 requires a declared --kv-stream-arena-mib budget and --fit off";
     if (params.n_parallel != 1 || params.kv_stream_auxiliary_layers ||

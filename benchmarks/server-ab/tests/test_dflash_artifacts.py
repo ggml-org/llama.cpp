@@ -337,6 +337,16 @@ class OrdinaryControls(unittest.TestCase):
         self.controls = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.controls)
 
+    def test_streamed_draft_cache_inherits_target_without_cli_overrides(self):
+        from types import SimpleNamespace
+        for mode, depth in (("mtp", 3), ("dflash", 7)):
+            args = SimpleNamespace(server=Path("server"), target=Path("target"), draft=Path("draft"),
+                port=12351, target_k="q5_1", target_v="q8_0", draft_k="q5_1", draft_v="q8_0",
+                arena_mib=1024, spec_mode=mode)
+            command = self.controls.server_command(args, 8192, depth)
+            self.assertNotIn("--spec-draft-type-k", command)
+            self.assertNotIn("--spec-draft-type-v", command)
+
     def test_comparison_modes_preserve_budget_and_do_not_load_an_unused_sidecar(self):
         from types import SimpleNamespace
         for mode, depth in (("none", 0), ("mtp", 3), ("dflash", 7)):
@@ -348,8 +358,8 @@ class OrdinaryControls(unittest.TestCase):
             self.assertEqual("--spec-type" in command, mode != "none")
             if mode == "mtp":
                 self.assertEqual(command[command.index("--spec-type")+1], "draft-mtp")
-                self.assertEqual(command[command.index("--spec-draft-type-k")+1], "q8_0")
-                self.assertEqual(command[command.index("--spec-draft-type-v")+1], "q4_0")
+                self.assertNotIn("--spec-draft-type-k", command)
+                self.assertNotIn("--spec-draft-type-v", command)
 
     def test_invalid_comparison_mode_depth_pairs_fail_before_launch(self):
         from types import SimpleNamespace

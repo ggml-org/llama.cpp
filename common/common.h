@@ -345,6 +345,8 @@ struct common_params_speculative_draft {
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+    bool cache_type_k_explicit = false;
+    bool cache_type_v_explicit = false;
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
@@ -1007,6 +1009,8 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 // Detect intent before model metadata is available; this does not establish backend support.
 bool common_params_uses_streamed_mtp(const common_params & params);
 bool common_params_uses_streamed_dflash(const common_params & params);
+// Adaptive speculation inherits target cache types and rejects explicit draft overrides.
+const char * common_streamed_kv_config_error(const common_params & params);
 // Configuration checks precede model-specific geometry and compiled-path qualification.
 const char * common_streamed_dflash_config_error(const common_params & params);
 // Resolve the count before context allocation; reject missing metadata and conflicting legacy values.
