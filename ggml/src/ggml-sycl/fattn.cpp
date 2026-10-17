@@ -349,10 +349,10 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         const ggml_tensor * K_diag = dst->src[1];
         const ggml_tensor * V_diag = dst->src[2];
         const ggml_tensor * Q_diag = dst->src[0];
-        if (K_diag->ne[1] >= 1024) {
+        dpct::queue_ptr q = ctx.stream();
+        if (K_diag->ne[1] >= 1024 && q->ext_oneapi_get_state() != sycl::ext::oneapi::experimental::queue_state::recording) {
             fa_diag_count++;
             float diag_buf[64];
-            dpct::queue_ptr q = ctx.stream();
             q->memcpy(diag_buf, dst->data, 64 * sizeof(float));
             q->wait();
             const char * kname = "???";
@@ -386,6 +386,14 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
     return ggml_sycl_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
+}
+
+bool ggml_sycl_flash_attn_ext_needs_sync(int device, const ggml_tensor * dst) {
+    return ggml_sycl_get_best_fattn_kernel(device, dst) == BEST_FATTN_KERNEL_MKL;
+}
+
+bool ggml_sycl_flash_attn_ext_uses_onednn(int device, const ggml_tensor * dst) {
+    return ggml_sycl_get_best_fattn_kernel(device, dst) == BEST_FATTN_KERNEL_ONEDNN;
 }
 
 static uintptr_t ggml_sycl_fattn_reserve_halves(ggml_sycl_fattn_extra & extra, size_t n_halves) {

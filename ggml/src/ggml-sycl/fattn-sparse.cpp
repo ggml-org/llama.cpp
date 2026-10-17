@@ -217,7 +217,7 @@ bool ggml_sycl_flash_attn_ext_sparse(ggml_backend_sycl_context & ctx, ggml_tenso
                           d_idx, d_cnt, n_kv_g, n_rows_m,
                           mask->nb[1] / sizeof(sycl::half));
 
-    if (sparse_fa_debug()) {
+    if (sparse_fa_debug() && stream->ext_oneapi_get_state() != sycl::ext::oneapi::experimental::queue_state::recording) {
         int32_t h_cnt = 0;
         SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(&h_cnt, d_cnt, sizeof(int32_t))));
         SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
