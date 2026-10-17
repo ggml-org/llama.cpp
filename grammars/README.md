@@ -73,11 +73,13 @@ Tokens allow grammars to match specific tokenizer tokens rather than character s
 
 Tokens can be specified in two ways:
 
-1. **Token ID**: Use angle brackets with the token ID in square brackets: `<[token-id]>`. For example, `<[1000]>` matches the token with ID 1000.
+1. **Token ID**: Use angle brackets with the token ID in square brackets: `<[token-id]>`. For example, `<[1000]>` matches the token with ID 1000. Multiple IDs and inclusive ranges can be combined: `<[1000,1005-1010]>` matches token 1000 or any token from 1005 to 1010.
 
 2. **Token string**: Use angle brackets with the token text directly: `<token>`. For example, `<think>` will match the token whose text is exactly `<think>`. This only works if the string tokenizes to exactly one token in the vocabulary, otherwise the grammar will fail to parse.
 
-You can negate token matches using the `!` prefix: `!<[1000]>` or `!<think>` matches any token *except* the specified one.
+You can negate token matches using the `!` prefix: `!<[1000]>` or `!<think>` matches any token *except* the specified one, and `!<[1000,1005-1010]>` matches any token outside the set.
+
+Tokens are matched whole, so a token rule can only match at the start of a token, never after a character rule has consumed part of its text. Any token named by a token rule is also excluded from character rules: once `<think>` appears as a token in a grammar, `.*` in that grammar will not match the `<think>` token.
 
 ```
 # Match a thinking block: <think>...</think>
