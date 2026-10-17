@@ -224,6 +224,8 @@ struct common_chat_tool {
     std::string name;
     std::string description;
     std::string parameters;
+    // tool stays in the grammar (callable) but is not rendered in the prompt; a "tool_reference" content part reveals it later without changing the prompt prefix
+    bool defer_loading = false;
 };
 
 enum common_chat_tool_choice {
@@ -460,7 +462,8 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
 // DEPRECATED: only used in tests
 common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
-common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
+// skip_deferred omits tools with defer_loading - for the rendered prompt only, never for the grammar
+common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools, bool skip_deferred = false);
 
 // The parameters schema of a function tool. A tool without parameters, or with an empty {}, takes zero arguments.
 common_json common_chat_tool_parameters(const common_json & function);

@@ -1358,6 +1358,24 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
 
+`tools[].function.defer_loading` (also accepted on `tools[]`): When `true`, the tool stays in the sampling grammar - so the model can call it - but its schema is left out of the rendered prompt. A client can keep a large tool set available without paying for every schema in context. Tools render at the start of the prompt, so keeping the declared set constant also keeps the prompt cache: adding a tool mid-conversation would invalidate the whole cached prefix. If the chat template handles `defer_loading` itself (e.g. GLM-5.x), it receives every tool with the flag set, and all tools may be deferred. Otherwise the server removes deferred tools before rendering, and at least one tool must stay un-deferred, else the request is rejected (the template would drop its tool section while the grammar still expects calls).
+
+To reveal a deferred tool, return `tool_reference` parts in a tool message, e.g. from a client-side tool search tool. Every referenced tool must be declared in `tools`. Templates that support it (e.g. GLM-5.x) expand the reference themselves; for other templates the server replaces it with the tool definition as JSON text. The `/v1/messages` endpoint accepts the same in a `tool_result`, and `defer_loading` on its tools.
+
+```json
+{
+  "tools": [
+    { "type": "function", "function": { "name": "search_tools", "description": "...", "parameters": {} } },
+    { "type": "function", "function": { "name": "get_weather", "description": "...", "parameters": {}, "defer_loading": true } }
+  ],
+  "messages": [
+    { "role": "user", "content": "What is the weather in Paris?" },
+    { "role": "assistant", "content": "", "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "search_tools", "arguments": "{\"query\": \"weather\"}" } }] },
+    { "role": "tool", "tool_call_id": "call_1", "content": [{ "type": "tool_reference", "tool_name": "get_weather" }] }
+  ]
+}
+```
+
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
 
 For multimodal input (typed content, `messages[i].content[j]`):

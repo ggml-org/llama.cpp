@@ -114,6 +114,8 @@ std::map<std::string, bool> caps::to_map() const {
         {"supports_preserve_reasoning", supports_preserve_reasoning},
         {"supports_reasoning_effort", supports_reasoning_effort},
         {"supports_object_arguments", supports_object_arguments},
+        {"supports_tool_defer_loading", supports_tool_defer_loading},
+        {"supports_tool_reference", supports_tool_reference},
     };
 }
 
@@ -583,6 +585,108 @@ caps caps_get(jinja::program & prog) {
             result.supports_reasoning_effort = effort->stats.used;
         }
     );
+
+    if (result.supports_tools) {
+        JJ_DEBUG("%s\n", ">>> Running capability check: deferred tools");
+
+        static const std::string visible_name  = "visible_tool_marker";
+        static const std::string deferred_name = "deferred_tool_marker";
+        static const std::string deferred_desc = "DEFERRED_TOOL_DESC_MARKER";
+
+        static const auto make_tool = [](const std::string & name, const std::string & desc, bool deferred) {
+            json tool = {
+                {"type", "function"},
+                {"function", {
+                    {"name", name},
+                    {"description", desc},
+                    {"parameters", {
+                        {"type", "object"},
+                        {"properties", {{"arg", {{"type", "string"}}}}},
+                    }},
+                }},
+            };
+            // templates differ on where they read the flag
+            if (deferred) {
+                tool["defer_loading"]             = true;
+                tool["function"]["defer_loading"] = true;
+            }
+            return tool;
+        };
+        const caps_json_fn tools_fn = [&]() {
+            return json::array({
+                make_tool(visible_name, "Tool description", false),
+                make_tool(deferred_name, deferred_desc, true),
+            });
+        };
+
+        // case: template leaves deferred tools out of the tool list
+        caps_try_execute(
+            prog,
+            [&]() {
+                return json::array({
+                    {
+                        {"role", "user"},
+                        {"content", "User message"}
+                    },
+                });
+            },
+            nullptr, // ctx_fn
+            tools_fn,
+            [&](context &, bool success, value &, value &, const std::string & rendered) {
+                result.supports_tool_defer_loading = success &&
+                    rendered.find(visible_name) != std::string::npos &&
+                    rendered.find(deferred_name) == std::string::npos;
+            }
+        );
+
+        if (result.supports_tool_defer_loading) {
+            JJ_DEBUG("%s\n", ">>> Running capability check: tool references");
+
+            // case: template expands tool_reference parts into the tool definition
+            const json args = result.supports_object_arguments ? json{{"arg", "value"}} : json(R"({"arg": "value"})");
+            caps_try_execute(
+                prog,
+                [&]() {
+                    return json::array({
+                        {
+                            {"role", "user"},
+                            {"content", "User message"},
+                        },
+                        {
+                            {"role", "assistant"},
+                            {"content", ""},
+                            {"tool_calls", json::array({
+                                {
+                                    {"id", "call00001"},
+                                    {"type", "function"},
+                                    {"function", {
+                                        {"name", visible_name},
+                                        {"arguments", args},
+                                    }},
+                                },
+                            })},
+                        },
+                        {
+                            {"role", "tool"},
+                            {"content", json::array({
+                                {
+                                    {"type", "tool_reference"},
+                                    {"name", deferred_name},
+                                    {"tool_name", deferred_name},
+                                },
+                            })},
+                            {"tool_call_id", "call00001"},
+                        },
+                    });
+                },
+                nullptr, // ctx_fn
+                tools_fn,
+                [&](context &, bool success, value &, value &, const std::string & rendered) {
+                    result.supports_tool_reference = success && rendered.find(deferred_desc) != std::string::npos;
+                }
+            );
+        }
+    }
 
     JJ_DEBUG("%s\n", result.to_string().c_str());
 

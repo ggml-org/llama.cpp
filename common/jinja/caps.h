@@ -25,6 +25,12 @@ struct caps {
 
     bool supports_object_arguments = false;
 
+    // template hides tools with defer_loading by itself
+    bool supports_tool_defer_loading = false;
+
+    // template expands "tool_reference" content parts into the tool definition
+    bool supports_tool_reference = false;
+
     // for reporting on server
     std::map<std::string, bool> to_map() const;
 

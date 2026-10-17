@@ -1243,7 +1243,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
             p.erase("input_video");
             p.erase("video_url");
 
-        } else if (type != "text") {
+        } else if (type != "text" && type != "tool_reference") {
             throw std::invalid_argument("unsupported content[].type");
         }
     }

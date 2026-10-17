@@ -465,6 +465,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                         std::string result_text;
                         json content_parts = json::array();
                         bool has_images = false;
+                        bool has_tool_refs = false;
 
                         for (const auto & c : result_content) {
                             std::string c_type = json_value(c, "type", std::string());
@@ -493,10 +494,16 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                                         {"image_url", {{"url", json_value(source, "url", std::string())}}}
                                     });
                                 }
+                            } else if (c_type == "tool_reference") {
+                                has_tool_refs = true;
+                                content_parts.push_back({
+                                    {"type", "tool_reference"},
+                                    {"tool_name", json_value(c, "tool_name", std::string())}
+                                });
                             }
                         }
 
-                        if (!has_images) {
+                        if (!has_images && !has_tool_refs) {
                             // Text-only: collapse to a plain string for maximum compatibility
                             tool_results.push_back({
                                 {"role", "tool"},
@@ -551,14 +558,18 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         if (tools.is_array()) {
             json oai_tools = json::array();
             for (const auto & tool : tools) {
-                oai_tools.push_back({
+                json oai_tool = {
                     {"type", "function"},
                     {"function", {
                         {"name", json_value(tool, "name", std::string())},
                         {"description", json_value(tool, "description", std::string())},
                         {"parameters", tool.contains("input_schema") ? tool.at("input_schema") : json::object()}
                     }}
-                });
+                };
+                if (json_value(tool, "defer_loading", false)) {
+                    oai_tool["function"]["defer_loading"] = true;
+                }
+                oai_tools.push_back(oai_tool);
             }
             oai_body["tools"] = oai_tools;
         }

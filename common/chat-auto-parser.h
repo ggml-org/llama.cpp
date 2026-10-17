@@ -54,6 +54,8 @@ namespace autoparser {
 struct generation_params {
     json                                  messages;
     json                                  tools;
+    // tools rendered in the prompt when the template cannot hide deferred tools itself; null = render `tools`
+    json                                  tools_visible;
     common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     json                                  json_schema;
     bool                                  parallel_tool_calls = true;
