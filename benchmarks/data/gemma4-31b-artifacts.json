@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifacts": {
+    "target": {
+      "repo": "unsloth/gemma-4-31B-it-GGUF",
+      "revision": "c1ac76e99d5513b141e8adde7288b85c3f9c32ec",
+      "filename": "gemma-4-31B-it-Q3_K_M.gguf",
+      "size": 14736608192,
+      "sha256": "d2d7a0f9117eb1a9a4b8b68bbb53c1ce5d1f602c45b9028dc12add0d0056f4fd"
+    },
+    "assistant": {
+      "repo": "unsloth/gemma-4-31B-it-GGUF",
+      "revision": "c1ac76e99d5513b141e8adde7288b85c3f9c32ec",
+      "filename": "mtp-gemma-4-31B-it.gguf",
+      "size": 514687104,
+      "sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de"
+    }
+  }
+}
