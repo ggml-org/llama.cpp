@@ -589,6 +589,67 @@ def test_chat_completions_multiple_choices():
             assert choice["finish_reason"] == "length"
 
 
+def test_chat_completions_multiple_choices_usage():
+    global server
+    server.start()
+    n_choices = 2
+    max_tokens = 8
+    messages = [
+        {"role": "system", "content": "Book"},
+        {"role": "user", "content": "What is the best book"},
+    ]
+
+    # reference: prompt token count of a single-choice request
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": max_tokens,
+        "messages": messages,
+    })
+    assert res.status_code == 200
+    n_prompt = res.body["usage"]["prompt_tokens"]
+    assert n_prompt > 0
+
+    # non-stream: usage must sum completion tokens over all choices and count the shared prompt once
+    # ref: https://github.com/ggml-org/llama.cpp/issues/29451
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": max_tokens,
+        "n": n_choices,
+        "messages": messages,
+    })
+    assert res.status_code == 200
+    assert len(res.body["choices"]) == n_choices
+    for choice in res.body["choices"]:
+        assert choice["finish_reason"] == "length"
+    usage = res.body["usage"]
+    assert usage["prompt_tokens"] == n_prompt
+    assert usage["completion_tokens"] == n_choices * max_tokens
+    assert usage["total_tokens"] == n_prompt + n_choices * max_tokens
+
+    # stream: exactly one usage chunk, the last one, covering all choices
+    res = server.make_stream_request("POST", "/chat/completions", data={
+        "max_tokens": max_tokens,
+        "n": n_choices,
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    })
+    usage_chunks = []
+    n_finished = 0
+    for data in res:
+        assert not usage_chunks, f"received a chunk after the usage chunk: {data}"
+        if "usage" in data:
+            assert data["choices"] == []
+            usage_chunks.append(data["usage"])
+        elif data["choices"][0]["finish_reason"] is not None:
+            assert data["choices"][0]["finish_reason"] == "length"
+            n_finished += 1
+    assert n_finished == n_choices
+    assert len(usage_chunks) == 1
+    usage = usage_chunks[0]
+    assert usage["prompt_tokens"] == n_prompt
+    assert usage["completion_tokens"] == n_choices * max_tokens
+    assert usage["total_tokens"] == n_prompt + n_choices * max_tokens
+
+
 def test_chat_completions_token_count():
     global server
     server.start()
