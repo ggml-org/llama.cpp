@@ -127,7 +127,9 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     float logit_softcap = 0.0f;
     memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
 
-    bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // The GQA-optimized TILE variant handles a trailing partial chunk (out-of-bounds
+    // checked iteration), so n_kv no longer needs to be a multiple of FATTN_KQ_STRIDE.
+    bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f;
 
     // XMX-accelerated path: oneDNN SDPA (native F16 and dequant+non-F16).
     // ONEDNN requires min 32 query tokens — short-circuit decode to avoid
@@ -260,7 +262,15 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     if (can_use_vector_kernel) {
         if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
             if (Q->ne[1] == 1) {
-                if (!gqa_opt_applies) {
+                // BMG, D=256: single-query decode runs materially faster on the vector
+                // kernel than on the GQA-optimized tile config (832 vs 1150 us at
+                // kv=65536, GQA4, B70-measured; +4..+18% end-to-end tg at 8k..64k
+                // context on spark2_5/qwen35 D=256 models). Other archs and head sizes
+                // keep the tile dispatcher's original preference.
+                const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+                const bool vec_decode = (arch == gpu_arch::intel_gpu_bmg_g21 ||
+                                         arch == gpu_arch::intel_gpu_bmg_g31) && Q->ne[0] == 256;
+                if (vec_decode || !gqa_opt_applies) {
                     return BEST_FATTN_KERNEL_VEC;
                 }
             }
