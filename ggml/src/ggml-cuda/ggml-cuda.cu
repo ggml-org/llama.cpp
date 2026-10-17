@@ -1,7 +1,6 @@
 #include "ggml-cuda.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
-#include "ggml-trace.h"
 
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
@@ -738,190 +737,7 @@ static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
 static std::atomic<int> ggml_cuda_lock_counter;
 
-// decode trace (ggml-trace.h): one pair of timing events per launch group, recorded on the node's stream. nothing
-// waits inside a token: the pairs are resolved on the batch_begin / stop thread once all of them are complete,
-// against one anchor event that is synchronized there (its wake-up shifts all device times by a constant)
-struct ggml_cuda_trace_pending {
-    cudaEvent_t start;
-    cudaEvent_t end;
-    int64_t     t_launch0;
-    int64_t     t_launch1;
-    int32_t     step;
-    int32_t     op;
-    int32_t     n_fused;
-    int32_t     stream;
-    int32_t     flags;
-    char        name[32];
-};
-
-struct ggml_cuda_trace {
-    static constexpr size_t max_events = 16384;
-
-    std::mutex mtx;
-    int backend_id = 0;
-    std::vector<cudaEvent_t> free_events;
-    size_t n_events = 0; // created, free or pending
-    std::vector<ggml_cuda_trace_pending> pending;
-    cudaEvent_t anchor = nullptr;
-    uint64_t dropped = 0;
-};
-
-static cudaEvent_t ggml_cuda_trace_event_get(ggml_cuda_trace * tr) {
-    if (!tr->free_events.empty()) {
-        cudaEvent_t e = tr->free_events.back();
-        tr->free_events.pop_back();
-        return e;
-    }
-    if (tr->n_events >= ggml_cuda_trace::max_events) {
-        return nullptr;
-    }
-    cudaEvent_t e;
-    CUDA_CHECK(cudaEventCreateWithFlags(&e, cudaEventDefault));
-    tr->n_events++;
-    return e;
-}
-
-// emits the resolved pairs; with wait the device is synchronized first (destructor), else nothing is resolved
-// unless every pending end event is complete
-static void ggml_cuda_trace_resolve(ggml_backend_cuda_context * ctx, bool wait) {
-    ggml_cuda_trace * tr = ctx->trace;
-    std::lock_guard<std::mutex> lock(tr->mtx);
-    if (tr->pending.empty()) {
-        return;
-    }
-    ggml_cuda_set_device(ctx->device);
-    if (wait) {
-        CUDA_CHECK(cudaDeviceSynchronize());
-    }
-    for (const auto & p : tr->pending) {
-        const cudaError_t err = cudaEventQuery(p.end);
-        if (err == cudaErrorNotReady) {
-            return; // the next batch_begin tries again
-        }
-        CUDA_CHECK(err);
-    }
-    if (tr->anchor == nullptr) {
-        CUDA_CHECK(cudaEventCreateWithFlags(&tr->anchor, cudaEventDefault));
-    }
-    CUDA_CHECK(cudaEventRecord(tr->anchor, ctx->stream(ctx->device, 0)));
-    CUDA_CHECK(cudaEventSynchronize(tr->anchor));
-    const int64_t t_anchor = ggml_trace_now_ns();
-
-    for (const auto & p : tr->pending) {
-        float ms0 = 0.0f, ms1 = 0.0f;
-        CUDA_CHECK(cudaEventElapsedTime(&ms0, p.start, tr->anchor));
-        CUDA_CHECK(cudaEventElapsedTime(&ms1, p.end,   tr->anchor));
-
-        ggml_trace_event ev;
-        ggml_trace_event_init(&ev, GGML_TRACE_OP_GPU, 0);
-        ev.t0_ns   = t_anchor - (int64_t) ((double) ms0*1e6);
-        ev.t1_ns   = t_anchor - (int64_t) ((double) ms1*1e6);
-        ev.aux     = p.t_launch0;
-        ev.aux2    = p.t_launch1;
-        ev.step    = p.step;
-        ev.op      = p.op;
-        ev.detail  = p.n_fused;
-        ev.piece   = p.stream;
-        ev.backend = tr->backend_id;
-        ev.flags   = p.flags;
-        memcpy(ev.name, p.name, sizeof(ev.name));
-        ggml_trace_emit(&ev);
-
-        tr->free_events.push_back(p.start);
-        tr->free_events.push_back(p.end);
-    }
-    tr->pending.clear();
-}
-
-static void ggml_cuda_trace_flush(void * ud) {
-    ggml_cuda_trace_resolve((ggml_backend_cuda_context *) ud, false);
-}
-
-// start of a launch group: host time and a start event on the node's stream; no event if the pool is exhausted
-struct ggml_cuda_trace_launch {
-    cudaEvent_t start = nullptr;
-    int64_t     t0    = 0;
-};
-
-static ggml_cuda_trace_launch ggml_cuda_trace_begin(ggml_backend_cuda_context * ctx) {
-    ggml_cuda_trace * tr = ctx->trace;
-    ggml_cuda_trace_launch l;
-    l.t0 = ggml_trace_now_ns();
-    {
-        std::lock_guard<std::mutex> lock(tr->mtx);
-        l.start = ggml_cuda_trace_event_get(tr);
-        if (l.start == nullptr) {
-            tr->dropped++;
-            return l;
-        }
-    }
-    CUDA_CHECK(cudaEventRecord(l.start, ctx->stream()));
-    return l;
-}
-
-static void ggml_cuda_trace_end(ggml_backend_cuda_context * ctx, const ggml_cuda_trace_launch & l, const ggml_tensor * node, int n_fused) {
-    if (l.start == nullptr) {
-        return;
-    }
-    ggml_cuda_trace * tr = ctx->trace;
-    cudaEvent_t end;
-    {
-        std::lock_guard<std::mutex> lock(tr->mtx);
-        end = ggml_cuda_trace_event_get(tr);
-        if (end == nullptr) {
-            // pool exhausted: the start event goes back to the free list; it is recorded but nothing waits for
-            // it, and a later cudaEventRecord simply re-records it
-            tr->dropped++;
-            tr->free_events.push_back(l.start);
-            return;
-        }
-    }
-    CUDA_CHECK(cudaEventRecord(end, ctx->stream()));
-
-    ggml_cuda_trace_pending p;
-    p.start     = l.start;
-    p.end       = end;
-    p.t_launch0 = l.t0;
-    p.t_launch1 = ggml_trace_now_ns();
-    p.step      = ggml_trace_step();
-    p.op        = node->op;
-    p.n_fused   = n_fused;
-    p.stream    = ctx->curr_stream_no;
-    // a weight as src[0]: a matrix of this device's weights (decode must not read the CPU layers' weights here)
-    const ggml_tensor * w = node->src[0];
-    ggml_backend_buffer_t wb = w == nullptr ? nullptr : w->view_src ? w->view_src->buffer : w->buffer;
-    p.flags     = wb != nullptr && ggml_backend_buffer_get_usage(wb) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS ? GGML_TRACE_FLAG_WEIGHT_SRC : 0;
-    {
-        ggml_trace_event tmp;
-        ggml_trace_event_set_name(&tmp, node->name);
-        memcpy(p.name, tmp.name, sizeof(p.name));
-    }
-    std::lock_guard<std::mutex> lock(tr->mtx);
-    tr->pending.push_back(p);
-}
-
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
-    if (trace != nullptr) {
-        // the completed timings first, then no flush may run any more, then the events go
-        ggml_cuda_trace_resolve(this, true);
-        ggml_trace_unregister_flush(ggml_cuda_trace_flush, this);
-        for (const auto & p : trace->pending) {
-            CUDA_CHECK(cudaEventDestroy(p.start));
-            CUDA_CHECK(cudaEventDestroy(p.end));
-        }
-        for (cudaEvent_t e : trace->free_events) {
-            CUDA_CHECK(cudaEventDestroy(e));
-        }
-        if (trace->anchor != nullptr) {
-            CUDA_CHECK(cudaEventDestroy(trace->anchor));
-        }
-        if (trace->dropped > 0) {
-            GGML_LOG_WARN("%s: %s: %" PRIu64 " GPU timings dropped (event pool exhausted)\n", __func__, name.c_str(), trace->dropped);
-        }
-        delete trace;
-        trace = nullptr;
-    }
-
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
 
@@ -4630,7 +4446,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     return 0;
 }
 
-static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key, const bool trace) {
+static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
     bool graph_evaluated_or_captured = false;
 
     // flag used to determine whether it is an integrated_gpu
@@ -4770,9 +4586,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
-                // trace: never while capturing, the bypass in ggml_backend_cuda_graph_compute runs these directly
-                const ggml_cuda_trace_launch trace_launch = trace ? ggml_cuda_trace_begin(cuda_ctx) : ggml_cuda_trace_launch();
-
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
@@ -4782,9 +4595,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                             nodes_to_skip + 1, ggml_op_name(node->op), node->name,
                             ggml_op_name(cgraph->nodes[last_fused]->op), cgraph->nodes[last_fused]->name);
 #endif
-                    if (trace) {
-                        ggml_cuda_trace_end(cuda_ctx, trace_launch, node, nodes_to_skip + 1);
-                    }
                     i += nodes_to_skip;
                     continue;
                 }
@@ -4810,10 +4620,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
                 GGML_ASSERT(ok);
-
-                if (trace) {
-                    ggml_cuda_trace_end(cuda_ctx, trace_launch, node, 1);
-                }
 
                 if (!is_concurrent_event_active) {
                     try_launch_concurrent_event(node);
@@ -4923,21 +4729,6 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     }
 #endif // USE_CUDA_GRAPH
 
-    // a traced decode step runs node by node so that every launch group gets its timing events. the node
-    // properties above are refreshed all the same: an instance that matches them stays valid for untraced steps,
-    // but a (re)capture this step asked for is not done, so the next untraced step must not replay the old
-    // instance; resetting the warmup makes it run directly and capture again
-    const bool trace = cuda_ctx->trace != nullptr && ggml_trace_active();
-    if (trace) {
-#ifdef USE_CUDA_GRAPH
-        if (use_cuda_graph && cuda_graph_update_required) {
-            cuda_ctx->cuda_graph(graph_key)->warmup_complete = false;
-        }
-#endif
-        use_cuda_graph             = false;
-        cuda_graph_update_required = false;
-    }
-
     if (use_cuda_graph && cuda_graph_update_required) {
         // Start CUDA graph capture
         {
@@ -4948,7 +4739,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
     }
 
-    ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key, trace);
+    ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
 
     return GGML_STATUS_SUCCESS;
 }
@@ -6348,12 +6139,6 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
         GGML_LOG_ERROR("%s: failed to allocate context\n", __func__);
         return nullptr;
     }
-
-    // decode trace: the flush resolves the GPU timings of a traced step (registered whether tracing or not, the
-    // trace may start after the backends)
-    ctx->trace = new ggml_cuda_trace;
-    ctx->trace->backend_id = ggml_trace_backend_id(ctx->name.c_str());
-    ggml_trace_register_flush(ggml_cuda_trace_flush, ctx);
 
     ggml_backend_t cuda_backend = new ggml_backend {
         /* .guid    = */ ggml_backend_cuda_guid(),

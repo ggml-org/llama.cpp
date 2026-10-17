@@ -388,13 +388,6 @@ private:
 
     copy_experts_info copy_experts;
 
-    // LLAMA_TRACE=<path.json>: per-action trace of decode steps (ggml-trace.h); trace_sync_pending: the last decode
-    // was traced and its output wait in synchronize() has not been recorded yet
-    bool trace_started      = false;
-    bool trace_sync_pending = false;
-    int  trace_out_backend  = 0; // ggml_trace_backend_id of the backend that holds the logits
-    void trace_init();
-
     // GGML_CPU_MOE_PREFETCH=1: hint the pages of lazily mapped experts ahead of their upload to a device
     // (op offload of large batches), so the copy streams from disk instead of faulting page by page
     bool   copy_prefetch           = false;

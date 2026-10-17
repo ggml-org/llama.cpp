@@ -12,7 +12,6 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
-#include "ggml-trace.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -403,25 +402,6 @@ size_t ggml_backend_get_max_size(ggml_backend_t backend) {
     return ggml_backend_buft_get_max_size(ggml_backend_get_default_buffer_type(backend));
 }
 
-// decode trace (ggml-trace.h): host side of the application's tensor transfers; the scheduler's own copies of split
-// inputs are COPY events and do not count here
-static thread_local bool ggml_backend_trace_in_sched = false;
-
-static bool ggml_backend_trace_xfer_active(void) {
-    return ggml_trace_active() && !ggml_backend_trace_in_sched;
-}
-
-static void ggml_backend_trace_xfer(int64_t t0, const struct ggml_tensor * tensor, size_t size, int direction) {
-    struct ggml_trace_event ev;
-    ggml_trace_event_init(&ev, GGML_TRACE_XFER, GGML_TRACE_TID_SCHED);
-    ev.t0_ns  = t0;
-    ev.t1_ns  = ggml_trace_now_ns();
-    ev.detail = direction;
-    ev.bytes  = (int64_t) size;
-    ggml_trace_event_set_name(&ev, tensor->name);
-    ggml_trace_emit(&ev);
-}
-
 void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     GGML_ASSERT(backend);
     GGML_ASSERT(tensor);
@@ -432,12 +412,7 @@ void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * 
         ggml_backend_synchronize(backend);
         ggml_backend_tensor_set(tensor, data, offset, size);
     } else {
-        const bool trace = ggml_backend_trace_xfer_active();
-        const int64_t t0 = trace ? ggml_trace_now_ns() : 0;
         backend->iface.set_tensor_async(backend, tensor, data, offset, size);
-        if (trace) {
-            ggml_backend_trace_xfer(t0, tensor, size, GGML_TRACE_INPUT);
-        }
     }
 }
 
@@ -451,12 +426,7 @@ void ggml_backend_tensor_get_async(ggml_backend_t backend, const struct ggml_ten
         ggml_backend_synchronize(backend);
         ggml_backend_tensor_get(tensor, data, offset, size);
     } else {
-        const bool trace = ggml_backend_trace_xfer_active();
-        const int64_t t0 = trace ? ggml_trace_now_ns() : 0;
         backend->iface.get_tensor_async(backend, tensor, data, offset, size);
-        if (trace) {
-            ggml_backend_trace_xfer(t0, tensor, size, GGML_TRACE_OUTPUT);
-        }
     }
 }
 
@@ -514,12 +484,7 @@ void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, siz
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
-    const bool trace = ggml_backend_trace_xfer_active();
-    const int64_t t0 = trace ? ggml_trace_now_ns() : 0;
     buf->iface.set_tensor(buf, tensor, data, offset, size);
-    if (trace) {
-        ggml_backend_trace_xfer(t0, tensor, size, GGML_TRACE_INPUT);
-    }
 }
 
 void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -534,12 +499,7 @@ void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, siz
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
 
-    const bool trace = ggml_backend_trace_xfer_active();
-    const int64_t t0 = trace ? ggml_trace_now_ns() : 0;
     buf->iface.get_tensor(buf, tensor, data, offset, size);
-    if (trace) {
-        ggml_backend_trace_xfer(t0, tensor, size, GGML_TRACE_OUTPUT);
-    }
 }
 
 void ggml_backend_tensor_set_2d(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size,
@@ -966,7 +926,6 @@ struct ggml_backend_sched_split {
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
-    bool trace;    // ggml_trace_active() for the splits being computed
 
     int n_backends;
 
@@ -1861,37 +1820,6 @@ static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
         ggml_backend_buffer_is_host(t->buffer);
 }
 
-// decode trace (ggml-trace.h): the host waits for a backend, through its event if there is one
-static void ggml_backend_sched_host_wait(ggml_backend_sched_t sched, ggml_backend_t backend, ggml_backend_event_t event) {
-    const int64_t t0 = sched->trace ? ggml_trace_now_ns() : 0;
-    if (event != NULL) {
-        ggml_backend_event_synchronize(event);
-    } else {
-        ggml_backend_synchronize(backend);
-    }
-    if (sched->trace) {
-        struct ggml_trace_event ev;
-        ggml_trace_event_init(&ev, GGML_TRACE_SYNC, GGML_TRACE_TID_SCHED);
-        ev.t0_ns   = t0;
-        ev.t1_ns   = ggml_trace_now_ns();
-        ev.backend = ggml_trace_backend_id(ggml_backend_name(backend));
-        ggml_trace_emit(&ev);
-    }
-}
-
-// a synchronous copy of a split input (t0 != t1), or an async one that was only enqueued (instant)
-static void ggml_backend_sched_trace_copy(ggml_backend_t split_backend, const struct ggml_tensor * input, int64_t t0, bool async) {
-    struct ggml_trace_event ev;
-    ggml_trace_event_init(&ev, GGML_TRACE_COPY, GGML_TRACE_TID_SCHED);
-    ev.t0_ns   = t0;
-    ev.t1_ns   = async ? 0 : ggml_trace_now_ns();
-    ev.detail  = async ? GGML_TRACE_COPY_ASYNC : GGML_TRACE_COPY_SYNC;
-    ev.backend = ggml_trace_backend_id(ggml_backend_name(split_backend));
-    ev.bytes   = (int64_t) ggml_nbytes(input);
-    ggml_trace_event_set_name(&ev, input->name);
-    ggml_trace_emit(&ev);
-}
-
 static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
     const int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
@@ -1900,12 +1828,12 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
 
     if (input->flags & GGML_TENSOR_FLAG_INPUT) {
         // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
-        ggml_backend_sched_host_wait(sched, split_backend, sched->events[split_backend_id][sched->cur_copy]);
-        const int64_t t0 = sched->trace ? ggml_trace_now_ns() : 0;
-        ggml_backend_tensor_copy(input, input_cpy);
-        if (sched->trace) {
-            ggml_backend_sched_trace_copy(split_backend, input, t0, false);
+        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+        } else {
+            ggml_backend_synchronize(split_backend);
         }
+        ggml_backend_tensor_copy(input, input_cpy);
         return;
     }
 
@@ -1913,63 +1841,30 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
         ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
     } else {
-        ggml_backend_sched_host_wait(sched, split_backend, NULL);
+        ggml_backend_synchronize(split_backend);
     }
 
-    if (sched->callback_copy != NULL && ggml_backend_sched_is_host_weight(input)) {
-        const int64_t t0 = sched->trace ? ggml_trace_now_ns() : 0;
-        if (sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
-            // the application's copy of a host weight, done (or enqueued) by the callback
-            if (sched->trace) {
-                ggml_backend_sched_trace_copy(split_backend, input, t0, false);
-            }
-            return;
-        }
+    if (sched->callback_copy != NULL && ggml_backend_sched_is_host_weight(input) &&
+        sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
+        return;
     }
 
     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
-    const int64_t t0 = sched->trace ? ggml_trace_now_ns() : 0;
     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-        ggml_backend_sched_host_wait(sched, input_backend, NULL);
-        ggml_backend_sched_host_wait(sched, split_backend, sched->events[split_backend_id][sched->cur_copy]);
-        const int64_t t1 = sched->trace ? ggml_trace_now_ns() : 0;
-        ggml_backend_tensor_copy(input, input_cpy);
-        if (sched->trace) {
-            ggml_backend_sched_trace_copy(split_backend, input, t1, false);
+        ggml_backend_synchronize(input_backend);
+        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+        } else {
+            ggml_backend_synchronize(split_backend);
         }
-    } else if (sched->trace) {
-        ggml_backend_sched_trace_copy(split_backend, input, t0, true);
+        ggml_backend_tensor_copy(input, input_cpy);
     }
-}
-
-// the scheduler's own transfers are COPY events, not XFER
-struct ggml_backend_sched_trace_scope {
-    bool prev;
-    ggml_backend_sched_trace_scope() : prev(ggml_backend_trace_in_sched) { ggml_backend_trace_in_sched = true; }
-    ~ggml_backend_sched_trace_scope() { ggml_backend_trace_in_sched = prev; }
-};
-
-static void ggml_backend_sched_trace_split(ggml_backend_t split_backend, const struct ggml_backend_sched_split * split, int64_t t0) {
-    struct ggml_trace_event ev;
-    ggml_trace_event_init(&ev, GGML_TRACE_SPLIT, GGML_TRACE_TID_SCHED);
-    ev.t0_ns   = t0;
-    ev.t1_ns   = ggml_trace_now_ns();
-    ev.backend = ggml_trace_backend_id(ggml_backend_name(split_backend));
-    ev.aux     = split->graph.n_nodes;
-    ev.bytes   = split->n_inputs;
-    if (split->graph.n_nodes > 0) {
-        ggml_trace_event_set_name(&ev, split->graph.nodes[0]->name);
-    }
-    ggml_trace_emit(&ev);
 }
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
-
-    sched->trace = ggml_trace_active();
-    ggml_backend_sched_trace_scope trace_scope;
 
     int prev_backend_id = -1;
 
@@ -1978,12 +1873,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
-        const int64_t trace_t0 = sched->trace ? ggml_trace_now_ns() : 0;
-
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
         if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
-            ggml_backend_sched_host_wait(sched, sched->backends[prev_backend_id], sched->events[prev_backend_id][sched->cur_copy]);
+            if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
+                ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
+            } else {
+                ggml_backend_synchronize(sched->backends[prev_backend_id]);
+            }
         }
 
         // copy the input tensors to the split backend
@@ -2041,10 +1938,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         // record the event of this split
         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
             ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
-        }
-
-        if (sched->trace) {
-            ggml_backend_sched_trace_split(split_backend, split, trace_t0);
         }
 
         prev_backend_id = split_backend_id;

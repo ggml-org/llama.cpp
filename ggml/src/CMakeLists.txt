@@ -195,7 +195,6 @@ add_library(ggml-base
             ../include/ggml-backend.h
             ../include/ggml-cpp.h
             ../include/ggml-opt.h
-            ../include/ggml-trace.h
             ../include/gguf.h
             ggml.c
             ggml.cpp
@@ -205,7 +204,6 @@ add_library(ggml-base
             ggml-opt.cpp
             ggml-threading.cpp
             ggml-threading.h
-            ggml-trace.cpp
             ggml-quants.c
             ggml-quants.h
             gguf.cpp)

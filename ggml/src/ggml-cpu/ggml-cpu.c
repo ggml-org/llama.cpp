@@ -8,7 +8,6 @@
 #include "ggml-impl.h"
 #include "quants.h"
 #include "ggml-threading.h"
-#include "ggml-trace.h"
 #include "unary-ops.h"
 #include "binary-ops.h"
 #include "vec.h"
@@ -506,11 +505,6 @@ struct ggml_threadpool {
     int          n_threads;   // Number of threads in the pool
     int32_t      prio;        // Scheduling priority
     uint32_t     poll;        // Polling level (0 - no polling)
-
-    // ggml_trace_active() read once per graph (ggml-trace.h), so that the workers do not touch the trace state
-    bool         trace;
-    int          trace_detail;
-    int          trace_step;
 
     enum ggml_status ec;
 };
@@ -1573,45 +1567,31 @@ static size_t ggml_cpu_moe_prefetch_window = 512u*1024*1024; // GGML_CPU_MOE_PRE
 
 // the whole nb02 stride of each used expert is hinted; for the usual contiguous expert tensors this is exactly
 // the expert's matrix, for a strided view it also covers the unread gap, which is harmless for a hint
-// trace_step >= 0: the traced step of the graph; piece / n_pieces / ith tag the trace record
-static void ggml_cpu_moe_prefetch_piece(const struct ggml_tensor * src0, int64_t a, size_t off, int trace_step, int piece, int n_pieces, int ith) {
+static void ggml_cpu_moe_prefetch_piece(const struct ggml_tensor * src0, int64_t a, size_t off) {
     const size_t    page = ggml_cpu_page_size;
     const size_t    nb02 = src0->nb[2];
     const uintptr_t p    = (uintptr_t) src0->data + (uintptr_t) a*nb02 + off;
     const uintptr_t n    = MIN(GGML_CPU_MOE_PREFETCH_PIECE, nb02 - off);
     const uintptr_t beg  = p & ~(uintptr_t)(page - 1);
     const uintptr_t end  = (p + n + page - 1) & ~(uintptr_t)(page - 1);
-    if (trace_step < 0) {
-        // a pure hint: errors (e.g. memory that is not file-backed) are ignored
-        (void) posix_madvise((void *) beg, end - beg, POSIX_MADV_WILLNEED);
-        return;
-    }
-    // a zero read_bytes delta means the range was already cached
-    const int64_t rb0 = ggml_trace_read_bytes();
-    const int64_t t0  = ggml_trace_now_ns();
+    // a pure hint: errors (e.g. memory that is not file-backed) are ignored
     (void) posix_madvise((void *) beg, end - beg, POSIX_MADV_WILLNEED);
-    const int64_t t1  = ggml_trace_now_ns();
-    const int64_t rb1 = ggml_trace_read_bytes();
-    ggml_trace_io_issue(trace_step, (const void *) beg, end - beg, GGML_TRACE_IO_PREFETCH, -1, -1, (int) a, src0->name,
-            piece, n_pieces, t0, t1, rb0 >= 0 && rb1 >= 0 ? rb1 - rb0 : -1, ith);
 }
 
 // split the used expert slices into pieces and issue POSIX_MADV_WILLNEED for this thread's share,
 // so that the reads of all selected experts are in flight at once instead of faulting in serially
-static void ggml_cpu_mul_mat_id_prefetch(const struct ggml_tensor * src0, const int64_t * matrix_row_counts, int ith, int nth, int trace_step) {
+static void ggml_cpu_mul_mat_id_prefetch(const struct ggml_tensor * src0, const int64_t * matrix_row_counts, int ith, int nth) {
     const int64_t n_as = src0->ne[2];
     const size_t  nb02 = src0->nb[2];
-    const int     ppe  = (int) ((nb02 + GGML_CPU_MOE_PREFETCH_PIECE - 1) / GGML_CPU_MOE_PREFETCH_PIECE);
 
     int64_t k = 0; // piece index over all used experts, in ascending expert order
     for (int64_t a = 0; a < n_as; ++a) {
         if (matrix_row_counts[a] == 0) {
             continue;
         }
-        int piece = 0;
-        for (size_t off = 0; off < nb02; off += GGML_CPU_MOE_PREFETCH_PIECE, ++k, ++piece) {
+        for (size_t off = 0; off < nb02; off += GGML_CPU_MOE_PREFETCH_PIECE, ++k) {
             if (k % nth == ith) {
-                ggml_cpu_moe_prefetch_piece(src0, a, off, trace_step, piece, ppe, ith);
+                ggml_cpu_moe_prefetch_piece(src0, a, off);
             }
         }
     }
@@ -1653,52 +1633,11 @@ static void ggml_cpu_moe_window_issue(struct ggml_cpu_moe_window * w, const stru
             } while (matrix_row_counts[w->map_a] == 0);
             w->map_rank++;
         }
-        ggml_cpu_moe_prefetch_piece(src0, w->map_a, (size_t) (q % w->ppe)*GGML_CPU_MOE_PREFETCH_PIECE, -1, 0, 0, 0);
+        ggml_cpu_moe_prefetch_piece(src0, w->map_a, (size_t) (q % w->ppe)*GGML_CPU_MOE_PREFETCH_PIECE);
         q++;
     }
 }
 #endif // GGML_CPU_HAVE_POSIX_MADVISE
-
-// trace: wall and thread CPU time of one thread's share of an expert; the difference is the time off-CPU
-// (page faults, I/O wait, preemption), which is the cost of a slice that is not resident yet
-struct ggml_cpu_trace_expert {
-    int64_t t0;
-    int64_t cpu0;
-    int64_t minflt;
-    int64_t majflt;
-};
-
-static void ggml_cpu_trace_expert_begin(struct ggml_cpu_trace_expert * te, int detail) {
-    te->t0     = ggml_trace_now_ns();
-    te->cpu0   = ggml_trace_thread_cpu_ns();
-    te->minflt = 0;
-    te->majflt = 0;
-    if (detail >= 2) {
-        ggml_trace_thread_faults(&te->minflt, &te->majflt);
-    }
-}
-
-static void ggml_cpu_trace_expert_end(const struct ggml_cpu_trace_expert * te, int detail, const struct ggml_tensor * dst,
-        int cur_a, int ith, int nth) {
-    // the CPU time interval lies inside the wall interval, so that the difference cannot be negative
-    const int64_t cpu1 = ggml_trace_thread_cpu_ns();
-    struct ggml_trace_event ev;
-    ggml_trace_event_init(&ev, GGML_TRACE_EXPERT_THREAD, ith);
-    ev.t0_ns = te->t0;
-    ev.t1_ns = ggml_trace_now_ns();
-    ev.aux   = MAX(0, (ev.t1_ns - te->t0) - (cpu1 - te->cpu0));
-    if (detail >= 2) {
-        int64_t minflt = 0, majflt = 0;
-        ggml_trace_thread_faults(&minflt, &majflt);
-        ev.aux2 = (minflt - te->minflt) | ((majflt - te->majflt) << 32);
-    }
-    ev.expert  = cur_a;
-    ev.op      = GGML_OP_MUL_MAT_ID;
-    ev.n_parts = nth;
-    ev.bytes   = (int64_t) dst->src[0]->nb[2];
-    ggml_trace_event_set_name(&ev, dst->name);
-    ggml_trace_emit(&ev);
-}
 
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
@@ -1734,8 +1673,6 @@ static void ggml_compute_forward_mul_mat_id(
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
 
-    const int trace_detail = params->threadpool->trace_detail;
-
     void * wdata_cur = params->wdata;
 
     if (src1->type != vec_dot_type) {
@@ -1760,12 +1697,6 @@ static void ggml_compute_forward_mul_mat_id(
     char * tiled_scratch = incr_ptr_aligned(&wdata_cur, ggml_tiled_wdata_size(nth, dst), 64);
 
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
-
-    // trace: one first-arrival flag per used expert (reserved by ggml_graph_plan whether tracing or not); the
-    // first thread to reach an expert has the poller sample the slice's residency
-    const int64_t n_used_max = MIN(n_as, ids->ne[0]*ids->ne[1]);
-    atomic_int * trace_first = incr_ptr_aligned(&wdata_cur, n_used_max*sizeof(atomic_int), CACHE_LINE_SIZE);
-    const bool trace = params->threadpool->trace && params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata);
 
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
@@ -1835,12 +1766,6 @@ static void ggml_compute_forward_mul_mat_id(
     GGML_UNUSED(pf_issued);
 #endif
 
-    if (trace) {
-        for (int64_t i = ith; i < n_used_max; i += nth) {
-            atomic_store_explicit(&trace_first[i], 0, memory_order_relaxed);
-        }
-    }
-
     ggml_barrier(params->threadpool);
 
 #if defined(GGML_CPU_HAVE_POSIX_MADVISE)
@@ -1867,23 +1792,16 @@ static void ggml_compute_forward_mul_mat_id(
 
         // (the piece count limit only matters for > 4 PB of used experts)
         if ((size_t) n_used*nb02 <= ggml_cpu_moe_prefetch_window || n_used*ppe > INT_MAX) {
-            ggml_cpu_mul_mat_id_prefetch(src0, matrix_row_counts, ith, nth, trace ? params->threadpool->trace_step : -1);
+            ggml_cpu_mul_mat_id_prefetch(src0, matrix_row_counts, ith, nth);
         } else {
-            // not traced: only prompt batches use this many experts, and those are not traced either
-            if (trace && ith == 0) {
-                static atomic_flag warned = ATOMIC_FLAG_INIT;
-                if (!atomic_flag_test_and_set(&warned)) {
-                    GGML_LOG_WARN("%s: windowed expert prefetch in a traced step: its I/O is not in the trace\n", __func__);
-                }
-            }
             use_window   = true;
             window.ppe   = ppe;
             window.total = n_used*ppe;
             window.map_a = first;
         }
     }
-#endif
     int64_t used_rank = 0; // rank of cur_a among the used experts
+#endif
 
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
@@ -1897,23 +1815,11 @@ static void ggml_compute_forward_mul_mat_id(
         if (use_window) {
             ggml_cpu_moe_window_issue(&window, src0, matrix_row_counts, ggml_cpu_moe_window_target(&window, nb02, used_rank));
         }
-#endif
-
-        // the first thread to reach the expert asks the poller to sample the slice's residency
-        struct ggml_cpu_trace_expert te = { 0, 0, 0, 0 };
-        if (trace) {
-            ggml_cpu_trace_expert_begin(&te, trace_detail);
-            if (atomic_exchange_explicit(&trace_first[used_rank], 1, memory_order_relaxed) == 0) {
-                ggml_trace_residency_request(-1, cur_a, dst->name, (const char *) src0->data + cur_a*nb02, nb02, te.t0);
-            }
-        }
         used_rank++;
+#endif
 
         // tiled takes over if profitable for this expert (see tiled.h)
         if (ggml_compute_forward_mul_mat_id_tiled(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0), tiled_scratch)) {
-            if (trace) {
-                ggml_cpu_trace_expert_end(&te, trace_detail, dst, cur_a, ith, nth);
-            }
             continue;
         }
 
@@ -1968,10 +1874,6 @@ static void ggml_compute_forward_mul_mat_id(
             }
 
             current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
-        }
-
-        if (trace) {
-            ggml_cpu_trace_expert_end(&te, trace_detail, dst, cur_a, ith, nth);
         }
     }
 }
@@ -3154,8 +3056,6 @@ struct ggml_cplan ggml_graph_plan(
                         // Workspace for tiled (see tiled.h)
                         cur = GGML_PAD(cur, 64);
                         cur += ggml_tiled_wdata_size(n_tasks, node);
-                        // first-arrival flags of the decode trace (ggml-trace.h), reserved whether tracing or not
-                        cur += MIN(n_as, ids->ne[0]*ids->ne[1])*sizeof(atomic_int) + CACHE_LINE_SIZE;
                     } break;
                 case GGML_OP_OUT_PROD:
                     {
@@ -3343,17 +3243,6 @@ static int ggml_cpu_try_fuse_ops(
     return 0;
 }
 
-static void ggml_cpu_trace_op(const struct ggml_tensor * node, int n_nodes, int64_t t0, int64_t t1) {
-    struct ggml_trace_event ev;
-    ggml_trace_event_init(&ev, GGML_TRACE_OP_CPU, 0);
-    ev.t0_ns  = t0;
-    ev.t1_ns  = t1;
-    ev.op     = node->op;
-    ev.detail = n_nodes;
-    ggml_trace_event_set_name(&ev, node->name);
-    ggml_trace_emit(&ev);
-}
-
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -3382,12 +3271,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     GGML_PRINT_DEBUG("thread #%d compute-start cplan %p last-graph %d\n", state->ith, (const void *)cplan, state->last_graph);
 #endif
 
-    // trace: worker 0 records each computed node (or fused group) from its start to the barrier after it
-    const bool trace = tp->trace && state->ith == 0;
-    struct ggml_tensor * trace_node = NULL;
-    int64_t trace_t0 = 0;
-    int     trace_n  = 0;
-
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
@@ -3398,10 +3281,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
-        }
-
-        if (trace) {
-            trace_t0 = ggml_trace_now_ns();
         }
 
         // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
@@ -3421,13 +3300,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if (node_n + 1 < cgraph->n_nodes) {
             ggml_barrier(state->threadpool);
-            if (trace) {
-                ggml_cpu_trace_op(node, n_fused + 1, trace_t0, ggml_trace_now_ns());
-            }
-        } else if (trace) {
-            // the last node ends with the final barrier below
-            trace_node = node;
-            trace_n    = n_fused + 1;
         }
     }
 
@@ -3438,10 +3310,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #endif
 
     ggml_barrier(state->threadpool);
-
-    if (trace_node != NULL) {
-        ggml_cpu_trace_op(trace_node, trace_n, trace_t0, ggml_trace_now_ns());
-    }
 
 #ifdef GGML_USE_CPU_RISCV64_SPACEMIT
     ggml_backend_cpu_riscv64_spacemit_clear_numa_thread_affinity_threaded(state->ith);
@@ -3605,9 +3473,6 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->stop             = false;
         threadpool->pause            = tpp->paused;
         threadpool->abort            = -1;
-        threadpool->trace            = false;
-        threadpool->trace_detail     = 0;
-        threadpool->trace_step       = -1;
         threadpool->workers          = NULL;
         threadpool->n_threads        = tpp->n_threads;
         threadpool->poll             = tpp->poll;
@@ -3695,10 +3560,6 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         threadpool->abort            = -1;
         threadpool->ec               = GGML_STATUS_SUCCESS;
     }
-
-    threadpool->trace        = ggml_trace_active();
-    threadpool->trace_detail = threadpool->trace ? ggml_trace_detail() : 0;
-    threadpool->trace_step   = threadpool->trace ? ggml_trace_step()   : -1;
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
