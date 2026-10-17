@@ -11,7 +11,7 @@ void llama_model_hrm_text::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_HRM_H_CYCLES, hparams.n_hrm_h_cycles);
     ml.get_key(LLM_KV_HRM_L_CYCLES, hparams.n_hrm_l_cycles);
 
-    // prefix-LM prefill is not implemented (causal attention only); kept for round-trip
+    // prefix-LM: prompt tokens attend to each other in both directions (see llama_kv_cache::set_input_kq_mask)
     ml.get_key(LLM_KV_HRM_PREFIX_LM, hparams.hrm_prefix_lm, false);
 
     GGML_ASSERT(hparams.n_hrm_layers_per_stack > 0);
