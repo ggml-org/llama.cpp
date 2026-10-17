@@ -6006,6 +6006,10 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
+    if (!ggml_rope_get_truncate(op)) {
+        return false;
+    }
+
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
