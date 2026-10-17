@@ -718,6 +718,89 @@ struct case_state_restore_fragmented : ctx_test {
     }
 };
 
+//
+// input validation
+//
+
+// - ask for a batch larger than the context, which llama.cpp lowers to n_ctx
+// - submit one token more than the context accepts in a single call
+// - verify that the call returns an error instead of aborting, and leaves the memory empty
+// - verify that a batch of the accepted size still decodes
+struct case_batch_too_large : ctx_test {
+    const char * name() const override { return "batch_big"; }
+
+    const char * description() const override {
+        return "a batch larger than the context accepts is rejected with an error, not an abort";
+    }
+
+    std::string skip_reason(model_run & mr) const override {
+        if (!mr.has_vocab()) {
+            return "the model has no vocab";
+        }
+        return ctx_test::skip_reason(mr);
+    }
+
+    case_result run(model_run & mr) const override {
+        ctx_opts opts;
+        opts.n_ctx    = 256;
+        opts.n_batch  = 512; // more than n_ctx: a causal context lowers it to n_ctx
+        opts.n_ubatch = 64;
+
+        auto ctx = mr.ctx(opts);
+        if (!ctx) {
+            return case_result::fail();
+        }
+
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        llama_memory_t mem = llama_get_memory(ctx.get());
+
+        // the encoder takes the whole input in one ubatch, the decoder up to n_batch tokens
+        const bool use_encoder = llama_model_has_encoder(mr.model);
+        const int32_t n_max = (use_encoder || mem == nullptr) ? (int32_t) llama_n_ubatch(ctx.get())
+                                                              : (int32_t) llama_n_batch(ctx.get());
+
+        auto make_batch = [&](int32_t n) {
+            llama_batch batch = llama_batch_init(n, 0, 1);
+            for (int32_t i = 0; i < n; ++i) {
+                batch.token[i]     = gen_token(n_vocab, 0, i);
+                batch.pos[i]       = i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]    = i + 1 == n;
+            }
+            batch.n_tokens = n;
+            return batch;
+        };
+
+        auto submit = [&](const llama_batch & batch) {
+            return use_encoder ? llama_encode(ctx.get(), batch) : llama_decode(ctx.get(), batch);
+        };
+
+        llama_batch too_big = make_batch(n_max + 1);
+        const int32_t ret_big = submit(too_big);
+        llama_batch_free(too_big);
+
+        CTX_REQUIRE(ret_big < 0, "a batch of " + std::to_string(n_max + 1) + " tokens with a limit of " +
+                std::to_string(n_max) + " returned " + std::to_string(ret_big) + ", expected an error");
+
+        if (mem != nullptr) {
+            CTX_REQUIRE(llama_memory_seq_pos_max(mem, 0) == -1, "the rejected batch left tokens in the memory");
+        }
+
+        llama_batch fits = make_batch(n_max);
+        const int32_t ret_fit = submit(fits);
+        llama_batch_free(fits);
+
+        CTX_REQUIRE(ret_fit == 0, "a batch of " + std::to_string(n_max) + " tokens after the rejected one returned " +
+                std::to_string(ret_fit));
+
+        TLOG_INF("%s: %d tokens rejected with %d, %d tokens accepted\n", __func__, n_max + 1, ret_big, n_max);
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_kv_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -733,6 +816,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_restore_failure>());
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
+    cases.push_back(std::make_unique<case_batch_too_large>());
 
     return cases;
 }

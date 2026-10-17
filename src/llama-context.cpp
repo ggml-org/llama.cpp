@@ -1604,12 +1604,16 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
 
     const uint32_t n_tokens = balloc->get_n_tokens();
 
+    // micro-batching is not possible for non-causal encoding, so we process the batch in a single shot
+    if (n_tokens > cparams.n_ubatch) {
+        LLAMA_LOG_ERROR("%s: the encoder requires n_ubatch >= n_tokens (n_ubatch = %u, n_tokens = %u)\n",
+                __func__, cparams.n_ubatch, n_tokens);
+        return -1;
+    }
+
     // [TAG_NO_CACHE_PAD]
     // TODO: add new split mode where we pad the input sequences so that ubatch.equal_seqs == true
     const llama_ubatch ubatch = balloc->split_simple(n_tokens);
-
-    // micro-batching is not possible for non-causal encoding, so we process the batch in a single shot
-    GGML_ASSERT(cparams.n_ubatch >= n_tokens && "encoder requires n_ubatch >= n_tokens");
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
@@ -1893,9 +1897,17 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
     }
 
-    GGML_ASSERT(n_tokens_all <= cparams.n_batch);
+    if (n_tokens_all > cparams.n_batch) {
+        LLAMA_LOG_ERROR("%s: n_tokens = %u exceeds n_batch = %u (for causal attention n_batch is capped at n_ctx = %u)\n",
+                __func__, n_tokens_all, cparams.n_batch, cparams.n_ctx);
+        return -1;
+    }
 
-    GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) && "non-causal attention requires n_ubatch >= n_tokens");
+    if (!cparams.causal_attn && n_tokens_all > cparams.n_ubatch) {
+        LLAMA_LOG_ERROR("%s: non-causal attention requires n_ubatch >= n_tokens (n_ubatch = %u, n_tokens = %u)\n",
+                __func__, cparams.n_ubatch, n_tokens_all);
+        return -1;
+    }
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
