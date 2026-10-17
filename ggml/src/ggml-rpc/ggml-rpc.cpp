@@ -1743,11 +1743,23 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
         uint64_t hash = fnv_hash((const uint8_t*)data, size);
         char hash_str[17];
         snprintf(hash_str, sizeof(hash_str), "%016" PRIx64, hash);
-        // save to cache_dir/hash_str
+        // save to cache_dir/hash_str, write to a temp file first so a failed write does not leave a bad entry
         fs::path cache_file = fs::path(cache_dir) / hash_str;
-        std::ofstream ofs(cache_file, std::ios::binary);
+        fs::path tmp_file = cache_file;
+        tmp_file += ".tmp";
+        std::ofstream ofs(tmp_file, std::ios::binary);
         ofs.write((const char *)data, size);
-        LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.string().c_str());
+        ofs.close();
+        std::error_code ec;
+        if (ofs) {
+            fs::rename(tmp_file, cache_file, ec);
+        }
+        if (!ofs || ec) {
+            LOG_WARN("[%s] failed to save '%s'\n", __func__, cache_file.string().c_str());
+            fs::remove(tmp_file, ec);
+        } else {
+            LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.string().c_str());
+        }
     }
     ggml_backend_tensor_set(tensor, data, offset, size);
     return true;
@@ -1823,15 +1835,15 @@ bool rpc_server::get_cached_file(uint64_t hash, std::vector<uint8_t> & data) {
     snprintf(hash_str, sizeof(hash_str), "%016" PRIx64, hash);
     fs::path cache_file = fs::path(cache_dir) / hash_str;
     std::error_code ec;
-    if (!fs::exists(cache_file, ec)) {
+    const uintmax_t size = fs::file_size(cache_file, ec);
+    if (ec || size == 0) {
         return false;
     }
     std::ifstream ifs(cache_file, std::ios::binary);
-    ifs.seekg(0, std::ios::end);
-    size_t size = ifs.tellg();
-    ifs.seekg(0, std::ios::beg);
     data.resize(size);
-    ifs.read((char *)data.data(), size);
+    if (!ifs.read((char *)data.data(), size)) {
+        return false;
+    }
     return true;
 }
 
