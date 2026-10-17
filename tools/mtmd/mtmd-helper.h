@@ -27,6 +27,8 @@ struct mtmd_helper_video_init_params {
     float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
     const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
     int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
+    float tokens_per_frame;
+    float max_tokens;
     // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
 };
 
