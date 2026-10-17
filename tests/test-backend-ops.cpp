@@ -2069,6 +2069,15 @@ struct test_unary : public test_case {
         return VARS_TO_STR3(type, ne_a, v);
     }
 
+    double max_nmse_err(ggml_backend_t backend) override {
+        // Metal computes f32 gelu_quick in f32, so an fp16 table in the CPU reference (NMSE about 5e-8) fails this
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        if (op == GGML_UNARY_OP_GELU_QUICK && type == GGML_TYPE_F32 && strcmp(ggml_backend_reg_name(reg), "MTL") == 0) {
+            return 1e-10;
+        }
+        return test_case::max_nmse_err(backend);
+    }
+
     test_unary(ggml_unary_op op,
             ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {128, 2, 2, 2},
@@ -2157,6 +2166,15 @@ struct test_glu : public test_case {
         return VARS_TO_STR4(type, ne_a, v, swapped);
     }
 
+    double max_nmse_err(ggml_backend_t backend) override {
+        // Metal computes f32 geglu_quick in f32, so an fp16 table in the CPU reference (NMSE about 5e-8) fails this
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        if (op == GGML_GLU_OP_GEGLU_QUICK && type == GGML_TYPE_F32 && strcmp(ggml_backend_reg_name(reg), "MTL") == 0) {
+            return 1e-10;
+        }
+        return test_case::max_nmse_err(backend);
+    }
+
     test_glu(ggml_glu_op op,
             ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {128, 2, 2, 2},
@@ -2200,6 +2218,15 @@ struct test_glu_split : public test_case {
 
     std::string vars() override {
         return VARS_TO_STR3(type, ne_a, v) + ",split";
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        // Metal computes f32 geglu_quick in f32, so an fp16 table in the CPU reference (NMSE about 5e-8) fails this
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        if (op == GGML_GLU_OP_GEGLU_QUICK && type == GGML_TYPE_F32 && strcmp(ggml_backend_reg_name(reg), "MTL") == 0) {
+            return 1e-10;
+        }
+        return test_case::max_nmse_err(backend);
     }
 
     test_glu_split(ggml_glu_op op,
