@@ -1720,6 +1720,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16;
         case GGML_OP_ARGSORT:
         case GGML_OP_TOP_K:
+            return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_ARANGE:
             return true;
         case GGML_OP_ROLL:

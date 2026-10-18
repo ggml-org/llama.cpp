@@ -326,6 +326,7 @@ endif()
 
 if (NOT GGML_BACKEND_DL AND GGML_CPU)
     # these tests use the backends directly and cannot be built with dynamic loading
+    llama_build_and_test(test-argsort.cpp LINK ggml)
     llama_build_and_test(test-barrier.cpp LINK ggml)
     llama_build_and_test(test-quantize-fns.cpp LINK ggml)
     llama_build_and_test(test-quantize-perf.cpp LINK ggml)
