@@ -42,14 +42,17 @@ bool kv_stream_test_tile_run(ggml_backend_t backend, const ggml_tensor * op, con
 
 // Resolve and load real device code without claiming that the whole streamed workload is admitted.
 bool kv_stream_test_dimension_instance(ggml_backend_t backend, ggml_type key, ggml_type value,
-        uint32_t width, uint32_t columns, uint32_t groups, bool mma, bool resume, bool dense) {
+        uint32_t width, uint32_t columns, uint32_t groups, bool mma, bool resume, bool dense, bool report) {
     auto * ctx=static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx->device);
-    const auto prepared=[](auto kernel) {
+    const auto prepared=[=](auto kernel) {
         if (!kernel) return false;
         cudaFuncAttributes attributes{};
         const auto status=cudaFuncGetAttributes(&attributes,kernel);
         if (status != cudaSuccess) { (void) cudaGetLastError(); return false; }
+        if (report) std::printf("dimension-resource,k=%s,v=%s,width=%u,columns=%u,groups=%u,mma=%d,resume=%d,dense=%d,regs=%d,local=%zu,shared=%zu,maxthreads=%d\n",
+            ggml_type_name(key),ggml_type_name(value),width,columns,groups,mma,resume,dense,
+            attributes.numRegs,attributes.localSizeBytes,attributes.sharedSizeBytes,attributes.maxThreadsPerBlock);
         return attributes.maxThreadsPerBlock > 0 && attributes.numRegs > 0;
     };
     if (mma && width == 512) return prepared(ggml_cuda_kv_stream_mma_runtime_kernel(key,value,columns,groups,resume,dense));
