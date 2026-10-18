@@ -171,8 +171,12 @@ llama_kv_cache::llama_kv_cache(
     const uint32_t requested_kv_size = kv_size;
     auto * mtp_host = stream ? stream->mtp_host_cache : nullptr;
     if (stream && stream->bounded_cache_lease) {
-        if (!n_swa || n_seq_max != 1 || n_stream != 1 || other || reuse || share || !offload || hparams.no_alloc || mtp_host) {
+        if (!n_swa || n_seq_max != 1 || n_stream != 1 || other || share || !offload || hparams.no_alloc || mtp_host) {
             throw std::runtime_error("bounded cache lease requires one allocated serial SWA group");
+        }
+        if (reuse) for (uint32_t il=0;il<hparams.n_layer_all;++il) {
+            if ((!filter || filter(int32_t(il))) && reuse(int32_t(il)) >= 0)
+                throw std::runtime_error("bounded cache lease cannot alias selected layers");
         }
         bounded_lease.reset(ggml_backend_memory_lease_retain(stream->bounded_cache_lease));
     }

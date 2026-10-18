@@ -3,9 +3,46 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-model.h"
+#include "llama-cparams.h"
+#include "llama-memory-bounded-kv.h"
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
+
+bool llama_kv_cache_iswa::bounded_storage_requirements(const llama_hparams & hp, const llama_memory_params & params,
+        const llama_cparams & cp, ggml_backend_buffer_type_t buft,
+        llama_memory_phase_cache_identity identity, llama_memory_bounded_kv_layout & output) noexcept {
+    if (!buft || !identity.id || !identity.generation || params.swa_full || cp.n_seq_max != 1 ||
+            !cp.n_ctx_seq || !cp.n_ubatch || !hp.n_swa || !hp.n_layer_all || hp.n_layer_all > LLAMA_MAX_LAYERS ||
+            hp.n_layer_nextn > hp.n_layer_all || hp.swa_type == LLAMA_SWA_TYPE_NONE) return false;
+    int32_t kt, vt;
+    std::memcpy(&kt,&params.type_k,sizeof(kt)); std::memcpy(&vt,&params.type_v,sizeof(vt));
+    if (kt < 0 || kt >= GGML_TYPE_COUNT || vt < 0 || vt >= GGML_TYPE_COUNT) return false;
+    try {
+        std::vector<uint32_t> ids;
+        for (uint32_t il=0;il<hp.n_layer();++il) if (hp.is_swa(il) && hp.has_kv(il)) ids.push_back(il);
+        if (ids.empty()) return false;
+        llama_memory_cache_requirement cache;
+        cache.identity=identity; cache.role=llama_memory_cache_role::bounded_resident;
+        cache.layers=uint32_t(ids.size()); cache.history_rows=cp.n_ctx_seq;
+        cache.window_rows=hp.n_swa; cache.headroom_rows=cp.n_ubatch; cache.row_padding=256;
+        const auto first=ids.front();
+        cache.format={params.type_k,params.type_v,hp.n_embd_head_k(first),hp.n_embd_head_v(first),hp.n_head_kv(first),!cp.flash_attn};
+        for (auto il : ids) if (hp.n_embd_head_k(il) != cache.format.key_head_dim ||
+                hp.n_embd_head_v(il) != cache.format.value_head_dim || hp.n_head_kv(il) != cache.format.kv_heads) return false;
+        const uint64_t kw=uint64_t(cache.format.key_head_dim)*cache.format.kv_heads;
+        const uint64_t vw=uint64_t(cache.format.value_head_dim)*cache.format.kv_heads;
+        const auto kb=ggml_blck_size(params.type_k), vb=ggml_blck_size(params.type_v);
+        const auto ks=ggml_type_size(params.type_k), vs=ggml_type_size(params.type_v);
+        if (!kw || !vw || kb <= 0 || vb <= 0 || !ks || !vs || kw%kb || vw%vb ||
+                kw > INT64_MAX || vw > INT64_MAX || kw > SIZE_MAX/ks || vw > SIZE_MAX/vs) return false;
+        const auto kr=ggml_row_size(params.type_k,int64_t(kw)), vr=ggml_row_size(params.type_v,int64_t(vw));
+        if (kr > SIZE_MAX-vr) return false;
+        cache.row_bytes=kr+vr;
+        return llama_memory_bounded_kv_layout_make(cache,ids,buft,output);
+    } catch (...) { return false; }
+}
 
 //
 // llama_kv_cache_iswa

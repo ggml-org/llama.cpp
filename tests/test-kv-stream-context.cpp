@@ -636,6 +636,151 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
     return result;
 }
 
+static void test_gemma_bounded_cache(testing & t, llama_model * model) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    std::vector<std::vector<float>> controls[2];
+    for (bool borrowed : {false,true}) {
+        auto cp=llama_context_default_params();
+        cp.n_ctx=2048; cp.n_batch=cp.n_ubatch=256; cp.n_seq_max=1;
+        cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        context_ptr context(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true(bool(context))) return;
+        auto resources=llama_memory_kv_resources_get(llama_get_memory(context.get()));
+        auto * local=resources.bounded;
+        if (!t.assert_true(local && resources.full && !resources.recurrent)) return;
+        auto * storage=local->get_k_storage(0)->buffer;
+        llama_memory_params params{}; params.type_k=cp.type_k; params.type_v=cp.type_v;
+        llama_memory_bounded_kv_layout quote, actual;
+        if (!t.assert_true(llama_kv_cache_iswa::bounded_storage_requirements(model->hparams,params,
+                context->get_cparams(),ggml_backend_buffer_get_type(storage),{607,1},quote) &&
+                local->describe_bounded_storage(607,1,2048,256,actual))) return;
+        t.assert_equal(size_t(50),quote.layers.size());
+        t.assert_equal(uint32_t(1280),quote.allocation.capacity_rows);
+        t.assert_equal(size_t(425984000),quote.allocation.bytes);
+        t.assert_equal(actual.allocation.bytes,quote.allocation.bytes);
+        using arena_ptr=std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>;
+        using lease_ptr=std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)>;
+        arena_ptr arena(nullptr,ggml_backend_memory_arena_free);
+        lease_ptr lease(nullptr,ggml_backend_memory_lease_free);
+        std::unique_ptr<llama_memory_bounded_kv> owner;
+        if (borrowed) {
+            arena.reset(ggml_backend_memory_arena_new_from_buffer(storage));
+            if (!t.assert_true(arena && ggml_backend_memory_arena_begin(arena.get(),0) &&
+                    ggml_backend_memory_arena_reserve_at(arena.get(),77,0,quote.allocation.bytes,quote.allocation.alignment,
+                        GGML_BACKEND_MEMORY_REGION_PERSISTENT,nullptr) && ggml_backend_memory_arena_commit(arena.get()))) return;
+            lease.reset(ggml_backend_memory_arena_acquire(arena.get(),77));
+            params.bounded_cache_lease=lease.get();
+            const auto filter=[&](int32_t il) { return model->hparams.is_swa(uint32_t(il)); };
+            const auto no_reuse=[](int32_t) { return int32_t(-1); };
+            bool alias_rejected=false;
+            try {
+                const auto alias=[](int32_t il) { return il == 0 ? int32_t(1) : int32_t(-1); };
+                llama_kv_cache invalid(*model,model->hparams,cp.type_k,cp.type_v,false,true,true,1280,1,256,
+                    model->hparams.n_swa,model->hparams.swa_type,nullptr,filter,alias,nullptr,"",&params);
+            } catch (const std::runtime_error & error) {
+                alias_rejected=std::string(error.what()) == "bounded cache lease cannot alias selected layers";
+            }
+            if (!t.assert_true(alias_rejected)) return;
+            ggml_backend_buffer_ptr short_buffer(ggml_backend_buffer_view(storage,0,quote.allocation.bytes-1));
+            arena_ptr short_arena(ggml_backend_memory_arena_new_from_buffer(short_buffer.get()),ggml_backend_memory_arena_free);
+            if (!t.assert_true(short_arena && ggml_backend_memory_arena_begin(short_arena.get(),0) &&
+                    ggml_backend_memory_arena_reserve_at(short_arena.get(),77,0,quote.allocation.bytes-1,quote.allocation.alignment,
+                        GGML_BACKEND_MEMORY_REGION_PERSISTENT,nullptr) && ggml_backend_memory_arena_commit(short_arena.get()))) return;
+            lease_ptr short_lease(ggml_backend_memory_arena_acquire(short_arena.get(),77),ggml_backend_memory_lease_free);
+            auto short_params=params; short_params.bounded_cache_lease=short_lease.get();
+            bool short_rejected=false;
+            try {
+                llama_kv_cache invalid(*model,model->hparams,cp.type_k,cp.type_v,false,true,true,1280,1,256,
+                    model->hparams.n_swa,model->hparams.swa_type,nullptr,filter,no_reuse,nullptr,"",&short_params);
+            } catch (const std::runtime_error & error) {
+                short_rejected=std::string(error.what()) == "bounded SWA cache exceeds its measured grant";
+            }
+            if (!t.assert_true(short_rejected)) return;
+            try {
+                llama_kv_cache cache(*model,model->hparams,cp.type_k,cp.type_v,false,true,true,1280,1,256,
+                    model->hparams.n_swa,model->hparams.swa_type,nullptr,filter,no_reuse,nullptr,"",&params);
+                t.assert_true(local->get_layer_ids() == cache.get_layer_ids());
+                t.assert_true(cache.get_k_storage(0)->data == local->get_k_storage(0)->data);
+            } catch (const std::exception & error) {
+                t.out << "no-op target reuse: " << error.what() << '\n';
+                t.assert_true(false); return;
+            }
+            owner=std::make_unique<llama_memory_bounded_kv>(quote,
+                llama_memory_resource{77,1,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,llama_memory_content::preserve});
+            if (!t.assert_true(owner->bind(lease.get()))) return;
+            llama_memory_execution_plan plan;
+            plan.domains.push_back({1,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
+            plan.stages={{1,{},{}},{2,{1},{}}};
+            if (!t.assert_true(owner->register_resources(plan,{1,2}))) return;
+            for (const auto & stage : plan.stages) t.assert_equal(quote.allocation.bytes,stage.requirements.front().size_min);
+        }
+        const auto words=common_tokenize(context.get(),"A forest has trees, birds, and flowing water. ",true);
+        if (!t.assert_true(!words.empty())) return;
+        uint64_t ticket=owner ? owner->begin_write(owner->identity()) : 0;
+        if (owner && !t.assert_true(ticket != 0)) return;
+        common_batch batch(context.get());
+        for (int first=0;first<1333;first+=256) {
+            batch.clear();
+            const int count=std::min(256,1333-first);
+            for (int i=0;i<count;++i) batch.add(words[size_t(first+i)%words.size()],first+i,0,i == count-1);
+            if (!t.assert_equal(0,llama_process(context.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        }
+        llama_synchronize(context.get());
+        if (owner) {
+            if (!t.assert_true(owner->finish_write(ticket,true))) return;
+            std::vector<std::vector<uint8_t>> bytes;
+            for (auto id : local->get_layer_ids()) for (auto * tensor : {local->get_k_storage(int32_t(id)),local->get_v_storage(int32_t(id))}) {
+                bytes.emplace_back(ggml_nbytes(tensor));
+                ggml_backend_tensor_get(tensor,bytes.back().data(),0,bytes.back().size());
+            }
+            std::vector<llama_pos> positions;
+            for (uint32_t cell=0;cell<local->get_size();++cell) positions.push_back(local->get_cells(0).pos_get(cell));
+            if (!t.assert_true(owner->bind(lease.get()))) return;
+            size_t index=0;
+            for (auto id : local->get_layer_ids()) for (auto * tensor : {local->get_k_storage(int32_t(id)),local->get_v_storage(int32_t(id))}) {
+                std::vector<uint8_t> after(ggml_nbytes(tensor));
+                ggml_backend_tensor_get(tensor,after.data(),0,after.size());
+                t.assert_true(bytes[index++] == after);
+            }
+            for (uint32_t cell=0;cell<local->get_size();++cell) t.assert_equal(positions[cell],local->get_cells(0).pos_get(cell));
+            t.assert_true(bool(owner->read(owner->identity())));
+        }
+        const size_t vocab=size_t(llama_vocab_n_tokens(llama_model_get_vocab(model)));
+        for (int step=0;step<8;++step) {
+            auto * logits=llama_get_logits_ith(context.get(),-1);
+            if (!t.assert_true(logits != nullptr)) return;
+            controls[borrowed].emplace_back(logits,logits+vocab);
+            const auto token=llama_token(std::max_element(logits,logits+vocab)-logits);
+            batch.clear(); batch.add(token,1333+step,0,true);
+            ticket=owner ? owner->begin_write(owner->identity()) : 0;
+            if (owner && !t.assert_true(ticket != 0)) return;
+            if (!t.assert_equal(0,llama_process(context.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+            llama_synchronize(context.get());
+            if (owner && !t.assert_true(owner->finish_write(ticket,true))) return;
+        }
+    }
+    if (!t.assert_equal(controls[0].size(),controls[1].size())) return;
+    for (size_t row=0;row<controls[0].size();++row) t.assert_true(std::memcmp(controls[0][row].data(),
+        controls[1][row].data(),controls[0][row].size()*sizeof(float)) == 0);
+    auto full=llama_context_default_params();
+    full.n_ctx=2048; full.n_batch=full.n_ubatch=256; full.n_seq_max=1;
+    full.type_k=GGML_TYPE_Q8_0; full.type_v=GGML_TYPE_Q4_0; full.swa_full=true;
+    full.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    context_ptr context(llama_init_from_model(model,full),llama_free);
+    if (!t.assert_true(bool(context))) return;
+    auto * local=llama_memory_kv_resources_get(llama_get_memory(context.get())).bounded;
+    if (!t.assert_true(local != nullptr)) return;
+    t.assert_equal(uint32_t(2048),local->get_size());
+    llama_memory_bounded_kv_layout unchanged;
+    unchanged.allocation.bytes=17;
+    llama_memory_params params{}; params.type_k=full.type_k; params.type_v=full.type_v; params.swa_full=true;
+    t.assert_true(!llama_kv_cache_iswa::bounded_storage_requirements(model->hparams,params,context->get_cparams(),
+        ggml_backend_buffer_get_type(local->get_k_storage(0)->buffer),{607,1},unchanged));
+    t.assert_equal(size_t(17),unchanged.allocation.bytes);
+}
+
 int main(int argc,char ** argv) {
     int baseline=0;
     bool exact_options = false, cache_options = false;
@@ -818,6 +963,11 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-bounded"); })) {
+        t.test("Gemma_target_local_cache_reuses_bounded_storage_without_changing_causal_execution",
+            [&](testing & t) { test_gemma_bounded_cache(t,model.get()); });
+        return t.summary();
+    }
     if (dflash_native_model && !dflash_exact_control) {
         if (!t.assert_true(bool(model))) return t.summary();
         t.test("ordinary_dflash_feature_workspace", [&](testing & t) { test_dflash_native(t, model.get()); });

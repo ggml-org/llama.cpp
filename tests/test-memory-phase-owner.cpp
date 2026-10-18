@@ -3,6 +3,8 @@
 #include "../src/llama-memory-workspace.h"
 #include "../src/llama-memory-recurrent-spill.h"
 #include "../src/llama-memory-bounded-kv.h"
+#include "../src/llama-kv-cache-iswa.h"
+#include "../src/llama-cparams.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "ggml-alloc.h"
 
@@ -13,6 +15,57 @@ static_assert(!std::is_copy_constructible<llama_memory_bounded_kv>::value,"a cac
 static_assert(!std::is_move_constructible<llama_memory_bounded_kv>::value,"pending preparations borrow the owner address");
 int main(int argc, char ** argv) {
     testing t;
+    t.test("model_SWA_quote_selects_Gemma_local_roots_and_stock_capacity", [](testing & t) {
+        llama_hparams hp{};
+        hp.n_layer_all=60; hp.n_layer_kv_from_start=60;
+        hp.n_head_arr.fill(32); hp.n_head_kv_arr.fill(16);
+        hp.n_embd_head_k_full=hp.n_embd_head_v_full=512;
+        hp.n_embd_head_k_swa=hp.n_embd_head_v_swa=256;
+        hp.n_swa=1024; hp.swa_type=LLAMA_SWA_TYPE_STANDARD;
+        hp.set_swa_pattern(6,false);
+        for (uint32_t il=5;il<60;il+=6) hp.n_head_kv_arr[il]=4;
+        llama_memory_params params{};
+        llama_cparams cp{}; cp.n_ctx_seq=262144; cp.n_ubatch=256; cp.n_seq_max=1; cp.flash_attn=true;
+        const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+        for (auto key : formats) for (auto value : formats) for (uint32_t history : {1024u,8192u,262144u}) {
+            params.type_k=key; params.type_v=value; cp.n_ctx_seq=history;
+            llama_memory_bounded_kv_layout layout;
+            if (!t.assert_true(llama_kv_cache_iswa::bounded_storage_requirements(hp,params,cp,
+                    ggml_backend_cpu_buffer_type(),{607,3},layout))) return;
+            t.assert_equal(size_t(50),layout.layers.size());
+            t.assert_equal(history == 1024 ? 1024u : 1280u,layout.allocation.capacity_rows);
+            t.assert_equal(256u,layout.cache.format.key_head_dim);
+            t.assert_equal(256u,layout.cache.format.value_head_dim);
+            t.assert_equal(16u,layout.cache.format.kv_heads);
+            t.assert_true(!layout.cache.format.value_transposed);
+            const size_t row=ggml_row_size(key,4096)+ggml_row_size(value,4096);
+            t.assert_equal(row*layout.allocation.capacity_rows*50,layout.allocation.bytes);
+            for (size_t i=0;i<50;++i) t.assert_equal(uint32_t(i+i/5),layout.layers[i].id);
+            if (key == GGML_TYPE_Q8_0 && value == GGML_TYPE_Q4_0 && history > 1024)
+                t.assert_equal(size_t(425984000),layout.allocation.bytes);
+        }
+        params.type_k=GGML_TYPE_Q8_0; params.type_v=GGML_TYPE_Q4_0;
+        llama_memory_bounded_kv_layout layout;
+        if (!t.assert_true(llama_kv_cache_iswa::bounded_storage_requirements(hp,params,cp,
+                ggml_backend_cpu_buffer_type(),{607,3},layout))) return;
+        const auto bytes=layout.allocation.bytes;
+        for (int invalid=0;invalid<8;++invalid) {
+            auto bad_hp=hp; auto bad_cp=cp; auto bad_params=params;
+            if (invalid == 0) bad_cp.n_seq_max=2;
+            if (invalid == 1) bad_cp.n_ubatch=0;
+            if (invalid == 2) bad_hp.n_swa=UINT32_MAX;
+            if (invalid == 3) bad_hp.n_head_kv_arr[0]=8;
+            if (invalid == 4) bad_params.swa_full=true;
+            if (invalid == 5) bad_hp.n_layer_kv_from_start=0;
+            if (invalid == 6) bad_hp.n_layer_nextn=61;
+            if (invalid == 7) bad_params.type_k=GGML_TYPE_COUNT;
+            t.assert_true(!llama_kv_cache_iswa::bounded_storage_requirements(bad_hp,bad_params,bad_cp,
+                ggml_backend_cpu_buffer_type(),{607,3},layout));
+            t.assert_equal(bytes,layout.allocation.bytes);
+            t.assert_equal(size_t(50),layout.layers.size());
+        }
+    });
     t.test("bounded_KV_rejects_inconsistent_backend_quotes_and_invalid_geometry", [](testing & t) {
         llama_memory_cache_requirement cache;
         cache.identity={605,1}; cache.role=llama_memory_cache_role::bounded_resident;

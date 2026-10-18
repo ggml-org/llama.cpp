@@ -9,6 +9,7 @@
 #include "llama-memory.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-bounded-kv.h"
+#include "llama-kv-cache-iswa.h"
 #include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
 #include "llama-kv-stream-positions.h"
@@ -518,40 +519,16 @@ llama_context::llama_context(
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
         if (serial_target_ctx) {
-            llama_memory_cache_requirement cache;
-            cache.identity={2,1}; cache.role=llama_memory_cache_role::bounded_resident;
-            cache.layers=hparams.n_layer(); cache.history_rows=cparams.n_ctx_seq;
-            cache.window_rows=hparams.n_swa; cache.headroom_rows=cparams.n_ubatch; cache.row_padding=256;
-            cache.format={params.type_k,params.type_v,hparams.n_embd_head_k(0),hparams.n_embd_head_v(0),hparams.n_head_kv(0),false};
-            const uint64_t kw=uint64_t(cache.format.key_head_dim)*cache.format.kv_heads;
-            const uint64_t vw=uint64_t(cache.format.value_head_dim)*cache.format.kv_heads;
-            if (params.type_k < GGML_TYPE_F32 || params.type_k >= GGML_TYPE_COUNT ||
-                    params.type_v < GGML_TYPE_F32 || params.type_v >= GGML_TYPE_COUNT ||
-                    !ggml_blck_size(params.type_k) || !ggml_blck_size(params.type_v) ||
-                    kw > INT64_MAX || vw > INT64_MAX || kw > SIZE_MAX/ggml_type_size(params.type_k) ||
-                    vw > SIZE_MAX/ggml_type_size(params.type_v) ||
-                    kw%ggml_blck_size(params.type_k) || vw%ggml_blck_size(params.type_v)) {
-                throw std::runtime_error("invalid bounded draft KV geometry");
-            }
-            const size_t kr=ggml_row_size(params.type_k,int64_t(kw)), vr=ggml_row_size(params.type_v,int64_t(vw));
-            if (kr > SIZE_MAX-vr) throw std::runtime_error("bounded draft KV row size overflow");
-            cache.row_bytes=kr+vr;
-            std::vector<uint32_t> ids;
-            for (uint32_t il=0;il<hparams.n_layer();++il) {
-                if (!hparams.is_swa(il) || !hparams.has_kv(il) ||
-                        hparams.n_embd_head_k(il) != cache.format.key_head_dim ||
-                        hparams.n_embd_head_v(il) != cache.format.value_head_dim ||
-                        hparams.n_head_kv(il) != cache.format.kv_heads || model.dev_layer(il) != model.devices.front().dev) {
-                    throw std::runtime_error("serial draft arena requires one homogeneous resident SWA group");
-                }
-                ids.push_back(il);
-            }
             auto * parent=serial_target_ctx->compute_memory.get();
             auto * buft=ggml_backend_buffer_get_type(parent->shared_parent());
             llama_memory_bounded_kv_layout layout;
-            if (!llama_memory_bounded_kv_layout_make(cache,ids,buft,layout)) {
+            if (!llama_kv_cache_iswa::bounded_storage_requirements(hparams,params_mem,cparams,buft,{2,1},layout)) {
                 throw std::runtime_error("invalid bounded draft allocation quote");
             }
+            if (layout.layers.size() != hparams.n_layer())
+                throw std::runtime_error("serial draft arena requires one homogeneous resident SWA group");
+            for (const auto & layer : layout.layers) if (model.dev_layer(layer.id) != model.devices.front().dev)
+                throw std::runtime_error("serial draft arena requires one homogeneous resident SWA group");
             auto * hybrid=dynamic_cast<llama_memory_hybrid *>(serial_target_ctx->memory.get());
             auto * recurrent=hybrid ? hybrid->get_mem_recr() : nullptr;
             const auto * bank=recurrent ? recurrent->spill_bank() : nullptr;
