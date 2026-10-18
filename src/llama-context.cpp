@@ -518,6 +518,10 @@ llama_context::llama_context(
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
+        if (model.arch == LLM_ARCH_GEMMA4 && cparams.shared_device_memory_bytes) {
+            if (params.swa_full) throw std::runtime_error("Gemma arena streaming requires bounded SWA storage (swa_full=false)");
+            params_mem.defer_bounded_cache=true;
+        }
         if (serial_target_ctx) {
             auto * parent=serial_target_ctx->compute_memory.get();
             auto * buft=ggml_backend_buffer_get_type(parent->shared_parent());
@@ -857,6 +861,27 @@ bool llama_context::prepare_compute_arenas(
                 std::to_string(admission.required_bytes) + ", available=" + std::to_string(admission.available_bytes) +
                 ", additional=" + std::to_string(admission.additional_bytes) + " bytes");
         }
+        if (compute_memory && kv_resources.bounded && kv_resources.bounded->bounded_storage_pending()) {
+            auto * local=kv_resources.bounded;
+            if (!stream || serial_cache || !compute_memory->shares_kv_memory())
+                throw std::runtime_error("deferred local cache requires the target shared arena");
+            llama_memory_params params{};
+            params.type_k=local->type_k(); params.type_v=local->type_v();
+            llama_memory_bounded_kv_layout layout;
+            if (!llama_kv_cache_iswa::bounded_storage_requirements(model.hparams,params,cparams,
+                    ggml_backend_buffer_get_type(compute_memory->shared_parent()),{stream->host()->cache_id()+1,1},layout))
+                throw std::runtime_error("invalid deferred local cache allocation quote");
+            auto loan=compute_memory->reserve_bounded_cache(layout);
+            if (!loan) throw std::runtime_error("persistent local cache does not fit the declared shared arena");
+            if (!compute_memory->retire_graph()) throw std::runtime_error("failed to retire local-cache reservation graphs");
+            ggml_backend_sched_reset(sched.get());
+            if (gf_res_reserve) gf_res_reserve->reset();
+            if (!local->bind_bounded_storage(loan->lease()))
+                throw std::runtime_error("failed to bind deferred local cache to its persistent arena region");
+            serial_cache=std::move(loan);
+            if (!compute_memory->prepare_serial_target())
+                throw std::runtime_error("failed to recapture the bound local-cache workspace");
+        }
         if (compute_memory) compute_memory_graph_revision = compute_memory->graph_binding_revision();
         return compute_memory != nullptr;
     }
@@ -888,7 +913,7 @@ void llama_context::sched_reserve() {
     const bool keep_parent=compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache());
     if (keep_parent) {
         if (!compute_memory->retire_graph()) throw std::runtime_error("failed to retire serial arena graph");
-        if (serial_cache) {
+        if (serial_cache && compute_memory->borrows_serial_parent()) {
             if (!compute_memory->prepare_serial_consumer(llama_memory_text_phase::prefill))
                 throw std::runtime_error("failed to retain serial draft workspace for remeasurement");
         } else {

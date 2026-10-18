@@ -93,6 +93,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     if (streaming) {
         base_params=*stream;
         base_params.bounded_cache_lease=nullptr;
+        base_params.defer_bounded_cache=false;
     }
 
     // chain filters
@@ -149,7 +150,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
             model, hparams, type_k, type_v,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
             hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share,"",
-            stream && stream->bounded_cache_lease ? stream : nullptr);
+            stream && (stream->bounded_cache_lease || stream->defer_bounded_cache) ? stream : nullptr);
 }
 
 void llama_kv_cache_iswa::clear(bool data) {

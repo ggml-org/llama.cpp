@@ -193,6 +193,9 @@ public:
     // Retain existing SWA bytes without another device allocation. The caller gates writes and their completion.
     std::unique_ptr<llama_memory_bounded_kv> retain_bounded_storage(uint64_t identity,uint64_t generation,
             uint32_t history_rows,uint32_t headroom_rows,llama_memory_resource resource = {}) const;
+    bool bounded_storage_pending() const noexcept;
+    // Bind an empty deferred cache after retiring reservation graphs; old placeholder metadata stays alive.
+    bool bind_bounded_storage(ggml_backend_memory_lease_t lease);
     ggml_tensor * get_k_storage(int32_t il) const;
     ggml_tensor * get_v_storage(int32_t il) const;
 
@@ -330,6 +333,8 @@ private:
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> retired_bounded_metadata;
+    bool bounded_pending = false;
     std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> bounded_lease{nullptr,ggml_backend_memory_lease_free};
 
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())

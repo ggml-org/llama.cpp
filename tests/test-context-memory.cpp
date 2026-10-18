@@ -258,6 +258,18 @@ int main(int argc, char ** argv) {
         owner.reset();
         for (auto * backend : f.backends) t.assert_equal(size_t(0), ggml_backend_sched_get_buffer_size(f.sched.get(), backend));
     });
+    t.test("root_workspace_can_recapture_after_graph_retirement_without_a_serial_child", [&](testing & t) {
+        fixture f(dev);
+        auto owner=llama_context_memory::create(f.sched.get(),f.backends,f.groups);
+        if (!t.assert_true(bool(owner))) return;
+        f.rebuild(); f.run(t,*owner,4);
+        for (int retry=0;retry<2;++retry) {
+            if (!t.assert_true(owner->retire_graph())) return;
+            t.assert_true(owner->compute_async(f.graph) == GGML_STATUS_FAILED);
+            if (!t.assert_true(owner->prepare_serial_target())) return;
+            f.rebuild(); f.run(t,*owner,5+retry);
+        }
+    });
     t.test("bounded_cache_stays_in_parent_across_workspace_handoff_and_cleanup", [&](testing & t) {
         fixture f(dev);
         llama_compute_workspace_plan plan;

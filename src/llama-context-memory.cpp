@@ -1015,9 +1015,9 @@ bool llama_context_memory::serial_ready() const noexcept {
 // Serial target/draft schedulers may alias scratch, but never execute or publish into it concurrently.
 bool llama_context_memory::prepare_serial_target() noexcept {
     if (!valid() || impl->serial_borrowed || impl->serial_busy || kv_device_suspended()) return false;
-    if (impl->serial_children.empty()) return true;
     serial_gate gate(impl->serial_busy);
     try {
+        if (impl->serial_children.empty()) return impl->executor.ready() || impl->capture_execution();
         if (impl->serial_active && impl->serial_active != this) {
             auto * child = impl->serial_active->impl.get();
             if (child->serial_parent != this || !child->drain() ||

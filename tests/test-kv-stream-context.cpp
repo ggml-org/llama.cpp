@@ -215,19 +215,21 @@ static void test_dflash_native(testing & t, llama_model * model) {
     t.assert_true(bool(source) && source.layout()->allocation.bytes == storage.allocation.bytes);
 }
 
-// Fail one candidate view after the draft's initial view, then permit parent recovery.
+// Fail one candidate view, then permit parent recovery.
 struct serial_parent_view_failure {
     using factory = ggml_backend_buffer_t (*)(ggml_backend_buffer_t,size_t,size_t);
     inline static serial_parent_view_failure * active = nullptr;
     ggml_backend_buffer_t parent;
     factory original;
     size_t calls = 0;
-    explicit serial_parent_view_failure(ggml_backend_buffer_t parent) : parent(parent),original(parent->view_buffer) {
+    size_t fail_call;
+    explicit serial_parent_view_failure(ggml_backend_buffer_t parent,size_t fail_call=2) :
+        parent(parent),original(parent->view_buffer),fail_call(fail_call) {
         GGML_ASSERT(original && !active);
         active = this;
         parent->view_buffer = [](ggml_backend_buffer_t buffer,size_t offset,size_t bytes) {
             GGML_ASSERT(active && buffer == active->parent);
-            if (++active->calls == 2) return static_cast<ggml_backend_buffer_t>(nullptr);
+            if (++active->calls == active->fail_call) return static_cast<ggml_backend_buffer_t>(nullptr);
             return active->original(buffer,offset,bytes);
         };
     }
@@ -636,6 +638,231 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
     return result;
 }
 
+// Measure native local attention before storage exists, then reuse one parent through both text phases.
+static void test_gemma_phase_parent(testing & t, llama_model * model) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    auto * dev=ggml_backend_dev_by_name("CUDA0");
+    if (!t.assert_true(dev != nullptr)) return;
+    ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
+    auto * buft=llama_kv_stream_device_buffer_type(dev);
+    std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+    std::vector<ggml_backend_buffer_type_t> types{buft,ggml_backend_cpu_buffer_type()};
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(),types.data(),2,1024,false,true));
+    if (!t.assert_true(bool(sched))) return;
+    llama_memory_params params{};
+    params.type_k=GGML_TYPE_Q8_0; params.type_v=GGML_TYPE_Q4_0;
+    params.shared_device_memory_bytes=768u*1024u*1024u;
+    params.kv_stream_max_rows=256; params.kv_stream_max_decode_rows=4;
+    params.kv_stream_backend=backend.get(); params.defer_bounded_cache=true;
+    const auto no_reuse=[](int32_t) { return int32_t(-1); };
+    llama_kv_cache_iswa cache(*model,params.type_k,params.type_v,false,true,false,true,
+        32768,1,256,256,nullptr,nullptr,no_reuse,nullptr,&params);
+    auto * local=cache.get_swa(); auto * stream=cache.get_base()->get_kv_stream();
+    if (!t.assert_true(local->bounded_storage_pending() && stream)) return;
+    auto * placeholder=local->get_k_storage(0);
+    struct attention_graph {
+        ggml_context_ptr ctx;
+        ggml_cgraph * graph=nullptr;
+        ggml_tensor * query=nullptr, * mask=nullptr, * output=nullptr;
+    };
+    const auto build=[&](uint32_t rows) {
+        attention_graph graph;
+        graph.ctx.reset(ggml_init({1024*1024,nullptr,true}));
+        auto * k=local->get_k_storage(0); auto * v=local->get_v_storage(0);
+        auto * keys=ggml_view_3d(graph.ctx.get(),k,256,k->ne[1],16,k->nb[1],ggml_row_size(k->type,256),0);
+        auto * values=ggml_view_3d(graph.ctx.get(),v,256,v->ne[1],16,v->nb[1],ggml_row_size(v->type,256),0);
+        graph.query=ggml_new_tensor_3d(graph.ctx.get(),GGML_TYPE_F32,256,rows,32);
+        graph.mask=ggml_new_tensor_2d(graph.ctx.get(),GGML_TYPE_F16,k->ne[1],GGML_PAD(rows,32));
+        ggml_set_input(graph.query); ggml_set_input(graph.mask);
+        graph.output=ggml_flash_attn_ext(graph.ctx.get(),graph.query,keys,values,graph.mask,1.0f/16,0,0);
+        ggml_prec_set_acc(graph.output,GGML_PREC_F32);
+        graph.graph=ggml_new_graph_custom(graph.ctx.get(),64,false);
+        ggml_build_forward_expand(graph.graph,graph.output);
+        ggml_backend_sched_set_tensor_backend(sched.get(),graph.output,backend.get());
+        return graph;
+    };
+    std::vector<size_t> measurements(4);
+    for (size_t phase=0;phase<2;++phase) {
+        ggml_backend_sched_reset(sched.get());
+        auto graph=build(phase ? 1 : 256);
+        ggml_backend_sched_reserve_size(sched.get(),graph.graph,measurements.data()+2*phase);
+        t.assert_true(local->bounded_storage_pending() && !placeholder->data &&
+            ggml_backend_buffer_get_size(placeholder->buffer) == 0);
+        ggml_backend_sched_reset(sched.get());
+    }
+    llama_compute_workspace_plan plan;
+    if (!t.assert_true(llama_compute_workspace_plan_make(types,measurements,2,plan))) return;
+    auto owner=llama_context_memory::create(sched.get(),backends,plan,stream);
+    if (!t.assert_true(bool(owner))) return;
+    t.assert_equal(params.shared_device_memory_bytes,owner->shared_parent_capacity());
+    llama_cparams cp{}; cp.n_ctx_seq=32768; cp.n_ubatch=256; cp.n_seq_max=1; cp.flash_attn=true;
+    llama_memory_bounded_kv_layout quote;
+    if (!t.assert_true(llama_kv_cache_iswa::bounded_storage_requirements(model->hparams,params,cp,buft,{609,1},quote))) return;
+    auto too_large=quote; too_large.allocation.bytes=params.shared_device_memory_bytes;
+    t.assert_true(!owner->reserve_bounded_cache(too_large) && owner->valid() && !owner->has_bounded_cache());
+    auto loan=owner->reserve_bounded_cache(quote);
+    if (!t.assert_true(loan && owner->retire_graph())) return;
+    ggml_backend_sched_reset(sched.get());
+    if (!t.assert_true(local->bind_bounded_storage(loan->lease()))) return;
+    auto * parent=owner->shared_parent();
+    const auto parent_base=uintptr_t(ggml_backend_buffer_get_base(parent));
+    std::vector<uintptr_t> addresses;
+    for (const auto & layer : quote.layers) for (bool value : {false,true}) {
+        auto * tensor=value ? local->get_v_storage(int32_t(layer.id)) : local->get_k_storage(int32_t(layer.id));
+        addresses.push_back(uintptr_t(tensor->data));
+        t.assert_true(ggml_backend_buffer_is_view(tensor->buffer) && uintptr_t(tensor->data) >= parent_base &&
+            uintptr_t(tensor->data)-parent_base <= params.shared_device_memory_bytes-ggml_nbytes(tensor));
+    }
+    auto * v=local->get_v_storage(0);
+    std::vector<float> values(ggml_nelements(v));
+    for (size_t i=0;i<values.size();++i) values[i]=float(int(i%31)-15)*0.0625f;
+    std::vector<uint8_t> encoded(ggml_nbytes(v));
+    ggml_quantize_chunk(v->type,values.data(),encoded.data(),0,v->ne[1],v->ne[0],nullptr);
+    ggml_backend_tensor_set(v,encoded.data(),0,encoded.size());
+    const auto verify_local=[&] {
+        size_t ordinal=0;
+        for (const auto & layer : quote.layers) for (bool value : {false,true}) {
+            auto * tensor=value ? local->get_v_storage(int32_t(layer.id)) : local->get_k_storage(int32_t(layer.id));
+            t.assert_equal(addresses[ordinal++],uintptr_t(tensor->data));
+            std::vector<uint8_t> data(ggml_nbytes(tensor));
+            ggml_backend_tensor_get(tensor,data.data(),0,data.size());
+            t.assert_true(value && layer.id == 0 ? data == encoded :
+                std::all_of(data.begin(),data.end(),[](uint8_t byte) { return byte == 0; }));
+        }
+        t.assert_equal(uint32_t(0),local->get_cells(0).get_used());
+    };
+    verify_local();
+    ggml_backend_buffer_clear(stream->buffer(),0);
+    if (!t.assert_true(stream->restore(32000))) return;
+    std::vector<float> prefill_output;
+    llama_context_memory_diagnostics before{}, decode{};
+    for (int step=0;step<3;++step) {
+        const bool decoding=step == 1;
+        const uint32_t rows=decoding ? 1 : 256;
+        if (!t.assert_true(owner->retire_graph())) return;
+        ggml_backend_sched_reset(sched.get());
+        const auto phase=decoding ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill;
+        if (decoding) {
+            const auto previous=owner->text_phase();
+            {
+                serial_parent_view_failure fault(parent,1);
+                t.assert_true(owner->signal_text_phase({phase,rows,true,true,false}).status ==
+                    llama_memory_text_phase_status::transition_failed);
+                t.assert_true(fault.calls > 0);
+            }
+            t.assert_true(owner->valid() && stream->complete());
+            t.assert_equal(previous.revision,owner->text_phase().revision);
+            t.assert_equal(before.kv_pool_bytes,stream->pool_grant_bytes());
+            t.assert_equal(size_t(32000),stream->tokens());
+            verify_local();
+        }
+        if (!t.assert_true(owner->signal_text_phase({phase,rows,true,true,false}).status == llama_memory_text_phase_status::changed)) return;
+        if (!t.assert_true(owner->prepare_serial_target())) return;
+        auto graph=build(rows);
+        if (!t.assert_true(ggml_backend_sched_alloc_graph(sched.get(),graph.graph))) return;
+        std::vector<float> query(ggml_nelements(graph.query),0.125f);
+        std::vector<ggml_fp16_t> mask(ggml_nelements(graph.mask),ggml_fp32_to_fp16(0));
+        ggml_backend_tensor_set(graph.query,query.data(),0,query.size()*sizeof(float));
+        ggml_backend_tensor_set(graph.mask,mask.data(),0,mask.size()*sizeof(ggml_fp16_t));
+        if (!t.assert_true("native local attention executes after graph retirement",owner->compute_async(graph.graph) == GGML_STATUS_SUCCESS)) return;
+        owner->synchronize();
+        std::vector<float> output(ggml_nelements(graph.output));
+        ggml_backend_tensor_get(graph.output,output.data(),0,output.size()*sizeof(float));
+        t.assert_true(std::all_of(output.begin(),output.end(),[](float value) { return std::isfinite(value); }));
+        if (step == 0) prefill_output=output;
+        t.assert_true(std::any_of(output.begin(),output.end(),[](float value) { return value != 0; }));
+        if (step == 2) t.assert_true(std::memcmp(output.data(),prefill_output.data(),output.size()*sizeof(float)) == 0);
+        verify_local();
+        llama_context_memory_diagnostics diagnostics;
+        if (!t.assert_true(owner->diagnostics(diagnostics))) return;
+        t.assert_equal(quote.allocation.bytes,diagnostics.persistent_cache_bytes);
+        t.assert_equal(params.shared_device_memory_bytes,diagnostics.parent_bytes);
+        t.assert_equal(diagnostics.parent_bytes,diagnostics.workspace_bytes+diagnostics.kv_pool_bytes+
+            diagnostics.kv_writer_bytes+diagnostics.kv_attention_bytes+diagnostics.persistent_cache_bytes+diagnostics.unused_bytes);
+        t.assert_true(owner->shared_parent() == parent && owner->covers_workspace(plan));
+        if (step == 0) before=diagnostics;
+        if (step == 1) decode=diagnostics;
+        if (step == 2) t.assert_equal(before.kv_pool_bytes,diagnostics.kv_pool_bytes);
+        if (!t.assert_true(owner->retire_graph())) return;
+        ggml_backend_sched_reset(sched.get());
+    }
+    t.assert_true(decode.kv_pool_bytes > before.kv_pool_bytes && decode.workspace_bytes < before.workspace_bytes);
+    t.out << "Gemma common parent bytes=" << params.shared_device_memory_bytes << " local=" << quote.allocation.bytes
+        << " prefill pool=" << before.kv_pool_bytes << " decode pool=" << decode.kv_pool_bytes
+        << " prefill resident/ring=" << before.resident_pages_per_layer << '/' << before.ring_slots
+        << " decode resident/ring=" << decode.resident_pages_per_layer << '/' << decode.ring_slots << '\n';
+}
+
+static void test_gemma_deferred_local(testing & t, llama_model * model) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    auto * dev=ggml_backend_dev_by_name("CUDA0");
+    if (!t.assert_true(dev != nullptr)) return;
+    ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+    llama_memory_params params{};
+    params.type_k=GGML_TYPE_Q8_0; params.type_v=GGML_TYPE_Q4_0;
+    params.kv_stream_pool_bytes=64u*1024u*1024u;
+    params.kv_stream_max_rows=256; params.kv_stream_max_decode_rows=4;
+    params.kv_stream_backend=backend.get(); params.defer_bounded_cache=true;
+    const auto no_reuse=[](int32_t) { return int32_t(-1); };
+    llama_kv_cache_iswa cache(*model,params.type_k,params.type_v,false,true,false,true,
+        8192,1,256,256,nullptr,nullptr,no_reuse,nullptr,&params);
+    auto * local=cache.get_swa();
+    if (!t.assert_true(local->bounded_storage_pending() && cache.get_base()->get_kv_stream())) return;
+    auto * placeholder=local->get_k_storage(0);
+    t.assert_true(placeholder && !placeholder->data && ggml_backend_buffer_get_size(placeholder->buffer) == 0);
+    local->clear(true);
+    t.assert_true(local->bounded_storage_pending() && local->prepare({}).empty() &&
+        local->init_update(nullptr,false)->get_status() == LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+    for (auto id : local->get_layer_ids()) t.assert_true(!local->get_k_storage(int32_t(id))->data &&
+        !local->get_v_storage(int32_t(id))->data);
+    llama_cparams cp{}; cp.n_ctx_seq=8192; cp.n_ubatch=256; cp.n_seq_max=1; cp.flash_attn=true;
+    auto * buft=llama_kv_stream_device_buffer_type(dev);
+    llama_memory_bounded_kv_layout quote;
+    if (!t.assert_true(llama_kv_cache_iswa::bounded_storage_requirements(model->hparams,params,cp,buft,{608,1},quote))) return;
+    using arena_ptr=std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>;
+    using lease_ptr=std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)>;
+    const auto bytes=quote.allocation.bytes, alignment=quote.allocation.alignment;
+    arena_ptr arena(ggml_backend_memory_arena_new(buft,bytes+2*alignment),ggml_backend_memory_arena_free);
+    if (!t.assert_true(arena && ggml_backend_memory_arena_begin(arena.get(),0) &&
+            ggml_backend_memory_arena_reserve_at(arena.get(),78,alignment,bytes,alignment,
+                GGML_BACKEND_MEMORY_REGION_PERSISTENT,nullptr) && ggml_backend_memory_arena_commit(arena.get()))) return;
+    auto * parent=ggml_backend_memory_arena_parent(arena.get());
+    ggml_backend_buffer_clear(parent,0x5a);
+    ggml_backend_buffer_ptr short_buffer(ggml_backend_buffer_view(parent,alignment,bytes-1));
+    arena_ptr short_arena(ggml_backend_memory_arena_new_from_buffer(short_buffer.get()),ggml_backend_memory_arena_free);
+    if (!t.assert_true(short_arena && ggml_backend_memory_arena_begin(short_arena.get(),0) &&
+            ggml_backend_memory_arena_reserve_at(short_arena.get(),78,0,bytes-1,alignment,
+                GGML_BACKEND_MEMORY_REGION_PERSISTENT,nullptr) && ggml_backend_memory_arena_commit(short_arena.get()))) return;
+    lease_ptr short_lease(ggml_backend_memory_arena_acquire(short_arena.get(),78),ggml_backend_memory_lease_free);
+    t.assert_true(!local->bind_bounded_storage(short_lease.get()));
+    t.assert_true(local->bounded_storage_pending() && local->get_k_storage(0) == placeholder && !placeholder->data);
+    lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(),78),ggml_backend_memory_lease_free);
+    if (!t.assert_true(local->bind_bounded_storage(lease.get()))) return;
+    t.assert_true(!local->bounded_storage_pending() && placeholder->data == nullptr);
+    const auto base=uintptr_t(ggml_backend_buffer_get_base(parent))+alignment;
+    for (const auto & layer : quote.layers) {
+        t.assert_equal(base+layer.k_offset,uintptr_t(local->get_k_storage(int32_t(layer.id))->data));
+        t.assert_equal(base+layer.v_offset,uintptr_t(local->get_v_storage(int32_t(layer.id))->data));
+    }
+    std::vector<uint8_t> marker(256,0x39), after(marker.size());
+    ggml_backend_tensor_set(local->get_k_storage(0),marker.data(),0,marker.size());
+    t.assert_true(local->bind_bounded_storage(lease.get()));
+    ggml_backend_tensor_get(local->get_k_storage(0),after.data(),0,after.size());
+    t.assert_true(marker == after);
+    ggml_tensor raw{}; raw.type=GGML_TYPE_I8;
+    raw.ne[0]=int64_t(bytes+2*alignment); raw.ne[1]=raw.ne[2]=raw.ne[3]=1;
+    raw.nb[0]=1; raw.nb[1]=raw.nb[2]=raw.nb[3]=size_t(raw.ne[0]);
+    raw.buffer=parent; raw.data=ggml_backend_buffer_get_base(parent);
+    std::vector<uint8_t> guard(alignment);
+    ggml_backend_tensor_get(&raw,guard.data(),0,guard.size());
+    t.assert_true(std::all_of(guard.begin(),guard.end(),[](uint8_t value) { return value == 0x5a; }));
+    ggml_backend_tensor_get(&raw,guard.data(),alignment+bytes,guard.size());
+    t.assert_true(std::all_of(guard.begin(),guard.end(),[](uint8_t value) { return value == 0x5a; }));
+    llama_memory_bounded_kv_layout bound;
+    t.assert_true(local->describe_bounded_storage(608,1,8192,256,bound));
+    t.assert_equal(bytes,bound.allocation.bytes);
+}
+
 static void test_gemma_stream_groups(testing & t, llama_model * model) {
     if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
     auto * dev=ggml_backend_dev_by_name("CUDA0");
@@ -803,7 +1030,8 @@ static void test_gemma_bounded_cache(testing & t, llama_model * model) {
                 ggml_backend_tensor_get(tensor,bytes.back().data(),0,bytes.back().size());
             }
             std::vector<llama_pos> positions;
-            for (uint32_t cell=0;cell<local->get_size();++cell) positions.push_back(local->get_cells(0).pos_get(cell));
+            for (uint32_t cell=0;cell<local->get_size();++cell) positions.push_back(
+                local->get_cells(0).is_empty(cell) ? -1 : local->get_cells(0).pos_get(cell));
             if (!t.assert_true(owner->bind(lease.get()))) return;
             size_t index=0;
             for (auto id : local->get_layer_ids()) for (auto * tensor : {local->get_k_storage(int32_t(id)),local->get_v_storage(int32_t(id))}) {
@@ -811,7 +1039,8 @@ static void test_gemma_bounded_cache(testing & t, llama_model * model) {
                 ggml_backend_tensor_get(tensor,after.data(),0,after.size());
                 t.assert_true(bytes[index++] == after);
             }
-            for (uint32_t cell=0;cell<local->get_size();++cell) t.assert_equal(positions[cell],local->get_cells(0).pos_get(cell));
+            for (uint32_t cell=0;cell<local->get_size();++cell) t.assert_equal(positions[cell],
+                local->get_cells(0).is_empty(cell) ? -1 : local->get_cells(0).pos_get(cell));
             t.assert_true(bool(owner->read(owner->identity())));
         }
         const size_t vocab=size_t(llama_vocab_n_tokens(llama_model_get_vocab(model)));
@@ -1030,6 +1259,16 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-phase-parent"); })) {
+        t.test("Gemma_native_local_cache_and_streamed_full_cache_share_one_phase_parent",
+            [&](testing & t) { test_gemma_phase_parent(t,model.get()); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-deferred-local"); })) {
+        t.test("Gemma_local_cache_metadata_binds_transactionally_without_private_storage",
+            [&](testing & t) { test_gemma_deferred_local(t,model.get()); });
+        return t.summary();
+    }
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-stream-groups"); })) {
         t.test("Gemma_streams_only_owned_full_attention_cache_roots",
             [&](testing & t) { test_gemma_stream_groups(t,model.get()); });
