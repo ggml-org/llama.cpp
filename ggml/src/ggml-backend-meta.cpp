@@ -1746,7 +1746,7 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
-    constexpr size_t compute_headroom = 16; // Maximum number of views per statically allocated tensor that can be created between evals.
+    constexpr size_t compute_headroom = 32; // Maximum number of views per statically allocated tensor that can be created between evals.
     const ggml_init_params params_static = {
         /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
