@@ -296,7 +296,7 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // trivial checks first -- no string ops needed
     if (params->only_copy)       return false;
 
-    // quantize only 2D and 3D tensors (experts)
+    // quantize only 2D+ tensors (matrices, experts, conv kernels)
     if (ggml_n_dims(tensor) < 2) return false;
 
     const std::string name = ggml_get_name(tensor);
@@ -1338,7 +1338,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
                 const int64_t n_per_row = tensor->ne[0];
                 const int64_t nrows_per_expert = tensor->ne[1];
-                const int64_t nrows_total = tensor->ne[1] * tensor->ne[2];
+                const int64_t nrows_total = ggml_nrows(tensor);
 
                 const size_t row_size_src = ggml_row_size(tensor->type, n_per_row);
                 const size_t row_size_dst = ggml_row_size(new_type,     n_per_row);
