@@ -655,6 +655,22 @@ bool llama_kv_cache::kv_stream_can_remove(llama_seq_id seq_id,llama_pos p0,llama
     return true;
 }
 
+bool llama_kv_cache::bounded_prefix_available(const llama_kv_cells & full,size_t retained) const noexcept {
+    if (!retained) return true;
+    if (bounded_pending || !n_swa || n_swa > INT32_MAX || n_stream != 1 || n_seq_max != 1 ||
+            (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED && swa_type != LLAMA_SWA_TYPE_SYMMETRIC) ||
+            retained > full.size() || full.is_empty(uint32_t(retained-1))) return false;
+    const auto last=full.pos_get(uint32_t(retained-1));
+    size_t first=0, end=retained;
+    while (first < end) {
+        const auto middle=first+(end-first)/2;
+        if (full.is_empty(uint32_t(middle))) return false;
+        if (llama_hparams::is_masked_swa(n_swa,swa_type,full.pos_get(uint32_t(middle)),last)) first=middle+1;
+        else end=middle;
+    }
+    return llama_kv_stream_bounded_contains(full,first,retained,v_cells[0]);
+}
+
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     if (!kv_stream_can_remove(seq_id,p0,p1)) return false;
     if (kv_stream) {

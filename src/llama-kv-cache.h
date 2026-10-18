@@ -139,6 +139,8 @@ public:
         return attached_mtp_cache;
     }
     bool kv_stream_can_remove(llama_seq_id seq_id, llama_pos p0, llama_pos p1, size_t * retained = nullptr) const;
+    // A retained prefix needs every still-visible local row, not only full-cache backing.
+    bool bounded_prefix_available(const llama_kv_cells & full, size_t retained) const noexcept;
 
     //
     // llama_memory_i

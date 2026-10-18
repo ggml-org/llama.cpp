@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <map>
 
 #ifdef KV_STREAM_TILE_NATIVE_TEST
 bool kv_stream_test_is_sm61_only();
@@ -636,6 +637,181 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
     hybrid->get_mem_recr()->state_write(result.recurrent,0,0);
     if (stream) t.assert_equal(position,stream->tokens());
     return result;
+}
+
+// A rejected streamed suffix operation must not change the independent local group's cells.
+static void test_gemma_lifecycle(testing & t, llama_model * model) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    auto * dev=ggml_backend_dev_by_name("CUDA0");
+    if (!t.assert_true(dev != nullptr)) return;
+    ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+    llama_memory_params params{};
+    params.type_k=GGML_TYPE_Q8_0; params.type_v=GGML_TYPE_Q4_0;
+    params.kv_stream_pool_bytes=64u*1024u*1024u;
+    params.kv_stream_max_rows=256; params.kv_stream_max_decode_rows=4;
+    params.kv_stream_backend=backend.get();
+    const auto no_reuse=[](int32_t) { return int32_t(-1); };
+    llama_kv_cache_iswa cache(*model,params.type_k,params.type_v,false,true,false,true,
+        8192,1,256,256,nullptr,nullptr,no_reuse,nullptr,&params);
+    llama_batch_allocr allocator(1);
+    auto batch=allocator.ubatch_reserve(64,1);
+    batch.data->seq_id_data.resize(batch.n_tokens,0);
+    for (uint32_t row=0;row<batch.n_tokens;++row) {
+        batch.pos[row]=llama_pos(row); batch.n_seq_id[row]=1;
+        batch.seq_id[row]=&batch.data->seq_id_data[row];
+    }
+    for (auto * group : {cache.get_base(),cache.get_swa()}) {
+        auto slots=group->prepare({batch});
+        if (!t.assert_true(slots.size() == 1)) return;
+        group->apply_ubatch(slots[0],batch);
+    }
+    auto * stream=cache.get_base()->get_kv_stream();
+    if (!t.assert_true(stream != nullptr)) return;
+    ggml_backend_buffer_clear(stream->buffer(),0);
+    if (!t.assert_true("imported host frontier is restored",stream->restore(64))) return;
+    const auto positions=[](const llama_kv_cache & group) {
+        std::vector<llama_pos> result;
+        const auto & cells=group.get_cells(0);
+        for (uint32_t row=0;row<group.get_size();++row)
+            result.push_back(cells.is_empty(row) ? -1 : cells.pos_get(row));
+        return result;
+    };
+    const auto full=positions(*cache.get_base()), local=positions(*cache.get_swa());
+    t.assert_true(!cache.seq_rm(0,10,20));
+    t.assert_equal(size_t(64),stream->tokens());
+    t.assert_true(full == positions(*cache.get_base()));
+    t.assert_true("rejected interior removal preserves local cells",local == positions(*cache.get_swa()));
+
+    struct image_writer : llama_io_write_i {
+        std::vector<uint8_t> bytes;
+        void write(const void * data,size_t size) override {
+            const auto * begin=static_cast<const uint8_t *>(data);
+            bytes.insert(bytes.end(),begin,begin+size);
+        }
+        void write_tensor(ggml_tensor * tensor,size_t offset,size_t size) override {
+            const auto start=bytes.size(); bytes.resize(start+size);
+            ggml_backend_tensor_get(tensor,bytes.data()+start,offset,size);
+        }
+        size_t n_bytes() override { return bytes.size(); }
+    };
+    struct image_reader : llama_io_read_i {
+        const std::vector<uint8_t> & bytes;
+        size_t cursor=0;
+        explicit image_reader(const std::vector<uint8_t> & bytes) : bytes(bytes) {}
+        void read(void * data,size_t size) override {
+            if (size > bytes.size()-cursor) throw std::runtime_error("truncated lifecycle fixture");
+            std::memcpy(data,bytes.data()+cursor,size); cursor+=size;
+        }
+        void read_tensor(ggml_tensor * tensor,size_t offset,size_t size) override {
+            if (size > bytes.size()-cursor) throw std::runtime_error("truncated lifecycle tensor");
+            ggml_backend_tensor_set(tensor,bytes.data()+cursor,offset,size); cursor+=size;
+        }
+        size_t n_bytes() override { return cursor; }
+    };
+    const auto save=[&] {
+        image_writer image;
+        cache.state_write(image,0,0);
+        return image.bytes;
+    };
+    // Exercise stock placement/serialization with encoded rows, without claiming a model-forward numerical test.
+    const auto append=[&](uint32_t first,uint32_t count,uint32_t seed) {
+        for (uint32_t done=0;done<count;) {
+            const uint32_t rows=std::min(256u,count-done);
+            auto batch=allocator.ubatch_reserve(rows,1);
+            batch.data->seq_id_data.resize(rows,0);
+            for (uint32_t row=0;row<rows;++row) {
+                batch.pos[row]=llama_pos(first+done+row); batch.token[row]=llama_token(seed);
+                batch.n_seq_id[row]=1; batch.seq_id[row]=&batch.data->seq_id_data[row];
+            }
+            for (auto * group : {cache.get_base(),cache.get_swa()}) {
+                auto slots=group->prepare({batch});
+                if (!t.assert_true(slots.size() == 1)) return false;
+                group->apply_ubatch(slots[0],batch);
+                const int32_t id=group == cache.get_base() ? 5 : 0;
+                for (auto * tensor : {group->get_k_storage(id),group->get_v_storage(id)}) {
+                    const auto row_bytes=ggml_row_size(tensor->type,tensor->ne[0]);
+                    std::vector<float> floats(size_t(tensor->ne[0]));
+                    std::vector<uint8_t> encoded(row_bytes);
+                    for (uint32_t row=0;row<rows;++row) {
+                        std::fill(floats.begin(),floats.end(),float(seed+uint32_t(batch.pos[row])%17)*0.0625f);
+                        ggml_quantize_chunk(tensor->type,floats.data(),encoded.data(),0,1,tensor->ne[0],nullptr);
+                        ggml_backend_tensor_set(tensor,encoded.data(),slots[0].idxs[0][row]*row_bytes,row_bytes);
+                    }
+                }
+            }
+            if (!t.assert_true(stream->restore(first+done+rows))) return false;
+            done+=rows;
+        }
+        return true;
+    };
+    const auto local_window=[&] {
+        auto * group=cache.get_swa();
+        const auto & cells=group->get_cells(0);
+        std::map<llama_pos,std::vector<uint8_t>> result;
+        for (auto * tensor : {group->get_k_storage(0),group->get_v_storage(0)}) {
+            std::vector<uint8_t> bytes(ggml_nbytes(tensor));
+            ggml_backend_tensor_get(tensor,bytes.data(),0,bytes.size());
+            const auto row_bytes=ggml_row_size(tensor->type,tensor->ne[0]);
+            for (uint32_t row=0;row<group->get_size();++row) {
+                if (cells.is_empty(row)) continue;
+                const auto pos=cells.pos_get(row);
+                if (llama_hparams::is_masked_swa(model->hparams.n_swa,model->hparams.swa_type,pos,cells.seq_pos_max(0))) continue;
+                auto & entry=result[pos];
+                entry.insert(entry.end(),bytes.data()+row*row_bytes,bytes.data()+(row+1)*row_bytes);
+            }
+        }
+        return result;
+    };
+    cache.clear(true);
+    if (!t.assert_true(append(0,64,1))) return;
+    const auto saved=save();
+    t.assert_true(!cache.seq_rm(0,0,16) && saved == save());
+    t.assert_true(cache.seq_rm(0,16,-1));
+    t.assert_equal(size_t(16),stream->tokens());
+    if (!t.assert_true(append(16,48,2))) return;
+    t.assert_true("equal-length requests with different content are distinct",saved != save());
+    cache.clear(true);
+    t.assert_equal(size_t(0),stream->tokens());
+    t.assert_equal(uint32_t(0),cache.get_swa()->get_cells(0).get_used());
+    image_reader reader(saved);
+    cache.state_read(reader,0,0);
+    t.assert_equal(saved.size(),reader.n_bytes());
+    t.assert_equal(size_t(64),stream->tokens());
+    t.assert_true("both groups round-trip through saved state",saved == save());
+    t.assert_true(cache.seq_rm(0,16,-1));
+    if (!t.assert_true(append(16,48,2))) return;
+    const auto rewritten=save();
+    t.assert_true(rewritten != saved);
+    t.assert_true(cache.seq_rm(0,64,64) && rewritten == save());
+
+    cache.clear(true);
+    if (!t.assert_true(append(0,2304,3))) return;
+    const auto baseline=local_window();
+    t.assert_equal(size_t(model->hparams.n_swa),baseline.size());
+    for (uint32_t accepted=0;accepted<=4;++accepted) {
+        if (!t.assert_true(append(2304,4,7))) return;
+        const auto provisional=local_window();
+        if (!t.assert_true(cache.seq_rm(0,llama_pos(2304+accepted),-1))) return;
+        t.assert_equal(size_t(2304+accepted),stream->tokens());
+        const auto retained=local_window();
+        t.assert_equal(baseline.size(),retained.size());
+        for (const auto & entry : retained) {
+            const auto & reference=entry.first < 2304 ? baseline : provisional;
+            const auto found=reference.find(entry.first);
+            t.assert_true("accepted window bytes survive rejected writes",found != reference.end() && found->second == entry.second);
+        }
+        t.assert_true(cache.seq_rm(0,2304,-1));
+        t.assert_true("zero acceptance and cancellation recover the complete local window",local_window() == baseline);
+    }
+    const auto full_before_old_prefix=positions(*cache.get_base());
+    t.assert_true("a prefix whose local history was evicted cannot be reused",!cache.seq_rm(0,64,-1));
+    t.assert_equal(size_t(2304),stream->tokens());
+    t.assert_true(full_before_old_prefix == positions(*cache.get_base()));
+    t.assert_true(local_window() == baseline);
+    cache.clear(true);
+    if (!t.assert_true(append(0,17,9))) return;
+    t.assert_equal(llama_pos(16),cache.seq_pos_max(0));
+    t.assert_equal(size_t(17),stream->tokens());
 }
 
 // Measure native local attention before storage exists, then reuse one parent through both text phases.
@@ -1259,6 +1435,11 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-lifecycle"); })) {
+        t.test("Gemma_serial_lifecycle_preserves_both_cache_groups",
+            [&](testing & t) { test_gemma_lifecycle(t,model.get()); });
+        return t.summary();
+    }
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-phase-parent"); })) {
         t.test("Gemma_native_local_cache_and_streamed_full_cache_share_one_phase_parent",
             [&](testing & t) { test_gemma_phase_parent(t,model.get()); });

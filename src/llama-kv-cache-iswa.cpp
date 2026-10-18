@@ -5,6 +5,7 @@
 #include "llama-model.h"
 #include "llama-cparams.h"
 #include "llama-memory-bounded-kv.h"
+#include "llama-kv-stream-model.h"
 
 #include <algorithm>
 #include <cassert>
@@ -159,12 +160,12 @@ void llama_kv_cache_iswa::clear(bool data) {
 }
 
 bool llama_kv_cache_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    bool res = true;
-
-    res = res & kv_base->seq_rm(seq_id, p0, p1);
-    res = res & kv_swa ->seq_rm(seq_id, p0, p1);
-
-    return res;
+    size_t retained=0;
+    if (!kv_base->kv_stream_can_remove(seq_id,p0,p1,&retained) || !kv_swa->kv_stream_can_remove(seq_id,p0,p1)) return false;
+    const auto * stream=kv_base->get_kv_stream();
+    if (stream && retained && retained < stream->tokens() &&
+            !kv_swa->bounded_prefix_available(kv_base->get_cells(0),retained)) return false;
+    return kv_base->seq_rm(seq_id,p0,p1) && kv_swa->seq_rm(seq_id,p0,p1);
 }
 
 void llama_kv_cache_iswa::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
