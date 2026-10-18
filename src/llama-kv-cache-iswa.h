@@ -36,7 +36,7 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share, const llama_memory_params * bounded = nullptr);
+        const  layer_share_cb & share, const llama_memory_params * stream = nullptr);
 
     llama_kv_cache_iswa(
             const llama_model & model,
@@ -54,7 +54,7 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share, const llama_memory_params * bounded = nullptr);
+        const  layer_share_cb & share, const llama_memory_params * stream = nullptr);
 
     ~llama_kv_cache_iswa() = default;
 

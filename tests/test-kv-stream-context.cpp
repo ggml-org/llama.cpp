@@ -636,6 +636,73 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
     return result;
 }
 
+static void test_gemma_stream_groups(testing & t, llama_model * model) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    auto * dev=ggml_backend_dev_by_name("CUDA0");
+    if (!t.assert_true(dev != nullptr)) return;
+    ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+    llama_memory_params params{};
+    params.type_k=GGML_TYPE_Q8_0; params.type_v=GGML_TYPE_Q4_0;
+    params.kv_stream_pool_bytes=64u*1024u*1024u;
+    params.kv_stream_max_rows=256; params.kv_stream_max_decode_rows=4;
+    params.kv_stream_backend=backend.get();
+    const auto no_reuse=[](int32_t) { return int32_t(-1); };
+    try {
+        llama_kv_cache_iswa cache(*model,params.type_k,params.type_v,false,true,false,true,
+            8192,1,256,256,nullptr,nullptr,no_reuse,nullptr,&params);
+        auto * base=cache.get_base(); auto * local=cache.get_swa();
+        auto * stream=base->get_kv_stream();
+        if (!t.assert_true(stream && !local->get_kv_stream())) return;
+        const auto resources=llama_memory_kv_resources_get(&cache);
+        t.assert_true(resources.full == base && resources.bounded == local && !resources.recurrent);
+        const auto & host=stream->host()->config();
+        t.assert_equal(10u,host.layers);
+        t.assert_equal(size_t(8192),host.context_tokens);
+        t.assert_equal(int64_t(512),host.shape.head_dim_k);
+        t.assert_equal(int64_t(512),host.shape.head_dim_v);
+        t.assert_equal(int64_t(4),host.shape.heads);
+        t.assert_equal(size_t(272629760),stream->host()->bytes());
+        const auto full=base->get_layer_ids();
+        t.assert_equal(size_t(10),full.size());
+        for (size_t ordinal=0;ordinal<full.size();++ordinal) {
+            const uint32_t id=uint32_t(5+6*ordinal);
+            t.assert_equal(id,full[ordinal]);
+            llama_kv_stream_host_layer planes;
+            if (!t.assert_true(stream->host()->layer(uint32_t(ordinal),planes))) return;
+            t.assert_true(base->get_k_storage(int32_t(id))->data == planes.k);
+            t.assert_true(base->get_v_storage(int32_t(id))->data == planes.v);
+            t.assert_true(base->get_k_storage(int32_t(id))->buffer == stream->buffer());
+        }
+        t.assert_equal(size_t(50),local->get_layer_ids().size());
+        t.assert_equal(uint32_t(1280),local->get_size());
+        for (auto id : local->get_layer_ids()) {
+            auto * tensor=local->get_k_storage(int32_t(id));
+            t.assert_true(tensor->buffer != stream->buffer() && !ggml_backend_buffer_is_host(tensor->buffer));
+        }
+        t.assert_true(stream->bounded_prefill() && stream->tokens() == 0 && stream->complete());
+        for (int invalid=0;invalid<3;++invalid) {
+            auto bad=params;
+            if (invalid == 1) bad.kv_stream_auxiliary_layers=1;
+            const llama_memory_i::layer_reuse_cb reuse=invalid == 2 ?
+                +[](int32_t il) { return il == 5 ? int32_t(11) : int32_t(-1); } : +[](int32_t) { return int32_t(-1); };
+            bool rejected=false;
+            try {
+                llama_kv_cache_iswa invalid_cache(*model,bad.type_k,bad.type_v,false,true,invalid == 0,true,
+                    8192,1,256,256,nullptr,nullptr,reuse,nullptr,&bad);
+            } catch (const std::runtime_error & error) {
+                const char * expected=invalid == 0 ? "KV streaming requires bounded SWA storage (swa_full=false)" :
+                    invalid == 1 ? "Gemma shared-KV drafting does not allocate auxiliary KV histories" :
+                    "KV streaming cannot alias selected layers";
+                rejected=std::string(error.what()) == expected;
+            }
+            t.assert_true(rejected);
+        }
+    } catch (const std::exception & error) {
+        t.out << "Gemma private streaming: " << error.what() << '\n';
+        t.assert_true(false);
+    }
+}
+
 static void test_gemma_bounded_cache(testing & t, llama_model * model) {
     if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
     std::vector<std::vector<float>> controls[2];
@@ -963,6 +1030,11 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-stream-groups"); })) {
+        t.test("Gemma_streams_only_owned_full_attention_cache_roots",
+            [&](testing & t) { test_gemma_stream_groups(t,model.get()); });
+        return t.summary();
+    }
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-bounded"); })) {
         t.test("Gemma_target_local_cache_reuses_bounded_storage_without_changing_causal_execution",
             [&](testing & t) { test_gemma_bounded_cache(t,model.get()); });

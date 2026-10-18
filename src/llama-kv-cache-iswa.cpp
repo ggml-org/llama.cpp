@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <stdexcept>
 
 bool llama_kv_cache_iswa::bounded_storage_requirements(const llama_hparams & hp, const llama_memory_params & params,
         const llama_cparams & cp, ggml_backend_buffer_type_t buft,
@@ -63,9 +64,9 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share, const llama_memory_params * bounded) :
+    const  layer_share_cb & share, const llama_memory_params * stream) :
     llama_kv_cache_iswa(model, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified,
-            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share, bounded) {
+            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share, stream) {
 }
 
 llama_kv_cache_iswa::llama_kv_cache_iswa(
@@ -84,7 +85,15 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share, const llama_memory_params * bounded) : unified(unified) {
+    const  layer_share_cb & share, const llama_memory_params * stream) : unified(unified) {
+
+    const bool streaming=stream && (stream->kv_stream_pool_bytes || stream->shared_device_memory_bytes);
+    if (streaming && swa_full) throw std::runtime_error("KV streaming requires bounded SWA storage (swa_full=false)");
+    llama_memory_params base_params{};
+    if (streaming) {
+        base_params=*stream;
+        base_params.bounded_cache_lease=nullptr;
+    }
 
     // chain filters
     const layer_filter_cb filter_base = [&](int32_t il) {
@@ -132,14 +141,15 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     kv_base = std::make_unique<llama_kv_cache>(
             model, hparams, type_k, type_v,
             v_trans, offload, unified, size_base, n_seq_max, n_pad,
-            0, LLAMA_SWA_TYPE_NONE, mem_other_base, filter_base, reuse, share);
+            0, LLAMA_SWA_TYPE_NONE, mem_other_base, filter_base, reuse, share,"",streaming ? &base_params : nullptr);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache>(
             model, hparams, type_k, type_v,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
-            hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share, "", bounded);
+            hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share,"",
+            stream && stream->bounded_cache_lease ? stream : nullptr);
 }
 
 void llama_kv_cache_iswa::clear(bool data) {

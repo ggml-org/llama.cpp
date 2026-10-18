@@ -181,9 +181,16 @@ llama_kv_cache::llama_kv_cache(
         bounded_lease.reset(ggml_backend_memory_lease_retain(stream->bounded_cache_lease));
     }
     if (stream && !mtp_host && !bounded_lease) {
-        if (model.arch != LLM_ARCH_QWEN35 || hparams.no_alloc || v_trans || !offload || n_seq_max != 1 ||
-                n_swa || other || reuse || share || !stream->kv_stream_backend || kv_size > UINT32_MAX-255) {
-            throw std::runtime_error("KV streaming requires an allocated serial Qwen35 CUDA target context with Flash Attention and no shared/SWA cache");
+        if (model.arch == LLM_ARCH_GEMMA4 && stream->kv_stream_auxiliary_layers)
+            throw std::runtime_error("Gemma shared-KV drafting does not allocate auxiliary KV histories");
+        if ((model.arch != LLM_ARCH_QWEN35 && model.arch != LLM_ARCH_GEMMA4) || hparams.no_alloc || v_trans ||
+                !offload || n_seq_max != 1 || n_swa || other || share || !stream->kv_stream_backend ||
+                kv_size > UINT32_MAX-255) {
+            throw std::runtime_error("KV streaming requires an allocated serial CUDA target with supported architecture, Flash Attention and unshared full-attention storage");
+        }
+        if (reuse) for (uint32_t il=0;il<hparams.n_layer_all;++il) {
+            if ((!filter || filter(int32_t(il))) && reuse(int32_t(il)) >= 0)
+                throw std::runtime_error("KV streaming cannot alias selected layers");
         }
         kv_size = GGML_PAD(kv_size,256);
     }
@@ -265,9 +272,10 @@ llama_kv_cache::llama_kv_cache(
         for (uint32_t il = 0; il < n_layer; ++il) if (hparams.has_kv(il) && (!filter || filter(il))) ids.push_back(il);
         if (ids.empty()) throw std::runtime_error("KV streaming found no attention layers");
         const auto first = ids.front();
-        for (auto il : ids) if (model.dev_layer(il) != dev || hparams.n_embd_head_k(il) != 256 || hparams.n_embd_head_v(il) != 256 ||
+        const auto dk=hparams.n_embd_head_k(first), dv=hparams.n_embd_head_v(first);
+        for (auto il : ids) if (model.dev_layer(il) != dev || hparams.n_embd_head_k(il) != dk || hparams.n_embd_head_v(il) != dv ||
                 hparams.n_head_kv(il) != hparams.n_head_kv(first) || hparams.n_head(il) != hparams.n_head(first)) {
-            throw std::runtime_error("KV streaming requires uniform 256-wide attention on one CUDA device");
+            throw std::runtime_error("KV streaming requires uniform attention geometry on one CUDA device");
         }
         auto * reg = ggml_backend_dev_backend_reg(dev);
         auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
@@ -280,7 +288,7 @@ llama_kv_cache::llama_kv_cache(
         config.max_batch_rows = stream->kv_stream_max_rows; config.query_heads = hparams.n_head(first);
         config.max_decode_rows = stream->kv_stream_max_decode_rows;
         config.measure = true;
-        config.host = {0,{type_k,type_v,256,256,hparams.n_head_kv(first),256,128},
+        config.host = {0,{type_k,type_v,dk,dv,hparams.n_head_kv(first),256,128},
             get()->capabilities(config.backend,type_k,type_v),requested_kv_size,uint32_t(ids.size())};
         if (!config.pool_bytes) {
             llama_kv_stream_policy_config bootstrap;
