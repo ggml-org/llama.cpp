@@ -1,4 +1,6 @@
 #include "kv-stream-block-test.h"
+#include "../ggml/src/ggml-backend-execution.h"
+#include "../src/llama-kv-stream-writer.h"
 
 // Ordinary SET_ROWS supplies independent reference bytes for each producer plane.
 struct producer_inputs {
@@ -11,20 +13,21 @@ struct producer_inputs {
     std::unique_ptr<llama_memory_cuda_executor> execution;
     producer_inputs(fixture & f, size_t rows) : backend(f.backend) {
         context.reset(ggml_init({65536,nullptr,true}));
-        k = ggml_new_tensor_2d(context.get(),GGML_TYPE_F32,512,int64_t(rows));
-        v = ggml_new_tensor_2d(context.get(),GGML_TYPE_F32,512,int64_t(rows));
+        const int64_t widths[2]={f.policy.shape.head_dim_k*f.policy.shape.heads,f.policy.shape.head_dim_v*f.policy.shape.heads};
+        k = ggml_new_tensor_2d(context.get(),GGML_TYPE_F32,widths[0],int64_t(rows));
+        v = ggml_new_tensor_2d(context.get(),GGML_TYPE_F32,widths[1],int64_t(rows));
         auto * indices = ggml_new_tensor_1d(context.get(),GGML_TYPE_I64,int64_t(rows));
         graph = ggml_new_graph_custom(context.get(),64,false);
         for (int side = 0; side < 2; ++side) {
-            auto * dst = ggml_new_tensor_2d(context.get(),ggml_type(side ? f.policy.shape.type_v : f.policy.shape.type_k),512,int64_t(rows));
+            auto * dst = ggml_new_tensor_2d(context.get(),ggml_type(side ? f.policy.shape.type_v : f.policy.shape.type_k),widths[side],int64_t(rows));
             encoded[side] = ggml_set_rows(context.get(),dst,side ? v : k,indices);
             ggml_build_forward_expand(graph,encoded[side]);
         }
         buffer.reset(ggml_backend_alloc_ctx_tensors(context.get(),backend)); GGML_ASSERT(buffer);
         std::vector<int64_t> idx(rows); for (size_t i = 0; i < rows; ++i) idx[i] = int64_t(i);
         ggml_backend_tensor_set(indices,idx.data(),0,rows*sizeof(int64_t));
-        std::vector<float> data(rows*512);
         for (int side = 0; side < 2; ++side) {
+            std::vector<float> data(rows*size_t(widths[side]));
             for (size_t i = 0; i < data.size(); ++i) data[i] = std::sin(float(i%677 + 17*side)*.05f);
             ggml_backend_tensor_set(side ? v : k,data.data(),0,data.size()*sizeof(float));
         }
@@ -70,11 +73,80 @@ struct download_fault {
 };
 
 int main(int argc, char ** argv) {
-    const bool cuda = argc > 1 && !std::strcmp(argv[1],"--cuda");
+    const bool gemma = argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-producer");
+    const bool cuda = gemma || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
     testing t;
+    if (gemma) t.set_filter("wide_producer_streaming_cancellation_and_retry_preserve_stock_bits");
+    if (gemma) t.test("wide_producer_streaming_cancellation_and_retry_preserve_stock_bits", [&](testing & t) {
+        auto * reg=ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+        const auto * ops=get ? get() : nullptr;
+        if (!t.assert_true(ops && ops->geometry)) return;
+        const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+        for (auto key : formats) for (auto value : formats) for (uint32_t rows : {1u,3u,17u,255u,256u}) {
+            constexpr size_t first=2048, capacity=4096;
+            const size_t active=first+rows;
+            fixture f(backend.get(),true,key,value,capacity,false,2,4,12,512,512);
+            f.policy.initial_ring_slots=1;
+            size_t writer_bytes=0, scratch=0, decode=0;
+            const ggml_kv_stream_attention_request request{f.policy.shape,32,256,capacity};
+            auto decode_request=request; decode_request.query_tokens=3;
+            if (!t.assert_true(llama_kv_stream_writer::requirements(ggml_backend_buffer_get_type(
+                        ggml_backend_memory_lease_buffer(f.lease.get())),f.policy.shape,rows,writer_bytes) &&
+                    ggml_kv_stream_workspace_query(ops,backend.get(),request,ggml_kv_stream_workspace_kind::prefill,scratch) &&
+                    ggml_kv_stream_workspace_query(ops,backend.get(),decode_request,ggml_kv_stream_workspace_kind::decode,decode))) return;
+            scratch=std::max(scratch,decode);
+            block_workspace writer(f,writer_bytes,111), workspace(f,scratch,113);
+            if (!t.assert_true(f.attach() && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true) && f.resident->configure_prefill_workspace(scratch) &&
+                    f.resident->configure_writes(rows,writer.lease.get()))) return;
+            auto pin=f.binding->acquire();
+            if (!t.assert_true(bool(pin))) return;
+            producer_inputs produced(f,rows);
+            block_inputs input(f,active,rows,false,32);
+            ggml_context_ptr context(ggml_init({8192,nullptr,true}));
+            auto * bounds=ggml_new_tensor_2d(context.get(),GGML_TYPE_I32,4,rows);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(context.get(),backend.get()));
+            if (!t.assert_true(bool(buffer))) return;
+            std::vector<int32_t> intervals(4*rows);
+            for (uint32_t row=0;row<rows;++row) {
+                intervals[4*row]=0; intervals[4*row+1]=int32_t(first+row+1);
+                intervals[4*row+2]=int32_t(input.padded); intervals[4*row+3]=1;
+            }
+            ggml_backend_tensor_set(bounds,intervals.data(),0,ggml_nbytes(bounds));
+            const bool compact=rows > 8;
+            auto * mask=compact ? bounds : input.mask;
+            if (!t.assert_true(f.resident->begin_sequence({0,1},active,1,first,{rows,!compact}))) return;
+            std::vector<std::vector<float>> expected;
+            for (uint32_t layer=0;layer<2;++layer) {
+                if (!t.assert_true(f.resident->write_sequence_rows(layer,first,produced.k,produced.v))) return;
+                check_host(t,f,layer,first,produced);
+                expected.push_back(stock_attention(f,input,layer));
+                if (!t.assert_true(f.resident->compute_streamed(layer,input.q,mask,input.output,active,1.f/16,
+                        workspace.lease.get(),true,1))) return;
+                ggml_backend_synchronize(backend.get());
+                t.assert_true(same_float_bits(expected.back(),input.read()));
+            }
+            t.assert_true(!f.resident->sequence_active());
+            if (!t.assert_true(f.resident->begin_sequence({0,1},active,1,SIZE_MAX,{rows,!compact}) &&
+                    f.resident->compute_streamed(0,input.q,mask,input.output,active,1.f/16,workspace.lease.get(),true,1))) return;
+            t.assert_true(f.resident->sequence_active());
+            f.resident->cancel_sequence();
+            t.assert_true(!f.resident->sequence_active());
+            if (!t.assert_true(f.resident->begin_sequence({1,0},active,1,SIZE_MAX,{rows,!compact}))) return;
+            for (uint32_t layer : {1u,0u}) {
+                if (!t.assert_true(f.resident->compute_streamed(layer,input.q,mask,input.output,active,1.f/16,
+                        workspace.lease.get(),true,1))) return;
+                ggml_backend_synchronize(backend.get());
+                t.assert_true(same_float_bits(expected[layer],input.read()));
+            }
+            t.assert_true(!f.resident->sequence_active());
+        }
+    });
     t.test("external_writer_lease_is_retained_until_explicit_release", [&](testing & t) {
         fixture f(backend.get(),cuda); if (!t.assert_true(f.attach())) return;
         auto pin = f.binding->acquire(); block_workspace work(f,32768);

@@ -19,6 +19,11 @@ int kv_stream_test_compiled_cc(ggml_backend_t backend);
 bool kv_stream_test_dimension_instance(ggml_backend_t backend,ggml_type key,ggml_type value,
         uint32_t width,uint32_t columns,uint32_t groups,bool mma,bool resume,bool dense);
 bool kv_stream_test_runtime_shared_instances();
+bool kv_stream_test_native_tile(ggml_backend_t backend,ggml_tensor * op);
+bool kv_stream_test_tile_plan(ggml_backend_t backend,const ggml_tensor * op,size_t tokens,
+        ggml_kv_stream_resume_plan & plan,size_t & bound);
+bool kv_stream_test_tile_run(ggml_backend_t backend,const ggml_tensor * op,const ggml_kv_stream_span_plan_view & view,
+        ggml_backend_buffer_t workspace,const ggml_kv_stream_resume_plan & plan,size_t first,size_t end);
 
 struct pascal_test_guard {
     ggml_backend_t backend;
@@ -365,6 +370,88 @@ static void check_mma_tile_conversion(testing & t, int width) {
 }
 
 int main(int argc, char ** argv) {
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-tile")) {
+#ifdef KV_STREAM_PASCAL_CUDA_TEST
+        testing t;
+        t.test("head512_tile_single_and_progressive_waves_match_native", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+                GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+            for (auto key : formats) for (auto value : formats) {
+                constexpr size_t active=2049;
+                fixture f(backend.get(),true,key,value,active,false,2,4,32,512,512);
+                if (!t.assert_true(f.attach())) return;
+                for (uint32_t queries : {1u,2u,3u,4u,5u,6u,7u,8u,9u,16u,17u,129u,256u}) {
+                    block_inputs input(f,active,queries,false,32);
+                    const auto expected=stock_attention(f,input,0,1.f/16,kv_stream_test_native_tile);
+                    auto storage=span_storage::create(f,0,active,queries,{0,256,768,active},true);
+                    ggml_kv_stream_span_plan_view view;
+                    if (!t.assert_true(storage && ggml_kv_stream_span_plan_get_view(storage->plan,view))) return;
+                    ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+                    auto * node=f.resident->attention(ctx.get(),0,input.q,input.mask,active,1.f/16);
+                    if (!t.assert_true(node != nullptr)) return;
+                    auto op=*node; op.data=input.output->data; op.buffer=input.output->buffer;
+                    ggml_kv_stream_resume_plan plan;
+                    size_t bound=0;
+                    if (!t.assert_true(kv_stream_test_tile_plan(backend.get(),&op,input.padded,plan,bound))) return;
+                    t.assert_true(plan.head_dim_k == 512 && plan.head_dim_v == 512 && plan.span_resume);
+                    t.assert_true(plan.kernel_config[2]*plan.kernel_config[3] <= 16);
+                    t.assert_true(plan.bytes <= bound);
+                    for (size_t history : {size_t(4096),size_t(65536),size_t(262144)}) {
+                        ggml_kv_stream_resume_plan other;
+                        size_t other_bound=0;
+                        t.assert_true(kv_stream_test_tile_plan(backend.get(),&op,history,other,other_bound));
+                        t.assert_equal(bound,other_bound);
+                        t.assert_true(other.bytes <= bound);
+                    }
+                    block_workspace workspace(f,bound,103);
+                    auto * scratch=ggml_backend_memory_lease_buffer(workspace.lease.get());
+                    auto * bounds=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_I32,4,queries);
+                    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+                    if (!t.assert_true(bool(buffer))) return;
+                    std::vector<int32_t> intervals(4*queries);
+                    for (uint32_t row=0;row<queries;++row) {
+                        intervals[4*row]=0; intervals[4*row+1]=int32_t(active-queries+row+1);
+                        intervals[4*row+2]=int32_t(input.padded); intervals[4*row+3]=1;
+                    }
+                    ggml_backend_tensor_set(bounds,intervals.data(),0,ggml_nbytes(bounds));
+                    for (bool compact : {false,true}) {
+                        auto current=op;
+                        if (compact) {
+                            current.src[3]=nullptr;
+                            if (!t.assert_true(ggml_backend_execution_set_mask_bounds(&current,bounds))) return;
+                        }
+                        const auto label=std::string(ggml_type_name(key))+"/"+ggml_type_name(value)+" TG"+std::to_string(queries)+
+                            (compact ? " compact" : " dense");
+                        if (!t.assert_true(kv_stream_test_tile_run(backend.get(),&current,view,scratch,plan,0,plan.tokens))) return;
+                        ggml_backend_synchronize(backend.get());
+                        t.assert_true(label+" complete stock bits",same_float_bits(expected,input.read()));
+                        std::vector<float> sentinel(expected.size(),-77);
+                        ggml_backend_tensor_set(input.output,sentinel.data(),0,ggml_nbytes(input.output));
+                        auto first=view; first.count=2;
+                        if (!t.assert_true(kv_stream_test_tile_run(backend.get(),&current,first,scratch,plan,0,768))) return;
+                        ggml_backend_synchronize(backend.get());
+                        t.assert_true(label+" no early publication",same_float_bits(sentinel,input.read()));
+                        auto second=view; second.spans+=2; second.count=1;
+                        if (!t.assert_true(kv_stream_test_tile_run(backend.get(),&current,second,scratch,plan,768,plan.tokens))) return;
+                        ggml_backend_synchronize(backend.get());
+                        t.assert_true(label+" resumed stock bits",same_float_bits(expected,input.read()));
+                        block_workspace short_workspace(f,plan.bytes-1,107);
+                        t.assert_true(!kv_stream_test_tile_run(backend.get(),&current,view,
+                            ggml_backend_memory_lease_buffer(short_workspace.lease.get()),plan,0,plan.tokens));
+                        t.assert_true(same_float_bits(expected,input.read()));
+                    }
+                }
+            }
+        });
+        return t.summary();
+#else
+        return 77;
+#endif
+    }
     if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-convert")) {
         testing t;
         t.test("head512_tile_conversion_matches_native", [](testing & t) { check_mma_tile_conversion(t,512); });
@@ -429,6 +516,8 @@ int main(int argc, char ** argv) {
             auto * short_buffer=ggml_backend_memory_lease_buffer(short_workspace.lease.get());
             t.assert_equal(required-1,ggml_backend_buffer_get_size(short_buffer));
             const auto before=input.read();
+            t.assert_true(ops->supports(backend.get(),&op));
+            t.assert_true(!ops->partial(backend.get(),&op,short_buffer,false));
             t.assert_true(!ops->spans(backend.get(),&op,storage->plan,short_buffer));
             t.assert_true(same_float_bits(before,input.read()));
             auto invalid=op;

@@ -9,6 +9,50 @@
 
 int main() {
     testing t;
+    t.test("tile_split_scratch_bound_covers_native_search_at_every_history", [&](testing & t) {
+        for (uint32_t occupancy : {1u,2u,4u,8u}) for (uint32_t sm : {1u,2u,17u,70u})
+            for (uint32_t destinations : {4u,8u,32u,128u,512u,4096u}) {
+            const uint32_t wave=sm*occupancy;
+            const auto bound=std::max(occupancy,ggml_cuda_fattn_tile_resume_splits(wave,destinations,occupancy,wave));
+            for (uint32_t tiles=1;tiles<=4096;tiles+=tiles < 64 ? 1 : 31) {
+                uint32_t expected=std::min(tiles,occupancy), best=0;
+                uint64_t best_waves=0;
+                for (uint32_t candidate=expected;candidate<=tiles;++candidate) {
+                    const uint64_t blocks=uint64_t(destinations)*candidate, waves=(blocks+wave-1)/wave;
+                    const auto efficiency=uint32_t(100*blocks/(waves*wave));
+                    if (best >= 95 && waves > best_waves) break;
+                    if (efficiency > best) { best=efficiency; best_waves=waves; expected=candidate; }
+                }
+                const auto actual=ggml_cuda_fattn_tile_resume_splits(tiles,destinations,occupancy,wave);
+                t.assert_equal(expected,actual);
+                t.assert_true(actual <= bound);
+            }
+        }
+        t.assert_equal(0u,ggml_cuda_fattn_tile_resume_splits(0,1,1,1));
+        t.assert_equal(0u,ggml_cuda_fattn_tile_resume_splits(1,0,1,1));
+        t.assert_equal(0u,ggml_cuda_fattn_tile_resume_splits(1,1,0,1));
+        t.assert_equal(0u,ggml_cuda_fattn_tile_resume_splits(1,1,1,0));
+        t.assert_equal(0u,ggml_cuda_fattn_tile_resume_splits(1,1,2,1));
+        t.assert_equal(0u,ggml_cuda_fattn_tile_resume_splits(UINT32_MAX,UINT32_MAX,1,1));
+    });
+    t.test("tile_prefill_checkpoints_stay_bounded_by_query_tiles", [&](testing & t) {
+        for (uint32_t width : {256u,512u}) for (uint32_t queries : {9u,16u,17u,31u,128u,129u,255u,256u}) {
+            ggml_cuda_fattn_tile_resume_geometry g{width,32,4,queries,width == 512 ? 2u : 4u,8,128,64,7,4};
+            ggml_cuda_fattn_tile_resume_layout short_history, long_history;
+            if (!t.assert_true(ggml_cuda_fattn_tile_resume_layout_make(g,4096,short_history))) continue;
+            t.assert_true(ggml_cuda_fattn_tile_resume_layout_make(g,262144,long_history));
+            t.assert_equal(short_history.bytes,long_history.bytes);
+            t.assert_equal(size_t((queries+g.ncols1-1)/g.ncols1)*(32/8)*7*128*short_history.thread_bytes,
+                short_history.state_bytes);
+            const auto saved=long_history;
+            g.queries=UINT32_MAX;
+            t.assert_true(!ggml_cuda_fattn_tile_resume_layout_make(g,262144,long_history));
+            t.assert_true(std::memcmp(&saved,&long_history,sizeof(saved)) == 0);
+        }
+        ggml_cuda_fattn_tile_resume_geometry invalid{512,32,4,4,4,8,128,64,7,4};
+        ggml_cuda_fattn_tile_resume_layout untouched;
+        t.assert_true(!ggml_cuda_fattn_tile_resume_layout_make(invalid,4096,untouched));
+    });
     t.test("wide_mma_and_tile_checkpoints_quote_native_accumulator_bytes", [&](testing & t) {
         for (uint32_t columns : {1u,2u,4u,8u}) for (uint32_t groups : {2u,8u}) {
             if (columns < 4 && groups != 8) continue;
@@ -162,7 +206,7 @@ int main() {
             if (kind == 2) bad.acc_bytes = 2;
             if (kind == 3) bad.query_heads = 3;
             if (kind == 4) bad.nbatch_fa = 31;
-            if (kind == 5) bad.queries = 9;
+            if (kind == 5) bad.queries = 0;
             if (kind == 6) bad.splits = UINT32_MAX;
             t.assert_true(!ggml_cuda_fattn_tile_resume_layout_make(bad,529,plan));
             t.assert_true(std::memcmp(&saved,&plan,sizeof(plan)) == 0);

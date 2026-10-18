@@ -79,6 +79,67 @@ static int verify_long_ring_exact() {
 }
 
 int main(int argc, char ** argv) {
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-progressive")) {
+        testing t;
+        t.test("head512_small_ring_decode_and_prefill_match_stock", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+            const auto * ops=get ? get() : nullptr;
+            if (!t.assert_true(ops && ops->geometry && ops->resume_spans)) return;
+            const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+                GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+            for (size_t active : {size_t(2049),size_t(4097)}) for (uint32_t ring : {1u,4u})
+            for (auto key : formats) for (auto value : formats) {
+                fixture f(backend.get(),true,key,value,active,false,2,4,12,512,512);
+                f.policy.initial_ring_slots=ring;
+                llama_kv_stream_policy_state placement;
+                if (!t.assert_true(llama_kv_stream_policy_initialize(f.policy,placement).status == llama_kv_stream_policy_status::success &&
+                        f.attach(&placement) && f.resident->configure_native_graph_attention(true) &&
+                        f.resident->configure_resumed_decode(true))) return;
+                t.assert_true(placement.resident_pages_per_layer+placement.ring_slots < (active+255)/256);
+                auto pin=f.binding->acquire();
+                if (!t.assert_true(bool(pin))) return;
+                for (uint32_t queries : {1u,2u,3u,4u,5u,6u,7u,8u,9u,16u,17u,31u,128u,129u,255u,256u}) {
+                    const ggml_kv_stream_attention_request request{f.policy.shape,32,queries,(active+255)/256*256};
+                    size_t bytes=0;
+                    if (!t.assert_true(ggml_kv_stream_workspace_query(ops,backend.get(),request,
+                            queries <= 8 ? ggml_kv_stream_workspace_kind::decode : ggml_kv_stream_workspace_kind::prefill,bytes))) return;
+                    if (queries > 8 && !t.assert_true(f.resident->configure_prefill_workspace(bytes))) return;
+                    block_workspace workspace(f,bytes,37);
+                    block_inputs input(f,active,queries,false,32);
+                    ggml_context_ptr ctx(ggml_init({16384,nullptr,true}));
+                    auto * bounds=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_I32,4,queries);
+                    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+                    if (!t.assert_true(bool(buffer))) return;
+                    std::vector<int32_t> intervals(4*queries);
+                    for (uint32_t row=0;row<queries;++row) {
+                        intervals[4*row]=0; intervals[4*row+1]=int32_t(active-queries+row+1);
+                        intervals[4*row+2]=int32_t(input.padded); intervals[4*row+3]=1;
+                    }
+                    ggml_backend_tensor_set(bounds,intervals.data(),0,ggml_nbytes(bounds));
+                    const bool compact=queries > 8;
+                    if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,!compact}))) return;
+                    for (uint32_t layer=0;layer<2;++layer) {
+                        const auto expected=stock_attention(f,input,layer);
+                        const auto label=std::string(ggml_type_name(key))+"/"+ggml_type_name(value)+" TG"+
+                            std::to_string(queries)+" layer "+std::to_string(layer)+" active "+
+                            std::to_string(active)+" ring "+std::to_string(f.policy.initial_ring_slots);
+                        if (!t.assert_true(label,f.resident->compute_streamed(layer,input.q,compact ? bounds : input.mask,
+                                input.output,active,1.f/16,workspace.lease.get(),true,4))) return;
+                        ggml_backend_synchronize(backend.get());
+                        t.assert_true(label+" stock bits",same_float_bits(expected,input.read()));
+                        t.assert_true(f.resident->last_attention_calls() > 1);
+                    }
+                    t.assert_true(!f.resident->sequence_active());
+                }
+            }
+        });
+        return t.summary();
+    }
     if (argc > 1 && !std::strcmp(argv[1],"--verify-long-ring")) return verify_long_ring_exact();
     if (argc > 1 && !std::strcmp(argv[1],"--bench-ring-decode")) return benchmark_ring_decode(argc > 2 && !std::strcmp(argv[2],"160k"));
     testing t;

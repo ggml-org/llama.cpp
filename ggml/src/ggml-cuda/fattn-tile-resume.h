@@ -15,10 +15,28 @@ struct ggml_cuda_fattn_tile_resume_geometry {
     uint32_t ncols1 = 0, ncols2 = 0, nthreads = 0, nbatch_fa = 0, splits = 0, acc_bytes = 0;
 };
 
+// Use the native split search; a complete occupancy wave bounds its history-independent scratch.
+static inline uint32_t ggml_cuda_fattn_tile_resume_splits(uint32_t tiles, uint32_t destinations,
+        uint32_t occupancy, uint32_t wave) {
+    if (!tiles || !destinations || !occupancy || occupancy > wave ||
+            uint64_t(destinations)*tiles > UINT64_MAX/100) return 0;
+    uint32_t splits = tiles < occupancy ? tiles : occupancy, best = 0;
+    uint64_t best_waves = 0;
+    for (uint32_t candidate = splits; candidate <= tiles; ++candidate) {
+        const uint64_t blocks = uint64_t(destinations)*candidate, waves = (blocks+wave-1)/wave;
+        const uint32_t efficiency = uint32_t(100*blocks/(waves*wave));
+        if (best >= 95 && waves > best_waves) break;
+        if (efficiency > best) { best = efficiency; best_waves = waves; splits = candidate; }
+        if (candidate == UINT32_MAX) break;
+    }
+    return splits;
+}
+
 struct ggml_cuda_fattn_tile_resume_control {
     char * state = nullptr;
     int32_t first = 0, end = 0;
     bool reset = false, finish = false;
+    const int32_t * mask_bounds = nullptr;
 };
 
 // The leading table preserves the K-argument ABI; the caller retains scratch and source grants through completion.
@@ -40,13 +58,14 @@ static inline bool ggml_cuda_fattn_tile_resume_layout_make(
     auto power_two = [](uint32_t v){return v && !(v&(v-1));};
     if ((g.width != 40 && g.width != 64 && g.width != 72 && g.width != 256 && g.width != 512) ||
             !g.query_heads || g.query_heads > 65535 || !g.kv_heads || g.query_heads%g.kv_heads ||
-            !g.queries || g.queries > 8 || (g.ncols1 != 1 && g.ncols1 != 2 && g.ncols1 != 4 && g.ncols1 != 8) ||
+            !g.queries || g.queries > INT32_MAX || (g.ncols1 != 1 && g.ncols1 != 2 && g.ncols1 != 4 && g.ncols1 != 8 &&
+                !(g.width == 512 && g.ncols1 == 16)) ||
             !power_two(g.ncols2) || g.ncols2 > 32 || (g.query_heads/g.kv_heads)%g.ncols2 ||
             (g.nthreads != 64 && g.nthreads != 128 && g.nthreads != 256) ||
             !power_two(g.nbatch_fa) || g.nbatch_fa > 256 || !g.splits || g.splits > 65535 ||
             (g.acc_bytes != 4 && g.acc_bytes != 8) || tokens < g.queries || tokens > INT32_MAX) return false;
     const size_t columns = size_t(g.ncols1)*g.ncols2, warps = g.nthreads/32;
-    if (columns < 2 || columns > 32 || (columns >= warps ? columns%warps : warps%columns)) return false;
+    if (columns < 2 || columns > (g.width == 512 ? 16u : 32u) || (columns >= warps ? columns%warps : warps%columns)) return false;
     const size_t cpw = columns > warps ? columns/warps : 1, np = warps > columns ? warps/columns : 1;
     if (g.nbatch_fa%(np*32) || (g.ncols2 > 1 && tokens%g.nbatch_fa)) return false;
     ggml_cuda_fattn_tile_resume_layout next;

@@ -3,7 +3,42 @@
 #include "../ggml/src/ggml-cuda/kv-stream-dispatch.cuh"
 #include "../ggml/src/ggml-cuda/kv-stream-runtime.cuh"
 #include "../ggml/src/ggml-cuda/kv-stream-tile.cuh"
+#include "../ggml/src/ggml-cuda/fattn.cuh"
+#include "ggml-cpp.h"
 #include <cstdlib>
+
+// Exercise the real tile family on the current device, without pretending its architecture is older.
+bool kv_stream_test_native_tile(ggml_backend_t backend, ggml_tensor * op) {
+    auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    const size_t bytes=ggml_cuda_flash_attn_ext_selected_alloc_size(ggml_cuda_kv_stream_kernel_family::tile,op);
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(ggml_backend_get_default_buffer_type(backend),bytes));
+    if (!buffer) return false;
+    auto native=*op;
+    native.data=ggml_backend_buffer_get_base(buffer.get()); native.buffer=buffer.get();
+    ggml_cuda_flash_attn_ext_selected(ctx,&native,ggml_cuda_kv_stream_kernel_family::tile);
+    CUDA_CHECK(cudaMemcpyAsync(op->data,native.data,ggml_nbytes(op),cudaMemcpyDeviceToDevice,ctx.stream()));
+    ggml_backend_synchronize(backend);
+    return true;
+}
+
+bool kv_stream_test_tile_plan(ggml_backend_t backend, const ggml_tensor * op, size_t tokens,
+        ggml_kv_stream_resume_plan & plan, size_t & bound) {
+    auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    const auto * q=op->src[0], * k=op->src[1], * v=op->src[2];
+    return ggml_cuda_kv_stream_tile_plan(ctx,k->type,v->type,uint32_t(q->ne[2]),uint32_t(k->ne[2]),
+        uint32_t(q->ne[1]),tokens,plan,uint32_t(k->ne[0])) &&
+        ggml_cuda_kv_stream_tile_prefill_bound(ctx,k->type,v->type,uint32_t(q->ne[2]),uint32_t(k->ne[2]),
+            uint32_t(q->ne[1]),tokens,uint32_t(k->ne[0]),bound);
+}
+
+bool kv_stream_test_tile_run(ggml_backend_t backend, const ggml_tensor * op, const ggml_kv_stream_span_plan_view & view,
+        ggml_backend_buffer_t workspace, const ggml_kv_stream_resume_plan & plan, size_t first, size_t end) {
+    auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    return ggml_cuda_kv_stream_tile_launch(ctx,op,view,workspace,plan,first,end);
+}
 
 // Resolve and load real device code without claiming that the whole streamed workload is admitted.
 bool kv_stream_test_dimension_instance(ggml_backend_t backend, ggml_type key, ggml_type value,

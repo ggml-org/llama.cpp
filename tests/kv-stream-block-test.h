@@ -48,7 +48,8 @@ struct block_inputs {
     }
 };
 
-inline std::vector<float> stock_attention(fixture & f, block_inputs & input, uint32_t layer, float scale = 1.0f/16) {
+inline std::vector<float> stock_attention(fixture & f, block_inputs & input, uint32_t layer, float scale = 1.0f/16,
+        bool (*native_override)(ggml_backend_t,ggml_tensor *) = nullptr) {
     ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
     const int64_t kv_heads=f.policy.shape.heads;
     const int64_t dk=f.policy.shape.head_dim_k, dv=f.policy.shape.head_dim_v;
@@ -63,6 +64,7 @@ inline std::vector<float> stock_attention(fixture & f, block_inputs & input, uin
     llama_kv_stream_host_layer host; GGML_ASSERT(f.host->layer(layer,host));
     ggml_backend_tensor_set(k,host.k,0,ggml_nbytes(k)); ggml_backend_tensor_set(v,host.v,0,ggml_nbytes(v));
     GGML_ASSERT(ggml_backend_graph_compute(f.backend,graph) == GGML_STATUS_SUCCESS);
+    if (native_override) GGML_ASSERT(native_override(f.backend,out));
     std::vector<float> result(ggml_nelements(out)); ggml_backend_tensor_get(out,result.data(),0,ggml_nbytes(out)); return result;
 }
 

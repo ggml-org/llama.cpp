@@ -674,8 +674,12 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
             }
 
             if (!oob_check || i_KQ < k_VKQ_sup) {
-                KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] += (ncols2 > 1 || mask) ?
-                    slope*__half2float(mask[j*stride_mask + k_VKQ_0 + i_KQ]) : 0.0f;
+                if constexpr (ggml_cuda_fattn_tile_mask_traits<KV>::enabled) {
+                    KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] += slope*kv.mask_value(mask,stride_mask,j,k_VKQ_0+i_KQ);
+                } else {
+                    KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] += (ncols2 > 1 || mask) ?
+                        slope*__half2float(mask[j*stride_mask + k_VKQ_0 + i_KQ]) : 0.0f;
+                }
 
                 KQ_max_new[jc0] = fmaxf(KQ_max_new[jc0], KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] + FATTN_KQ_MAX_OFFSET);
             }

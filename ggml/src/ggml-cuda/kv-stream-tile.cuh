@@ -31,7 +31,10 @@ static inline fattn_kernel_t ggml_cuda_kv_stream_tile_kernel(ggml_type key, ggml
 }
 
 bool ggml_cuda_kv_stream_tile_plan(ggml_backend_cuda_context & ctx, ggml_type key, ggml_type value,
-        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, ggml_kv_stream_resume_plan & output);
+        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, ggml_kv_stream_resume_plan & output,
+        uint32_t width = 256);
+bool ggml_cuda_kv_stream_tile_prefill_bound(ggml_backend_cuda_context & ctx, ggml_type key, ggml_type value,
+        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, uint32_t width, size_t & output);
 bool ggml_cuda_kv_stream_tile_layout(ggml_backend_cuda_context & ctx, ggml_type key, ggml_type value,
         const ggml_kv_stream_resume_plan & plan, ggml_cuda_fattn_tile_resume_layout & output, size_t * shared_bytes = nullptr);
 // Enqueue on the caller's ordered stream; grants and scratch remain alive through its read fence.

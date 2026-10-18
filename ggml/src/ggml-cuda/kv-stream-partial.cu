@@ -140,7 +140,7 @@ static ggml_kv_stream_capabilities capabilities(ggml_backend_t backend, int32_t 
     return caps;
 }
 
-// Admit only compiled native pairs with head size 256, one sequence, and no sinks/bias/softcap.
+// Admit implemented native geometry, one sequence, and no sinks/bias/softcap.
 // Segmented execution validates physical K/V through its retained plan rather than prototype data pointers.
 static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool segmented) {
     if (!backend || !ggml_backend_is_cuda(backend) || !op || op->op != GGML_OP_FLASH_ATTN_EXT ||
@@ -155,7 +155,8 @@ static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool
     if (op->src[5]) {
         auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
         const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,op);
-        if (family != kernel_family::mma && family != kernel_family::vector) return false;
+        if (family != kernel_family::mma && family != kernel_family::vector &&
+                !(family == kernel_family::tile && k && k->ne[0] == 512)) return false;
     }
     if (!q || !k || !v || !mask || q->type != GGML_TYPE_F32 ||
             mask->type != GGML_TYPE_F16 || op->type != GGML_TYPE_F32 ||
@@ -189,8 +190,7 @@ static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool
 }
 
 static bool supports(ggml_backend_t backend, const ggml_tensor * op) {
-    return op && op->src[1] && op->src[2] && op->src[1]->ne[0] == 256 && op->src[2]->ne[0] == 256 &&
-        supports_common(backend,op,false);
+    return supports_common(backend,op,false);
 }
 
 static bool supports_spans(ggml_backend_t backend, const ggml_tensor * op) {
@@ -253,7 +253,7 @@ static bool workspace_valid(ggml_backend_t backend, ggml_backend_buffer_t buffer
 
 // Export two native vector splits. A shifted maximum remains a valid common (m,L,U) coordinate.
 static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t buffer, bool second) {
-    if (op && op->src[5]) return false;
+    if (!op || !op->src[0] || op->src[0]->ne[0] != 256 || op->src[5]) return false;
     if (capture_active(backend) || !supports(backend, op)) return false;
     ggml_kv_stream_block_layout layout;
     if (ggml_kv_stream_block_layout_make(size_t(op->ne[1])*size_t(op->ne[2]), 256, layout).status != ggml_kv_stream_partial_status::success ||
@@ -342,8 +342,8 @@ static bool resume_plan_dimension(
     std::memcpy(op.op_params,&scale,sizeof(scale));
     op.src[0] = &q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &mask;
     const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op);
-    if (family == kernel_family::tile && width == 256) return ggml_cuda_kv_stream_tile_plan(
-        ctx,ggml_type(key),ggml_type(value),heads,kv_heads,queries,tokens,output);
+    if (family == kernel_family::tile) return ggml_cuda_kv_stream_tile_plan(
+        ctx,ggml_type(key),ggml_type(value),heads,kv_heads,queries,tokens,output,width);
     if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_f16_resume_plan(ctx,&op,output);
     if (width != 256) return false;
     auto native=ggml_cuda_kv_stream_vector_kernel(key == GGML_TYPE_F32 ? GGML_TYPE_F16 : ggml_type(key),
@@ -516,7 +516,8 @@ static bool resume_span_launch(
 // Validate a retained logical wave independently of prototype K/V pointers before any asynchronous write.
 static bool resume_spans(ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t workspace,
         const ggml_kv_stream_resume_plan & plan, const ggml_kv_stream_span_plan_view & view, size_t first, size_t end) {
-    if (capture_active(backend) || !plan.span_resume || plan.kernel_config[0] != 2 || !supports_spans(backend,op) ||
+    if (capture_active(backend) || !plan.span_resume ||
+            (plan.kernel_config[0] != 2 && !(plan.kernel_config[0] == 1 && plan.head_dim_k == 512)) || !supports_spans(backend,op) ||
             !workspace || !view.spans || !view.count || view.count > 3 || first >= end || end > plan.tokens ||
             view.active_tokens != plan.tokens || view.query_tokens != plan.queries) return false;
     const auto * q=op->src[0], * k=op->src[1], * v=op->src[2];
@@ -576,6 +577,7 @@ static bool resume_spans(ggml_backend_t backend, const ggml_tensor * op, ggml_ba
     }
     if (cursor != end) return false;
     auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+    if (plan.kernel_config[0] == 1) return ggml_cuda_kv_stream_tile_launch(ctx,op,view,workspace,plan,first,end);
     return ggml_cuda_flash_attn_ext_mma_f16_resume(ctx,const_cast<ggml_tensor *>(op),descriptors,view.count,
         reinterpret_cast<void *>(base),capacity,first,end,plan.tokens);
 }
@@ -714,7 +716,8 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
     if (family == kernel_family::none) return plan_status::stock_unavailable;
     if (!op->src[3] || op->src[4] || ggml_get_op_params_i32(op,4) != 0 ||
             (metadata.head_dim_k != 256 && metadata.head_dim_k != 512) || metadata.head_dim_v != metadata.head_dim_k ||
-            (metadata.queries > 8 && family != kernel_family::mma)) return plan_status::unsupported_geometry;
+            (metadata.queries > 8 && family != kernel_family::mma &&
+                !(family == kernel_family::tile && metadata.head_dim_k == 512))) return plan_status::unsupported_geometry;
     if (op->src[3]->nb[1] < size_t(op->src[1]->ne[1])*sizeof(half) || op->src[3]->nb[1]%sizeof(half))
         return plan_status::unsupported_geometry;
     float params[3]; std::memcpy(params, op->op_params, sizeof(params));
@@ -749,7 +752,7 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
     } else if (family == kernel_family::tile) {
         if (!ggml_cuda_kv_stream_tile_plan(ctx,ggml_type(metadata.type_k),ggml_type(metadata.type_v),
                 uint32_t(metadata.query_heads),uint32_t(metadata.kv_heads),uint32_t(metadata.queries),
-                size_t(metadata.padded_tokens),next.resume)) return plan_status::unsupported_launch_resources;
+                size_t(metadata.padded_tokens),next.resume,uint32_t(metadata.head_dim_k))) return plan_status::unsupported_launch_resources;
         ggml_cuda_fattn_tile_resume_layout layout;
         if (!ggml_cuda_kv_stream_tile_layout(ctx,ggml_type(metadata.type_k),ggml_type(metadata.type_v),
                 next.resume,layout,&requirements.shared_bytes)) return plan_status::unsupported_launch_resources;
@@ -832,6 +835,13 @@ static bool mma_workspace_for_queries_dimension(ggml_backend_t backend, int32_t 
     std::memcpy(op.op_params,&scale,sizeof(scale));
     auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
+    if (width == 512 && ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op) == kernel_family::tile) {
+        if (prefill) return ggml_cuda_kv_stream_tile_prefill_bound(ctx,ggml_type(key),ggml_type(value),
+            heads,kv_heads,queries,tokens,width,bytes);
+        ggml_kv_stream_resume_plan plan;
+        if (!ggml_cuda_kv_stream_tile_plan(ctx,ggml_type(key),ggml_type(value),heads,kv_heads,queries,tokens,plan,width)) return false;
+        bytes=plan.bytes; return true;
+    }
     if (prefill) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op);
@@ -909,7 +919,7 @@ static bool geometry_workspace(ggml_backend_t backend, const ggml_kv_stream_atte
             uint32_t(shape.heads),request.query_tokens,request.tokens,request.spans,output,true,512);
     if (kind == ggml_kv_stream_workspace_kind::prefill_mask_bounds) {
         ggml_kv_stream_resume_plan plan;
-        if (!geometry_resume_plan(backend,request,plan) || plan.kernel_config[0] != 2) return false;
+        if (!geometry_resume_plan(backend,request,plan) || (plan.kernel_config[0] != 2 && plan.kernel_config[0] != 1)) return false;
         output=0; return true;
     }
     if ((kind != ggml_kv_stream_workspace_kind::decode && kind != ggml_kv_stream_workspace_kind::mma) ||
