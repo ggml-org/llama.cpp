@@ -373,6 +373,8 @@ target_include_directories(test-cuda-vmm-probe PRIVATE ${PROJECT_SOURCE_DIR}/ggm
 llama_test(test-cuda-vmm-probe)
 llama_test_cmd(${CMAKE_COMMAND} NAME test-cuda-architecture-config
     ARGS -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/test-cuda-architecture-config.cmake)
+llama_test_cmd(${CMAKE_COMMAND} NAME test-cuda-kv-runtime-config
+    ARGS -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/test-cuda-kv-runtime-config.cmake)
 
 if (GGML_CUDA AND GGML_CUDA_FA)
     enable_language(CUDA)

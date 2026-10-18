@@ -38,7 +38,7 @@ struct ggml_cuda_fattn_tile_resume_layout {
 static inline bool ggml_cuda_fattn_tile_resume_layout_make(
         const ggml_cuda_fattn_tile_resume_geometry & g, size_t tokens, ggml_cuda_fattn_tile_resume_layout & output) {
     auto power_two = [](uint32_t v){return v && !(v&(v-1));};
-    if ((g.width != 40 && g.width != 64 && g.width != 72 && g.width != 256) ||
+    if ((g.width != 40 && g.width != 64 && g.width != 72 && g.width != 256 && g.width != 512) ||
             !g.query_heads || g.query_heads > 65535 || !g.kv_heads || g.query_heads%g.kv_heads ||
             !g.queries || g.queries > 8 || (g.ncols1 != 1 && g.ncols1 != 2 && g.ncols1 != 4 && g.ncols1 != 8) ||
             !power_two(g.ncols2) || g.ncols2 > 32 || (g.query_heads/g.kv_heads)%g.ncols2 ||

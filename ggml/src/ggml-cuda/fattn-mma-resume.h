@@ -76,17 +76,20 @@ static inline bool ggml_cuda_fattn_mma_resume_block_active(
 // A native CTA/output-tile intersection owns slot (output_tile + CTA), including seam fragments.
 static inline bool ggml_cuda_fattn_mma_resume_layout_make(
         size_t destinations, size_t blocks, uint32_t threads, uint32_t columns, uint32_t groups,
-        ggml_cuda_fattn_mma_resume_layout & output, size_t kv_tiles = 0, bool compact = false) {
+        ggml_cuda_fattn_mma_resume_layout & output, size_t kv_tiles = 0, bool compact = false,
+        uint32_t head_width = 256) {
     if (!destinations || !blocks || destinations > SIZE_MAX-(blocks-1) ||
             !threads || threads%32 || threads > 1024 ||
             (columns != 1 && columns != 2 && columns != 4 && columns != 8) ||
             (groups != 2 && groups != 8) || (columns < 4 && groups != 8) ||
+            (head_width != 256 && head_width != 512) ||
             (kv_tiles && destinations > SIZE_MAX/kv_tiles) ||
             (compact && !ggml_cuda_fattn_mma_resume_schedule_valid(destinations,blocks,kv_tiles))) return false;
     ggml_cuda_fattn_mma_resume_layout next;
     next.slots=destinations+blocks-1;
-    // Head-256 Turing MMA fragments hold 128 or 256 bytes, plus two FP32 max/sum pairs.
-    next.thread_bytes=columns*groups <= 16 ? 144 : 272;
+    // Match stock's thinner half2 tiles, including head-512 at 32 columns.
+    const bool thin=columns*groups <= (head_width == 512 ? 32u : 16u);
+    next.thread_bytes=(thin ? head_width/2 : head_width)+4*sizeof(float);
     if (compact) {
         next.slots=ggml_cuda_fattn_mma_resume_state_slots(destinations,blocks,kv_tiles);
         // Uniform native splits stay inside one output tile and all have at least two K tiles.

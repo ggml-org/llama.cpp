@@ -5,7 +5,8 @@
 template<ggml_type V>
 static fattn_kernel_t tile_kernel(uint32_t ncols1, uint32_t ncols2) {
     using reader = ggml_cuda_fattn_tile_resume_kv<GGML_TYPE_@KV_STREAM_KEY@,V>;
-#define TILE(C1, C2) if (ncols1 == C1 && ncols2 == C2) return flash_attn_tile<256,256,C1,C2,false,reader>;
+#define TILE(C1, C2) if constexpr (@KV_STREAM_DIM@ == 256 || C1*C2 <= 16) { \
+    if (ncols1 == C1 && ncols2 == C2) return flash_attn_tile<@KV_STREAM_DIM@,@KV_STREAM_DIM@,C1,C2,false,reader>; }
     TILE(2,1) TILE(4,1) TILE(8,1)
     TILE(1,2) TILE(2,2) TILE(4,2) TILE(8,2)
     TILE(1,4) TILE(2,4) TILE(4,4) TILE(8,4)
@@ -15,7 +16,7 @@ static fattn_kernel_t tile_kernel(uint32_t ncols1, uint32_t ncols2) {
 }
 
 // Use the same compiled-pair flags as the upstream vector registry.
-fattn_kernel_t ggml_cuda_kv_stream_tile_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t ncols1, uint32_t ncols2) {
+fattn_kernel_t ggml_cuda_kv_stream_tile_kernel_@KV_STREAM_SYMBOL@(ggml_type value, uint32_t ncols1, uint32_t ncols2) {
     GGML_UNUSED_VARS(value,ncols1,ncols2);
 #ifndef GGML_CUDA_NO_FA
     switch (value) {

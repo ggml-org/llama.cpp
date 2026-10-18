@@ -9,6 +9,30 @@
 
 int main() {
     testing t;
+    t.test("wide_mma_and_tile_checkpoints_quote_native_accumulator_bytes", [&](testing & t) {
+        for (uint32_t columns : {1u,2u,4u,8u}) for (uint32_t groups : {2u,8u}) {
+            if (columns < 4 && groups != 8) continue;
+            ggml_cuda_fattn_mma_resume_layout narrow,wide;
+            if (!t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(12,17,128,columns,groups,narrow,41,true))) return;
+            if (!t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(12,17,128,columns,groups,wide,41,true,512))) return;
+            t.assert_equal(narrow.slots,wide.slots);
+            t.assert_equal(narrow.map_entries,wide.map_entries);
+            t.assert_equal(columns*groups <= 32 ? size_t(272) : size_t(528),wide.thread_bytes);
+            t.assert_equal(wide.slots*128*wide.thread_bytes,wide.bytes);
+            const auto saved=wide;
+            for (uint32_t invalid : {0u,255u,UINT32_MAX}) {
+                t.assert_true(!ggml_cuda_fattn_mma_resume_layout_make(12,17,128,columns,groups,wide,41,true,invalid));
+                t.assert_true(std::memcmp(&saved,&wide,sizeof(wide)) == 0);
+            }
+        }
+        ggml_cuda_fattn_tile_resume_geometry g{512,32,4,4,1,8,64,64,17,4};
+        ggml_cuda_fattn_tile_resume_layout tile;
+        if (!t.assert_true(ggml_cuda_fattn_tile_resume_layout_make(g,8192,tile))) return;
+        t.assert_equal(size_t(4*(8+8*4)),tile.thread_bytes);
+        t.assert_equal(size_t(512*32*4*4),tile.output_bytes);
+        t.assert_true(tile.state_offset+tile.state_bytes <= tile.partial_offset);
+        t.assert_true(tile.output_offset+tile.output_bytes <= tile.bytes);
+    });
     t.test("mma_compact_checkpoints_only_store_multitile_native_slices",[&](testing & t) {
         for (size_t destinations : {1u,2u,7u}) for (size_t tiles : {1u,2u,7u,41u})
             for (size_t blocks : {1u,3u,17u,64u}) {

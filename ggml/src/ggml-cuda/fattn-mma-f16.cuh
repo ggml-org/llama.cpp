@@ -1315,10 +1315,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
     char * checkpoint=nullptr;
     if constexpr (KV::resumable) {
-        static_assert(DKQ == 256 && DV == 256, "resume layout is head-256 only");
-        constexpr size_t thread_bytes=ncols <= 16 ? 144 : 272;
+        static_assert((DKQ == 256 || DKQ == 512) && DKQ == DV, "unsupported resumed head geometry");
+        constexpr size_t thread_bytes=sizeof(VKQ_C)+sizeof(KQ_max)+sizeof(KQ_rowsum);
 #if defined(TURING_MMA_AVAILABLE)
-        static_assert(sizeof(VKQ_C)+sizeof(KQ_max)+sizeof(KQ_rowsum) == thread_bytes, "native checkpoint layout changed");
+        static_assert(thread_bytes == (ncols <= (DKQ == 512 ? 32 : 16) ? DV/2 : DV)+4*sizeof(float), "native checkpoint layout changed");
 #endif
         // Singleton native slices cannot cross a tile-aligned wave; do not read their absent map/state.
         if (kb0_start > native_start || kb0_stop < native_stop) {

@@ -16,6 +16,9 @@ bool kv_stream_test_is_arch_only(int cc);
 size_t kv_stream_test_shared_limit(ggml_backend_t backend, size_t limit);
 int kv_stream_test_override_cc(ggml_backend_t backend, int cc);
 int kv_stream_test_compiled_cc(ggml_backend_t backend);
+bool kv_stream_test_dimension_instance(ggml_backend_t backend,ggml_type key,ggml_type value,
+        uint32_t width,uint32_t columns,uint32_t groups,bool mma,bool resume,bool dense);
+bool kv_stream_test_runtime_shared_instances();
 
 struct pascal_test_guard {
     ggml_backend_t backend;
@@ -321,6 +324,40 @@ static int benchmark_spans() {
 }
 
 int main(int argc, char ** argv) {
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-compiled")) {
+#ifdef KV_STREAM_PASCAL_CUDA_TEST
+        testing t;
+        t.test("compiled_wide_stock_family_instances_load_on_the_real_device", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            t.assert_true(kv_stream_test_runtime_shared_instances());
+            const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+                GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+            for (const auto key : formats) for (const auto value : formats)
+                for (const auto geometry : {std::make_pair(1u,8u),std::make_pair(2u,8u),std::make_pair(4u,8u),
+                        std::make_pair(8u,8u),std::make_pair(4u,2u),std::make_pair(8u,2u)})
+                    for (bool resume : {false,true}) for (bool dense : {false,true})
+                        t.assert_true(kv_stream_test_dimension_instance(backend.get(),key,value,512,
+                            geometry.first,geometry.second,true,resume,dense));
+            for (const auto pair : {std::make_pair(GGML_TYPE_Q8_0,GGML_TYPE_Q4_0),
+                    std::make_pair(GGML_TYPE_Q8_0,GGML_TYPE_Q8_0),
+                    std::make_pair(GGML_TYPE_Q5_1,GGML_TYPE_Q5_1),
+                    std::make_pair(GGML_TYPE_F16,GGML_TYPE_F16)}) {
+                for (uint32_t columns : {1u,2u,4u,8u}) for (bool resume : {false,true}) for (bool dense : {false,true})
+                    t.assert_true(kv_stream_test_dimension_instance(backend.get(),pair.first,pair.second,512,columns,8,true,resume,dense));
+                for (uint32_t columns : {2u,4u,8u})
+                    t.assert_true(kv_stream_test_dimension_instance(backend.get(),pair.first,pair.second,512,columns,1,false,false,false));
+            }
+            t.assert_true(!kv_stream_test_dimension_instance(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_IQ4_NL,512,1,8,true,true,false));
+            t.assert_true(!kv_stream_test_dimension_instance(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,384,1,8,true,true,false));
+        });
+        return t.summary();
+#else
+        return 77;
+#endif
+    }
     const int consumer=argc > 1 && !std::strcmp(argv[1],"--cuda-sm75") ? 750 :
         argc > 1 && !std::strcmp(argv[1],"--cuda-sm86") ? 860 :
         argc > 1 && !std::strcmp(argv[1],"--cuda-sm89") ? 890 :
@@ -355,6 +392,17 @@ int main(int argc, char ** argv) {
     }
     if (argc > 1 && !std::strcmp(argv[1], "--bench")) return benchmark_spans();
     testing t;
+    t.test("dimensioned_inputs_preserve_independent_key_and_value_rows", [](testing & t) {
+        ggml_backend_ptr backend(ggml_backend_cpu_init());
+        fixture f(backend.get(),false,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,2,4,16,512,256);
+        block_inputs input(f,513,4,false,32);
+        t.assert_equal(int64_t(512),input.q->ne[0]);
+        t.assert_equal(int64_t(256),input.output->ne[0]);
+        t.assert_equal(size_t(4*32*512),input.qdata.size());
+        t.assert_equal(size_t(4*32*256),input.read().size());
+        t.assert_equal(size_t(544),f.host->layout().k_row_bytes);
+        t.assert_equal(size_t(144),f.host->layout().v_row_bytes);
+    });
     const bool quant_matrix = argc > 1 && !std::strcmp(argv[1], "--cuda-quant-matrix");
     const bool float32_only = argc > 1 && !std::strcmp(argv[1], "--cuda-f32");
     if (quant_matrix) t.set_filter("compiled_cache_pairs_execute_stock_order_spanned_attention");

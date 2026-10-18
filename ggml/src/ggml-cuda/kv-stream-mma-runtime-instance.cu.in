@@ -1,0 +1,39 @@
+#include "ggml-cuda/kv-stream-runtime.cuh"
+#include "ggml-cuda/kv-stream-mma-runtime.cuh"
+
+template<bool encoded, bool resume, bool dense>
+__launch_bounds__(ggml_cuda_fattn_mma_get_nthreads(512,512,@KV_STREAM_COLUMNS@*@KV_STREAM_GROUPS@),
+    ggml_cuda_fattn_mma_get_occupancy(512,512,@KV_STREAM_COLUMNS@*@KV_STREAM_GROUPS@))
+static __global__ void ggml_cuda_fattn_mma_runtime(
+        const char * Q, const char * K, const char * V, const char * mask, const char * sinks, const int * KV_max,
+        float * dst, float2 * meta, float scale, float bias, float m0, float m1, uint32_t log2, float softcap,
+        int32_t ne00, uint3 ne01, int32_t ne02, int32_t ne03, int32_t nb01, int32_t nb02, int32_t nb03,
+        int32_t ne10, int32_t ne11, int32_t ne12, int32_t ne13, int32_t nb11, int32_t nb12, int64_t nb13,
+        int32_t nb21, int32_t nb22, int64_t nb23,
+        int32_t ne31, int32_t ne32, int32_t ne33, int32_t nb31, int32_t nb32, int64_t nb33,
+        const ggml_cuda_kv_span * spans, int count, int offset, uint32_t flags,
+        ggml_cuda_fattn_mma_resume_control control, ggml_type key, ggml_type value) {
+    ggml_cuda_pdl_sync();
+    extern __shared__ unsigned char storage[];
+    auto * cached=reinterpret_cast<ggml_cuda_kv_span *>(storage+offset);
+    if (threadIdx.y*blockDim.x+threadIdx.x < count)
+        cached[threadIdx.y*blockDim.x+threadIdx.x]=spans[threadIdx.y*blockDim.x+threadIdx.x];
+    __syncthreads();
+    const ggml_cuda_fattn_mma_runtime_span_kv<encoded,resume,dense> reader{cached,count,0,flags,control,0,key,value};
+    flash_attn_ext_f16_impl<512,512,@KV_STREAM_COLUMNS@,@KV_STREAM_GROUPS@,false,false,false>(
+        Q,K,V,mask,sinks,KV_max,dst,meta,scale,bias,m0,m1,log2,softcap,
+        ne00,ne01,ne02,ne03,nb01,nb02,nb03,ne10,ne11,ne12,ne13,nb11,nb12,nb13,nb21,nb22,nb23,
+        ne31,ne32,ne33,nb31,nb32,nb33,reader);
+}
+
+template<bool encoded>
+static ggml_kv_mma_runtime_kernel_t ggml_cuda_kv_runtime_select(bool resume, bool dense) {
+    if (resume) return dense ? ggml_cuda_fattn_mma_runtime<encoded,true,true> : ggml_cuda_fattn_mma_runtime<encoded,true,false>;
+    return dense ? ggml_cuda_fattn_mma_runtime<encoded,false,true> : ggml_cuda_fattn_mma_runtime<encoded,false,false>;
+}
+
+// Format admission belongs to the shared registry, not another arithmetic specialization.
+ggml_kv_mma_runtime_kernel_t ggml_cuda_kv_stream_mma_runtime_kernel_@KV_STREAM_COLUMNS@_@KV_STREAM_GROUPS@(
+        bool encoded, bool resume, bool dense) {
+    return encoded ? ggml_cuda_kv_runtime_select<true>(resume,dense) : ggml_cuda_kv_runtime_select<false>(resume,dense);
+}
