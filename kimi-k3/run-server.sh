@@ -7,6 +7,11 @@
 #   MODEL       first shard of the GGUF          (default: the IQ1_S-XS model, /mnt/k3/kimi-k3-iq1/...-00001-of-00034.gguf;
 #               the MXFP4 model /mnt/k3/kimi-k3/MXFP4_MOE/...-00001-of-00031.gguf is the accuracy-preserving one)
 #   PORT        listen port                      (default: 18090)
+#   HOST        listen address                   (default: 0.0.0.0 = every interface, reachable from the local
+#               network; 127.0.0.1 = this machine only). There is no API key by default: anyone who can reach the
+#               port, or any web page open in a browser on the network (CORS allows all origins), can use the
+#               server; set API_KEY to require one
+#   API_KEY     require this key on API requests (the web UI asks for it once)
 #   GPU_LAYERS  layers whose dense weights go to CUDA0, from layer 0 (default: IQ1 model file 11 with
 #               OFFLOAD=1 / 19 with OFFLOAD=0, 8 otherwise; measured on the 12 GB card: MXFP4 10 layers left
 #               ~20 MB free; IQ1 19 layers leave ~500 MB without offload, with it 12 leave ~490 MB and 16 OOM)
@@ -45,6 +50,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${BIN:-$HERE/../build/bin/llama-server}"
 MODEL="${MODEL:-/mnt/k3/kimi-k3-iq1/Kimi-K3-abliterated-IQ1_S-XS-00001-of-00034.gguf}"
 PORT="${PORT:-18090}"
+HOST="${HOST:-0.0.0.0}"
+API_KEY="${API_KEY:-}"
 if [[ "$(basename "$MODEL")" == *IQ1* ]]; then
     OFFLOAD="${OFFLOAD:-1}"
     # the offload staging buffer takes ~2.3 GB more GPU memory: 11 dense layers with it (12 left < 500 MiB), 19 without
@@ -87,7 +94,7 @@ for a in "$@"; do
             die "refusing '$a': load mode, lazy mode and tensor placement are fixed by this script (use GPU_LAYERS)" ;;
         -m|--model|-c|--ctx-size|-t|--threads|--port|-b|--batch-size|-ub|--ubatch-size)
             die "refusing '$a': set it with the MODEL / CTX / THREADS / PORT / UBATCH environment variables" ;;
-        -fa|--flash-attn|-np|--parallel|--host)
+        -fa|--flash-attn|-np|--parallel|--host|--api-key|--api-key-file)
             die "refusing '$a': fixed by this script" ;;
         -ctxcp|--ctx-checkpoints|--swa-checkpoints)
             die "refusing '$a': set it with the CHECKPOINTS environment variable" ;;
@@ -102,6 +109,8 @@ for v in $(compgen -e | grep '^LLAMA_ARG_' || true); do
 done
 # these would silently turn the pinned dense weights into pageable memory, or offload single-token decode
 unset GGML_CUDA_NO_PINNED GGML_CUDA_ENABLE_UNIFIED_MEMORY GGML_OP_OFFLOAD_MIN_BATCH
+# llama-server adds LLAMA_API_KEY to the keys given on the command line: only API_KEY may set one
+unset LLAMA_API_KEY
 
 # ... and from llama.cpp config files, which are applied before the environment and the arguments
 for f in /etc/llama.cpp/config.ini "${XDG_CONFIG_HOME:-$HOME/.config}/llama.cpp/config.ini"; do
@@ -116,7 +125,22 @@ done
 [[ "$OFFLOAD" =~ ^[01]$ ]] || die "OFFLOAD must be 0 or 1"
 [[ -z "$CHECKPOINTS" || "$CHECKPOINTS" =~ ^(0|[1-9][0-9]*)$ ]] || die "CHECKPOINTS must be a non-negative integer"
 
+[[ "$HOST" =~ ^[0-9A-Za-z.:_-]+$ && "$HOST" != -* ]] || die "HOST must be an address or host name"
+# the key goes to the server through a pipe (--api-key-file), not the command line every local user can read; the
+# file form is one key per line with # comments, so a key must not contain a line break or start with #
+[[ "$API_KEY" != *$'\n'* && "$API_KEY" != \#* ]] || die "API_KEY must not contain a line break or start with #"
+KEY_FLAG=()
+if [[ -n "$API_KEY" ]]; then
+    # fd 3 stays open across exec (a <(...) pipe would be closed before exec runs)
+    exec 3<<<"$API_KEY"
+    KEY_FLAG=(--api-key-file /dev/fd/3)
+fi
+if [[ "$HOST" != 127.* && "$HOST" != localhost && "$HOST" != ::1 && -z "$API_KEY" ]]; then
+    echo "run-server.sh: listening on $HOST:$PORT without an API key: anyone on the network (and any web page open in a browser there, CORS allows all origins) can use this server; set API_KEY to require one" >&2
+fi
+
 # the web UI: the embedded one must be built from tools/ui (-DLLAMA_BUILD_UI=ON), not the downloaded release bundle
+
 BUILD_DIR="$(cd "$(dirname "$BIN")/.." && pwd)"
 UI_FLAG=()
 if [[ -n "$UI_PATH" ]]; then
@@ -173,10 +197,11 @@ CHECKPOINTS_FLAG=()
 if [[ -n "$CHECKPOINTS" ]]; then
     CHECKPOINTS_FLAG=(--ctx-checkpoints "$CHECKPOINTS")
 fi
+unset API_KEY
 exec "$BIN" "$@" \
     -m "$MODEL" \
     -lm none --lazy-mode on $OFFLOAD_FLAG -fit off --no-warmup "${CHECKPOINTS_FLAG[@]}" \
     -ngl 999 -ot "$OT" \
     -t "$THREADS" -fa on -c "$CTX" -b "$UBATCH" -ub "$UBATCH" -np 1 \
     --ui-config "$UI_CONFIG" "${UI_FLAG[@]}" \
-    --host 127.0.0.1 --port "$PORT"
+    "${KEY_FLAG[@]}" --host "$HOST" --port "$PORT"
