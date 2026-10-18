@@ -96,11 +96,13 @@ static __global__ void flash_attn_ext_vec(
     constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
     constexpr int cpy_ne = cpy_nb / 4;
 
+    constexpr int warp_size   = ggml_cuda_fattn_vec_get_warp_size_device<type_K, type_V>();
+
 #ifdef GGML_USE_HIP
 #ifdef RDNA
     constexpr int nthreads_KQ_q = 2;
 #else
-    constexpr int nthreads_KQ_q = 4;
+   constexpr int nthreads_KQ_q = warp_size == 64 ? 8 : 4;
 #endif // RDNA
     constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);
 #else
@@ -109,7 +111,6 @@ static __global__ void flash_attn_ext_vec(
 #endif // GGML_USE_HIP
 
     constexpr int nthreads    = ggml_cuda_fattn_vec_get_nthreads_device();
-    constexpr int warp_size   = ggml_cuda_fattn_vec_get_warp_size_device<type_K, type_V>();
     constexpr int nthreads_KQ = (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_BF16) ? 128 / cpy_nb : nthreads_KQ_q;
     constexpr int nthreads_V  = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16) ? 128 / cpy_nb : nthreads_V_q;
 

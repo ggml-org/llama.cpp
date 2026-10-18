@@ -185,7 +185,7 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q4_0(
 
 #pragma unroll
     for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
-        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+        const int k_KQ = k_KQ_0 + threadIdx.x % nthreads;
 
         const int ib    = k_KQ /  QI8_1;
         const int iqs4  = k_KQ %  QI4_0;
@@ -216,7 +216,7 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q4_1(
 
 #pragma unroll
     for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
-        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+        const int k_KQ = k_KQ_0 + threadIdx.x % nthreads;
 
         const int ib    = k_KQ /  QI8_1;
         const int iqs4  = k_KQ %  QI4_1;
@@ -249,7 +249,7 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q5_0(
 
 #pragma unroll
     for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
-        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+        const int k_KQ = k_KQ_0 + threadIdx.x % nthreads;
 
         const int ib    = k_KQ /  QI8_1;
         const int iqs4  = k_KQ %  QI5_0;
@@ -294,7 +294,7 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q5_1(
 
 #pragma unroll
     for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
-        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+        const int k_KQ = k_KQ_0 + threadIdx.x % nthreads;
 
         const int ib    = k_KQ /  QI8_1;
         const int iqs4  = k_KQ %  QI5_1;
@@ -340,7 +340,7 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q8_0(
 
 #pragma unroll
     for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
-        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+        const int k_KQ = k_KQ_0 + threadIdx.x % nthreads;
 
         const int ib  = k_KQ / QI8_0;
         const int iqs = k_KQ % QI8_0;
