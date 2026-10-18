@@ -393,6 +393,17 @@ private:
         return key;
     }
 
+    // for rules that refer to themselves: pick a free name now, set the body later
+    std::string _reserve_rule_name(const std::string & name) {
+        std::string esc_name = gbnf_format_rule_name(name);
+        std::string key = esc_name;
+        for (int i = 0; _rules.find(key) != _rules.end(); i++) {
+            key = esc_name + std::to_string(i);
+        }
+        _rules[key] = "";
+        return key;
+    }
+
     std::string _generate_union_rule(const std::string & name, const std::vector<common_chat_schema_ptr> & alt_schemas) {
         std::vector<std::string> rules;
         rules.reserve(alt_schemas.size());
@@ -784,7 +795,6 @@ private:
                 }
             }
             std::string free_kv = free_kvs.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
-            std::string free_loop = free_kv.empty() ? "" : "( \",\" space " + free_kv + " )*";
 
             // seen: bitmask of tracked keys, or with any_order == false the count of required keys
             const size_t required_mask = any_order ? (size_t(1) << n_required) - 1 : 0;
@@ -798,6 +808,7 @@ private:
                 }
                 return alts;
             };
+            // one "," then the next key, so only one stack waits for the comma
             std::map<size_t, std::string> rest_rules;
             std::function<std::string(size_t)> rest = [&](size_t seen) -> std::string {
                 auto it = rest_rules.find(seen);
@@ -805,11 +816,17 @@ private:
                     return it->second;
                 }
                 auto alts = tracked_alts(seen, rest);
-                std::string body = free_loop;
-                if (!alts.empty()) {
-                    body += (body.empty() ? "" : " ") + std::string("( \",\" space ( ") + string_join(alts, " | ") + " ) )" + (all_required(seen) ? "?" : "");
+                if (alts.empty() && free_kv.empty()) {
+                    return rest_rules[seen] = "";
                 }
-                return rest_rules[seen] = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
+                auto rule_name = _reserve_rule_name(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen));
+                rest_rules[seen] = rule_name;
+                if (!free_kv.empty()) {
+                    alts.insert(alts.begin(), free_kv + " " + rule_name);
+                }
+                std::string body = "\",\" space ( " + string_join(alts, " | ") + " )";
+                _rules[rule_name] = all_required(seen) ? "( " + body + " )?" : body;
+                return rule_name;
             };
 
             auto firsts = tracked_alts(0, rest);
