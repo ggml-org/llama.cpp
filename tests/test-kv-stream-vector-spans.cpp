@@ -110,7 +110,7 @@ struct span_storage {
             const size_t k_offset = offsets[i], v_offset = offsets[i] + layout.v_offset;
             ggml_tensor k = {}, v = {};
             for (auto * tensor : {&k, &v}) {
-                tensor->ne[0] = 256;
+                tensor->ne[0] = tensor == &k ? f.policy.shape.head_dim_k : f.policy.shape.head_dim_v;
                 tensor->ne[1] = int64_t(tokens);
                 tensor->ne[2] = f.policy.shape.heads;
                 tensor->ne[3] = 1;
@@ -172,9 +172,9 @@ static std::vector<float> ordinary(fixture & f, block_inputs & input, uint32_t l
 static std::vector<float> evaluate(
         fixture & f, const ggml_kv_stream_partial_ops * ops,
         span_storage & storage, block_inputs & input, uint32_t layer, bool & accepted,
-        size_t * used_workspace = nullptr) {
+        size_t * used_workspace = nullptr, float scale = 1.0f/16) {
     ggml_context_ptr ctx(ggml_init({65536, nullptr, true}));
-    auto * node = f.resident->attention(ctx.get(), layer, input.q, input.mask, input.active, 1.0f/16);
+    auto * node = f.resident->attention(ctx.get(), layer, input.q, input.mask, input.active, scale);
     if (!node) {
         accepted = false;
         return {};
@@ -323,7 +323,123 @@ static int benchmark_spans() {
     return 0;
 }
 
+// Compare the tile decoder with the native whole-plane converter at the requested head width.
+static void check_mma_tile_conversion(testing & t, int width) {
+    ggml_backend_load_all();
+    auto * dev = ggml_backend_dev_by_name("CUDA0");
+    ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+    auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+        ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+    const auto * ops = get ? get() : nullptr;
+    if (!t.assert_true(ops && ops->version >= 8 && ops->convert && ops->convert_mma_rows)) return;
+    for (ggml_type type : {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,
+            GGML_TYPE_Q5_1,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_F32}) {
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * source = ggml_new_tensor_2d(ctx.get(),type,width,7);
+        auto * stock = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,width,7);
+        auto * tile = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,width,7);
+        for (auto * tensor : {source,stock,tile}) tensor->nb[2] = tensor->nb[1];
+        ggml_set_input(source);
+        ggml_set_output(stock);
+        ggml_set_output(tile);
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+        if (!t.assert_true(buffer != nullptr)) continue;
+        std::vector<float> values(7*width);
+        for (size_t i = 0; i < values.size(); ++i) values[i] = .25f*std::sin(float(i%509)*.031f);
+        std::vector<uint8_t> packed(7*ggml_row_size(type,width));
+        ggml_quantize_chunk(type,values.data(),packed.data(),0,7,width,nullptr);
+        ggml_backend_tensor_set(source,packed.data(),0,packed.size());
+        if (!t.assert_true(ops->supports_conversion(backend.get(),source,stock) &&
+                ops->convert(backend.get(),source,stock))) continue;
+        if (!t.assert_true(ops->convert_mma_rows(backend.get(),source,tile))) continue;
+        ggml_backend_synchronize(backend.get());
+        std::vector<ggml_fp16_t> expected(7*width),actual(7*width);
+        ggml_backend_tensor_get(stock,expected.data(),0,expected.size()*sizeof(ggml_fp16_t));
+        ggml_backend_tensor_get(tile,actual.data(),0,actual.size()*sizeof(ggml_fp16_t));
+        size_t mismatches = 0;
+        for (size_t i = 0; i < expected.size(); ++i) mismatches += expected[i] != actual[i];
+        t.out << ggml_type_name(type) << " tile mismatches = " << mismatches << " / " << expected.size() << "\n";
+        t.assert_equal(size_t(0),mismatches);
+    }
+}
+
 int main(int argc, char ** argv) {
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-convert")) {
+        testing t;
+        t.test("head512_tile_conversion_matches_native", [](testing & t) { check_mma_tile_conversion(t,512); });
+        return t.summary();
+    }
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-spans")) {
+        testing t;
+        t.test("head512_spans_preserve_stock_order_for_target_verification", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+            const auto * ops=get ? get() : nullptr;
+            if (!t.assert_true(ops && ops->spans && ops->spans_workspace)) return;
+            const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+                GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+            for (auto key : formats) for (auto value : formats) {
+                const auto pair=std::make_pair(key,value);
+                constexpr size_t active=8193;
+                fixture f(backend.get(),true,pair.first,pair.second,active,false,2,4,82,512,512);
+                if (!t.assert_true(f.attach())) return;
+                for (uint32_t queries : {1u,2u,3u,4u}) for (bool masked : {false,true}) {
+                    block_inputs input(f,active,queries,masked,32);
+                    const auto expected=stock_attention(f,input,0,1.0f);
+                    for (const auto & cuts : {std::vector<size_t>{0,active},std::vector<size_t>{0,3328,active},
+                            std::vector<size_t>{0,3328,6400,active},std::vector<size_t>{0,127,257,active}}) {
+                        for (bool wrapped : {false,true}) {
+                            if (wrapped && cuts.size() != 4) continue;
+                            auto spans=span_storage::create(f,0,active,queries,cuts,wrapped);
+                            if (!t.assert_true(bool(spans))) return;
+                            bool accepted=false;
+                            const auto actual=evaluate(f,ops,*spans,input,0,accepted,nullptr,1.0f);
+                            if (!t.assert_true(accepted)) return;
+                            t.assert_true(same_float_bits(expected,actual));
+                        }
+                    }
+                }
+            }
+        });
+        t.test("head512_rejects_short_workspace_and_invalid_metadata_without_writes", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+            const auto * ops=get ? get() : nullptr;
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,1025,false,2,4,32,512,512);
+            if (!t.assert_true(ops && f.attach())) return;
+            block_inputs input(f,1025,3,false,32);
+            auto storage=span_storage::create(f,0,1025,3,{0,256,768,1025},true);
+            if (!t.assert_true(bool(storage))) return;
+            ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+            auto * node=f.resident->attention(ctx.get(),0,input.q,input.mask,input.active,1.0f);
+            if (!t.assert_true(node != nullptr)) return;
+            auto op=*node; op.buffer=input.output->buffer; op.data=input.output->data;
+            size_t required=0;
+            if (!t.assert_true(ops->spans_workspace(backend.get(),&op,storage->plan,required) && required > 1)) return;
+            block_workspace short_workspace(f,required-1,79);
+            auto * short_buffer=ggml_backend_memory_lease_buffer(short_workspace.lease.get());
+            t.assert_equal(required-1,ggml_backend_buffer_get_size(short_buffer));
+            const auto before=input.read();
+            t.assert_true(!ops->spans(backend.get(),&op,storage->plan,short_buffer));
+            t.assert_true(same_float_bits(before,input.read()));
+            auto invalid=op;
+            invalid.ne[0]=256;
+            size_t unchanged=77;
+            t.assert_true(!ops->spans_workspace(backend.get(),&invalid,storage->plan,unchanged));
+            t.assert_equal(size_t(77),unchanged);
+            t.assert_true(same_float_bits(before,input.read()));
+        });
+        return t.summary();
+    }
     if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-compiled")) {
 #ifdef KV_STREAM_PASCAL_CUDA_TEST
         testing t;
@@ -357,6 +473,55 @@ int main(int argc, char ** argv) {
 #else
         return 77;
 #endif
+    }
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-gemma-geometry")) {
+        testing t;
+        t.test("dimension_aware_backend_prepares_full_attention_queries", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+            const auto * ops=get ? get() : nullptr;
+            if (!t.assert_true(ops && ops->version >= 15 && ops->geometry)) return;
+            const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+                GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+            for (auto key : formats) for (auto value : formats) {
+                const auto pair=std::make_pair(key,value);
+                for (uint32_t width : {1u,2u,3u,4u,256u}) {
+                    const ggml_kv_stream_attention_request request{{pair.first,pair.second,512,512,4,256,128},32,width,262144};
+                    ggml_kv_stream_resume_plan plan;
+                    t.assert_true(ggml_kv_stream_resume_plan_query(ops,backend.get(),request,plan));
+                    t.assert_equal(uint32_t(512),plan.head_dim_k);
+                    t.assert_equal(uint32_t(512),plan.head_dim_v);
+                    size_t bytes=0;
+                    t.assert_true(ggml_kv_stream_workspace_query(ops,backend.get(),request,
+                        width <= 4 ? ggml_kv_stream_workspace_kind::decode : ggml_kv_stream_workspace_kind::prefill,bytes));
+                    t.assert_true(bytes > 0);
+                }
+            }
+            const ggml_kv_stream_attention_request valid{{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,512,512,4,256,128},32,4,8192};
+            for (int defect=0;defect<6;++defect) {
+                auto request=valid;
+                if (defect == 0) request.shape.head_dim_k=384;
+                if (defect == 1) request.shape.head_dim_v=256;
+                if (defect == 2) request.shape.type_v=GGML_TYPE_IQ4_NL;
+                if (defect == 3) request.query_heads=31;
+                if (defect == 4) request.shape.page_tokens=128;
+                if (defect == 5) request.query_tokens=0;
+                ggml_kv_stream_resume_plan untouched;
+                untouched.bytes=77; untouched.head_dim_k=123;
+                t.assert_true(!ggml_kv_stream_resume_plan_query(ops,backend.get(),request,untouched));
+                t.assert_equal(size_t(77),untouched.bytes);
+                t.assert_equal(uint32_t(123),untouched.head_dim_k);
+                size_t bytes=77;
+                t.assert_true(!ggml_kv_stream_workspace_query(ops,backend.get(),request,
+                    ggml_kv_stream_workspace_kind::decode,bytes));
+                t.assert_equal(size_t(77),bytes);
+            }
+        });
+        return t.summary();
     }
     const int consumer=argc > 1 && !std::strcmp(argv[1],"--cuda-sm75") ? 750 :
         argc > 1 && !std::strcmp(argv[1],"--cuda-sm86") ? 860 :
@@ -1344,44 +1509,7 @@ int main(int argc, char ** argv) {
     });
 
     if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(
-            "encoded_mma_tile_bytes_equal_stock_conversion", [](testing & t) {
-        auto * dev = ggml_backend_dev_by_name("CUDA0");
-        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
-        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
-            ggml_backend_reg_get_proc_address(
-                ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
-        const auto * ops = get ? get() : nullptr;
-        if (!t.assert_true(ops && ops->version >= 8 && ops->convert && ops->convert_mma_rows)) return;
-        for (ggml_type type : {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,
-                GGML_TYPE_Q5_1,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_F32}) {
-            ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
-            auto * source = ggml_new_tensor_2d(ctx.get(),type,256,7);
-            auto * stock = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,256,7);
-            auto * tile = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,256,7);
-            for (auto * tensor : {source,stock,tile}) tensor->nb[2] = tensor->nb[1];
-            ggml_set_input(source);
-            ggml_set_output(stock);
-            ggml_set_output(tile);
-            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
-            if (!t.assert_true(buffer != nullptr)) continue;
-            std::vector<float> values(7*256);
-            for (size_t i = 0; i < values.size(); ++i) values[i] = .25f*std::sin(float(i%509)*.031f);
-            std::vector<uint8_t> packed(7*ggml_row_size(type,256));
-            ggml_quantize_chunk(type,values.data(),packed.data(),0,7,256,nullptr);
-            ggml_backend_tensor_set(source,packed.data(),0,packed.size());
-            if (!t.assert_true(ops->supports_conversion(backend.get(),source,stock) &&
-                    ops->convert(backend.get(),source,stock))) continue;
-            if (!t.assert_true(ops->convert_mma_rows(backend.get(),source,tile))) continue;
-            ggml_backend_synchronize(backend.get());
-            std::vector<ggml_fp16_t> expected(7*256),actual(7*256);
-            ggml_backend_tensor_get(stock,expected.data(),0,expected.size()*sizeof(ggml_fp16_t));
-            ggml_backend_tensor_get(tile,actual.data(),0,actual.size()*sizeof(ggml_fp16_t));
-            size_t mismatches = 0;
-            for (size_t i = 0; i < expected.size(); ++i) mismatches += expected[i] != actual[i];
-            t.out << ggml_type_name(type) << " tile mismatches = " << mismatches << " / " << expected.size() << "\n";
-            t.assert_equal(size_t(0),mismatches);
-        }
-    });
+            "encoded_mma_tile_bytes_equal_stock_conversion", [](testing & t) { check_mma_tile_conversion(t,256); });
 
     if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(
             "tg3_tg4_q8_q4_tile_conversion_matches_stock", [](testing & t) {

@@ -172,7 +172,8 @@ static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool
     if (ranges[0].begin%16 || q->nb[1]%16 || q->nb[2]%16 ||
             k->nb[1]%16 || k->nb[2]%16 || v->nb[1]%16 || v->nb[2]%16) return false;
     if (!segmented && (ranges[1].begin%16 || ranges[2].begin%16)) return false;
-    if (q->ne[2] > 65535 || q->ne[1] > INT32_MAX/512/q->ne[2]) return false;
+    if ((k->ne[0] != 256 && k->ne[0] != 512) || v->ne[0] != k->ne[0] ||
+            q->ne[2] <= 0 || q->ne[2] > 65535 || q->ne[1] > INT32_MAX/(2*k->ne[0])/q->ne[2]) return false;
     float params[3]; std::memcpy(params, op->op_params, sizeof(params));
     if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;
     // Sliced masks retain the full row pitch. Validate logical shape using a packed metadata clone.
@@ -184,11 +185,12 @@ static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool
     auto logical = *op; logical.src[3] = &packed;
 
     ggml_kv_stream_execution execution;
-    return ggml_kv_stream_attention_validate(&logical, {256,256,256,256,128}, caps, size_t(k->ne[1]), execution).status == ggml_kv_stream_status::success;
+    return ggml_kv_stream_attention_validate(&logical, {k->ne[0],v->ne[0],256,256,128}, caps, size_t(k->ne[1]), execution).status == ggml_kv_stream_status::success;
 }
 
 static bool supports(ggml_backend_t backend, const ggml_tensor * op) {
-    return supports_common(backend,op,false);
+    return op && op->src[1] && op->src[2] && op->src[1]->ne[0] == 256 && op->src[2]->ne[0] == 256 &&
+        supports_common(backend,op,false);
 }
 
 static bool supports_spans(ggml_backend_t backend, const ggml_tensor * op) {
@@ -197,7 +199,8 @@ static bool supports_spans(ggml_backend_t backend, const ggml_tensor * op) {
 
 // Conversion operates on contiguous token-major planes, independently of their logical head/token axes.
 static bool supports_conversion(ggml_backend_t backend, const ggml_tensor * source, const ggml_tensor * destination) {
-    if (!source || !destination || destination->type != GGML_TYPE_F16 || source->ne[0] != 256 || source->ne[3] != 1) return false;
+    if (!source || !destination || destination->type != GGML_TYPE_F16 ||
+            (source->ne[0] != 256 && source->ne[0] != 512) || source->ne[3] != 1) return false;
     const auto caps = capabilities(backend,source->type,source->type);
     if (!caps.k.online_write || !caps.k.convert_f16) return false;
     span src, dst;
@@ -206,13 +209,13 @@ static bool supports_conversion(ggml_backend_t backend, const ggml_tensor * sour
     for (int i = 0; i < 4; ++i) if (source->ne[i] != destination->ne[i]) return false;
     for (const auto * tensor : {source,destination}) {
         ggml_kv_stream_layout layout;
-        if (ggml_kv_stream_layout_make({tensor->type,tensor->type,256,256,tensor->ne[2],256,128},
+        if (ggml_kv_stream_layout_make({tensor->type,tensor->type,tensor->ne[0],tensor->ne[0],tensor->ne[2],256,128},
                 size_t(tensor->ne[1]),layout).status != ggml_kv_stream_status::success ||
                 tensor->nb[0] != ggml_type_size(tensor->type) || tensor->nb[1] != layout.k_token_bytes ||
                 tensor->nb[2] != layout.k_row_bytes) return false;
     }
     // Existing converter launchers use signed element counts in their grid calculations.
-    return source->ne[1] <= INT32_MAX/256/source->ne[2];
+    return source->ne[1] <= INT32_MAX/source->ne[0]/source->ne[2];
 }
 
 // Reuse the backend's converter without graph allocation, pool scratch, or host round trips.
@@ -304,14 +307,14 @@ static bool direct(ggml_backend_t backend, const ggml_tensor * op) {
 }
 
 // Match native TG1/TG2 vector ownership before any resident or ring span is consumed.
-static bool resume_plan(
+static bool resume_plan_dimension(
         ggml_backend_t backend, int32_t key, int32_t value,
         uint32_t heads, uint32_t kv_heads, uint32_t queries,
-        size_t tokens, ggml_kv_stream_resume_plan & output) {
+        size_t tokens, ggml_kv_stream_resume_plan & output, uint32_t width) {
     if (!backend || !ggml_backend_is_cuda(backend) || capture_active(backend) ||
             key < 0 || key >= GGML_TYPE_COUNT || value < 0 || value >= GGML_TYPE_COUNT ||
             !heads || !kv_heads || heads%kv_heads || heads > 65535 ||
-            !queries || queries > INT32_MAX || !tokens || tokens > size_t(INT32_MAX)-255 ||
+            (width != 256 && width != 512) || !queries || queries > INT32_MAX || !tokens || tokens > size_t(INT32_MAX)-255 ||
             !ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value))) return false;
     auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
@@ -322,7 +325,7 @@ static bool resume_plan(
     ggml_tensor q{}, k{}, v{}, mask{}, op{};
     q.type = GGML_TYPE_F32; k.type = ggml_type(key); v.type = ggml_type(value); mask.type = GGML_TYPE_F16;
     const int64_t padded = int64_t((tokens+255)/256*256);
-    q.ne[0] = k.ne[0] = v.ne[0] = 256; q.ne[1] = queries; q.ne[2] = heads;
+    q.ne[0] = k.ne[0] = v.ne[0] = width; q.ne[1] = queries; q.ne[2] = heads;
     k.ne[1] = v.ne[1] = padded; k.ne[2] = v.ne[2] = kv_heads; mask.ne[0] = padded; mask.ne[1] = queries;
     for (auto * tensor : {&q, &k, &v, &mask}) {
         tensor->ne[3] = 1;
@@ -332,16 +335,17 @@ static bool resume_plan(
         for (int i = 2; i < 4; ++i) tensor->nb[i] = tensor->nb[i-1]*size_t(tensor->ne[i-1]);
     }
     op.op = GGML_OP_FLASH_ATTN_EXT; op.type=GGML_TYPE_F32;
-    op.ne[0]=256; op.ne[1]=heads; op.ne[2]=queries; op.ne[3]=1;
-    op.nb[0]=sizeof(float); op.nb[1]=256*sizeof(float);
+    op.ne[0]=width; op.ne[1]=heads; op.ne[2]=queries; op.ne[3]=1;
+    op.nb[0]=sizeof(float); op.nb[1]=width*sizeof(float);
     op.nb[2]=op.nb[1]*heads; op.nb[3]=op.nb[2]*queries;
     const float scale=1.0f/16;
     std::memcpy(op.op_params,&scale,sizeof(scale));
     op.src[0] = &q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &mask;
     const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op);
-    if (family == kernel_family::tile) return ggml_cuda_kv_stream_tile_plan(
+    if (family == kernel_family::tile && width == 256) return ggml_cuda_kv_stream_tile_plan(
         ctx,ggml_type(key),ggml_type(value),heads,kv_heads,queries,tokens,output);
     if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_f16_resume_plan(ctx,&op,output);
+    if (width != 256) return false;
     auto native=ggml_cuda_kv_stream_vector_kernel(key == GGML_TYPE_F32 ? GGML_TYPE_F16 : ggml_type(key),
         value == GGML_TYPE_F32 ? GGML_TYPE_F16 : ggml_type(value),queries);
     auto resumed=ggml_cuda_kv_stream_resume_kernel(ggml_type(key),ggml_type(value),queries);
@@ -378,6 +382,12 @@ static bool resume_plan(
     cache.store(cache_key,next);
     output = next;
     return true;
+}
+
+// Legacy callbacks retain the original 256/256 contract and vector selection.
+static bool resume_plan(ggml_backend_t backend, int32_t key, int32_t value,
+        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, ggml_kv_stream_resume_plan & output) {
+    return resume_plan_dimension(backend,key,value,heads,kv_heads,queries,tokens,output,256);
 }
 
 static bool resume_plan_valid(const ggml_kv_stream_resume_plan & plan, ggml_type value, int compiled_arch) {
@@ -511,10 +521,11 @@ static bool resume_spans(ggml_backend_t backend, const ggml_tensor * op, ggml_ba
             view.active_tokens != plan.tokens || view.query_tokens != plan.queries) return false;
     const auto * q=op->src[0], * k=op->src[1], * v=op->src[2];
     if (q->ne[1] != plan.queries || q->ne[2] != plan.heads || size_t(k->ne[1]) != plan.tokens ||
-            view.shape.type_k != k->type || view.shape.type_v != v->type || view.shape.head_dim_k != 256 ||
-            view.shape.head_dim_v != 256 || view.shape.heads != k->ne[2]) return false;
+            view.shape.type_k != k->type || view.shape.type_v != v->type || view.shape.head_dim_k != k->ne[0] ||
+            view.shape.head_dim_v != v->ne[0] || view.shape.heads != k->ne[2]) return false;
     ggml_kv_stream_resume_plan checked;
-    if (!resume_plan(backend,k->type,v->type,plan.heads,uint32_t(k->ne[2]),plan.queries,plan.tokens,checked) ||
+    if (!resume_plan_dimension(backend,k->type,v->type,plan.heads,uint32_t(k->ne[2]),plan.queries,plan.tokens,checked,uint32_t(k->ne[0])) ||
+            checked.head_dim_k != plan.head_dim_k || checked.head_dim_v != plan.head_dim_v ||
             checked.bytes != plan.bytes || checked.state_bytes != plan.state_bytes || checked.splits != plan.splits ||
             checked.partial_offset != plan.partial_offset || checked.meta_offset != plan.meta_offset ||
             checked.values_per_thread != plan.values_per_thread || !plan.resume_resident) return false;
@@ -575,14 +586,15 @@ static bool resume(
         const ggml_kv_stream_resume_plan & plan, size_t tokens, size_t first, bool last) {
     if (!op || plan.tokens != tokens || first >= tokens) return false;
     if (plan.kernel_config[0] == 2) {
-        if (capture_active(backend) || !supports(backend,op) || !workspace ||
+        if (capture_active(backend) || !supports_common(backend,op,false) || !workspace ||
                 ggml_backend_buffer_is_host(workspace) ||
                 !ggml_backend_supports_buft(backend,ggml_backend_buffer_get_type(workspace))) return false;
         const auto * q=op->src[0], * k=op->src[1], * v=op->src[2];
         if (q->ne[1] != plan.queries || q->ne[2] != plan.heads || k->ne[2] != plan.kernel_config[1] ||
                 size_t(k->ne[1]) > tokens-first || last != (first+size_t(k->ne[1]) == tokens)) return false;
         ggml_kv_stream_resume_plan checked;
-        if (!resume_plan(backend,k->type,v->type,plan.heads,plan.kernel_config[1],plan.queries,tokens,checked) ||
+        if (!resume_plan_dimension(backend,k->type,v->type,plan.heads,plan.kernel_config[1],plan.queries,tokens,checked,uint32_t(k->ne[0])) ||
+                checked.head_dim_k != plan.head_dim_k || checked.head_dim_v != plan.head_dim_v ||
                 checked.bytes != plan.bytes || checked.state_bytes != plan.state_bytes ||
                 checked.partial_offset != plan.partial_offset || checked.meta_offset != plan.meta_offset ||
                 checked.splits != plan.splits || checked.values_per_thread != plan.values_per_thread ||
@@ -701,7 +713,7 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
     const auto family = ggml_cuda_flash_attn_ext_kernel_family(ctx.device, op);
     if (family == kernel_family::none) return plan_status::stock_unavailable;
     if (!op->src[3] || op->src[4] || ggml_get_op_params_i32(op,4) != 0 ||
-            metadata.head_dim_k != 256 || metadata.head_dim_v != 256 ||
+            (metadata.head_dim_k != 256 && metadata.head_dim_k != 512) || metadata.head_dim_v != metadata.head_dim_k ||
             (metadata.queries > 8 && family != kernel_family::mma)) return plan_status::unsupported_geometry;
     if (op->src[3]->nb[1] < size_t(op->src[1]->ne[1])*sizeof(half) || op->src[3]->nb[1]%sizeof(half))
         return plan_status::unsupported_geometry;
@@ -711,7 +723,7 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
     if (!metadata_checked) {
         const auto * q = op->src[0], * k = op->src[1], * v = op->src[2];
         if (q->nb[1]%16 || q->nb[2]%16 || k->nb[1]%16 || k->nb[2]%16 || v->nb[1]%16 || v->nb[2]%16 ||
-                q->ne[2] > 65535 || q->ne[1] > INT32_MAX/512/q->ne[2]) return plan_status::unsupported_geometry;
+                q->ne[2] > 65535 || q->ne[1] > INT32_MAX/(2*metadata.head_dim_k)/q->ne[2]) return plan_status::unsupported_geometry;
         const auto caps = capabilities(backend, k->type, v->type);
         if (!caps.direct_pair) return plan_status::missing_streamed_implementation;
         auto packed = *op->src[3];
@@ -721,10 +733,10 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
         }
         auto logical = *op; logical.src[3] = &packed;
         ggml_kv_stream_execution checked;
-        if (ggml_kv_stream_attention_validate(&logical, {256,256,256,256,128}, caps, size_t(k->ne[1]), checked).status !=
+        if (ggml_kv_stream_attention_validate(&logical, {metadata.head_dim_k,metadata.head_dim_v,256,256,128}, caps, size_t(k->ne[1]), checked).status !=
                 ggml_kv_stream_status::success) return plan_status::unsupported_geometry;
     }
-    if (family != kernel_family::tile && metadata.queries <= 2 && ggml_cuda_kv_stream_attention_select(ggml_cuda_info().devices[ctx.device].cc,
+    if (metadata.head_dim_k == 256 && family != kernel_family::tile && metadata.queries <= 2 && ggml_cuda_kv_stream_attention_select(ggml_cuda_info().devices[ctx.device].cc,
             uint32_t(metadata.queries), ggml_type(metadata.type_k), ggml_type(metadata.type_v)) == ggml_cuda_kv_stream_attention_path::none)
         return plan_status::missing_streamed_implementation;
     streamed_plan next;
@@ -771,7 +783,7 @@ static bool spans_workspace(
 static bool convert_mma_rows(
         ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination) {
     if (!backend || !ggml_backend_is_cuda(backend) || !source || !destination ||
-            destination->type != GGML_TYPE_F16 || source->ne[0] != 256 ||
+            destination->type != GGML_TYPE_F16 || (source->ne[0] != 256 && source->ne[0] != 512) ||
             source->ne[1] <= 0 || source->ne[1] > INT_MAX || source->ne[2] != 1 || source->ne[3] != 1 ||
             destination->ne[0] != source->ne[0] || destination->ne[1] != source->ne[1] ||
             destination->ne[2] != 1 || destination->ne[3] != 1) return false;
@@ -784,22 +796,22 @@ static bool convert_mma_rows(
     return ggml_cuda_flash_attn_ext_mma_convert_rows(
         ctx,source->type,static_cast<const char *>(source->data),static_cast<half *>(destination->data),
         int(source->ne[1]),int64_t(source->nb[1]),int64_t(destination->nb[1]),
-        source->nb[1] == ggml_row_size(source->type,source->ne[0]));
+        source->nb[1] == ggml_row_size(source->type,source->ne[0]),int(source->ne[0]));
 }
 
-static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32_t value,
-        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, size_t spans, size_t & bytes, bool prefill=false) {
+static bool mma_workspace_for_queries_dimension(ggml_backend_t backend, int32_t key, int32_t value,
+        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, size_t spans, size_t & bytes, bool prefill, uint32_t width) {
     if (!backend || !ggml_backend_is_cuda(backend) || capture_active(backend) ||
             key < 0 || key >= GGML_TYPE_COUNT || value < 0 || value >= GGML_TYPE_COUNT ||
             !heads || heads > 65535 || !kv_heads || kv_heads > heads || heads%kv_heads ||
-            !queries || (queries > 8 && !prefill) || !tokens || tokens > INT32_MAX ||
+            (width != 256 && width != 512) || !queries || (queries > 8 && !prefill) || !tokens || tokens > INT32_MAX ||
             !spans || spans > 3 || !ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value))) return false;
     ggml_tensor q={},k={},v={},mask={},op={};
     q.type=GGML_TYPE_F32;
-    q.ne[0]=256; q.ne[1]=queries; q.ne[2]=heads; q.ne[3]=1;
+    q.ne[0]=width; q.ne[1]=queries; q.ne[2]=heads; q.ne[3]=1;
     k.type=ggml_type(key); v.type=ggml_type(value);
     for (auto * tensor : {&k,&v}) {
-        tensor->ne[0]=256; tensor->ne[1]=int64_t(tokens);
+        tensor->ne[0]=width; tensor->ne[1]=int64_t(tokens);
         tensor->ne[2]=kv_heads; tensor->ne[3]=1;
     }
     mask.type=GGML_TYPE_F16;
@@ -807,7 +819,7 @@ static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32
     mask.ne[2]=mask.ne[3]=1;
     op.op=GGML_OP_FLASH_ATTN_EXT; op.type=GGML_TYPE_F32;
     op.src[0]=&q; op.src[1]=&k; op.src[2]=&v; op.src[3]=&mask;
-    op.ne[0]=256; op.ne[1]=heads; op.ne[2]=queries; op.ne[3]=1;
+    op.ne[0]=width; op.ne[1]=heads; op.ne[2]=queries; op.ne[3]=1;
     for (auto * tensor : {&q,&k,&v,&mask,&op}) {
         tensor->nb[0]=ggml_type_size(tensor->type);
         tensor->nb[1]=ggml_row_size(tensor->type,tensor->ne[0]);
@@ -825,7 +837,7 @@ static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32
         const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op);
         if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_prefill_bound(ctx,&op,bytes,true);
         ggml_kv_stream_resume_plan plan;
-        if (!resume_plan(backend,key,value,heads,kv_heads,queries,tokens,plan)) return false;
+        if (!resume_plan_dimension(backend,key,value,heads,kv_heads,queries,tokens,plan,width)) return false;
         bytes=plan.bytes; return true;
 #else
         return false;
@@ -835,7 +847,7 @@ static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32
     // Load both layouts before the arena fills VRAM; short verification batches can select either kernel.
     for (bool token_major : {false,true}) {
         for (auto * tensor : {&k,&v}) {
-            const size_t row=ggml_row_size(tensor->type,256);
+            const size_t row=ggml_row_size(tensor->type,width);
             tensor->nb[1]=token_major ? row*kv_heads : row;
             tensor->nb[2]=token_major ? row : row*tokens;
         }
@@ -847,6 +859,11 @@ static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32
     if (!required) return false;
     bytes=required;
     return true;
+}
+
+static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32_t value,
+        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, size_t spans, size_t & bytes, bool prefill=false) {
+    return mma_workspace_for_queries_dimension(backend,key,value,heads,kv_heads,queries,tokens,spans,bytes,prefill,256);
 }
 
 static bool mma_workspace(ggml_backend_t backend, int32_t key, int32_t value,
@@ -862,6 +879,53 @@ static bool mma_workspace(ggml_backend_t backend, int32_t key, int32_t value,
     }
     bytes=required;
     return true;
+}
+
+// Admit only implemented cache geometry; old requests keep their existing quote path.
+static bool geometry_valid(const ggml_kv_stream_attention_request & request) {
+    const auto & shape=request.shape;
+    return (shape.head_dim_k == 256 || shape.head_dim_k == 512) && shape.head_dim_v == shape.head_dim_k &&
+        shape.page_tokens == 256 && shape.alignment == 128;
+}
+
+static bool geometry_resume_plan(ggml_backend_t backend, const ggml_kv_stream_attention_request & request,
+        ggml_kv_stream_resume_plan & output) {
+    return geometry_valid(request) && resume_plan_dimension(backend,request.shape.type_k,request.shape.type_v,
+        request.query_heads,uint32_t(request.shape.heads),request.query_tokens,request.tokens,output,uint32_t(request.shape.head_dim_k));
+}
+
+// Wide quotes reserve actual native continuation scratch, not a context-sized F16 gather.
+static bool geometry_workspace(ggml_backend_t backend, const ggml_kv_stream_attention_request & request,
+        ggml_kv_stream_workspace_kind kind, size_t & output) {
+    if (!geometry_valid(request)) return false;
+    if (request.shape.head_dim_k == 256) {
+        auto legacy=*ggml_cuda_kv_stream_partial_ops();
+        legacy.version=14; legacy.geometry=nullptr;
+        return ggml_kv_stream_workspace_query(&legacy,backend,request,kind,output);
+    }
+    const auto & shape=request.shape;
+    if (kind == ggml_kv_stream_workspace_kind::prefill)
+        return mma_workspace_for_queries_dimension(backend,shape.type_k,shape.type_v,request.query_heads,
+            uint32_t(shape.heads),request.query_tokens,request.tokens,request.spans,output,true,512);
+    if (kind == ggml_kv_stream_workspace_kind::prefill_mask_bounds) {
+        ggml_kv_stream_resume_plan plan;
+        if (!geometry_resume_plan(backend,request,plan) || plan.kernel_config[0] != 2) return false;
+        output=0; return true;
+    }
+    if ((kind != ggml_kv_stream_workspace_kind::decode && kind != ggml_kv_stream_workspace_kind::mma) ||
+            !request.query_tokens || request.query_tokens > 8) return false;
+    size_t required=0;
+    for (uint32_t queries=1;queries<=request.query_tokens;++queries) {
+        ggml_kv_stream_resume_plan plan;
+        size_t ordinary=0;
+        if (!resume_plan_dimension(backend,shape.type_k,shape.type_v,request.query_heads,uint32_t(shape.heads),
+                queries,request.tokens,plan,512) ||
+                !mma_workspace_for_queries_dimension(backend,shape.type_k,shape.type_v,request.query_heads,
+                    uint32_t(shape.heads),queries,request.tokens,request.spans,ordinary,false,512)) return false;
+        required=std::max(required,std::max(plan.bytes,ordinary));
+    }
+    if (!required) return false;
+    output=required; return true;
 }
 
 // Stage-7 entry point: validate every physical range before the first asynchronous launch.
@@ -1177,6 +1241,7 @@ ggml_cuda_kv_stream_plan_status ggml_cuda_kv_stream_attention_plan_query(
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
+    static const ggml_kv_stream_geometry_ops geometry{geometry_resume_plan,geometry_workspace};
     static const ggml_kv_stream_partial_ops ops{15,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
         [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t max_queries,size_t tokens,size_t & bytes) {
             if (!max_queries || max_queries > 8) return false;
@@ -1221,7 +1286,7 @@ const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
         [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t rows,size_t tokens) {
             ggml_kv_stream_resume_plan plan;
             return resume_plan(backend,key,value,heads,kv_heads,rows,tokens,plan) && plan.kernel_config[0] != 1;
-        }};
+        },&geometry};
 #ifdef GGML_CUDA_NO_FA
     GGML_UNUSED(ops);
     return nullptr;

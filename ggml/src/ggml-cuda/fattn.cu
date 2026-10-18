@@ -6,6 +6,7 @@
 #include "fattn.cuh"
 #include "kv-stream-attention-dispatch.h"
 #include "kv-stream-dispatch.cuh"
+#include "kv-stream-runtime.cuh"
 #include "fattn-plan-cache.h"
 #include "../ggml-kv-stream-device.h"
 #include "../ggml-backend-execution.h"
@@ -556,20 +557,21 @@ static uint32_t mma_span_conversion_flags(const ggml_tensor * dst) {
 struct mma_cached_plan {
     mma_span_launch plan;
     fattn_kernel_t ordinary=nullptr;
-    ggml_kv_mma_span_kernel_t spanned=nullptr;
+    const void * spanned=nullptr;
     size_t native_shared_bytes=0;
 };
 
 // Reproduce stock Stream-K planning while accounting for descriptors in caller-owned scratch.
-static bool mma_span_launch_make(
+template<int DKQ, int DV>
+static bool mma_span_launch_make_dimension(
         ggml_backend_cuda_context & ctx, const ggml_tensor * dst,
-        size_t span_count, mma_span_launch & output, ggml_cuda_kv_stream_plan_status * failure = nullptr,
-        bool resumable = false) {
+        size_t span_count, mma_span_launch & output, ggml_cuda_kv_stream_plan_status * failure,
+        bool resumable) {
     using status = ggml_cuda_kv_stream_plan_status;
     if (dst && dst->src[5] && !dst->src[3]) {
         ggml_tensor logical{}, mask{};
         return ggml_backend_execution_mask_metadata(dst,logical,mask) &&
-            mma_span_launch_make(ctx,&logical,span_count,output,failure,resumable);
+            mma_span_launch_make_dimension<DKQ,DV>(ctx,&logical,span_count,output,failure,resumable);
     }
     if (failure) *failure = status::unsupported_geometry;
     if (!dst || dst->op != GGML_OP_FLASH_ATTN_EXT || !span_count || span_count > 3 ||
@@ -582,9 +584,9 @@ static bool mma_span_launch_make(
             q->type != GGML_TYPE_F32 ||
             !ggml_cuda_kv_stream_kernel(k->type,v->type) ||
             dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst) ||
-            dst->ne[0] != 256 || dst->ne[1] != q->ne[2] || dst->ne[2] != q->ne[1] || dst->ne[3] != 1 ||
-            q->ne[0] != 256 || v->ne[0] != 256 ||
-            k->ne[0] != 256 || q->ne[1] < 1 || q->ne[1] > INT32_MAX ||
+            dst->ne[0] != DV || dst->ne[1] != q->ne[2] || dst->ne[2] != q->ne[1] || dst->ne[3] != 1 ||
+            q->ne[0] != DKQ || v->ne[0] != DV ||
+            k->ne[0] != DKQ || q->ne[1] < 1 || q->ne[1] > INT32_MAX ||
             k->ne[2] <= 0 || v->ne[2] != k->ne[2] || q->ne[2] <= 0 || q->ne[2] > 65535 ||
             q->ne[2]%k->ne[2] ||
             (q->ne[2]/k->ne[2] != 2 && q->ne[2]/k->ne[2] != 6 && q->ne[2]/k->ne[2] != 8) ||
@@ -592,7 +594,7 @@ static bool mma_span_launch_make(
             k->ne[1] != v->ne[1] || k->ne[1] <= 0 || k->ne[1] > INT_MAX ||
             mask->type != GGML_TYPE_F16 || mask->ne[0] < k->ne[1] ||
             mask->ne[1] < q->ne[1] || mask->ne[2] != 1 || mask->ne[3] != 1) return false;
-    if (q->ne[1] > INT32_MAX/512/q->ne[2]) return false;
+    if (q->ne[1] > INT32_MAX/(2*std::max(DKQ,DV))/q->ne[2]) return false;
     float params[3];
     memcpy(params,dst->op_params,sizeof(params));
     if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;
@@ -608,7 +610,6 @@ static bool mma_span_launch_make(
         return false;
     }
 
-    constexpr int DKQ = 256, DV = 256;
     const int gqa_ratio = int(q->ne[2]/k->ne[2]);
     // Stock Blackwell uses eight columns for ratio six and masks the two padded heads.
     const int ncols2 = gqa_ratio > 4 ? 8 : 2;
@@ -695,7 +696,10 @@ static bool mma_span_launch_make(
             flash_attn_ext_f16<DKQ,DV,4,2,false,false,false>) :
         ncols2 == 8 ? flash_attn_ext_f16<DKQ,DV,8,8,false,false,false> :
             flash_attn_ext_f16<DKQ,DV,8,2,false,false,false>;
-    auto spanned = ggml_cuda_kv_stream_mma_kernel(k->type,v->type,uint32_t(ncols1),uint32_t(ncols2),resumable,next.dense_strided);
+    const void * spanned = DKQ == 512 ? reinterpret_cast<const void *>(ggml_cuda_kv_stream_mma_runtime_kernel(
+        k->type,v->type,uint32_t(ncols1),uint32_t(ncols2),resumable,next.dense_strided)) :
+        reinterpret_cast<const void *>(ggml_cuda_kv_stream_mma_kernel(k->type,v->type,
+            uint32_t(ncols1),uint32_t(ncols2),resumable,next.dense_strided));
     if (!spanned) {
         if (failure) *failure=status::missing_streamed_implementation;
         return false;
@@ -763,7 +767,7 @@ static bool mma_span_launch_make(
     next.bytes = next.descriptor_bytes+next.fixup_bytes;
     if (resumable) {
         ggml_cuda_fattn_mma_resume_layout state;
-        if (!ggml_cuda_fattn_mma_resume_layout_make(next.ntiles_dst,blocks,nthreads,ncols1,ncols2,state,next.ntiles_kv,true) ||
+        if (!ggml_cuda_fattn_mma_resume_layout_make(next.ntiles_dst,blocks,nthreads,ncols1,ncols2,state,next.ntiles_kv,true,DV) ||
                 next.bytes > SIZE_MAX-127) {
             if (failure) *failure=status::overflow;
             return false;
@@ -798,6 +802,19 @@ static bool mma_span_launch_make(
     if (failure) *failure = status::success;
     return true;
 }
+
+static bool mma_span_launch_make(ggml_backend_cuda_context & ctx, const ggml_tensor * dst,
+        size_t span_count, mma_span_launch & output, ggml_cuda_kv_stream_plan_status * failure = nullptr,
+        bool resumable = false) {
+    if (!dst || !dst->src[1] || !dst->src[2]) return false;
+    const auto dk=dst->src[1]->ne[0], dv=dst->src[2]->ne[0];
+    if (dk == 512 && dv == 512)
+        return mma_span_launch_make_dimension<512,512>(ctx,dst,span_count,output,failure,resumable);
+    if (dk == 256 && dv == 256)
+        return mma_span_launch_make_dimension<256,256>(ctx,dst,span_count,output,failure,resumable);
+    if (failure) *failure=ggml_cuda_kv_stream_plan_status::unsupported_geometry;
+    return false;
+}
 } // namespace
 
 // Fixup blocks cannot exceed native residency; whole-tile launches need no fixup plane.
@@ -806,7 +823,7 @@ bool ggml_cuda_flash_attn_ext_mma_prefill_bound(ggml_backend_cuda_context & ctx,
     mma_span_launch plan;
     if (!mma_span_launch_make(ctx,dst,resumable ? 3 : 1,plan,nullptr,resumable)) return false;
     size_t size=size_t(plan.native_blocks_limit);
-    for (size_t factor : {size_t(plan.ncols1*plan.ncols2),size_t(2+256/2),sizeof(float2)}) {
+    for (size_t factor : {size_t(plan.ncols1*plan.ncols2),size_t(2+dst->ne[0]/2),sizeof(float2)}) {
         if (size > SIZE_MAX/factor) return false;
         size*=factor;
     }
@@ -815,9 +832,9 @@ bool ggml_cuda_flash_attn_ext_mma_prefill_bound(ggml_backend_cuda_context & ctx,
     if (resumable) {
         const size_t blocks=std::max(size_t(plan.native_blocks_limit),size_t(plan.ntiles_dst));
         ggml_cuda_fattn_mma_resume_layout checkpoint;
-        const int threads=ggml_cuda_fattn_mma_get_nthreads(256,256,plan.ncols1*plan.ncols2,
+        const int threads=ggml_cuda_fattn_mma_get_nthreads(dst->src[1]->ne[0],dst->ne[0],plan.ncols1*plan.ncols2,
             ggml_cuda_info().devices[ctx.device].cc);
-        if (!ggml_cuda_fattn_mma_resume_layout_make(plan.ntiles_dst,blocks,threads,plan.ncols1,plan.ncols2,checkpoint)) return false;
+        if (!ggml_cuda_fattn_mma_resume_layout_make(plan.ntiles_dst,blocks,threads,plan.ncols1,plan.ncols2,checkpoint,0,false,uint32_t(dst->ne[0]))) return false;
         for (size_t count : {blocks,checkpoint.slots}) {
             if (count > (SIZE_MAX-127)/sizeof(uint32_t) || size > SIZE_MAX-127) return false;
             size=(size+127)/128*128;
@@ -848,7 +865,7 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(
     return true;
 }
 
-template<int ncols1, int ncols2>
+template<int DKQ, int DV, int ncols1, int ncols2>
 static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         ggml_backend_cuda_context & ctx, ggml_tensor * dst,
         const ggml_cuda_kv_span * spans, size_t count,
@@ -859,12 +876,19 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         if (!ggml_backend_execution_mask_metadata(dst,logical,mask)) return false;
         control.mask_bounds=static_cast<const int32_t *>(dst->src[5]->data);
         if (!control.mask_bounds) return false;
-        return ggml_cuda_flash_attn_ext_mma_f16_spans_case<ncols1,ncols2>(
+        return ggml_cuda_flash_attn_ext_mma_f16_spans_case<DKQ,DV,ncols1,ncols2>(
             ctx,&logical,spans,count,workspace,plan,control);
     }
-    constexpr int DKQ = 256, DV = 256;
-    auto kernel=ggml_cuda_kv_stream_mma_kernel(dst->src[1]->type,dst->src[2]->type,ncols1,ncols2,plan.resumable,plan.dense_strided);
-    if (!kernel) return false;
+    ggml_kv_mma_span_kernel_t kernel=nullptr;
+    ggml_kv_mma_runtime_kernel_t runtime=nullptr;
+    if constexpr (DKQ == 512) {
+        runtime=ggml_cuda_kv_stream_mma_runtime_kernel(dst->src[1]->type,dst->src[2]->type,
+            ncols1,ncols2,plan.resumable,plan.dense_strided);
+        if (!runtime) return false;
+    } else {
+        kernel=ggml_cuda_kv_stream_mma_kernel(dst->src[1]->type,dst->src[2]->type,ncols1,ncols2,plan.resumable,plan.dense_strided);
+        if (!kernel) return false;
+    }
     auto * device_spans = static_cast<ggml_cuda_kv_span *>(workspace);
     CUDA_CHECK(cudaMemcpyAsync(
         device_spans,spans,count*sizeof(*spans),cudaMemcpyHostToDevice,ctx.stream()));
@@ -919,20 +943,24 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
                 {unsigned(active_blocks.size()),1,1},{unsigned(warp_size),unsigned(nthreads/warp_size),1},plan.shared_bytes,ctx.stream());
         }
     }
-    ggml_cuda_kernel_launch(kernel,selected_launch,
-        static_cast<const char *>(q->data),spans[0].k,spans[0].v,
-        static_cast<const char *>(mask->data),(const char *)nullptr,(const int *)nullptr,
-        destination,meta,
-        scale,0.0f,1.0f,1.0f,uint32_t(1),0.0f,
-        int32_t(q->ne[0]),ne01,int32_t(q->ne[2]),int32_t(q->ne[3]),
-        int32_t(q->nb[1]),int32_t(q->nb[2]),int32_t(q->nb[3]),
-        int32_t(k->ne[0]),int32_t(k->ne[1]),int32_t(k->ne[2]),int32_t(k->ne[3]),
-        int32_t(k->nb[1]),int32_t(k->nb[2]),int64_t(k->nb[3]),
-        int32_t(v->nb[1]),int32_t(v->nb[2]),int64_t(v->nb[3]),
-        int32_t(mask->ne[1]),int32_t(mask->ne[2]),int32_t(mask->ne[3]),
-        int32_t(mask->nb[1]),int32_t(mask->nb[2]),int64_t(mask->nb[3]),
-        device_spans,int(count),int(plan.span_shared_offset),
-        mma_span_conversion_flags(dst),control);
+    const auto launch_kernel=[&](auto function,auto... extra) {
+        ggml_cuda_kernel_launch(function,selected_launch,
+            static_cast<const char *>(q->data),spans[0].k,spans[0].v,
+            static_cast<const char *>(mask->data),(const char *)nullptr,(const int *)nullptr,
+            destination,meta,
+            scale,0.0f,1.0f,1.0f,uint32_t(1),0.0f,
+            int32_t(q->ne[0]),ne01,int32_t(q->ne[2]),int32_t(q->ne[3]),
+            int32_t(q->nb[1]),int32_t(q->nb[2]),int32_t(q->nb[3]),
+            int32_t(k->ne[0]),int32_t(k->ne[1]),int32_t(k->ne[2]),int32_t(k->ne[3]),
+            int32_t(k->nb[1]),int32_t(k->nb[2]),int64_t(k->nb[3]),
+            int32_t(v->nb[1]),int32_t(v->nb[2]),int64_t(v->nb[3]),
+            int32_t(mask->ne[1]),int32_t(mask->ne[2]),int32_t(mask->ne[3]),
+            int32_t(mask->nb[1]),int32_t(mask->nb[2]),int64_t(mask->nb[3]),
+            device_spans,int(count),int(plan.span_shared_offset),
+            mma_span_conversion_flags(dst),control,extra...);
+    };
+    if constexpr (DKQ == 512) launch_kernel(runtime,k->type,v->type);
+    else launch_kernel(kernel);
     CUDA_CHECK(cudaGetLastError());
 
     if (plan.resumable && control.end < k->ne[1]) return true;
@@ -970,6 +998,17 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
     return true;
 }
 
+static bool mma_span_launch_selected(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
+        const ggml_cuda_kv_span * spans, size_t count, void * workspace, const mma_span_launch & plan,
+        ggml_cuda_fattn_mma_resume_control control = {}) {
+#define LAUNCH(C1,C2) if (plan.ncols1 == C1 && plan.ncols2 == C2) return dst->ne[0] == 512 ? \
+    ggml_cuda_flash_attn_ext_mma_f16_spans_case<512,512,C1,C2>(ctx,dst,spans,count,workspace,plan,control) : \
+    ggml_cuda_flash_attn_ext_mma_f16_spans_case<256,256,C1,C2>(ctx,dst,spans,count,workspace,plan,control);
+    LAUNCH(1,8) LAUNCH(2,8) LAUNCH(4,8) LAUNCH(8,8) LAUNCH(4,2) LAUNCH(8,2)
+#undef LAUNCH
+    return false;
+}
+
 // Reserve raw native fragments and a private publication plane in the same caller-owned grant.
 bool ggml_cuda_flash_attn_ext_mma_f16_resume_requirements(
         ggml_backend_cuda_context & ctx, const ggml_tensor * dst,
@@ -991,7 +1030,8 @@ bool ggml_cuda_flash_attn_ext_mma_f16_resume_plan(
     next.state_bytes=plan.output_offset ? plan.output_offset-plan.state_offset : 0;
     next.partial_offset=plan.output_offset; next.meta_offset=plan.descriptor_bytes;
     next.kernel_config[0]=2; next.kernel_config[1]=uint32_t(dst->src[1]->ne[2]);
-    next.kernel_config[2]=uint32_t(ggml_cuda_fattn_mma_get_nbatch_fa(256,256,plan.ncols1*plan.ncols2,
+    next.head_dim_k=uint32_t(dst->src[1]->ne[0]); next.head_dim_v=uint32_t(dst->src[2]->ne[0]);
+    next.kernel_config[2]=uint32_t(ggml_cuda_fattn_mma_get_nbatch_fa(next.head_dim_k,next.head_dim_v,plan.ncols1*plan.ncols2,
         ggml_cuda_info().devices[ctx.device].cc));
     next.kernel_config[3]=uint32_t(plan.ncols1); next.kernel_config[4]=uint32_t(plan.ncols2);
     next.resume_resident=true;
@@ -1011,19 +1051,12 @@ bool ggml_cuda_flash_attn_ext_mma_f16_resume(
             plan.bytes > UINTPTR_MAX-uintptr_t(workspace)) return false;
     const auto * k=dst->src[1], * v=dst->src[2];
     const auto cc=ggml_cuda_info().devices[ctx.device].cc;
-    const size_t tile=ggml_cuda_fattn_mma_get_nbatch_fa(256,256,plan.ncols1*plan.ncols2,cc);
+    const size_t tile=ggml_cuda_fattn_mma_get_nbatch_fa(k->ne[0],v->ne[0],plan.ncols1*plan.ncols2,cc);
     if (active < size_t(dst->src[0]->ne[1]) || !ggml_cuda_fattn_mma_resume_wave_validate(
             spans,count,active,size_t(k->ne[1]),tile,first,end,k->ne[2],
-            ggml_row_size(k->type,256),ggml_row_size(v->type,256))) return false;
+            ggml_row_size(k->type,k->ne[0]),ggml_row_size(v->type,v->ne[0]))) return false;
     const ggml_cuda_fattn_mma_resume_control control{static_cast<char *>(workspace)+plan.state_offset,int32_t(first),int32_t(end)};
-    if (plan.ncols1 == 1) return ggml_cuda_flash_attn_ext_mma_f16_spans_case<1,8>(ctx,dst,spans,count,workspace,plan,control);
-    if (plan.ncols1 == 2) return ggml_cuda_flash_attn_ext_mma_f16_spans_case<2,8>(ctx,dst,spans,count,workspace,plan,control);
-    if (plan.ncols1 == 8) return plan.ncols2 == 8 ?
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<8,8>(ctx,dst,spans,count,workspace,plan,control) :
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<8,2>(ctx,dst,spans,count,workspace,plan,control);
-    return plan.ncols2 == 8 ?
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,8>(ctx,dst,spans,count,workspace,plan,control) :
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,2>(ctx,dst,spans,count,workspace,plan,control);
+    return mma_span_launch_selected(ctx,dst,spans,count,workspace,plan,control);
 }
 
 bool ggml_cuda_flash_attn_ext_mma_f16_spans(
@@ -1039,14 +1072,7 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans(
             (active != k->ne[1] && (active+255)/256*256 != k->ne[1]) ||
             !ggml_cuda_kv_spans_validate(spans,count,active,k->ne[2],
             ggml_row_size(k->type,k->ne[0]),ggml_row_size(v->type,v->ne[0]))) return false;
-    if (plan.ncols1 == 1) return ggml_cuda_flash_attn_ext_mma_f16_spans_case<1,8>(ctx,dst,spans,count,workspace,plan);
-    if (plan.ncols1 == 2) return ggml_cuda_flash_attn_ext_mma_f16_spans_case<2,8>(ctx,dst,spans,count,workspace,plan);
-    if (plan.ncols1 == 8) return plan.ncols2 == 8 ?
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<8,8>(ctx,dst,spans,count,workspace,plan) :
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<8,2>(ctx,dst,spans,count,workspace,plan);
-    return plan.ncols2 == 8 ?
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,8>(ctx,dst,spans,count,workspace,plan) :
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,2>(ctx,dst,spans,count,workspace,plan);
+    return mma_span_launch_selected(ctx,dst,spans,count,workspace,plan);
 }
 
 template<ggml_type type>
@@ -1062,9 +1088,10 @@ __global__ void flash_attn_ext_mma_convert_rows_kernel(
 bool ggml_cuda_flash_attn_ext_mma_convert_rows(
         ggml_backend_cuda_context & ctx, ggml_type type,
         const char * source, half * destination, int rows, int64_t source_stride, int64_t destination_stride,
-        bool contiguous) {
-    if (!source || !destination || rows <= 0 || source_stride <= 0 || destination_stride < 256*int64_t(sizeof(half))) return false;
-    const ggml_cuda_kernel_launch_params launch({unsigned(rows),1,1},{32,1,1},0,ctx.stream());
+        bool contiguous, int width) {
+    if (!source || !destination || (width != 256 && width != 512) || rows <= 0 || source_stride <= 0 ||
+            destination_stride < width*int64_t(sizeof(half))) return false;
+    const ggml_cuda_kernel_launch_params launch({unsigned(rows),1,1},{unsigned(width/8),1,1},0,ctx.stream());
     switch (type) {
 #define CONVERT(TYPE) case GGML_TYPE_##TYPE: \
         ggml_cuda_kernel_launch(flash_attn_ext_mma_convert_rows_kernel<GGML_TYPE_##TYPE>,launch, \
@@ -1076,6 +1103,14 @@ bool ggml_cuda_flash_attn_ext_mma_convert_rows(
     }
     CUDA_CHECK(cudaGetLastError());
     return true;
+}
+
+// Preserve the existing diagnostic entry point for head-256 callers.
+bool ggml_cuda_flash_attn_ext_mma_convert_rows(
+        ggml_backend_cuda_context & ctx, ggml_type type,
+        const char * source, half * destination, int rows, int64_t source_stride, int64_t destination_stride,
+        bool contiguous) {
+    return ggml_cuda_flash_attn_ext_mma_convert_rows(ctx,type,source,destination,rows,source_stride,destination_stride,contiguous,256);
 }
 
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
