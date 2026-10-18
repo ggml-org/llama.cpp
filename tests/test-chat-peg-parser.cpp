@@ -977,14 +977,13 @@ static void test_tagged_peg_parser(testing & t) {
 static void test_unordered_tool_args(testing & t) {
     auto schema = json::parse(R"({"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}, "required": ["a", "b"]})");
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        return p.tool_args(p.schema(p.json(), "args", schema)) | p.tool_arg_json_value(p.schema(p.json(), "value", schema)) | p.schema(p.json(), "plain", schema);
+        return p.tool_arg_json_value(p.unordered_schema(p.schema(p.json(), "unordered", schema))) | p.tool_arg_json_value(p.schema(p.json(), "plain", schema));
     });
     auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
     t.log(gbnf);
 
-    t.assert_true("tool_args schema is unordered", gbnf.find("args-rest-") != std::string::npos);
-    t.assert_true("tool_arg_json_value schema is unordered", gbnf.find("value-rest-") != std::string::npos);
-    t.assert_true("plain schema is ordered", gbnf.find("plain-rest-") == std::string::npos);
+    t.assert_true("unordered_schema is unordered", gbnf.find("unordered-rest-") != std::string::npos);
+    t.assert_true("plain schema stays ordered", gbnf.find("plain-rest-") == std::string::npos);
 }
 
 static void test_permute(testing & t) {
