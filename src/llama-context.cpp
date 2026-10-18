@@ -290,11 +290,11 @@ llama_context::llama_context(
         throw std::runtime_error("kv_stream_pool_bytes and shared_device_memory_bytes are mutually exclusive");
     }
     if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
-        if (model.arch != LLM_ARCH_QWEN35 || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
+        if ((model.arch != LLM_ARCH_QWEN35 && model.arch != LLM_ARCH_GEMMA4) || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
                 hparams.no_alloc || hparams.vocab_only || model.devices.size() != 1 || cparams.n_seq_max != 1 ||
                 (cparams.n_rs_seq && !streamed_rs_rollback) || !cparams.offload_kqv || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
                 !cparams.causal_attn || params.embeddings || model.devices.front().is_meta || !llama_kv_stream_device_buffer_type(model.devices.front().dev)) {
-            throw std::runtime_error("KV streaming requires one CUDA device, serial Qwen35 target context, -fa on, supported rollback mode, no embedding mode and allocated weights (--fit off)");
+            throw std::runtime_error("KV streaming requires one CUDA device, serial Qwen35 or Gemma4 target context, -fa on, supported rollback mode, no embedding mode and allocated weights (--fit off)");
         }
         for (uint32_t il = 0; il < hparams.n_layer(); ++il) if (model.dev_layer(il) != model.devices.front().dev) {
             throw std::runtime_error("initial KV streaming integration requires all model layers on the single CUDA device");
@@ -302,6 +302,8 @@ llama_context::llama_context(
     }
     // The target owns the physical pool. The attached draft writes directly to its
     // separate authoritative host cache and borrows target-owned execution workspace.
+    if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT && params.ctx_other && params.ctx_other->get_cparams().kv_streaming())
+        throw std::runtime_error("Gemma shared-KV assistant execution is not admitted yet");
     std::shared_ptr<llama_kv_stream_logical_cache> mtp_attached;
     llama_kv_stream_model * mtp_target_stream = nullptr;
     if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.ctx_other &&

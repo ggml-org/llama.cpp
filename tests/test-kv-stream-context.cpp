@@ -49,6 +49,21 @@ static bool dflash_exact_control = false;
 static bool dflash_short_control = false;
 static bool test_cache_explicit = false;
 static ggml_type test_cache_k = GGML_TYPE_Q8_0, test_cache_v = GGML_TYPE_Q4_0;
+static size_t gemma_test_arena_size = size_t(1024)*1048576;
+
+// Keep instrumentation budgets explicit without changing ordinary model qualification.
+static size_t gemma_test_arena_bytes(const char * text) {
+    if (!text) return size_t(1024)*1048576;
+    size_t mib=0;
+    if (!*text) throw std::invalid_argument("missing Gemma test arena MiB");
+    for (const char * digit=text;*digit;++digit) {
+        if (*digit < '0' || *digit > '9' || mib > (4095u-size_t(*digit-'0'))/10)
+            throw std::invalid_argument("Gemma test arena must be 1..4095 MiB");
+        mib=mib*10+size_t(*digit-'0');
+    }
+    if (!mib) throw std::invalid_argument("Gemma test arena must be 1..4095 MiB");
+    return mib*1048576;
+}
 
 // Qualify ordinary feature injection without a stream pool or a shared phase arena.
 static void test_dflash_native(testing & t, llama_model * model) {
@@ -637,6 +652,167 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
     hybrid->get_mem_recr()->state_write(result.recurrent,0,0);
     if (stream) t.assert_equal(position,stream->tokens());
     return result;
+}
+
+// Keep exact model outputs across fresh processes without accepting truncated or mismatched controls.
+static void gemma_logits_file(FILE * file,bool writing,const std::array<uint64_t,8> & profile,
+        std::vector<std::vector<float>> & values) {
+    constexpr uint64_t magic=0x474d344c4f474954ull;
+    if (!file || profile[0] != magic || profile[1] != 1 || !profile[2] || profile[2] > INT32_MAX ||
+            profile[3] >= profile[2] || !profile[4] || profile[4] > 256 || profile[4] > profile[2]-profile[3] ||
+            !profile[5] || profile[5] > INT32_MAX || profile[5] > (uint64_t(32)<<30)/sizeof(float)/profile[4] ||
+            profile[6] >= GGML_TYPE_COUNT || profile[7] >= GGML_TYPE_COUNT)
+        throw std::runtime_error("invalid Gemma logit control profile");
+    if (writing) {
+        if (values.size() != profile[4]) throw std::runtime_error("invalid Gemma logit control rows");
+        for (const auto & row : values) if (row.size() != profile[5])
+            throw std::runtime_error("invalid Gemma logit control columns");
+        if (std::fwrite(profile.data(),1,sizeof(profile),file) != sizeof(profile))
+            throw std::runtime_error("cannot write Gemma logit control header");
+        for (const auto & row : values) if (std::fwrite(row.data(),sizeof(float),row.size(),file) != row.size())
+            throw std::runtime_error("cannot write Gemma logit control values");
+        const uint64_t footer=~magic;
+        if (std::fwrite(&footer,1,sizeof(footer),file) != sizeof(footer) || std::fflush(file))
+            throw std::runtime_error("cannot finish Gemma logit control");
+        return;
+    }
+    std::array<uint64_t,8> actual{};
+    if (std::fread(actual.data(),1,sizeof(actual),file) != sizeof(actual) || actual != profile)
+        throw std::runtime_error("Gemma logit control header differs");
+    auto next=std::vector<std::vector<float>>(size_t(profile[4]),std::vector<float>(size_t(profile[5])));
+    for (auto & row : next) if (std::fread(row.data(),sizeof(float),row.size(),file) != row.size())
+        throw std::runtime_error("truncated Gemma logit control values");
+    uint64_t footer=0;
+    if (std::fread(&footer,1,sizeof(footer),file) != sizeof(footer) || footer != ~magic || std::fgetc(file) != EOF || std::ferror(file))
+        throw std::runtime_error("invalid Gemma logit control footer");
+    values=std::move(next);
+}
+
+// Qualify the model graph, not just individual cache owners or attention operators.
+static void test_gemma_target_context(testing & t, llama_model * model,uint32_t capacity=8192,
+        uint32_t prompt=1333,uint32_t outputs=8,bool native_control=true,bool expect_streaming=false,
+        const char * export_native=nullptr,const char * import_native=nullptr) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    if (!t.assert_true(capacity <= model->hparams.n_ctx_train && prompt > 1024 &&
+            prompt < capacity && outputs > 0 && outputs <= capacity-prompt)) return;
+    std::vector<std::vector<float>> reference;
+    const auto vocab=size_t(llama_vocab_n_tokens(llama_model_get_vocab(model)));
+    const std::array<uint64_t,8> profile{0x474d344c4f474954ull,1,capacity,prompt,outputs,vocab,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0};
+    if (!t.assert_true(!(export_native && import_native) && (!(export_native || import_native) || native_control))) return;
+    if (import_native) {
+        std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::fopen(import_native,"rb"));
+        gemma_logits_file(file.get(),false,profile,reference);
+    }
+    for (bool streaming : {false,true}) {
+        if (!streaming && !native_control) continue;
+        if ((!streaming && import_native) || (streaming && export_native)) continue;
+        auto cp=llama_context_default_params();
+        cp.n_ctx=capacity; cp.n_batch=cp.n_ubatch=256; cp.n_seq_max=1;
+        cp.n_threads=cp.n_threads_batch=8; cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        if (streaming) cp.shared_device_memory_bytes=gemma_test_arena_size;
+        context_ptr context(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true(streaming ? "streamed Gemma target context is admitted" : "native Gemma control starts",bool(context))) return;
+        auto * groups=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(context.get()));
+        if (!t.assert_true(groups && !groups->get_swa()->bounded_storage_pending())) return;
+        if (streaming) {
+            auto * owner=context->get_compute_memory();
+            if (!t.assert_true(owner && owner->shares_kv_memory() && owner->has_bounded_cache())) return;
+            t.assert_equal(cp.shared_device_memory_bytes,owner->shared_parent_capacity());
+            t.assert_true(ggml_backend_buffer_is_view(groups->get_swa()->get_k_storage(0)->buffer));
+        }
+        common_batch batch(context.get());
+        for (int32_t first=0;first<int32_t(prompt);) {
+            const auto rows=std::min(256,int32_t(prompt)-first);
+            batch.clear();
+            for (int32_t row=0;row<rows;++row) batch.add(llama_token(10+(first+row)%64),first+row,0,row == rows-1);
+            if (!t.assert_equal(0,llama_process(context.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+            first+=rows;
+            if (first%8192 == 0 || first == int32_t(prompt)) t.out << "Gemma target streaming=" << streaming
+                << " prefill=" << first << '/' << prompt << std::endl;
+        }
+        if (streaming) llama_set_kv_stream_decode(context.get(),true);
+        for (uint32_t step=0;step<outputs;++step) {
+            const auto * logits=llama_get_logits_ith(context.get(),-1);
+            if (!t.assert_true(logits != nullptr)) return;
+            t.assert_true("Gemma model logits remain finite",
+                std::all_of(logits,logits+vocab,[](float value) { return std::isfinite(value); }));
+            if (!streaming) reference.emplace_back(logits,logits+vocab);
+            else if (native_control) t.assert_true("native and streamed Gemma logits are bit-exact",
+                std::memcmp(reference[size_t(step)].data(),logits,vocab*sizeof(float)) == 0);
+            else t.assert_true(std::all_of(logits,logits+vocab,[](float value) { return std::isfinite(value); }));
+            batch.clear(); batch.add(llama_token(80+step),llama_pos(prompt+step),0,true);
+            if (!t.assert_equal(0,llama_process(context.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        }
+        llama_synchronize(context.get());
+        if (streaming) {
+            auto * stream=groups->get_base()->get_kv_stream();
+            t.assert_true(stream && stream->complete());
+            t.assert_equal(size_t(prompt)+outputs,stream->tokens());
+            llama_context_memory_diagnostics usage;
+            if (!t.assert_true(context->get_compute_memory()->diagnostics(usage))) return;
+            t.assert_equal(size_t(425984000),usage.persistent_cache_bytes);
+            t.assert_equal(cp.shared_device_memory_bytes,usage.parent_bytes);
+            t.assert_true(usage.phase == llama_memory_text_phase::decode);
+            if (expect_streaming) t.assert_true("longer-than-pool target uses streaming",usage.streaming_active);
+            t.out << "Gemma target context=" << capacity << " prompt=" << prompt << " outputs=" << outputs
+                << " native_control=" << native_control << " decode_pool=" << usage.kv_pool_bytes
+                << " resident/ring=" << usage.resident_pages_per_layer << '/' << usage.ring_slots
+                << " active=" << usage.active_pages << '\n';
+        }
+    }
+    if (export_native) {
+        std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::fopen(export_native,"wbx"));
+        gemma_logits_file(file.get(),true,profile,reference);
+    }
+}
+
+// Constructor failures must explain the rejected profile and leave a valid context constructible afterward.
+static void test_gemma_target_admission(testing & t, llama_model * model,bool include_forward=true) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    for (uint32_t invalid=0;invalid<6;++invalid) {
+        auto cp=llama_context_default_params();
+        cp.n_ctx=8192; cp.n_batch=cp.n_ubatch=256; cp.n_seq_max=1; cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.shared_device_memory_bytes=gemma_test_arena_size;
+        const char * expected="KV streaming requires one CUDA device, serial Qwen35 or Gemma4 target context";
+        if (invalid == 0) {
+            cp.swa_full=true;
+            expected="Gemma arena streaming requires bounded SWA storage";
+        } else if (invalid == 1) cp.n_seq_max=2;
+        else if (invalid == 2) cp.embeddings=true;
+        else if (invalid == 3) cp.offload_kqv=false;
+        else if (invalid == 4) {
+            cp.shared_device_memory_bytes=256u*1024u*1024u;
+            expected="workspace admission: insufficient arena quota";
+        } else {
+            cp.shared_device_memory_bytes=512u*1024u*1024u;
+            expected="persistent local cache does not fit the declared shared arena";
+        }
+        bool rejected=false;
+        try {
+            auto context=std::make_unique<llama_context>(*model,cp);
+        } catch (const std::runtime_error & error) {
+            t.out << "Gemma admission case=" << invalid << ": " << error.what() << '\n';
+            rejected=std::string(error.what()).find(expected) != std::string::npos;
+            if (invalid == 4) t.assert_true(std::string(error.what()).find("additional=") != std::string::npos);
+        }
+        t.assert_true(std::string("startup rejects profile with the expected cause: ")+expected,rejected);
+    }
+    {
+        auto cp=llama_context_default_params();
+        cp.n_ctx=8192; cp.n_batch=cp.n_ubatch=256; cp.n_seq_max=1; cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.shared_device_memory_bytes=gemma_test_arena_size; cp.n_rs_seq=3;
+        context_ptr context(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true("Gemma keeps upstream's ignored recurrent rollback setting",bool(context))) return;
+        t.assert_equal(uint32_t(0),context->get_cparams().n_rs_seq);
+        t.assert_true(!context->get_compute_memory()->has_speculative_consumer());
+    }
+    if (include_forward) test_gemma_target_context(t,model);
 }
 
 // A rejected streamed suffix operation must not change the independent local group's cells.
@@ -1354,6 +1530,53 @@ int main(int argc,char ** argv) {
         b={0,0,0,0,0,0,2,4,0.4f,0.2f,0.4f,0.2f,5,3,0.4f,0.3f,0.2f,0.1f};
         t.assert_true(dflash_exact_lattice(a.data(),3,6,2,16) == dflash_exact_lattice(b.data(),3,6,2,16));
     });
+    t.test("gemma_logit_files_validate_profile_framing_and_exact_payload", [&](testing & t) {
+        const std::array<uint64_t,8> profile{0x474d344c4f474954ull,1,16,4,2,3,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0};
+        std::vector<std::vector<float>> source{{0.0f,-0.0f,1.5f},{-2.0f,3.0f,4.0f}}, result;
+        std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::tmpfile());
+        if (!t.assert_true(bool(file))) return;
+        gemma_logits_file(file.get(),true,profile,source);
+        std::rewind(file.get());
+        gemma_logits_file(file.get(),false,profile,result);
+        t.assert_equal(source.size(),result.size());
+        for (size_t row=0;row<source.size();++row) t.assert_true(kv_stream_bytes_equal(
+            source[row].data(),source[row].size()*sizeof(float),result[row].data(),result[row].size()*sizeof(float)));
+        const auto unchanged=result;
+        const auto rejects=[&](const std::array<uint64_t,8> & expected) {
+            std::rewind(file.get());
+            try { gemma_logits_file(file.get(),false,expected,result); }
+            catch (const std::runtime_error &) { return true; }
+            return false;
+        };
+        auto wrong=profile; wrong[2]+=1;
+        t.assert_true(rejects(wrong) && result == unchanged);
+        wrong=profile; wrong[5]=UINT64_MAX;
+        t.assert_true(rejects(wrong) && result == unchanged);
+        const unsigned char extra=7;
+        std::fseek(file.get(),0,SEEK_END); std::fwrite(&extra,1,1,file.get()); std::fflush(file.get());
+        t.assert_true(rejects(profile) && result == unchanged);
+        file.reset(std::tmpfile());
+        if (!t.assert_true(bool(file))) return;
+        std::fwrite(profile.data(),1,sizeof(profile),file.get()); std::fflush(file.get());
+        t.assert_true(rejects(profile) && result == unchanged);
+        file.reset(std::tmpfile());
+        if (!t.assert_true(bool(file))) return;
+        gemma_logits_file(file.get(),true,profile,source);
+        std::rewind(file.get()); std::fwrite(&extra,1,1,file.get()); std::fflush(file.get());
+        t.assert_true(rejects(profile) && result == unchanged);
+    });
+    t.test("gemma_test_arena_override_is_explicit_and_bounded", [](testing & t) {
+        t.assert_equal(size_t(1024)*1048576,gemma_test_arena_bytes(nullptr));
+        t.assert_equal(size_t(768)*1048576,gemma_test_arena_bytes("768"));
+        t.assert_equal(size_t(1)*1048576,gemma_test_arena_bytes("1"));
+        t.assert_equal(size_t(4095)*1048576,gemma_test_arena_bytes("4095"));
+        for (const char * invalid : {"", "0", "-1", "+768", " 768", "768 ", "768x", "4096", "18446744073709551616"}) {
+            bool rejected=false;
+            try { (void)gemma_test_arena_bytes(invalid); }
+            catch (const std::invalid_argument &) { rejected=true; }
+            t.assert_true(rejected);
+        }
+    });
     t.test("streaming_is_disabled_by_default", [&](testing & t) {
         const auto defaults = llama_context_default_params();
         t.assert_equal(size_t(0),defaults.kv_stream_pool_bytes);
@@ -1362,6 +1585,12 @@ int main(int argc,char ** argv) {
     });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
+        if (!std::strcmp(argv[i],"--gemma-test-arena-mib")) {
+            if (++i == argc) { std::fprintf(stderr,"missing Gemma test arena MiB\n"); return 1; }
+            try { gemma_test_arena_size=gemma_test_arena_bytes(argv[i]); }
+            catch (const std::invalid_argument & error) { std::fprintf(stderr,"%s\n",error.what()); return 1; }
+            continue;
+        }
         if (!std::strcmp(argv[i], "--test-cache-k") || !std::strcmp(argv[i], "--test-cache-v")) {
             const bool key = !std::strcmp(argv[i], "--test-cache-k");
             if (++i == argc) {
@@ -1435,6 +1664,50 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-admission-only"); })) {
+        t.test("Gemma_target_admission_memory_boundaries",
+            [&](testing & t) { test_gemma_target_admission(t,model.get(),false); });
+        return t.summary();
+    }
+    for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-native-logits") || !std::strcmp(argv[i],"--gemma-streamed-logits")) {
+        const bool native=!std::strcmp(argv[i],"--gemma-native-logits");
+        if (i+1 == argc) { std::fprintf(stderr,"missing Gemma logit control path\n"); return 1; }
+        const char * path=argv[i+1];
+        t.test(native ? "Gemma_native_logit_control_export" : "Gemma_streamed_target_matches_external_native_control",
+            [&](testing & t) { test_gemma_target_context(t,model.get(),8192,1333,8,true,false,
+                native ? path : nullptr,native ? nullptr : path); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-admission-guards"); })) {
+        t.test("Gemma_target_rejects_invalid_profiles_and_recovers_after_quota_failures",
+            [&](testing & t) { test_gemma_target_admission(t,model.get()); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-target"); })) {
+        t.test("Gemma_streamed_target_matches_native_model_execution",
+            [&](testing & t) { test_gemma_target_context(t,model.get()); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-target-medium"); })) {
+        t.test("Gemma_streamed_target_ring_matches_native_model_execution",
+            [&](testing & t) { test_gemma_target_context(t,model.get(),32768,32000,16,true,true); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-target-medium-fit"); })) {
+        t.test("Gemma_streamed_target_light_ring_matches_fitting_native_context",
+            [&](testing & t) { test_gemma_target_context(t,model.get(),24576,23552,16,true,true); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-target-ring"); })) {
+        t.test("Gemma_streamed_target_ring_exceeds_measured_native_context_capacity",
+            [&](testing & t) { test_gemma_target_context(t,model.get(),32768,32000,16,false,true); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-target-long"); })) {
+        t.test("Gemma_streamed_target_long_history_fits_fixed_physical_budget",
+            [&](testing & t) { test_gemma_target_context(t,model.get(),262144,65536,16,false,true); });
+        return t.summary();
+    }
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-lifecycle"); })) {
         t.test("Gemma_serial_lifecycle_preserves_both_cache_groups",
             [&](testing & t) { test_gemma_lifecycle(t,model.get()); });
