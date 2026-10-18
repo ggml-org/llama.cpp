@@ -175,6 +175,48 @@ static void test(void) {
         assert(common_kv_stream_auxiliary_layers(automatic, 3) == 0);
     }
 
+    {
+        common_params shared;
+        shared.shared_device_memory_bytes=1024u*1024u*1024u;
+        shared.speculative.types={COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        shared.speculative.draft.mparams.path="assistant.gguf";
+        shared.n_parallel=1; shared.n_batch=shared.n_ubatch=256;
+        for (int32_t depth=1;depth<=3;++depth) {
+            shared.speculative.draft.n_max=depth;
+            assert(common_kv_stream_verify_max(shared,true) == uint32_t(depth+1));
+            assert(common_kv_stream_verify_max(shared,false) == 0);
+        }
+        auto rejects=[](const common_params & params) {
+            try { (void)common_kv_stream_verify_max(params,true); }
+            catch (const std::invalid_argument &) { return true; }
+            return false;
+        };
+        for (int32_t depth : {-1,0,4,INT32_MAX}) {
+            auto invalid=shared; invalid.speculative.draft.n_max=depth;
+            assert(rejects(invalid));
+        }
+        auto invalid=shared; invalid.n_parallel=2;
+        assert(rejects(invalid));
+        invalid=shared; invalid.n_batch=3; invalid.n_ubatch=0;
+        assert(rejects(invalid));
+        invalid=shared; invalid.n_batch=4; invalid.n_ubatch=3;
+        assert(rejects(invalid));
+        invalid=shared; invalid.speculative.draft.mparams.path.clear();
+        assert(rejects(invalid));
+        invalid=shared; invalid.n_batch=0;
+        assert(rejects(invalid));
+        invalid=shared; invalid.n_ubatch=-1;
+        assert(rejects(invalid));
+        invalid=shared; invalid.speculative.draft.cache_type_k_explicit=true;
+        assert(rejects(invalid));
+        invalid=shared; invalid.speculative.draft.cache_type_v_explicit=true;
+        assert(rejects(invalid));
+        shared.n_batch=4; shared.n_ubatch=0;
+        assert(common_kv_stream_verify_max(shared,true) == 4);
+        shared.shared_device_memory_bytes=0;
+        assert(common_kv_stream_verify_max(shared,true) == 0);
+    }
+
     auto assert_output_limits = [](int32_t n_batch, int32_t n_parallel, int32_t n_draft,
                                    int32_t total, int32_t per_seq) {
         const auto limits = common_speculative_get_output_limits(n_batch, n_parallel, n_draft);

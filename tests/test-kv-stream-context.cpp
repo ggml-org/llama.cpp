@@ -13,6 +13,7 @@
 #include "testing.h"
 #include "kv-stream-bit-exact-test.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -1466,7 +1467,8 @@ static void test_gemma_stream_groups(testing & t, llama_model * model) {
     }
 }
 
-static void test_gemma_assistant_source(testing & t, llama_model * model, const char * path, bool forced=false, bool compact=false) {
+static void test_gemma_assistant_source(testing & t, llama_model * model, const char * path,
+        bool forced=false, bool compact=false, bool verify=false, bool quotas=false) {
     if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4 && path)) return;
     auto mp=llama_model_default_params(); mp.n_gpu_layers=999;
     model_ptr assistant(llama_model_load_from_file(path,mp),llama_model_free);
@@ -1476,6 +1478,8 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
     if (!t.assert_true(width == assistant->hparams.n_embd_inp() && width == assistant->hparams.n_embd_out())) return;
     std::vector<std::vector<float>> logits[2],hidden_states[2];
     std::vector<llama_token> proposals[2];
+    llama_context_params quota_params{};
+    size_t exact_budget=0;
     const int prefix=forced ? 6143 : compact ? 2305 : 1333;
     for (bool streamed : {false,true}) {
         auto cp=llama_context_default_params();
@@ -1485,14 +1489,34 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
         cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
         cp.shared_device_memory_bytes=streamed ? size_t(forced ? 424 : compact ? 480 : 1024)*1048576 : 0;
+        cp.kv_stream_verify_max=streamed && verify ? 4 : 0;
+        if (streamed && verify) for (int invalid=0;invalid<4;++invalid) {
+            auto bad=cp;
+            if (invalid == 0) bad.kv_stream_verify_max=5;
+            if (invalid == 1) bad.n_ubatch=3;
+            if (invalid == 2) bad.shared_device_memory_bytes=0;
+            if (invalid == 3) bad.n_seq_max=2;
+            bool rejected=false;
+            try { llama_context wrong(*model,bad); }
+            catch (const std::runtime_error & error) {
+                rejected=std::string(error.what()) == "explicit streamed verification requires a serial Gemma4 target and 1-4 queries within n_ubatch";
+            }
+            if (!t.assert_true("invalid verification declaration rejects before target allocation",rejected)) return;
+        }
         context_ptr target(llama_init_from_model(model,cp),llama_free);
         if (!t.assert_true(streamed ? "streamed target for actual assistant" : "native target for actual assistant",bool(target))) return;
         llama_set_embeddings_nextn(target.get(),true,false);
         const auto resources=llama_memory_kv_resources_get(llama_get_memory(target.get()));
         if (!t.assert_true(resources.full && resources.bounded && !resources.recurrent)) return;
         auto * stream=resources.full->get_kv_stream();
+        if (streamed && verify) {
+            t.assert_equal(uint32_t(0),target->get_cparams().n_rs_seq);
+            t.assert_equal(uint32_t(4),target->get_cparams().kv_stream_decode_rows());
+            t.assert_equal(uint32_t(4),stream->max_decode_rows());
+        }
         auto dp=cp;
         dp.n_batch=dp.n_ubatch=1; dp.shared_device_memory_bytes=0;
+        dp.kv_stream_verify_max=0;
         dp.ctx_type=LLAMA_CONTEXT_TYPE_MTP; dp.ctx_other=target.get();
         if (streamed && !forced) {
             const auto revision=target->get_compute_memory()->graph_binding_revision();
@@ -1531,6 +1555,27 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         std::fprintf(stderr,"Gemma actual assistant: streamed=%d arena=%zu device_free_before_context=%zu\n",int(streamed),cp.shared_device_memory_bytes,free);
         context_ptr draft(llama_init_from_model(assistant.get(),dp),llama_free);
         if (!t.assert_true(streamed ? "streamed Gemma assistant context admitted" : "native Gemma assistant context admitted",bool(draft))) return;
+        if (streamed) {
+            const auto * child=draft->get_compute_memory();
+            const auto * parent=target->get_compute_memory();
+            if (!t.assert_true("Gemma assistant borrows the existing serial target workspace",
+                    child && parent && child->borrows_serial_parent() && child->shared_parent() == parent->shared_parent())) return;
+            t.assert_true(parent->has_speculative_consumer());
+            if (quotas) {
+                llama_context_memory_diagnostics usage;
+                const auto & config=stream->host()->config();
+                llama_kv_stream_policy_config policy;
+                policy.shape=config.shape; policy.capabilities=config.capabilities; policy.layers=config.layers;
+                size_t minimum=0;
+                if (!t.assert_true(parent->diagnostics(usage) && usage.unused_bytes == 0 &&
+                        llama_kv_stream_policy_minimum_pool_bytes(policy,minimum).status == llama_kv_stream_policy_status::success &&
+                        minimum <= usage.kv_pool_bytes && usage.kv_pool_bytes <= usage.parent_bytes)) return;
+                exact_budget=usage.parent_bytes-usage.kv_pool_bytes+minimum;
+                quota_params=cp;
+                std::fprintf(stderr,"Gemma joint arena quota: required=%zu current=%zu minimum_pool=%zu\n",
+                    exact_budget,usage.parent_bytes,minimum);
+            }
+        }
         llama_set_embeddings_nextn(draft.get(),true,true);
         const auto words=common_tokenize(target.get(),"A woodland stream flows past trees and birds. ",true);
         if (!t.assert_true(!words.empty())) return;
@@ -1550,6 +1595,8 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         const auto * initial=llama_get_logits_ith(target.get(),-1);
         if (!t.assert_true(h && initial)) return;
         std::vector<float> hidden(h,h+width);
+        const auto target_hidden=hidden;
+        const std::vector<float> target_logits(initial,initial+vocab);
         const llama_token first_token=llama_token(std::max_element(initial,initial+vocab)-initial);
         auto token=first_token;
         const auto full_ids=resources.full->get_layer_ids(),local_ids=resources.bounded->get_layer_ids();
@@ -1619,6 +1666,12 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
             token=llama_token(std::max_element(values,values+vocab)-values);
             proposals[streamed].push_back(token);
             hidden.assign(next,next+width);
+            const auto * retained_h=llama_get_embeddings_nextn_ith(target.get(),last_count-1);
+            const auto * retained_logits=llama_get_logits_ith(target.get(),-1);
+            t.assert_true("assistant preserves retained target hidden output",retained_h &&
+                !std::memcmp(retained_h,target_hidden.data(),width*sizeof(float)));
+            t.assert_true("assistant preserves retained target logits",retained_logits &&
+                !std::memcmp(retained_logits,target_logits.data(),vocab*sizeof(float)));
             t.assert_true("assistant leaves source KV bytes unchanged",snapshot() == before);
             t.assert_equal(full_used,resources.full->get_cells(0).get_used());
             t.assert_equal(local_used,resources.bounded->get_cells(0).get_used());
@@ -1673,6 +1726,53 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
             hidden_states[streamed].emplace_back(next,next+width);
             t.assert_true("refreshed assistant read preserves rewritten sources",snapshot() == rewritten);
         }
+        if (verify) {
+            llama_set_kv_stream_decode(target.get(),true);
+            if (stream) {
+                const auto unchanged=snapshot();
+                llama_memory_cache_requirement before_source,after_source;
+                if (!t.assert_true(stream->read_source(before_source))) return;
+                prompt.clear();
+                for (int row=0;row<5;++row) prompt.add(words[size_t(row)%words.size()],prefix+row,0,true);
+                if (!t.assert_equal("verification wider than the declared profile rejects before execution",-1,
+                        llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+                t.assert_equal(size_t(prefix),stream->tokens());
+                t.assert_true(stream->read_source(after_source) && after_source.identity.id == before_source.identity.id &&
+                    after_source.identity.generation == before_source.identity.generation);
+                t.assert_true(snapshot() == unchanged);
+            }
+            for (int count=1;count<=4;++count) {
+                prompt.clear();
+                for (int row=0;row<count;++row) prompt.add(words[size_t(row)%words.size()],prefix+row,0,true);
+                if (!t.assert_equal("declared target verification width executes",0,
+                        llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+                for (int row=0;row<count;++row) {
+                    const auto * values=llama_get_logits_ith(target.get(),row);
+                    const auto * next=llama_get_embeddings_nextn_ith(target.get(),row);
+                    if (!t.assert_true(values && next)) return;
+                    logits[streamed].emplace_back(values,values+vocab);
+                    hidden_states[streamed].emplace_back(next,next+width);
+                    if (row+1 == count) {
+                        hidden.assign(next,next+width);
+                        token=llama_token(std::max_element(values,values+vocab)-values);
+                    }
+                }
+                if (stream && !t.assert_equal(size_t(prefix+count),stream->tokens())) return;
+                const auto verified=snapshot();
+                common_batch read(draft.get());
+                const auto id=read.add(token,prefix+count,0,true);
+                read.set_embd(id,{hidden.data(),1,width});
+                if (!t.assert_equal("assistant uses the completed verification frontier",0,
+                        llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,read.get()))) return;
+                const auto * values=llama_get_logits_ith(draft.get(),-1);
+                const auto * next=llama_get_embeddings_nextn_ith(draft.get(),-1);
+                if (!t.assert_true(values && next)) return;
+                logits[streamed].emplace_back(values,values+vocab);
+                hidden_states[streamed].emplace_back(next,next+width);
+                t.assert_true("post-verification assistant leaves sources unchanged",snapshot() == verified);
+                if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(target.get()),0,prefix,-1))) return;
+            }
+        }
         draft.reset();
         llama_set_kv_stream_decode(target.get(),true);
         prompt.clear(); prompt.add(first_token,prefix,0,true);
@@ -1680,7 +1780,45 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         const auto * values=llama_get_logits_ith(target.get(),-1);
         if (!t.assert_true(values != nullptr)) return;
         logits[streamed].emplace_back(values,values+vocab);
-        std::fprintf(stderr,"Gemma actual assistant control complete: streamed=%d predictions=3\n",int(streamed));
+        std::fprintf(stderr,"Gemma actual assistant control complete: streamed=%d predictions=3 verify_max=%d\n",int(streamed),verify ? 4 : 0);
+    }
+    if (quotas) {
+        if (!t.assert_true(exact_budget > 1)) return;
+        for (bool sufficient : {false,true}) {
+            auto cp=quota_params; cp.shared_device_memory_bytes=exact_budget-(sufficient ? 0 : 1);
+            context_ptr target(nullptr,llama_free), draft(nullptr,llama_free);
+            std::string error;
+            try {
+                target.reset(new llama_context(*model,cp));
+                auto dp=cp; dp.n_batch=dp.n_ubatch=1;
+                dp.shared_device_memory_bytes=0; dp.kv_stream_verify_max=0;
+                dp.ctx_type=LLAMA_CONTEXT_TYPE_MTP; dp.ctx_other=target.get();
+                draft.reset(new llama_context(*assistant,dp));
+            } catch (const std::runtime_error & failure) { error=failure.what(); }
+            if (!sufficient) {
+                if (!t.assert_true("one-byte-short joint arena rejects without private workspace fallback",
+                        error == "persistent local cache does not fit the declared shared arena" ||
+                        error == "failed to prepare compute arenas")) return;
+                continue;
+            }
+            if (!t.assert_true("exact joint arena admits both contexts",error.empty() && target && draft)) {
+                t.out << "exact joint arena error: " << error << '\n'; return;
+            }
+            t.assert_equal(exact_budget,target->get_compute_memory()->shared_parent_capacity());
+            t.assert_true(draft->get_compute_memory()->borrows_serial_parent());
+            const auto words=common_tokenize(target.get(),"A woodland stream flows past trees. ",true);
+            if (!t.assert_true(!words.empty())) return;
+            common_batch prompt(target.get());
+            for (int row=0;row<16;++row) prompt.add(words[size_t(row)%words.size()],row,0,row == 15);
+            if (!t.assert_equal("exact joint arena short prefill",0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+            const auto * h=llama_get_embeddings_nextn_ith(target.get(),15);
+            const auto * values=llama_get_logits_ith(target.get(),-1);
+            if (!t.assert_true(h && values)) return;
+            common_batch read(draft.get());
+            const auto id=read.add(llama_token(std::max_element(values,values+vocab)-values),16,0,true);
+            read.set_embd(id,{h,1,width});
+            t.assert_equal("exact joint arena assistant handoff",0,llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,read.get()));
+        }
     }
     t.assert_true(proposals[0] == proposals[1]);
     if (!t.assert_equal(logits[0].size(),logits[1].size())) return;
@@ -1688,6 +1826,78 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         std::memcmp(logits[0][row].data(),logits[1][row].data(),vocab*sizeof(float)) == 0);
     for (size_t row=0;row<hidden_states[0].size();++row) t.assert_true("actual assistant hidden rows match native bits",
         std::memcmp(hidden_states[0][row].data(),hidden_states[1][row].data(),width*sizeof(float)) == 0);
+}
+
+static void test_gemma_common_startup(testing & t,const char * target_path,const char * assistant_path) {
+    common_params params;
+    params.model.path=target_path;
+    params.n_ctx=4096; params.n_batch=params.n_ubatch=256; params.n_parallel=1;
+    params.n_gpu_layers=999; params.fit_params=false; params.swa_full=false;
+    params.shared_device_memory_bytes=size_t(1024)*1048576;
+    params.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    params.cache_type_k=GGML_TYPE_Q8_0; params.cache_type_v=GGML_TYPE_Q4_0;
+    params.cpuparams.n_threads=params.cpuparams_batch.n_threads=8;
+    params.speculative.types={COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+    params.speculative.draft.n_max=3;
+    params.speculative.draft.n_gpu_layers=999;
+    params.speculative.draft.mparams.path=assistant_path;
+    auto main=common_init_from_params(params);
+    auto * target=main ? main->context() : nullptr;
+    if (!t.assert_true("common Gemma target startup succeeds",target != nullptr)) return;
+    const auto * parent=target->get_compute_memory();
+    if (!t.assert_true(parent && parent->serial_ready())) return;
+    t.assert_equal(uint32_t(0),target->get_cparams().n_rs_seq);
+    t.assert_equal(uint32_t(4),target->get_cparams().kv_stream_verify_max);
+    struct load_probe {
+        const llama_context_memory * parent;
+        std::atomic<uint32_t> observed{0};
+    } probe{parent};
+    auto draft_params=common_base_params_to_speculative(params);
+    draft_params.load_progress_callback=[](float,void * opaque) {
+        auto & p=*static_cast<load_probe *>(opaque);
+        p.observed.fetch_or(p.parent->serial_ready() ? 3u : 1u,std::memory_order_relaxed);
+        return true;
+    };
+    draft_params.load_progress_callback_user_data=&probe;
+    auto speculative=common_speculative_init_from_params(draft_params,main->model(),target);
+    auto * draft=speculative ? speculative->context() : nullptr;
+    if (!t.assert_true("common Gemma assistant startup succeeds",draft != nullptr)) return;
+    t.assert_equal("target warmup graphs are retired before assistant weight loading",uint32_t(1),
+        probe.observed.load(std::memory_order_relaxed));
+    t.assert_true(draft->get_compute_memory()->borrows_serial_parent());
+    t.assert_true(draft->get_compute_memory()->shared_parent() == parent->shared_parent());
+    t.assert_equal(uint32_t(1),draft->n_batch());
+    t.assert_equal(uint32_t(1),draft->n_ubatch());
+    const auto words=common_tokenize(target,"A woodland stream flows past trees and birds. ",true);
+    if (!t.assert_true(!words.empty())) return;
+    common_batch batch(target);
+    for (int row=0;row<64;++row) batch.add(words[size_t(row)%words.size()],row,0,row == 63);
+    if (!t.assert_equal("short prefill after common warmup",0,llama_process(target,LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+    const size_t width=target->get_model().hparams.n_embd_out();
+    const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(main->model()));
+    const auto predict=[&](int position,int hidden_row) {
+        const auto * hidden=llama_get_embeddings_nextn_ith(target,hidden_row);
+        const auto * logits=llama_get_logits_ith(target,-1);
+        if (!t.assert_true(hidden && logits)) return false;
+        common_batch read(draft);
+        const auto id=read.add(llama_token(std::max_element(logits,logits+vocab)-logits),position,0,true);
+        read.set_embd(id,{hidden,1,width});
+        if (!t.assert_equal("common assistant reads target outputs",0,llama_process(draft,LLAMA_PROCESS_TYPE_DECODE,read.get()))) return false;
+        const auto * result=llama_get_logits_ith(draft,-1);
+        return t.assert_true(result && std::all_of(result,result+vocab,[](float value) { return std::isfinite(value); }));
+    };
+    if (!predict(64,63)) return;
+    llama_set_kv_stream_decode(target,true);
+    batch.clear();
+    for (int row=0;row<4;++row) batch.add(words[size_t(row)%words.size()],64+row,0,true);
+    if (!t.assert_equal("common target verifies declared four-query batch",0,
+            llama_process(target,LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+    if (!predict(68,3)) return;
+    speculative.reset();
+    t.assert_true(!parent->has_speculative_consumer());
+    batch.clear(); batch.add(words.front(),68,0,true);
+    t.assert_equal("common target resumes after assistant destruction",0,
+        llama_process(target,LLAMA_PROCESS_TYPE_DECODE,batch.get()));
 }
 
 static void test_gemma_bounded_cache(testing & t, llama_model * model) {
@@ -2010,6 +2220,23 @@ int main(int argc,char ** argv) {
         t.assert_equal(size_t(0),defaults.shared_device_memory_bytes);
         t.assert_equal(uint32_t(0), defaults.kv_stream_auxiliary_layers);
     });
+    t.test("streamed_verification_width_is_independent_of_recurrent_storage", [&](testing & t) {
+        t.assert_equal(uint32_t(0),llama_context_default_params().kv_stream_verify_max);
+        llama_cparams params{};
+        params.n_seq_max=1;
+        t.assert_equal(uint32_t(1),params.kv_stream_decode_rows());
+        for (uint32_t rows=1;rows<=4;++rows) {
+            params.kv_stream_verify_max=rows;
+            params.n_rs_seq=0;
+            t.assert_equal(rows,params.kv_stream_decode_rows());
+            params.n_rs_seq=3;
+            t.assert_equal(rows,params.kv_stream_decode_rows());
+        }
+        params.kv_stream_verify_max=0;
+        t.assert_equal(uint32_t(4),params.kv_stream_decode_rows());
+        params.n_rs_seq=0; params.kv_stream_auxiliary_layers=1;
+        t.assert_equal(uint32_t(4),params.kv_stream_decode_rows());
+    });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
         if (!std::strcmp(argv[i],"--gemma-test-arena-mib")) {
@@ -2088,6 +2315,13 @@ int main(int argc,char ** argv) {
         ~restore() {if (backend) kv_stream_test_override_cc(backend,previous);}
     } restore_cc{baseline_backend.get(),previous};
 #endif
+    for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-common-startup")) {
+        if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
+        t.test("Gemma_common_startup_and_short_prefill_borrow_workspace",[&](testing & t) {
+            test_gemma_common_startup(t,argv[2],argv[i+1]);
+        });
+        return t.summary();
+    }
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     const llama_model_tensor_buft_override cache_only_weights[]={{".*",ggml_backend_cpu_buffer_type()},{nullptr,nullptr}};
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-read-source-cache"); })) {
@@ -2101,7 +2335,9 @@ int main(int argc,char ** argv) {
         t.test("Gemma_actual_assistant_reads_target_sources_without_new_KV",[&](testing & t) {
             const bool forced=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-forced"); });
             const bool compact=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-memory"); });
-            test_gemma_assistant_source(t,model.get(),argv[i+1],forced,compact);
+            const bool verify=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-verify"); });
+            const bool quotas=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-quotas"); });
+            test_gemma_assistant_source(t,model.get(),argv[i+1],forced,compact,verify,quotas);
         });
         return t.summary();
     }

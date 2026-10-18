@@ -1334,6 +1334,20 @@ uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t
     return count;
 }
 
+uint32_t common_kv_stream_verify_max(const common_params & params,bool shares_target_kv) {
+    if (!shares_target_kv || !common_params_uses_streamed_mtp(params)) return 0;
+    (void)common_kv_stream_auxiliary_layers(params,0,true);
+    if (const auto * error=common_streamed_kv_config_error(params)) throw std::invalid_argument(error);
+    const int32_t depth=params.speculative.draft.n_max;
+    if (depth < 1 || depth > 3) throw std::invalid_argument("shared-target MTP supports 1-3 draft tokens");
+    const int32_t rows=depth+1;
+    if (params.n_parallel != 1 || params.n_batch <= 0 || params.n_ubatch < 0 ||
+            (params.n_ubatch == 0 ? params.n_batch : std::min(params.n_batch,params.n_ubatch)) < rows) {
+        throw std::invalid_argument("shared-target MTP requires one serial slot and verification within the target microbatch");
+    }
+    return uint32_t(rows);
+}
+
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
@@ -1391,6 +1405,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             std::strcmp(architecture,"gemma4") == 0;
         cparams.kv_stream_auxiliary_layers = common_kv_stream_auxiliary_layers(
             params, llama_model_n_layer_nextn(model), shared_target_kv);
+        cparams.kv_stream_verify_max=common_kv_stream_verify_max(params,shared_target_kv);
     } catch (const std::invalid_argument & error) {
         COM_ERR("%s\n", error.what());
         return;
