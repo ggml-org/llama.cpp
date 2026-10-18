@@ -751,6 +751,143 @@ static void l2_norm_f32(const void * restrict src,
     }
 }
 
+static inline HVX_VectorPair hvx_fwht_stage_pair(HVX_Vector v0, HVX_Vector v1, int32_t b) {
+    HVX_VectorPair p = Q6_W_vshuff_VVR(v1, v0, b);
+    HVX_Vector s = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(p), Q6_V_hi_W(p));
+    HVX_Vector d = Q6_Vqf32_vsub_Vqf32Vqf32(Q6_V_lo_W(p), Q6_V_hi_W(p));
+    return Q6_W_vshuff_VVR(d, s, b);
+}
+
+static inline HVX_VectorPair hvx_fwht32_pair(HVX_Vector v0_sf, HVX_Vector v1_sf, HVX_Vector v_scale) {
+    HVX_Vector v0 = Q6_Vqf32_vmpy_VsfVsf(v0_sf, v_scale);
+    HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(v1_sf, v_scale);
+    HVX_VectorPair p;
+    p = hvx_fwht_stage_pair(v0, v1, 4);
+    p = hvx_fwht_stage_pair(Q6_V_lo_W(p), Q6_V_hi_W(p), 8);
+    p = hvx_fwht_stage_pair(Q6_V_lo_W(p), Q6_V_hi_W(p), 16);
+    p = hvx_fwht_stage_pair(Q6_V_lo_W(p), Q6_V_hi_W(p), 32);
+    p = hvx_fwht_stage_pair(Q6_V_lo_W(p), Q6_V_hi_W(p), 64);
+    return p;
+}
+
+static inline void hvx_fwht_store32(HVX_Vector * restrict v_dst, HVX_VectorPair p) {
+    v_dst[0] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p));
+}
+
+static inline void hvx_fwht_store64(HVX_Vector * restrict v_dst, HVX_VectorPair p) {
+    HVX_Vector u = Q6_V_lo_W(p);
+    HVX_Vector v = Q6_V_hi_W(p);
+    v_dst[0] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(u, v));
+    v_dst[1] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(u, v));
+}
+
+static inline void hvx_fwht_tail_f32(HVX_Vector * restrict v_dst, uint32_t nvec) {
+    uint32_t len_vec = 2;
+    for (; len_vec * 2 < nvec; len_vec <<= 2) {
+        const uint32_t step = len_vec * 4;
+        for (uint32_t i = 0; i < nvec; i += step) {
+            for (uint32_t j = 0; j < len_vec; j++) {
+                HVX_Vector a0 = v_dst[i + j];
+                HVX_Vector a1 = v_dst[i + j + len_vec];
+                HVX_Vector a2 = v_dst[i + j + 2 * len_vec];
+                HVX_Vector a3 = v_dst[i + j + 3 * len_vec];
+
+                HVX_Vector t0 = Q6_Vqf32_vadd_VsfVsf(a0, a1);
+                HVX_Vector t1 = Q6_Vqf32_vsub_VsfVsf(a0, a1);
+                HVX_Vector t2 = Q6_Vqf32_vadd_VsfVsf(a2, a3);
+                HVX_Vector t3 = Q6_Vqf32_vsub_VsfVsf(a2, a3);
+
+                v_dst[i + j]               = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(t0, t2));
+                v_dst[i + j + len_vec]     = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(t1, t3));
+                v_dst[i + j + 2 * len_vec] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(t0, t2));
+                v_dst[i + j + 3 * len_vec] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(t1, t3));
+            }
+        }
+    }
+
+    if (len_vec < nvec) {
+        for (uint32_t i = 0; i < nvec; i += 2 * len_vec) {
+            for (uint32_t j = 0; j < len_vec; j++) {
+                HVX_Vector u = v_dst[i + j];
+                HVX_Vector v = v_dst[i + len_vec + j];
+                v_dst[i + j]           = hvx_vec_add_f32_f32(u, v);
+                v_dst[i + len_vec + j] = hvx_vec_sub_f32_f32(u, v);
+            }
+        }
+    }
+}
+
+static inline void hvx_fwht_row_f32(const uint8_t * restrict src, uint8_t * restrict dst, uint32_t n, HVX_Vector v_scale) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const uint32_t nvec               = n / VLEN_FP32;
+
+    if (nvec == 1) {
+        HVX_VectorPair p = hvx_fwht32_pair(v_src[0], v_src[0], v_scale);
+        hvx_fwht_store32(v_dst, p);
+        return;
+    }
+
+    for (uint32_t i = 0; i < nvec; i += 2) {
+        HVX_VectorPair p = hvx_fwht32_pair(v_src[i], v_src[i + 1], v_scale);
+        hvx_fwht_store64(&v_dst[i], p);
+    }
+
+    hvx_fwht_tail_f32(v_dst, nvec);
+}
+
+static inline void hvx_fwht_row_f16(const uint8_t * restrict src, uint8_t * restrict dst, uint32_t n, HVX_Vector v_scale) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const uint32_t nvec               = n / VLEN_FP32;
+
+    if (nvec == 1) {
+        HVX_Vector v0 = Q6_V_lo_W(hvx_vec_f16_to_f32(v_src[0]));
+        HVX_VectorPair p = hvx_fwht32_pair(v0, v0, v_scale);
+        hvx_fwht_store32(v_dst, p);
+        return;
+    }
+
+    const uint32_t nvec_f16 = n / VLEN_FP16;
+    for (uint32_t i = 0; i < nvec_f16; i++) {
+        HVX_VectorPair f32p = hvx_vec_f16_to_f32(v_src[i]);
+        HVX_VectorPair p    = hvx_fwht32_pair(Q6_V_lo_W(f32p), Q6_V_hi_W(f32p), v_scale);
+        hvx_fwht_store64(&v_dst[2 * i], p);
+    }
+
+    hvx_fwht_tail_f32(v_dst, nvec);
+}
+
+static void hadamard_f32(const void * restrict src,
+                         void * restrict dst,
+                         const uint32_t num_rows,
+                         const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    const HVX_Vector v_scale = hvx_vec_splat_f32(1.0f / sqrtf((float) ne0));
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_row = (const uint8_t *) src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_row       = (uint8_t *) dst + (ir * dst_row_size_aligned);
+
+        hvx_fwht_row_f32(src_row, dst_row, ne0, v_scale);
+    }
+}
+
+static void hadamard_f16(const void * restrict src,
+                         void * restrict dst,
+                         const uint32_t num_rows,
+                         const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    const HVX_Vector v_scale = hvx_vec_splat_f32(1.0f / sqrtf((float) ne0));
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_row = (const uint8_t *) src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_row       = (uint8_t *) dst + (ir * dst_row_size_aligned);
+
+        hvx_fwht_row_f16(src_row, dst_row, ne0, v_scale);
+    }
+}
+
 static void tanh_f32(const void * restrict src,
                      void * restrict dst,
                      const uint32_t num_rows,
@@ -1644,6 +1781,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_STEP:      op_type = is_f16 ? "step-f16"     : "step-f32";         break;
         case HTP_OP_L2_NORM:         op_type = is_f16 ? "l2norm-f16"   : "l2norm-f32";       break;
         case HTP_OP_TRI:             op_type = "tri-f32";                                    break;
+        case HTP_OP_HADAMARD:        op_type = is_f16 ? "hadamard-f16" : "hadamard-f32";     break;
         default:
             FARF(ERROR, "Unsupported unary Op %u\n", octx->op);
             return HTP_STATUS_NO_SUPPORT;
@@ -1663,6 +1801,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_ABS:
             case HTP_OP_UNARY_LOG:
             case HTP_OP_UNARY_STEP:
+            case HTP_OP_HADAMARD:
                 break;
             default:
                 FARF(ERROR, "unary-%s: not supported for F16\n", op_type);
@@ -1677,16 +1816,17 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     }
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const size_t elem_size = is_f16 ? sizeof(_Float16) : sizeof(float);
-    const size_t src0_data_row_size = src0->ne[0] * elem_size;
-    const size_t dst_data_row_size  = dst->ne[0]  * elem_size;
+    const size_t src0_elem_size = is_f16 ? sizeof(_Float16) : sizeof(float);
+    const size_t dst_elem_size  = (dst->type == HTP_TYPE_F16) ? sizeof(_Float16) : sizeof(float);
+    const size_t src0_data_row_size = src0->ne[0] * src0_elem_size;
+    const size_t dst_data_row_size  = dst->ne[0]  * dst_elem_size;
 
     uint32_t row_start = 0;
     uint32_t nrows     = src0_nrows;
 
     if (octx->ctx->mdev.count > 1) {
         uint32_t rows_per_chunk = 0;
-        htp_tensor_mdev_rows_per_chunk(dst, (uint32_t) elem_size, (uint32_t) dst_data_row_size, &rows_per_chunk);
+        htp_tensor_mdev_rows_per_chunk(dst, (uint32_t) dst_elem_size, (uint32_t) dst_data_row_size, &rows_per_chunk);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_start = range.start;
         nrows     = range.count;
@@ -1813,6 +1953,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_ABS:       compute_func = (void *) abs_f16;                 break;
             case HTP_OP_UNARY_LOG:       compute_func = (void *) log_f16;                 break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f16;                break;
+            case HTP_OP_HADAMARD:        compute_func = (void *) hadamard_f16;            break;
             default:                     break;
         }
     } else {
@@ -1843,6 +1984,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_RELU:      compute_func = (void *) relu_f32;                break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f32;                break;
             case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f32;             break;
+            case HTP_OP_HADAMARD:        compute_func = (void *) hadamard_f32;            break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tri_f32;
                 compute_func = (void *) tri_f32;

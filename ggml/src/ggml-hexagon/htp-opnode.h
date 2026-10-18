@@ -47,13 +47,19 @@ struct htp_opnode {
     void init(ggml_tensor * node) {
         this->node = node;
         if (this->node) {
-            this->name = ggml_op_desc(this->node);
+            if (this->node->op == GGML_OP_MUL_MAT &&
+                ggml_get_op_params_i32(this->node, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
+                this->name = "MUL_MAT_HADAMARD";
+                this->inputs.push_back(this->node->src[1]);
+            } else {
+                this->name = ggml_op_desc(this->node);
 
-            // Build inputs (preserving optional nullptrs)
-            int n_inputs = n_active_src(this->node);
-            this->inputs.resize(n_inputs, nullptr);
-            for (int i = 0; i < n_inputs; i++) {
-                this->inputs[i] = this->node->src[i];
+                // Build inputs (preserving optional nullptrs)
+                int n_inputs = n_active_src(this->node);
+                this->inputs.resize(n_inputs, nullptr);
+                for (int i = 0; i < n_inputs; i++) {
+                    this->inputs[i] = this->node->src[i];
+                }
             }
 
             // Build outputs
@@ -124,6 +130,10 @@ struct htp_opnode {
     bool stackable() const {
         switch (this->op()) {
             case GGML_OP_MUL_MAT:
+                if (ggml_get_op_params_i32(this->node, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
+                    return false;
+                }
+                return ggml_is_quantized(this->src0()->type);
             case GGML_OP_MUL_MAT_ID:
                 return ggml_is_quantized(this->src0()->type);
             default:

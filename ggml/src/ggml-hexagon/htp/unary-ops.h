@@ -64,6 +64,7 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_STEP:
         case HTP_OP_L2_NORM:
         case HTP_OP_TRI:
+        case HTP_OP_HADAMARD:
             return true;
         default:
             return false;
@@ -94,8 +95,9 @@ static inline void htp_unary_vtcm_layout_build(
     uint32_t * out_col_tile,
     uint32_t * out_vtcm_row_per_thread
 ) {
+    const size_t dst_elem_size      = (op == HTP_OP_HADAMARD) ? sizeof(float) : elem_size;
     const size_t src0_data_row_size = ne00 * elem_size;
-    const size_t dst_data_row_size  = ne10 * elem_size;
+    const size_t dst_data_row_size  = ne10 * dst_elem_size;
 
     const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
@@ -131,7 +133,8 @@ static inline void htp_unary_vtcm_layout_build(
     }
 
     const bool is_reduction = (op == HTP_OP_NORM || op == HTP_OP_RMS_NORM ||
-                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_L2_NORM);
+                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_L2_NORM ||
+                               op == HTP_OP_HADAMARD);
     // The tiled fallback path below only has F32 task functions (unary_task_f32_tiled_*);
     // F16 has no tiled kernels, so it must stay on the row-block path like reduction ops.
     // NOTE: if F16 ends up with vtcm_row_per_thread == 0 here (row too large for the VTCM

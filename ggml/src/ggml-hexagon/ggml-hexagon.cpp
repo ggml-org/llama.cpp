@@ -5359,9 +5359,37 @@ static void ggml_hexagon_precompute_fused_mmidnx_params(
     kparams->n_weights = n_weights;
 }
 
+static bool ggml_hexagon_op_mul_mat_use_fwht(const struct ggml_tensor * dst) {
+    if (dst->op != GGML_OP_MUL_MAT || ggml_get_op_params_i32(dst, 1) != GGML_HINT_SRC0_IS_HADAMARD) {
+        return false;
+    }
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    const int64_t n = src1->ne[0];
+    if (n < 32 || (n & (n - 1)) != 0) {
+        return false;
+    }
+
+    return src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+           (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16) &&
+           ggml_is_contiguous_rows(src1) && ggml_is_contiguous(dst) &&
+           ggml_are_same_shape(src1, dst);
+}
+
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
+
+    if (ggml_get_op_params_i32(dst, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
+        if (!ggml_hexagon_op_mul_mat_use_fwht(dst)) {
+            return false;
+        }
+        struct htp_unary_kernel_params ukparams;
+        ggml_hexagon_precompute_unary_params(sess, HTP_OP_HADAMARD, src1, nullptr, dst, &ukparams);
+        return ukparams.vtcm_row_per_thread > 0 && (size_t) ukparams.vtcm_size <= sess->vtcm_size;
+    }
 
     if (dst->type != GGML_TYPE_F32) {
         return false;
@@ -5921,8 +5949,9 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src1 = op->src[1]; // indices
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_BF16 &&
-        src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_I32) {
+    if (src0->type != GGML_TYPE_F32  && src0->type != GGML_TYPE_F16 && src0->type  != GGML_TYPE_BF16 && src0->type != GGML_TYPE_I32  &&
+        src0->type != GGML_TYPE_Q1_0 && src0->type != GGML_TYPE_Q2_0 && src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q8_0 &&
+        src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K ) {
         return false;
     }
 
@@ -6666,7 +6695,11 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
 static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
     switch (t->op) {
         case GGML_OP_FLASH_ATTN_EXT:  return HTP_OP_FLASH_ATTN_EXT;
-        case GGML_OP_MUL_MAT:         return HTP_OP_MUL_MAT;
+        case GGML_OP_MUL_MAT:
+            if (ggml_get_op_params_i32(t, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
+                return HTP_OP_HADAMARD;
+            }
+            return HTP_OP_MUL_MAT;
         case GGML_OP_MUL_MAT_ID:      return HTP_OP_MUL_MAT_ID;
         case GGML_OP_MUL:             return HTP_OP_MUL;
         case GGML_OP_ADD:             return HTP_OP_ADD;
@@ -6795,6 +6828,7 @@ static bool is_supported_mul_mat_id_nx_kernel(const ggml_tensor * src0, const st
 
 static bool is_mergeable_mul_mat(const ggml_tensor * t) {
     if (t->op != GGML_OP_MUL_MAT) return false;
+    if (ggml_get_op_params_i32(t, 1) == GGML_HINT_SRC0_IS_HADAMARD) return false;
 
     const ggml_tensor * src0 = t->src[0];
     const ggml_tensor * src1 = t->src[1];
@@ -6897,7 +6931,9 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             if (graph->nodes[i]->op == GGML_OP_RMS_NORM && ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
                 extra->flags |= GGML_HEXAGON_TENSOR_FUSEABLE;
-            } else if (graph->nodes[i]->op == GGML_OP_MUL_MAT || graph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
+            } else if ((graph->nodes[i]->op == GGML_OP_MUL_MAT &&
+                        ggml_get_op_params_i32(graph->nodes[i], 1) != GGML_HINT_SRC0_IS_HADAMARD) ||
+                       graph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
                 if ((i + 1 < graph->n_nodes && graph->nodes[i + 1]->op == GGML_OP_ADD && ggml_can_fuse(graph, i, { graph->nodes[i]->op, GGML_OP_ADD })) ||
                     ggml_node_has_n_uses(graph, i, 1)) {
                     extra->flags |= GGML_HEXAGON_TENSOR_FUSEABLE;

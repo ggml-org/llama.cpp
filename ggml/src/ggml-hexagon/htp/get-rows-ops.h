@@ -64,7 +64,7 @@ static inline void htp_get_rows_vtcm_layout_build(
         size_t src0_row_size = 0;
         if (kernel_type == HTP_GET_ROWS_KERNEL_TILED) {
             const size_t tile_stride = htp_tensor_get_tile_padded_size(type);
-            const uint32_t n_k_tiles = ne00 / HTP_TENSOR_TILE_N_COLS;
+            const uint32_t n_k_tiles = ne00 / htp_tensor_get_tile_k(type);
             src0_row_size = n_k_tiles > 0 ? (n_k_tiles * tile_stride) : tile_stride;
         } else {
             src0_row_size = htp_tensor_get_row_size(type, ne00);

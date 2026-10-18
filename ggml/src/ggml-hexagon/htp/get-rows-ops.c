@@ -288,7 +288,7 @@ static void get_rows_thread_tiled(unsigned int nth, unsigned int ith, void * dat
     }
 
     const uint32_t ir1 = MIN(ir0 + dr, grctx->task_start + grctx->tasks);
-    const uint32_t n_k_tiles = ne00 / HTP_TENSOR_TILE_N_COLS;
+    const uint32_t n_k_tiles = ne00 / htp_tensor_get_tile_k(octx->src[0]->type);
     const struct htp_get_rows_vtcm_layout * vtcm_layout = &grctx->vtcm_layout;
     uint8_t * src_spad_base = VTCM_LAYOUT_PTR(uint8_t, grctx->vtcm_base, vtcm_layout->off_src0) + ith * vtcm_layout->src0_bytes_per_thread;
     uint8_t * dst_spad_base = VTCM_LAYOUT_PTR(uint8_t, grctx->vtcm_base, vtcm_layout->off_dst)  + ith * vtcm_layout->dst_bytes_per_thread;
@@ -450,7 +450,9 @@ int op_get_rows(struct htp_ops_context * octx) {
             break;
         case HTP_GET_ROWS_KERNEL_TILED:
             switch (octx->src[0]->type) {
-                case HTP_TYPE_F16:  grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f32; break;
+                case HTP_TYPE_F16:  grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f32;  break;
+                case HTP_TYPE_Q1_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q1_0_f32; break;
+                case HTP_TYPE_Q2_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q2_0_f32; break;
                 case HTP_TYPE_Q8_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q8_0_f32; break;
                 case HTP_TYPE_Q4_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q4_0_f32; break;
                 case HTP_TYPE_Q4_K: grctx.compute_tiled = hvx_dequantize_row_tiled_q4_k_f32; break;
@@ -466,6 +468,8 @@ int op_get_rows(struct htp_ops_context * octx) {
             switch (octx->src[0]->type) {
                 case HTP_TYPE_F16:  grctx.compute_flat = hvx_dequantize_row_flat_f16_f32;  break;
                 case HTP_TYPE_BF16: grctx.compute_flat = hvx_dequantize_row_flat_bf16_f32; break;
+                case HTP_TYPE_Q1_0: grctx.compute_flat = hvx_dequantize_row_flat_q1_0_f32; break;
+                case HTP_TYPE_Q2_0: grctx.compute_flat = hvx_dequantize_row_flat_q2_0_f32; break;
                 case HTP_TYPE_Q8_0: grctx.compute_flat = hvx_dequantize_row_flat_q8_0_f32; break;
                 case HTP_TYPE_Q4_0: grctx.compute_flat = hvx_dequantize_row_flat_q4_0_f32; break;
                 case HTP_TYPE_Q4_K: grctx.compute_flat = hvx_dequantize_row_flat_q4_k_f32; break;
