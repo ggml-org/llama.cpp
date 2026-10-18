@@ -12,10 +12,23 @@
 #               port, or any web page open in a browser on the network (CORS allows all origins), can use the
 #               server; set API_KEY to require one
 #   API_KEY     require this key on API requests (the web UI asks for it once)
-#   GPU_LAYERS  layers whose dense weights go to CUDA0, from layer 0 (default: IQ1 model file 11 with
-#               OFFLOAD=1 / 19 with OFFLOAD=0, 8 otherwise; measured on the 12 GB card: MXFP4 10 layers left
-#               ~20 MB free; IQ1 19 layers leave ~500 MB without offload, with it 12 leave ~490 MB and 16 OOM)
-#   CTX         context size                     (default: 8192)
+#   CTX         context size in tokens           (default: 262144). Picks one of two profiles:
+#                 CTX > 8192:  KV_TYPE q8_0, GPU_LAYERS 0, output head on the CPU, CACHE_RAM 32768
+#                 CTX <= 8192: KV_TYPE f16, GPU_LAYERS 11 (IQ1, OFFLOAD=1) / 19 (IQ1, OFFLOAD=0) / 8 (other),
+#                              output head on the GPU, the server's prompt cache size
+#   GPU_LAYERS  layers whose dense weights go to CUDA0, from layer 0 (default: see CTX). Measured on the 12 GB card
+#               at CTX 8192: MXFP4 10 layers left ~20 MB free; IQ1 19 layers leave ~500 MB without offload, with it
+#               12 leave ~490 MB and 16 OOM. At CTX 262144 the 0-layer default leaves ~800 MB idle; each dense layer
+#               takes ~345 MiB, so more than 0 is unmeasured there ("failed to allocate compute pp buffers" = too many)
+#   KV_TYPE     attention cache type, f16 or q8_0 (default: see CTX; passed as both -ctk and -ctv, the model needs
+#               them equal). The cache holds 24 layers x 576 values per token: 3.6 GiB at 262144 tokens in q8_0;
+#               f16 is refused above CTX 131072 (6.75 GiB at 262144 does not fit)
+#   CACHE_RAM   host memory for the server's prompt cache in MiB (--cache-ram; default: 32768 when CTX > 8192, else
+#               the server's 8192). One long chat needs room for its cache (~4.1 GB at 256k) plus its context
+#               checkpoints (443 MiB each, up to 32 = ~14 GB); a smaller limit drops long chats when the UI switches
+#               conversations, and returning to one then reprocesses it from the start; 0 turns the cache off.
+#               The active chat's own checkpoints (up to ~14 GB) come on top; both take host RAM away from the
+#               page cache that expert streaming uses
 #   THREADS     CPU threads, physical cores      (default: 14)
 #   UBATCH      prompt batch size (-b = -ub); every batch reads nearly all experts once (default: 2048)
 #   PREDICT     next-layer expert prediction: 0 off, 1 observe (statistics only), 2 prefetch (default: 2)
@@ -36,15 +49,24 @@
 #
 # THREADS should stay at the physical core count: the prediction worker runs on a spare hyperthread
 #
-# memory: the dense weights of the CPU layers (~49 GiB) are loaded into pinned host memory (-lm none), so expert
-# streaming cannot evict them; the routed experts stay on disk (--lazy-mode on) and are read per token through
-# the page cache with GGML_CPU_MOE_PREFETCH=1. --no-warmup: the warmup run would route all 896 experts per layer.
+# memory: the dense weights of the CPU layers (~49 GiB with the CTX <= 8192 profile, ~54 GiB at the long-context
+# default) are loaded into pinned host memory (-lm none), so expert streaming cannot evict them; the routed experts
+# stay on disk (--lazy-mode on) and are read per token through the page cache with GGML_CPU_MOE_PREFETCH=1.
+# --no-warmup: the warmup run would route all 896 experts per layer.
 #
-# measured 2026-10-16 (IQ1 model, 256 GB RAM, 1.6k-token prompt + 128 tokens): prompt ~108 s (76 s with CHECKPOINTS=0),
-# decode ~0.53 tok/s; prompt batches read the experts with O_DIRECT at 8-9 GB/s (LLAMA_COPY_DIRECT=0 for the old
-# page-cache path: ~285 s)
+# measured 2026-10-16 (IQ1 model, 256 GB RAM, CTX 8192, 1.6k-token prompt + 128 tokens): prompt ~108 s (76 s with
+# CHECKPOINTS=0), decode ~0.53 tok/s; prompt batches read the experts with O_DIRECT at 8-9 GB/s (LLAMA_COPY_DIRECT=0
+# for the old page-cache path: ~285 s)
+#
+# long context (CTX 262144): the attention cache must stay on the GPU (in host RAM the CPU would do the attention,
+# +1-2 s per token near a full context), so the dense layers and the output head move to the CPU to make room:
+# expected ~+0.09 s per token. Near a full context the GPU also reads the whole cache per token (estimated ~20-25 ms)
+# and each 2048-token prompt batch adds an estimated ~15-25 s of attention to its ~70-100 s of expert streaming.
+# A fresh 256k-token prompt therefore takes hours; a chat that grows turn by turn only processes each new turn
 
 set -euo pipefail
+
+die() { echo "run-server.sh: $*" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${BIN:-$HERE/../build/bin/llama-server}"
@@ -52,19 +74,40 @@ MODEL="${MODEL:-/mnt/k3/kimi-k3-iq1/Kimi-K3-abliterated-IQ1_S-XS-00001-of-00034.
 PORT="${PORT:-18090}"
 HOST="${HOST:-0.0.0.0}"
 API_KEY="${API_KEY:-}"
+CTX="${CTX:-262144}"
+[[ "$CTX" =~ ^[1-9][0-9]{0,7}$ ]] || die "CTX must be a positive number of tokens"
+# small contexts keep the previously measured layout; larger ones need the GPU memory for the attention cache
+if [[ "$CTX" -le 8192 ]]; then
+    LONG_CTX=0
+else
+    LONG_CTX=1
+fi
+GPU_LAYERS_SET="${GPU_LAYERS:+1}"
 if [[ "$(basename "$MODEL")" == *IQ1* ]]; then
     OFFLOAD="${OFFLOAD:-1}"
     # the offload staging buffer takes ~2.3 GB more GPU memory: 11 dense layers with it (12 left < 500 MiB), 19 without
-    if [[ "$OFFLOAD" == 1 ]]; then
+    if [[ "$LONG_CTX" == 1 ]]; then
+        GPU_LAYERS="${GPU_LAYERS:-0}"
+    elif [[ "$OFFLOAD" == 1 ]]; then
         GPU_LAYERS="${GPU_LAYERS:-11}"
     else
         GPU_LAYERS="${GPU_LAYERS:-19}"
     fi
 else
-    GPU_LAYERS="${GPU_LAYERS:-8}"
+    if [[ "$LONG_CTX" == 1 ]]; then
+        GPU_LAYERS="${GPU_LAYERS:-0}"
+    else
+        GPU_LAYERS="${GPU_LAYERS:-8}"
+    fi
     OFFLOAD="${OFFLOAD:-0}"
 fi
-CTX="${CTX:-8192}"
+if [[ "$LONG_CTX" == 1 ]]; then
+    KV_TYPE="${KV_TYPE:-q8_0}"
+    CACHE_RAM="${CACHE_RAM:-32768}"
+else
+    KV_TYPE="${KV_TYPE:-f16}"
+    CACHE_RAM="${CACHE_RAM:-}"
+fi
 THREADS="${THREADS:-14}"
 UBATCH="${UBATCH:-2048}"
 PREDICT="${PREDICT:-2}"
@@ -74,8 +117,6 @@ UI_CONFIG_DEFAULT='{"displayPerformance":true}'
 UI_CONFIG="${UI_CONFIG:-$UI_CONFIG_DEFAULT}"
 UI_PATH="${UI_PATH:-}"
 N_LAYER=93
-
-die() { echo "run-server.sh: $*" >&2; exit 1; }
 
 # flags that defeat streaming: loading/locking/validating everything touches all 1.5 TB, op offload copies
 # whole 5 GB expert tensors to the GPU, and load/lazy/placement settings are fixed by this script.
@@ -98,6 +139,12 @@ for a in "$@"; do
             die "refusing '$a': fixed by this script" ;;
         -ctxcp|--ctx-checkpoints|--swa-checkpoints)
             die "refusing '$a': set it with the CHECKPOINTS environment variable" ;;
+        -ctk|--cache-type-k|-ctv|--cache-type-v)
+            die "refusing '$a': set it with the KV_TYPE environment variable" ;;
+        -cram|--cache-ram)
+            die "refusing '$a': set it with the CACHE_RAM environment variable" ;;
+        -nkvo|--no-kv-offload|-kvo|--kv-offload)
+            die "refusing '$a': the attention cache must stay on the GPU" ;;
         --ui-config|--webui-config|--ui-config-file|--webui-config-file|--path)
             die "refusing '$a': set it with the UI_CONFIG / UI_PATH environment variables" ;;
     esac
@@ -119,11 +166,17 @@ done
 
 [[ -x "$BIN" ]]   || die "llama-server not found at $BIN (build the worktree first)"
 [[ -f "$MODEL" ]] || die "model not found: $MODEL"
-[[ "$GPU_LAYERS" =~ ^(0|[1-9][0-9]*)$ && "$GPU_LAYERS" -le "$N_LAYER" ]] || die "GPU_LAYERS must be 0..$N_LAYER"
-[[ "$UBATCH" =~ ^[1-9][0-9]*$ && "$UBATCH" -ge 32 && "$UBATCH" -le 8192 ]] || die "UBATCH must be 32..8192"
+[[ "$GPU_LAYERS" =~ ^(0|[1-9][0-9]?)$ && "$GPU_LAYERS" -le "$N_LAYER" ]] || die "GPU_LAYERS must be 0..$N_LAYER"
+[[ "$UBATCH" =~ ^[1-9][0-9]{0,3}$ && "$UBATCH" -ge 32 && "$UBATCH" -le 8192 ]] || die "UBATCH must be 32..8192"
 [[ "$PREDICT" =~ ^[012]$ ]] || die "PREDICT must be 0, 1 or 2"
 [[ "$OFFLOAD" =~ ^[01]$ ]] || die "OFFLOAD must be 0 or 1"
-[[ -z "$CHECKPOINTS" || "$CHECKPOINTS" =~ ^(0|[1-9][0-9]*)$ ]] || die "CHECKPOINTS must be a non-negative integer"
+[[ -z "$CHECKPOINTS" || "$CHECKPOINTS" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "CHECKPOINTS must be a non-negative integer"
+[[ "$KV_TYPE" == f16 || "$KV_TYPE" == q8_0 ]] || die "KV_TYPE must be f16 or q8_0"
+[[ "$KV_TYPE" != f16 || "$CTX" -le 131072 ]] || die "KV_TYPE=f16 does not fit the GPU above CTX 131072, use q8_0"
+[[ -z "$CACHE_RAM" || "$CACHE_RAM" =~ ^(0|[1-9][0-9]{0,6})$ ]] || die "CACHE_RAM must be a number of MiB"
+if [[ "$LONG_CTX" == 1 && "$GPU_LAYERS_SET" == 1 && "$GPU_LAYERS" -gt 0 ]]; then
+    echo "run-server.sh: warning: GPU_LAYERS=$GPU_LAYERS with CTX $CTX is unmeasured: each dense layer takes ~345 MiB of GPU memory and CTX 262144 leaves ~800 MiB with 0; 'failed to allocate compute pp buffers' means lower it" >&2
+fi
 
 [[ "$HOST" =~ ^[0-9A-Za-z.:_-]+$ && "$HOST" != -* ]] || die "HOST must be an address or host name"
 # the key goes to the server through a pipe (--api-key-file), not the command line every local user can read; the
@@ -176,8 +229,27 @@ OT='_exps\.=CPU'
 if [[ -n "$cpu_layers" ]]; then
     OT="$OT,blk\.($cpu_layers)\.=CPU"
 fi
+# long contexts: the ~0.9 GB output head goes to the CPU too (read once per token, ~17 ms; prompt batches only
+# compute the last token's logits, so op offload never uploads it)
+if [[ "$LONG_CTX" == 1 ]]; then
+    OT="$OT,^output\.=CPU"
+    HEAD_ON=CPU
+else
+    HEAD_ON=GPU
+fi
+if [[ "$GPU_LAYERS" == 0 ]]; then
+    gpu_desc="GPU dense layers: none"
+else
+    gpu_desc="GPU dense layers 0..$((GPU_LAYERS - 1))"
+fi
+CACHE_RAM_FLAG=()
+cache_desc="server default"
+if [[ -n "$CACHE_RAM" ]]; then
+    CACHE_RAM_FLAG=(--cache-ram "$CACHE_RAM")
+    cache_desc="$CACHE_RAM MiB"
+fi
 
-echo "run-server.sh: GPU dense layers 0..$((GPU_LAYERS - 1)), ctx $CTX, threads $THREADS, port $PORT"
+echo "run-server.sh: $gpu_desc, output head on $HEAD_ON, ctx $CTX, KV $KV_TYPE, prompt cache $cache_desc, threads $THREADS, port $PORT"
 echo "run-server.sh: loading reads ~58 GB of dense weights first"
 
 export GGML_CPU_MOE_PREFETCH=1
@@ -202,6 +274,7 @@ exec "$BIN" "$@" \
     -m "$MODEL" \
     -lm none --lazy-mode on $OFFLOAD_FLAG -fit off --no-warmup "${CHECKPOINTS_FLAG[@]}" \
     -ngl 999 -ot "$OT" \
-    -t "$THREADS" -fa on -c "$CTX" -b "$UBATCH" -ub "$UBATCH" -np 1 \
+    -t "$THREADS" -fa on -c "$CTX" -ctk "$KV_TYPE" -ctv "$KV_TYPE" "${CACHE_RAM_FLAG[@]}" \
+    -b "$UBATCH" -ub "$UBATCH" -np 1 \
     --ui-config "$UI_CONFIG" "${UI_FLAG[@]}" \
     "${KEY_FLAG[@]}" --host "$HOST" --port "$PORT"
