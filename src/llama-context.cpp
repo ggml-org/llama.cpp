@@ -879,6 +879,11 @@ bool llama_context::prepare_compute_arenas(
     if (!llama_compute_workspace_plan_make(backend_buft, measurements, n_phases, plan)) {
         return false;
     }
+    // A sampler can change the child's graph footprint after construction. Its graphs are retired before measurement.
+    if (compute_memory && cparams.kv_shared_read && compute_memory->borrows_serial_parent() &&
+            !compute_memory->covers_workspace(plan)) {
+        compute_memory.reset();
+    }
     if (compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache() ||
             (cparams.kv_shared_read && compute_memory->borrows_serial_parent()))) {
         if (!compute_memory->covers_workspace(plan) && !compute_memory->grow_workspace(plan)) return false;

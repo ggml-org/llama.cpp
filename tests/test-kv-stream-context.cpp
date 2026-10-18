@@ -1828,6 +1828,213 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         std::memcmp(hidden_states[0][row].data(),hidden_states[1][row].data(),width*sizeof(float)) == 0);
 }
 
+// Observe the real graph inputs and every assistant block without changing the draft loop.
+struct gemma_candidate_trace {
+    struct record {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        bool operator==(const record & other) const { return name == other.name && bytes == other.bytes; }
+    };
+    std::vector<record> records;
+    bool valid=true;
+
+    void capture(const char * name,ggml_tensor * tensor,ggml_type type) {
+        if (!tensor || tensor->type != type || !ggml_is_contiguous(tensor)) {
+            std::fprintf(stderr,"Gemma candidate trace cannot read %s: tensor=%s expected_type=%d actual_type=%d\n",
+                name,tensor ? tensor->name : "null",int(type),tensor ? int(tensor->type) : -1);
+            valid=false; return;
+        }
+        records.push_back({name,std::vector<uint8_t>(ggml_nbytes(tensor))});
+        ggml_backend_tensor_get(tensor,records.back().bytes.data(),0,records.back().bytes.size());
+    }
+    static bool callback(ggml_tensor * tensor,bool ask,void * opaque) {
+        auto & trace=*static_cast<gemma_candidate_trace *>(opaque);
+        const std::string name=tensor->name;
+        const bool token_input=tensor->op == GGML_OP_GET_ROWS && tensor->src[1] &&
+            !std::strncmp(tensor->src[1]->name,"inp_tokens",10);
+        const bool wanted=token_input || name == "inp_xh" || name == "Qcur_pos-0" || name == "result_output" ||
+            name == "h_nextn" || name == "out_scaled-0" || name == "out_scaled-1" ||
+            name == "out_scaled-2" || name == "out_scaled-3";
+        if (!wanted) return false;
+        if (ask) return true;
+        if (token_input) {
+            trace.capture("tokens",tensor->src[1],GGML_TYPE_I32);
+        } else if (name == "inp_xh") {
+            trace.capture("hidden",tensor->src[1],GGML_TYPE_F32);
+        } else if (name == "Qcur_pos-0") {
+            trace.capture("position",tensor->src[1],GGML_TYPE_I32);
+        } else {
+            trace.capture(name.c_str(),tensor,GGML_TYPE_F32);
+        }
+        return true;
+    }
+};
+
+// Match the common driver to explicit sequential stock predictions and frozen target sources.
+static void test_gemma_candidate_loop(testing & t,llama_model * model,const char * path,bool compact) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4 && path)) return;
+    auto mp=llama_model_default_params(); mp.n_gpu_layers=999;
+    model_ptr assistant(llama_model_load_from_file(path,mp),llama_model_free);
+    if (!t.assert_true(assistant && assistant->arch == LLM_ARCH_GEMMA4_ASSISTANT && assistant->hparams.n_layer_nextn == 4)) return;
+    const size_t width=model->hparams.n_embd_out();
+    const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(assistant.get()));
+    kv_stream_bit_oracle oracle;
+    for (bool streamed : {false,true}) {
+        if (streamed) oracle.compare();
+        auto cp=llama_context_default_params();
+        cp.n_ctx=4096; cp.n_batch=cp.n_ubatch=compact ? 32 : 256; cp.n_seq_max=1;
+        cp.n_threads=cp.n_threads_batch=8; cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.shared_device_memory_bytes=streamed ? size_t(compact ? 480 : 1024)*1048576 : 0;
+        cp.kv_stream_verify_max=streamed ? 4 : 0;
+        context_ptr target(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true(bool(target))) return;
+        gemma_candidate_trace trace;
+        auto dp=cp; dp.n_batch=dp.n_ubatch=1;
+        dp.shared_device_memory_bytes=0; dp.kv_stream_verify_max=0;
+        dp.ctx_type=LLAMA_CONTEXT_TYPE_MTP; dp.ctx_other=target.get();
+        dp.cb_eval=gemma_candidate_trace::callback; dp.cb_eval_user_data=&trace;
+        context_ptr draft(llama_init_from_model(assistant.get(),dp),llama_free);
+        if (!t.assert_true(bool(draft))) return;
+        llama_set_embeddings_nextn(target.get(),true,false);
+        llama_set_embeddings_nextn(draft.get(),true,true);
+        const auto words=common_tokenize(target.get(),"A woodland stream flows past trees and birds. ",true);
+        if (!t.assert_true(!words.empty())) return;
+        const int prefix=compact ? 2305 : 1333;
+        llama_tokens prompt;
+        common_batch batch(target.get());
+        for (int first=0;first<prefix;first+=int(cp.n_ubatch)) {
+            batch.clear();
+            const int count=std::min(int(cp.n_ubatch),prefix-first);
+            for (int row=0;row<count;++row) {
+                const auto token=words[size_t(first+row)%words.size()];
+                prompt.push_back(token); batch.add(token,first+row,0,row+1 == count);
+            }
+            if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        }
+        llama_set_kv_stream_decode(target.get(),true);
+        const auto * h=llama_get_embeddings_nextn_ith(target.get(),batch.size()-1);
+        const auto * logits=llama_get_logits_ith(target.get(),-1);
+        if (!t.assert_true(h && logits)) return;
+        const std::vector<float> hidden(h,h+width);
+        const llama_token anchor=llama_token(std::max_element(logits,logits+vocab)-logits);
+        const auto resources=llama_memory_kv_resources_get(llama_get_memory(target.get()));
+        if (!t.assert_true(resources.full && resources.bounded && !resources.recurrent)) return;
+        const auto snapshot=[&] {
+            std::vector<std::vector<uint8_t>> bytes;
+            for (auto * cache : {resources.full,resources.bounded}) {
+                const auto ids=cache->get_layer_ids();
+                for (auto * tensor : {cache->get_k_storage(int32_t(ids.back())),cache->get_v_storage(int32_t(ids.back()))}) {
+                    bytes.emplace_back(ggml_nbytes(tensor));
+                    ggml_backend_tensor_get(tensor,bytes.back().data(),0,bytes.back().size());
+                }
+            }
+            return bytes;
+        };
+        const auto source_bytes=snapshot();
+        auto * physical_parent=target->get_compute_memory()->shared_parent();
+        llama_memory_cache_requirement source;
+        auto * stream=resources.full->get_kv_stream();
+        if (stream && !t.assert_true(stream->read_source(source))) return;
+        trace.records.clear();
+        llama_tokens explicit_tokens;
+        auto token=anchor;
+        auto next_hidden=hidden;
+        for (int step=0;step<3;++step) {
+            common_batch read(draft.get());
+            const auto id=read.add(token,prefix,0,true);
+            read.set_embd(id,{next_hidden.data(),1,width});
+            if (!t.assert_equal(0,llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,read.get()))) return;
+            const auto * values=llama_get_logits_ith(draft.get(),-1);
+            const auto * next=llama_get_embeddings_nextn_ith(draft.get(),-1);
+            if (!t.assert_true(values && next)) return;
+            const size_t offset=size_t(step)*9;
+            if (!t.assert_true(trace.valid && trace.records.size() == offset+9)) return;
+            const auto & token_record=trace.records[offset];
+            const auto & hidden_record=trace.records[offset+1];
+            const auto & position_record=trace.records[offset+2];
+            const llama_pos position=prefix;
+            t.assert_true("observed token is the current sequential prediction",token_record.name == "tokens" &&
+                kv_stream_bytes_equal(&token,sizeof(token),token_record.bytes.data(),token_record.bytes.size()));
+            t.assert_true("observed hidden state evolves from the previous prediction",hidden_record.name == "hidden" &&
+                kv_stream_bytes_equal(next_hidden.data(),width*sizeof(float),hidden_record.bytes.data(),hidden_record.bytes.size()));
+            t.assert_true("all predictions use the fixed target frontier",position_record.name == "position" &&
+                kv_stream_bytes_equal(&position,sizeof(position),position_record.bytes.data(),position_record.bytes.size()));
+            for (size_t layer=0;layer<4;++layer) t.assert_equal("out_scaled-"+std::to_string(layer),trace.records[offset+3+layer].name);
+            token=llama_token(std::max_element(values,values+vocab)-values);
+            explicit_tokens.push_back(token); next_hidden.assign(next,next+width);
+        }
+        if (!trace.valid || trace.records.size() != 27) {
+            t.out << "Gemma candidate trace valid=" << trace.valid << " records=" << trace.records.size() << '\n';
+            for (const auto & record : trace.records) t.out << record.name << " bytes=" << record.bytes.size() << '\n';
+        }
+        if (!t.assert_true("three sequential passes observe all inputs, four blocks and outputs",trace.valid && trace.records.size() == 27)) return;
+        const auto explicit_trace=trace.records;
+        for (bool backend : {false,true}) for (int depth=1;depth<=3;++depth) for (int scenario=0;scenario<4;++scenario) {
+            common_params_speculative params;
+            params.types={COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+            params.draft.ctx_tgt=target.get(); params.draft.ctx_dft=draft.get();
+            params.draft.n_max=depth; params.draft.backend_sampling=backend;
+            params.draft.p_min=scenario == 1 ? 1.0f : 0.0f;
+            params.draft.n_min=scenario == 2 ? depth+1 : 0;
+            common_speculative_ptr spec(common_speculative_init(params,1));
+            if (!t.assert_true(bool(spec))) return;
+            trace.records.clear();
+            common_speculative_begin(spec.get(),0,prompt);
+            if (!t.assert_true(common_speculative_process(spec.get(),batch))) return;
+            if (!t.assert_true("shared KV process performs no assistant catch-up",trace.records.empty())) return;
+            std::vector<uint8_t> saved;
+            if (!t.assert_true(common_speculative_get_state(spec.get(),0,saved) && saved.size() == sizeof(uint32_t)+width*sizeof(float))) return;
+            if (!t.assert_true("draft carry starts at the target's final hidden row",!std::memcmp(saved.data()+sizeof(uint32_t),hidden.data(),width*sizeof(float)))) return;
+            auto stale=saved;
+            std::fill(stale.begin()+sizeof(uint32_t),stale.end(),0);
+            common_speculative_set_state(spec.get(),0,stale);
+            if (!t.assert_true(common_speculative_process(spec.get(),batch))) return;
+            std::vector<uint8_t> refreshed;
+            if (!t.assert_true("processing current target outputs replaces stale draft carry",
+                    common_speculative_get_state(spec.get(),0,refreshed) && refreshed == saved && trace.records.empty())) return;
+            for (int repeat=0;repeat<2;++repeat) {
+                if (repeat) common_speculative_set_state(spec.get(),0,saved);
+                trace.records.clear();
+                llama_tokens result;
+                auto & request=common_speculative_get_draft_params(spec.get(),0);
+                request.drafting=true; request.n_max=scenario == 3 ? 1 : -1;
+                request.pos0=prefix; request.id_last=anchor; request.prompt=&prompt; request.result=&result;
+                common_speculative_draft(spec.get());
+                if (streamed && !t.assert_true("sampler graph changes keep the same shared physical parent",
+                        target->get_compute_memory()->shared_parent() == physical_parent &&
+                        draft->get_compute_memory()->borrows_serial_parent() &&
+                        draft->get_compute_memory()->shared_parent() == physical_parent)) return;
+                const size_t calls=scenario == 1 ? 1 : size_t(depth);
+                const size_t returned=(scenario == 1 || scenario == 2) ? 0 : scenario == 3 ? 1 : size_t(depth);
+                if (!t.assert_true("stock driver observes the explicit fixed-position token/hidden chain",trace.valid &&
+                        trace.records.size() == calls*9 && std::equal(trace.records.begin(),trace.records.end(),explicit_trace.begin()))) return;
+                if (!t.assert_true("configured length, confidence and minimum-length rules match stock",result ==
+                        llama_tokens(explicit_tokens.begin(),explicit_tokens.begin()+returned))) return;
+                if (!t.assert_true("all draft passes leave target KV unchanged",snapshot() == source_bytes)) return;
+                if (stream) {
+                    llama_memory_cache_requirement after;
+                    t.assert_true(stream->read_source(after) && after.identity.id == source.identity.id &&
+                        after.identity.generation == source.identity.generation && stream->tokens() == size_t(prefix));
+                    if (compact) {
+                        llama_context_memory_diagnostics usage;
+                        t.assert_true("candidate memory profile exercises the ring",target->get_compute_memory()->diagnostics(usage) && usage.streaming_active);
+                    }
+                }
+                const std::string label=std::to_string(int(backend))+"/"+std::to_string(depth)+"/"+std::to_string(scenario)+"/"+std::to_string(repeat);
+                oracle.bytes(label+"/candidates",result.data(),result.size()*sizeof(llama_token));
+                for (size_t row=0;row<trace.records.size();++row) {
+                    const auto & record=trace.records[row];
+                    oracle.bytes(label+"/"+std::to_string(row)+"/"+record.name,record.bytes.data(),record.bytes.size());
+                }
+            }
+        }
+        if (streamed) oracle.finish();
+        std::fprintf(stderr,"Gemma candidate loop: streamed=%d matched_records=%zu bytes=%llu\n",int(streamed),oracle.records(),(unsigned long long)oracle.byte_count());
+    }
+}
+
 static void test_gemma_common_startup(testing & t,const char * target_path,const char * assistant_path) {
     common_params params;
     params.model.path=target_path;
@@ -2330,6 +2537,14 @@ int main(int argc,char ** argv) {
     }
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-candidate-loop")) {
+        if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
+        t.test("Gemma_common_candidate_loop_matches_native_fixed_position_predictions",[&](testing & t) {
+            const bool compact=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-memory"); });
+            test_gemma_candidate_loop(t,model.get(),argv[i+1],compact);
+        });
+        return t.summary();
+    }
     for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-assistant-source")) {
         if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
         t.test("Gemma_actual_assistant_reads_target_sources_without_new_KV",[&](testing & t) {
