@@ -1691,6 +1691,30 @@ static void test_json_schema_unordered_properties() {
         });
 }
 
+static void test_json_schema_unordered_ref_with_ordered() {
+    auto doc = common_chat_schema_from_json(json::parse(R"""({
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/D"}},
+        "$defs": {"D": {"type": "object", "properties": {"unordered": {"enum": ["a"]}, "d": {"type": "boolean"}}, "required": ["d"]}}
+    })"""));
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+        auto resp = builder.add_schema("resp", *doc.root);
+        auto tool = builder.add_schema_unordered("tool", *doc.root);
+        builder.add_rule("root", "\"R\" " + resp + " | \"T\" " + tool);
+    });
+    test("$ref used by both an ordered and an unordered schema", grammar,
+        {
+            R"""(R{"x": {"d": true}})""",
+            R"""(T{"x": {"d": true}})""",
+            R"""(T{"x": {"unordered": "a", "d": true}})""",
+            R"""(T{"x": {"d": true, "unordered": "a"}})""",
+        },
+        {
+            R"""(T{"x": "a"})""",
+            R"""(R{"x": {"unordered": "a", "d": true}})""",
+        });
+}
+
 static void test_unordered_accepts_ordered(const std::string & test_desc, const std::string & schema_str, size_t max_len) {
     fprintf(stderr, "⚫ Testing unordered accepts everything ordered accepts: %s\n", test_desc.c_str());
     auto schema = json::parse(schema_str);
@@ -1810,6 +1834,7 @@ int main() {
     test_json_schema();
     test_json_schema_unordered_properties();
     test_json_schema_unordered_superset();
+    test_json_schema_unordered_ref_with_ordered();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }

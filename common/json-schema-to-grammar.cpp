@@ -359,6 +359,7 @@ private:
     bool _unordered_properties = false;
     std::map<std::string, std::string> _rules;
     std::unordered_set<std::string> _refs_being_resolved;
+    std::map<const common_chat_schema *, std::string> _unordered_refs;
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
     int _depth = 0;
@@ -722,7 +723,24 @@ private:
     std::string _resolve_ref(const common_chat_schema_ref & schema) {
         auto it = schema.ref.find('#');
         std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
-        std::string ref_name = "ref" + gbnf_format_rule_name(ref_fragment) + (_unordered_properties ? "-unordered" : "");
+        std::string ref_name = "ref" + gbnf_format_rule_name(ref_fragment);
+        if (_unordered_properties) {
+            // keyed by target, so an ordered rule with the same name is never reused
+            auto it = _unordered_refs.find(schema.target);
+            if (it != _unordered_refs.end()) {
+                return it->second;
+            }
+            if (!schema.target) {
+                _errors.push_back("Unresolved $ref " + schema.ref);
+                return "";
+            }
+            std::string name = ref_name + "-unordered";
+            for (int i = 0; _rules.find(name) != _rules.end(); i++) {
+                name = ref_name + "-unordered" + std::to_string(i);
+            }
+            _unordered_refs[schema.target] = name;
+            return _unordered_refs[schema.target] = visit(*schema.target, name);
+        }
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
             if (!schema.target) {
                 _errors.push_back("Unresolved $ref " + schema.ref);
