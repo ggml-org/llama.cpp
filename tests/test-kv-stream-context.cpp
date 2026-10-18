@@ -9,6 +9,7 @@
 #include "../src/llama-kv-cache-iswa.h"
 #include "../src/llama-io.h"
 #include "../ggml/src/ggml-backend-impl.h"
+#include "../ggml/src/ggml-backend-execution.h"
 #include "testing.h"
 #include "kv-stream-bit-exact-test.h"
 #include <algorithm>
@@ -991,7 +992,7 @@ static void test_gemma_lifecycle(testing & t, llama_model * model) {
 }
 
 // Measure native local attention before storage exists, then reuse one parent through both text phases.
-static void test_gemma_phase_parent(testing & t, llama_model * model) {
+static void test_gemma_phase_parent(testing & t, llama_model * model, bool shared_reads=false) {
     if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
     auto * dev=ggml_backend_dev_by_name("CUDA0");
     if (!t.assert_true(dev != nullptr)) return;
@@ -1007,8 +1008,9 @@ static void test_gemma_phase_parent(testing & t, llama_model * model) {
     params.kv_stream_max_rows=256; params.kv_stream_max_decode_rows=4;
     params.kv_stream_backend=backend.get(); params.defer_bounded_cache=true;
     const auto no_reuse=[](int32_t) { return int32_t(-1); };
+    const uint32_t capacity=shared_reads ? 131072 : 32768;
     llama_kv_cache_iswa cache(*model,params.type_k,params.type_v,false,true,false,true,
-        32768,1,256,256,nullptr,nullptr,no_reuse,nullptr,&params);
+        capacity,1,256,256,nullptr,nullptr,no_reuse,nullptr,&params);
     auto * local=cache.get_swa(); auto * stream=cache.get_base()->get_kv_stream();
     if (!t.assert_true(local->bounded_storage_pending() && stream)) return;
     auto * placeholder=local->get_k_storage(0);
@@ -1047,7 +1049,7 @@ static void test_gemma_phase_parent(testing & t, llama_model * model) {
     auto owner=llama_context_memory::create(sched.get(),backends,plan,stream);
     if (!t.assert_true(bool(owner))) return;
     t.assert_equal(params.shared_device_memory_bytes,owner->shared_parent_capacity());
-    llama_cparams cp{}; cp.n_ctx_seq=32768; cp.n_ubatch=256; cp.n_seq_max=1; cp.flash_attn=true;
+    llama_cparams cp{}; cp.n_ctx_seq=capacity; cp.n_ubatch=256; cp.n_seq_max=1; cp.flash_attn=true;
     llama_memory_bounded_kv_layout quote;
     if (!t.assert_true(llama_kv_cache_iswa::bounded_storage_requirements(model->hparams,params,cp,buft,{609,1},quote))) return;
     auto too_large=quote; too_large.allocation.bytes=params.shared_device_memory_bytes;
@@ -1143,6 +1145,188 @@ static void test_gemma_phase_parent(testing & t, llama_model * model) {
         << " prefill pool=" << before.kv_pool_bytes << " decode pool=" << decode.kv_pool_bytes
         << " prefill resident/ring=" << before.resident_pages_per_layer << '/' << before.ring_slots
         << " decode resident/ring=" << decode.resident_pages_per_layer << '/' << decode.ring_slots << '\n';
+    if (!shared_reads) return;
+    const auto ids=cache.get_base()->get_layer_ids();
+    if (!t.assert_true(!ids.empty())) return;
+    const int32_t selected=int32_t(ids.back());
+    const auto filter=[&](int32_t il) { return il == selected; };
+    const auto share=[&](int32_t) { return selected; };
+    llama_kv_cache reader(*model,model->hparams,params.type_k,params.type_v,false,true,true,
+        capacity,1,256,0,LLAMA_SWA_TYPE_NONE,cache.get_base(),filter,nullptr,share);
+    auto * original=reader.get_k_storage(selected);
+    const size_t grants=stream->device_grant_bytes();
+    t.assert_true(!reader.attach_shared_stream_reader(*owner,5));
+    t.assert_true(reader.get_k_storage(selected) == original);
+    if (!t.assert_true(reader.attach_shared_stream_reader(*owner,4))) return;
+    t.assert_equal(grants,stream->device_grant_bytes());
+    t.assert_true(!reader.attach_shared_stream_reader(*owner,4));
+    t.assert_true(reader.get_k_storage(selected) != original &&
+        reader.get_k_storage(selected)->data == original->data &&
+        ggml_backend_buft_is_execution(ggml_backend_buffer_get_type(reader.get_k_storage(selected)->buffer)));
+    bool mismatch=false;
+    try {
+        llama_kv_cache invalid(*model,model->hparams,params.type_k,GGML_TYPE_Q8_0,false,true,true,
+            capacity,1,256,0,LLAMA_SWA_TYPE_NONE,cache.get_base(),filter,nullptr,share);
+    } catch (const std::runtime_error & error) {
+        mismatch=std::string(error.what()) == "shared KV source has incompatible cache geometry or format";
+    }
+    t.assert_true("shared cache cannot silently override requested quantization",mismatch);
+    llama_kv_stream_host_layer host;
+    if (!t.assert_true(stream->host()->layer(uint32_t(ids.size()-1),host))) return;
+    ggml_backend_buffer_clear(stream->buffer(),0);
+    for (bool value : {false,true}) {
+        auto * root=value ? cache.get_base()->get_v_storage(selected) : original;
+        std::vector<float> source(ggml_nelements(root));
+        for (size_t i=0;i<source.size();++i) source[i]=float(int(i%37)-18)*0.0625f;
+        ggml_quantize_chunk(root->type,source.data(),value ? host.v : host.k,0,root->ne[1],root->ne[0],nullptr);
+    }
+    const uint32_t active=128000;
+    if (!t.assert_true(stream->restore(active) && owner->prepare_serial_decode() && reader.arm_shared_stream_reader())) return;
+    llama_kv_stream_runtime_diagnostics runtime;
+    if (!t.assert_true(stream->runtime_diagnostics(runtime))) return;
+    const size_t layer_bytes=size_t(active)*(stream->host()->layout().k_token_bytes+stream->host()->layout().v_token_bytes);
+    t.out << "borrowed source: rows=" << active << " layer bytes=" << layer_bytes << " entire pool=" << runtime.pool_bytes
+        << " resident mean=" << runtime.resident_pages_per_layer << " ring slots=" << runtime.ring_slots << '\n';
+    // Even the whole pool cannot contain this layer, so no resident/ring partition can acquire it at once.
+    if (!t.assert_true("source history exceeds the entire physical KV pool",layer_bytes > runtime.pool_bytes)) return;
+    llama_kv_cache::slot_info slots;
+    slots.s0=slots.s1=0; slots.strm={0}; slots.idxs={{0}};
+    for (bool value : {false,true}) {
+        bool rejected=false;
+        try {
+            if (value) reader.cpy_v(nullptr,nullptr,nullptr,selected,slots);
+            else reader.cpy_k(nullptr,nullptr,nullptr,selected,slots);
+        } catch (const std::runtime_error & error) {
+            rejected=std::string(error.what()) == "cannot write a borrowed KV source";
+        }
+        t.assert_true("shared reader cannot build a KV writer",rejected);
+    }
+    std::vector<uint8_t> saved_head(256);
+    std::memcpy(saved_head.data(),host.v,saved_head.size());
+    reader.clear(true);
+    t.assert_true("clearing the reader does not clear its source",std::memcmp(saved_head.data(),host.v,saved_head.size()) == 0);
+    t.assert_equal(size_t(active),stream->tokens());
+    auto * root=reader.get_k_storage(selected);
+    if (!t.assert_true(root->ne[0] == 2048 && root->ne[1] == capacity && reader.get_size() == capacity)) return;
+    for (uint32_t rows : {1u,3u,4u}) {
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * q=ggml_new_tensor_3d(ctx.get(),GGML_TYPE_F32,512,rows,32);
+        auto * mask=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,active,rows);
+        auto * k=ggml_permute(ctx.get(),reader.get_k(ctx.get(),selected,active,slots),0,2,1,3);
+        auto * v=ggml_permute(ctx.get(),reader.get_v(ctx.get(),selected,active,slots),0,2,1,3);
+        auto * output=ggml_flash_attn_ext(ctx.get(),q,k,v,mask,1.0f/16,0,0);
+        ggml_prec_set_acc(output,GGML_PREC_F32);
+        ggml_backend_execution_set_external_workspace(output,true);
+        auto * graph=ggml_new_graph_custom(ctx.get(),64,false); ggml_build_forward_expand(graph,output);
+        auto * nk=ggml_new_tensor_2d(ctx.get(),params.type_k,2048,active);
+        auto * nv=ggml_new_tensor_2d(ctx.get(),params.type_v,2048,active);
+        auto * native_k=ggml_view_3d(ctx.get(),nk,512,active,4,nk->nb[1],ggml_row_size(nk->type,512),0);
+        auto * native_v=ggml_view_3d(ctx.get(),nv,512,active,4,nv->nb[1],ggml_row_size(nv->type,512),0);
+        auto * expected=ggml_flash_attn_ext(ctx.get(),q,native_k,native_v,mask,1.0f/16,0,0);
+        ggml_prec_set_acc(expected,GGML_PREC_F32);
+        auto * native_graph=ggml_new_graph_custom(ctx.get(),64,false); ggml_build_forward_expand(native_graph,expected);
+        ggml_backend_buffer_ptr allocation(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+        if (!t.assert_true(bool(allocation))) return;
+        std::vector<float> queries(ggml_nelements(q),0.125f);
+        std::vector<ggml_fp16_t> masks(ggml_nelements(mask),ggml_fp32_to_fp16(0));
+        ggml_backend_tensor_set(q,queries.data(),0,ggml_nbytes(q));
+        ggml_backend_tensor_set(mask,masks.data(),0,ggml_nbytes(mask));
+        ggml_backend_tensor_set(nk,host.k,0,ggml_nbytes(nk));
+        ggml_backend_tensor_set(nv,host.v,0,ggml_nbytes(nv));
+        if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(backend.get(),native_graph))) return;
+        std::vector<float> want(ggml_nelements(expected)),got(want.size());
+        ggml_backend_tensor_get(expected,want.data(),0,ggml_nbytes(expected));
+        for (int repeat=0;repeat<2;++repeat) {
+            if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(backend.get(),graph))) return;
+            ggml_backend_tensor_get(output,got.data(),0,ggml_nbytes(output));
+            t.assert_true("cache-view borrowed attention matches stock bits",std::memcmp(want.data(),got.data(),ggml_nbytes(output)) == 0);
+            t.assert_equal(size_t(active),stream->tokens());
+        }
+        if (!t.assert_true(reader.release_shared_stream_reader())) return;
+        t.assert_equal(GGML_STATUS_FAILED,ggml_backend_graph_compute(backend.get(),graph));
+        ggml_backend_tensor_get(output,got.data(),0,ggml_nbytes(output));
+        t.assert_true("unarmed shared reader preserves outputs",std::memcmp(want.data(),got.data(),ggml_nbytes(output)) == 0);
+        if (!t.assert_true(reader.arm_shared_stream_reader())) return;
+        t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(backend.get(),graph));
+        ggml_backend_tensor_get(output,got.data(),0,ggml_nbytes(output));
+        t.assert_true("shared reader rearm keeps stock bits",std::memcmp(want.data(),got.data(),ggml_nbytes(output)) == 0);
+    }
+    t.assert_true(reader.release_shared_stream_reader());
+    const auto local_ids=local->get_layer_ids();
+    if (!t.assert_true(local_ids.size() >= 3)) return;
+    const int32_t local_source=int32_t(local_ids.back());
+    auto * native_key=local->get_k_storage(local_source);
+    auto * native_value=local->get_v_storage(local_source);
+    std::vector<float> local_values(ggml_nelements(native_value));
+    for (size_t i=0;i<local_values.size();++i) local_values[i]=float(int(i%31)-15)*0.0625f;
+    std::vector<uint8_t> encoded_local(ggml_nbytes(native_value));
+    ggml_quantize_chunk(native_value->type,local_values.data(),encoded_local.data(),0,
+        native_value->ne[1],native_value->ne[0],nullptr);
+    ggml_backend_tensor_set(native_value,encoded_local.data(),0,encoded_local.size());
+    auto native_owner=local->retain_bounded_storage(610,1,capacity,256);
+    if (!t.assert_true(bool(native_owner))) return;
+    auto native_pin=native_owner->read(native_owner->identity());
+    const auto local_filter=[&](int32_t il) {
+        return std::find(local_ids.end()-3,local_ids.end(),uint32_t(il)) != local_ids.end();
+    };
+    const auto local_share=[&](int32_t) { return local_source; };
+    llama_kv_cache local_reader(*model,model->hparams,params.type_k,params.type_v,false,true,true,
+        local->get_size(),1,256,model->hparams.n_swa,model->hparams.swa_type,local,local_filter,nullptr,local_share);
+    auto * original_local=local_reader.get_k_storage(local_source);
+    llama_memory_bounded_kv_read empty;
+    t.assert_true(!local_reader.attach_shared_bounded_reader(empty));
+    t.assert_true(local_reader.get_k_storage(local_source) == original_local);
+    if (!t.assert_true(local_reader.attach_shared_bounded_reader(native_pin))) return;
+    t.assert_true(!local_reader.attach_shared_bounded_reader(native_pin));
+    if (!t.assert_true(local_reader.arm_shared_bounded_reader(native_pin))) return;
+    for (auto id : local_reader.get_layer_ids()) {
+        auto * key=local_reader.get_k_storage(int32_t(id)),* value=local_reader.get_v_storage(int32_t(id));
+        t.assert_true(key != native_key && value != native_value && key->view_src == native_key && value->view_src == native_value);
+        t.assert_true(key->data == native_key->data && value->data == native_value->data);
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * q=ggml_new_tensor_3d(ctx.get(),GGML_TYPE_F32,256,1,32);
+        auto * mask=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,local->get_size(),1);
+        const auto attention=[&](ggml_tensor * k,ggml_tensor * v) {
+            auto * keys=ggml_view_3d(ctx.get(),k,256,local->get_size(),16,k->nb[1],ggml_row_size(k->type,256),0);
+            auto * values=ggml_view_3d(ctx.get(),v,256,local->get_size(),16,v->nb[1],ggml_row_size(v->type,256),0);
+            auto * out=ggml_flash_attn_ext(ctx.get(),q,keys,values,mask,1.0f/16,0,0);
+            ggml_prec_set_acc(out,GGML_PREC_F32);
+            return out;
+        };
+        auto * result=attention(key,value),* reference=attention(native_key,native_value);
+        auto * graph=ggml_new_graph_custom(ctx.get(),64,false);
+        ggml_build_forward_expand(graph,result); ggml_build_forward_expand(graph,reference);
+        ggml_backend_buffer_ptr allocation(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+        if (!t.assert_true(bool(allocation))) return;
+        std::vector<float> query(ggml_nelements(q),0.125f);
+        std::vector<ggml_fp16_t> masks(ggml_nelements(mask),ggml_fp32_to_fp16(0));
+        ggml_backend_tensor_set(q,query.data(),0,ggml_nbytes(q));
+        ggml_backend_tensor_set(mask,masks.data(),0,ggml_nbytes(mask));
+        if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(backend.get(),graph))) return;
+        std::vector<float> got(ggml_nelements(result)),want(got.size());
+        ggml_backend_tensor_get(result,got.data(),0,ggml_nbytes(result));
+        ggml_backend_tensor_get(reference,want.data(),0,ggml_nbytes(reference));
+        t.assert_true("three local readers preserve native attention bits",std::memcmp(want.data(),got.data(),ggml_nbytes(result)) == 0);
+    }
+    local_reader.clear(true);
+    std::vector<uint8_t> after_local(encoded_local.size());
+    ggml_backend_tensor_get(native_value,after_local.data(),0,after_local.size());
+    t.assert_true(encoded_local == after_local);
+    native_pin.reset();
+    t.assert_equal(uint64_t(0),native_owner->begin_write(native_owner->identity()));
+    {
+        auto wrong_owner=local->retain_bounded_storage(611,1,capacity,256);
+        if (!t.assert_true(bool(wrong_owner))) return;
+        auto wrong=wrong_owner->read(wrong_owner->identity());
+        t.assert_true(!local_reader.arm_shared_bounded_reader(wrong));
+        t.assert_equal(uint64_t(0),native_owner->begin_write(native_owner->identity()));
+    }
+    local_reader.release_shared_bounded_reader();
+    const auto write=native_owner->begin_write(native_owner->identity());
+    if (!t.assert_true(write != 0 && native_owner->finish_write(write,true))) return;
+    native_pin=native_owner->read(native_owner->identity());
+    t.assert_true(local_reader.arm_shared_bounded_reader(native_pin));
+    local_reader.release_shared_bounded_reader();
 }
 
 static void test_gemma_deferred_local(testing & t, llama_model * model) {
@@ -1282,6 +1466,230 @@ static void test_gemma_stream_groups(testing & t, llama_model * model) {
     }
 }
 
+static void test_gemma_assistant_source(testing & t, llama_model * model, const char * path, bool forced=false, bool compact=false) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4 && path)) return;
+    auto mp=llama_model_default_params(); mp.n_gpu_layers=999;
+    model_ptr assistant(llama_model_load_from_file(path,mp),llama_model_free);
+    if (!t.assert_true(assistant && assistant->arch == LLM_ARCH_GEMMA4_ASSISTANT)) return;
+    const size_t width=model->hparams.n_embd_out();
+    const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(assistant.get()));
+    if (!t.assert_true(width == assistant->hparams.n_embd_inp() && width == assistant->hparams.n_embd_out())) return;
+    std::vector<std::vector<float>> logits[2],hidden_states[2];
+    std::vector<llama_token> proposals[2];
+    const int prefix=forced ? 6143 : compact ? 2305 : 1333;
+    for (bool streamed : {false,true}) {
+        auto cp=llama_context_default_params();
+        cp.n_ctx=forced ? 6144 : 4096;
+        cp.n_batch=cp.n_ubatch=forced ? 1 : compact ? 32 : 256; cp.n_seq_max=1;
+        cp.n_threads=cp.n_threads_batch=8; cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.shared_device_memory_bytes=streamed ? size_t(forced ? 424 : compact ? 480 : 1024)*1048576 : 0;
+        context_ptr target(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true(streamed ? "streamed target for actual assistant" : "native target for actual assistant",bool(target))) return;
+        llama_set_embeddings_nextn(target.get(),true,false);
+        const auto resources=llama_memory_kv_resources_get(llama_get_memory(target.get()));
+        if (!t.assert_true(resources.full && resources.bounded && !resources.recurrent)) return;
+        auto * stream=resources.full->get_kv_stream();
+        auto dp=cp;
+        dp.n_batch=dp.n_ubatch=1; dp.shared_device_memory_bytes=0;
+        dp.ctx_type=LLAMA_CONTEXT_TYPE_MTP; dp.ctx_other=target.get();
+        if (streamed && !forced) {
+            const auto revision=target->get_compute_memory()->graph_binding_revision();
+            for (int profile=0;profile<10;++profile) {
+                auto invalid=dp;
+                switch (profile) {
+                    case 0: invalid.n_batch=2; break;
+                    case 1: invalid.n_ctx+=256; break;
+                    case 2: invalid.swa_full=true; break;
+                    case 3: invalid.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_DISABLED; break;
+                    case 4: invalid.embeddings=true; break;
+                    case 5: invalid.offload_kqv=false; break;
+                    case 6: invalid.attention_type=LLAMA_ATTENTION_TYPE_NON_CAUSAL; break;
+                    case 7: invalid.ctx_type=LLAMA_CONTEXT_TYPE_DEFAULT; break;
+                    case 8: invalid.type_k=GGML_TYPE_Q4_0; break;
+                    case 9: invalid.type_v=GGML_TYPE_Q8_0; break;
+                }
+                bool rejected=false;
+                try { llama_context wrong(*assistant,invalid); }
+                catch (const std::runtime_error & error) {
+                    const char * expected=profile < 8 ?
+                        "shared Gemma KV reads require a matching serial TG1 MTP context and target phase arena" :
+                        "shared KV source has incompatible cache geometry or format";
+                    rejected=std::string(error.what()) == expected;
+                    if (!rejected) t.out << "unexpected assistant rejection: " << error.what() << '\n';
+                }
+                if (!t.assert_true("incompatible assistant rejected before changing target",rejected)) return;
+                t.assert_true(stream->complete() && stream->tokens() == 0);
+                t.assert_equal(uint32_t(0),resources.full->get_cells(0).get_used());
+                t.assert_equal(uint32_t(0),resources.bounded->get_cells(0).get_used());
+                t.assert_equal(revision,target->get_compute_memory()->graph_binding_revision());
+            }
+        }
+        size_t free=0,total=0;
+        ggml_backend_dev_memory(model->devices.front().dev,&free,&total);
+        std::fprintf(stderr,"Gemma actual assistant: streamed=%d arena=%zu device_free_before_context=%zu\n",int(streamed),cp.shared_device_memory_bytes,free);
+        context_ptr draft(llama_init_from_model(assistant.get(),dp),llama_free);
+        if (!t.assert_true(streamed ? "streamed Gemma assistant context admitted" : "native Gemma assistant context admitted",bool(draft))) return;
+        llama_set_embeddings_nextn(draft.get(),true,true);
+        const auto words=common_tokenize(target.get(),"A woodland stream flows past trees and birds. ",true);
+        if (!t.assert_true(!words.empty())) return;
+        common_batch prompt(target.get());
+        int last_count=0;
+        for (int first=0;first<prefix;first+=int(cp.n_ubatch)) {
+            prompt.clear(); last_count=std::min(int(cp.n_ubatch),prefix-first);
+            for (int i=0;i<last_count;++i) prompt.add(words[size_t(first+i)%words.size()],first+i,0,i == last_count-1);
+            if (first < 4) std::fprintf(stderr,"Gemma assistant prefill submit: streamed=%d first=%d rows=%d\n",int(streamed),first,last_count);
+            if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+            if (compact) llama_synchronize(target.get());
+            if (first < 4 || (compact && (first+last_count)%128 == 0) || (first+last_count)%512 == 0 || first+last_count == prefix)
+                std::fprintf(stderr,"Gemma assistant control prefill: streamed=%d progress=%d/%d\n",int(streamed),first+last_count,prefix);
+        }
+        llama_synchronize(target.get());
+        const auto * h=llama_get_embeddings_nextn_ith(target.get(),last_count-1);
+        const auto * initial=llama_get_logits_ith(target.get(),-1);
+        if (!t.assert_true(h && initial)) return;
+        std::vector<float> hidden(h,h+width);
+        const llama_token first_token=llama_token(std::max_element(initial,initial+vocab)-initial);
+        auto token=first_token;
+        const auto full_ids=resources.full->get_layer_ids(),local_ids=resources.bounded->get_layer_ids();
+        if (!t.assert_true(!full_ids.empty() && !local_ids.empty())) return;
+        const std::array<ggml_tensor *,4> source_tensors{
+            resources.full->get_k_storage(int32_t(full_ids.back())),resources.full->get_v_storage(int32_t(full_ids.back())),
+            resources.bounded->get_k_storage(int32_t(local_ids.back())),resources.bounded->get_v_storage(int32_t(local_ids.back()))};
+        const auto snapshot=[&] {
+            std::vector<std::vector<uint8_t>> bytes;
+            for (auto * tensor : source_tensors) {
+                bytes.emplace_back(ggml_nbytes(tensor));
+                ggml_backend_tensor_get(tensor,bytes.back().data(),0,bytes.back().size());
+            }
+            return bytes;
+        };
+        const auto before=snapshot();
+        const auto full_used=resources.full->get_cells(0).get_used(),local_used=resources.bounded->get_cells(0).get_used();
+        if (streamed && !forced) {
+            common_batch valid(draft.get());
+            const auto id=valid.add(token,prefix,0,true);
+            valid.set_embd(id,{hidden.data(),1,width});
+            const auto revision=target->get_compute_memory()->graph_binding_revision();
+            llama_memory_cache_requirement original;
+            if (!t.assert_true(stream->read_source(original))) return;
+            for (int profile=0;profile<11;++profile) {
+                auto invalid=*valid.get();
+                switch (profile) {
+                    case 0: invalid.tokens.front().has_embd=false; break;
+                    case 1: invalid.tokens.front().id=LLAMA_TOKEN_NULL; break;
+                    case 2: invalid.tokens.front().id=llama_token(vocab); break;
+                    case 3: invalid.tokens.front().pos[0]=-1; break;
+                    case 4: --invalid.tokens.front().pos[0]; break;
+                    case 5: ++invalid.tokens.front().pos[0]; break;
+                    case 6: invalid.tokens.front().seq_ids={1}; break;
+                    case 7: invalid.tokens.front().embd_off=SIZE_MAX; break;
+                    case 8: invalid.embd.pop_back(); break;
+                    case 9: invalid.n_embd=width-1; break;
+                    case 10: invalid.tokens.push_back(invalid.tokens.front()); break;
+                }
+                if (!t.assert_equal("invalid assistant payload rejects before source acquisition",-1,
+                        llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,&invalid))) return;
+                llama_memory_cache_requirement unchanged;
+                t.assert_true(stream->read_source(unchanged) && unchanged.identity.id == original.identity.id &&
+                    unchanged.identity.generation == original.identity.generation);
+                t.assert_true("invalid payload leaves all shared source bytes unchanged",snapshot() == before);
+                t.assert_equal(full_used,resources.full->get_cells(0).get_used());
+                t.assert_equal(local_used,resources.bounded->get_cells(0).get_used());
+                t.assert_equal(revision,target->get_compute_memory()->graph_binding_revision());
+            }
+            llama_memory_clear(llama_get_memory(draft.get()),true);
+            t.assert_true("assistant clear cannot clear target KV",snapshot() == before);
+            t.assert_equal(full_used,resources.full->get_cells(0).get_used());
+            t.assert_equal(local_used,resources.bounded->get_cells(0).get_used());
+        }
+        for (int step=0;step<3;++step) {
+            common_batch batch(draft.get());
+            const auto id=batch.add(token,prefix,0,true);
+            batch.set_embd(id,{hidden.data(),1,width});
+            if (!t.assert_equal("actual assistant forward",0,llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+            llama_synchronize(draft.get());
+            const auto * values=llama_get_logits_ith(draft.get(),-1);
+            const auto * next=llama_get_embeddings_nextn_ith(draft.get(),-1);
+            if (!t.assert_true(values && next)) return;
+            if (!t.assert_true(std::all_of(values,values+vocab,[](float value) { return std::isfinite(value); }))) return;
+            logits[streamed].emplace_back(values,values+vocab);
+            hidden_states[streamed].emplace_back(next,next+width);
+            token=llama_token(std::max_element(values,values+vocab)-values);
+            proposals[streamed].push_back(token);
+            hidden.assign(next,next+width);
+            t.assert_true("assistant leaves source KV bytes unchanged",snapshot() == before);
+            t.assert_equal(full_used,resources.full->get_cells(0).get_used());
+            t.assert_equal(local_used,resources.bounded->get_cells(0).get_used());
+            if (stream) {
+                t.assert_true(stream->complete() && stream->tokens() == size_t(prefix));
+                if (compact) {
+                    llama_context_memory_diagnostics usage;
+                    t.assert_true(target->get_compute_memory()->diagnostics(usage) && usage.streaming_active);
+                }
+                if (forced) {
+                    const auto & layout=stream->host()->layout();
+                    const size_t layer_bytes=size_t(prefix)*(layout.k_token_bytes+layout.v_token_bytes);
+                    std::fprintf(stderr,"Gemma assistant forced ring: step=%d source_bytes=%zu entire_pool=%zu\n",step,layer_bytes,stream->pool_grant_bytes());
+                    if (!t.assert_true("actual assistant source exceeds the entire pool",layer_bytes > stream->pool_grant_bytes())) return;
+                }
+            }
+        }
+        if (!forced) {
+            llama_memory_cache_requirement old_source;
+            if (stream && !t.assert_true(stream->read_source(old_source))) return;
+            if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(target.get()),0,prefix-1,-1))) return;
+            if (stream) {
+                common_batch stale(draft.get());
+                const auto id=stale.add(token,prefix,0,true);
+                stale.set_embd(id,{hidden.data(),1,width});
+                if (!t.assert_equal("old frontier is not readable after truncation",-1,
+                        llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,stale.get()))) return;
+            }
+            prompt.clear(); prompt.add(words[size_t(prefix-1)%words.size()],prefix-1,0,true);
+            if (!t.assert_equal("target rewrites while assistant metadata stays attached",0,
+                    llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+            h=llama_get_embeddings_nextn_ith(target.get(),0);
+            initial=llama_get_logits_ith(target.get(),-1);
+            if (!t.assert_true(h && initial)) return;
+            hidden.assign(h,h+width);
+            token=llama_token(std::max_element(initial,initial+vocab)-initial);
+            if (stream) {
+                llama_memory_cache_requirement refreshed;
+                if (!t.assert_true(stream->read_source(refreshed) && refreshed.identity.id == old_source.identity.id &&
+                        refreshed.identity.generation > old_source.identity.generation && stream->tokens() == size_t(prefix))) return;
+            }
+            const auto rewritten=snapshot();
+            common_batch fresh(draft.get());
+            const auto id=fresh.add(token,prefix,0,true);
+            fresh.set_embd(id,{hidden.data(),1,width});
+            if (!t.assert_equal("assistant rebinds the new target generation",0,
+                    llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,fresh.get()))) return;
+            const auto * values=llama_get_logits_ith(draft.get(),-1);
+            const auto * next=llama_get_embeddings_nextn_ith(draft.get(),-1);
+            if (!t.assert_true(values && next)) return;
+            logits[streamed].emplace_back(values,values+vocab);
+            hidden_states[streamed].emplace_back(next,next+width);
+            t.assert_true("refreshed assistant read preserves rewritten sources",snapshot() == rewritten);
+        }
+        draft.reset();
+        llama_set_kv_stream_decode(target.get(),true);
+        prompt.clear(); prompt.add(first_token,prefix,0,true);
+        if (!t.assert_equal("target resumes after reader destruction",0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+        const auto * values=llama_get_logits_ith(target.get(),-1);
+        if (!t.assert_true(values != nullptr)) return;
+        logits[streamed].emplace_back(values,values+vocab);
+        std::fprintf(stderr,"Gemma actual assistant control complete: streamed=%d predictions=3\n",int(streamed));
+    }
+    t.assert_true(proposals[0] == proposals[1]);
+    if (!t.assert_equal(logits[0].size(),logits[1].size())) return;
+    for (size_t row=0;row<logits[0].size();++row) t.assert_true("actual assistant/target logits match native bits",
+        std::memcmp(logits[0][row].data(),logits[1][row].data(),vocab*sizeof(float)) == 0);
+    for (size_t row=0;row<hidden_states[0].size();++row) t.assert_true("actual assistant hidden rows match native bits",
+        std::memcmp(hidden_states[0][row].data(),hidden_states[1][row].data(),width*sizeof(float)) == 0);
+}
+
 static void test_gemma_bounded_cache(testing & t, llama_model * model) {
     if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
     std::vector<std::vector<float>> controls[2];
@@ -1394,6 +1802,25 @@ static void test_gemma_bounded_cache(testing & t, llama_model * model) {
             for (uint32_t cell=0;cell<local->get_size();++cell) t.assert_equal(positions[cell],
                 local->get_cells(0).is_empty(cell) ? -1 : local->get_cells(0).pos_get(cell));
             t.assert_true(bool(owner->read(owner->identity())));
+            {
+                auto source=owner->read(owner->identity());
+                ggml_context_ptr metadata(ggml_init({4096,nullptr,true}));
+                ggml_tensor * k=nullptr,* v=nullptr;
+                auto * native_k=local->get_k_storage(58),* native_v=local->get_v_storage(58);
+                if (!t.assert_true(source.bind_layer_views(metadata.get(),58,native_k,native_v,k,v))) return;
+                t.assert_true(k != native_k && v != native_v && k->view_src == native_k && v->view_src == native_v);
+                t.assert_true(k->data == native_k->data && v->data == native_v->data);
+                t.assert_equal(int64_t(4096),k->ne[0]); t.assert_equal(int64_t(1280),k->ne[1]);
+                t.assert_equal(uint64_t(0),owner->begin_write(owner->identity()));
+                auto * saved_k=k; auto * saved_v=v;
+                t.assert_true(!source.bind_layer_views(metadata.get(),58,local->get_k_storage(57),native_v,k,v));
+                t.assert_true(k == saved_k && v == saved_v);
+                for (auto item : {std::pair{k,bytes.size()-2},std::pair{v,bytes.size()-1}}) {
+                    std::vector<uint8_t> copy(ggml_nbytes(item.first));
+                    ggml_backend_tensor_get(item.first,copy.data(),0,copy.size());
+                    t.assert_true(copy == bytes[item.second]);
+                }
+            }
         }
         const size_t vocab=size_t(llama_vocab_n_tokens(llama_model_get_vocab(model)));
         for (int step=0;step<8;++step) {
@@ -1662,8 +2089,22 @@ int main(int argc,char ** argv) {
     } restore_cc{baseline_backend.get(),previous};
 #endif
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
+    const llama_model_tensor_buft_override cache_only_weights[]={{".*",ggml_backend_cpu_buffer_type()},{nullptr,nullptr}};
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-read-source-cache"); })) {
+        // This cache-only oracle needs no weight computation; leave VRAM for the stock full-history attention graph.
+        mparams.tensor_buft_overrides=cache_only_weights;
+    }
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-assistant-source")) {
+        if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
+        t.test("Gemma_actual_assistant_reads_target_sources_without_new_KV",[&](testing & t) {
+            const bool forced=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-forced"); });
+            const bool compact=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-memory"); });
+            test_gemma_assistant_source(t,model.get(),argv[i+1],forced,compact);
+        });
+        return t.summary();
+    }
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-admission-only"); })) {
         t.test("Gemma_target_admission_memory_boundaries",
             [&](testing & t) { test_gemma_target_admission(t,model.get(),false); });
@@ -1716,6 +2157,11 @@ int main(int argc,char ** argv) {
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-phase-parent"); })) {
         t.test("Gemma_native_local_cache_and_streamed_full_cache_share_one_phase_parent",
             [&](testing & t) { test_gemma_phase_parent(t,model.get()); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-read-source-cache"); })) {
+        t.test("Gemma_shared_full_cache_reads_use_progressive_target_storage",
+            [&](testing & t) { test_gemma_phase_parent(t,model.get(),true); });
         return t.summary();
     }
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-deferred-local"); })) {

@@ -5,6 +5,7 @@
 #include "../src/llama-kv-stream-mtp-proxy.h"
 #include "../ggml/src/ggml-backend-execution.h"
 #include "../src/llama-context-memory.h"
+#include "../src/llama-memory-bounded-kv.h"
 #include <random>
 
 // Quantization error is not adapter error: compare the exact bytes from an ordinary CUDA producer graph.
@@ -150,8 +151,11 @@ struct serial_workspace_fixture {
     std::unique_ptr<llama_kv_stream_model> model;
     std::unique_ptr<llama_context_memory> owner;
 
-    explicit serial_workspace_fixture(ggml_backend_t backend,const std::function<bool()> & capture = {}) :
-        host(backend,true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1),
+    explicit serial_workspace_fixture(ggml_backend_t backend,const std::function<bool()> & capture = {},
+            uint32_t width=256,size_t context=513,uint32_t layers=1,uint32_t heads=2,
+            uint32_t query_heads=4,size_t arena_mib=8,
+            ggml_type key_type=GGML_TYPE_Q8_0,ggml_type value_type=GGML_TYPE_Q4_0) :
+        host(backend,true,key_type,value_type,context,false,layers,heads,0,width,width),
         type(llama_kv_stream_device_buffer_type(ggml_backend_get_device(backend))),
         alignment(ggml_backend_buft_get_alignment(type)),backends{backend,cpu.get()},
         types{type,ggml_backend_cpu_buffer_type()},
@@ -160,8 +164,8 @@ struct serial_workspace_fixture {
         bootstrap.pool_bytes = 0;
         size_t minimum = 0;
         GGML_ASSERT(llama_kv_stream_policy_minimum_pool_bytes(bootstrap,minimum).status == llama_kv_stream_policy_status::success);
-        llama_kv_stream_model_config config{backend,host.host->config(),minimum,256,4};
-        config.shared_device_memory_bytes = 8*1048576;
+        llama_kv_stream_model_config config{backend,host.host->config(),minimum,256,query_heads};
+        config.shared_device_memory_bytes = arena_mib*1048576;
         model = llama_kv_stream_model::create(config);
         plan.groups = {{type,2*1048576,alignment,0}};
         plan.phase_sizes = {{2*1048576},{1048576}};
@@ -287,9 +291,11 @@ int main(int argc,char ** argv) {
     const bool phase_loan_only = argc > 1 && std::strcmp(argv[1], "--cuda-phase-loan") == 0;
     const bool serial_scratch_only = argc > 1 && std::strcmp(argv[1], "--cuda-serial-scratch") == 0;
     const bool gemma_target_only = argc > 1 && std::strcmp(argv[1], "--cuda-gemma-target") == 0;
+    const bool read_proxy_only = argc > 1 && std::strcmp(argv[1], "--cuda-read-proxy") == 0;
     const bool wide_target_only = gemma_target_only || (argc > 1 && std::strcmp(argv[1], "--cuda-wide-target") == 0);
     testing t;
     if (native_only) t.set_filter("native_attention_admission_.*");
+    if (read_proxy_only) t.set_filter("read_only_layer_proxy_routes_native_graphs_to_committed_sources");
     if (wide_target_only) t.set_filter("ordinary_graph_dispatches_kv_producers_and_streamed_attention");
     if (native_reduced) t.set_filter("native_attention_reduced_.*");
     if (serial_scratch_only) t.set_filter("serial_draft_growth_.*");
@@ -304,11 +310,187 @@ int main(int argc,char ** argv) {
     if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
     if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
     if (phase_prefetch_only) t.set_filter("phase_prefetch_.*");
-    if (argc < 2 || (!phase_prefetch_only && !wide_target_only && !native_reduced && !native_only && !serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !phase_admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
+    if (argc < 2 || (!read_proxy_only && !phase_prefetch_only && !wide_target_only && !native_reduced && !native_only && !serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !phase_admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return phase_admission_only ? 77 : 1;
     ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
+    t.test("serial_draft_growth_replans_target_workspace_without_moving_persistent_cache",[&](testing & t) {
+        serial_workspace_fixture f(backend.get());
+        llama_memory_cache_requirement cache;
+        cache.identity={710,1}; cache.role=llama_memory_cache_role::bounded_resident;
+        cache.layers=1; cache.history_rows=4096; cache.window_rows=16; cache.headroom_rows=16; cache.row_padding=32;
+        cache.format={GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,32,32,1,false}; cache.row_bytes=52;
+        llama_memory_bounded_kv_layout local;
+        if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,{9},f.type,local))) return;
+        auto loan=f.owner->reserve_bounded_cache(local);
+        if (!t.assert_true(bool(loan))) return;
+        auto * storage=ggml_backend_memory_lease_buffer(loan->lease());
+        ggml_backend_buffer_clear(storage,0x5a);
+        ggml_backend_buffer_clear(f.model->buffer(),0);
+        populate(f.model->host());
+        if (!t.assert_true(f.model->restore(257) && f.owner->prepare_serial_decode())) return;
+        auto * parent=f.owner->shared_parent();
+        llama_context_memory_diagnostics before,after;
+        if (!t.assert_true(f.owner->diagnostics(before))) return;
+        auto plan=f.plan;
+        plan.groups[0].size=3*1048576;
+        plan.phase_sizes={{3*1048576},{2*1048576}};
+        t.assert_true(!f.owner->covers_workspace(plan));
+        if (!t.assert_true(f.owner->grow_workspace(plan))) return;
+        t.assert_true(f.owner->covers_workspace(plan) && f.owner->valid() && f.model->complete());
+        t.assert_equal(size_t(257),f.model->tokens());
+        t.assert_true(f.owner->shared_parent() == parent && ggml_backend_memory_lease_buffer(loan->lease()) == storage);
+        if (!t.assert_true(f.owner->diagnostics(after))) return;
+        t.assert_equal(before.parent_bytes,after.parent_bytes);
+        t.assert_equal(local.allocation.bytes,after.persistent_cache_bytes);
+        t.assert_equal(size_t(1048576),after.workspace_bytes-before.workspace_bytes);
+        t.assert_equal(size_t(1048576),before.kv_pool_bytes-after.kv_pool_bytes);
+        auto invalid=plan; invalid.groups[0].first_slot=1;
+        t.assert_true(!f.owner->grow_workspace(invalid));
+        auto excessive=plan;
+        excessive.groups[0].size=16*1048576;
+        excessive.phase_sizes={{16*1048576},{2*1048576}};
+        const auto revision=f.owner->graph_binding_revision();
+        t.assert_true(!f.owner->grow_workspace(excessive) && f.owner->valid());
+        t.assert_equal(revision,f.owner->graph_binding_revision());
+        t.assert_true(f.owner->grow_workspace(plan));
+        t.assert_equal(revision,f.owner->graph_binding_revision());
+        auto changed=plan; changed.groups[0].size=4*1048576;
+        changed.phase_sizes={{4*1048576},{3*1048576}};
+        {
+            parent_view_fault failure(parent,1);
+            t.assert_true(!f.owner->grow_workspace(changed));
+        }
+        t.assert_true(f.owner->valid() && f.owner->covers_workspace(plan) && !f.owner->covers_workspace(changed));
+        t.assert_true(f.model->complete() && f.model->tokens() == 257);
+        {
+            bool reentered=false;
+            parent_view_fault probe(parent,0);
+            probe.on_create=[&] { reentered=reentered || f.owner->grow_workspace(changed); };
+            t.assert_true(f.owner->grow_workspace(changed));
+            t.assert_true(!reentered);
+        }
+        {
+            serial_workspace_child child(f);
+            if (!t.assert_true(child.attach(f,1048576,1048576))) return;
+            t.assert_true(!f.owner->grow_workspace(changed));
+        }
+        if (!t.assert_true(f.owner->prepare_serial_target())) return;
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * marker=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_I8,int64_t(local.allocation.bytes));
+        if (!t.assert_true(ggml_backend_tensor_alloc(storage,marker,ggml_backend_buffer_get_base(storage)) == GGML_STATUS_SUCCESS)) return;
+        std::vector<uint8_t> bytes(local.allocation.bytes);
+        ggml_backend_tensor_get(marker,bytes.data(),0,bytes.size());
+        t.assert_true(std::all_of(bytes.begin(),bytes.end(),[](uint8_t value) { return value == 0x5a; }));
+        auto * input=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,16);
+        ggml_set_input(input); ggml_set_output(input);
+        auto * output=ggml_scale(ctx.get(),input,3);
+        ggml_set_output(output);
+        auto * graph=ggml_new_graph_custom(ctx.get(),64,false); ggml_build_forward_expand(graph,output);
+        ggml_backend_sched_set_tensor_backend(f.sched.get(),input,backend.get());
+        ggml_backend_sched_set_tensor_backend(f.sched.get(),output,backend.get());
+        if (!t.assert_true(ggml_backend_sched_alloc_graph(f.sched.get(),graph))) return;
+        std::vector<float> values(16,2),got(16);
+        ggml_backend_tensor_set(input,values.data(),0,ggml_nbytes(input));
+        if (!t.assert_equal(GGML_STATUS_SUCCESS,f.owner->compute_async(graph))) return;
+        f.owner->synchronize();
+        ggml_backend_tensor_get(output,got.data(),0,ggml_nbytes(output));
+        t.assert_true(std::all_of(got.begin(),got.end(),[](float value) { return value == 6; }));
+    });
+    t.test("read_only_layer_proxy_routes_native_graphs_to_committed_sources",[&](testing & t) {
+        ggml_backend_ptr child(ggml_backend_dev_init(dev,nullptr));
+        for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16}})
+        for (size_t active : {257u,24577u}) for (uint32_t queries : {1u,3u,4u}) {
+            t.out << "proxy pair=" << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second)
+                  << " active=" << active << " queries=" << queries << '\n';
+            serial_workspace_fixture f(backend.get(),{},512,32768,2,4,32,128,pair.first,pair.second);
+            const llama_memory_cache_format format{pair.first,pair.second,512,512,4,false};
+            const auto bytes=f.model->device_grant_bytes();
+            auto reader=llama_kv_stream_read_proxy::create(*f.model,*f.owner,1,format,32,4);
+            if (!t.assert_true(bool(reader))) return;
+            t.assert_equal(bytes,f.model->device_grant_bytes());
+            t.assert_true(!reader->arm());
+            t.assert_true(!llama_kv_stream_read_proxy::create(*f.model,*f.owner,2,format,32,1));
+            auto bad=format; bad.value_type=GGML_TYPE_Q5_1;
+            t.assert_true(!llama_kv_stream_read_proxy::create(*f.model,*f.owner,1,bad,32,1));
+            t.assert_true(!llama_kv_stream_read_proxy::create(*f.model,*f.owner,1,format,32,5));
+            t.assert_true(!llama_kv_stream_read_proxy::create(*f.model,*f.owner,1,format,33,1));
+            t.assert_true(!llama_kv_stream_read_proxy::create(*f.model,*f.owner,1,format,UINT32_MAX,1));
+            ggml_backend_buffer_clear(f.model->buffer(),0);
+            populate(f.model->host());
+            if (!t.assert_true(f.model->restore(active) && f.owner->prepare_serial_decode())) return;
+            llama_memory_cache_requirement before;
+            uint64_t revision=0;
+            if (!t.assert_true(f.model->read_source(before,&revision) && revision != 0)) return;
+            block_inputs input(f.host,active,queries,false,32),control(f.host,active,queries,false,32);
+            auto scaled=input.qdata;
+            for (auto & value : scaled) value*=2;
+            ggml_backend_tensor_set(control.q,scaled.data(),0,scaled.size()*sizeof(float));
+            const auto expected=stock_attention(f.host,control,1);
+            ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+            auto * q=ggml_scale(ctx.get(),input.q,2);
+            auto * k=ggml_view_3d(ctx.get(),reader->key(),512,input.padded,4,
+                reader->key()->nb[1],ggml_row_size(pair.first,512),0);
+            auto * v=ggml_view_3d(ctx.get(),reader->value(),512,input.padded,4,
+                reader->value()->nb[1],ggml_row_size(pair.second,512),0);
+            auto * out=ggml_flash_attn_ext(ctx.get(),q,k,v,input.mask,1.0f/16,0,0);
+            ggml_flash_attn_ext_set_prec(out,GGML_PREC_F32);
+            ggml_backend_execution_set_external_workspace(out,true);
+            auto * graph=ggml_new_graph_custom(ctx.get(),64,false); ggml_build_forward_expand(graph,out);
+            ggml_backend_buffer_ptr storage(ggml_backend_alloc_ctx_tensors(ctx.get(),child.get()));
+            if (!t.assert_true(bool(storage))) return;
+            std::vector<float> actual(expected.size(),-77),previous;
+            ggml_backend_tensor_set(out,actual.data(),0,ggml_nbytes(out));
+            t.assert_true(ggml_backend_execution_supports(reader->buffer(),dev,out));
+            t.assert_equal(GGML_STATUS_FAILED,ggml_backend_graph_compute(child.get(),graph));
+            ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
+            t.assert_true(std::all_of(actual.begin(),actual.end(),[](float value) { return value == -77; }));
+            if (!t.assert_true(reader->arm() && reader->ready())) return;
+            for (uint32_t repeat=0;repeat<2;++repeat) {
+                if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(child.get(),graph))) return;
+                ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
+                t.assert_true("read proxy matches native bits across backend queues",same_float_bits(expected,actual));
+                t.assert_equal(active,f.model->tokens());
+            }
+            auto write=*out; write.op=GGML_OP_SET_ROWS;
+            t.assert_true(!ggml_backend_execution_supports(reader->buffer(),dev,&write));
+            t.assert_equal(GGML_STATUS_FAILED,ggml_backend_execution_compute(reader->buffer(),child.get(),&write));
+            auto malformed=*out; malformed.src[4]=input.q;
+            t.assert_true(!ggml_backend_execution_supports(reader->buffer(),dev,&malformed));
+            t.assert_equal(GGML_STATUS_FAILED,ggml_backend_execution_compute(reader->buffer(),child.get(),&malformed));
+            {
+                backend_drain_fault failure(child.get(),1);
+                t.assert_equal(GGML_STATUS_FAILED,ggml_backend_execution_compute(reader->buffer(),child.get(),out));
+                t.assert_equal(size_t(1),failure.calls);
+            }
+            t.assert_true(reader->ready() && f.model->complete());
+            llama_memory_cache_requirement after;
+            t.assert_true(f.model->read_source(after) && after.identity.id == before.identity.id &&
+                after.identity.generation == before.identity.generation);
+            previous=actual;
+            const auto phase=f.owner->signal_text_phase({llama_memory_text_phase::prefill,1,true,true,false});
+            if (!t.assert_true(phase.status == llama_memory_text_phase_status::changed && f.owner->prepare_serial_decode())) return;
+            t.assert_true(!reader->ready() && !reader->arm());
+            t.assert_equal(GGML_STATUS_FAILED,ggml_backend_graph_compute(child.get(),graph));
+            ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
+            t.assert_true(same_float_bits(previous,actual));
+            if (!t.assert_true(reader->disarm() && reader->arm() && reader->ready())) return;
+            t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(child.get(),graph));
+            ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
+            t.assert_true(same_float_bits(expected,actual));
+            ggml_backend_buffer_ptr retained(ggml_backend_buffer_retain(reader->buffer()));
+            reader.reset();
+            t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(child.get(),graph));
+            ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
+            t.assert_true("retained proxy buffer owns its tensor metadata",same_float_bits(expected,actual));
+            if (!t.assert_true(f.model->truncate(active-1))) return;
+            t.assert_equal(GGML_STATUS_FAILED,ggml_backend_graph_compute(child.get(),graph));
+            ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
+            t.assert_true("source truncation invalidates retained reader",same_float_bits(expected,actual));
+            t.assert_true(f.model->complete());
+        }
+    });
     if (native_reduced) t.test("native_attention_reduced_build_rejects_mixed_pair_and_keeps_equal_pair", [&](testing & t) {
         fixture mixed(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         {

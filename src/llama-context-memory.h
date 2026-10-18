@@ -88,6 +88,9 @@ public:
     LLAMA_API bool has_bounded_cache() const noexcept;
     // A graph rebuild can keep ownership only when its measured catalog fits every existing phase grant.
     LLAMA_API bool covers_workspace(const llama_compute_workspace_plan & plan) const noexcept;
+    // Grow the elastic target prefix before attaching serial children; fixed caches and the parent allocation stay in place.
+    LLAMA_API bool grow_workspace(const llama_compute_workspace_plan & plan,
+        llama_context_memory_create_result * result = nullptr) noexcept;
     // Borrow measured scratch, or the full parent after explicit KV suspension. Return grants before resume.
     LLAMA_API static std::unique_ptr<llama_context_memory> borrow_workspace(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,

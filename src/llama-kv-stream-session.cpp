@@ -896,6 +896,72 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
 }
 
+bool llama_kv_stream_session::read_source(llama_memory_cache_requirement & output) const noexcept {
+    const auto & s=*impl;
+    if (s.busy || s.running || s.poisoned || s.transition || s.transition_closed || s.device_suspended ||
+            s.publication.pending() || !s.committed || !s.binding || !s.binding->ready() ||
+            s.content->generation() != s.expected_generation) return false;
+    const auto & host=s.content->host()->config();
+    const auto & layout=s.content->host()->layout();
+    if (host.context_tokens > UINT32_MAX || layout.k_token_bytes > SIZE_MAX-layout.v_token_bytes) return false;
+    llama_memory_cache_requirement source;
+    source.identity={host.cache_id,s.expected_generation};
+    source.role=llama_memory_cache_role::full_history;
+    source.layers=host.layers; source.history_rows=uint32_t(host.context_tokens);
+    source.row_padding=uint32_t(host.shape.page_tokens);
+    source.row_bytes=layout.k_token_bytes+layout.v_token_bytes;
+    source.format={ggml_type(host.shape.type_k),ggml_type(host.shape.type_v),
+        uint32_t(host.shape.head_dim_k),uint32_t(host.shape.head_dim_v),uint32_t(host.shape.heads),false};
+    llama_memory_cache_bound bound;
+    if (!llama_memory_cache_bound_make(source,nullptr,bound)) return false;
+    output=source;
+    return true;
+}
+
+bool llama_kv_stream_session::read_attention(const llama_memory_cache_read_binding & binding,
+        ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale) {
+    auto & s=*impl;
+    llama_memory_cache_requirement source;
+    if (!read_source(source) || s.ring_guard || binding.cache.layers != 1 ||
+            !llama_memory_cache_read_binding_valid(binding,source,0,uint32_t(s.committed),s.revision) ||
+            !q || !mask || !output || q->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 ||
+            q->ne[0] != source.format.key_head_dim || q->ne[1] <= 0 || q->ne[1] > s.config.max_decode_rows ||
+            q->ne[1] > s.config.max_batch_rows || q->ne[2] <= 0 || q->ne[2] > s.config.query_heads ||
+            q->ne[2]%source.format.kv_heads || q->ne[3] != 1 ||
+            output->ne[0] != source.format.value_head_dim || output->ne[1] != q->ne[2] ||
+            output->ne[2] != q->ne[1] || output->ne[3] != 1 || mask->type != GGML_TYPE_F16 ||
+            mask->ne[0] < int64_t((s.committed+255)/256*256) || mask->ne[1] != q->ne[1] ||
+            mask->ne[2] != 1 || mask->ne[3] != 1) return false;
+    auto * workspace=ggml_backend_memory_lease_buffer(s.leases[2].get());
+    if (!workspace) return false;
+    auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+        ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend)),"ggml_backend_kv_stream_partial_ops"));
+    size_t needed=0;
+    ggml_kv_stream_resume_plan selected;
+    if (!get || !get() || !ggml_kv_stream_resume_plan_query(get(),s.backend,
+            {s.config.policy.shape,uint32_t(q->ne[2]),uint32_t(q->ne[1]),(s.committed+255)/256*256},selected) ||
+            !ggml_kv_stream_workspace_query(get(),s.backend,
+            {s.config.policy.shape,uint32_t(q->ne[2]),uint32_t(q->ne[1]),s.content->host()->layout().tokens},
+            ggml_kv_stream_workspace_kind::decode,needed) ||
+            needed > ggml_backend_buffer_get_size(workspace)) return false;
+    session_operation operation(s.busy);
+    try {
+        if (!s.drain()) { s.poisoned=true; return false; }
+        s.pin=s.binding->acquire();
+        if (!s.pin) return false;
+        const uint32_t layer=binding.cache.source_first_layer;
+        const size_t span=std::max(size_t(1),s.resident->suggested_span_pages());
+        if (!s.resident->begin_sequence({layer},s.committed,span,s.committed,{uint32_t(q->ne[1]),true}) ||
+                !s.resident->compute_streamed(layer,q,mask,output,s.committed,scale,s.leases[2].get(),true,span)) {
+            s.drain(); s.poisoned=true; return false;
+        }
+        // DMA retirement does not complete resident-only attention.
+        ggml_backend_synchronize(s.backend);
+        s.pin.reset();
+        return true;
+    } catch (...) { s.drain(); s.poisoned=true; throw; }
+}
+
 // Cancellation is not inference-state rollback, even when no KV token frontier was committed yet.
 void llama_kv_stream_session::abort() {
     auto & s = *impl;

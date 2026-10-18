@@ -29,6 +29,7 @@ struct llama_cparams {
     bool kv_stream_mask = false;
     bool mtp_publish_host = false;
     bool mtp_span_attention = false;
+    bool kv_shared_read = false; // read-only assistant over target-owned full and bounded caches
     uint32_t serial_block_rows = 0; // separately owned block drafter, not an auxiliary MTP cache
     // Rebuild the same declared draft workload that startup measured for the serial lease.
     uint32_t serial_graph_reserve_rows(bool decode) const noexcept {

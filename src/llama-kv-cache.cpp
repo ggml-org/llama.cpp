@@ -9,6 +9,7 @@
 #include "llama-kv-stream-positions.h"
 #include "llama-kv-stream-mtp-proxy.h"
 #include "llama-memory-bounded-kv.h"
+#include "llama-context-memory.h"
 #include "ggml-alloc.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 
@@ -23,6 +24,108 @@
 
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
+}
+
+bool llama_kv_cache::attach_shared_stream_reader(llama_context_memory & parent,uint32_t max_queries) {
+    if (!other || n_swa || n_seq_max != 1 || n_stream != 1 || v_trans || kv_stream || mtp_proxy ||
+            bounded_pending || shared_read_metadata || layers.empty() || layers.size() > LLAMA_MAX_LAYERS || !other->kv_stream) return false;
+    try {
+        auto * source=other->kv_stream.get();
+        const auto & shape=source->host()->config().shape;
+        const llama_memory_cache_format format{ggml_type(shape.type_k),ggml_type(shape.type_v),
+            uint32_t(shape.head_dim_k),uint32_t(shape.head_dim_v),uint32_t(shape.heads),false};
+        ggml_context_ptr metadata(ggml_init({4096+2*layers.size()*ggml_tensor_overhead(),nullptr,true}));
+        if (!metadata) return false;
+        auto replacement=layers;
+        std::vector<std::unique_ptr<llama_kv_stream_read_proxy>> readers;
+        for (auto & layer : replacement) {
+            size_t ordinal=0;
+            for (;ordinal<other->layers.size();++ordinal) {
+                const auto & candidate=other->layers[ordinal];
+                if (candidate.k == layer.k && candidate.v == layer.v) break;
+            }
+            if (ordinal == other->layers.size() || layer.k->type != format.key_type || layer.v->type != format.value_type ||
+                    hparams.n_embd_head_k(layer.il) != format.key_head_dim ||
+                    hparams.n_embd_head_v(layer.il) != format.value_head_dim ||
+                    hparams.n_head_kv(layer.il) != format.kv_heads) return false;
+            auto reader=llama_kv_stream_read_proxy::create(*source,parent,uint32_t(ordinal),format,
+                hparams.n_head(layer.il),max_queries);
+            if (!reader) return false;
+            layer.k=reader->key(); layer.v=reader->value();
+            layer.k_stream={ggml_view_2d(metadata.get(),layer.k,layer.k->ne[0],layer.k->ne[1],layer.k->nb[1],0)};
+            layer.v_stream={ggml_view_2d(metadata.get(),layer.v,layer.v->ne[0],layer.v->ne[1],layer.v->nb[1],0)};
+            if (ggml_backend_view_init(layer.k_stream[0]) != GGML_STATUS_SUCCESS ||
+                    ggml_backend_view_init(layer.v_stream[0]) != GGML_STATUS_SUCCESS) return false;
+            readers.push_back(std::move(reader));
+        }
+        shared_readers=std::move(readers);
+        shared_read_metadata=std::move(metadata);
+        layers.swap(replacement);
+        return true;
+    } catch (const std::bad_alloc &) { return false; }
+}
+
+bool llama_kv_cache::arm_shared_stream_reader() {
+    if (shared_readers.empty()) return false;
+    for (auto & reader : shared_readers) if (!reader->arm()) {
+        release_shared_stream_reader();
+        return false;
+    }
+    return true;
+}
+
+bool llama_kv_cache::release_shared_stream_reader() noexcept {
+    for (auto & reader : shared_readers) if (!reader->disarm()) return false;
+    return true;
+}
+
+bool llama_kv_cache::attach_shared_bounded_reader(const llama_memory_bounded_kv_read & source) {
+    if (!source || !other || !n_swa || n_seq_max != 1 || n_stream != 1 || v_trans || kv_stream || mtp_proxy ||
+            bounded_pending || shared_read_metadata || !other->bounded_lease || layers.empty() ||
+            layers.size() > LLAMA_MAX_LAYERS || source.layout()->allocation.capacity_rows != get_size()) return false;
+    try {
+        ggml_context_ptr metadata(ggml_init({4096+4*layers.size()*ggml_tensor_overhead(),nullptr,true}));
+        if (!metadata) return false;
+        auto replacement=layers;
+        std::vector<uint32_t> ids;
+        auto read=std::make_unique<llama_memory_bounded_kv_read>();
+        for (auto & layer : replacement) {
+            const auto root=std::find_if(other->layers.begin(),other->layers.end(),[&](const kv_layer & candidate) {
+                return candidate.k == layer.k && candidate.v == layer.v;
+            });
+            if (root == other->layers.end() || !layer.k || !layer.v || layer.k->ne[0] != hparams.n_embd_k_gqa(layer.il) ||
+                    layer.v->ne[0] != hparams.n_embd_v_gqa(layer.il) ||
+                    !source.bind_layer_views(metadata.get(),root->il,root->k,root->v,layer.k,layer.v)) return false;
+            layer.k_stream={ggml_view_2d(metadata.get(),layer.k,layer.k->ne[0],layer.k->ne[1],layer.k->nb[1],0)};
+            layer.v_stream={ggml_view_2d(metadata.get(),layer.v,layer.v->ne[0],layer.v->ne[1],layer.v->nb[1],0)};
+            if (ggml_backend_view_init(layer.k_stream[0]) != GGML_STATUS_SUCCESS ||
+                    ggml_backend_view_init(layer.v_stream[0]) != GGML_STATUS_SUCCESS) return false;
+            ids.push_back(root->il);
+        }
+        shared_bounded_source=source.layout()->cache.identity.id;
+        shared_bounded_generation=source.layout()->cache.identity.generation;
+        shared_bounded_buffer=source.buffer();
+        shared_bounded_layers=std::move(ids);
+        shared_bounded_read=std::move(read);
+        shared_read_metadata=std::move(metadata);
+        layers.swap(replacement);
+        return true;
+    } catch (const std::bad_alloc &) { return false; }
+}
+
+bool llama_kv_cache::arm_shared_bounded_reader(const llama_memory_bounded_kv_read & source) noexcept {
+    if (!source || !shared_bounded_read || source.buffer() != shared_bounded_buffer ||
+            source.layout()->cache.identity.id != shared_bounded_source ||
+            source.layout()->cache.identity.generation < shared_bounded_generation || shared_bounded_layers.size() != layers.size()) return false;
+    for (size_t i=0;i<layers.size();++i)
+        if (!source.contains_layer(shared_bounded_layers[i],layers[i].k,layers[i].v)) return false;
+    *shared_bounded_read=source;
+    shared_bounded_generation=source.layout()->cache.identity.generation;
+    return true;
+}
+
+void llama_kv_cache::release_shared_bounded_reader() noexcept {
+    if (shared_bounded_read) shared_bounded_read->reset();
 }
 
 bool llama_kv_cache::describe_bounded_storage(uint64_t identity,uint64_t generation,uint32_t history_rows,
@@ -378,7 +481,16 @@ llama_kv_cache::llama_kv_cache(
             const int32_t il_share = share(il);
 
             if (il_share >= 0) {
-                const auto & layer_share = other->layers[other->map_layer_ids[il_share]];
+                const auto source=other->map_layer_ids.find(il_share);
+                if (source == other->map_layer_ids.end()) throw std::runtime_error("shared KV source layer is unavailable");
+                const auto & layer_share = other->layers[source->second];
+                if (!layer_share.k || layer_share.k->type != type_k ||
+                        (layer_share.v && layer_share.v->type != type_v) ||
+                        (other->kv_stream && (!layer_share.v || v_trans ||
+                            layer_share.k->ne[0] != hparams.n_embd_k_gqa(il) ||
+                            layer_share.v->ne[0] != hparams.n_embd_v_gqa(il)))) {
+                    throw std::runtime_error("shared KV source has incompatible cache geometry or format");
+                }
 
                 LLAMA_LOG_WARN("%s: layer %3d: sharing with layer %d. k = %p, v = %p\n", __func__, il, il_share,
                         layer_share.k->data, layer_share.v->data);
@@ -628,6 +740,7 @@ llama_kv_cache::llama_kv_cache(
 llama_kv_cache::~llama_kv_cache() = default;
 
 void llama_kv_cache::clear(bool data) {
+    if (shared_read_metadata) return;
     if (mtp_proxy && !mtp_proxy->remove_suffix(0, std::numeric_limits<size_t>::max()))
         throw std::runtime_error("failed to reset attached MTP host cache");
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1708,6 +1821,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
+    if (shared_read_metadata) throw std::runtime_error("cannot write a borrowed KV source");
     GGML_UNUSED(sinfo);
 
     const int32_t ikv = map_layer_ids.at(il);
@@ -1743,6 +1857,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 }
 
 ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
+    if (shared_read_metadata) throw std::runtime_error("cannot write a borrowed KV source");
     GGML_UNUSED(sinfo);
 
     const int32_t ikv = map_layer_ids.at(il);

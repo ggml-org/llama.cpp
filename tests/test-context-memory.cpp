@@ -177,6 +177,10 @@ int main(int argc, char ** argv) {
         fixture target(dev), draft(dev);
         auto parent = llama_context_memory::create(target.sched.get(),target.backends,target.groups);
         if (!t.assert_true(bool(parent))) return;
+        const auto original_revision=parent->graph_binding_revision();
+        t.assert_true(!parent->grow_workspace({}));
+        t.assert_true(parent->valid());
+        t.assert_equal(original_revision,parent->graph_binding_revision());
         llama_compute_workspace_plan plan;
         plan.groups=draft.groups;
         plan.phase_sizes.assign(2,std::vector<size_t>(draft.groups.size()));

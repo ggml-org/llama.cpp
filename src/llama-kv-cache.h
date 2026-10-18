@@ -16,8 +16,11 @@ struct llama_context;
 class llama_kv_stream_model;
 class llama_kv_stream_logical_cache;
 class llama_kv_stream_mtp_proxy;
+class llama_kv_stream_read_proxy;
+class llama_context_memory;
 struct llama_memory_bounded_kv_layout;
 class llama_memory_bounded_kv;
+class llama_memory_bounded_kv_read;
 
 //
 // llama_kv_cache
@@ -125,6 +128,16 @@ public:
 
     ~llama_kv_cache();
     llama_kv_stream_model * get_kv_stream() const noexcept { return kv_stream.get(); }
+    // Replace shared full-cache roots with owned read-only metadata. The target and parent outlive all reader graphs.
+    bool attach_shared_stream_reader(llama_context_memory & parent, uint32_t max_queries);
+    // Arm only after preparing the parent's serial phase; release before any target mutation.
+    bool arm_shared_stream_reader();
+    bool release_shared_stream_reader() noexcept;
+    // Own view metadata for shared local roots. The target's native roots outlive this cache and all its graphs.
+    bool attach_shared_bounded_reader(const llama_memory_bounded_kv_read & source);
+    // The caller completes native readers before releasing this physical read pin.
+    bool arm_shared_bounded_reader(const llama_memory_bounded_kv_read & source) noexcept;
+    void release_shared_bounded_reader() noexcept;
     // The stock device cache remains available for prefill and unsupported MTP phases.
     // The caller must keep the target context (which owns the physical pool) alive.
     bool attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache,
@@ -304,6 +317,12 @@ private:
     std::unique_ptr<llama_kv_stream_mtp_proxy> mtp_proxy;
     std::shared_ptr<llama_kv_stream_logical_cache> attached_mtp_cache;
     std::unique_ptr<llama_kv_stream_model> kv_stream;
+    std::vector<std::unique_ptr<llama_kv_stream_read_proxy>> shared_readers;
+    ggml_context_ptr shared_read_metadata;
+    std::unique_ptr<llama_memory_bounded_kv_read> shared_bounded_read;
+    std::vector<uint32_t> shared_bounded_layers;
+    ggml_backend_buffer_t shared_bounded_buffer = nullptr;
+    uint64_t shared_bounded_source = 0, shared_bounded_generation = 0;
     bool v_trans = true;  // the value tensor is transposed
 
     const uint32_t n_seq_max = 1;

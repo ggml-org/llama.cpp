@@ -2844,7 +2844,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         if (compact_mask) GGML_ASSERT(ggml_backend_execution_set_mask_bounds(cur,kq_mask));
         ggml_backend_execution_set_external_workspace(cur,
-            cparams.mtp_publish_host ? cparams.mtp_span_attention : cparams.kv_stream_decode || cparams.kv_stream_prefill);
+            (cparams.mtp_publish_host ? cparams.mtp_span_attention : cparams.kv_stream_decode || cparams.kv_stream_prefill) ||
+            (cparams.kv_shared_read && managed_k && managed_k == managed_v));
         if (cparams.kv_stream_prefill && !cparams.mtp_publish_host) ggml_backend_execution_set_verified_workspace(cur);
         res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
 

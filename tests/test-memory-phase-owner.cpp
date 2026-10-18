@@ -13,8 +13,136 @@
 
 static_assert(!std::is_copy_constructible<llama_memory_bounded_kv>::value,"a cache must have one write owner");
 static_assert(!std::is_move_constructible<llama_memory_bounded_kv>::value,"pending preparations borrow the owner address");
+
+struct alias_init_probe {
+    inline static alias_init_probe * active=nullptr;
+    ggml_backend_buffer_t buffer;
+    decltype(ggml_backend_buffer_i::init_tensor) previous;
+    uint32_t roots=0,views=0,fail=0;
+    explicit alias_init_probe(ggml_backend_buffer_t buffer,uint32_t fail=0) : buffer(buffer),previous(buffer->iface.init_tensor),fail(fail) {
+        GGML_ASSERT(!active); active=this;
+        buffer->iface.init_tensor=[](ggml_backend_buffer_t buffer,ggml_tensor * tensor) {
+            if (tensor->view_src) ++active->views; else ++active->roots;
+            if (active->fail && active->views == active->fail) return GGML_STATUS_ALLOC_FAILED;
+            return active->previous ? active->previous(buffer,tensor) : GGML_STATUS_SUCCESS;
+        };
+    }
+    ~alias_init_probe() { buffer->iface.init_tensor=previous; active=nullptr; }
+};
 int main(int argc, char ** argv) {
     testing t;
+    ggml_backend_ptr alias_backend;
+    auto * alias_buft=ggml_backend_cpu_buffer_type();
+    if (argc > 1 && !std::strcmp(argv[1],"--alias-backend")) {
+        if (argc != 3) return 1;
+        ggml_backend_load_all();
+        auto * device=ggml_backend_dev_by_name(argv[2]);
+        if (!device) return 1;
+        alias_backend.reset(ggml_backend_dev_init(device,nullptr));
+        if (!alias_backend) return 1;
+        alias_buft=ggml_backend_get_default_buffer_type(alias_backend.get());
+        t.set_filter("bounded_read_binds_owned_layer_metadata_without_new_storage");
+    }
+    t.test("bounded_read_binds_owned_layer_metadata_without_new_storage", [&](testing & t) {
+        const ggml_type formats[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1};
+        for (auto key : formats) for (auto value : formats) for (bool gemma : {false,true}) {
+            llama_memory_cache_requirement cache;
+            cache.identity={801,1}; cache.role=llama_memory_cache_role::bounded_resident;
+            cache.layers=2; cache.history_rows=4096; cache.window_rows=16; cache.headroom_rows=16; cache.row_padding=32;
+            const uint32_t dk=gemma ? 256 : 32,dv=gemma ? 256 : 64,heads=gemma ? 16 : 1;
+            const int64_t kw=int64_t(dk)*heads,vw=int64_t(dv)*heads;
+            cache.format={key,value,dk,dv,heads,false}; cache.row_bytes=ggml_row_size(key,kw)+ggml_row_size(value,vw);
+            llama_memory_bounded_kv_layout layout;
+            if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,{3,9},alias_buft,layout))) return;
+            const auto alignment=layout.allocation.alignment,bytes=layout.allocation.bytes;
+            arena_ptr parent(ggml_backend_memory_arena_new(layout.buft,bytes+2*alignment),ggml_backend_memory_arena_free);
+            if (!t.assert_true(bool(parent) && ggml_backend_memory_arena_begin(parent.get(),0) &&
+                    ggml_backend_memory_arena_reserve_at(parent.get(),88,alignment,bytes,alignment,
+                        GGML_BACKEND_MEMORY_REGION_PERSISTENT,nullptr) && ggml_backend_memory_arena_commit(parent.get()))) return;
+            lease_ptr lease(ggml_backend_memory_arena_acquire(parent.get(),88),ggml_backend_memory_lease_free);
+            auto owner=std::make_unique<llama_memory_bounded_kv>(layout);
+            if (!t.assert_true(owner->bind(lease.get()))) return;
+            auto read=owner->read(cache.identity);
+            if (!t.assert_true(bool(read))) return;
+            const auto * base=static_cast<const uint8_t *>(ggml_backend_buffer_get_base(read.buffer()));
+            ggml_context_ptr native(ggml_init({4096,nullptr,true}));
+            auto * native_k=ggml_new_tensor_3d(native.get(),key,kw,32,1);
+            auto * native_v=ggml_new_tensor_3d(native.get(),value,vw,32,1);
+            auto * native_buffer=gemma ? ggml_backend_memory_arena_parent(parent.get()) : read.buffer();
+            ggml_tallocr allocator{};
+            if (!t.assert_true(ggml_tallocr_new_range(&allocator,native_buffer,layout.layers[1].k_offset+(gemma ? alignment : 0),
+                    bytes-layout.layers[1].k_offset) && ggml_tallocr_alloc(&allocator,native_k) == GGML_STATUS_SUCCESS &&
+                    ggml_tallocr_alloc(&allocator,native_v) == GGML_STATUS_SUCCESS)) return;
+            auto * all=ggml_new_tensor_1d(native.get(),GGML_TYPE_I8,int64_t(bytes+2*alignment));
+            auto * parent_buffer=ggml_backend_memory_arena_parent(parent.get());
+            if (!t.assert_true(ggml_backend_tensor_alloc(parent_buffer,all,ggml_backend_buffer_get_base(parent_buffer)) ==
+                    GGML_STATUS_SUCCESS)) return;
+            ggml_backend_buffer_clear(ggml_backend_memory_arena_parent(parent.get()),0xa5);
+            ggml_context_ptr ctx(ggml_init({4096+8*ggml_tensor_overhead(),nullptr,true}));
+            ggml_tensor * k=nullptr,* v=nullptr;
+            {
+                alias_init_probe probe(native_buffer);
+                if (!t.assert_true(read.bind_layer_views(ctx.get(),9,native_k,native_v,k,v))) return;
+                t.assert_equal(uint32_t(0),probe.roots);
+                t.assert_equal(uint32_t(2),probe.views);
+            }
+            t.assert_true(k && v && k->buffer == native_buffer && v->buffer == native_buffer);
+            {
+                alias_init_probe probe(native_buffer);
+                const auto used=ggml_used_mem(ctx.get());
+                t.assert_true(read.contains_layer(9,k,v));
+                t.assert_true(read.contains_layer(9,native_k,native_v));
+                t.assert_true(!read.contains_layer(3,k,v));
+                t.assert_true(!read.contains_layer(9,native_v,native_k));
+                auto moved=*k; moved.data=static_cast<uint8_t *>(moved.data)+1;
+                t.assert_true(!read.contains_layer(9,&moved,v));
+                t.assert_equal(used,ggml_used_mem(ctx.get()));
+                t.assert_equal(uint32_t(0),probe.roots);
+                t.assert_equal(uint32_t(0),probe.views);
+            }
+            t.assert_true(k->data == base+layout.layers[1].k_offset && v->data == base+layout.layers[1].v_offset);
+            t.assert_equal(kw,k->ne[0]); t.assert_equal(vw,v->ne[0]); t.assert_equal(int64_t(32),k->ne[1]);
+            t.assert_true(k->type == key && v->type == value);
+            t.assert_equal(ggml_row_size(key,kw),k->nb[1]); t.assert_equal(ggml_row_size(value,vw),v->nb[1]);
+            t.assert_equal(size_t(1),ggml_backend_memory_arena_lease_count(parent.get()));
+            t.assert_equal(uint64_t(0),owner->begin_write(cache.identity));
+            const auto used=ggml_used_mem(ctx.get());
+            auto * old_k=k; auto * old_v=v;
+            llama_memory_bounded_kv_read empty;
+            t.assert_true(k->view_src == native_k && v->view_src == native_v);
+            t.assert_true(!empty.bind_layer_views(ctx.get(),9,native_k,native_v,k,v));
+            t.assert_true(!read.bind_layer_views(nullptr,9,native_k,native_v,k,v));
+            t.assert_true(!read.bind_layer_views(ctx.get(),7,native_k,native_v,k,v));
+            t.assert_true(!read.bind_layer_views(ctx.get(),3,native_k,native_v,k,v));
+            t.assert_true(!read.bind_layer_views(ctx.get(),9,native_k,native_v,k,k));
+            t.assert_true(!read.bind_layer_views(ctx.get(),9,nullptr,native_v,k,v));
+            t.assert_true(!read.bind_layer_views(ctx.get(),9,native_v,native_k,k,v));
+            auto forged=*native_k; forged.type=GGML_TYPE_COUNT;
+            t.assert_true(!read.bind_layer_views(ctx.get(),9,&forged,native_v,k,v));
+            ggml_context_ptr short_ctx(ggml_init({ggml_tensor_overhead(),nullptr,true}));
+            t.assert_true(!read.bind_layer_views(short_ctx.get(),9,native_k,native_v,k,v));
+            ggml_context_ptr allocating(ggml_init({8192,nullptr,false}));
+            t.assert_true(!read.bind_layer_views(allocating.get(),9,native_k,native_v,k,v));
+            t.assert_true(k == old_k && v == old_v);
+            t.assert_equal(used,ggml_used_mem(ctx.get()));
+            for (uint32_t fail : {1u,2u}) {
+                ggml_context_ptr rejected(ggml_init({4096,nullptr,true}));
+                alias_init_probe fault(native_buffer,fail);
+                t.assert_true(!read.bind_layer_views(rejected.get(),9,native_k,native_v,k,v));
+                t.assert_true(k == old_k && v == old_v);
+                t.assert_equal(uint32_t(0),fault.roots);
+            }
+            std::vector<uint8_t> complete(bytes+2*alignment);
+            ggml_backend_tensor_get(all,complete.data(),0,complete.size());
+            t.assert_true(std::all_of(complete.begin(),complete.end(),[](uint8_t byte) { return byte == 0xa5; }));
+            lease.reset(); owner.reset(); parent.reset();
+            std::vector<uint8_t> copied(ggml_nbytes(k));
+            ggml_backend_tensor_get(k,copied.data(),0,copied.size());
+            t.assert_true(std::all_of(copied.begin(),copied.end(),[](uint8_t byte) { return byte == 0xa5; }));
+            ctx.reset(); native.reset(); read.reset();
+        }
+    });
     t.test("model_SWA_quote_selects_Gemma_local_roots_and_stock_capacity", [](testing & t) {
         llama_hparams hp{};
         hp.n_layer_all=60; hp.n_layer_kv_from_start=60;

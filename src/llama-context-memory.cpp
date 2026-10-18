@@ -753,6 +753,61 @@ bool llama_context_memory::covers_workspace(const llama_compute_workspace_plan &
     return true;
 }
 
+bool llama_context_memory::grow_workspace(const llama_compute_workspace_plan & plan,
+        llama_context_memory_create_result * result) noexcept {
+    if (result) *result={};
+    if (!valid() || !impl->shared_stream || impl->serial_parent || impl->serial_busy ||
+            !impl->serial_children.empty() || kv_device_suspended() ||
+            plan.phase_sizes.size() != 2 || plan.groups.size() != impl->arenas.size() ||
+            impl->kv_arena >= plan.groups.size()) return false;
+    bool growing=false;
+    for (size_t g=0;g<plan.groups.size();++g) {
+        const auto & group=plan.groups[g];
+        const auto & arena=impl->arenas[g];
+        if (group.buft != arena.buft || group.first_slot != arena.first_slot || !group.alignment ||
+                group.alignment != ggml_backend_buft_get_alignment(group.buft) || !group.size) return false;
+        size_t maximum=0;
+        for (size_t p=0;p<2;++p) {
+            if (plan.phase_sizes[p].size() != plan.groups.size() || plan.phase_sizes[p][g]%group.alignment) return false;
+            const auto bytes=plan.phase_sizes[p][g];
+            maximum=std::max(maximum,bytes);
+            const auto id=p ? impl->decode_stage : impl->prefill_stage;
+            bool found=false;
+            for (const auto & stage : impl->phase_target.plan.stages) if (stage.id == id)
+                for (const auto & requirement : stage.requirements) if (requirement.resource == g+1) {
+                    if (requirement.alignment != group.alignment || (g != impl->kv_arena && bytes > requirement.size_min)) return false;
+                    growing=growing || bytes > requirement.size_min;
+                    found=true;
+                }
+            if (!found) return false;
+        }
+        if (group.size != maximum) return false;
+    }
+    if (!growing) {
+        if (result) *result={llama_context_memory_create_status::success};
+        return true;
+    }
+    serial_gate gate(impl->serial_busy);
+    try {
+        llama_memory_transition_target candidate;
+        if (!impl->serial_workspace_target(plan.phase_sizes[0][impl->kv_arena],
+                plan.phase_sizes[1][impl->kv_arena],candidate,result)) return false;
+        if (!impl->apply_target(candidate)) {
+            if (result) result->status=llama_context_memory_create_status::transition_failed;
+            return false;
+        }
+        impl->phase_target=std::move(candidate);
+        for (const auto & stage : impl->phase_target.plan.stages)
+            for (const auto & requirement : stage.requirements) if (requirement.resource == impl->kv_workspace_resource)
+                impl->kv_workspace_max=std::max(impl->kv_workspace_max,requirement.size_min);
+        if (result) *result={llama_context_memory_create_status::success};
+        return true;
+    } catch (...) {
+        if (result) result->status=llama_context_memory_create_status::allocation_failed;
+        return false;
+    }
+}
+
 llama_context_memory_loan::~llama_context_memory_loan() {
     if (!storage) return;
     ggml_backend_memory_lease_free(storage);

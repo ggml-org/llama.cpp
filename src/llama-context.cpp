@@ -302,8 +302,32 @@ llama_context::llama_context(
     }
     // The target owns the physical pool. The attached draft writes directly to its
     // separate authoritative host cache and borrows target-owned execution workspace.
-    if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT && params.ctx_other && params.ctx_other->get_cparams().kv_streaming())
-        throw std::runtime_error("Gemma shared-KV assistant execution is not admitted yet");
+    if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT && params.ctx_other && params.ctx_other->get_cparams().kv_streaming()) {
+        const auto & target=*params.ctx_other;
+        const auto & source=target.get_model();
+        if (source.arch != LLM_ARCH_GEMMA4 || cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP ||
+                cparams.n_ctx != target.n_ctx() || cparams.n_seq_max != 1 || cparams.n_rs_seq ||
+                cparams.n_batch != 1 || cparams.n_ubatch != 1 || !cparams.causal_attn || params.embeddings ||
+                !cparams.offload_kqv || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED || params.swa_full ||
+                model.devices.size() != 1 || source.devices.size() != 1 ||
+                model.devices.front().dev != source.devices.front().dev || hparams.no_alloc || !hparams.n_layer_nextn ||
+                source.hparams.n_layer() < 2 || hparams.n_embd_inp() != source.hparams.n_embd_out() ||
+                hparams.n_embd_out() != source.hparams.n_embd_out() || !target.compute_memory ||
+                !target.compute_memory->shares_kv_memory() || !target.kv_resources.full || !target.kv_resources.bounded ||
+                !target.kv_resources.full->get_kv_stream()) {
+            throw std::runtime_error("shared Gemma KV reads require a matching serial TG1 MTP context and target phase arena");
+        }
+        for (uint32_t il=0;il<hparams.n_layer_all;++il) {
+            const auto id=source.hparams.n_layer()-(hparams.is_swa(il) ? 2 : 1);
+            if (model.dev_layer(il) != source.devices.front().dev || hparams.is_swa(il) != source.hparams.is_swa(id) ||
+                    hparams.n_embd_head_k(il) != source.hparams.n_embd_head_k(id) ||
+                    hparams.n_embd_head_v(il) != source.hparams.n_embd_head_v(id) ||
+                    hparams.n_head_kv(il) != source.hparams.n_head_kv(id) || hparams.n_head(il) != source.hparams.n_head(id)) {
+                throw std::runtime_error("incompatible Gemma assistant shared-KV geometry");
+            }
+        }
+        cparams.kv_shared_read=true;
+    }
     std::shared_ptr<llama_kv_stream_logical_cache> mtp_attached;
     llama_kv_stream_model * mtp_target_stream = nullptr;
     if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.ctx_other &&
@@ -567,6 +591,18 @@ llama_context::llama_context(
 
         memory.reset(model.create_memory(params_mem, cparams));
         kv_resources = llama_memory_kv_resources_get(memory.get());
+        if (cparams.kv_shared_read) {
+            auto * target=cparams.ctx_other;
+            auto * stream=target->kv_resources.full->get_kv_stream();
+            auto local=target->kv_resources.bounded->retain_bounded_storage(stream->host()->cache_id()+1,1,
+                target->get_cparams().n_ctx_seq,target->get_cparams().n_ubatch);
+            const auto pin=local ? local->read(local->identity()) : llama_memory_bounded_kv_read{};
+            if (!kv_resources.full || !kv_resources.bounded || !pin ||
+                    !kv_resources.full->attach_shared_stream_reader(*target->compute_memory,1) ||
+                    !kv_resources.bounded->attach_shared_bounded_reader(pin)) {
+                throw std::runtime_error("failed to bind leased Gemma assistant KV sources");
+            }
+        }
         if (cparams.kv_streaming()) {
             auto * stream=kv_resources.full ? kv_resources.full->get_kv_stream() : nullptr;
             cparams.kv_stream_prefill=stream && stream->bounded_prefill();
@@ -677,6 +713,7 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
+    if (cparams.kv_shared_read) finish_shared_kv_read();
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.hparams.no_alloc && !opt_ctx) {
@@ -827,7 +864,9 @@ bool llama_context::prepare_compute_arenas(
         return false;
     }
     if (compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache())) {
-        return compute_memory->covers_workspace(plan);
+        if (!compute_memory->covers_workspace(plan) && !compute_memory->grow_workspace(plan)) return false;
+        compute_memory_graph_revision=compute_memory->graph_binding_revision();
+        return true;
     }
 
     llama_kv_stream_model * stream = nullptr;
@@ -1895,6 +1934,46 @@ bool llama_context::set_adapter_cvec(
 }
 
 // Complete the managed K/V publication before inspecting its host frontier.
+bool llama_context::prepare_shared_kv_read() {
+    if (!cparams.kv_shared_read || !cparams.ctx_other ||
+            (kv_read_frame_active && !finish_shared_kv_read())) return false;
+    auto * target=cparams.ctx_other;
+    auto * stream=target->kv_resources.full ? target->kv_resources.full->get_kv_stream() : nullptr;
+    if (!stream || !target->kv_resources.bounded || !target->compute_memory || !kv_resources.full || !kv_resources.bounded) return false;
+    try {
+        target->synchronize();
+        stream->release_graphs();
+        if (!stream->set_workspaces({}) || !target->compute_memory->prepare_serial_decode()) return false;
+        llama_memory_cache_requirement source;
+        if (!stream->read_source(source)) return false;
+        auto local=target->kv_resources.bounded->retain_bounded_storage(source.identity.id+1,source.identity.generation,
+            target->get_cparams().n_ctx_seq,target->get_cparams().n_ubatch);
+        const auto pin=local ? local->read(local->identity()) : llama_memory_bounded_kv_read{};
+        if (!pin || !kv_resources.full->arm_shared_stream_reader() || !kv_resources.bounded->arm_shared_bounded_reader(pin)) {
+            kv_resources.full->release_shared_stream_reader();
+            kv_resources.bounded->release_shared_bounded_reader();
+            return false;
+        }
+        kv_read_frame_active=true;
+        return true;
+    } catch (const std::exception & error) {
+        LLAMA_LOG_ERROR("%s: failed to acquire target KV sources: %s\n",__func__,error.what());
+        return false;
+    }
+}
+
+bool llama_context::finish_shared_kv_read() noexcept {
+    if (!kv_read_frame_active) return true;
+    try {
+        if (compute_memory) compute_memory->synchronize();
+        else if (sched) ggml_backend_sched_synchronize(sched.get());
+        if (!kv_resources.full->release_shared_stream_reader()) return false;
+        kv_resources.bounded->release_shared_bounded_reader();
+        kv_read_frame_active=false;
+        return true;
+    } catch (...) { return false; }
+}
+
 bool llama_context::publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_result & graph) {
     auto * draft = dynamic_cast<llama_kv_cache *>(memory.get());
     if (!draft || !draft->complete_mtp_publication()) return false;
@@ -1965,6 +2044,14 @@ llm_graph_result * llama_context::process_ubatch(
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
+    if (cparams.kv_shared_read && !prepare_shared_kv_read()) {
+        LLAMA_LOG_ERROR("%s: failed to acquire shared target KV sources\n",__func__);
+        ret=GGML_STATUS_FAILED; return nullptr;
+    }
+    struct shared_read_guard {
+        llama_context * owner;
+        ~shared_read_guard() { if (owner) owner->finish_shared_kv_read(); }
+    } reading{cparams.kv_shared_read ? this : nullptr};
     if (stream && cparams.kv_stream_mask && phase == llama_memory_text_phase::prefill &&
             !stream_context->prepare_mask_bounds(ubatch,cparams.causal_attn)) {
         LLAMA_LOG_ERROR("%s: managed prefill mask cannot be represented by an exact visibility interval\n",__func__);
@@ -2085,6 +2172,9 @@ llm_graph_result * llama_context::process_ubatch(
     if (stream && !stream->complete()) {
         LLAMA_LOG_ERROR("%s: KV streaming graph did not complete every attention layer\n",__func__);
         ret = GGML_STATUS_FAILED; return nullptr;
+    }
+    if (cparams.kv_shared_read && !finish_shared_kv_read()) {
+        ret=GGML_STATUS_FAILED; return nullptr;
     }
     spill_capture.active=false;
     streaming.completed = true;
@@ -2387,6 +2477,19 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         LLAMA_LOG_ERROR("%s: embd row width %zu does not match the decoder input %zu\n",
                 __func__, batch_inp.n_embd, batch_inp.n_embd_inp);
         return -1;
+    }
+
+    if (cparams.kv_shared_read) {
+        const auto * target=cparams.ctx_other;
+        const auto * source=target && target->kv_resources.full ? target->kv_resources.full->get_kv_stream() : nullptr;
+        if (!source || !source->complete() || source->tokens() >= target->get_cparams().n_ctx_seq ||
+                batch_inp.tokens.size() != 1 || batch_inp.n_pos_per_embd != 1 ||
+                batch_inp.n_embd != model.hparams.n_embd_inp()) return -1;
+        const auto & token=batch_inp.tokens.front();
+        if (token.id < 0 || token.id >= model.vocab.n_tokens() || !token.has_embd ||
+                token.embd_off > batch_inp.embd.size() || batch_inp.n_embd > batch_inp.embd.size()-token.embd_off ||
+                token.seq_ids.size() != 1 || !token.seq_ids.count(0) ||
+                token.pos[0] < 0 || size_t(token.pos[0]) != source->tokens()) return -1;
     }
 
     if (cparams.kv_streaming()) {
@@ -3302,6 +3405,21 @@ ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes, bool feature_input) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
+
+    // Remeasure topology without constraining it to an older borrowed grant.
+    struct scheduler_restore {
+        ggml_backend_sched_ptr & current;
+        ggml_backend_sched_ptr saved;
+        ~scheduler_restore() { if (saved) current=std::move(saved); }
+    } measuring{sched,{}};
+    if (split_only && sizes && compute_memory) {
+        ggml_backend_sched_ptr temporary(ggml_backend_sched_new(backend_ptrs.data(),backend_buft.data(),
+            backend_ptrs.size(),size_t(gf_res_reserve->get_max_nodes()),cparams.pipeline_parallel,cparams.op_offload));
+        if (!temporary) return nullptr;
+        ggml_backend_sched_set_copy_callback(temporary.get(),sched_copy_experts,this);
+        measuring.saved=std::move(sched);
+        sched=std::move(temporary);
+    }
 
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
