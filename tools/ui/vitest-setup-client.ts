@@ -77,6 +77,14 @@ beforeEach(() => {
 				});
 			}
 
+			// Mock /perf (the performance panel); tests of the polling install their own mock
+			if (/\/perf\b/.test(url)) {
+				return new Response(JSON.stringify({ gen: {}, prompt: {}, ts_ms: 0, window_s: 60 }), {
+					headers: { 'Content-Type': 'application/json' },
+					status: 200
+				});
+			}
+
 			// Default: use real fetch
 			return originalFetch(input, init);
 		}

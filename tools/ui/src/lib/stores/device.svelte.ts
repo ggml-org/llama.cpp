@@ -10,7 +10,7 @@
  */
 
 import { browser } from '$app/environment';
-import { DEFAULT_MOBILE_BREAKPOINT, MEDIA_QUERIES } from '$lib/constants';
+import { DEFAULT_MOBILE_BREAKPOINT, MEDIA_QUERIES, PERF_CARD_MIN_WIDTH } from '$lib/constants';
 import { MediaQuery } from 'svelte/reactivity';
 
 /**
@@ -43,9 +43,15 @@ class DeviceStore {
 	readonly systemTheme = $state({ isDark: false });
 
 	private mobile = new MediaQuery(`max-width: ${DEFAULT_MOBILE_BREAKPOINT - 1}px`);
+	private wide = new MediaQuery(`min-width: ${PERF_CARD_MIN_WIDTH}px`);
 
 	get isMobile(): boolean {
 		return this.mobile.current;
+	}
+
+	/** Wide enough for side content next to the chat column (the performance card). */
+	get isWide(): boolean {
+		return this.wide.current;
 	}
 
 	constructor() {

@@ -19,6 +19,8 @@ export const SETTINGS_KEYS = {
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
+	// Display
+	DISPLAY_PERFORMANCE: 'displayPerformance',
 	DRY_ALLOWED_LENGTH: 'dry_allowed_length',
 	DRY_BASE: 'dry_base',
 	DRY_MULTIPLIER: 'dry_multiplier',

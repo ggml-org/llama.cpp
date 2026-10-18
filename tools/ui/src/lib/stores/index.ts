@@ -54,6 +54,9 @@ export { permissionsStore } from './permissions.svelte';
 // TOOLS
 export { toolsStore } from './tools.svelte';
 
+// PERFORMANCE PANEL (polls /perf while shown)
+export { perfStore } from './perf.svelte';
+
 // ENVIRONMENT / META
 export { versionStore } from './version.svelte';
 

@@ -260,6 +260,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1"
     )
 
+    # llama_decode_progress on a prompt batch of the generated Kimi-K3 model
+    llama_test(test-moe-predict NAME test-moe-predict-progress ARGS --progress "${MODEL_DIR}/kimi-k3-moe.gguf")
+    set_tests_properties(test-moe-predict-progress PROPERTIES FIXTURES_REQUIRED generate-models)
+
     llama_build(test-fusion.cpp)
 endif()
 

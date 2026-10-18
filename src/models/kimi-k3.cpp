@@ -359,6 +359,19 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
 
 // next-layer expert prediction: hint op between the selection of layer il and its expert matmuls
 void llama_model_kimi_k3::graph::on_moe_selected(ggml_tensor * selected_experts, int il) const {
+    // prompt batches report each layer they reach (llama_decode_progress); a host expert tensor as src[0] keeps the op on the CPU
+    if (n_tokens > 4) {
+        const ggml_tensor * w = model.layers[il].ffn_up_exps;
+        if (progress != nullptr && w != nullptr && w->buffer != nullptr && ggml_backend_buffer_is_host(w->buffer)) {
+            ggml_tensor * args[2] = { model.layers[il].ffn_up_exps, selected_experts };
+            ggml_tensor * op = ggml_custom_4d(ctx0, GGML_TYPE_F32, 1, 1, 1, 1, args, 2,
+                    llama_decode_progress_op, 1, const_cast<llama_decode_progress_ud *>(&progress[il]));
+            ggml_format_name(op, "decode_progress-%d", il);
+            ggml_build_forward_expand(gf, op);
+        }
+        return;
+    }
+
     llama_moe_predictor * mp = model.moe_predictor.get();
     // with the MoE cache (--moe-cache-mib) the experts come from GPU slots instead of the mapping
     if (mp == nullptr || moe_cache != nullptr || n_tokens > 4 || moe_router_in == nullptr || moe_router_il != il) {

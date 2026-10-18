@@ -190,6 +190,11 @@ export { HuggingFaceService } from './huggingface.service';
 export { PropsService } from './props.service';
 
 /**
+ * **PerfService** - Live server performance (`GET /perf`), polled by perfStore
+ */
+export { PerfService } from './perf.service';
+
+/**
  * **ParameterSyncService** - Server defaults and user settings synchronization
  *
  * Manages the complex logic of merging server-provided default parameters with

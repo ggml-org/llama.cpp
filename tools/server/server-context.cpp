@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-decision.h"
 #include "server-http.h"
+#include "server-perf.h"
 #include "server-task.h"
 #include "server-queue.h"
 #include "server-schema.h"
@@ -957,6 +958,9 @@ public:
     server_queue    queue_tasks;
     server_response queue_results;
 
+    // GET /perf, reads only atomics and its own samples: safe from any thread
+    server_perf perf;
+
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
 
@@ -1046,6 +1050,9 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        // the sampler reads the model and context
+        perf.stop();
+
         spec.reset();
         spec_init.reset();
 
@@ -1450,6 +1457,7 @@ private:
                 if (slot.stats.n_gen > 0) {
                     metrics_on_prediction(slot);
                 }
+                perf.counters.on_request_end(slot.stats);
             };
 
             slot.reset();
@@ -1534,6 +1542,8 @@ private:
 
         // propagate new defaults back to caller
         params = params_base;
+
+        perf.start(model_tgt, ctx_tgt, params_base.model.path);
 
         if (!is_resume) {
             return init();
@@ -3610,6 +3620,7 @@ private:
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
                         slot.stats.update_prompt_start();
+                        perf.counters.on_prompt_start(slot.stats.t_start);
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
@@ -3994,6 +4005,7 @@ private:
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
+                    const bool do_checkpoint_req = do_checkpoint;
 
                     // TODO: do the same for all models, then remove process_mtmd_chunk()
                     if (use_mixed_batch() && !slot.can_split() && input_tokens.has_mtmd) {
@@ -4177,6 +4189,37 @@ private:
                     //       yet processed and therefore it is not part of the checkpoint.
                     if (do_checkpoint) {
                         create_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
+                    }
+
+                    // the batches still to come, for the projected prompt speed of GET /perf
+                    {
+                        server_prompt_plan_params pp;
+                        pp.pos           = slot.prompt.n_tokens();
+                        pp.n_total       = slot.task->n_tokens();
+                        pp.n_batch       = n_batch;
+                        pp.n_ubatch      = n_ubatch;
+                        pp.checkpoints   = do_checkpoint_req;
+                        pp.last_user_pos = last_user_pos;
+                        pp.last_ckpt     = slot.prompt.checkpoints.empty() ? -1 : (int32_t) slot.prompt.checkpoints.back().n_tokens;
+                        pp.min_step      = params_base.checkpoint_min_step;
+                        for (const auto & sp : spans.spans) {
+                            if (sp.role == COMMON_CHAT_ROLE_USER) {
+                                pp.user_starts.push_back((int32_t) sp.pos);
+                            }
+                        }
+                        std::sort(pp.user_starts.begin(), pp.user_starts.end());
+
+                        // media chunks are decoded on their own, and the counters follow one request: no projection then
+                        bool valid = !has_mtmd;
+                        for (int32_t i = pp.pos; valid && input_tokens.has_mtmd && i < pp.n_total; ++i) {
+                            valid = input_tokens[i] != LLAMA_TOKEN_NULL;
+                        }
+                        int n_active = 0;
+                        for (const auto & other : slots) {
+                            n_active += other.is_processing();
+                        }
+                        valid = valid && n_active <= 1;
+                        perf.counters.on_prompt_plan((int32_t) n_tokens_cur, server_prompt_plan(pp), valid);
                     }
                 }
 
@@ -4484,6 +4527,7 @@ private:
             }
 
             slot.stats.update_gen_last();
+            perf.counters.on_gen(slot.stats);
 
             completion_token_output result;
             result.tok          = id;
@@ -4632,6 +4676,7 @@ private:
                 // TODO: set result.probs
 
                 slot.stats.n_gen += 1;
+                perf.counters.on_gen(slot.stats);
 
                 if (!process_token(result, slot)) {
                     slot.print_timings();
@@ -4732,12 +4777,17 @@ private:
         // advance the prompt timing of the slots that had tokens in this batch
         // note: a second pass, it must run after the sync to reflect the compute
         const int64_t t_now = ggml_time_us();
+        const server_slot * slot_prompt = nullptr;
         for (int i = off; i < off + n_tokens; ++i) {
             const auto & t = batch.tokens[i];
             auto & slot = slots[t.id_slot];
             if (t.is_prompt && slot.stats.is_set()) {
                 slot.stats.set_prompt_last(t_now);
+                slot_prompt = &slot;
             }
+        }
+        if (n_prompt_tokens > 0) {
+            perf.counters.on_prompt_batch(slot_prompt ? slot_prompt->stats : server_slot_stats(), n_prompt_tokens, t_now - t_decode_start);
         }
     }
 
@@ -5350,6 +5400,18 @@ void server_routes::init_routes() {
             res->data = res_task->to_metrics();
         }
 
+        return res;
+    };
+
+    this->get_perf = [this](const server_http_req &) {
+        // never wakes the model: the figures come from the sampler and atomics only
+        auto res = create_response(true);
+        json data;
+        if (!ctx_server.perf.get(data)) {
+            res->error(format_error_response("no model is loaded", ERROR_TYPE_UNAVAILABLE));
+            return res;
+        }
+        res->ok(data);
         return res;
     };
 

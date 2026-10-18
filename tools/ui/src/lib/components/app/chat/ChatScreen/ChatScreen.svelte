@@ -9,6 +9,7 @@
 		ChatScreenForm,
 		ChatScreenServerError,
 		ChatScreenStreamResumeStatus,
+		PerfPanel,
 		ServerLoadingSplash
 	} from '$lib/components/app';
 	import { LANDING_SETTLE_MAX_MS, LANDING_STABLE_FRAMES, ROUTES } from '$lib/constants';
@@ -22,6 +23,7 @@
 		chatStore,
 		conversationsStore,
 		deviceStore,
+		perfStore,
 		serverStore,
 		settingsStore
 	} from '$lib/stores';
@@ -47,6 +49,13 @@
 	let isServerLoading = $derived(serverStore.loading);
 	let hasPropsError = $derived(!!serverStore.error);
 	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
+	// on a phone the composer is fixed over the messages: the bottom padding (pb-48) must also cover the strip
+	let perfStripHeight = $state(0);
+	let stripPadding = $derived(
+		perfStore.enabled && deviceStore.isMobile && perfStripHeight > 0
+			? `calc(12rem + ${perfStripHeight}px)`
+			: undefined
+	);
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!deviceStore.isMobile) return '1rem';
 
@@ -295,6 +304,7 @@
 {:else}
 	<div
 		style:--chat-form-bottom-position={chatFormBottomPosition}
+		style:padding-bottom={stripPadding}
 		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-1rem-var(--chat-tabs-offset,0px))] px-4 md:py-0 pt-12 pb-48 md:pb-4"
 		ondragenter={dragAndDrop.dragHandlers.dragenter}
 		ondragleave={dragAndDrop.dragHandlers.dragleave}
@@ -350,6 +360,12 @@
 					/>
 				{/if}
 			</div>
+
+			{#if perfStore.enabled && !deviceStore.isWide}
+				<div bind:clientHeight={perfStripHeight} class="pointer-events-auto mx-auto mb-1 max-w-3xl">
+					<PerfPanel variant="strip" />
+				</div>
+			{/if}
 
 			<ChatScreenForm
 				bind:uploadedFiles={fileUpload.uploadedFiles}

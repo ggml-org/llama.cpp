@@ -2096,6 +2096,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 mix(file->size());
             }
             mp.model_id = id;
+            mp.mincore_ok = llama_moe_predictor::mincore_trusted(lazy_file_paths);
 
             std::vector<llama_moe_predictor::layer_tensors> lt(mp.n_layer);
             for (int il = 0; il < mp.n_layer; ++il) {
@@ -3861,6 +3862,36 @@ const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_te
 
 int32_t llama_model_n_expert(const struct llama_model * model) {
     return model->hparams.n_expert;
+}
+
+void llama_moe_predict_stats(const struct llama_model * model, struct llama_moe_predict_data * out) {
+    *out = {};
+    if (model == nullptr || !model->moe_predictor) {
+        return;
+    }
+    const auto st = model->moe_predictor->get_stats();
+    out->enabled              = true;
+    out->mode                 = st.mode;
+    out->n_layer              = (int32_t) model->hparams.n_layer();
+    out->layer_seen           = st.layer_seen;
+    out->step_seen            = st.step_seen;
+    out->hits                 = st.hits;
+    out->actual               = st.actual;
+    out->guesses              = st.guesses;
+    out->bytes_hit            = st.bytes_hit;
+    out->bytes_wasted         = st.bytes_wasted;
+    out->bytes_late           = st.bytes_late;
+    out->bytes_actual         = st.bytes_actual;
+    out->bytes_read_predictor = st.bytes_read_predictor;
+    out->bytes_pending        = st.bytes_pending;
+    out->bytes_credited       = st.bytes_credited;
+    out->probes               = st.probes;
+}
+
+void llama_moe_predict_set_io_clock(const struct llama_model * model, uint64_t read_bytes, uint64_t cached_bytes) {
+    if (model != nullptr && model->moe_predictor) {
+        model->moe_predictor->set_io_clock(read_bytes, cached_bytes);
+    }
 }
 
 int32_t llama_model_n_devices(const struct llama_model * model) {

@@ -46,6 +46,9 @@ export const STATS_UNITS = {
 
 export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
+/** from this width the performance card fits in the right margin next to a 48rem composer and an open sidebar */
+export const PERF_CARD_MIN_WIDTH = 1536;
+
 /** Models listed per remote provider before the "+ X more" line; search covers the rest. */
 export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
 

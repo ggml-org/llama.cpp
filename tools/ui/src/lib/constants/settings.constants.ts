@@ -315,6 +315,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
+				help: 'Show live server performance (CPU, GPU, memory, generation and prompt speed, disk bandwidth, expert prediction) in a small panel. Polls the server once a second while shown.',
+				key: SETTINGS_KEYS.DISPLAY_PERFORMANCE,
+				label: 'Display performance',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
 				help: 'Display the full file system path inside file and folder @-mention badges instead of just the file or folder name.',
 				key: SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS,
 				label: 'Show full path in mentions',

@@ -1706,6 +1706,45 @@ extern "C" {
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
 
+    // next-layer expert prediction (LLAMA_MOE_PREDICT), lifetime counters; bytes are what the loads read from disk
+    struct llama_moe_predict_data {
+        bool     enabled;     // false: no predictor (dense model, or prediction off)
+        int32_t  mode;        // 1 observe, 2 prefetch
+        int32_t  n_layer;
+        int32_t  layer_seen;
+        uint64_t step_seen;
+
+        uint64_t hits;        // guesses that were used
+        uint64_t actual;      // experts used
+        uint64_t guesses;     // guesses scored
+
+        uint64_t bytes_hit;            // read for guesses that were used (incl. credited)
+        uint64_t bytes_wasted;         // read for guesses that were evicted unused
+        uint64_t bytes_late;           // read for guesses after their layer had started
+        uint64_t bytes_actual;         // read for the experts of the running layer
+        uint64_t bytes_read_predictor; // read for guesses in total
+        uint64_t bytes_pending;        // read for unused guesses, not yet used nor evicted
+        uint64_t bytes_credited;       // part of bytes_hit: used later while still resident
+
+        uint64_t probes;               // residency probes on the graph thread (one mincore per expert tensor each)
+    };
+
+    LLAMA_API void llama_moe_predict_stats(const struct llama_model * model, struct llama_moe_predict_data * out);
+
+    // publish the process read_bytes and the page cache size (about once a second), expires old pending guesses
+    LLAMA_API void llama_moe_predict_set_io_clock(const struct llama_model * model, uint64_t read_bytes, uint64_t cached_bytes);
+
+    // layer progress of the running decode; n_tokens == 0 when none runs, il == -1 before the first reported layer
+    struct llama_decode_progress_data {
+        int32_t il;            // last layer reached in the current ubatch (models that report it, prompt batches only)
+        int32_t n_layer;
+        int32_t n_tokens;      // tokens of the current ubatch
+        int32_t n_tokens_done; // tokens of the earlier ubatches of the same decode call
+        int64_t t_start_us;    // start of the decode call (ggml_time_us)
+    };
+
+    LLAMA_API void llama_decode_progress(const struct llama_context * ctx, struct llama_decode_progress_data * out);
+
     //
     // training
     //

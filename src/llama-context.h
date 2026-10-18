@@ -195,6 +195,8 @@ struct llama_context {
     //
 
     llama_perf_context_data perf_get_data() const;
+
+    llama_decode_progress_data decode_progress() const;
     void perf_reset();
 
     llama_memory_breakdown memory_breakdown() const;
@@ -387,6 +389,13 @@ private:
     };
 
     copy_experts_info copy_experts;
+
+    // layer progress of the running decode (llama_decode_progress), raised by the graph ops and the expert uploads
+    std::atomic<int32_t> progress_il{-1};
+    std::atomic<int32_t> progress_n_tokens{0};
+    std::atomic<int32_t> progress_n_done{0};
+    std::atomic<int64_t> progress_t_start_us{0};
+    std::vector<llama_decode_progress_ud> progress_ud; // [n_layer], userdata of the graph ops
 
     // GGML_CPU_MOE_PREFETCH=1: hint the pages of lazily mapped experts ahead of their upload to a device
     // (op offload of large batches), so the copy streams from disk instead of faulting page by page

@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -36,9 +37,14 @@ struct llama_moe_predictor {
         float    grow      = 0.5f;  // grow a slot group if its next 4 slots would be at least this useful
         float    shrink    = 0.3f;  // shrink if its outermost 4 slots are less useful than this
         int      cap       = 32;    // max router + popularity slots per layer
+        // false: mincore cannot be trusted for the model files (neither owned nor writable), the HIGH loads decide
+        bool     mincore_ok = true;
         // for tests: start with the workers paused, and record the order of processed work
         bool     paused    = false;
         bool     trace     = false;
+        // for tests: bytes a load reads from disk (instead of /proc/thread-self/io), and expert residency (instead of mincore)
+        std::function<uint64_t(int il, int e, bool high)> test_load_bytes;
+        std::function<bool(int il, int e)>                test_resident;
     };
 
     // the three expert tensors of a MoE layer (nullptr for dense layers)
@@ -89,9 +95,30 @@ struct llama_moe_predictor {
         uint64_t high_drops;
     };
     counters get_counters() const;
+    void pause();
     void resume();
     void wait_idle();                 // until both queues are empty and no work is in progress
     std::vector<int> get_trace();     // +(il+1) for a HIGH expert, -(il+1) for a LOW one, in processing order
+
+    // lifetime counters for the performance panel (relaxed atomics, any thread)
+    // bytes: what the prefetch loads read from disk; a guess that is not used stays pending until it is used
+    // (credited if still resident) or known to be gone (wasted)
+    struct stats {
+        int      mode;
+        int      layer_seen;
+        uint64_t step_seen;
+        uint64_t hits, actual, guesses;
+        uint64_t bytes_hit, bytes_wasted, bytes_late, bytes_actual, bytes_read_predictor, bytes_pending, bytes_credited;
+        uint64_t probes; // residency probes (3 mincore calls each) on the graph thread
+    };
+    stats get_stats() const;
+
+    // the process read_bytes and the page cache size, published about once a second; also expires the pending
+    // guesses whose pages the page cache has surely evicted since they were read
+    void set_io_clock(uint64_t read_bytes, uint64_t cached_bytes);
+
+    // false if mincore cannot be trusted for these files (it reports every page resident for files neither owned nor writable)
+    static bool mincore_trusted(const std::vector<std::string> & paths);
 
     // ranking used for the router guesses: sigmoid(logit) + bias, descending (exposed for tests)
     static void rank_router(const float * logits, const float * bias, int n_expert, int n, std::vector<int> & out);
@@ -116,6 +143,7 @@ private:
         uint64_t cf_mix_hits[3] = {}; // router top T-4 + popularity top 4, T = 16, 24, 32
         std::vector<int> pred_r48;
         std::vector<int> pred_p_all;  // most popular overall (for the counterfactual mix)
+        std::vector<int> guess;       // the guesses issued for this layer (router, then popularity)
     };
 
     struct work {
@@ -127,7 +155,11 @@ private:
 
     void enqueue(bool high, int il, const std::vector<int> & experts);
     void worker_loop();
-    void prefetch_expert(int il, int e, bool low);
+    void prefetch_expert(int il, int e, bool low, uint64_t step);
+    uint64_t load_bytes(int il, int e, bool high);
+    bool resident(int il, int e);
+    void account_load(int il, int e, bool low, uint64_t step, uint64_t b);
+    void resolve_pending(size_t i, bool used);
     bool pop_high(work & w);
     void drain_high();
     void adapt(layer_state & s);
@@ -174,6 +206,20 @@ private:
     std::vector<float> scratch_score;
     std::vector<int>  scratch_rank_r; // n_expert: rank in the router guesses (pred_r48), -1 if none
     std::vector<int>  scratch_rank_p; // n_expert: rank in the popularity guesses (pred_p), -1 if none
+
+    // byte accounting, prefetch mode only: per (layer, expert), index il*n_expert + e
+    std::unique_ptr<std::atomic<uint64_t>[]> pred_tag;    // step + 1 of the current guess, 0: none
+    std::unique_ptr<std::atomic<uint64_t>[]> pred_bytes;  // read for the current guess
+    std::unique_ptr<std::atomic<uint64_t>[]> pend_bytes;  // read for an earlier guess that was not used
+    std::unique_ptr<std::atomic<uint64_t>[]> pend_clock;  // io clock when it became pending
+    std::unique_ptr<std::atomic<uint64_t>[]> pend_cached; // page cache size then
+
+    std::atomic<uint64_t> n_hits{0}, n_actual{0}, n_guesses{0};
+    std::atomic<uint64_t> bytes_hit{0}, bytes_wasted{0}, bytes_late{0}, bytes_actual{0}, bytes_read_predictor{0};
+    std::atomic<uint64_t> bytes_pending{0}, bytes_credited{0}, n_probes{0};
+    std::atomic<uint64_t> io_clock{0}, io_cached{0};
+    uint64_t io_floor = 0;   // sampler thread only: clock when the sampler resumed
+    int64_t  io_last_us = 0; // sampler thread only
 };
 
 // the graph op: thread 0 forwards the layer's selection (src[1]) and, if present, the next layer's router logits

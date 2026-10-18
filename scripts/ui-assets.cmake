@@ -2,7 +2,7 @@
 #
 # Asset provisioning priority:
 #   1. Pre-built assets in SRC_DIST_DIR (manually built by user)
-#   2. If BUILD_UI=ON: npm build
+#   2. If BUILD_UI=ON: npm build (a failure stops the build, it never falls back to the download)
 #   3. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
 #      of dist.tar.gz (verified against dist.tar.gz.sha256)
 
@@ -333,8 +333,7 @@ function(npm_build out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
     if(NOT EXISTS "${UI_SOURCE_DIR}/package.json")
-        message(STATUS "UI: ${UI_SOURCE_DIR}/package.json not found, skipping npm")
-        return()
+        message(FATAL_ERROR "UI: ${UI_SOURCE_DIR}/package.json not found (LLAMA_BUILD_UI=ON)")
     endif()
 
     npm_build_should_skip(skip)
@@ -350,8 +349,7 @@ function(npm_build out_var)
         find_program(NPM_EXECUTABLE npm)
     endif()
     if(NOT NPM_EXECUTABLE)
-        message(STATUS "UI: npm not found, skipping npm build")
-        return()
+        message(FATAL_ERROR "UI: npm not found (LLAMA_BUILD_UI=ON); install node/npm or configure with -DLLAMA_BUILD_UI=OFF")
     endif()
 
     stage_sources()
@@ -379,9 +377,7 @@ function(npm_build out_var)
             ERROR_VARIABLE  err
         )
         if(NOT rc EQUAL 0)
-            message(STATUS "UI: npm ci failed (${rc})")
-            message(STATUS "  stderr: ${err}")
-            return()
+            message(FATAL_ERROR "UI: npm ci failed (${rc}) in ${WORK_DIR}\n  stderr: ${err}")
         endif()
     endif()
 
@@ -396,14 +392,11 @@ function(npm_build out_var)
         ERROR_VARIABLE  err
     )
     if(NOT rc EQUAL 0)
-        message(STATUS "UI: npm run build failed (${rc})")
-        message(STATUS "  stderr: ${err}")
-        return()
+        message(FATAL_ERROR "UI: npm run build failed (${rc}) in ${WORK_DIR}\n  stderr: ${err}")
     endif()
 
     if(NOT EXISTS "${DIST_DIR}/index.html")
-        message(STATUS "UI: npm build finished but assets missing in ${DIST_DIR}")
-        return()
+        message(FATAL_ERROR "UI: npm build finished but assets missing in ${DIST_DIR}")
     endif()
 
     message(STATUS "UI: npm build succeeded")

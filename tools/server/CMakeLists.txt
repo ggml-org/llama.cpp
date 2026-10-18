@@ -17,6 +17,8 @@ add_library(${TARGET} STATIC
     server-decision.h
     server-context.cpp
     server-context.h
+    server-perf.cpp
+    server-perf.h
     server-stream.cpp
     server-stream.h
     server-tools.cpp
@@ -33,7 +35,7 @@ endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
-target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
 
 # llama-server-impl: server logic, reusable by app
 

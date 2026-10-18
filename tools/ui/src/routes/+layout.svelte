@@ -4,7 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { SidebarNavigation } from '$lib/components/app';
+	import { PerfDock, SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
@@ -338,15 +338,21 @@
 	<Toaster closeButton richColors />
 </Tooltip.Provider>
 
-<!-- PWA update prompt + version -->
-<div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
+<PerfDock />
+
+<!-- PWA update prompt + version; the stack itself lets clicks through, only its content takes them -->
+<div class="pointer-events-none fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
 	{#if showBuildVersion && versionStore.build}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
+		<span class="pointer-events-auto text-[10px] tabular-nums text-muted-foreground"
+			>{versionStore.build}</span
+		>
 	{/if}
 
-	<PwaRefreshAlert
-		forceReload={pwa.needRefreshByStorage}
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
-		{updateServiceWorker}
-	/>
+	<div class="pointer-events-auto">
+		<PwaRefreshAlert
+			forceReload={pwa.needRefreshByStorage}
+			needRefresh={$needRefresh || pwa.needRefreshByStorage}
+			{updateServiceWorker}
+		/>
+	</div>
 </div>

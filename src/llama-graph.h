@@ -5,6 +5,7 @@
 #include "llama-hparams.h"
 #include "llama-adapter.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
@@ -778,6 +779,16 @@ public:
 // along with the input tensors, the object also provides commonly used outputs tensors, such as logits, embeddings, etc.
 //   these are used by the llama_context to extact the relevant data, based on the compute parameters
 
+// per-layer userdata of the decode progress op (llama_decode_progress)
+struct llama_decode_progress_ud {
+    std::atomic<int32_t> * il_out;
+    int32_t il;
+};
+
+// the graph op: thread 0 reports that layer il was reached; raises the reported layer, never lowers it
+void llama_decode_progress_op(struct ggml_tensor * dst, int ith, int nth, void * userdata);
+void llama_decode_progress_set(std::atomic<int32_t> & il_out, int32_t il);
+
 // callback that allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
 using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il)>;
 
@@ -805,6 +816,8 @@ struct llm_graph_params {
     const llama_prec_policy * prec_policy = nullptr;
 
     const llama_hadamard * hdmd = nullptr;
+
+    const llama_decode_progress_ud * progress = nullptr; // [n_layer], owned by the context
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1058,6 +1071,8 @@ struct llm_graph_context {
     const llama_prec_policy * prec_policy;
 
     const llama_hadamard * hdmd;
+
+    const llama_decode_progress_ud * progress;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 

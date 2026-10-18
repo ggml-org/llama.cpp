@@ -367,6 +367,7 @@ struct server_models_routes {
     // handlers using lambda function, so that they can capture `this` without `std::bind`
     server_http_context::handler_t get_router_props;
     server_http_context::handler_t proxy_get;
+    server_http_context::handler_t get_router_perf; // GET /perf of the named or most recently used running model, never loads one
     server_http_context::handler_t proxy_post;
     server_http_context::handler_t get_router_models;
     server_http_context::handler_t post_router_models_load;

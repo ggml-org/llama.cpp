@@ -515,3 +515,72 @@ export interface ApiStreamSession {
 	started_at: number;
 	completed_at: number;
 }
+
+/**
+ * Response from GET /perf: live server performance, sampled about once a second while polled.
+ * Bytes, bytes per second, percent 0..100; null when a figure is not known (yet) or not available.
+ */
+export interface ApiPerfResponse {
+	ts_ms: number | null;
+	window_s: number;
+	cpu: { busy_pct: number | null; proc_pct: number | null; n_cpu: number } | null;
+	gpu: {
+		busy_pct: number;
+		mem_used_bytes: number;
+		mem_total_bytes: number;
+		name: string;
+	} | null;
+	mem: {
+		total_bytes: number;
+		occupied_bytes: number;
+		used_bytes: number;
+		cached_bytes: number;
+		free_bytes: number;
+	} | null;
+	gen: {
+		tps_headline: number | null;
+		tps_window: number | null;
+		tps_total: number | null;
+		tps_last: number | null;
+		generating: boolean;
+		n_tokens: number;
+	};
+	prompt: {
+		tps_headline: number | null;
+		tps_window: number | null;
+		tps_total: number | null;
+		tps_last: number | null;
+		processing: boolean;
+		layer: number | null;
+		n_layer: number | null;
+		n_tokens: number;
+		/** the headline projects the request's final rate from its batch plan */
+		estimate?: boolean;
+		batch?: number | null;
+		n_batches?: number | null;
+	};
+	nvme: { device: string; read_bps: number | null; read_bps_10s: number | null } | null;
+	predict: {
+		mode: 'observe' | 'prefetch';
+		precision_window: number | null;
+		precision_total: number | null;
+		recall_window: number | null;
+		recall_total: number | null;
+		hits: number;
+		actual: number;
+		guesses: number;
+		probes: number;
+		steps: number;
+	} | null;
+	preload: {
+		wasted_pct: number | null;
+		bytes_wasted: number;
+		bytes_late: number;
+		bytes_hit: number;
+		bytes_credited: number;
+		bytes_actual: number;
+		bytes_pending: number;
+		bytes_read_predictor: number;
+		bytes_read_total: number;
+	} | null;
+}

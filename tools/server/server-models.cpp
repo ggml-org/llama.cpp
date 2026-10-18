@@ -2033,6 +2033,29 @@ void server_models_routes::init_routes() {
         return models.proxy_request(req, method, name, false);
     };
 
+    this->get_router_perf = [this](const server_http_req & req) {
+        std::string name = req.get_param("model");
+        if (name.empty()) {
+            int64_t t_best = -1;
+            for (const auto & meta : models.get_all_meta()) {
+                if (meta.is_ready_or_sleep() && meta.last_used > t_best) {
+                    t_best = meta.last_used;
+                    name   = meta.name;
+                }
+            }
+        } else if (auto meta = models.get_meta(name); meta.has_value()) {
+            name = meta->is_ready_or_sleep() ? meta->name : "";
+        } else {
+            name = "";
+        }
+        if (name.empty()) {
+            auto res = std::make_unique<server_http_res>();
+            res_err(res, format_error_response("no model is loaded", ERROR_TYPE_UNAVAILABLE));
+            return res;
+        }
+        return models.proxy_request(req, "GET", name, false);
+    };
+
     this->proxy_post = [this](const server_http_req & req) {
         std::string method = "POST";
         json body = json::parse(req.body);

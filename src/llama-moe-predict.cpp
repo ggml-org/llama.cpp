@@ -15,6 +15,11 @@
 #define LLAMA_MOE_PREDICT_MADVISE
 #endif
 
+#if defined(__linux__)
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
+
 static constexpr uint32_t MOE_PRED_MAGIC   = 0x3150524b; // "KRP1"
 static constexpr uint32_t MOE_PRED_VERSION = 1;
 static constexpr size_t   MOE_PRED_PIECE   = 2u*1024*1024;
@@ -23,6 +28,45 @@ static constexpr int      MOE_PRED_NR_MIN  = 16;
 static constexpr int      MOE_PRED_EVAL    = 16;         // tokens between adaptations
 static constexpr int      MOE_PRED_SAVE    = 32;         // steps between saves
 static constexpr int      MOE_PRED_LOG     = 64;         // steps between log lines
+static constexpr size_t   MOE_PRED_PROBE   = 1024u*1024; // residency probe: bytes per expert tensor (one mincore each)
+static constexpr int      MOE_PRED_NPROBE  = 8;          // experts probed per layer at most
+static constexpr int64_t  MOE_PRED_IO_GAP  = 2500000;    // us: a longer gap between io clock updates restarts the clock
+
+// bytes the calling thread caused to be read from storage so far (0 if unknown)
+static uint64_t thread_read_bytes() {
+#if defined(__linux__)
+    struct io_file {
+        int fd = -1;
+        ~io_file() {
+            if (fd >= 0) {
+                close(fd);
+            }
+        }
+    };
+    thread_local io_file f;
+    if (f.fd < 0) {
+        f.fd = open("/proc/thread-self/io", O_RDONLY | O_CLOEXEC);
+        if (f.fd < 0) {
+            return 0;
+        }
+    }
+    char buf[512];
+    const ssize_t n = pread(f.fd, buf, sizeof(buf) - 1, 0);
+    if (n <= 0) {
+        return 0;
+    }
+    buf[n] = 0;
+    const char * p = strstr(buf, "\nread_bytes: ");
+    return p ? strtoull(p + 13, nullptr, 10) : 0;
+#else
+    return 0;
+#endif
+}
+
+// HIGH loads of this thread, so that a LOW load that drains them in between can exclude their bytes
+static thread_local uint64_t t_nested_bytes = 0;
+// simulated read_bytes of this thread (params::test_load_bytes)
+static thread_local uint64_t t_sim_bytes = 0;
 
 static uint32_t fnv1a(const uint8_t * p, size_t n) {
     uint32_t h = 2166136261u;
@@ -79,6 +123,15 @@ llama_moe_predictor::llama_moe_predictor(const params & p, std::vector<layer_ten
     scratch_rank_r.assign(par.n_expert, -1);
     scratch_rank_p.assign(par.n_expert, -1);
 
+    if (par.mode == MODE_PREFETCH) {
+        const size_t n = (size_t) par.n_layer*par.n_expert;
+        pred_tag   .reset(new std::atomic<uint64_t>[n]());
+        pred_bytes .reset(new std::atomic<uint64_t>[n]());
+        pend_bytes .reset(new std::atomic<uint64_t>[n]());
+        pend_clock .reset(new std::atomic<uint64_t>[n]());
+        pend_cached.reset(new std::atomic<uint64_t>[n]());
+    }
+
 #if defined(LLAMA_MOE_PREDICT_MADVISE)
     const long pg = sysconf(_SC_PAGESIZE);
     page_size = pg > 0 ? (size_t) pg : 4096;
@@ -96,9 +149,9 @@ llama_moe_predictor::llama_moe_predictor(const params & p, std::vector<layer_ten
         workers.emplace_back([this] { worker_loop(); });
     }
 
-    LLAMA_LOG_INFO("%s: MoE expert prediction %s, %d workers, slots cap %d, grow %.2f, shrink %.2f, stats %s\n",
+    LLAMA_LOG_INFO("%s: MoE expert prediction %s, %d workers, slots cap %d, grow %.2f, shrink %.2f, stats %s, residency by %s\n",
             __func__, par.mode == MODE_PREFETCH ? "prefetch" : "observe", n_workers, par.cap, par.grow, par.shrink,
-            par.stats_path.empty() ? "(none)" : par.stats_path.c_str());
+            par.stats_path.empty() ? "(none)" : par.stats_path.c_str(), par.mincore_ok ? "mincore" : "load deltas");
 }
 
 llama_moe_predictor::~llama_moe_predictor() {
@@ -251,6 +304,37 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
 
             s.hits   += hits;
             s.actual += act.size();
+            n_hits    += hits;
+            n_actual  += act.size();
+            n_guesses += s.guess.size();
+
+            // the bytes read for the guesses: used now, or pending until the expert is used or evicted
+            if (pred_tag) {
+                for (int e : act) {
+                    scratch_mark[e] = 1;
+                }
+                const uint64_t clk = io_clock.load(std::memory_order_relaxed);
+                const uint64_t cch = io_cached.load(std::memory_order_relaxed);
+                for (int e : s.guess) {
+                    const size_t i = (size_t) il*par.n_expert + e;
+                    pred_tag[i].store(0, std::memory_order_relaxed); // loads that finish later are late
+                    const uint64_t b = pred_bytes[i].exchange(0, std::memory_order_relaxed);
+                    if (b == 0) {
+                        continue;
+                    }
+                    if (scratch_mark[e]) {
+                        bytes_hit += b;
+                    } else {
+                        bytes_pending += b;
+                        pend_clock [i].store(clk, std::memory_order_relaxed);
+                        pend_cached[i].store(cch, std::memory_order_relaxed);
+                        pend_bytes [i] += b;
+                    }
+                }
+                for (int e : act) {
+                    scratch_mark[e] = 0;
+                }
+            }
             s.wasted += (uint64_t) std::max<int64_t>(0, (int64_t) (s.n_r + s.n_p) - (int64_t) hits);
             s.tokens += n_tok;
             s.n_eval += n_tok;
@@ -258,6 +342,24 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
             s.has_pred = false;
             if (s.n_eval >= MOE_PRED_EVAL) {
                 adapt(s);
+            }
+        }
+
+        // an earlier guess that was not used is used now: credited if its pages are still resident
+        // (before the expert matmuls of this layer fault them in); without a trusted mincore the HIGH load decides
+        if (pred_tag && (par.mincore_ok || par.test_resident)) {
+            int n_probe = 0;
+            for (int e : act) {
+                const size_t i = (size_t) il*par.n_expert + e;
+                if (n_probe == MOE_PRED_NPROBE) {
+                    break;
+                }
+                if (pend_bytes[i].load(std::memory_order_relaxed) == 0) {
+                    continue;
+                }
+                n_probe++;
+                n_probes++;
+                resolve_pending(i, resident(il, e));
             }
         }
 
@@ -311,6 +413,16 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
 
             guess.assign(nx.pred_r.begin(), nx.pred_r.begin() + std::min<size_t>(nx.pred_r.size(), nx.n_r));
             guess.insert(guess.end(), nx.pred_p.begin(), nx.pred_p.begin() + std::min<size_t>(nx.pred_p.size(), nx.n_p));
+            nx.guess = guess;
+
+            if (pred_tag) {
+                for (int e : guess) {
+                    const size_t i = (size_t) il_next*par.n_expert + e;
+                    // bytes of an older guess that landed after its scoring
+                    bytes_late += pred_bytes[i].exchange(0, std::memory_order_relaxed);
+                    pred_tag[i].store(step + 1, std::memory_order_relaxed);
+                }
+            }
         }
 
         if (il == first_moe) {
@@ -450,12 +562,17 @@ void llama_moe_predictor::drain_high() {
             std::lock_guard<std::mutex> lock(qmtx);
             trace.push_back(w.il + 1);
         }
-        prefetch_expert(w.il, w.e, false);
+        prefetch_expert(w.il, w.e, false, w.step);
     }
 }
 
 llama_moe_predictor::counters llama_moe_predictor::get_counters() const {
     return { high_n.load(), low_done.load(), low_drops.load(), high_drops.load() };
+}
+
+void llama_moe_predictor::pause() {
+    std::lock_guard<std::mutex> lock(qmtx);
+    paused = true;
 }
 
 void llama_moe_predictor::resume() {
@@ -476,7 +593,11 @@ std::vector<int> llama_moe_predictor::get_trace() {
     return trace;
 }
 
-void llama_moe_predictor::prefetch_expert(int il, int e, bool low) {
+void llama_moe_predictor::prefetch_expert(int il, int e, bool low, uint64_t step) {
+    // the bytes this load reads from disk: the read_bytes delta of this thread, without the HIGH loads drained in between
+    const bool     account = pred_tag != nullptr;
+    const uint64_t io0     = account ? load_bytes(il, e, !low) : 0;
+    const uint64_t nested0 = t_nested_bytes;
 #if defined(LLAMA_MOE_PREDICT_MADVISE)
     for (const ggml_tensor * t : lt[il].exps) {
         if (t == nullptr || e >= t->ne[2]) {
@@ -496,10 +617,165 @@ void llama_moe_predictor::prefetch_expert(int il, int e, bool low) {
             }
         }
     }
+#endif
+    if (!account) {
+        return;
+    }
+    const uint64_t io1    = par.test_load_bytes ? t_sim_bytes : thread_read_bytes();
+    const uint64_t nested = t_nested_bytes - nested0;
+    const uint64_t d      = io1 > io0 ? io1 - io0 : 0;
+    const uint64_t b      = d > nested ? d - nested : 0;
+    if (!low) {
+        t_nested_bytes += b;
+    }
+    account_load(il, e, low, step, b);
+}
+
+// the read_bytes of this thread before a load (tests: the simulated load is done here)
+uint64_t llama_moe_predictor::load_bytes(int il, int e, bool high) {
+    if (par.test_load_bytes) {
+        const uint64_t before = t_sim_bytes;
+        t_sim_bytes += par.test_load_bytes(il, e, high);
+        return before;
+    }
+    return thread_read_bytes();
+}
+
+void llama_moe_predictor::account_load(int il, int e, bool low, uint64_t step, uint64_t b) {
+    const size_t i = (size_t) il*par.n_expert + e;
+    if (!low) {
+        // the current layer needs it: never late nor wasted
+        bytes_actual += b;
+        if (!par.mincore_ok && !par.test_resident && pend_bytes[i].load(std::memory_order_relaxed) > 0) {
+            resolve_pending(i, b == 0);
+        }
+        return;
+    }
+    if (pred_tag[i].load(std::memory_order_relaxed) == step + 1) {
+        pred_bytes[i] += b;
+        // scored in between: the bytes are not in its count, so they are late
+        if (pred_tag[i].load(std::memory_order_relaxed) != step + 1) {
+            bytes_late += pred_bytes[i].exchange(0, std::memory_order_relaxed);
+        }
+    } else {
+        bytes_late += b;
+    }
+    bytes_read_predictor += b;
+    // guessed again while an earlier unused read is pending: nothing read means its pages are still there
+    if (pend_bytes[i].load(std::memory_order_relaxed) > 0) {
+        if (b == 0) {
+            pend_clock [i].store(io_clock .load(std::memory_order_relaxed), std::memory_order_relaxed);
+            pend_cached[i].store(io_cached.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        } else {
+            resolve_pending(i, false);
+        }
+    }
+}
+
+void llama_moe_predictor::resolve_pending(size_t i, bool used) {
+    const uint64_t p = pend_bytes[i].exchange(0, std::memory_order_relaxed);
+    if (p == 0) {
+        return;
+    }
+    if (used) {
+        bytes_hit      += p;
+        bytes_credited += p;
+    } else {
+        bytes_wasted += p;
+    }
+    bytes_pending -= p;
+}
+
+// sampled residency of an expert: the middle MOE_PRED_PROBE bytes of each of its tensors, resident if half the pages are
+bool llama_moe_predictor::resident(int il, int e) {
+    if (par.test_resident) {
+        return par.test_resident(il, e);
+    }
+#if defined(__linux__)
+    thread_local std::vector<unsigned char> vec;
+    size_t n_res = 0;
+    size_t n_all = 0;
+    for (const ggml_tensor * t : lt[il].exps) {
+        if (t == nullptr || e >= t->ne[2]) {
+            continue;
+        }
+        const size_t nb02 = t->nb[2];
+        const size_t len  = std::min(MOE_PRED_PROBE, nb02);
+        const size_t pos  = (nb02 - len)/2;
+        const uintptr_t p   = (uintptr_t) t->data + (uintptr_t) e*nb02 + pos;
+        const uintptr_t beg = p & ~(uintptr_t) (page_size - 1);
+        const uintptr_t end = (p + len + page_size - 1) & ~(uintptr_t) (page_size - 1);
+        vec.resize((end - beg)/page_size);
+        if (mincore((void *) beg, end - beg, vec.data()) != 0) {
+            continue;
+        }
+        for (unsigned char v : vec) {
+            n_res += v & 1;
+        }
+        n_all += vec.size();
+    }
+    return n_all > 0 && 2*n_res >= n_all;
 #else
     GGML_UNUSED(il);
     GGML_UNUSED(e);
-    GGML_UNUSED(low);
+    return false;
+#endif
+}
+
+llama_moe_predictor::stats llama_moe_predictor::get_stats() const {
+    const auto ld = [](const std::atomic<uint64_t> & a) { return a.load(std::memory_order_relaxed); };
+    return {
+        par.mode, layer_seen.load(std::memory_order_relaxed), ld(step_seen),
+        ld(n_hits), ld(n_actual), ld(n_guesses),
+        ld(bytes_hit), ld(bytes_wasted), ld(bytes_late), ld(bytes_actual), ld(bytes_read_predictor),
+        ld(bytes_pending), ld(bytes_credited), ld(n_probes),
+    };
+}
+
+void llama_moe_predictor::set_io_clock(uint64_t read_bytes, uint64_t cached_bytes) {
+    // pending reads stamped while nobody published the clock may be older than they look: count from now
+    const int64_t t = ggml_time_us();
+    if (io_last_us == 0 || t - io_last_us > MOE_PRED_IO_GAP) {
+        io_floor = read_bytes;
+    }
+    io_last_us = t;
+    io_clock .store(read_bytes,   std::memory_order_relaxed);
+    io_cached.store(cached_bytes, std::memory_order_relaxed);
+
+    if (!pred_tag || cached_bytes == 0) {
+        return;
+    }
+    // the whole page cache was read over since the pending read: its pages are gone
+    const size_t n = (size_t) par.n_layer*par.n_expert;
+    for (size_t i = 0; i < n; ++i) {
+        if (pend_bytes[i].load(std::memory_order_relaxed) == 0) {
+            continue;
+        }
+        const uint64_t clk = std::max(pend_clock[i].load(std::memory_order_relaxed), io_floor);
+        const uint64_t pc  = pend_cached[i].load(std::memory_order_relaxed);
+        const uint64_t lim = pc > 0 ? std::min(pc, cached_bytes) : cached_bytes;
+        if (read_bytes > clk && read_bytes - clk > lim) {
+            resolve_pending(i, false);
+        }
+    }
+}
+
+bool llama_moe_predictor::mincore_trusted(const std::vector<std::string> & paths) {
+#if defined(__linux__)
+    // mincore reports every page as resident for a file the caller neither owns nor may write
+    if (paths.empty()) {
+        return false;
+    }
+    for (const auto & path : paths) {
+        struct stat st{};
+        if (stat(path.c_str(), &st) != 0 || (st.st_uid != geteuid() && access(path.c_str(), W_OK) != 0)) {
+            return false;
+        }
+    }
+    return true;
+#else
+    GGML_UNUSED(paths);
+    return false;
 #endif
 }
 
@@ -541,7 +817,7 @@ void llama_moe_predictor::worker_loop() {
                     std::lock_guard<std::mutex> lock(qmtx);
                     trace.push_back(-(w.il + 1));
                 }
-                prefetch_expert(w.il, w.e, true);
+                prefetch_expert(w.il, w.e, true, w.step);
                 low_done++;
             }
         } else {

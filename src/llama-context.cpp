@@ -178,6 +178,11 @@ llama_context::llama_context(
     //     may need to be backend-dependent
     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
 
+    progress_ud.resize(model.hparams.n_layer());
+    for (size_t il = 0; il < progress_ud.size(); ++il) {
+        progress_ud[il] = { &progress_il, (int32_t) il };
+    }
+
     {
         // the same switch as the CPU backend's expert prefetch: both hint experts that are read from disk
         const char * env = getenv("GGML_CPU_MOE_PREFETCH");
@@ -1865,6 +1870,13 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         ~copy_stats_guard() { ctx.copy_stats_log(); }
     } copy_stats_guard{ *this };
 
+    // no decode runs once this returns, on any path
+    struct progress_guard {
+        llama_context & ctx;
+        ~progress_guard() { ctx.progress_n_tokens.store(0, std::memory_order_relaxed); }
+    } progress_guard{ *this };
+    progress_t_start_us.store(ggml_time_us(), std::memory_order_relaxed);
+
     if (batch_inp.tokens.empty()) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
@@ -2039,6 +2051,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
 
         ggml_status status;
+
+        progress_il      .store(-1,                       std::memory_order_relaxed);
+        progress_n_done  .store((int32_t) n_tokens_prev,  std::memory_order_relaxed);
+        progress_n_tokens.store((int32_t) ubatch.n_tokens, std::memory_order_relaxed);
 
         const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
 
@@ -2743,6 +2759,7 @@ llm_graph_params llama_context::graph_params(
         /*.moe_cache   =*/ moe_cache.get(),
         /*.prec_policy =*/ &model.prec_policy,
         /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
+        /*.progress    =*/ progress_ud.empty() ? nullptr : progress_ud.data(),
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3036,6 +3053,11 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
     const ggml_tensor * ids = node->src[2];
     if (ggml_nelements(ids) == 0) {
         return true;
+    }
+
+    // the experts of layer il are uploaded: the decode has reached it
+    if (int il = -1; sscanf(ggml_get_name(src), "blk.%d.", &il) == 1) {
+        llama_decode_progress_set(lctx->progress_il, il);
     }
 
     // the runs of used experts of this tensor, uploaded in order with the reads from disk running ahead
@@ -3930,6 +3952,16 @@ size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq
 //
 // perf
 //
+
+llama_decode_progress_data llama_context::decode_progress() const {
+    llama_decode_progress_data data = {};
+    data.n_tokens      = progress_n_tokens  .load(std::memory_order_relaxed);
+    data.n_tokens_done = progress_n_done    .load(std::memory_order_relaxed);
+    data.il            = progress_il        .load(std::memory_order_relaxed);
+    data.t_start_us    = progress_t_start_us.load(std::memory_order_relaxed);
+    data.n_layer       = (int32_t) progress_ud.size();
+    return data;
+}
 
 llama_perf_context_data llama_context::perf_get_data() const {
     llama_perf_context_data data = {};
@@ -4895,6 +4927,10 @@ int32_t llama_decode(
 //
 // perf
 //
+
+void llama_decode_progress(const llama_context * ctx, llama_decode_progress_data * out) {
+    *out = ctx->decode_progress();
+}
 
 llama_perf_context_data llama_perf_context(const llama_context * ctx) {
     llama_perf_context_data data = {};

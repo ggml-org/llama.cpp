@@ -131,6 +131,7 @@ struct server_routes {
     // they won't be called until ctx_http.is_ready is set to true
     server_http_context::handler_t get_health;
     server_http_context::handler_t get_metrics;
+    server_http_context::handler_t get_perf;
     server_http_context::handler_t get_slots;
     server_http_context::handler_t post_slots;
     server_http_context::handler_t get_props;

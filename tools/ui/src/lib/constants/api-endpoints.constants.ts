@@ -14,6 +14,11 @@ export const API_CHAT = {
 	CONTROL: './v1/chat/completions/control'
 };
 
+// live server performance figures, polled by the performance panel
+export const API_PERF = {
+	GET: './perf'
+};
+
 // slot introspection, requires the --slots flag on the server
 export const API_SLOTS = {
 	LIST: './slots'

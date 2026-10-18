@@ -24,6 +24,10 @@
 #               (~1.6k-token prompt: 108 s with, 76 s without). 0 is right for single-turn requests; keep the
 #               default when conversations continue across requests (the checkpoint is what lets the next turn
 #               reuse the processed prefix)
+#   UI_CONFIG   web UI defaults for a browser's first visit (--ui-config; default: '{"displayPerformance":true}',
+#               the live performance panel; browsers that already saved settings tick Display > Display performance once)
+#   UI_PATH     serve the web UI from this directory (--path) instead of the one built into the binary, e.g. after
+#               `cd tools/ui && LLAMA_UI_OUT_DIR=/some/dir npm run build` (no relink); skips the UI build checks below
 #
 # THREADS should stay at the physical core count: the prediction worker runs on a spare hyperthread
 #
@@ -59,6 +63,9 @@ UBATCH="${UBATCH:-2048}"
 PREDICT="${PREDICT:-2}"
 PREDICT_STATS="${PREDICT_STATS:-${XDG_STATE_HOME:-$HOME/.local/state}/llama.cpp/$(basename "$MODEL" .gguf).predict.bin}"
 CHECKPOINTS="${CHECKPOINTS:-}"
+UI_CONFIG_DEFAULT='{"displayPerformance":true}'
+UI_CONFIG="${UI_CONFIG:-$UI_CONFIG_DEFAULT}"
+UI_PATH="${UI_PATH:-}"
 N_LAYER=93
 
 die() { echo "run-server.sh: $*" >&2; exit 1; }
@@ -84,6 +91,8 @@ for a in "$@"; do
             die "refusing '$a': fixed by this script" ;;
         -ctxcp|--ctx-checkpoints|--swa-checkpoints)
             die "refusing '$a': set it with the CHECKPOINTS environment variable" ;;
+        --ui-config|--webui-config|--ui-config-file|--webui-config-file|--path)
+            die "refusing '$a': set it with the UI_CONFIG / UI_PATH environment variables" ;;
     esac
 done
 
@@ -106,6 +115,27 @@ done
 [[ "$PREDICT" =~ ^[012]$ ]] || die "PREDICT must be 0, 1 or 2"
 [[ "$OFFLOAD" =~ ^[01]$ ]] || die "OFFLOAD must be 0 or 1"
 [[ -z "$CHECKPOINTS" || "$CHECKPOINTS" =~ ^(0|[1-9][0-9]*)$ ]] || die "CHECKPOINTS must be a non-negative integer"
+
+# the web UI: the embedded one must be built from tools/ui (-DLLAMA_BUILD_UI=ON), not the downloaded release bundle
+BUILD_DIR="$(cd "$(dirname "$BIN")/.." && pwd)"
+UI_FLAG=()
+if [[ -n "$UI_PATH" ]]; then
+    [[ -f "$UI_PATH/index.html" ]] || die "UI_PATH=$UI_PATH has no index.html"
+    UI_FLAG=(--path "$UI_PATH")
+else
+    # the UI is linked into the server library when it is shared, else into the binary
+    UI_LIB="$(dirname "$BIN")/libllama-server-impl.so"
+    [[ -f "$UI_LIB" ]] || UI_LIB="$BIN"
+    if [[ -e "$BUILD_DIR/tools/ui/.ui-stamp" ]]; then
+        die "the embedded web UI is the downloaded release bundle (no performance panel): reconfigure with -DLLAMA_BUILD_UI=ON and rebuild, or set UI_PATH"
+    fi
+    if [[ "$BUILD_DIR/tools/ui/ui.cpp" -nt "$UI_LIB" ]]; then
+        die "the web UI was regenerated after $(basename "$UI_LIB") was linked: rebuild llama-server first"
+    fi
+    if [[ -f "$HERE/../tools/ui/dist/index.html" ]]; then
+        echo "run-server.sh: warning: tools/ui/dist exists and is embedded instead of the UI built from source" >&2
+    fi
+fi
 
 # another llama process competes for the same 160 GB of RAM and page cache
 if others="$(pgrep -a -x 'llama-[a-z0-9-]+' || true)"; [[ -n "$others" ]]; then
@@ -148,4 +178,5 @@ exec "$BIN" "$@" \
     -lm none --lazy-mode on $OFFLOAD_FLAG -fit off --no-warmup "${CHECKPOINTS_FLAG[@]}" \
     -ngl 999 -ot "$OT" \
     -t "$THREADS" -fa on -c "$CTX" -b "$UBATCH" -ub "$UBATCH" -np 1 \
+    --ui-config "$UI_CONFIG" "${UI_FLAG[@]}" \
     --host 127.0.0.1 --port "$PORT"

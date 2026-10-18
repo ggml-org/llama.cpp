@@ -1559,6 +1559,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     moe_cache        (params.moe_cache),
     prec_policy      (params.prec_policy),
     hdmd             (params.hdmd),
+    progress         (params.progress),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1566,6 +1567,22 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     gf               (res->get_gf()) {
         res->set_params(params);
     }
+
+void llama_decode_progress_set(std::atomic<int32_t> & il_out, int32_t il) {
+    int32_t cur = il_out.load(std::memory_order_relaxed);
+    while (cur < il && !il_out.compare_exchange_weak(cur, il, std::memory_order_relaxed)) {
+    }
+}
+
+void llama_decode_progress_op(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
+    GGML_UNUSED(dst);
+    GGML_UNUSED(nth);
+    if (ith != 0) {
+        return;
+    }
+    const auto * ud = (const llama_decode_progress_ud *) userdata;
+    llama_decode_progress_set(*ud->il_out, ud->il);
+}
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
