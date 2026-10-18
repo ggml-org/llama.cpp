@@ -9,7 +9,9 @@
 
 #include "json.h"
 
+#include <algorithm>
 #include <cassert>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -1689,6 +1691,111 @@ static void test_json_schema_unordered_properties() {
         });
 }
 
+static void test_unordered_accepts_ordered(const std::string & test_desc, const std::string & schema_str, size_t max_len) {
+    fprintf(stderr, "⚫ Testing unordered accepts everything ordered accepts: %s\n", test_desc.c_str());
+    auto schema = json::parse(schema_str);
+    std::vector<std::string> keys;
+    for (const auto & [key, _] : schema.at("properties").items()) {
+        keys.push_back(key);
+    }
+    if (schema.at("additionalProperties").get<bool>()) {
+        keys.push_back("extra");
+    }
+    std::vector<std::string> required_first;
+    if (schema.contains("required")) {
+        const auto & required = schema.at("required");
+        for (size_t i = 0; i < required.size(); i++) {
+            required_first.push_back(required[i].get<std::string>());
+        }
+    }
+    for (const auto & key : keys) {
+        if (std::find(required_first.begin(), required_first.end(), key) == required_first.end()) {
+            required_first.push_back(key);
+        }
+    }
+
+    std::vector<std::vector<std::string>> sequences;
+    std::function<void(std::vector<std::string> &)> extend = [&](std::vector<std::string> & seq) {
+        sequences.push_back(seq);
+        if (seq.size() == max_len) {
+            return;
+        }
+        for (const auto & key : keys) {
+            if (std::find(seq.begin(), seq.end(), key) == seq.end()) {
+                seq.push_back(key);
+                extend(seq);
+                seq.pop_back();
+            }
+        }
+    };
+    std::vector<std::string> seq;
+    extend(seq);
+    for (const auto & order : {keys, required_first}) {
+        for (size_t mask = 0; mask < (size_t(1) << order.size()); mask++) {
+            std::vector<std::string> subset;
+            for (size_t i = 0; i < order.size(); i++) {
+                if (mask & (size_t(1) << i)) {
+                    subset.push_back(order[i]);
+                }
+            }
+            sequences.push_back(subset);
+        }
+    }
+
+    auto * ordered = build_grammar(json_schema_to_grammar(schema, true));
+    auto doc = common_chat_schema_from_json(schema);
+    auto * unordered = build_grammar(build_grammar([&](const common_grammar_builder & builder) { builder.add_schema_unordered("root", *doc.root); }));
+    const auto ordered_org = llama_grammar_get_stacks(ordered);
+    const auto unordered_org = llama_grammar_get_stacks(unordered);
+
+    size_t n_accepted = 0;
+    for (const auto & s : sequences) {
+        std::string input = "{";
+        for (size_t i = 0; i < s.size(); i++) {
+            input += (i > 0 ? ", \"" : "\"") + s[i] + "\": 1";
+        }
+        input += "}";
+        if (match_string(input, ordered)) {
+            n_accepted++;
+            bool matched = match_string(input, unordered);
+            if (!matched) {
+                fprintf(stderr, "  ❌ ordered accepts but unordered rejects: %s\n", input.c_str());
+            }
+            assert(matched);
+            llama_grammar_get_stacks(unordered) = unordered_org;
+        }
+        llama_grammar_get_stacks(ordered) = ordered_org;
+    }
+    fprintf(stderr, "  ✅︎ %zu of %zu inputs accepted by ordered, all accepted by unordered\n", n_accepted, sequences.size());
+    assert(n_accepted > 0);
+
+    llama_grammar_free_impl(ordered);
+    llama_grammar_free_impl(unordered);
+}
+
+static void test_json_schema_unordered_superset() {
+    test_unordered_accepts_ordered(
+        "optional declared before required",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}}, "required": ["b"], "additionalProperties": false})""",
+        3);
+    test_unordered_accepts_ordered(
+        "all optional, additional allowed",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}}, "additionalProperties": true})""",
+        5);
+    test_unordered_accepts_ordered(
+        "2 required, 3 optional, additional allowed",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}}, "required": ["c", "a"], "additionalProperties": true})""",
+        6);
+    test_unordered_accepts_ordered(
+        "2 required, 6 optional: more keys than are tracked",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}}, "required": ["b", "g"], "additionalProperties": false})""",
+        4);
+    test_unordered_accepts_ordered(
+        "7 required, 2 optional: required keep the declared order",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}}, "required": ["a", "b", "c", "d", "e", "f", "g"], "additionalProperties": false})""",
+        2);
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1702,6 +1809,7 @@ int main() {
     test_custom_root_symbol_check();
     test_json_schema();
     test_json_schema_unordered_properties();
+    test_json_schema_unordered_superset();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
