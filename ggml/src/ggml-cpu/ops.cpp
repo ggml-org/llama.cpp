@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 
 // ggml_compute_forward_dup
@@ -2332,6 +2333,18 @@ void ggml_compute_forward_fill(const ggml_compute_params * params, ggml_tensor *
                 GGML_ABORT("unsupported type for ggml_compute_forward_fill: %s", ggml_type_name(src0->type));
             }
     }
+}
+
+// ggml_compute_forward_sleep
+
+void ggml_compute_forward_sleep(const ggml_compute_params * params, ggml_tensor * dst) {
+    if (params->ith != 0) {
+        return;
+    }
+
+    const auto t_end = std::chrono::steady_clock::now() + std::chrono::microseconds(ggml_get_op_params_i32(dst, 0));
+
+    while (std::chrono::steady_clock::now() < t_end) {}
 }
 
 // ggml_compute_tri

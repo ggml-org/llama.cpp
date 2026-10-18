@@ -151,6 +151,10 @@ struct vk_op_push_constants {
     float param4;
 };
 
+struct vk_op_sleep_push_constants {
+    uint32_t ticks;
+};
+
 struct vk_op_fwht_push_constants {
     uint32_t n_rows;
     uint32_t src_offset;
