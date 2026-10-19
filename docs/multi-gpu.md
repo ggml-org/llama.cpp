@@ -102,13 +102,13 @@ This repository holds:
 
 | Path | What |
 |---|---|
-| `patches/` | 11 patches for llama.cpp's `dist-tp` branch: a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a 3-rank full-mesh all-reduce, profiling, removal of the GitHub Actions workflows inherited from llama.cpp, and a fix for gpt-oss |
+| `patches/` | 21 patches for llama.cpp's `dist-tp` branch: a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a 3-rank full-mesh all-reduce, multi-chunk RDMA messages, profiling, removal of the GitHub Actions workflows inherited from llama.cpp, fixes for gpt-oss, Qwen3-Next and Qwen3.5, and Vulkan decode kernels and GPU submission changes for Intel Xe2/Xe3 integrated GPUs |
 | `build.cmd` | builds `llama-cli.exe` and its DLLs from scratch with the patches applied |
 | `scripts/` | PowerShell scripts, run from a controller machine, that prepare the USB4 links, check the nodes, launch every rank and verify what transport each one actually used |
 | `prompts/` | a sample prompt |
 
 The patches apply to `https://github.com/hli25/llama.cpp`, branch `dist-tp`, commit
-(`1d8081c894ce51e7d137ca388289e6351209fe23`),
+  (`ea753a291370cf0f4aead6cdf0c52ac5b5515495`),
 
 #### 1. Requirements
 
@@ -187,18 +187,22 @@ connection.
 
 ##### 3.2 Firewall
 
-On every node, allow inbound for `llama-cli.exe` (the rendezvous on rank 0 at `MasterPort`, and each
-rank's listener at `MasterPort + rank`) and TCP 23517 (the NetworkDirect connection manager, used
-when a rank accepts an RDMA connection):
+On every node, allow inbound TCP 29500-29502 (the rendezvous on rank 0 at `MasterPort`, 29500 by
+default, and each rank's listener at `MasterPort + rank`) and TCP 23517-23518 (the NetworkDirect
+connection manager, used when a rank accepts an RDMA connection; some providers accept on 23518, the
+port after it):
 
 ```powershell
-New-NetFirewallRule -DisplayName 'dist-tp llama-cli' -Direction Inbound -Action Allow -Program 'C:\disttp\llama-cli.exe' -Profile Private,Domain
-New-NetFirewallRule -DisplayName 'dist-tp ND connect' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 23517 -Profile Private
+New-NetFirewallRule -DisplayName 'dist-tp rendezvous' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 29500-29502 -Profile Private,Domain
+New-NetFirewallRule -DisplayName 'dist-tp ND connect' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 23517-23518 -Profile Private
 ```
 
-A program rule is bound to that exact path: a binary run from any other folder is not admitted, and
-the run waits at the rendezvous with no error. `link_throughput.ps1` additionally needs its port
-(8902 by default) open on the server's USB4 leg.
+With another `MasterPort`, open `MasterPort` to `MasterPort + N - 1` for N ranks. A program rule for
+`llama-cli.exe` can replace the first rule, but it is bound to that exact path: a binary run from
+any other folder is not admitted, and the run waits at the rendezvous with no error. A blocked
+NetworkDirect port only moves the edges it serves to TCP, so check every edge in the transport line
+(section 5). `link_throughput.ps1` additionally needs its port (8902 by default) open on the
+server's USB4 leg.
 
 ##### 3.3 SSH from the controller
 
@@ -286,20 +290,76 @@ still goes over RDMA, but each relayed message takes two hops. The run must repo
 `-Transport tcp` runs the same thing over TCP on the same cables, and `-Transport none -RankNodes A`
 runs a single node.
 
-**Keep the prompt on RDMA with `-ub`.** NetworkDirect carries payloads up to 262144 bytes; larger
-ones go over TCP. One all-reduce carries `ubatch x n_embd x 4` bytes, so with the default ubatch the
-prompt goes over TCP and only decode uses RDMA. Use
+**Keep the prompt on RDMA.** One all-reduce carries `ubatch x n_embd x 4` bytes. By default
+NetworkDirect carries payloads up to 262144 bytes (one ND chunk) and larger ones go over TCP, so
+with the default ubatch the prompt goes over TCP and only decode uses RDMA. Either:
 
-    -ub N    with    N = floor(262144 / (4 x n_embd))
+- add `-RdmaMultiChunk` (sets `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` and `LLAMA_DIST_TP_RDMA_MAX_BYTES=0`):
+  a message may then span any number of ND chunks, so every payload goes over RDMA at the default
+  ubatch, or
+- keep every prompt all-reduce within one chunk with
 
-`n_embd` is printed in the model load log (`print_info: n_embd = ...`): 2880 gives 22, 4096 gives
-16, 5120 gives 12, 8192 gives 8. A smaller ubatch processes the prompt in more, smaller GPU
-batches. The run prints the largest payload it saw against the ND limit.
+      -ub N    with    N = floor(262144 / (4 x n_embd))
+
+  `n_embd` is printed in the model load log (`print_info: n_embd = ...`): 2880 gives 22, 4096
+  gives 16, 5120 gives 12, 8192 gives 8. A smaller ubatch processes the prompt in more, smaller GPU
+  batches.
+
+The run prints the largest payload it saw against the ND limit (`none` with `-RdmaMultiChunk`).
+
+Three nodes, full mesh, every payload on RDMA, with the Vulkan settings for Intel integrated GPUs
+from section 6 passed through `-ExtraEnv`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0' -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1;GGML_VK_FENCE_POLL_PAUSES=20;GGML_VK_DEFER_GATE=1;GGML_VK_FWHT=1;GGML_VK_ADD_RMS_FUSION=1'
+```
 
 Each run writes every rank's log to `scripts\logs\` and appends a JSON line to
 `scripts\logs\results.jsonl`. Add `-Rank0Manual` to start ranks 1..N-1 and print the command for
 rank 0, to paste into `cmd.exe` on that node (not PowerShell: there `set X=1` sets no environment
 variable). That is how to watch tokens stream; detached ranks buffer their output.
+
+##### Three nodes by hand: direct mesh, all on RDMA
+
+The same run as the `-Mesh -RdmaMultiChunk` example above, without the scripts. "Direct" means no
+relay: every rank sends straight to both peers over the two cables it has. Example cabling, one /24
+per cable:
+
+| Cable | Addresses |
+|---|---|
+| rank 0 - rank 1 | rank 0 `192.168.77.1`, rank 1 `192.168.77.2` |
+| rank 1 - rank 2 | rank 1 `192.168.78.1`, rank 2 `192.168.78.2` |
+| rank 2 - rank 0 | rank 0 `192.168.79.1`, rank 2 `192.168.79.2` |
+
+Rank r dials rank r+1 (mod 3) over the USB4 cable between them, so `LLAMA_DIST_TP_RING_NEXT_HOST`
+is rank r+1's address on that cable: `192.168.77.2` on rank 0, `192.168.78.2` on rank 1 and
+`192.168.79.1` on rank 2. `--dist-master` is rank 0's own address on a network every rank reaches,
+e.g. its normal network address `192.168.1.10`, and the rendezvous port.
+
+On each node, in `cmd.exe` (not PowerShell) in the binary folder:
+
+```bat
+set LLAMA_DIST_TP_RDMA=1
+set LLAMA_DIST_TP_FULL_DUPLEX=1
+set LLAMA_DIST_TP_MESH=1
+set LLAMA_DIST_TP_RDMA_MULTICHUNK=1
+set LLAMA_DIST_TP_RDMA_MAX_BYTES=0
+set LLAMA_DIST_TP_RING_NEXT_HOST=<rank r+1's address on the cable to it>
+set LLAMA_DIST_TP_RECORD_AHEAD=1
+set GGML_VK_FENCE_POLL_PAUSES=20
+set GGML_VK_DEFER_GATE=1
+set GGML_VK_FWHT=1
+set GGML_VK_ADD_RMS_FUSION=1
+llama-cli -m <model> -f <prompt> -n 64 -c 2048 -ngl 99 -t 8 --temp 0 --seed 1234 ^
+  --device Vulkan0 -fa on -ctk q8_0 -ctv q8_0 ^
+  --split-mode tensor --world-size 3 --world-rank <r> --dist-master 192.168.1.10:29500
+```
+
+Add `--no-jinja` for gpt-oss (section 8). Start rank 2, then rank 1, then rank 0: rank 0 must not
+wait on peers that have not started. Every variable must be the same on every rank except
+`LLAMA_DIST_TP_RING_NEXT_HOST`, and the model, prompt and binaries must be identical. Then check
+every rank's log as in section 5: the transport line lists `ND` for both edges and says
+`(all payloads over ND)`, and `dist-tp all-reduce: full mesh` is printed.
 
 #### 5. Is it really RDMA, and is it correct?
 
@@ -311,7 +371,7 @@ checks every rank's log, but know what it checks:
 2. No rank logs `NetworkDirect not established on ring edge`, `falling back to TCP`,
    `no usable NetworkDirect` or `staying on TCP`. `nd_edges_up` equals `nd_edges_expected`.
 3. Every `ring edge i->j dials <ip>` is a USB4 address.
-4. No payload exceeded the ND limit (see `-ub` above).
+4. No payload exceeded the ND limit (see `-RdmaMultiChunk` and `-ub` above).
 5. No rank logs `WARN skipping required allreduce`.
 6. The generated text is the same as a single-node run of the same model, prompt and seed (the
    `out_sha256` field). Not every model architecture splits correctly in tensor-parallel mode, so
@@ -319,13 +379,15 @@ checks every rank's log, but know what it checks:
 
 #### 6. Environment variables
 
-`run_disttp.ps1` sets or clears all of these on every rank. For a manual run:
+`run_disttp.ps1` sets or clears the `LLAMA_DIST_TP_*` switches below on every rank; pass the others,
+and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual run:
 
 | Variable | Effect |
 |---|---|
 | `LLAMA_DIST_TP_RDMA=1` | use NetworkDirect for the ring edges; TCP remains for the rendezvous |
 | `LLAMA_DIST_TP_RING_NEXT_HOST=<ip>` | the address this rank dials for its ring-next peer: the far end of the USB4 cable to rank+1 |
-| `LLAMA_DIST_TP_RDMA_MAX_BYTES` | largest payload sent over ND, default 262144; larger ones go over TCP. Do not raise it: multi-chunk ND transfers can deadlock |
+| `LLAMA_DIST_TP_RDMA_MAX_BYTES` | largest payload sent over ND, default 262144 (one ND chunk); larger ones go over TCP. 0 = no ceiling. Above 262144, or 0, only with `LLAMA_DIST_TP_RDMA_MULTICHUNK=1`: without it multi-chunk ND transfers can deadlock |
+| `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` | a message may span any number of ND chunks: a sender blocked at its ND window keeps receiving, so two ranks sending to each other cannot deadlock. With `LLAMA_DIST_TP_RDMA_MAX_BYTES=0` every payload, the prompt included, goes over ND. The first time a sender waits at its window it prints `[dist-tp][nd] multi-chunk messages: a blocked sender keeps receiving` (`-RdmaMultiChunk`) |
 | `LLAMA_DIST_TP_RDMA_ADDR=<ip>` | the local ND address, when it must differ from the ring socket's |
 | `LLAMA_DIST_TP_RDMA_DEBUG=1` | log each ND listener, connection request, connect and teardown |
 | `LLAMA_DIST_TP_FULL_DUPLEX=1` | post each step's send before waiting on its receive |
@@ -333,11 +395,30 @@ checks every rank's log, but know what it checks:
 | `LLAMA_DIST_TP_MESH_RELAY=u` | with the mesh: relay the reverse direction of ring edge u through the third rank |
 | `LLAMA_DIST_TP_MESH_REVERSE_TCP=r,...` | with the mesh: send the reverse direction of the listed ranks' edges over TCP |
 | `LLAMA_DIST_TP_MESH_LARGE=1` | with the mesh: also mesh payloads above the ND limit, over TCP |
+| `LLAMA_DIST_TP_MESH_ND_LARGE=1` | **experimental, not yet benchmarked.** With the mesh: payloads above `LLAMA_DIST_TP_MESH_MAX_BYTES` (the prompt) also go through the mesh, on ND over both links at once, instead of the ring. Needs `LLAMA_DIST_TP_RDMA=1`, `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` and `LLAMA_DIST_TP_RDMA_MAX_BYTES=0`, and no relay, reverse-TCP or `MESH_LARGE`; otherwise it prints why and the ring is kept. When on, the all-reduce line says `mesh above too (ND, both links at once)`. These payloads have no TCP fallback: a rank whose ND connection is down fails the collective. Same sum order as the ring |
+| `LLAMA_DIST_TP_SPLIT_RECURRENT=1` | Qwen3.5 and Qwen3.5-MoE: split the gated DeltaNet (recurrent) layers across the ranks. Unset, they run whole on every rank, which is always the case for Qwen3-Next. Use the same value on every rank |
+| `LLAMA_DIST_TP_RECORD_AHEAD=1` | with one GPU per rank (`--device Vulkan0`): a helper thread records the next piece of the graph while the all-reduce runs, and prints `dist-tp record-ahead on`. Needs the Vulkan backend's deferred submit; any other backend prints that the switch is ignored. `LLAMA_DIST_TP_RECORD_AHEAD_SPIN_US` (default 2000) sets how long the helper polls for work before it sleeps |
 | `LLAMA_DISTPROF=1` | print one `[distprof]` cost line per graph (GPU wait, time in the collective, bytes) |
 | `GGML_TRACE=1` | write an HTML trace of the graph steps to `GGML_TRACE_HTML` (default `llama-trace.html`), bounded by `GGML_TRACE_MAX_STEPS` and `GGML_TRACE_MAX_EVENTS` |
 
 The command line takes `--split-mode tensor --world-size N --world-rank r --dist-master <rank 0
 address>:<port>` on every rank.
+
+**Vulkan, Intel Xe2/Xe3 integrated GPUs.** The patches add two decode kernels that are on by default
+on the Intel devices the Vulkan backend classifies as Xe2 that have integer dot products and 16-lane
+subgroups, and switches that are off unless set. The settings used with the 3-node mesh above are
+`GGML_VK_FENCE_POLL_PAUSES=20 GGML_VK_DEFER_GATE=1 GGML_VK_FWHT=1 GGML_VK_ADD_RMS_FUSION=1`, with
+`LLAMA_DIST_TP_RECORD_AHEAD=1`.
+
+| Variable | Effect |
+|---|---|
+| `GGML_VK_XE_MMVQ=0` | turn off the Q2_K/Q3_K decode matrix-vector kernel for Xe2/Xe3 (`GGML_VK_XE_MMVQ_ROWS`, default 8, sets its rows per workgroup) |
+| `GGML_VK_FA_DEC_XE=0` | turn off the single-token Q8_0 flash-attention kernel for Xe2/Xe3, used for head size 128, Q8_0 K and V and 16 query heads per KV head (`-fa on -ctk q8_0 -ctv q8_0`). `GGML_VK_FA_DEC_XE_CHUNK=32/64` changes its KV chunk from 128 |
+| `GGML_VK_DEFER_GATE=1` | with `LLAMA_DIST_TP_RECORD_AHEAD=1`: the piece recorded ahead goes to the GPU as soon as it is recorded and waits there on an event the CPU sets once the all-reduced data is written back, instead of being submitted only at that point |
+| `GGML_VK_FENCE_POLL_PAUSES=N` | check the GPU fence every N CPU pause instructions while waiting (default 1000) |
+| `GGML_VK_FWHT=1` | run the Hadamard transform (`MUL_MAT_HADAMARD`) as the subgroup kernel on Intel too; `2` the shared-memory kernel, `0` neither; unset keeps llama.cpp's choice, which leaves Intel out. Compare the output against a run without it on a new GPU or driver |
+| `GGML_VK_ADD_RMS_FUSION=1` | fuse the residual add and the RMS norm that follows it on Intel too (llama.cpp leaves it off there); `0` turns it off everywhere |
+| `GGML_VK_GRAPH_PROF=N` | diagnostic: every N synchronizes, print a `[vkgprof]` line with where the time from the first graph computed after a synchronize to the end of the next synchronize went (CPU recording before the GPU had work, GPU busy, GPU idle) |
 
 #### 7. Scripts
 
@@ -346,7 +427,7 @@ address>:<port>` on every rank.
 | `nodes.ps1.template` | the site configuration; copy to `nodes.ps1` |
 | `prep_fabric.ps1` | reboot each node and prove it rebooted, MTU 1500 and Private profile on the USB4 legs, re-address `Readdress` nodes, prove every edge connects and carries full-size frames |
 | `verify_binaries.ps1` | same `llama-cli`, DLLs, model and prompt on every node; reports or checks the loaded USB4/RDMA driver images |
-| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP; analyses every rank's log |
+| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP (`-Mesh`, `-RdmaMultiChunk`, `-ExtraEnv` for further switches); analyses every rank's log |
 | `distprof.ps1` | log analysis, dot-sourced by `run_disttp.ps1` |
 | `nd_pair.ps1` | NetworkDirect test between two nodes in one direction |
 | `nd_all_directions.ps1` | `nd_pair.ps1` for both directions of every cable |
