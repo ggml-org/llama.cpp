@@ -59,6 +59,10 @@ class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
     def set_vocab(self):
+        # HuggingFaceBio/Carbon-14B: Qwen3 with the HybridDNATokenizer (Qwen3 BPE plus DNA 6-mers)
+        if self._is_hybriddna():
+            self._set_vocab_hybriddna()
+            return
         try:
             self._set_vocab_sentencepiece()
         except FileNotFoundError:

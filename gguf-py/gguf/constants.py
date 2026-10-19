@@ -366,6 +366,7 @@ class Keys:
         ADD_BOS              = "tokenizer.ggml.add_bos_token"
         ADD_EOS              = "tokenizer.ggml.add_eos_token"
         ADD_SEP              = "tokenizer.ggml.add_sep_token"
+        DNA_AUTO_TAGS        = "tokenizer.ggml.dna_auto_tags"
         ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
         REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"

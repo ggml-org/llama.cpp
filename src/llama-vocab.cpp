@@ -1776,16 +1776,15 @@ private:
 // text at load
 static const std::string dna_kmer_marker = "\xee\x80\x80";
 
+// HybridDNATokenizer (HuggingFaceBio/Carbon-*): text inside <dna>...</dna> is cut into fixed 6-mers, everything else goes through the base BPE
+// Mirrors HybridDNATokenizer.encode, with optional tagging of untagged DNA (auto_dna_tags, Carbon-14B) and tail="pad_n" vocab, whose dedicated tokens pad a trailing partial k-mer with N instead of A ("CT" -> "CTNNNN")
 struct llm_tokenizer_hybriddna_session : llm_tokenizer_bpe_session {
     llm_tokenizer_hybriddna_session(const llama_vocab & vocab, const llm_tokenizer_bpe & tokenizer) : llm_tokenizer_bpe_session{vocab, tokenizer}, vocab{vocab} {}
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) override {
-        static const std::string open_tag  = "<dna>";
-        static const std::string close_tag = "</dna>";
-
-        const auto dna_begin_id = vocab.text_to_token(open_tag);
-        const auto dna_end_id   = vocab.text_to_token(close_tag);
-        const auto dna_oov_id   = vocab.text_to_token("<oov>");
+        dna_begin_id = vocab.text_to_token(open_tag);
+        dna_end_id   = vocab.text_to_token(close_tag);
+        dna_oov_id   = vocab.text_to_token("<oov>");
 
         // Fall back to plain BPE if the DNA pieces aren't in the vocab.
         if (dna_begin_id == LLAMA_TOKEN_NULL || dna_end_id == LLAMA_TOKEN_NULL || dna_oov_id == LLAMA_TOKEN_NULL) {
@@ -1793,62 +1792,186 @@ struct llm_tokenizer_hybriddna_session : llm_tokenizer_bpe_session {
             return;
         }
 
-        const size_t k = 6;
-        size_t pos = 0;
+        pad_char = vocab.text_to_token("A" + std::string(k - 1, 'N') + dna_kmer_marker) != LLAMA_TOKEN_NULL ? 'N' : 'A';
 
+        // split on explicit tags as HybridDNATokenizer._split_by_dna_tags does; only the text outside them is auto-tagged
+        size_t pos = 0;
         while (pos < text.size()) {
             const size_t start = text.find(open_tag, pos);
-            if (start == std::string::npos) {
-                if (pos < text.size()) {
-                    llm_tokenizer_bpe_session::tokenize(text.substr(pos), output);
-                }
+            const size_t end   = text.find(close_tag, pos);
+
+            if (start == std::string::npos && end == std::string::npos) {
+                tokenize_text(text.substr(pos), output);
                 break;
             }
-            if (start > pos) {
-                llm_tokenizer_bpe_session::tokenize(text.substr(pos, start - pos), output);
+            if (start == std::string::npos || end < start) {
+                // as in _split_by_dna_tags, text before a </dna> without a matching <dna> is DNA (no begin token)
+                tokenize_dna(text.substr(pos, end - pos), false, true, output);
+                pos = end + close_tag.size();
+                continue;
             }
-            output.push_back(dna_begin_id);
+
+            tokenize_text(text.substr(pos, start - pos), output);
 
             const size_t content_start = start + open_tag.size();
-            const size_t end           = text.find(close_tag, content_start);
-            const size_t content_end   = (end == std::string::npos) ? text.size() : end;
-
-            emit_dna_kmers(text.substr(content_start, content_end - content_start), k, dna_oov_id, output);
-
             if (end == std::string::npos) {
+                // an unterminated <dna> runs to the end of the text (no end token)
+                tokenize_dna(text.substr(content_start), true, false, output);
                 break;
             }
-            output.push_back(dna_end_id);
+            tokenize_dna(text.substr(content_start, end - content_start), true, true, output);
             pos = end + close_tag.size();
         }
     }
 
 private:
-    void emit_dna_kmers(const std::string & raw, size_t k, llama_token oov_id, std::vector<llama_token> & output) {
-        std::string seq = raw;
-        for (char & c : seq) {
-            if (c >= 'a' && c <= 'z') {
-                c = char(c - 32);
+    static bool is_letter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+    static bool is_acgt  (char c) { return c == 'A' || c == 'C' || c == 'G' || c == 'T'; }
+    static char to_upper (char c) { return c >= 'a' && c <= 'z' ? char(c - 32) : c; }
+
+    // IUPAC nucleotide codes, either case (HybridDNATokenizer.IUPAC_RUN_RE)
+    static bool is_iupac(char c) {
+        c = to_upper(c);
+        return std::string("ACGTRYSWKMBDHVN").find(c) != std::string::npos;
+    }
+
+    // HybridDNATokenizer._normalize_spaced_dna: join displays like "ACGTA CGTAC ..." when they hold at least twelve bases
+    // (at least six chunks of 1-5 uppercase ACGT separated by spaces or tabs, not touching a letter)
+    static std::string normalize_spaced_dna(const std::string & text) {
+        const auto is_blank = [](char c) { return c == ' ' || c == '\t'; };
+        std::string out;
+        size_t p = 0;
+        while (p < text.size()) {
+            if (is_acgt(text[p]) && (p == 0 || !is_letter(text[p - 1]))) {
+                size_t match_end = std::string::npos;
+                size_t chunk = p;
+                for (int n_chunks = 1; ; n_chunks++) {
+                    size_t chunk_end = chunk;
+                    while (chunk_end < text.size() && chunk_end - chunk < 5 && is_acgt(text[chunk_end])) {
+                        chunk_end++;
+                    }
+                    if (chunk_end == chunk) {
+                        break;
+                    }
+                    if (n_chunks >= 6 && (chunk_end == text.size() || !is_letter(text[chunk_end]))) {
+                        match_end = chunk_end; // the regex is greedy, so the last valid end wins
+                    }
+                    size_t next = chunk_end;
+                    while (next < text.size() && is_blank(text[next])) {
+                        next++;
+                    }
+                    if (next == chunk_end) {
+                        break;
+                    }
+                    chunk = next;
+                }
+                if (match_end != std::string::npos) {
+                    std::string seq;
+                    for (size_t i = p; i < match_end; i++) {
+                        if (!is_blank(text[i])) {
+                            seq += text[i];
+                        }
+                    }
+                    out += seq.size() >= 12 ? seq : text.substr(p, match_end - p);
+                    p = match_end;
+                    continue;
+                }
             }
+            out += text[p++];
+        }
+        return out;
+    }
+
+    // text outside explicit tags: with auto_dna_tags, tag DNA runs as HybridDNATokenizer._auto_tag_text_segment does
+    // (pure ACGT runs of at least 6 bases, or runs of at least 12 with at most 20% IUPAC ambiguity codes)
+    void tokenize_text(const std::string & raw, std::vector<llama_token> & output) {
+        auto bpe = [&](const std::string & piece) {
+            if (!piece.empty()) {
+                llm_tokenizer_bpe_session::tokenize(piece, output);
+            }
+        };
+        if (!vocab.get_dna_auto_tags()) {
+            bpe(raw);
+            return;
         }
 
-        // k-mers carry the reserved marker suffix; a non-ACGT k-mer simply
-        // isn't in the vocab and falls back to <oov>
-        auto kmer_token = [&](const std::string & kmer) {
+        const std::string text = normalize_spaced_dna(raw);
+        size_t prev = 0;
+        size_t i = 0;
+        while (i < text.size()) {
+            if (!is_iupac(text[i])) {
+                i++;
+                continue;
+            }
+            size_t j = i;
+            size_t n_ambiguous = 0;
+            for (; j < text.size() && is_iupac(text[j]); j++) {
+                n_ambiguous += !is_acgt(to_upper(text[j]));
+            }
+            const size_t len = j - i;
+            if ((n_ambiguous == 0 && len >= 6) || (n_ambiguous > 0 && len >= 12 && 5 * n_ambiguous <= len)) {
+                bpe(text.substr(prev, i - prev));
+                tokenize_dna(text.substr(i, len), true, true, output);
+                prev = j;
+            }
+            i = j;
+        }
+        bpe(text.substr(prev));
+    }
+
+    // HybridDNATokenizer._process_dna_sequence: strip, uppercase, then one token per k bases
+    // a k-mer with anything but ACGT is <oov>, and a trailing partial k-mer is right-padded with pad_char
+    void tokenize_dna(const std::string & content, bool has_start, bool has_end, std::vector<llama_token> & output) {
+        if (has_start) {
+            output.push_back(dna_begin_id);
+        }
+
+        auto cpts = unicode_cpts_from_utf8(content);
+        size_t first = 0;
+        size_t last  = cpts.size();
+        while (first < last && unicode_cpt_flags_from_cpt(cpts[first]).is_whitespace) {
+            first++;
+        }
+        while (last > first && unicode_cpt_flags_from_cpt(cpts[last - 1]).is_whitespace) {
+            last--;
+        }
+
+        // k-mers carry the reserved marker suffix, so they never resolve to a base-vocab token
+        auto kmer_token = [&](size_t from, size_t to) {
+            std::string kmer;
+            for (size_t i = from; i < to; i++) {
+                const uint32_t c = cpts[i] < 128 ? (uint32_t) to_upper((char) cpts[i]) : cpts[i];
+                if (c > 127 || !is_acgt((char) c)) {
+                    return dna_oov_id;
+                }
+                kmer += (char) c;
+            }
+            kmer.append(k - kmer.size(), pad_char);
             const auto tok = vocab.text_to_token(kmer + dna_kmer_marker);
-            return tok != LLAMA_TOKEN_NULL ? tok : oov_id;
+            return tok != LLAMA_TOKEN_NULL ? tok : dna_oov_id;
         };
 
-        size_t i = 0;
-        for (; i + k <= seq.size(); i += k) {
-            output.push_back(kmer_token(seq.substr(i, k)));
+        size_t i = first;
+        for (; i + k <= last; i += k) {
+            output.push_back(kmer_token(i, i + k));
         }
-        if (i < seq.size()) {
-            std::string kmer = seq.substr(i);
-            kmer.append(k - kmer.size(), 'A');
-            output.push_back(kmer_token(kmer));
+        if (i < last) {
+            output.push_back(kmer_token(i, last));
+        }
+
+        if (has_end) {
+            output.push_back(dna_end_id);
         }
     }
+
+    const std::string open_tag  = "<dna>";
+    const std::string close_tag = "</dna>";
+    const size_t k = 6;
+
+    llama_token dna_begin_id = LLAMA_TOKEN_NULL;
+    llama_token dna_end_id   = LLAMA_TOKEN_NULL;
+    llama_token dna_oov_id   = LLAMA_TOKEN_NULL;
+    char pad_char = 'A';
 
     const llama_vocab & vocab;
 };
@@ -1957,6 +2080,7 @@ struct llama_vocab::impl {
     bool add_bos                    = false;
     bool add_eos                    = false;
     bool add_sep                    = false;
+    bool dna_auto_tags              = false; // hybriddna: tag untagged DNA runs before tokenizing
     bool ignore_merges              = false;
     bool clean_spaces               = false;  // clean_up_tokenization_spaces
     bool remove_extra_whitespaces   = false;
@@ -2689,6 +2813,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 if (text.size() > dna_kmer_marker.size()
                         && text.compare(text.size() - dna_kmer_marker.size(), dna_kmer_marker.size(), dna_kmer_marker) == 0) {
                     text.erase(text.size() - dna_kmer_marker.size());
+                    // tail="pad_n": "CTNNNN" detokenizes to its real bases "CT"
+                    // full k-mers are ACGT only, so only N-padded tail tokens end in N
+                    const size_t last_base = text.find_last_not_of('N');
+                    if (last_base != std::string::npos) {
+                        text.erase(last_base + 1);
+                    }
                 }
             }
         }
@@ -2780,6 +2910,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
             if (ml.get_key(LLM_KV_TOKENIZER_ADD_SEP, temp, false)) {
                 add_sep = temp;
+            }
+            if (ml.get_key(LLM_KV_TOKENIZER_DNA_AUTO_TAGS, temp, false)) {
+                dna_auto_tags = temp;
             }
 
             // workaround for Gemma 4
@@ -4310,6 +4443,10 @@ bool llama_vocab::get_add_eos() const {
 
 bool llama_vocab::get_add_sep() const {
     return pimpl->add_sep;
+}
+
+bool llama_vocab::get_dna_auto_tags() const {
+    return pimpl->dna_auto_tags;
 }
 
 bool llama_vocab::get_ignore_merges() const {

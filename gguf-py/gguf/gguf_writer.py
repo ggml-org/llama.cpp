@@ -1314,6 +1314,9 @@ class GGUFWriter:
     def add_add_sep_token(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_SEP, value)
 
+    def add_dna_auto_tags(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.DNA_AUTO_TAGS, value)
+
     def add_add_space_prefix(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_PREFIX, value)
 
