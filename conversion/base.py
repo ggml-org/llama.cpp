@@ -1625,7 +1625,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_head_count_kv(n_head_kv)
             logger.info(f"gguf: key-value head count = {n_head_kv}")
 
-        if self.hparams.get("is_causal") is False:
+        if self.hparams.get("is_causal") is False or self.hparams.get("use_bidirectional_attention") is True:
             self.gguf_writer.add_causal_attention(False)
             logger.info("gguf: causal attention = False")
 
