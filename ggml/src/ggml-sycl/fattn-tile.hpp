@@ -5,7 +5,6 @@
 #include "fattn-common.hpp"
 
 #include <cmath>
-#include <cstdio>
 #include <float.h>
 
 namespace syclex = sycl::ext::oneapi::experimental;
@@ -1179,13 +1178,8 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_sycl_context & ctx, ggm
     // n_kv need not be a multiple of FATTN_KQ_STRIDE: the kernel handles the trailing
     // partial chunk with the out-of-bounds checked iteration.
     const bool use_gqa_opt = mask && max_bias == 0.0f && Q->ne[1] <= gqa_limit;
-    {
-        static int dbg = ggml_sycl_get_env("GGML_SYCL_FA_TILE_DEBUG", 0);
-        if (dbg == 1) {
-            fprintf(stderr, "[FA-TILE] DKQ=%d DV=%d gqa=%d q=%lld n_kv=%lld gqa_opt=%d\n",
-                    DKQ, DV, gqa_ratio, (long long) Q->ne[1], (long long) K->ne[1], (int) use_gqa_opt);
-        }
-    }
+    GGML_SYCL_FA_TILE_DEBUG("[FA-TILE] DKQ=%d DV=%d gqa=%d q=%lld n_kv=%lld gqa_opt=%d\n",
+                            DKQ, DV, gqa_ratio, (long long) Q->ne[1], (long long) K->ne[1], (int) use_gqa_opt);
 
     if constexpr (DV == 512) {
         if (use_gqa_opt && gqa_ratio % 16 == 0) {
