@@ -5,8 +5,8 @@ exclude =
     # Do not traverse examples and tools
     examples,
     tools,
-    # Reference scripts for skills
-    skills,
+    # Do not traverse .venv directories
+    .venv*,
     # Do not include package initializers
     __init__.py,
     # No need to traverse our git directory
