@@ -65,6 +65,7 @@ struct clip_hparams {
     int32_t image_max_pixels = -1;
     resize_algo image_resize_algo = RESIZE_ALGO_BICUBIC;
     pad_style image_resize_pad = PAD_CEIL; // padding style when resizing
+    bool image_round_half_even = false;    // smart_resize rounds .5 to even, like Python round() in the HF processor
     std::array<uint8_t, 3> image_pad_color = {0, 0, 0};
 
     // (preprocessor) for llava-uhd style models

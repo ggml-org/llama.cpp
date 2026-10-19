@@ -1634,6 +1634,8 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_DOTS_OCR:
                     {
                         hparams.rope_theta = 10000.0f;
+                        hparams.image_resize_pad  = PAD_NONE; // the HF processor resizes to the smart_resize size, no padding
+                        hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
@@ -1750,6 +1752,8 @@ struct clip_model_loader {
                     {
                         hparams.n_merge = 2; // default value for Qwen 2 and 2.5
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        hparams.image_resize_pad  = PAD_NONE; // the HF processor resizes to the smart_resize size, no padding
+                        hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
@@ -1825,6 +1829,8 @@ struct clip_model_loader {
                     {
                         hparams.n_merge = 2; // spatial_merge_size
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        hparams.image_resize_pad  = PAD_NONE; // the HF processor resizes to the smart_resize size, no padding
+                        hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
                         // 1D banded sliding-window radius (visual_token_window_size); required
@@ -2092,6 +2098,8 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_EXAONE4_5:
                     {
                         hparams.n_merge = 2;
+                        hparams.image_resize_pad  = PAD_NONE; // the HF processor resizes to the smart_resize size, no padding
+                        hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, false);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
