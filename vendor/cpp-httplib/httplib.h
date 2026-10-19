@@ -8,13 +8,21 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.61.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003d00"
+#define CPPHTTPLIB_VERSION "0.62.0"
+#define CPPHTTPLIB_VERSION_NUM "0x003e00"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
 #error                                                                         \
     "cpp-httplib doesn't support Windows 8 or lower. Please use Windows 10 or later."
+#endif
+#endif
+
+#if defined(__SANITIZE_THREAD__)
+#define CPPHTTPLIB_THREAD_SANITIZER
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define CPPHTTPLIB_THREAD_SANITIZER
 #endif
 #endif
 
@@ -122,12 +130,20 @@
 #define CPPHTTPLIB_REDIRECT_MAX_COUNT 20
 #endif
 
+#ifndef CPPHTTPLIB_INTERIM_RESPONSE_MAX_COUNT
+#define CPPHTTPLIB_INTERIM_RESPONSE_MAX_COUNT 100
+#endif
+
 #ifndef CPPHTTPLIB_MULTIPART_FORM_DATA_FILE_MAX_COUNT
 #define CPPHTTPLIB_MULTIPART_FORM_DATA_FILE_MAX_COUNT 1024
 #endif
 
 #ifndef CPPHTTPLIB_PAYLOAD_MAX_LENGTH
 #define CPPHTTPLIB_PAYLOAD_MAX_LENGTH (100 * 1024 * 1024) // 100MB
+#endif
+
+#ifndef CPPHTTPLIB_SSE_MAX_EVENT_LENGTH
+#define CPPHTTPLIB_SSE_MAX_EVENT_LENGTH (16 * 1024 * 1024) // 16MB
 #endif
 
 #ifndef CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH
@@ -210,6 +226,16 @@
 #ifndef CPPHTTPLIB_MAX_LINE_LENGTH
 #define CPPHTTPLIB_MAX_LINE_LENGTH 32768
 #endif
+
+// These bound the parsing of every request, so 0 cannot lift them.
+static_assert(CPPHTTPLIB_REQUEST_URI_MAX_LENGTH > 0,
+              "CPPHTTPLIB_REQUEST_URI_MAX_LENGTH must be positive");
+static_assert(CPPHTTPLIB_HEADER_MAX_LENGTH > 0,
+              "CPPHTTPLIB_HEADER_MAX_LENGTH must be positive");
+static_assert(CPPHTTPLIB_HEADER_MAX_COUNT > 0,
+              "CPPHTTPLIB_HEADER_MAX_COUNT must be positive");
+static_assert(CPPHTTPLIB_MAX_LINE_LENGTH > 0,
+              "CPPHTTPLIB_MAX_LINE_LENGTH must be positive");
 
 #ifndef CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH
 #define CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH 16777216
@@ -340,7 +366,6 @@ using socklen_t = int;
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
-#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -451,6 +476,7 @@ using socket_t = int;
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
@@ -581,6 +607,10 @@ namespace ws {
 class WebSocket;
 } // namespace ws
 
+namespace sse {
+class SSEClient;
+} // namespace sse
+
 namespace detail {
 
 /*
@@ -660,6 +690,15 @@ inline bool equal(const std::string &a, const std::string &b) {
          });
 }
 
+// For a literal, without building a std::string from it.
+template <size_t N>
+inline bool equal(const std::string &a, const char (&b)[N]) {
+  return a.size() == N - 1 &&
+         std::equal(a.begin(), a.end(), b, [](char ca, char cb) {
+           return to_lower(ca) == to_lower(cb);
+         });
+}
+
 struct equal_to {
   bool operator()(const std::string &a, const std::string &b) const {
     return equal(a, b);
@@ -668,17 +707,13 @@ struct equal_to {
 
 struct hash {
   size_t operator()(const std::string &key) const {
-    return hash_core(key.data(), key.size(), 0);
-  }
-
-  size_t hash_core(const char *s, size_t l, size_t h) const {
-    return (l == 0) ? h
-                    : hash_core(s + 1, l - 1,
-                                // Unsets the 6 high bits of h, therefore no
-                                // overflow happens
-                                (((std::numeric_limits<size_t>::max)() >> 6) &
-                                 h * 33) ^
-                                    static_cast<unsigned char>(to_lower(*s)));
+    size_t h = 0;
+    for (auto c : key) {
+      // Unsets the 6 high bits of h, therefore no overflow happens
+      h = (((std::numeric_limits<size_t>::max)() >> 6) & h * 33) ^
+          static_cast<unsigned char>(to_lower(c));
+    }
+    return h;
   }
 };
 
@@ -736,6 +771,7 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
   }
   if (p == last) { return {first, std::errc::invalid_argument}; }
 
+  auto radix = static_cast<T>(base);
   T result = 0;
   for (; p != last; ++p) {
     char c = *p;
@@ -751,10 +787,11 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
     }
 
     if (digit < 0 || digit >= base) { break; }
-    if (result > ((std::numeric_limits<T>::max)() - digit) / base) {
+    auto d = static_cast<T>(digit);
+    if (result > ((std::numeric_limits<T>::max)() - d) / radix) {
       return {p, std::errc::result_out_of_range};
     }
-    result = result * base + digit;
+    result = result * radix + d;
   }
 
   if (p == first || (negative && p == first + 1)) {
@@ -881,6 +918,12 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
   auto has_authority = has_authority_prefix || (!url.empty() && url[0] != '/' &&
                                                 url[0] != '?' && url[0] != '#');
   if (has_authority) {
+    // userinfo is not supported, and a backslash that some parsers take for
+    // '/' would leave them seeing another host than this one.
+    if (url.find_first_of("@\\", pos) < url.find_first_of("/?#", pos)) {
+      return false;
+    }
+
     if (pos < url.size() && url[pos] == '[') {
       auto close = url.find(']', pos);
       if (close == std::string::npos) { return false; }
@@ -1803,6 +1846,7 @@ struct Request {
   bool is_multipart_form_data() const;
 
   // private members...
+  bool body_read_started_ = false;
   bool body_consumed_ = false;
   bool expect_100_continue_pending_ = false;
   size_t redirect_count_ = CPPHTTPLIB_REDIRECT_MAX_COUNT;
@@ -1970,6 +2014,16 @@ public:
   virtual void set_read_timeout(time_t sec, time_t usec = 0) {
     (void)sec;
     (void)usec;
+  }
+
+  // Bounds the reads from now on to `msec` in total, on top of the timeout of
+  // each one. 0 lifts the bound.
+  virtual void set_max_timeout(time_t msec) { (void)msec; }
+
+  // Lets a wait for data end early once `interrupted` returns true, so that
+  // another thread can stop a blocked read on every platform.
+  virtual void set_read_interrupt(std::function<bool()> interrupted) {
+    (void)interrupted;
   }
 
   // Bytes already pulled off the socket and sitting in this stream's own
@@ -2425,7 +2479,8 @@ private:
   int bind_internal(const std::string &host, int port, int socket_flags);
   bool listen_internal();
 
-  bool routing(Request &req, Response &res, Stream &strm);
+  bool routing(Request &req, Response &res, Stream &strm,
+               bool skip_pre_routing);
   bool handle_file_request(Request &req, Response &res);
   bool check_if_not_modified(const Request &req, Response &res,
                              const std::string &etag, time_t mtime) const;
@@ -2724,6 +2779,7 @@ public:
 
   private:
     friend class ClientImpl;
+    friend class sse::SSEClient;
 
     ssize_t read_with_decompression(char *buf, size_t len);
 
@@ -2941,13 +2997,12 @@ protected:
   void close_socket(Socket &socket);
   void disconnect(bool gracefully);
 
+  std::string make_request_target(const Request &req) const;
   bool process_request(Stream &strm, Request &req, Response &res,
                        bool close_connection, Error &error);
 
   bool write_content_with_provider(Stream &strm, const Request &req,
                                    Error &error) const;
-
-  void copy_settings(const ClientImpl &rhs);
 
   void output_log(const Request &req, const Response &res) const;
   void output_error_log(const Error &err, const Request *req) const;
@@ -2960,6 +3015,9 @@ protected:
   Socket socket_;
   mutable std::mutex socket_mutex_;
   std::recursive_mutex request_mutex_;
+  // How many send() calls are running on this client, guarded by
+  // request_mutex_
+  size_t send_depth_ = 0;
 
   // These are all protected under socket_mutex
   size_t socket_requests_in_flight_ = 0;
@@ -3071,6 +3129,9 @@ private:
   virtual bool is_ssl() const;
 
   void transfer_socket_ownership_to_handle(StreamHandle &handle);
+  StreamHandle open_stream_(Request &req);
+  void add_credential_headers(Request &req);
+  std::string proxy_target_prefix() const;
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
 public:
@@ -3099,6 +3160,24 @@ protected:
   uint64_t last_backend_error_ = 0;
 #endif
 };
+
+namespace detail {
+
+// Stands in for a client that Client could not make from its arguments, so a
+// request fails rather than going through a null pointer.
+class InvalidClientImpl final : public ClientImpl {
+public:
+  InvalidClientImpl() : ClientImpl(std::string(), 0) {}
+  bool is_valid() const override { return false; }
+
+private:
+  bool create_and_connect_socket(Socket &, Error &error) override {
+    error = Error::Connection;
+    return false;
+  }
+};
+
+} // namespace detail
 
 class Client {
 public:
@@ -3364,7 +3443,14 @@ private:
   bool process_and_close_socket(socket_t sock) override;
 
   tls::ctx_t ctx_ = nullptr;
+  // update_certs_pem() replaces the certificates and CAs that handshakes read
+  // from ctx_, so it waits for the handshakes in progress, which their timeout
+  // bounds, and new ones wait while it is pending so that they cannot keep it
+  // waiting.
   std::mutex ctx_mutex_;
+  std::condition_variable ctx_cv_;
+  size_t handshakes_in_progress_ = 0;
+  size_t updates_pending_ = 0;
 
   int last_ssl_error_ = 0;
 };
@@ -3446,11 +3532,12 @@ private:
 
   std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
 
+  // Like ca_cert_store_set_, keeps what ctx_ cannot report back: the verifier
+  // set_server_certificate_verifier() installed there.
+  tls::VerifyCallback server_certificate_verifier_;
+
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   bool enable_windows_cert_verification_ = true;
-  // Like ca_cert_store_set_, tracks what ctx_ cannot report back: whether
-  // set_server_certificate_verifier() installed a verifier.
-  bool server_certificate_verifier_set_ = false;
 #endif
 
   friend class ClientImpl;
@@ -3571,7 +3658,7 @@ inline void ClientImpl::set_max_timeout(
     const std::chrono::duration<Rep, Period> &duration) {
   auto msec =
       std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-  set_max_timeout(msec);
+  set_max_timeout(static_cast<time_t>(msec));
 }
 
 template <class Rep, class Period>
@@ -3937,6 +4024,8 @@ struct ChunkedDecoder {
   bool parse_trailers_into(Headers &dest, const Headers &src_headers);
 };
 
+// A regular file opened to be served: mapped on Windows, read with pread()
+// elsewhere.
 class mmap {
 public:
   mmap(const char *path);
@@ -3947,18 +4036,20 @@ public:
 
   bool is_open() const;
   size_t size() const;
-  const char *data() const;
+  // Copies up to len bytes from offset into buf and returns how many: fewer,
+  // down to 0, if the file has shrunk since it was opened.
+  size_t read(size_t offset, char *buf, size_t len) const;
 
 private:
 #if defined(_WIN32)
   HANDLE hFile_ = NULL;
   HANDLE hMapping_ = NULL;
+  void *addr_ = nullptr;
+  bool is_open_empty_file = false;
 #else
   int fd_ = -1;
 #endif
   size_t size_ = 0;
-  void *addr_ = nullptr;
-  bool is_open_empty_file = false;
 };
 
 // NOTE: https://www.rfc-editor.org/rfc/rfc9110#section-5
@@ -4003,8 +4094,10 @@ struct MbedTlsContext {
   mbedtls_x509_crt own_cert;
   mbedtls_pk_context own_key;
   bool is_server = false;
+  // Peer certificate required (set_verify_client()); a client defaults to true
   bool verify_client = false;
-  bool has_verify_callback = false;
+  // Set by tls::set_verify_callback().
+  VerifyCallback verify_callback;
 
   MbedTlsContext();
   ~MbedTlsContext();
@@ -4027,8 +4120,10 @@ namespace impl {
 struct WolfSSLContext {
   WOLFSSL_CTX *ctx = nullptr;
   bool is_server = false;
+  // Peer certificate required (set_verify_client()); a client defaults to true
   bool verify_client = false;
-  bool has_verify_callback = false;
+  // Replaced under verify_callback_mutex()
+  std::shared_ptr<VerifyCallback> verify_callback;
   std::string ca_pem_data_; // accumulated PEM for get_ca_names/get_ca_certs
 
   WolfSSLContext();
@@ -4453,7 +4548,8 @@ enum ReadResult : int { Fail = 0, Text = 1, Binary = 2, Timeout = 3 };
 // Result of WebSocketClient::connect(). Truthy only when the WebSocket
 // upgrade handshake fully succeeded. On failure error() identifies the
 // failing layer; status()/headers() expose the server's upgrade response
-// when one was received (status() is -1 otherwise).
+// when one was received (status() is -1 otherwise), or the proxy's reply to
+// CONNECT when error() is ProxyConnection.
 class Result {
 public:
   Result() = default;
@@ -4555,6 +4651,8 @@ private:
   int max_missed_pongs_;
   int unacked_pings_ = 0;
   std::atomic<bool> closed_{false};
+  // Set when the peer stopped answering pings, to end a read() waiting on it
+  std::atomic<bool> pong_timed_out_{false};
   // Set once the caller has bounded read() through set_read_timeout(). Until
   // then the timeout in effect is the compile-time default, and elapsing it
   // is a failure that closes the connection, not a Timeout.
@@ -4612,6 +4710,12 @@ public:
   void set_interface(const std::string &intf);
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
+  void set_proxy(const std::string &host, int port);
+  void set_proxy_basic_auth(const std::string &username,
+                            const std::string &password);
+  void set_proxy_bearer_token_auth(const std::string &token);
+  void set_no_proxy(const std::vector<std::string> &patterns);
+
 #ifdef CPPHTTPLIB_SSL_ENABLED
   struct PemMemory {
     const char *cert_pem;
@@ -4630,13 +4734,23 @@ public:
   void enable_server_certificate_verification(bool enabled);
   void enable_server_hostname_verification(bool enabled);
   void enable_system_ca(bool enabled);
+  void set_server_certificate_verifier(tls::VerifyCallback verifier);
+  void set_session_verifier(
+      std::function<SSLVerifierResponse(tls::session_t)> verifier);
+  void set_proxy_digest_auth(const std::string &username,
+                             const std::string &password);
 #endif
 
 private:
   void shutdown_and_close();
+  std::pair<time_t, time_t> handshake_timeout() const;
   bool create_stream(std::unique_ptr<Stream> &strm, Error &error,
                      int &ssl_error, uint64_t &ssl_backend_error);
   void prepare_default_headers(Request &req);
+  bool is_proxy_enabled() const;
+  bool create_and_connect_socket(Error &error);
+  bool send_proxy_connect(Request &req, Response &proxy_res, Error &error);
+  bool connect_with_proxy(Response &proxy_res, Error &error);
 
   std::string host_;
   int port_;
@@ -4666,6 +4780,13 @@ private:
   // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
 
+  std::string proxy_host_;
+  int proxy_port_ = -1;
+  std::string proxy_basic_auth_username_;
+  std::string proxy_basic_auth_password_;
+  std::string proxy_bearer_token_auth_token_;
+  std::vector<detail::NoProxyEntry> no_proxy_entries_;
+
 #ifdef CPPHTTPLIB_SSL_ENABLED
   bool is_ssl_ = false;
   tls::ctx_t tls_ctx_ = nullptr;
@@ -4677,6 +4798,9 @@ private:
   SystemCAMode system_ca_mode_ = SystemCAMode::Auto;
   bool server_certificate_verification_ = true;
   bool server_hostname_verification_ = true;
+  std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
+  std::string proxy_digest_auth_username_;
+  std::string proxy_digest_auth_password_;
 #endif
 };
 
