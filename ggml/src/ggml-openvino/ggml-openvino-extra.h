@@ -192,10 +192,12 @@ struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
 // Extra data for KV cache / compute tensors - stores ov::Tensor for infer_request
 struct ggml_openvino_tensor_extra : public ggml_openvino_extra_base {
     std::shared_ptr<ov::Tensor> tensor;  // For direct use with infer_request
+    const void * data;                   // tensor->data that `tensor` wraps
 
-    explicit ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t) :
+    ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t, const void * data) :
         ggml_openvino_extra_base(Type::TENSOR),
-        tensor(std::move(t)) {}
+        tensor(std::move(t)),
+        data(data) {}
 };
 
 // =====================================================

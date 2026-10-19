@@ -10,9 +10,11 @@
 #include <map>
 #include <memory>
 #include <openvino/core/partial_shape.hpp>
+#include <openvino/runtime/tensor.hpp>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct ModelParams {
@@ -353,15 +355,60 @@ public:
     // and writes it one element per row, so its first rows do not hold the first tokens.
     bool is_kvcache_token_rows(const ggml_tensor * cache) const;
 
+    // Reuse the KV cache ov::Tensor while pointer, type and shape stay the same (a new USM tensor costs microseconds).
+    template <typename Make>
+    ov::Tensor cached_kv_tensor(const ggml_tensor * kv,
+                                const ov::element::Type & type,
+                                const ov::Shape & shape,
+                                Make && make) const {
+        auto & entry = m_kv_tensor_cache[kv];
+        if (!entry.tensor || entry.data != kv->data || entry.type != type || entry.shape != shape) {
+            entry = {kv->data, type, shape, make(), next_tensor_id()};
+        }
+        m_last_kv_tensor_id = entry.id;
+        return entry.tensor;
+    }
+
+    // Id of the tensor returned by the last cached_kv_tensor() call, 0 if there was no call since the last read.
+    uint64_t take_last_kv_tensor_id() const { return std::exchange(m_last_kv_tensor_id, 0); }
+
+    // Ids are never 0 and never reused: the same id means the same ov::Tensor.
+    uint64_t next_tensor_id() const { return ++m_tensor_id; }
+
+    // What one infer request port holds between inferences (dynamic GPU path).
+    struct ov_port_binding {
+        ov::Tensor staging;  // USM host tensor used in place of a small host tensor
+        void * staging_ptr = nullptr;
+        size_t staging_bytes = 0;
+        uint64_t staging_id = 0;
+        uint64_t bound_id = 0;  // id of the tensor bound to the port, 0 if not known
+        ov::Shape bound_shape;
+        ov::element::Type bound_type;
+    };
+
+    // Port state of `request`, reset when the decoder runs with another request.
+    std::vector<ov_port_binding> & port_bindings(bool input, size_t n, const void * request) const {
+        if (m_bindings_request != request) {
+            m_input_bindings.clear();
+            m_output_bindings.clear();
+            m_bindings_request = request;
+        }
+        auto & v = input ? m_input_bindings : m_output_bindings;
+        if (v.size() < n) {
+            v.resize(n);
+        }
+        return v;
+    }
+
     const ggml_tensor * get_tensor_from_name(const std::string & name) const;
 
     void clear_model_weights() { m_model_weights.clear(); }
 
     static std::pair<ModelParams, ComputeParams> compute_llm_params(ggml_cgraph * cgraph, bool is_static);
 
-    ModelParams get_model_params() const { return m_model_params; }
+    const ModelParams & get_model_params() const { return m_model_params; }
 
-    ComputeParams get_compute_params() const { return m_compute_params; }
+    const ComputeParams & get_compute_params() const { return m_compute_params; }
 
     void set_model_params(const ModelParams & model_params) { m_model_params = model_params; }
 
@@ -521,6 +568,21 @@ private:
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
     std::set<const ggml_tensor *> m_kvcache_4d;
+
+    struct kv_tensor_entry {
+        const void * data = nullptr;
+        ov::element::Type type;
+        ov::Shape shape;
+        ov::Tensor tensor;
+        uint64_t id = 0;
+    };
+
+    mutable std::map<const ggml_tensor *, kv_tensor_entry> m_kv_tensor_cache;
+    mutable uint64_t m_tensor_id = 0;
+    mutable uint64_t m_last_kv_tensor_id = 0;
+    mutable std::vector<ov_port_binding> m_input_bindings;
+    mutable std::vector<ov_port_binding> m_output_bindings;
+    mutable const void * m_bindings_request = nullptr;
 
     ModelParams m_model_params;
     ComputeParams m_compute_params;

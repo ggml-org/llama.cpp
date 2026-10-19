@@ -408,6 +408,31 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
     }
 }
 
+// Inputs are set on every inference: keep the tensor extra when it still wraps the same memory, shape and type.
+static bool ggml_openvino_extra_unchanged(const ggml_backend_openvino_buffer_context * ctx,
+                                          const ggml_tensor * tensor) {
+    auto it = ctx->tensor_extras.find(const_cast<ggml_tensor *>(tensor));
+    if (it == ctx->tensor_extras.end() || it->second == nullptr || tensor->extra != it->second ||
+        it->second->type != ggml_openvino_extra_base::Type::TENSOR) {
+        return false;
+    }
+    const auto * extra = static_cast<const ggml_openvino_tensor_extra *>(it->second);
+    const auto & t = extra->tensor;
+    if (extra->data != tensor->data || t == nullptr || t->get_element_type() != GgmlOvDecoder::get_ov_type(tensor)) {
+        return false;
+    }
+    const auto & shape = t->get_shape();
+    if (shape.size() != GGML_MAX_DIMS) {
+        return false;
+    }
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (shape[GGML_MAX_DIMS - 1 - i] != static_cast<size_t>(tensor->ne[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                     ggml_tensor * tensor,
                                                     const void * data,
@@ -511,6 +536,9 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             memcpy((char *) tensor->data + offset, data, size);
         }
 
+        if (ggml_openvino_extra_unchanged(ctx, tensor)) {
+            return;
+        }
         ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(tensor, ctx->is_remote);
         if (extra == nullptr) {
             // GGML_LOG_ERROR("%s: failed to create tensor extra for %s\n", __func__, tensor->name);
