@@ -10931,6 +10931,31 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {512, 8193, 2, 1}, false, {2, 1, 0, 3}));
     test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {256, 16385, 2, 1}, false, {0, 2, 1, 3}));
 
+    // channel-first <-> channel-last, sizes not multiples of the 32/64 transpose tile
+    for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
+                {33, 17, 5, 19}, {300, 70, 3, 70}, {40, 300, 2, 300}, {5, 3, 7, 9} }) {
+            for (std::array<int64_t, 4> perm : std::initializer_list<std::array<int64_t, 4>>{
+                    {1, 2, 3, 0},
+                    {3, 0, 1, 2} }) {
+                test_cases.emplace_back(new test_cont(type_dst, ne, false, perm));
+            }
+        }
+    }
+
+    // small channel dims (scaled-down VAE shapes, e.g. 8:832:480:13 and 2:416:3120:16), with extent-1 dims
+    for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
+                {104, 60, 13, 8}, {52, 39, 16, 2}, {37, 9, 5, 3}, {65, 7, 3, 32},
+                {8, 104, 60, 13}, {2, 52, 39, 16}, {3, 37, 9, 5}, {16, 1, 50, 7} }) {
+            for (std::array<int64_t, 4> perm : std::initializer_list<std::array<int64_t, 4>>{
+                    {1, 2, 3, 0},
+                    {3, 0, 1, 2} }) {
+                test_cases.emplace_back(new test_cont(type_dst, ne, false, perm));
+            }
+        }
+    }
+
     auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr, bool perm1 = false, bool src_overlap = false) {
         for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
             test_cases.emplace_back(new test_bin_bcast(op, type, ne, nr, 1, perm1, src_overlap));
