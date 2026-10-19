@@ -3472,15 +3472,16 @@ static bool ggml_hexagon_flash_attn_is_hmx_eligible(
         return true;
     }
 
-    // Compute-bound head dim
-    if (DK >= 256) {
-        return true;
-    }
-
     const uint32_t n_head = q->ne[2];
     const uint32_t n_kv_heads = k->ne[2];
     const uint32_t G = n_kv_heads > 0 ? n_head / n_kv_heads : 1;
     const uint32_t S = k->ne[1];
+    const uint32_t total_threads = sess->n_threads * sess->mdev.count;
+
+    // Compute-bound head dim (for DK == 256 decode, HVX is faster when KV heads span all threads)
+    if (DK > 256 || (DK == 256 && (DV > 256 || n_kv_heads < total_threads))) {
+        return true;
+    }
 
     // Tile alignment for 32-row HMX tiles
     const bool is_tile_aligned = (G > 0 && (32 % G == 0));
@@ -3493,7 +3494,9 @@ static bool ggml_hexagon_flash_attn_is_hmx_eligible(
 
     // Context depth crossover
     uint32_t s_cross = 512;
-    if (DK <= 64) {
+    if (DK == 256) {
+        s_cross = 4096;
+    } else if (DK <= 64) {
         s_cross = (sess->n_threads >= 8) ? 2048 : ((sess->n_threads >= 6) ? 768 : 512);
     } else {
         s_cross = (sess->n_threads >= 8) ? 1024 : 512;
@@ -3662,10 +3665,6 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
     // but the op implementation writes to F16 or F32.
     // Let's assume dst can be F32 or F16.
     if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
-        return false;
-    }
-
-    if (dst->ne[3] != 1) {
         return false;
     }
 
