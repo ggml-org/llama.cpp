@@ -1334,6 +1334,46 @@ inline static __m128 ggml_v_silu(__m128 x) {
     return _mm_div_ps(x, one_plus_exp_neg_x);
 }
 
+#elif defined(__VXE__) || defined(__VXE2__)
+
+// adapted from arm limited optimized routine
+// the maximum error is 1.45358 plus 0.5 ulps
+// numbers above 88.38 will flush to infinity
+// numbers beneath -103.97 will flush to zero
+inline static float32x4_t ggml_v_expf(float32x4_t v_x) {
+    const float32x4_t v_r = vec_splats(0x1.8p23f);
+    const float32x4_t v_z = vec_madd(v_x, vec_splats(0x1.715476p+0f), v_r);
+    const float32x4_t v_n = vec_sub(v_z, v_r);
+    const float32x4_t v_b = vec_nmsub(v_n, vec_splats(0x1.7f7d1cp-20f),
+                                      vec_nmsub(v_n, vec_splats(0x1.62e4p-1f), v_x));
+    const uint32x4_t  v_e = vec_sl((uint32x4_t)v_z, 23);
+    const float32x4_t v_k = (float32x4_t)vec_add(v_e, (uint32x4_t)vec_splats(1.0f));
+    const uint32x4_t  v_c = (uint32x4_t)vec_cmpgt(vec_abs(v_n), vec_splats(126.0f));
+    const float32x4_t v_u = vec_mul(v_b, v_b);
+    const float32x4_t v_j = vec_madd(
+        vec_madd(vec_madd(vec_splats(0x1.0e4020p-7f), v_b, vec_splats(0x1.573e2ep-5f)), v_u,
+                 vec_madd(vec_splats(0x1.555e66p-3f), v_b, vec_splats(0x1.fffdb6p-2f))),
+        v_u, vec_mul(vec_splats(0x1.ffffecp-1f), v_b));
+    if (vec_all_eq(v_c, vec_splats(UINT32_C(0)))) {
+        return vec_madd(v_j, v_k, v_k);
+    }
+    const uint32x4_t  v_d  = vec_and((uint32x4_t)vec_cmple(v_n, vec_splats(0.0f)), vec_splats(UINT32_C(0x82000000)));
+    const float32x4_t v_s1 = (float32x4_t)vec_add(v_d, vec_splats(UINT32_C(0x7f000000)));
+    const float32x4_t v_s2 = (float32x4_t)vec_sub(v_e, v_d);
+    return vec_sel(vec_sel(vec_madd(v_k, v_j, v_k), vec_mul(vec_madd(v_s2, v_j, v_s2), v_s1), v_c),
+                   vec_mul(v_s1, v_s1), (uint32x4_t)vec_cmpgt(vec_abs(v_n), vec_splats(192.0f)));
+}
+
+// computes silu x/(1+exp(-x)) in single precision vector
+inline static float32x4_t ggml_v_silu(float32x4_t v_x) {
+    const float32x4_t v_one = vec_splats(1.0f);
+    const float32x4_t v_zero = vec_splats(0.0f);
+    const float32x4_t v_neg_x = vec_sub(v_zero, v_x);
+    const float32x4_t v_exp_neg_x = ggml_v_expf(v_neg_x);
+    const float32x4_t v_one_plus_exp_neg_x = vec_add(v_one, v_exp_neg_x);
+    return vec_div(v_x, v_one_plus_exp_neg_x);
+}
+
 #elif defined(__riscv_v_intrinsic)
 
 // adapted from arm limited optimized routine
@@ -1386,7 +1426,7 @@ inline static vfloat32m2_t ggml_v_silu_m2(vfloat32m2_t x, int vl) {
     return __riscv_vfdiv_vv_f32m2(x, one_plus_exp_neg_x, vl);
 }
 
-#endif // __ARM_NEON / __AVX2__ / __SSE2__ / __riscv_v_intrinsic
+#endif // __ARM_NEON / __AVX2__ / __SSE2__ / __VXE__ / __riscv_v_intrinsic
 
 inline static void ggml_vec_silu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     for (int i = 0; i < n; ++i) {
