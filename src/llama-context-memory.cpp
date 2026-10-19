@@ -823,16 +823,25 @@ std::unique_ptr<llama_context_memory_loan> llama_context_memory::reserve_bounded
     return reserve_region(layout.allocation.bytes,&layout);
 }
 
+std::unique_ptr<llama_context_memory_loan> llama_context_memory::reserve_bounded_cache(
+        const llama_memory_bounded_kv_layout & layout,llama_context_memory_create_result * admission) {
+    return reserve_region(layout.allocation.bytes,&layout,admission);
+}
+
 std::unique_ptr<llama_context_memory_loan> llama_context_memory::reserve_staging(size_t bytes) {
     return reserve_region(bytes,nullptr);
 }
 
 std::unique_ptr<llama_context_memory_loan> llama_context_memory::reserve_region(size_t bytes,
-        const llama_memory_bounded_kv_layout * layout) {
+        const llama_memory_bounded_kv_layout * layout,llama_context_memory_create_result * admission) {
+    if (admission) {
+        *admission={};
+        admission->available_bytes=impl->kv_parent_capacity;
+    }
     if (!valid() || impl->serial_borrowed || impl->serial_busy || impl->bounded_cache || (!layout && impl->staging_lease) ||
             !impl->serial_children.empty() || !impl->kv_parent || impl->kv_arena >= impl->arenas.size() ||
             (layout && layout->buft != ggml_backend_buffer_get_type(impl->kv_parent)) ||
-            !bytes || bytes > impl->kv_parent_capacity) return {};
+            !bytes || (!admission && bytes > impl->kv_parent_capacity)) return {};
     serial_gate gate(impl->serial_busy);
     bool changed=false;
     try {
@@ -845,22 +854,54 @@ std::unique_ptr<llama_context_memory_loan> llama_context_memory::reserve_region(
         ++id;
         const auto & budget=target.budgets[impl->kv_arena];
         const auto alignment=ggml_backend_buft_get_alignment(ggml_backend_buffer_get_type(impl->kv_parent));
-        if ((layout && layout->allocation.alignment != alignment) || bytes%alignment) return {};
+        if (!alignment || (alignment&(alignment-1)) ||
+                (layout && layout->allocation.alignment != alignment) || bytes%alignment) return {};
         size_t end=impl->kv_parent_capacity;
         for (const auto & fixed : target.fixed) if (fixed.arena == impl->kv_arena) end=std::min(end,fixed.region.offset);
-        if (bytes > end) return {};
-        const size_t offset=(end-bytes)&~(alignment-1);
         const llama_memory_resource resource{id,budget.domain,budget.allocation_class,llama_memory_content::preserve};
         target.plan.resources.push_back(resource);
         target.plan.inputs.push_back(id); target.plan.outputs.push_back(id);
         for (auto & stage : target.plan.stages) stage.requirements.push_back({
             id,bytes,bytes,alignment,LLAMA_MEMORY_ACCESS_READ_WRITE,LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
+        if (admission) {
+            auto unlimited=target.budgets;
+            unlimited[impl->kv_arena].capacity=SIZE_MAX;
+            auto movable=target.fixed;
+            // A new parent packs persistent suffixes at its new end, not at this parent's old addresses.
+            movable.erase(std::remove_if(movable.begin(),movable.end(),[&](const auto & fixed) {
+                return fixed.arena==impl->kv_arena;
+            }),movable.end());
+            size_t required=0;
+            llama_memory_stage_id phase=0;
+            for (const auto & stage : target.plan.stages) {
+                llama_memory_layout minimum;
+                const auto planned=llama_memory_layout_minimum(target.plan,stage.id,unlimited,movable,minimum);
+                if (planned.status!=llama_memory_layout_status::success) {
+                    if (planned.status==llama_memory_layout_status::allocation_failed)
+                        admission->status=llama_context_memory_create_status::allocation_failed;
+                    return {};
+                }
+                if (impl->kv_arena>=minimum.arenas.size()) return {};
+                for (const auto & region : minimum.arenas[impl->kv_arena].regions) {
+                    if (region.offset>SIZE_MAX-region.size) return {};
+                    if (region.offset+region.size>required) { required=region.offset+region.size; phase=stage.id; }
+                }
+            }
+            admission->required_bytes=required; admission->stage=phase; admission->resource=id;
+            if (required>impl->kv_parent_capacity) {
+                quota_shortage(admission,impl->kv_parent_capacity,required,phase,id);
+                return {};
+            }
+        }
+        if (bytes > end) return {};
+        const size_t offset=(end-bytes)&~(alignment-1);
         target.fixed.push_back({impl->kv_arena,{id,offset,bytes,alignment,GGML_BACKEND_MEMORY_REGION_PERSISTENT}});
         for (const auto & stage : target.plan.stages) {
             llama_memory_layout candidate;
             if (llama_memory_layout_elastic(target.plan,stage.id,target.budgets,target.fixed,candidate).status !=
                     llama_memory_layout_status::success) return {};
         }
+        if (admission) admission->status=llama_context_memory_create_status::transition_failed;
         auto cache=layout ? std::make_unique<llama_memory_bounded_kv>(*layout,resource) : nullptr;
         std::vector<llama_memory_consumer *> consumers{impl->workspace.get()};
         if (impl->shared_stream) consumers.push_back(impl->shared_stream->memory_consumer());
@@ -885,6 +926,7 @@ std::unique_ptr<llama_context_memory_loan> llama_context_memory::reserve_region(
         }
         lease_ptr initial(ggml_backend_memory_arena_acquire(arena,id),ggml_backend_memory_lease_free);
         if (!initial || (cache && !cache->bind(initial.get()))) {
+            if (admission) admission->status=llama_context_memory_create_status::allocation_failed;
             initial.reset();
             restore();
             return {};
@@ -907,8 +949,16 @@ std::unique_ptr<llama_context_memory_loan> llama_context_memory::reserve_region(
         }
         result->storage=ggml_backend_memory_arena_acquire(arena,id);
         impl->phase_target=std::move(target);
-        if (!result->storage) { gate.busy=false; if (layout) release_bounded_cache(); else release_staging(); return {}; }
+        if (!result->storage) {
+            if (admission) admission->status=llama_context_memory_create_status::allocation_failed;
+            gate.busy=false; if (layout) release_bounded_cache(); else release_staging(); return {};
+        }
+        if (admission) admission->status=llama_context_memory_create_status::success;
         return result;
+    } catch (const std::bad_alloc &) {
+        if (admission) admission->status=llama_context_memory_create_status::allocation_failed;
+        if (changed) { impl->invalid=true; impl->executor.quiesce(); }
+        return {};
     } catch (...) {
         if (changed) { impl->invalid=true; impl->executor.quiesce(); }
         return {};

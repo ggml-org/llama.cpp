@@ -81,6 +81,9 @@ public:
             llama_context_memory_create_result * result = nullptr);
     // Reserve a fixed cache suffix inside the declared parent, not a second backend allocation.
     LLAMA_API std::unique_ptr<llama_context_memory_loan> reserve_bounded_cache(const llama_memory_bounded_kv_layout & layout);
+    // Quote all phase minima before mutation; required_bytes describes a restart with movable fixed suffixes.
+    LLAMA_API std::unique_ptr<llama_context_memory_loan> reserve_bounded_cache(const llama_memory_bounded_kv_layout & layout,
+        llama_context_memory_create_result * admission);
     // Stable publication staging stays disjoint from both graph scratch and elastic KV.
     LLAMA_API std::unique_ptr<llama_context_memory_loan> reserve_staging(size_t bytes);
     // External leases prevent cleanup; the parent remains usable with the fixed region until they return.
@@ -146,7 +149,8 @@ public:
 
 private:
     friend class llama_context_memory_loan;
-    std::unique_ptr<llama_context_memory_loan> reserve_region(size_t bytes,const llama_memory_bounded_kv_layout * layout);
+    std::unique_ptr<llama_context_memory_loan> reserve_region(size_t bytes,const llama_memory_bounded_kv_layout * layout,
+        llama_context_memory_create_result * admission = nullptr);
     bool release_staging() noexcept;
     bool release_region(bool cache) noexcept;
     struct implementation;

@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -799,7 +800,20 @@ static void test_gemma_target_admission(testing & t, llama_model * model,bool in
         } catch (const std::runtime_error & error) {
             t.out << "Gemma admission case=" << invalid << ": " << error.what() << '\n';
             rejected=std::string(error.what()).find(expected) != std::string::npos;
-            if (invalid == 4) t.assert_true(std::string(error.what()).find("additional=") != std::string::npos);
+            if (invalid == 4 || invalid == 5) {
+                const std::string message=error.what();
+                const auto start=message.find("required=");
+                size_t required=0,available=0,additional=0;
+                const bool parsed=start!=std::string::npos && std::sscanf(message.c_str()+start,
+                    "required=%zu, available=%zu, additional=%zu",&required,&available,&additional)==3;
+                t.assert_true("quota diagnostic carries exact byte fields",parsed);
+                if (parsed) {
+                    t.assert_equal(cp.shared_device_memory_bytes,available);
+                    t.assert_true(required>available);
+                    t.assert_equal(required-available,additional);
+                }
+                if (invalid==5) t.assert_true(message.find("phase=")!=std::string::npos && message.find("resource=")!=std::string::npos);
+            }
         }
         t.assert_true(std::string("startup rejects profile with the expected cause: ")+expected,rejected);
     }
@@ -1796,9 +1810,17 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
                 draft.reset(new llama_context(*assistant,dp));
             } catch (const std::runtime_error & failure) { error=failure.what(); }
             if (!sufficient) {
+                const auto fields=error.find("required=");
+                size_t required=0,available=0,additional=0;
                 if (!t.assert_true("one-byte-short joint arena rejects without private workspace fallback",
-                        error == "persistent local cache does not fit the declared shared arena" ||
-                        error == "failed to prepare compute arenas")) return;
+                        error.find("persistent local cache does not fit the declared shared arena: insufficient arena quota;")==0 &&
+                        fields!=std::string::npos && std::sscanf(error.c_str()+fields,
+                            "required=%zu, available=%zu, additional=%zu",&required,&available,&additional)==3)) {
+                    t.out << "one-byte-short joint arena error: " << error << '\n'; return;
+                }
+                t.assert_equal(exact_budget,required);
+                t.assert_equal(exact_budget-1,available);
+                t.assert_equal(size_t(1),additional);
                 continue;
             }
             if (!t.assert_true("exact joint arena admits both contexts",error.empty() && target && draft)) {
@@ -2241,6 +2263,96 @@ static void test_gemma_acceptance(testing & t,llama_model * model,const char * p
         spec.reset();
         if (streamed) oracle.finish();
         std::fprintf(stderr,"Gemma acceptance: streamed=%d records=%zu bytes=%llu\n",int(streamed),oracle.records(),(unsigned long long)oracle.byte_count());
+    }
+}
+
+struct warmup_compute_failure {
+    inline static warmup_compute_failure * active=nullptr;
+    ggml_backend_dev_t device;
+    decltype(ggml_backend_device_i::init_backend) initialize;
+    std::map<ggml_backend_t,decltype(ggml_backend_i::graph_compute)> compute;
+    ggml_status status;
+    size_t calls=0;
+    warmup_compute_failure(ggml_backend_dev_t device,ggml_status status) :
+        device(device),initialize(device->iface.init_backend),status(status) {
+        GGML_ASSERT(!active); active=this;
+        device->iface.init_backend=[](ggml_backend_dev_t dev,const char * params) {
+            auto * backend=active->initialize(dev,params);
+            if (backend) {
+                active->compute[backend]=backend->iface.graph_compute;
+                backend->iface.graph_compute=[](ggml_backend_t backend,ggml_cgraph *) {
+                    backend->iface.graph_compute=active->compute.at(backend);
+                    ++active->calls;
+                    return active->status;
+                };
+            }
+            return backend;
+        };
+    }
+    ~warmup_compute_failure() { device->iface.init_backend=initialize; active=nullptr; }
+};
+
+static void test_gemma_warmup_failures(testing & t,const char * target_path,int mode=-1,const char * logit_path=nullptr) {
+    auto * reg=ggml_backend_reg_by_name("CUDA");
+    if (!t.assert_true(reg && ggml_backend_reg_dev_count(reg))) return;
+    auto * device=ggml_backend_reg_dev_get(reg,0);
+    std::vector<float> controls[2];
+    for (bool streamed : {false,true}) {
+        if (mode>=0 && int(streamed)!=mode) continue;
+        common_params params;
+        params.model.path=target_path;
+        params.n_ctx=4096; params.n_batch=params.n_ubatch=256; params.n_parallel=1;
+        params.n_gpu_layers=999; params.fit_params=false; params.swa_full=false;
+        params.shared_device_memory_bytes=streamed ? size_t(1024)*1048576 : 0;
+        params.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        params.cache_type_k=GGML_TYPE_Q8_0; params.cache_type_v=GGML_TYPE_Q4_0;
+        params.cpuparams.n_threads=params.cpuparams_batch.n_threads=8;
+        params.warmup=true;
+        for (auto status : {GGML_STATUS_ABORTED,GGML_STATUS_ALLOC_FAILED,GGML_STATUS_FAILED}) {
+            warmup_compute_failure fault(device,status);
+            auto result=common_init_from_params(params);
+            t.out << "warmup failure streamed=" << streamed << " status=" << status << " calls=" << fault.calls << '\n';
+            if (!t.assert_equal("warmup reaches the injected backend failure",size_t(1),fault.calls)) return;
+            t.assert_true("warmup failure retains the initialization result and loaded model",result && result->model());
+            t.assert_true("failed warmup must not publish a usable context",result && !result->context());
+        }
+        auto retry=common_init_from_params(params);
+        if (!t.assert_true("startup succeeds after failed warmup teardown",retry && retry->context())) return;
+        t.assert_equal("successful warmup leaves no request cells",llama_pos(-1),
+            llama_memory_seq_pos_max(llama_get_memory(retry->context()),0));
+        const auto words=common_tokenize(retry->context(),"A woodland stream flows past trees. ",true);
+        if (!t.assert_true(!words.empty())) return;
+        common_batch prompt(retry->context());
+        for (int row=0;row<2;++row) prompt.add(words[size_t(row)%words.size()],row,0,row==1);
+        if (!t.assert_equal("fresh request computes after failed startup cleanup",0,
+                llama_process(retry->context(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+        const auto * logits=llama_get_logits_ith(retry->context(),-1);
+        const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(retry->model()));
+        if (!t.assert_true(logits && std::all_of(logits,logits+vocab,[](float value) { return std::isfinite(value); }))) return;
+        controls[streamed].assign(logits,logits+vocab);
+        retry.reset();
+        for (bool model_only : {false,true}) {
+            params.warmup=model_only;
+            warmup_compute_failure fault(device,GGML_STATUS_FAILED);
+            auto bypass=common_init_from_params(params,model_only);
+            t.assert_true("disabled warmup and model-only loading do not execute a graph",bypass && bypass->model() &&
+                bool(bypass->context())!=model_only);
+            t.assert_equal(size_t(0),fault.calls);
+        }
+    }
+    if (mode<0) {
+        t.assert_true("recovered native and streamed startup produce exact logits",kv_stream_bytes_equal(
+            controls[0].data(),controls[0].size()*sizeof(float),controls[1].data(),controls[1].size()*sizeof(float)));
+    } else {
+        if (!t.assert_true(logit_path && !controls[mode].empty())) return;
+        const std::array<uint64_t,8> profile{0x474d344c4f474954ull,1,4096,2,1,controls[mode].size(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0};
+        std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::fopen(logit_path,mode==0 ? "wb" : "rb"));
+        if (!t.assert_true(bool(file))) return;
+        std::vector<std::vector<float>> values;
+        if (mode==0) values.push_back(controls[0]);
+        gemma_logits_file(file.get(),mode==0,profile,values);
+        if (mode==1) t.assert_true("fresh-process recovered logits match every native bit",values.size()==1 &&
+            kv_stream_bytes_equal(values[0].data(),values[0].size()*sizeof(float),controls[1].data(),controls[1].size()*sizeof(float)));
     }
 }
 
@@ -2751,6 +2863,18 @@ int main(int argc,char ** argv) {
         ~restore() {if (backend) kv_stream_test_override_cc(backend,previous);}
     } restore_cc{baseline_backend.get(),previous};
 #endif
+    for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-warmup-native-logits") || !std::strcmp(argv[i],"--gemma-warmup-streamed-logits")) {
+        if (i+1==argc) { std::fprintf(stderr,"missing Gemma warmup logit path\n"); return 1; }
+        const int mode=!std::strcmp(argv[i],"--gemma-warmup-native-logits") ? 0 : 1;
+        t.test("Gemma_warmup_failure_and_recovery_matches_framed_native_control",
+            [&](testing & t) { test_gemma_warmup_failures(t,argv[2],mode,argv[i+1]); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-warmup-failures"); })) {
+        t.test("Gemma_common_startup_rejects_failed_warmup_and_can_retry",
+            [&](testing & t) { test_gemma_warmup_failures(t,argv[2]); });
+        return t.summary();
+    }
     for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-common-startup")) {
         if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
         t.test("Gemma_common_startup_and_short_prefill_borrow_workspace",[&](testing & t) {

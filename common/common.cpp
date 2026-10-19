@@ -1629,7 +1629,12 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
         if (llama_model_has_encoder(model)) {
             common_batch batch = common_batch_get_one(lctx, tmp);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+            const int32_t status = llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+            if (status != 0) {
+                COM_ERR("model warmup encode failed, status = %d\n", status);
+                res->pimpl->context.reset();
+                return res;
+            }
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
             if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
                 decoder_start_token_id = bos;
@@ -1640,7 +1645,12 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         if (llama_model_has_decoder(model)) {
             tmp.resize(std::min(tmp.size(), (size_t) params.n_batch));
             common_batch batch = common_batch_get_one(lctx, tmp);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            const int32_t status = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            if (status != 0) {
+                COM_ERR("model warmup decode failed, status = %d\n", status);
+                res->pimpl->context.reset();
+                return res;
+            }
         }
         llama_memory_clear(llama_get_memory(lctx), true);
         llama_synchronize(lctx);

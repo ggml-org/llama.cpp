@@ -998,6 +998,7 @@ struct common_init_result {
     std::vector<llama_adapter_lora_ptr> & lora();
 
 private:
+    friend std::unique_ptr<common_init_result> common_init_from_params(common_params &, bool);
     struct impl;
     std::unique_ptr<impl> pimpl;
 };

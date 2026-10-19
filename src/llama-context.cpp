@@ -934,8 +934,12 @@ bool llama_context::prepare_compute_arenas(
             if (!llama_kv_cache_iswa::bounded_storage_requirements(model.hparams,params,cparams,
                     ggml_backend_buffer_get_type(compute_memory->shared_parent()),{stream->host()->cache_id()+1,1},layout))
                 throw std::runtime_error("invalid deferred local cache allocation quote");
-            auto loan=compute_memory->reserve_bounded_cache(layout);
-            if (!loan) throw std::runtime_error("persistent local cache does not fit the declared shared arena");
+            llama_context_memory_create_result local_admission;
+            auto loan=compute_memory->reserve_bounded_cache(layout,&local_admission);
+            if (!loan) throw std::runtime_error(std::string("persistent local cache does not fit the declared shared arena: ")+
+                llama_context_memory_create_status_name(local_admission.status)+"; required="+std::to_string(local_admission.required_bytes)+
+                ", available="+std::to_string(local_admission.available_bytes)+", additional="+std::to_string(local_admission.additional_bytes)+
+                " bytes; phase="+std::to_string(local_admission.stage)+", resource="+std::to_string(local_admission.resource));
             if (!compute_memory->retire_graph()) throw std::runtime_error("failed to retire local-cache reservation graphs");
             ggml_backend_sched_reset(sched.get());
             if (gf_res_reserve) gf_res_reserve->reset();
