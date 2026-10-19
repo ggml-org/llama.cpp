@@ -16,6 +16,7 @@
 # Examples:
 #   .\run_disttp.ps1 -Transport rdma                       # $CLUSTER_RINGS[2]
 #   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -MeshRelay 2
+#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraEnv 'GGML_VK_FWHT=1'
 #   .\run_disttp.ps1 -Transport tcp  -RankNodes A,B
 #   .\run_disttp.ps1 -Transport none -RankNodes A          # single node baseline
 param(
@@ -48,9 +49,15 @@ param(
   # leaves the variable unset.
   [switch]$NoFullDuplex,
   # LLAMA_DIST_TP_RDMA_MAX_BYTES, the largest payload sent over ND; larger ones go over TCP.
-  # -1 (default) leaves it unset, which keeps the build's ceiling of 262144 (256 KiB). Values above
-  # 262144 are not supported: multi-chunk ND transfers can deadlock.
+  # -1 (default) leaves it unset, which keeps the build's ceiling of 262144 (256 KiB), or sets 0
+  # (no ceiling) with -RdmaMultiChunk. Values above 262144 need -RdmaMultiChunk: without it
+  # multi-chunk ND transfers can deadlock.
   [int64]$RdmaMaxBytes = -1,
+  # LLAMA_DIST_TP_RDMA_MULTICHUNK=1: a message longer than one ND chunk stays on RDMA, because a
+  # sender blocked at its ND window keeps receiving. Unless -RdmaMaxBytes is given it also sets
+  # LLAMA_DIST_TP_RDMA_MAX_BYTES=0, so every payload, the prompt included, goes over RDMA and no
+  # -ub is needed.
+  [switch]$RdmaMultiChunk,
   # LLAMA_DIST_TP_RDMA_DEBUG=1 on every rank: the ND layer logs each edge's local address, listener,
   # connection request, connect and teardown. For diagnosing an edge, not for timing.
   [switch]$RdmaDebug,
@@ -62,6 +69,10 @@ param(
   # directly but relayed through the third rank, over the forward edges. Use it when one direction
   # of one cable cannot carry ND data; every byte stays on RDMA.
   [string]$MeshRelay = '',
+  # More environment for every rank, 'NAME=value;NAME=value', set after the variables above so it
+  # can override them: the Vulkan switches in the README, LLAMA_DIST_TP_RECORD_AHEAD=1,
+  # LLAMA_DIST_TP_SPLIT_RECURRENT=1. A value must not contain & | < > ^ " or %.
+  [string]$ExtraEnv = '',
   # Start ranks 1..N-1 detached, then STOP and print the exact command to run by hand in a console
   # on rank 0. llama.cpp block-buffers stdout when it is not attached to a console, so this is the
   # way to watch tokens stream.
@@ -95,7 +106,12 @@ function RunDirFor([string]$n){ if($CLUSTER_CFG.RunDirByNode -and $CLUSTER_CFG.R
 if($Mesh -and $world -ne 3){ throw "-Mesh needs exactly 3 ranks (have $world)" }
 if($MeshRelay -and -not $Mesh){ throw "-MeshRelay only applies with -Mesh" }
 if($MeshRelay -and $MeshRelay -notmatch '^[0-2]$'){ throw "-MeshRelay takes one rank, 0..2 (have '$MeshRelay')" }
-if($RdmaMaxBytes -gt 262144){ throw "-RdmaMaxBytes above 262144 is not supported (multi-chunk ND transfers can deadlock)" }
+if($RdmaMaxBytes -gt 262144 -and -not $RdmaMultiChunk){ throw "-RdmaMaxBytes above 262144 needs -RdmaMultiChunk (without it multi-chunk ND transfers can deadlock)" }
+# Not $extraEnv: PowerShell variable names ignore case, so that would be the parameter itself.
+$envExtra = @($ExtraEnv -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+foreach($kv in $envExtra){
+  if($kv -notmatch '^[A-Za-z_][A-Za-z0-9_]*=[^&|<>^"%]*$'){ throw "-ExtraEnv entry '$kv' is not NAME=value, or its value has a character cmd would interpret" }
+}
 $LOGDIR = Join-Path $PSScriptRoot 'logs'
 if(-not (Test-Path $LOGDIR)){ New-Item -ItemType Directory $LOGDIR | Out-Null }
 
@@ -110,6 +126,8 @@ if(-not $Master -and $world -gt 1){ $Master = (Node-RendezvousIp $nodeList[0]) +
 Write-Host "==== $Tag :: world=$world nodes=$($nodeList -join ',') transport=$Transport ===="
 Write-Host "  model  : $(Split-Path $Model -Leaf)"
 Write-Host "  fixed  : -n $NPred -c $Ctx -ngl $Ngl -t $Threads --device $Device --temp 0 --seed 1234 $ExtraArgs"
+if($RdmaMultiChunk){ Write-Host "  ND     : multi-chunk messages, LLAMA_DIST_TP_RDMA_MAX_BYTES=$(if($RdmaMaxBytes -ge 0){$RdmaMaxBytes}else{0})" }
+if($envExtra.Count){ Write-Host "  env    : $($envExtra -join ' ')" }
 if($world -gt 1){
   for($i=0; $i -lt $world; $i++){ Write-Host ("  rank{0} {1} -> {2}" -f $i, $nodeList[$i], $next[$i]) }
   Write-Host "  master : $Master (rendezvous only, no tensor traffic)"
@@ -131,7 +149,8 @@ function RankEnv([int]$rank){
   @(
     "LLAMA_DIST_TP_RDMA=$(if($Transport -eq 'rdma'){1})"
     "LLAMA_DIST_TP_FULL_DUPLEX=$(if(-not $NoFullDuplex){1})"
-    "LLAMA_DIST_TP_RDMA_MAX_BYTES=$(if($RdmaMaxBytes -ge 0){$RdmaMaxBytes})"
+    "LLAMA_DIST_TP_RDMA_MAX_BYTES=$(if($RdmaMaxBytes -ge 0){$RdmaMaxBytes}elseif($RdmaMultiChunk){0})"
+    "LLAMA_DIST_TP_RDMA_MULTICHUNK=$(if($RdmaMultiChunk){1})"
     # A name whitelist for collectives; setting it can silently drop required all-reduces.
     'LLAMA_DIST_TP_COLLECT_PREFIXES='
     "LLAMA_DIST_TP_RING_NEXT_HOST=$($next[$rank])"
@@ -141,7 +160,17 @@ function RankEnv([int]$rank){
     # Both put mesh traffic on TCP; this launcher never does.
     'LLAMA_DIST_TP_MESH_REVERSE_TCP='
     'LLAMA_DIST_TP_MESH_LARGE='
+    # Off unless -ExtraEnv sets them. SPLIT_RECURRENT must be the same on every rank.
+    'LLAMA_DIST_TP_MESH_ND_LARGE='
+    'LLAMA_DIST_TP_SPLIT_RECURRENT='
+    'LLAMA_DIST_TP_RECORD_AHEAD='
   )
+}
+# A rank's whole environment: RankEnv without the names -ExtraEnv sets, then -ExtraEnv (also at
+# one rank).
+function AllEnv([int]$rank){
+  $names = @($envExtra | ForEach-Object { ($_ -split '=', 2)[0] })
+  @(@(RankEnv $rank) | Where-Object { $names -notcontains ($_ -split '=', 2)[0] }) + $envExtra
 }
 
 $logs = @{}
@@ -151,7 +180,7 @@ function LaunchRank([int]$rank){
   $log  = "$rd\$Tag.rank$rank.log"
   $logs[$rank] = $log
   # `set X=` clears X, and cmd carries on down the && chain whether or not X existed.
-  $envPfx = (@(RankEnv $rank) | ForEach-Object { "set $_&&" }) -join ''
+  $envPfx = (@(AllEnv $rank) | ForEach-Object { "set $_&&" }) -join ''
   $rankArg = if($world -gt 1){ " --world-rank $rank" } else { '' }
   # No leading quote in the cmd string: when a `cmd /c` line STARTS with a quote, cmd strips the
   # outer pair and the redirect silently never happens. Quotes further in are fine and let RunDir
@@ -188,7 +217,7 @@ while(`$sw.Elapsed.TotalSeconds -lt 90){
 for($r = $world - 1; $r -ge 1; $r--){ LaunchRank $r; Start-Sleep 10 }
 
 if($Rank0Manual){
-  $envLines = @(@(RankEnv 0) | ForEach-Object { "set $_" }) + 'set LLAMA_DISTPROF=1'
+  $envLines = @(@(AllEnv 0) | ForEach-Object { "set $_" }) + 'set LLAMA_DISTPROF=1'
   $rank0Arg = if($world -gt 1){ ' --world-rank 0' } else { '' }
 
   Write-Host ""
@@ -315,8 +344,8 @@ if($Transport -eq 'rdma'){
     if($meshTcp){ Write-Host "  *** a mesh direction fell back to TCP: this is NOT an all-RDMA mesh ***" }
   }
   if($prof){
-    Write-Host ("  largest all-reduce payload: {0} B, ND ceiling: {1}" -f $prof.max_coll_bytes, $(if($null -ne $an.nd_max_bytes){"$($an.nd_max_bytes) B"}else{'unknown'}))
-    if($overCeiling){ Write-Host "  *** payloads above the ND ceiling went over TCP (the prompt, usually); pass -ExtraArgs '-ub N', N = floor(262144 / (4 x n_embd)) ***" }
+    Write-Host ("  largest all-reduce payload: {0} B, ND ceiling: {1}" -f $prof.max_coll_bytes, $(if($null -eq $an.nd_max_bytes){'unknown'}elseif($an.nd_max_bytes -eq 0){'none'}else{"$($an.nd_max_bytes) B"}))
+    if($overCeiling){ Write-Host "  *** payloads above the ND ceiling went over TCP (the prompt, usually); pass -RdmaMultiChunk, or -ExtraArgs '-ub N', N = floor(262144 / (4 x n_embd)) ***" }
   }
 }
 if($an.foreign_rank_logs.Count){ Write-Host ("  *** rank(s) {0}: the log dials a different ring-next than this run set; it is from another run ***" -f ($an.foreign_rank_logs -join ', ')) }
@@ -360,6 +389,7 @@ $rec = [ordered]@{
   status=$an.status; end_reason=$endReason; build=$(if($an.builds.Count){$an.builds[0]}else{$null})
   model=(Split-Path $Model -Leaf); prompt=(Split-Path $Prompt -Leaf); n_predict=$NPred; ctx=$Ctx; extra_args=$ExtraArgs
   threads=$Threads; ngl=$Ngl; full_duplex=(-not $NoFullDuplex); mesh=[bool]$Mesh; mesh_relay=$MeshRelay
+  rdma_multichunk=[bool]$RdmaMultiChunk; extra_env=($envExtra -join ';')
   mesh_up=$(if($Mesh){ @($raw.Values | Where-Object { "$_" -match 'dist-tp all-reduce: full mesh' }).Count }else{ $null })
   mesh_tcp_ranks=$meshTcp; device=$Device; master=$(if($world -gt 1){$Master}else{$null})
   prefill_tps=$an.prefill_tps; decode_tps=$an.decode_tps
