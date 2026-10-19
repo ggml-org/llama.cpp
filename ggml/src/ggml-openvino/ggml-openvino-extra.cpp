@@ -697,5 +697,5 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
         ov_tensor = std::make_shared<ov::Tensor>(element_type, shape, tensor->data);
     }
 
-    return new ggml_openvino_tensor_extra(ov_tensor);
+    return new ggml_openvino_tensor_extra(ov_tensor, tensor->data);
 }

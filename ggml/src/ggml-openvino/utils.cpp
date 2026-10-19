@@ -64,13 +64,26 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
     if (ggml_tensor->op != GGML_OP_NONE || ggml_tensor->view_src != nullptr) {
         return std::nullopt;
     }
-    const auto * op = ggml_decoder->get_tensor_used_op(ggml_tensor);
-    if (!GgmlOvDecoder::is_kvcache(ggml_tensor, op) || !ggml_decoder->is_kvcache_token_rows(ggml_tensor)) {
-        return std::nullopt;
-    }
 
     const auto & compute_params = ggml_decoder->get_compute_params();
     if (compute_params.n_seq_active != 1 || compute_params.seq_active_start != 0) {
+        return std::nullopt;
+    }
+
+    const int ctx_per_seq = ggml_decoder->get_ctx_per_seq();
+    const int n_kv = compute_params.attention_size;
+    if (ctx_per_seq <= 0 || n_kv <= 0 || n_kv >= ctx_per_seq) {
+        return std::nullopt;
+    }
+
+    ov::Shape full_shape = GgmlOvDecoder::get_shape(ggml_tensor);
+    if (full_shape.size() != 4 || full_shape[0] != 1 || full_shape[1] != 1 ||
+        static_cast<int>(full_shape[2]) != ctx_per_seq) {
+        return std::nullopt;
+    }
+    // The consumer lookup scans the whole graph, so it runs after the cheap checks.
+    const auto * op = ggml_decoder->get_tensor_used_op(ggml_tensor);
+    if (!GgmlOvDecoder::is_kvcache(ggml_tensor, op) || !ggml_decoder->is_kvcache_token_rows(ggml_tensor)) {
         return std::nullopt;
     }
 
@@ -85,28 +98,19 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
     if (is_swa) {
         return std::nullopt;
     }
-    const int ctx_per_seq = ggml_decoder->get_ctx_per_seq();
-    const int n_kv = compute_params.attention_size;
-    if (ctx_per_seq <= 0 || n_kv <= 0 || n_kv >= ctx_per_seq) {
-        return std::nullopt;
-    }
-
-    ov::Shape full_shape = GgmlOvDecoder::get_shape(ggml_tensor);
-    if (full_shape.size() != 4 || full_shape[0] != 1 || full_shape[1] != 1 ||
-        static_cast<int>(full_shape[2]) != ctx_per_seq) {
-        return std::nullopt;
-    }
 
     ov::Shape sliced_shape = full_shape;
     sliced_shape[2] = static_cast<size_t>(n_kv);
 
-    if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
-        auto remote_context = ggml_openvino_get_remote_context();
-        auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
-        return gpu_context.create_tensor(ggml_decoder->get_ov_type(ggml_tensor), sliced_shape, ggml_tensor->data);
-    }
-
-    return ov::Tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), sliced_shape, ggml_tensor->data);
+    const auto type = GgmlOvDecoder::get_ov_type(ggml_tensor);
+    return ggml_decoder->cached_kv_tensor(ggml_tensor, type, sliced_shape, [&]() -> ov::Tensor {
+        if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
+            auto remote_context = ggml_openvino_get_remote_context();
+            auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
+            return gpu_context.create_tensor(type, sliced_shape, ggml_tensor->data);
+        }
+        return ov::Tensor(type, sliced_shape, ggml_tensor->data);
+    });
 }
 
 // For a KV cache in the 4-D layout (GgmlOvDecoder::is_kvcache_4d), a [1, ctx, n_heads_kv, head_size] tensor over the
@@ -120,12 +124,15 @@ std::optional<ov::Tensor> try_make_kv_4d_tensor(const std::shared_ptr<GgmlOvDeco
     const size_t n_heads_kv = static_cast<size_t>(ggml_decoder->get_n_heads_kv_for_tensor(ggml_tensor));
     const ov::Shape shape{1, static_cast<size_t>(ggml_tensor->ne[1]), n_heads_kv,
                           static_cast<size_t>(ggml_tensor->ne[0]) / n_heads_kv};
-    if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
-        auto remote_context = ggml_openvino_get_remote_context();
-        auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
-        return gpu_context.create_tensor(ggml_decoder->get_ov_type(ggml_tensor), shape, ggml_tensor->data);
-    }
-    return ov::Tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), shape, ggml_tensor->data);
+    const auto type = GgmlOvDecoder::get_ov_type(ggml_tensor);
+    return ggml_decoder->cached_kv_tensor(ggml_tensor, type, shape, [&]() -> ov::Tensor {
+        if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
+            auto remote_context = ggml_openvino_get_remote_context();
+            auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
+            return gpu_context.create_tensor(type, shape, ggml_tensor->data);
+        }
+        return ov::Tensor(type, shape, ggml_tensor->data);
+    });
 }
 
 static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurrent) {
@@ -840,6 +847,58 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     return GGML_STATUS_SUCCESS;
 }
 
+namespace {
+
+// Small host inputs and outputs go through backend-owned USM host tensors, so the GPU plugin has no per-call copies.
+constexpr size_t k_io_staging_max_bytes = 4u << 20;
+
+bool io_staging_enabled() {
+    static const bool enabled = ggml_openvino_is_gpu() && ggml_openvino_get_remote_context().has_value();
+    return enabled;
+}
+
+// Told from the ggml side: asking an ov::Tensor if it is remote is slow (it throws for a host tensor).
+bool is_host_input(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder, const std::string & name) {
+    if (ggml_decoder->get_model_extra_inputs().count(name) != 0) {
+        return true;
+    }
+    const auto * t = ggml_decoder->get_input_ggml_tensor(name);
+    return t != nullptr && !ggml_openvino_buffer_is_remote(t);
+}
+
+bool stageable_size(const ov::Tensor & t) {
+    return t.get_byte_size() > 0 && t.get_byte_size() <= k_io_staging_max_bytes;
+}
+
+ov::Tensor & staging_for(const GgmlOvDecoder & decoder, GgmlOvDecoder::ov_port_binding & b, const ov::Tensor & like) {
+    const size_t bytes = like.get_byte_size();
+    if (!b.staging || b.staging_bytes < bytes || b.staging.get_element_type() != like.get_element_type()) {
+        auto gpu_context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+        auto usm = gpu_context.create_usm_host_tensor(like.get_element_type(), like.get_shape());
+        b.staging_ptr = usm.get();
+        b.staging = usm;
+        b.staging_bytes = bytes;
+        b.staging_id = decoder.next_tensor_id();
+    } else if (b.staging.get_shape() != like.get_shape()) {
+        b.staging.set_shape(like.get_shape());
+    }
+    return b.staging;
+}
+
+// False when the port already holds this tensor (same id) with the same shape and type.
+bool needs_bind(GgmlOvDecoder::ov_port_binding & b, const ov::Tensor & t, uint64_t id) {
+    if (io_staging_enabled() && id != 0 && id == b.bound_id && t.get_element_type() == b.bound_type &&
+        t.get_shape() == b.bound_shape) {
+        return false;
+    }
+    b.bound_id = id;
+    b.bound_shape = t.get_shape();
+    b.bound_type = t.get_element_type();
+    return true;
+}
+
+}  // namespace
+
 enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::shared_ptr<ov_runtime_context> & r_ctx) {
     auto & core = ov_singleton_core();
     const auto & config = ggml_openvino_get_compile_config();
@@ -1355,16 +1414,38 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             reset_single_slot_recurrent_cache(cgraph, m_params, c_params);
         }
 
+        auto & in_bindings = ggml_decoder->port_bindings(true, ov_input_names.size(), infer_request.get());
         for (size_t i = 0; i < ov_input_names.size(); i++) {
             const auto & param_name = ov_input_names[i];
+            ggml_decoder->take_last_kv_tensor_id();  // clear
             auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
-            infer_request->set_input_tensor(i, input_tensor);
+            uint64_t id = ggml_decoder->take_last_kv_tensor_id();
+            auto & binding = in_bindings[i];
+            if (id == 0 && io_staging_enabled() && is_host_input(ggml_decoder, param_name) &&
+                stageable_size(input_tensor)) {
+                auto & staging = staging_for(*ggml_decoder, binding, input_tensor);
+                std::memcpy(binding.staging_ptr, input_tensor.data(), input_tensor.get_byte_size());
+                input_tensor = staging;
+                id = binding.staging_id;
+            }
+            if (needs_bind(binding, input_tensor, id)) {
+                infer_request->set_input_tensor(i, input_tensor);
+            }
 
             if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_INPUT")) {
                 print_input_tensor_info(param_name, input_tensor);
             }
         }
 
+        auto & out_bindings = ggml_decoder->port_bindings(false, ov_output_names.size(), infer_request.get());
+
+        struct staged_output {
+            void * dst;
+            const void * src;
+            size_t bytes;
+        };
+
+        std::vector<staged_output> staged_outputs;  // copied back after infer()
         for (size_t i = 0; i < ov_output_names.size(); i++) {
             // Debug-only outputs added via GGML_OPENVINO_DEBUG_NODE (see
             // translate_session.cpp) have no corresponding ggml tensor; leave
@@ -1380,13 +1461,29 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             if (ggml_nbytes(ggml_tensor) == 0) {
                 continue;
             }
+            ggml_decoder->take_last_kv_tensor_id();  // clear
             auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
-            infer_request->set_output_tensor(i, output_tensor);
+            uint64_t id = ggml_decoder->take_last_kv_tensor_id();
+            auto & binding = out_bindings[i];
+            if (id == 0 && io_staging_enabled() && !ggml_openvino_buffer_is_remote(ggml_tensor) &&
+                stageable_size(output_tensor)) {
+                void * dst = output_tensor.data();
+                const size_t bytes = output_tensor.get_byte_size();
+                output_tensor = staging_for(*ggml_decoder, binding, output_tensor);
+                staged_outputs.push_back({dst, binding.staging_ptr, bytes});
+                id = binding.staging_id;
+            }
+            if (needs_bind(binding, output_tensor, id)) {
+                infer_request->set_output_tensor(i, output_tensor);
+            }
         }
 
         ov_raw_infer_start = ggml_time_us();
         infer_request->infer();
         infer_end_time = ggml_time_us();
+        for (const auto & out : staged_outputs) {
+            std::memcpy(out.dst, out.src, out.bytes);
+        }
         if (stateful_recurrent) {
             const auto * inp_pos = get_inp_pos_tensor(cgraph);
             r_ctx->stateful_kv_size =
