@@ -1,0 +1,675 @@
+From b0fc6a52660d60a64b9ce0bcd7f28276a74ef9dd Mon Sep 17 00:00:00 2001
+From: jayneelatintel <jayneel.vora@intel.com>
+Date: Thu, 15 Oct 2026 08:10:52 -0700
+Subject: [PATCH 17/21] Vulkan: single-token Q8_0 flash attention for Intel
+ Xe2/Xe3 iGPUs, FA tuning knobs
+
+On Intel the scalar FA shader never groups the query heads of a KV head
+when there are 16 of them (max_gqa = block_rows = 8), so every K and V
+row is loaded and dequantized 16 times; grouping them
+(GGML_VK_FA_GQA_ROWS=16) needs more registers than the compiler has,
+and the shader spills.
+
+flash_attn_dec_xe.comp takes one chunk of 128 KV positions of one KV
+head per workgroup for all 16 query heads: int8 dot products for the
+scores (Q quantized on entry), max and row sums in shared memory, then
+P x V in four streams of 32 threads that each own 4 values of all 16
+heads. It writes split-k partials for the existing fa_split_k_reduce,
+which also applies the sinks.
+
+Used for N == 1, head size 128, Q8_0 K and V, exactly 16 query heads per
+KV head, no ALiBi or softcap, on the devices that get the Xe matvec.
+GGML_VK_FA_DEC_XE=0 turns it off, GGML_VK_FA_DEC_XE_CHUNK=32/64 changes
+the chunk, GGML_VK_FA_DEC_XE_DIAG=1/2/3 skips the score or P x V step
+for timing (wrong results).
+
+Knobs for the generic shader, all off by default: GGML_VK_FA_SPLIT_WGS
+(split_k target workgroup count), GGML_VK_FA_GQA_ROWS and
+GGML_VK_FA_SUBGROUP.
+
+test-backend-ops: the kernel's other paths on the model shape (1 and 4
+KV heads, sinks, no mask, two sequences, 40 positions, the cache's
+permuted layout). Every FLASH_ATTN_EXT case passes with the kernel on
+and off.
+---
+ ggml/src/ggml-vulkan/ggml-vulkan.cpp          | 147 +++++++-
+ .../vulkan-shaders/flash_attn_dec_xe.comp     | 343 ++++++++++++++++++
+ .../vulkan-shaders/vulkan-shaders-gen.cpp     |   4 +
+ tests/test-backend-ops.cpp                    |  25 +-
+ 4 files changed, 512 insertions(+), 7 deletions(-)
+ create mode 100644 ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp
+
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 4d142d2cb..ae7824e68 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -719,6 +719,12 @@ struct vk_device_struct {
+     bool xe_mmvq;          // Q2_K/Q3_K decode matvec from mul_mat_vecq_xe.comp
+     uint32_t xe_mmvq_rows; // rows per workgroup for it
+     uint32_t xe_mmvq_mode; // diagnostic mode for it, 0 = normal
++    uint32_t fa_split_wgs; // FA split_k: split the KV range until this many workgroups run, 0 = 2 per shader core
++    uint32_t fa_gqa_rows;  // scalar FA: group up to this many query heads of one KV head per workgroup, 0 = block_rows
++    uint32_t fa_subgroup;  // scalar FA on Intel: subgroup size for the reductions, 0 = shared memory only
++    bool fa_dec_xe;           // single-token Q8_0 flash attention from flash_attn_dec_xe.comp
++    uint32_t fa_dec_xe_chunk; // KV positions per workgroup for it
++    uint32_t fa_dec_xe_diag;  // timing experiments only (wrong results): GGML_VK_FA_DEC_XE_DIAG
+ 
+     bool subgroup_size_control;
+     uint32_t subgroup_min_size;
+@@ -963,6 +969,7 @@ struct vk_device_struct {
+     std::map<std::pair<uint32_t, uint32_t>, vk_pipeline> pipeline_fa_mask_opt;
+ 
+     vk_pipeline pipeline_flash_attn_split_k_reduce;
++    vk_pipeline pipeline_fa_dec_xe[2]; // [has mask]
+     vk_pipeline pipeline_count_experts;
+ 
+     // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
+@@ -3280,8 +3287,9 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device,
+ 
+     if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+         // Disable subgroup use due to performance issues when enforcing subgroup sizes
+-        result.subgroup_size = 32;
+-        result.disable_subgroups = true;
++        // (GGML_VK_FA_SUBGROUP turns it back on with the given size)
++        result.subgroup_size = device->fa_subgroup ? device->fa_subgroup : 32;
++        result.disable_subgroups = device->fa_subgroup == 0;
+     } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
+         result.subgroup_size = n_rows < 4 ? 32 : device->subgroup_size;
+     } else {
+@@ -4981,6 +4989,13 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+ 
+     ggml_vk_create_pipeline(device, device->pipeline_matmul_split_k_reduce, "split_k_reduce", split_k_reduce_len, split_k_reduce_data, "main", 2, 2 * sizeof(uint32_t), {256 * 4, 1, 1}, {}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
++#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
++    if (device->fa_dec_xe) {
++        for (uint32_t m = 0; m < 2; ++m) {
++            ggml_vk_create_pipeline(device, device->pipeline_fa_dec_xe[m], m ? "fa_dec_xe_q8_0_mask" : "fa_dec_xe_q8_0", fa_dec_xe_q8_0_len, fa_dec_xe_q8_0_data, "main", 7, sizeof(vk_flash_attn_push_constants), {1, 1, 1}, {128, device->fa_dec_xe_chunk, m, device->fa_dec_xe_diag}, 1, true, true, 16);
++        }
++    }
++#endif
+ 
+     for (auto &it : device->pipeline_fa_mask_opt) {
+         auto BrBc = it.first;
+@@ -6474,6 +6489,41 @@ static vk_device ggml_vk_get_device(size_t idx) {
+             device->xe_mmvq_mode = atoi(s);
+         }
+ 
++        // Flash attention tuning (0 = upstream behaviour): GGML_VK_FA_SPLIT_WGS, GGML_VK_FA_GQA_ROWS,
++        // GGML_VK_FA_SUBGROUP, see the fields.
++        device->fa_split_wgs = 0;
++        if (const char * s = getenv("GGML_VK_FA_SPLIT_WGS")) {
++            device->fa_split_wgs = std::max(0, atoi(s));
++        }
++        device->fa_gqa_rows = 0;
++        if (const char * s = getenv("GGML_VK_FA_GQA_ROWS")) {
++            device->fa_gqa_rows = std::min(32, std::max(0, atoi(s)));
++        }
++        device->fa_subgroup = 0;
++        if (const char * s = getenv("GGML_VK_FA_SUBGROUP")) {
++            const uint32_t sg = std::max(0, atoi(s));
++            device->fa_subgroup = sg >= device->subgroup_min_size && sg <= device->subgroup_max_size ? sg : 0;
++        }
++
++        // Single-token flash attention over a Q8_0 cache with head size 128 and 16 query heads per KV
++        // head (flash_attn_dec_xe.comp), on the same devices as the Xe matvec: GGML_VK_FA_DEC_XE=0 turns
++        // it off, GGML_VK_FA_DEC_XE_CHUNK sets the KV positions per workgroup (32, 64 or 128).
++        device->fa_dec_xe = device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE2 &&
++                            device->integer_dot_product && device->subgroup_size_control && device->subgroup_require_full_support &&
++                            device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16;
++        if (const char * s = getenv("GGML_VK_FA_DEC_XE")) {
++            device->fa_dec_xe = device->fa_dec_xe && atoi(s) != 0;
++        }
++        device->fa_dec_xe_chunk = 128;
++        if (const char * s = getenv("GGML_VK_FA_DEC_XE_CHUNK")) {
++            const int ch = atoi(s);
++            device->fa_dec_xe_chunk = ch <= 32 ? 32 : ch <= 64 ? 64 : 128;
++        }
++        device->fa_dec_xe_diag = 0;
++        if (const char * s = getenv("GGML_VK_FA_DEC_XE_DIAG")) {
++            device->fa_dec_xe_diag = (uint32_t) atoi(s) & 3;
++        }
++
+         ggml_vk_load_shaders(device);
+ 
+         // Prefer a dedicated transfer queue on AMD dGPUs (non-GCN) when graphics queue use is disabled.
+@@ -10149,6 +10199,71 @@ static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, co
+     return supported;
+ }
+ 
++#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
++// Single-token attention with flash_attn_dec_xe.comp: one workgroup per (KV chunk, KV head) for all 16
++// query heads of the KV head, always followed by the split-k reduce (which also applies the sinks).
++// ggml_vk_flash_attn has checked the shapes, types and strides.
++static void ggml_vk_flash_attn_dec_xe(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * v, const ggml_tensor * mask, const ggml_tensor * sinks, ggml_tensor * dst) {
++    const uint32_t HSV   = 128;
++    const uint32_t CH    = ctx->device->fa_dec_xe_chunk;
++    const uint32_t KV    = (uint32_t) k->ne[1];
++    const uint32_t k_num = CEIL_DIV(KV, CH);
++    const uint32_t ne1   = (uint32_t) dst->ne[1];
++    const uint32_t ne2   = (uint32_t) dst->ne[2];
++    const uint32_t ne3   = (uint32_t) dst->ne[3];
++
++    float scale;
++    memcpy(&scale, (const float *) dst->op_params + 0, sizeof(float));
++
++    const uint64_t split_k_size = (HSV * ne1 * sizeof(float) + ne1 * sizeof(float) * 2) * k_num * ne2 * ne3;
++    if (split_k_size > ctx->device->properties.limits.maxStorageBufferRange) {
++        GGML_ABORT("Requested preallocation size is too large");
++    }
++    if (ctx->prealloc_size_split_k < split_k_size) {
++        ctx->prealloc_size_split_k = split_k_size;
++        ggml_vk_preallocate_buffers(ctx, subctx);
++    }
++
++    vk_pipeline pipeline = ctx->device->pipeline_fa_dec_xe[mask ? 1 : 0];
++    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
++    ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
++
++    vk_subbuffer q_buf       = ggml_vk_tensor_subbuffer(ctx, q);
++    vk_subbuffer k_buf       = ggml_vk_tensor_subbuffer(ctx, k);
++    vk_subbuffer v_buf       = ggml_vk_tensor_subbuffer(ctx, v);
++    vk_subbuffer dst_buf     = ggml_vk_tensor_subbuffer(ctx, dst);
++    vk_subbuffer mask_buf    = mask ? ggml_vk_tensor_subbuffer(ctx, mask) : q_buf;
++    vk_subbuffer sinks_buf   = sinks ? ggml_vk_tensor_subbuffer(ctx, sinks) : q_buf;
++    vk_subbuffer split_k_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_split_k, 0);
++
++    const vk_flash_attn_push_constants pc = { 1, KV, ne1, ne2, ne3,
++                                              (uint32_t) q->ne[2], (uint32_t) q->ne[3],
++                                              (uint32_t) k->ne[2], (uint32_t) k->ne[3],
++                                              (uint32_t) v->ne[2], (uint32_t) v->ne[3],
++                                              mask ? (uint32_t) mask->ne[1] : 0, mask ? (uint32_t) mask->ne[2] : 0, mask ? (uint32_t) mask->ne[3] : 0,
++                                              (uint32_t) (q->nb[1] / sizeof(float)), (uint32_t) q->nb[2], (uint32_t) q->nb[3],
++                                              (uint32_t) (k->nb[1] / ggml_type_size(k->type)), (uint32_t) k->nb[2], (uint32_t) k->nb[3],
++                                              (uint32_t) (v->nb[1] / ggml_type_size(v->type)), (uint32_t) v->nb[2], (uint32_t) v->nb[3],
++                                              scale, 0.0f, 0.0f,
++                                              0, 0.0f, 0.0f,
++                                              16, CH, k_num };
++
++    if (ctx->prealloc_split_k_need_sync) {
++        ggml_vk_sync_buffers(ctx, subctx);
++    }
++    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
++                              {q_buf, k_buf, v_buf, mask_buf, sinks_buf, split_k_buf, q_buf},
++                              pc, { k_num, (uint32_t) k->ne[2], (uint32_t) q->ne[3] });
++
++    ggml_vk_sync_buffers(ctx, subctx);
++    const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, ne1, ne2, ne3, k_num, (sinks != nullptr) };
++    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_flash_attn_split_k_reduce,
++                              {split_k_buf, sinks_buf, dst_buf},
++                              pc2, { ne1, HSV, ne2 * ne3 });
++    ctx->prealloc_split_k_need_sync = true;
++}
++#endif
++
+ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * v, const ggml_tensor * mask, const ggml_tensor * sinks, ggml_tensor * dst) {
+     VK_LOG_DEBUG("ggml_vk_flash_attn((" << q << ", name=" << q->name << ", type=" << q->type << ", ne0=" << q->ne[0] << ", ne1=" << q->ne[1] << ", ne2=" << q->ne[2] << ", ne3=" << q->ne[3] << ", nb0=" << q->nb[0] << ", nb1=" << q->nb[1] << ", nb2=" << q->nb[2] << ", nb3=" << q->nb[3];
+     std::cerr << "), (" << k << ", name=" << k->name << ", type=" << k->type << ", ne0=" << k->ne[0] << ", ne1=" << k->ne[1] << ", ne2=" << k->ne[2] << ", ne3=" << k->ne[3] << ", nb0=" << k->nb[0] << ", nb1=" << k->nb[1] << ", nb2=" << k->nb[2] << ", nb3=" << k->nb[3];
+@@ -10200,6 +10315,20 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
+ 
+     assert(dst->type == GGML_TYPE_F32);
+     assert(q->type == GGML_TYPE_F32);
++
++#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
++    if (ctx->device->fa_dec_xe && N == 1 && HSK == 128 && HSV == 128 &&
++        k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0 &&
++        nek2 == nev2 && neq2 == 16 * nek2 && nek3 == nev3 && neq3 % nek3 == 0 &&
++        (!mask || (nem2 == 1 && nem3 == 1)) &&
++        ((const float *) dst->op_params)[1] == 0.0f && ((const float *) dst->op_params)[2] == 0.0f &&
++        nbq2 % 16 == 0 && nbq3 % 16 == 0 &&
++        nbk1 % 8 == 0 && nbk2 % 8 == 0 && nbk3 % 8 == 0 && nbv1 % 4 == 0 && nbv2 % 4 == 0 && nbv3 % 4 == 0) {
++        ggml_vk_flash_attn_dec_xe(ctx, subctx, q, k, v, mask, sinks, dst);
++        return;
++    }
++#endif
++
+     uint32_t gqa_ratio = 1;
+     uint32_t qk_ratio = neq2 / nek2;
+     uint32_t workgroups_x = (uint32_t)neq1;
+@@ -10211,7 +10340,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
+     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
+     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
+     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k->type, v->type, f32acc);
+-    const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
++    const uint32_t max_gqa = std::min(std::max(tuning_params.block_rows, ctx->device->fa_gqa_rows), 32u);
+ 
+     if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
+         qk_ratio * nek2 == neq2 && nek2 == nev2 && nem2 <= 1) {
+@@ -10225,6 +10354,11 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
+ 
+     tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k->type, v->type, f32acc);
+ 
++    // A group wider than the tuned block (GGML_VK_FA_GQA_ROWS) still takes one workgroup per KV head.
++    if (gqa_ratio > tuning_params.block_rows && tuning_params.path == FA_SCALAR) {
++        tuning_params.block_rows = gqa_ratio;
++    }
++
+     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
+     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
+     uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
+@@ -10297,12 +10431,13 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
+     const uint32_t Tr = CEIL_DIV(N, Br);
+ 
+     // Try to use split_k when KV is large enough to be worth the overhead.
++    const uint32_t split_wgs = ctx->device->fa_split_wgs ? ctx->device->fa_split_wgs : shader_core_count * 2;
+     if (gqa_ratio > 1 && workgroups_x <= Br) {
+-        split_k = shader_core_count * 2 / (workgroups_x * workgroups_y * workgroups_z);
++        split_k = split_wgs / (workgroups_x * workgroups_y * workgroups_z);
+     } else if (gqa_ratio <= 1) {
+         uint32_t total_wgs_no_split = Tr * workgroups_y * workgroups_z;
+-        if (total_wgs_no_split < shader_core_count * 2) {
+-            split_k = shader_core_count * 2 / total_wgs_no_split;
++        if (total_wgs_no_split < split_wgs) {
++            split_k = split_wgs / total_wgs_no_split;
+         }
+     }
+ 
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp
+new file mode 100644
+index 000000000..df8de769c
+--- /dev/null
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp
+@@ -0,0 +1,343 @@
++#version 450
++
++#extension GL_EXT_control_flow_attributes : enable
++#extension GL_EXT_shader_16bit_storage : require
++#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
++#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
++#extension GL_EXT_integer_dot_product : require
++
++// Single-token flash attention for Intel Xe2/Xe3 iGPUs: Q8_0 K and V of head size 128, 16 query
++// heads per KV head (Qwen3-235B-A22B and models of the same attention shape).
++//
++// The generic scalar shader either gives each query head its own workgroup, so every K and V row
++// is loaded and dequantized 16 times, or, with the heads grouped, needs more registers than the
++// Intel compiler has and spills. Here one workgroup takes CH consecutive KV positions of one KV
++// head for all 16 of its query heads, in three steps that share nothing but shared memory:
++//   1. scores: each thread dots one K row against HPT query heads with the int8 dot product
++//      (Q is quantized to 8 bits per 32 values on entry, as the generic MMQ path does);
++//   2. the max of each head over the chunk (a tree in shared memory), then the exponentials;
++//   3. P x V: four streams each walk a quarter of the chunk, a thread owning 4 values of the head
++//      dimension for all 16 heads; the streams are added up in shared memory.
++// The result is always the split-k partial (unnormalized O, row sum L, row max M) that
++// fa_split_k_reduce combines, so sinks and the division by L happen there.
++//
++// A Q8_0 row of 128 values is 136 bytes: blocks (2-byte scale + 32 int8) at bytes 0, 34, 68, 102.
++// K rows are read as 8-byte pairs and V as dwords (the host checks the alignment): each pair of blocks is 17 dwords,
++// the even block's scale is the low half of dword 0 and its quants start mid-dword, the odd
++// block's scale is the high half of dword 8 and its quants are dwords 9..16.
++
++layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
++
++layout (constant_id = 0) const uint WG = 128;      // threads; phase 3 needs exactly 128
++layout (constant_id = 1) const uint CH = 128;      // KV positions per workgroup: 32, 64 or 128
++layout (constant_id = 2) const uint HAS_MASK = 1;
++layout (constant_id = 3) const uint DIAG = 0;      // timing only, wrong results: 1 skips the K dot products, 2 the P x V loop
++
++const uint D   = 128;            // head size of K and V
++const uint G   = 16;             // query heads per KV head
++const uint NC  = G / 4;          // columns of 4 heads
++const uint HPT = G * CH / WG;    // heads per thread in step 1
++const uint PP  = CH * NC / WG;   // positions per thread in the first step of the max
++
++layout (push_constant) uniform parameter {
++    uint32_t N;
++    uint32_t KV;
++
++    uint32_t ne1;
++    uint32_t ne2;
++    uint32_t ne3;
++
++    uint32_t neq2;
++    uint32_t neq3;
++    uint32_t nek2;
++    uint32_t nek3;
++    uint32_t nev2;
++    uint32_t nev3;
++    uint32_t nem1;
++    uint32_t nem2;
++    uint32_t nem3;
++
++    uint32_t nb01;
++    uint32_t nb02;
++    uint32_t nb03;
++    uint32_t nb11;
++    uint32_t nb12;
++    uint32_t nb13;
++    uint32_t nb21;
++    uint32_t nb22;
++    uint32_t nb23;
++
++    float scale;
++    float max_bias;
++    float logit_softcap;
++
++    uint32_t mask_n_head_log2;
++    float m0;
++    float m1;
++
++    uint32_t gqa_ratio;
++    uint32_t split_kv;
++    uint32_t k_num;
++} p;
++
++layout (binding = 0) readonly buffer Q {vec4 data_qv4[];};
++layout (binding = 1) readonly buffer K {uvec2 data_k2[];};
++layout (binding = 2) readonly buffer V {uint data_v[];};
++layout (binding = 3) readonly buffer M {float16_t data_m[];};
++layout (binding = 5) writeonly buffer O {float data_o[];};
++layout (binding = 5) writeonly buffer OV4 {vec4 data_ov4[];};
++
++shared ivec4 qq[G * D / 16];     // Q as int8: head h, block b at [h * 8 + b * 2 + 0..1]
++shared float qdsh[G * D / 32];   // Q scales: head h, block b at [h * 4 + b]
++shared vec4  psh[CH * NC];       // scores, then exp(score - max): position j, heads 4c..4c+3 at [j * NC + c]
++shared vec4  red[WG];             // column maxes
++shared vec4  redl[WG];            // column sums
++shared vec4  comb[2 * G * 32];    // partial O of two streams: [stream][head][lane]
++
++#define NEG_FLT_MAX_OVER_2 uintBitsToFloat(0xFEFFFFFF)
++#define NEG_INF uintBitsToFloat(0xFF800000)
++
++void main() {
++    const uint tid   = gl_LocalInvocationID.x;
++    const uint chunk = gl_WorkGroupID.x;
++    const uint ik2   = gl_WorkGroupID.y;            // KV head
++    const uint iq3   = gl_WorkGroupID.z;
++    const uint iq2   = ik2 * G;                     // its first query head
++    const uint ik3   = iq3 / (p.neq3 / p.nek3);
++    const uint iv3   = iq3 / (p.neq3 / p.nev3);
++
++    const uint j0 = chunk * CH;
++    const uint nj = min(CH, p.KV - j0);
++
++    // 0. Q times the softmax scale as int8, one 32-value block per thread
++    if (tid < G * D / 32) {
++        const uint h = tid / (D / 32);
++        const uint b = tid % (D / 32);
++        const uint qb = ((iq2 + h) * p.nb02 + iq3 * p.nb03) / 16 + b * 8;
++        vec4 x[8];
++        float amax = 0.0;
++        [[unroll]] for (uint i = 0; i < 8; ++i) {
++            x[i] = data_qv4[qb + i] * p.scale;
++            const vec4 a = abs(x[i]);
++            amax = max(amax, max(max(a.x, a.y), max(a.z, a.w)));
++        }
++        const float d = amax / 127.0;
++        const float id = d != 0.0 ? 1.0 / d : 0.0;
++        [[unroll]] for (uint i = 0; i < 2; ++i) {
++            qq[h * 8 + b * 2 + i] = ivec4(pack32(i8vec4(round(x[i * 4 + 0] * id))),
++                                          pack32(i8vec4(round(x[i * 4 + 1] * id))),
++                                          pack32(i8vec4(round(x[i * 4 + 2] * id))),
++                                          pack32(i8vec4(round(x[i * 4 + 3] * id))));
++        }
++        qdsh[h * 4 + b] = d;
++    }
++    barrier();
++
++    // 1. scores of position jl for heads h0 .. h0 + HPT - 1
++    const uint jl = tid % CH;
++    const uint h0 = (tid / CH) * HPT;
++    float s[HPT];
++    if (jl < nj) {
++        [[unroll]] for (uint h = 0; h < HPT; ++h) {
++            s[h] = 0.0;
++        }
++        if ((DIAG & 1) == 0) {
++        const uint kw = (ik2 * p.nb12 + ik3 * p.nb13 + (j0 + jl) * p.nb11 * 34) / 8;
++        uint wr[34];
++        [[unroll]] for (uint i = 0; i < 17; ++i) {
++            const uvec2 t = data_k2[kw + i];
++            wr[2 * i] = t.x;
++            wr[2 * i + 1] = t.y;
++        }
++        [[unroll]] for (uint pr = 0; pr < 2; ++pr) {
++            int ke[8], ko[8];
++            [[unroll]] for (uint i = 0; i < 8; ++i) {
++                ke[i] = int((wr[pr * 17 + i] >> 16) | (wr[pr * 17 + i + 1] << 16));
++                ko[i] = int(wr[pr * 17 + 9 + i]);
++            }
++            const float de = unpackHalf2x16(wr[pr * 17]).x;
++            const float dd = unpackHalf2x16(wr[pr * 17 + 8]).y;
++            [[unroll]] for (uint h = 0; h < HPT; ++h) {
++                const uint qi = (h0 + h) * 8 + pr * 4;
++                const ivec4 a0 = qq[qi + 0];
++                const ivec4 a1 = qq[qi + 1];
++                const ivec4 b0 = qq[qi + 2];
++                const ivec4 b1 = qq[qi + 3];
++                int ae = dotPacked4x8EXT(a0.x, ke[0]);
++                ae    += dotPacked4x8EXT(a0.y, ke[1]);
++                ae    += dotPacked4x8EXT(a0.z, ke[2]);
++                ae    += dotPacked4x8EXT(a0.w, ke[3]);
++                ae    += dotPacked4x8EXT(a1.x, ke[4]);
++                ae    += dotPacked4x8EXT(a1.y, ke[5]);
++                ae    += dotPacked4x8EXT(a1.z, ke[6]);
++                ae    += dotPacked4x8EXT(a1.w, ke[7]);
++                int ao = dotPacked4x8EXT(b0.x, ko[0]);
++                ao    += dotPacked4x8EXT(b0.y, ko[1]);
++                ao    += dotPacked4x8EXT(b0.z, ko[2]);
++                ao    += dotPacked4x8EXT(b0.w, ko[3]);
++                ao    += dotPacked4x8EXT(b1.x, ko[4]);
++                ao    += dotPacked4x8EXT(b1.y, ko[5]);
++                ao    += dotPacked4x8EXT(b1.z, ko[6]);
++                ao    += dotPacked4x8EXT(b1.w, ko[7]);
++                const uint di = (h0 + h) * 4 + pr * 2;
++                s[h] += float(ae) * (qdsh[di] * de) + float(ao) * (qdsh[di + 1] * dd);
++            }
++        }
++        }
++        if (HAS_MASK != 0) {
++            const float m = float(data_m[j0 + jl]);
++            [[unroll]] for (uint h = 0; h < HPT; ++h) {
++                s[h] += m;
++            }
++        }
++    } else {
++        [[unroll]] for (uint h = 0; h < HPT; ++h) {
++            s[h] = NEG_INF;
++        }
++    }
++    [[unroll]] for (uint c = 0; c < HPT / 4; ++c) {
++        psh[jl * NC + h0 / 4 + c] = vec4(s[c * 4 + 0], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]);
++    }
++    barrier();
++
++    // 2. max of each head over the chunk, then the exponentials
++    {
++        const uint c = tid % NC;
++        const uint jp = (tid / NC) * PP;
++        vec4 m = psh[jp * NC + c];
++        [[unroll]] for (uint i = 1; i < PP; ++i) {
++            m = max(m, psh[(jp + i) * NC + c]);
++        }
++        red[tid] = m;
++    }
++    barrier();
++    [[unroll]] for (uint st = WG / 2; st >= NC; st >>= 1) {
++        if (tid < st) {
++            red[tid] = max(red[tid], red[tid + st]);
++        }
++        barrier();
++    }
++    // red[c] now holds the max of column c; the floor keeps exp() finite in a fully masked chunk
++    bool any_live = false;
++    [[unroll]] for (uint c = 0; c < NC; ++c) {
++        any_live = any_live || any(greaterThan(red[c], vec4(NEG_FLT_MAX_OVER_2)));
++    }
++    [[unroll]] for (uint c = 0; c < HPT / 4; ++c) {
++        const vec4 mc = max(red[h0 / 4 + c], vec4(NEG_FLT_MAX_OVER_2));
++        psh[jl * NC + h0 / 4 + c] = exp(vec4(s[c * 4 + 0], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]) - mc);
++    }
++    barrier();
++
++    // row sums of the exponentials, the same way as the max
++    {
++        const uint c = tid % NC;
++        const uint jp = (tid / NC) * PP;
++        vec4 sm = psh[jp * NC + c];
++        [[unroll]] for (uint i = 1; i < PP; ++i) {
++            sm += psh[(jp + i) * NC + c];
++        }
++        redl[tid] = sm;
++    }
++    barrier();
++    [[unroll]] for (uint st = WG / 2; st >= NC; st >>= 1) {
++        if (tid < st) {
++            redl[tid] += redl[tid + st];
++        }
++        barrier();
++    }
++
++    // 3. O = P x V. Four streams of 32 threads each take a quarter of the chunk; in a stream, lane l
++    // owns values 4g..4g+3 of all 16 heads. Within 16 lanes all blocks have the same parity: lanes
++    // 0-7 block 0, 8-15 block 2, 16-23 block 1, 24-31 block 3.
++    const uint l   = tid % 32;
++    const uint sid = tid / 32;
++    const uint blk = ((l >> 3) & 1) * 2 + (l >> 4);
++    const uint qi  = l & 7;
++    const uint g   = blk * 8 + qi;
++    const bool odd = (blk & 1) != 0;
++    const uint pw  = (blk >> 1) * 17;
++    const uint wq0 = pw + (odd ? 9 + qi : qi);
++    const uint wq1 = odd ? wq0 : wq0 + 1;
++    const uint wd  = pw + (odd ? 8 : 0);
++
++    vec4 o[G];
++    [[unroll]] for (uint h = 0; h < G; ++h) {
++        o[h] = vec4(0.0);
++    }
++    const uint jn = (DIAG & 2) != 0 ? 0 : any_live ? nj : 0;
++    const uint ja = sid * (CH / 4);
++    const uint jb = min(ja + CH / 4, jn);
++    const uint vstride = p.nb21 * 34 / 4;
++    uint vw = (ik2 * p.nb22 + iv3 * p.nb23 + (j0 + ja) * p.nb21 * 34) / 4;
++    // U positions per iteration, all loads first, so that each thread has several in flight
++    const uint U = 2;
++    uint j = ja;
++    for (; j + U <= jb; j += U, vw += U * vstride) {
++        uint w0[U], w1[U], wdv[U];
++        [[unroll]] for (uint u = 0; u < U; ++u) {
++            w0[u]  = data_v[vw + u * vstride + wq0];
++            w1[u]  = data_v[vw + u * vstride + wq1];
++            wdv[u] = data_v[vw + u * vstride + wd];
++        }
++        [[unroll]] for (uint u = 0; u < U; ++u) {
++            const vec2 dv = unpackHalf2x16(wdv[u]);
++            const uint qv = odd ? w0[u] : ((w0[u] >> 16) | (w1[u] << 16));
++            const vec4 vf = vec4(unpack8(int32_t(qv)));
++            const float d = odd ? dv.y : dv.x;
++            [[unroll]] for (uint c = 0; c < NC; ++c) {
++                const vec4 pd = psh[(j + u) * NC + c] * d;
++                o[c * 4 + 0] += pd.x * vf;
++                o[c * 4 + 1] += pd.y * vf;
++                o[c * 4 + 2] += pd.z * vf;
++                o[c * 4 + 3] += pd.w * vf;
++            }
++        }
++    }
++    for (; j < jb; ++j, vw += vstride) {
++        const uint w0 = data_v[vw + wq0];
++        const uint w1 = data_v[vw + wq1];
++        const vec2 dv = unpackHalf2x16(data_v[vw + wd]);
++        const uint qv = odd ? w0 : ((w0 >> 16) | (w1 << 16));
++        const vec4 vf = vec4(unpack8(int32_t(qv)));
++        const float d = odd ? dv.y : dv.x;
++        [[unroll]] for (uint c = 0; c < NC; ++c) {
++            const vec4 pd = psh[j * NC + c] * d;
++            o[c * 4 + 0] += pd.x * vf;
++            o[c * 4 + 1] += pd.y * vf;
++            o[c * 4 + 2] += pd.z * vf;
++            o[c * 4 + 3] += pd.w * vf;
++        }
++    }
++
++    // add up the four streams: 3 and 2 into 1 and 0, then 1 into 0
++    if (sid >= 2) {
++        [[unroll]] for (uint h = 0; h < G; ++h) {
++            comb[((sid - 2) * G + h) * 32 + l] = o[h];
++        }
++    }
++    barrier();
++    if (sid < 2) {
++        [[unroll]] for (uint h = 0; h < G; ++h) {
++            o[h] += comb[(sid * G + h) * 32 + l];
++        }
++    }
++    barrier();
++    if (sid == 1) {
++        [[unroll]] for (uint h = 0; h < G; ++h) {
++            comb[h * 32 + l] = o[h];
++        }
++    }
++    barrier();
++    if (sid == 0) {
++        // split-k partials, laid out as fa_split_k_reduce reads them
++        const uint ob = (D * p.ne1 * (chunk + p.k_num * p.ne2 * iq3)) / 4;
++        [[unroll]] for (uint h = 0; h < G; ++h) {
++            data_ov4[ob + (iq2 + h) * (D / 4) + g] = o[h] + comb[h * 32 + l];
++        }
++        if (l < G) {
++            const uint lm = D * p.ne1 * p.ne2 * p.ne3 * p.k_num + p.ne1 * 2 * (chunk + p.k_num * p.ne2 * iq3);
++            data_o[lm + iq2 + l] = redl[l / 4][l % 4];
++            data_o[lm + p.ne1 + iq2 + l] = max(red[l / 4][l % 4], NEG_FLT_MAX_OVER_2);
++        }
++    }
++}
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+index f3ef5bad0..d3b73ba76 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -844,6 +844,10 @@ void process_shaders() {
+ 
+     string_to_spv("split_k_reduce", "mul_mat_split_k_reduce.comp", {});
+     string_to_spv("fa_split_k_reduce", "flash_attn_split_k_reduce.comp", {});
++#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
++    // Intel Xe2/Xe3 single-token attention over a Q8_0 cache
++    string_to_spv("fa_dec_xe_q8_0", "flash_attn_dec_xe.comp", {});
++#endif
+ 
+     string_to_spv("fa_mask_opt", "flash_attn_mask_opt.comp", {});
+ 
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 1b77cc3d8..646783a85 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -8688,6 +8688,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+         }
+     }
+ 
++    // and its single-token flash attention: 2 kv heads of 16 q heads each, so the 16 q heads of a
++    // kv head can share one workgroup; kv 1000 is not a multiple of any block size
++    for (ggml_type kv_type : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
++        for (int64_t kv : {256, 1000, 1024, 2048}) {
++            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, kv, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, kv_type, kv_type));
++        }
++    }
++    // the Intel decode kernel's other paths on that shape: 1 and 4 kv heads (3 and 1 nodes), sinks,
++    // no mask, a second sequence, fewer positions than one chunk, and the K/V cache's own layout
++    // (positions of all kv heads interleaved)
++    for (int64_t nh : {1, 4}) {
++        test_cases.emplace_back(new test_flash_attn_ext(128, 128, nh, {16, 1}, 1000, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    }
++    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1000, 1, true,  true,  0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1000, 1, false, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 2}, 1000, 1, false, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1},   40, 1, true,  false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1000, 1, true,  false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}));
++
+     for (ggml_type type_a : base_types) {
+         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+             for (int n : {1, 16}) {
+@@ -9632,7 +9651,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {1, 1}));   // attn_v, 2 kv heads
+     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32, 128, 1, 4096, {1, 1}, {1, 1}));   // ffn_gate_inp (router)
+     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 75968, 1, 4096, {1, 1}, {1, 1})); // output, half the vocab
+-    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1024, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
++    for (ggml_type kv_type : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) { // flash attention, 2 kv heads of 16 q heads each
++        for (int64_t kv : {1024, 2048, 4096}) {
++            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, kv, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, kv_type, kv_type));
++        }
++    }
+ 
+     return test_cases;
+ }
+-- 
+2.55.0.windows.3
+

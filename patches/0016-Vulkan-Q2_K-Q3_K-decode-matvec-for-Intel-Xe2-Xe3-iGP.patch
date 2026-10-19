@@ -1,0 +1,524 @@
+From 11557175471b03d72e3b0d74ccee19a75b6c3cf4 Mon Sep 17 00:00:00 2001
+From: jayneelatintel <jayneel.vora@intel.com>
+Date: Thu, 15 Oct 2026 06:07:38 -0700
+Subject: [PATCH 16/21] Vulkan: Q2_K/Q3_K decode matvec for Intel Xe2/Xe3 iGPUs
+
+On these iGPUs the generic q8_1 matvec (mul_mat_vecq.comp) is limited
+by instruction issue, not memory: with the weights in cache it is no
+faster. mul_mat_vecq_xe.comp replaces it for Q2_K and Q3_K, n = 1..8,
+plain and MUL_MAT_ID (fused bias/scale kept through reduce_result):
+
+- one 16-lane subgroup per workgroup, 4 lanes per row; a lane owns the
+  four scale groups that share one set of quant dwords (and Q3_K hmask
+  dwords), so it loads them once per block and the plane masks are
+  constants
+- fields masked in place and dotted with the mixed-sign dot product,
+  the power of two removed once per group
+- Q3_K's 2-byte-aligned blocks read as aligned dwords, realigned only
+  when needed; rows assigned so that branch stays uniform
+- activations, their per-group sums and scales prepared once per block
+  for all rows of the workgroup
+
+On by default on the Intel devices ggml-vulkan classifies as Xe2 that
+have integer dot products and 16-lane subgroups. GGML_VK_XE_MMVQ=0
+turns it off; GGML_VK_XE_MMVQ_ROWS sets the rows per workgroup (a
+multiple of 4, default 8); GGML_VK_XE_MODE selects diagnostics (1 loads
+only, 2 weights in cache; wrong results). Also GGML_VK_RM_KQ,
+GGML_VK_RM_KQ_INT and GGML_VK_DMMV_WG override the stock matvec's rows
+and workgroup size.
+
+test-backend-ops: eval cases at the Qwen3-235B-A22B decode shapes (odd
+block counts, partial workgroups, fused expert weights) and perf cases
+for every decode matvec of that model.
+---
+ ggml/src/ggml-vulkan/ggml-vulkan.cpp          |  64 +++-
+ .../vulkan-shaders/mul_mat_vecq_xe.comp       | 278 ++++++++++++++++++
+ .../vulkan-shaders/vulkan-shaders-gen.cpp     |   5 +
+ tests/test-backend-ops.cpp                    |  33 +++
+ 4 files changed, 376 insertions(+), 4 deletions(-)
+ create mode 100644 ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vecq_xe.comp
+
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 0e2257384..4d142d2cb 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -715,6 +715,10 @@ struct vk_device_struct {
+     bool integer_dot_product;
+     // 0: default, 1: force mmvq, -1: disable mmvq
+     int32_t mmvq_mode;
++    int32_t dmmv_wg_force; // -1: heuristic, else a dmmv_wg_sizes value (GGML_VK_DMMV_WG)
++    bool xe_mmvq;          // Q2_K/Q3_K decode matvec from mul_mat_vecq_xe.comp
++    uint32_t xe_mmvq_rows; // rows per workgroup for it
++    uint32_t xe_mmvq_mode; // diagnostic mode for it, 0 = normal
+ 
+     bool subgroup_size_control;
+     uint32_t subgroup_min_size;
+@@ -4717,6 +4721,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+         rm_stdq = 2;
+         rm_stdq_int = 2;
+     }
++    // Rows per workgroup overrides for the k-quant matvec shaders: GGML_VK_RM_KQ (float path) and
++    // GGML_VK_RM_KQ_INT (integer-dot path).
++    if (const char * s = getenv("GGML_VK_RM_KQ"))     { rm_kq     = std::max(1, atoi(s)); }
++    if (const char * s = getenv("GGML_VK_RM_KQ_INT")) { rm_kq_int = std::max(1, atoi(s)); }
+     uint32_t rm_iq = 2 * rm_kq;
+ 
+     const bool use_subgroups = device->subgroup_arithmetic;
+@@ -4809,8 +4817,14 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+ 
+                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_MXFP4][i], "mul_mat_vec_mxfp4_q8_1_f32", arr_dmmv_mxfp4_q8_1_f32_len[reduc], arr_dmmv_mxfp4_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 2*rm_stdq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
+ 
+-                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q2_K][i], "mul_mat_vec_q2_k_q8_1_f32", arr_dmmv_q2_k_q8_1_f32_len[reduc], arr_dmmv_q2_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 2*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
+-                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q3_K][i], "mul_mat_vec_q3_k_q8_1_f32", arr_dmmv_q3_k_q8_1_f32_len[reduc], arr_dmmv_q3_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
++                if (device->xe_mmvq) {
++                    const uint32_t rx = device->xe_mmvq_rows;
++                    ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q2_K][i], "mul_mat_vec_q2_k_q8_1_f32_xe", mul_mat_vec_q2_k_q8_1_f32_xe_len, mul_mat_vec_q2_k_q8_1_f32_xe_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rx, 1, 1}, {16, rx, i+1, device->xe_mmvq_mode}, 1, true, true, 16);
++                    ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q3_K][i], "mul_mat_vec_q3_k_q8_1_f32_xe", mul_mat_vec_q3_k_q8_1_f32_xe_len, mul_mat_vec_q3_k_q8_1_f32_xe_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rx, 1, 1}, {16, rx, i+1, device->xe_mmvq_mode}, 1, true, true, 16);
++                } else {
++                    ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q2_K][i], "mul_mat_vec_q2_k_q8_1_f32", arr_dmmv_q2_k_q8_1_f32_len[reduc], arr_dmmv_q2_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 2*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
++                    ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q3_K][i], "mul_mat_vec_q3_k_q8_1_f32", arr_dmmv_q3_k_q8_1_f32_len[reduc], arr_dmmv_q3_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
++                }
+                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q4_K][i], "mul_mat_vec_q4_k_q8_1_f32", arr_dmmv_q4_k_q8_1_f32_len[reduc], arr_dmmv_q4_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
+                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q5_K][i], "mul_mat_vec_q5_k_q8_1_f32", arr_dmmv_q5_k_q8_1_f32_len[reduc], arr_dmmv_q5_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
+                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q6_K][i], "mul_mat_vec_q6_k_q8_1_f32", arr_dmmv_q6_k_q8_1_f32_len[reduc], arr_dmmv_q6_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
+@@ -4861,8 +4875,14 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+ 
+             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_MXFP4], "mul_mat_vec_id_mxfp4_q8_1_f32", arr_dmmv_id_mxfp4_q8_1_f32_len[reduc], arr_dmmv_id_mxfp4_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {2*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 2*rm_stdq_int}, 1, true, use_subgroups, subgroup_size_int);
+ 
+-            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q2_K], "mul_mat_vec_id_q2_k_q8_1_f32", arr_dmmv_id_q2_k_q8_1_f32_len[reduc], arr_dmmv_id_q2_k_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {2*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 2*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
+-            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q3_K], "mul_mat_vec_id_q3_k_q8_1_f32", arr_dmmv_id_q3_k_q8_1_f32_len[reduc], arr_dmmv_id_q3_k_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
++            if (device->xe_mmvq) {
++                const uint32_t rx = device->xe_mmvq_rows;
++                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q2_K], "mul_mat_vec_id_q2_k_q8_1_f32_xe", mul_mat_vec_id_q2_k_q8_1_f32_xe_len, mul_mat_vec_id_q2_k_q8_1_f32_xe_data, "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {rx, 1, 1}, {16, rx, 1, device->xe_mmvq_mode}, 1, true, true, 16);
++                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q3_K], "mul_mat_vec_id_q3_k_q8_1_f32_xe", mul_mat_vec_id_q3_k_q8_1_f32_xe_len, mul_mat_vec_id_q3_k_q8_1_f32_xe_data, "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {rx, 1, 1}, {16, rx, 1, device->xe_mmvq_mode}, 1, true, true, 16);
++            } else {
++                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q2_K], "mul_mat_vec_id_q2_k_q8_1_f32", arr_dmmv_id_q2_k_q8_1_f32_len[reduc], arr_dmmv_id_q2_k_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {2*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 2*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
++                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q3_K], "mul_mat_vec_id_q3_k_q8_1_f32", arr_dmmv_id_q3_k_q8_1_f32_len[reduc], arr_dmmv_id_q3_k_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
++            }
+             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q4_K], "mul_mat_vec_id_q4_k_q8_1_f32", arr_dmmv_id_q4_k_q8_1_f32_len[reduc], arr_dmmv_id_q4_k_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
+             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q5_K], "mul_mat_vec_id_q5_k_q8_1_f32", arr_dmmv_id_q5_k_q8_1_f32_len[reduc], arr_dmmv_id_q5_k_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
+             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q6_K], "mul_mat_vec_id_q6_k_q8_1_f32", arr_dmmv_id_q6_k_q8_1_f32_len[reduc], arr_dmmv_id_q6_k_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
+@@ -6436,6 +6456,24 @@ static vk_device ggml_vk_get_device(size_t idx) {
+         descriptor_set_layout_create_info.setPNext(&dslbfci);
+         device->dsl = device->device.createDescriptorSetLayout(descriptor_set_layout_create_info);
+ 
++        // Q2_K/Q3_K decode matvec with fewer instructions per block (mul_mat_vecq_xe.comp) on Intel Xe2/Xe3
++        // (read by ggml_vk_load_shaders, so set before it):
++        // GGML_VK_XE_MMVQ=0 turns it off, GGML_VK_XE_MMVQ_ROWS sets the rows per workgroup (a multiple of 4).
++        device->xe_mmvq = device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE2 &&
++                          device->integer_dot_product && device->subgroup_size_control && device->subgroup_require_full_support &&
++                          device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16 && device->subgroup_arithmetic;
++        if (const char * s = getenv("GGML_VK_XE_MMVQ")) {
++            device->xe_mmvq = device->xe_mmvq && atoi(s) != 0;
++        }
++        device->xe_mmvq_rows = 8;
++        if (const char * s = getenv("GGML_VK_XE_MMVQ_ROWS")) {
++            device->xe_mmvq_rows = std::max(1, (atoi(s) + 3) / 4) * 4;
++        }
++        device->xe_mmvq_mode = 0;
++        if (const char * s = getenv("GGML_VK_XE_MODE")) {
++            device->xe_mmvq_mode = atoi(s);
++        }
++
+         ggml_vk_load_shaders(device);
+ 
+         // Prefer a dedicated transfer queue on AMD dGPUs (non-GCN) when graphics queue use is disabled.
+@@ -6483,6 +6521,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
+             device->mmvq_mode = 1;
+         }
+ 
++        // Matvec workgroup size override: GGML_VK_DMMV_WG=subgroup or large.
++        device->dmmv_wg_force = -1;
++        if (const char * s = getenv("GGML_VK_DMMV_WG")) {
++            device->dmmv_wg_force = strcmp(s, "large") == 0 ? DMMV_WG_SIZE_LARGE : DMMV_WG_SIZE_SUBGROUP;
++        }
++
+         return device;
+     }
+ 
+@@ -7197,9 +7241,15 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context *
+         if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
+             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
+         }
++        if (ctx->device->dmmv_wg_force >= 0) {
++            dmmv_wg = ctx->device->dmmv_wg_force;
++        }
+         return ctx->device->pipeline_dequant_mul_mat_vec_q8_1_f32[dmmv_wg][a_type][num_cols-1];
+     }
+ 
++    if (ctx->device->dmmv_wg_force >= 0) {
++        dmmv_wg = ctx->device->dmmv_wg_force;
++    }
+     return b_type == GGML_TYPE_F32 ? ctx->device->pipeline_dequant_mul_mat_vec_f32_f32[dmmv_wg][a_type][num_cols-1] : ctx->device->pipeline_dequant_mul_mat_vec_f16_f32[dmmv_wg][a_type][num_cols-1];
+ }
+ 
+@@ -7359,9 +7409,15 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
+         if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
+             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
+         }
++        if (ctx->device->dmmv_wg_force >= 0) {
++            dmmv_wg = ctx->device->dmmv_wg_force;
++        }
+         return ctx->device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[dmmv_wg][a_type];
+     }
+ 
++    if (ctx->device->dmmv_wg_force >= 0) {
++        dmmv_wg = ctx->device->dmmv_wg_force;
++    }
+     return ctx->device->pipeline_dequant_mul_mat_vec_id_f32[dmmv_wg][a_type];
+ }
+ 
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vecq_xe.comp b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vecq_xe.comp
+new file mode 100644
+index 000000000..7bae0c275
+--- /dev/null
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vecq_xe.comp
+@@ -0,0 +1,278 @@
++#version 450
++
++#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
++#extension GL_EXT_integer_dot_product : require
++
++// Q2_K and Q3_K matrix-vector product against q8_1 activations for Intel Xe2/Xe3 iGPUs, where
++// the decode matvec is limited by instruction issue (loads and their address arithmetic
++// included), not by memory bandwidth.
++//
++// One subgroup of exactly 16 lanes per workgroup, NUM_ROWS (a multiple of 4) rows per workgroup.
++// Lanes 4*slot .. 4*slot+3 work on the same row, so the four of them read each block's 64 bytes
++// of quants as one contiguous run. Lane quadrant (qn, qh) = ((lane >> 1) & 1, lane & 1) owns
++// the 64 values qn*128 + s*32 + qh*16 + 0..15 for s = 0..3: four scale groups that live in the
++// same four quant dwords (and, for Q3_K, the same four hmask dwords), at bit plane s. So a lane
++// loads those dwords once per block and the plane masks are constants.
++//
++// The fields are masked in place rather than shifted down and dotted against the signed
++// activations with the mixed-sign dot product; the power-of-two factor this leaves on each sum
++// is removed once per group. Q3_K blocks (110 bytes) start on a 2-byte boundary every other
++// block, so they are read as aligned dwords and realigned only when they need it. Rows are
++// assigned so that, for each of a lane's rows, all 16 lanes see blocks of the same alignment,
++// which keeps that branch uniform.
++
++#define MMQ
++#define B_TYPE block_q8_1_x4
++
++#include "mul_mat_vec_base.glsl"
++
++layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
++
++layout (binding = 0) readonly buffer A_U32 {uint32_t data_a_u32[];};
++layout (binding = 1) readonly buffer B_I4 {ivec4 data_b_i4[];};
++
++// Diagnostics (GGML_VK_XE_MODE): 0 normal, 1 loads only, 2 every row reads the same two blocks
++// (compute with the weights in cache). Only mode 0 gives correct results.
++layout (constant_id = 3) const uint XE_MODE = 0;
++
++// Rows per lane
++#define RPL (NUM_ROWS / 4)
++
++uint a_offset, b_offset, d_offset;
++
++void compute_outputs(const uint first_row, const uint num_rows) {
++    const uint tid  = gl_LocalInvocationID.x;
++    const uint qn   = (tid >> 1) & 1;
++    const uint qh   = tid & 1;
++    const uint slot = tid >> 2;
++
++    get_offsets(a_offset, b_offset, d_offset);
++    b_offset /= QUANT_K_Q8_1;
++    const uint nblocks = p.ncols / QUANT_K;
++
++    // Local row of this lane's i-th row. With 8 or more rows, rows of the same i are an even
++    // distance apart.
++    uint lrow[RPL];
++    uint arow[RPL];
++    [[unroll]] for (uint i = 0; i < RPL; ++i) {
++        lrow[i] = NUM_ROWS >= 8 ? (i & 1) + 2 * slot + 8 * (i >> 1) : slot;
++        arow[i] = a_offset + (first_row + min(lrow[i], num_rows - 1)) * nblocks;
++    }
++
++    FLOAT_TYPE acc[NUM_COLS][RPL];
++    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++        [[unroll]] for (uint i = 0; i < RPL; ++i) {
++            acc[j][i] = FLOAT_TYPE(0.0f);
++        }
++    }
++
++#if defined(DATA_A_Q2_K)
++    const uint qs_word  = 4 + qn * 8 + qh * 4;
++    const uint sc_shift = qh * 8;
++#else
++    const uint qs_word  = 8 + qn * 8 + qh * 4;
++    const uint hm_word  = qh * 4;
++    const uint sc_shift = qh * 8 + qn * 4;
++    const uint hm_base  = 0x01010101u << (qn * 4);
++#endif
++
++    for (uint ib = 0; ib < nblocks; ++ib) {
++        // Weights of all of this lane's rows first, so the loads are in flight together.
++#if defined(DATA_A_Q2_K)
++        // 84 bytes = 21 dwords: scales in 0-3, qs in 4-19, dm in 20
++        uint q[RPL][4];
++        uint sc[RPL][2];
++        uint dmw[RPL];
++        [[unroll]] for (uint i = 0; i < RPL; ++i) {
++            const uint base = (XE_MODE == 2 ? a_offset + (ib & 1) : arow[i] + ib) * 21;
++            [[unroll]] for (uint k = 0; k < 4; ++k) {
++                q[i][k] = data_a_u32[base + qs_word + k];
++            }
++            sc[i][0] = data_a_u32[base + qn * 2];
++            sc[i][1] = data_a_u32[base + qn * 2 + 1];
++            dmw[i] = data_a_u32[base + 20];
++        }
++#else
++        // 110 bytes, 2-byte aligned: hmask in bytes 0-31, qs 32-95, scales 96-107, d 108-109.
++        // Five aligned dwords from the one holding the first byte needed; the fifth is only
++        // used by blocks that start halfway into a dword and never leaves the block.
++        uint q[RPL][5];
++        uint hm[RPL][5];
++        uint sc[RPL][4];
++        float da[RPL];
++        bool odd[RPL];
++        [[unroll]] for (uint i = 0; i < RPL; ++i) {
++            const uint blk = XE_MODE == 2 ? a_offset + (ib & 1) : arow[i] + ib;
++            const uint byte0 = blk * 110;
++            const uint base = byte0 >> 2;
++            odd[i] = (byte0 & 2) != 0;
++            [[unroll]] for (uint k = 0; k < 5; ++k) {
++                q[i][k]  = data_a_u32[base + qs_word + k];
++                hm[i][k] = data_a_u32[base + hm_word + k];
++            }
++            sc[i][0] = data_a_u32[base + 24];
++            sc[i][1] = data_a_u32[base + 25];
++            sc[i][2] = data_a_u32[base + 26];
++            sc[i][3] = data_a_u32[base + (odd[i] ? 27 : 26)];
++            da[i] = float(data_a[blk].d);
++        }
++#endif
++
++        // Activations: the lane's group in plane s is ints qh*4 .. qh*4+3 of q8_1 block
++        // qn*4 + s, normally all four in one block_q8_1_x4.
++        ivec4 bq[NUM_COLS][4];
++        float bd[NUM_COLS][4];
++        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++            const uint bx = (j*p.batch_stride_b + ib*QUANT_K) / QUANT_K_Q8_1 + b_offset + qn * 4;
++            if ((bx & 3) == 0) {
++                const uint x = (bx >> 2) * 9;
++                const ivec4 ds4 = data_b_i4[x];
++                [[unroll]] for (uint s = 0; s < 4; ++s) {
++                    bq[j][s] = data_b_i4[x + 1 + s * 2 + qh];
++                    bd[j][s] = unpackHalf2x16(uint(ds4[s])).x;
++                }
++            } else {
++                [[unroll]] for (uint s = 0; s < 4; ++s) {
++                    const uint bi = bx + s;
++                    bq[j][s] = data_b_i4[(bi >> 2) * 9 + 1 + (bi & 3) * 2 + qh];
++                    bd[j][s] = float(data_b[bi >> 2].ds[bi & 3].x);
++                }
++            }
++        }
++
++        if (XE_MODE == 1) {
++            [[unroll]] for (uint i = 0; i < RPL; ++i) {
++                acc[0][i] += FLOAT_TYPE(q[i][0] ^ q[i][3] ^ sc[i][1]) + bd[0][0] + float(bq[0][3].w);
++            }
++            continue;
++        }
++
++        // Per-group activation sums, shared by all rows
++        int bsum[NUM_COLS][4];
++        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++            [[unroll]] for (uint s = 0; s < 4; ++s) {
++                bsum[j][s] = dotPacked4x8EXT(bq[j][s].x, 0x01010101) + dotPacked4x8EXT(bq[j][s].y, 0x01010101) +
++                             dotPacked4x8EXT(bq[j][s].z, 0x01010101) + dotPacked4x8EXT(bq[j][s].w, 0x01010101);
++            }
++        }
++
++#if defined(DATA_A_Q2_K)
++        // d part scaled by 4^-s for the in-place mask, m part needs only the sums
++        float bdq[NUM_COLS][4];
++        float bdm[NUM_COLS][4];
++        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++            [[unroll]] for (uint s = 0; s < 4; ++s) {
++                bdq[j][s] = bd[j][s] * (1.0f / float(1 << (2 * s)));
++                bdm[j][s] = bd[j][s] * float(bsum[j][s]);
++            }
++        }
++
++        [[unroll]] for (uint i = 0; i < RPL; ++i) {
++            float accd[NUM_COLS];
++            float accm[NUM_COLS];
++            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++                accd[j] = 0.0f;
++                accm[j] = 0.0f;
++            }
++            [[unroll]] for (uint s = 0; s < 4; ++s) {
++                const uint scw = sc[i][s >> 1];
++                const int d4 = int(bitfieldExtract(scw, int(sc_shift + 16 * (s & 1)), 4));
++                const float m4 = float(bitfieldExtract(scw, int(sc_shift + 16 * (s & 1) + 4), 4));
++                const uint qmask = 0x03030303u << (2 * s);
++                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++                    int dq = dotPacked4x8EXT(bq[j][s].x, q[i][0] & qmask);
++                    dq    += dotPacked4x8EXT(bq[j][s].y, q[i][1] & qmask);
++                    dq    += dotPacked4x8EXT(bq[j][s].z, q[i][2] & qmask);
++                    dq    += dotPacked4x8EXT(bq[j][s].w, q[i][3] & qmask);
++                    accd[j] += float(dq * d4) * bdq[j][s];
++                    accm[j] += m4 * bdm[j][s];
++                }
++            }
++            const vec2 dm = unpackHalf2x16(dmw[i]);
++            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++                acc[j][i] += FLOAT_TYPE(dm.x * accd[j] - dm.y * accm[j]);
++            }
++        }
++#else // DATA_A_Q3_K
++        [[unroll]] for (uint i = 0; i < RPL; ++i) {
++            uint L[4], H[4], S0, S1, S2;
++            if (odd[i]) {
++                [[unroll]] for (uint k = 0; k < 4; ++k) {
++                    L[k] = (q[i][k] >> 16) | (q[i][k + 1] << 16);
++                    H[k] = (hm[i][k] >> 16) | (hm[i][k + 1] << 16);
++                }
++                S0 = (sc[i][0] >> 16) | (sc[i][1] << 16);
++                S1 = (sc[i][1] >> 16) | (sc[i][2] << 16);
++                S2 = (sc[i][2] >> 16) | (sc[i][3] << 16);
++            } else {
++                [[unroll]] for (uint k = 0; k < 4; ++k) {
++                    L[k] = q[i][k];
++                    H[k] = hm[i][k];
++                }
++                S0 = sc[i][0];
++                S1 = sc[i][1];
++                S2 = sc[i][2];
++            }
++
++            float accf[NUM_COLS];
++            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++                accf[j] = 0.0f;
++            }
++            [[unroll]] for (uint s = 0; s < 4; ++s) {
++                // 6-bit scale of group qn*8 + 2s + qh: low 4 bits from scales[2s + qh] nibble qn,
++                // high 2 bits from scales[8 + 2(s & 1) + qh] bits 2*(2qn + s/2)
++                const uint sh = sc_shift + 16 * (s & 1);
++                const int scale = int(bitfieldInsert(bitfieldExtract(s < 2 ? S0 : S1, int(sh), 4),
++                                                     bitfieldExtract(S2, int(sh + 2 * (s >> 1)), 2), 4, 2)) - 32;
++                const uint qmask = 0x03030303u << (2 * s);
++                const uint hmask = hm_base << s;
++                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++                    int dq = dotPacked4x8EXT(bq[j][s].x, L[0] & qmask);
++                    int dh = dotPacked4x8EXT(bq[j][s].x, H[0] & hmask);
++                    dq += dotPacked4x8EXT(bq[j][s].y, L[1] & qmask);
++                    dh += dotPacked4x8EXT(bq[j][s].y, H[1] & hmask);
++                    dq += dotPacked4x8EXT(bq[j][s].z, L[2] & qmask);
++                    dh += dotPacked4x8EXT(bq[j][s].z, H[2] & hmask);
++                    dq += dotPacked4x8EXT(bq[j][s].w, L[3] & qmask);
++                    dh += dotPacked4x8EXT(bq[j][s].w, H[3] & hmask);
++                    // value = q2 + 4*hbit - 4
++                    const int sum = (dq >> (2 * s)) + ((dh >> (qn * 4 + s)) << 2) - 4 * bsum[j][s];
++                    accf[j] += float(sum * scale) * bd[j][s];
++                }
++            }
++            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++                acc[j][i] += FLOAT_TYPE(da[i] * accf[j]);
++            }
++        }
++#endif
++    }
++
++    // Each lane holds partial sums for RPL of the rows; spread them over the row slots and add
++    // across the subgroup.
++    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
++    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
++        [[unroll]] for (uint r = 0; r < NUM_ROWS; ++r) {
++            temp[j][r] = FLOAT_TYPE(0.0f);
++            [[unroll]] for (uint i = 0; i < RPL; ++i) {
++                if (lrow[i] == r) {
++                    temp[j][r] = acc[j][i];
++                }
++            }
++        }
++    }
++    reduce_result(temp, d_offset, first_row, num_rows, tid);
++}
++
++void main() {
++    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
++
++    // do NUM_ROWS at a time, unless there aren't enough remaining rows
++    if (first_row + NUM_ROWS <= p.stride_d) {
++        compute_outputs(first_row, NUM_ROWS);
++    } else {
++        if (first_row >= p.stride_d) {
++            return;
++        }
++        compute_outputs(first_row, p.stride_d - first_row);
++    }
++}
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+index 1925582ff..f3ef5bad0 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -747,6 +747,11 @@ void process_shaders() {
+             string_to_spv("mul_mat_vec_id_" + tname + "_q8_1_f32_subgroup", "mul_mat_vecq.comp", merge_maps(base_dict, {{"MUL_MAT_ID", "1"}, {data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD", "1"}}));
+             string_to_spv("mul_mat_vec_id_" + tname + "_q8_1_f32_subgroup_no_shmem", "mul_mat_vecq.comp", merge_maps(base_dict, {{"MUL_MAT_ID", "1"}, {data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD_NO_SHMEM", "1"}}));
+         }
++        if (tname == "q2_k" || tname == "q3_k") {
++            // Intel Xe2/Xe3 decode variant: fewer load and ALU instructions per block
++            string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_xe", "mul_mat_vecq_xe.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD_NO_SHMEM", "1"}}));
++            string_to_spv("mul_mat_vec_id_" + tname + "_q8_1_f32_xe", "mul_mat_vecq_xe.comp", merge_maps(base_dict, {{"MUL_MAT_ID", "1"}, {data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD_NO_SHMEM", "1"}}));
++        }
+ #endif
+ 
+         // Dequant shaders
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 15b50209c..1b77cc3d8 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -8672,6 +8672,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+         }
+     }
+ 
++    // Qwen3-235B-A22B Q2_K decode shapes at 2 and 3 ranks, for the Intel Xe2/Xe3 matvec kernels:
++    // k of 512/768 gives an odd block count, 1003 rows a partial workgroup
++    for (ggml_type type_a : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K}) {
++        for (int64_t k : {512, 768, 2048, 4096}) {
++            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 4096, 1, k, {1, 1}, {1, 1}));
++        }
++        for (int64_t n : {1, 3}) {
++            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1003, n, 768, {1, 1}, {1, 1}));
++        }
++        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 128, 8, true, 768, 1, 4096));
++        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 128, 8, true, 1003, 1, 4096));
++        for (int64_t k : {512, 768}) {
++            test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, GGML_TYPE_F32, 128, 8, false, 4096, 1, k, 1, true));
++        }
++    }
++
+     for (ggml_type type_a : base_types) {
+         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+             for (int n : {1, 16}) {
+@@ -9601,6 +9617,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
+     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
+ 
++    // Qwen3-235B-A22B Q2_K decode (n = 1), one rank's share under tensor parallelism over 2 and 3
++    // ranks: hidden 4096, 64 q / 4 kv heads of 128, 128 experts of 1536 rows with 8 used, vocab
++    // 151936. Select with -p 'k=4096|k=768|k=512|kv=1024' or by type.
++    for (int64_t ffn : {768, 512}) { // expert rows per rank, 1536/2 and 1536/3
++        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_K, GGML_TYPE_F32, 128, 8, true, ffn, 1, 4096));               // ffn_gate_exps, ffn_up_exps
++        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q3_K, GGML_TYPE_F32, 128, 8, false, 4096, 1, ffn));              // ffn_down_exps (perf mode times only the last node, so not the fused form)
++    }
++    for (int64_t q : {4096, 2048}) { // q rows per rank: 32 or 16 heads
++        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q2_K, GGML_TYPE_F32, q, 1, 4096, {1, 1}, {1, 1})); // attn_q
++        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q3_K, GGML_TYPE_F32, 4096, 1, q, {1, 1}, {1, 1})); // attn_output
++    }
++    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q2_K, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {1, 1}));   // attn_k, 2 kv heads
++    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {1, 1}));   // attn_v, 2 kv heads
++    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32, 128, 1, 4096, {1, 1}, {1, 1}));   // ffn_gate_inp (router)
++    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 75968, 1, 4096, {1, 1}, {1, 1})); // output, half the vocab
++    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1024, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
++
+     return test_cases;
+ }
+ 
+-- 
+2.55.0.windows.3
+

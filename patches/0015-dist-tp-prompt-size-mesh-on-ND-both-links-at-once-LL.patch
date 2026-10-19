@@ -1,0 +1,451 @@
+From 6d0bcb1a743b5bb4783a12a5bf7a7a251acd4caf Mon Sep 17 00:00:00 2001
+From: jayneelatintel <jayneel.vora@intel.com>
+Date: Wed, 14 Oct 2026 06:40:14 -0700
+Subject: [PATCH 15/21] dist-tp: prompt-size mesh on ND, both links at once
+ (LLAMA_DIST_TP_MESH_ND_LARGE)
+
+With LLAMA_DIST_TP_MESH=1 the 3-rank mesh only carried payloads up to
+64 KiB (decode); every prompt batch kept the store-and-forward ring,
+which sends the payload twice over one link in two dependent steps
+while the reverse direction of every cable sits idle.
+
+LLAMA_DIST_TP_MESH_ND_LARGE=1 sends large payloads through the mesh
+too, with every direction on NetworkDirect. dist_nd_exchange_pair()
+sends one message to both peers and receives one from each in a single
+non-blocking loop: 256 KiB chunks are interleaved across the two
+connections, received chunks go straight into the caller's buffers (no
+spill copy), and acks leave as soon as a window's worth is consumed. It
+never blocks on one connection while the other could move, apart from
+the existing wait for the previous ack's own send completion. Each link
+then carries the payload once in each direction at the same time.
+
+Only taken when RDMA is on, LLAMA_DIST_TP_RDMA_MULTICHUNK=1,
+LLAMA_DIST_TP_RDMA_MAX_BYTES=0, and no relay, reverse-TCP or TCP large
+mesh is set; all read from the environment, so every rank decides the
+same way. Otherwise the banner says why and large payloads keep the
+ring. A rank whose ND connection is down fails the collective: there is
+no TCP path for these payloads.
+
+The sum order is unchanged ((own + prev) + next, served through the
+existing two-step mesh handoff), so the output stays bit-identical to
+the ring. nd_flush is split into the window wait and nd_post_staged();
+every existing path behaves as before. Unset, nothing changes.
+---
+ common/dist-comm-nd.cpp | 234 +++++++++++++++++++++++++++++++++++++---
+ common/dist-comm-nd.h   |  10 ++
+ common/dist-comm.cpp    |  82 ++++++++++++--
+ 3 files changed, 307 insertions(+), 19 deletions(-)
+
+diff --git a/common/dist-comm-nd.cpp b/common/dist-comm-nd.cpp
+index adb40bd53..3f6cf3bab 100644
+--- a/common/dist-comm-nd.cpp
++++ b/common/dist-comm-nd.cpp
+@@ -17,6 +17,11 @@ bool dist_nd_send2(dist_nd_conn *, const void *, size_t, const void *, size_t, s
+     return false;
+ }
+ bool dist_nd_recv(dist_nd_conn *, void *, size_t, std::string & err) { err = "no ND"; return false; }
++bool dist_nd_exchange_pair(dist_nd_conn *, dist_nd_conn *, const void *, size_t, const void *, size_t,
++                           void *, void *, void *, void *, std::string & err) {
++    err = "no ND";
++    return false;
++}
+ bool dist_nd_send_drain(dist_nd_conn *, std::string &) { return true; }
+ void dist_nd_free(dist_nd_conn *) {}
+ 
+@@ -991,6 +996,26 @@ static bool nd_wait_ack_progressing(dist_nd_conn * c) {
+     }
+ }
+ 
++// Posts the chunk staged in the current slot. The caller has made sure the window allows it: either
++// fewer than ND_WINDOW chunks are unacknowledged, or an ack is in hand.
++static bool nd_post_staged(dist_nd_conn * c) {
++    if (c->tx_since_ack >= ND_WINDOW) {
++        c->ack_pending--;
++        c->tx_since_ack = 0;
++    }
++    const int slot = c->tx_slot_cur;
++    const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, c->tx_seq++ };
++    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
++    const size_t len = sizeof(hdr) + c->tx_fill;
++    c->tx_fill = 0;
++    if (!nd_post_send(c, slot, len)) {
++        return false;
++    }
++    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
++    c->tx_since_ack++;
++    return true;
++}
++
+ static bool nd_flush(dist_nd_conn * c) {
+     if (c->tx_fill == 0) {
+         return true;
+@@ -1007,20 +1032,8 @@ static bool nd_flush(dist_nd_conn * c) {
+                 }
+             }
+         }
+-        c->ack_pending--;
+-        c->tx_since_ack = 0;
+     }
+-    const int slot = c->tx_slot_cur;
+-    const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, c->tx_seq++ };
+-    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
+-    const size_t len = sizeof(hdr) + c->tx_fill;
+-    c->tx_fill = 0;
+-    if (!nd_post_send(c, slot, len)) {
+-        return false;
+-    }
+-    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
+-    c->tx_since_ack++;
+-    return true;
++    return nd_post_staged(c);
+ }
+ 
+ static bool nd_send_raw(dist_nd_conn * c, const void * data, size_t size) {
+@@ -1301,6 +1314,201 @@ bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err)
+     return true;
+ }
+ 
++// ---------------------------------------------------------------------------------------
++// two-peer exchange for the 3-rank full mesh (multi-chunk mode only)
++//
++// One message, a header followed by its payload, leaves for both peers while one message of the
++// same size arrives from each, all four directions at once. Nothing here waits on one connection
++// while the other could move: the two halves below stage, post and consume only what is possible
++// right now, and the loop in dist_nd_exchange_pair polls both completion queues between rounds.
++// Received bytes go straight into the caller's buffers, so a payload of many chunks costs no copy
++// beyond the staging one, and the acks for them leave as soon as a window's worth is consumed, so
++// neither peer stalls at its send window while this rank is still busy sending.
++// ---------------------------------------------------------------------------------------
++
++// Stages and posts as much of [hdr | payload] on c as it can take without waiting. pos counts the
++// message bytes already staged. Stops at the send window (an ack has to arrive first) and when
++// every staging slot is still on the wire (a send completion has to retire one first).
++static bool nd_tx_pump(dist_nd_conn * c, const uint8_t * hdr, size_t hdr_size,
++                       const uint8_t * payload, size_t size, size_t & pos, bool & moved) {
++    const size_t total = hdr_size + size;
++    for (;;) {
++        // a full chunk, or the last bytes of the message, leaves as soon as the window allows
++        if (c->tx_fill == ND_PAYLOAD || (pos == total && c->tx_fill > 0)) {
++            if (c->tx_since_ack >= ND_WINDOW && c->ack_pending == 0) {
++                return true;
++            }
++            if (!nd_post_staged(c)) {
++                return false;
++            }
++            moved = true;
++            continue;
++        }
++        if (pos == total) {
++            return true;
++        }
++        // a fresh chunk: the slot must not still be on the wire before it is written
++        if (c->tx_fill == 0 && c->tx_inflight >= ND_TX_DEPTH) {
++            return true;
++        }
++        size_t take = ND_PAYLOAD - c->tx_fill;
++        const uint8_t * src;
++        if (pos < hdr_size) {
++            take = std::min(take, hdr_size - pos);
++            src  = hdr + pos;
++        } else {
++            take = std::min(take, total - pos);
++            src  = payload + (pos - hdr_size);
++        }
++        memcpy(c->tx_slot(c->tx_slot_cur) + sizeof(nd_msg_hdr) + c->tx_fill, src, take);
++        c->tx_fill += take;
++        pos += take;
++        moved = true;
++    }
++}
++
++// Copies whatever has arrived on c into [hdr | payload], without waiting: bytes spilled earlier
++// first, then the receive ring, exactly the order nd_recv_raw reads them in. pos counts the
++// message bytes received so far. Bytes past the end of this message stay where they are, for the
++// next one.
++static bool nd_rx_pump(dist_nd_conn * c, uint8_t * hdr, size_t hdr_size,
++                       uint8_t * payload, size_t size, size_t & pos, bool & moved) {
++    const size_t total = hdr_size + size;
++    auto put = [&](const uint8_t * src, size_t n) {
++        while (n > 0) {
++            size_t    take = n;
++            uint8_t * dst;
++            if (pos < hdr_size) {
++                take = std::min(take, hdr_size - pos);
++                dst  = hdr + pos;
++            } else {
++                dst  = payload + (pos - hdr_size);
++            }
++            memcpy(dst, src, take);
++            src += take;
++            n   -= take;
++            pos += take;
++        }
++    };
++    while (pos < total && c->rx_spill_off < c->rx_spill.size()) {
++        const size_t take = std::min(c->rx_spill.size() - c->rx_spill_off, total - pos);
++        put(c->rx_spill.data() + c->rx_spill_off, take);
++        c->rx_spill_off += take;
++        if (c->rx_spill_off == c->rx_spill.size()) {
++            c->rx_spill.clear();
++            c->rx_spill_off = 0;
++        }
++        moved = true;
++    }
++    while (pos < total && c->rx_spill.empty() && !c->rx_ready.empty()) {
++        nd_rx_item & it = c->rx_ready.front();
++        const size_t take = std::min((size_t)(it.len - it.off), total - pos);
++        put(c->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off, take);
++        it.off += (uint32_t)take;
++        moved = true;
++        if (it.off == it.len) {
++            const int slot = it.slot;
++            c->rx_ready.pop_front();
++            if (!c->post_rx(slot)) {
++                return false;
++            }
++            if (++c->rx_since_ack >= ND_WINDOW) {
++                c->rx_since_ack = 0;
++                if (!nd_post_ack_direct(c)) {
++                    return false;
++                }
++            }
++        }
++    }
++    return true;
++}
++
++bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr, size_t hdr_size,
++                           const void * payload, size_t size, void * hdr_from_a, void * from_a,
++                           void * hdr_from_b, void * from_b, std::string & err) {
++    if (a == nullptr || b == nullptr || a == b) {
++        err = "two-peer exchange needs two distinct ND connections";
++        return false;
++    }
++    if (!nd_multichunk()) {
++        err = "two-peer exchange needs LLAMA_DIST_TP_RDMA_MULTICHUNK";
++        return false;
++    }
++    const uint8_t * h   = (const uint8_t *)hdr;
++    const uint8_t * p   = (const uint8_t *)payload;
++    const size_t    total = hdr_size + size;
++    size_t tx_a = 0, tx_b = 0, rx_a = 0, rx_b = 0;
++
++    const int64_t tick       = nd_tick_ticks();
++    int64_t       last_check = nd_qpc();
++    uint32_t      idle_steps = 0;
++    bool ok = true;
++    for (;;) {
++        bool moved = false;
++        ok = nd_tx_pump(a, h, hdr_size, p, size, tx_a, moved) &&
++             nd_tx_pump(b, h, hdr_size, p, size, tx_b, moved) &&
++             nd_rx_pump(a, (uint8_t *)hdr_from_a, hdr_size, (uint8_t *)from_a, size, rx_a, moved) &&
++             nd_rx_pump(b, (uint8_t *)hdr_from_b, hdr_size, (uint8_t *)from_b, size, rx_b, moved);
++        if (!ok) {
++            break;
++        }
++        if (tx_a == total && tx_b == total && a->tx_fill == 0 && b->tx_fill == 0 &&
++            rx_a == total && rx_b == total) {
++            break;
++        }
++        int stepped = 0;
++        for (dist_nd_conn * c : { a, b }) {
++            const int r = nd_try_step(c);
++            if (r < 0) {
++                ok = false;
++                break;
++            }
++            stepped += r;
++        }
++        if (!ok) {
++            break;
++        }
++        if (moved) {
++            idle_steps = 0;
++            continue;
++        }
++        if (stepped > 0) {
++            // completions that never let anything move mean a queue is replaying something stale
++            if (++idle_steps > ND_MAX_IDLE_STEPS) {
++                ND_LOG_ERR("two-peer exchange consumed %u completions without moving data\n", idle_steps);
++                ok = false;
++                break;
++            }
++            continue;
++        }
++        YieldProcessor();
++        const int64_t now = nd_qpc();
++        if (now - last_check >= tick) {
++            last_check = now;
++            for (dist_nd_conn * c : { a, b }) {
++                if (nd_tcp_peer_closed(c->tcp_in) || nd_tcp_peer_closed(c->tcp_out)) {
++                    ND_LOG_DBG("peer dropped the ring socket\n");
++                    c->peer_gone = true;
++                    ok = false;
++                }
++            }
++            if (!ok) {
++                break;
++            }
++        }
++    }
++    if (ok && !nd_full_duplex()) {
++        ok = nd_send_drain_local(a) && nd_send_drain_local(b);
++    }
++    if (!ok) {
++        a->tx_fill = 0;   // drop any half-staged chunk; the connections are finished either way
++        b->tx_fill = 0;
++        err = (a->peer_gone || b->peer_gone) ? "peer closed connection" : "NetworkDirect two-peer exchange failed";
++        return false;
++    }
++    return true;
++}
++
+ void dist_nd_free(dist_nd_conn * c) {
+     if (!c) {
+         return;
+diff --git a/common/dist-comm-nd.h b/common/dist-comm-nd.h
+index 0b4717d79..b8858ea0f 100644
+--- a/common/dist-comm-nd.h
++++ b/common/dist-comm-nd.h
+@@ -50,6 +50,16 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out, uintptr_t tcp_in, bool liste
+ bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
+                    const void * payload, size_t payload_size, std::string & err);
+ bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err);
++// The 3-rank full mesh's exchange for a payload of any size: sends one message (hdr, then
++// payload) to both a and b while receiving one message of the same sizes from each, all four
++// directions at once and straight into the caller's buffers, interleaving 256 KiB chunks across
++// the two connections. It never blocks on one connection while the other could move. Needs
++// LLAMA_DIST_TP_RDMA_MULTICHUNK; a and b must be different connections, and the send buffers
++// must not overlap the receive buffers. In full-duplex mode the sends are left to
++// dist_nd_send_drain, as after dist_nd_send2.
++bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr, size_t hdr_size,
++                           const void * payload, size_t size, void * hdr_from_a, void * from_a,
++                           void * hdr_from_b, void * from_b, std::string & err);
+ // Wait for sends posted but not yet retired. Only needed in full-duplex mode, where dist_nd_send2
+ // returns as soon as the chunk is posted rather than when it has completed.
+ bool dist_nd_send_drain(dist_nd_conn * c, std::string & err);
+diff --git a/common/dist-comm.cpp b/common/dist-comm.cpp
+index 9cd843dcf..8ebdbbe73 100644
+--- a/common/dist-comm.cpp
++++ b/common/dist-comm.cpp
+@@ -472,6 +472,9 @@ struct dist_comm_socket_context::impl {
+     // size above which every direction rides TCP, and it is the same on every rank.
+     bool                 mesh_large        = false;
+     size_t               mesh_large_above  = 0;
++    // LLAMA_DIST_TP_MESH_ND_LARGE: payloads above mesh_max_bytes take the mesh too, with every
++    // direction on ND (multi-chunk, no ND ceiling), both links at once via dist_nd_exchange_pair.
++    bool                 mesh_nd_large     = false;
+     bool                 mesh_pending      = false;   // the first ring step ran as a mesh exchange
+     size_t               mesh_pending_size = 0;
+     const void *         mesh_pending_ptr  = nullptr; // where that step left prev's payload
+@@ -661,7 +664,7 @@ struct dist_comm_socket_context::impl {
+         if (mesh_max_bytes == 0) {
+             return false;
+         }
+-        return size <= mesh_max_bytes || (mesh_large && size > mesh_large_above);
++        return size <= mesh_max_bytes || mesh_nd_large || (mesh_large && size > mesh_large_above);
+     }
+ 
+     // Full-mesh exchange for world_size 3, opt-in via LLAMA_DIST_TP_MESH=1.
+@@ -686,9 +689,10 @@ struct dist_comm_socket_context::impl {
+     //
+     // Payloads up to mesh_max_bytes post both sends before receiving, which is safe while a
+     // payload fits one ND chunk and the TCP socket buffer. Larger payloads keep the ring unless
+-    // LLAMA_DIST_TP_MESH_LARGE is set and every direction rides TCP (see mesh_takes); those send
+-    // from a helper thread. Every rank sees the same payload size, so every rank takes the same
+-    // branch.
++    // LLAMA_DIST_TP_MESH_ND_LARGE is set, where every direction rides ND and one two-peer ND
++    // exchange moves all four directions at once, or LLAMA_DIST_TP_MESH_LARGE is set and every
++    // direction rides TCP (see mesh_takes); those send from a helper thread. Every rank sees the
++    // same payload size, so every rank takes the same branch.
+     //
+     // LLAMA_DIST_TP_MESH_RELAY=u takes one reverse direction, u+1 -> u, off the wire for a link
+     // that cannot carry it. Rank u+1 then sends only to next, rank u+2 forwards what it received
+@@ -782,7 +786,44 @@ struct dist_comm_socket_context::impl {
+ 
+         bool ok;
+         int  sends = 2;   // messages this rank put on the wire, for the trace
+-        if (size > mesh_max_bytes) {
++        if (size > mesh_max_bytes && mesh_nd_large) {
++            // A large payload with every direction on ND (LLAMA_DIST_TP_MESH_ND_LARGE, prefill).
++            // One call sends to both peers and receives from both, interleaving 256 KiB chunks
++            // across the two links, so each link carries the payload once in each direction at
++            // the same time, where the ring moves 2x the payload one way per link in two
++            // dependent steps. There is no TCP path here: a rank whose ND connection did not come
++            // up fails the collective rather than quietly carrying prefill over TCP.
++            if (!(nd_to_next && nd_to_prev && nd_from_prev && nd_from_next)) {
++                err = "mesh exchange: LLAMA_DIST_TP_MESH_ND_LARGE needs both ND connections up";
++                return false;
++            }
++            if (send_data_ptr == recv_data_ptr) {
++                err = "mesh exchange: send and receive buffers alias, which the two-peer exchange cannot allow";
++                return false;
++            }
++            op_hdr hdr_next {};
++            op_hdr hdr_prev {};
++            ok = dist_nd_exchange_pair(nd_send, nd_recv, &send_hdr, sizeof(send_hdr), send_data_ptr, size,
++                                       &hdr_next, mesh_from_next.data(), &hdr_prev, recv_data_ptr, err);
++            if (ok) {
++                stats.bytes_sent += 2 * (sizeof(send_hdr) + size);
++                stats.bytes_recv += 2 * (sizeof(send_hdr) + size);
++                for (const op_hdr * hh : { &hdr_prev, &hdr_next }) {
++                    if (hh->op != op) {
++                        err = "unexpected op code on mesh";
++                        ok = false;
++                    } else if (hh->count != size) {
++                        err = "unexpected payload size on mesh";
++                        ok = false;
++                    }
++                }
++            }
++            if (ok) {
++                mesh_prev_src = hdr_prev.src_rank;
++                mesh_next_src = hdr_next.src_rank;
++                ok = dist_nd_send_drain(nd_send, err) && dist_nd_send_drain(nd_recv, err);
++            }
++        } else if (size > mesh_max_bytes) {
+             // A large payload, so every direction is on TCP (mesh_takes) and it can be many MB.
+             // A helper thread sends to next and then to prev while this thread receives from
+             // prev and then from next. Nothing then depends on the socket buffers absorbing a
+@@ -976,8 +1017,37 @@ struct dist_comm_socket_context::impl {
+             }
+         }
+ 
++        // LLAMA_DIST_TP_MESH_ND_LARGE: large payloads take the mesh with every direction on ND.
++        // Only where nothing above mesh_max_bytes would ride TCP (RDMA on, no ND ceiling) and the
++        // multi-chunk flow control can carry a message of many chunks. Every input comes from the
++        // environment, so every rank decides the same way.
++        if (dist_transport_env_true("LLAMA_DIST_TP_MESH_ND_LARGE", false)) {
++            const char * why = nullptr;
++            if (!dist_transport_env_true("LLAMA_DIST_TP_RDMA", false)) {
++                why = "needs LLAMA_DIST_TP_RDMA";
++            } else if (!dist_transport_env_true("LLAMA_DIST_TP_RDMA_MULTICHUNK", false)) {
++                why = "needs LLAMA_DIST_TP_RDMA_MULTICHUNK";
++            } else if (dist_nd_ceiling_from_env() != 0) {
++                why = "needs LLAMA_DIST_TP_RDMA_MAX_BYTES=0";
++            } else if (mesh_relay_edge >= 0) {
++                why = "is ignored with LLAMA_DIST_TP_MESH_RELAY";
++            } else if (!mesh_reverse_tcp.empty()) {
++                why = "is ignored with LLAMA_DIST_TP_MESH_REVERSE_TCP";
++            } else if (mesh_large) {
++                why = "is ignored with LLAMA_DIST_TP_MESH_LARGE";
++            }
++            if (why != nullptr) {
++                std::fprintf(stderr, "dist-tp: LLAMA_DIST_TP_MESH_ND_LARGE %s; large payloads keep the ring\n", why);
++                std::fflush(stderr);
++            } else {
++                mesh_nd_large = true;
++            }
++        }
++
+         char above[96];
+-        if (mesh_large && mesh_large_above > mesh_max_bytes) {
++        if (mesh_nd_large) {
++            std::snprintf(above, sizeof(above), "mesh above too (ND, both links at once)");
++        } else if (mesh_large && mesh_large_above > mesh_max_bytes) {
+             std::snprintf(above, sizeof(above), "ring to %zu B, mesh above (TCP, send thread)", mesh_large_above);
+         } else if (mesh_large) {
+             std::snprintf(above, sizeof(above), "mesh above (TCP, send thread)");
+-- 
+2.55.0.windows.3
+

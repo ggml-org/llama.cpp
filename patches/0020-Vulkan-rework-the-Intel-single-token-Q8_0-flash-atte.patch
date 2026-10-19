@@ -1,0 +1,462 @@
+From d3a481bc8d52da9ec5316ae8d675a3c9d7c7ada7 Mon Sep 17 00:00:00 2001
+From: jayneelatintel <jayneel.vora@intel.com>
+Date: Thu, 15 Oct 2026 17:15:24 -0700
+Subject: [PATCH 20/21] Vulkan: rework the Intel single-token Q8_0 flash
+ attention
+
+The time of a workgroup was a chain of memory trips and barriers, and
+its 32 KB of shared memory kept part of the workgroups of a 2K context
+from being resident at once, so the dispatch took two rounds.
+
+- scores: lane h of a subgroup is query head h; the subgroup's K rows
+  are read with consecutive lanes on consecutive 8-byte pieces, first
+  thing in the kernel; Q (8-bit, realigned to the dwords of a Q8_0 row,
+  zeros against the scales) stays in registers and K dwords come from
+  the lane holding them, so the dot products read no shared memory
+- max and sum per head: one exchange of the subgroups' values each, two
+  barriers instead of twelve
+- P x V: P read once per 8 positions per lane and passed between lanes;
+  8 positions of V loads in flight
+- the four streams are added up through the P buffer, so shared memory
+  is 11.5 KB (CH 128) and all workgroups are resident
+
+test-backend-ops FLASH_ATTN_EXT hsk=hsv=128 passes at chunks 128, 64
+and 32. Same pipeline, push constants and spec constants as before.
+---
+ .../vulkan-shaders/flash_attn_dec_xe.comp     | 338 +++++++++---------
+ 1 file changed, 170 insertions(+), 168 deletions(-)
+
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp
+index df8de769c..443725da8 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dec_xe.comp
+@@ -5,39 +5,50 @@
+ #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+ #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+ #extension GL_EXT_integer_dot_product : require
++#extension GL_KHR_shader_subgroup_basic : require
++#extension GL_KHR_shader_subgroup_shuffle : require
++#extension GL_KHR_shader_subgroup_vote : require
++
+ 
+ // Single-token flash attention for Intel Xe2/Xe3 iGPUs: Q8_0 K and V of head size 128, 16 query
+-// heads per KV head (Qwen3-235B-A22B and models of the same attention shape).
++// heads per KV head (Qwen3-235B-A22B and models of the same attention shape). Needs subgroups of 16.
+ //
+-// The generic scalar shader either gives each query head its own workgroup, so every K and V row
+-// is loaded and dequantized 16 times, or, with the heads grouped, needs more registers than the
+-// Intel compiler has and spills. Here one workgroup takes CH consecutive KV positions of one KV
+-// head for all 16 of its query heads, in three steps that share nothing but shared memory:
+-//   1. scores: each thread dots one K row against HPT query heads with the int8 dot product
+-//      (Q is quantized to 8 bits per 32 values on entry, as the generic MMQ path does);
+-//   2. the max of each head over the chunk (a tree in shared memory), then the exponentials;
++// One workgroup takes CH consecutive KV positions of one KV head for all 16 of its query heads.
++// The time of a workgroup is a chain of trips to memory and barriers, so the steps are laid out to
++// keep that chain short and shared memory small (all workgroups of a 2K context resident at once):
++//   1. scores: subgroup k takes positions k*PS .. k*PS+PS-1, lane h query head h. The subgroup's K
++//      rows are read with consecutive lanes on consecutive 8-byte pieces, issued first thing; each lane
++//      keeps its head's Q (8-bit, realigned to the dwords of a Q8_0 row) in registers and takes the K
++//      dwords from the lane that holds them, so the dot products need no shared memory;
++//   2. the max and the sum of each head: one exchange of the subgroups' values each, two barriers;
+ //   3. P x V: four streams each walk a quarter of the chunk, a thread owning 4 values of the head
+-//      dimension for all 16 heads; the streams are added up in shared memory.
++//      dimension for all 16 heads; P comes from shared memory U positions at a time, one read per lane,
++//      and is passed between lanes; the streams are added up through the same shared memory.
+ // The result is always the split-k partial (unnormalized O, row sum L, row max M) that
+ // fa_split_k_reduce combines, so sinks and the division by L happen there.
+ //
+ // A Q8_0 row of 128 values is 136 bytes: blocks (2-byte scale + 32 int8) at bytes 0, 34, 68, 102.
+-// K rows are read as 8-byte pairs and V as dwords (the host checks the alignment): each pair of blocks is 17 dwords,
+-// the even block's scale is the low half of dword 0 and its quants start mid-dword, the odd
+-// block's scale is the high half of dword 8 and its quants are dwords 9..16.
++// K rows are read as 8-byte pieces and V as dwords (the host checks the alignment): each pair of
++// blocks is 17 dwords, the even block's scale is the low half of dword 0 and its quants start
++// mid-dword, the odd block's scale is the high half of dword 8 and its quants are dwords 9..16.
++// The dot product of the even block runs over dwords 0..8 against Q shifted by two bytes, with zeros
++// where the scales are.
+ 
+ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+ 
+-layout (constant_id = 0) const uint WG = 128;      // threads; phase 3 needs exactly 128
++layout (constant_id = 0) const uint WG = 128;      // threads; steps 1 and 3 need exactly 128
+ layout (constant_id = 1) const uint CH = 128;      // KV positions per workgroup: 32, 64 or 128
+ layout (constant_id = 2) const uint HAS_MASK = 1;
+ layout (constant_id = 3) const uint DIAG = 0;      // timing only, wrong results: 1 skips the K dot products, 2 the P x V loop
+ 
+ const uint D   = 128;            // head size of K and V
+-const uint G   = 16;             // query heads per KV head
++const uint G   = 16;             // query heads per KV head, = subgroup size
+ const uint NC  = G / 4;          // columns of 4 heads
+-const uint HPT = G * CH / WG;    // heads per thread in step 1
+-const uint PP  = CH * NC / WG;   // positions per thread in the first step of the max
++const uint NSG = 8;              // subgroups
++const uint PS  = CH / NSG;       // positions per subgroup in step 1
++const uint KR  = (PS * 17 + 15) / 16;   // 8-byte pieces of K per lane
++const uint U   = 8;              // positions per iteration of P x V (4, 8 or 16; divides CH / 4)
++const uint CPL = U / 4;          // columns of P per lane per iteration
+ 
+ layout (push_constant) uniform parameter {
+     uint32_t N;
+@@ -89,10 +100,12 @@ layout (binding = 5) writeonly buffer OV4 {vec4 data_ov4[];};
+ 
+ shared ivec4 qq[G * D / 16];     // Q as int8: head h, block b at [h * 8 + b * 2 + 0..1]
+ shared float qdsh[G * D / 32];   // Q scales: head h, block b at [h * 4 + b]
+-shared vec4  psh[CH * NC];       // scores, then exp(score - max): position j, heads 4c..4c+3 at [j * NC + c]
+-shared vec4  red[WG];             // column maxes
+-shared vec4  redl[WG];            // column sums
+-shared vec4  comb[2 * G * 32];    // partial O of two streams: [stream][head][lane]
++shared vec4  psh[CH * NC];       // exp(score - max): heads 4c..4c+3 of position j at [c * CH + j]; then the streams' O
++shared float redm[NSG * G];      // per subgroup and head: max, then sum
++shared float reds[NSG * G];
++
++// dword d of the K row of position pp of this subgroup, from the lane that read it
++#define KDW(pp, d) subgroupShuffle((((d) & 1) == 0) ? kr[((pp) * 17 + (d) / 2) / 16].x : kr[((pp) * 17 + (d) / 2) / 16].y, ((pp) * 17 + (d) / 2) % 16)
+ 
+ #define NEG_FLT_MAX_OVER_2 uintBitsToFloat(0xFEFFFFFF)
+ #define NEG_INF uintBitsToFloat(0xFF800000)
+@@ -108,6 +121,29 @@ void main() {
+ 
+     const uint j0 = chunk * CH;
+     const uint nj = min(CH, p.KV - j0);
++    const uint sg = tid / 16;                       // subgroup
++    const uint sl = tid % 16;                       // lane; in steps 1 and 2 the query head
++    const uint pj = sg * PS;                        // the subgroup's first position in step 1
++    const uint np = nj > pj ? min(PS, nj - pj) : 0;
++
++    // the subgroup's K rows: piece e = r * 16 + lane is 8-byte piece e % 17 of row e / 17
++    uvec2 kr[KR];
++    {
++        const uint kb = (ik2 * p.nb12 + ik3 * p.nb13 + (j0 + pj) * p.nb11 * 34) / 8;
++        const uint ks = p.nb11 * 34 / 8;
++        [[unroll]] for (uint r = 0; r < KR; ++r) {
++            const uint e = r * 16 + sl;
++            const uint row = e / 17;
++            kr[r] = uvec2(0);
++            if ((DIAG & 1) == 0 && row < np) {
++                kr[r] = data_k2[kb + row * ks + (e - row * 17)];
++            }
++        }
++    }
++    float mk = 0.0;
++    if (HAS_MASK != 0 && sl < np) {
++        mk = float(data_m[j0 + pj + sl]);
++    }
+ 
+     // 0. Q times the softmax scale as int8, one 32-value block per thread
+     if (tid < G * D / 32) {
+@@ -133,122 +169,80 @@ void main() {
+     }
+     barrier();
+ 
+-    // 1. scores of position jl for heads h0 .. h0 + HPT - 1
+-    const uint jl = tid % CH;
+-    const uint h0 = (tid / CH) * HPT;
+-    float s[HPT];
+-    if (jl < nj) {
+-        [[unroll]] for (uint h = 0; h < HPT; ++h) {
+-            s[h] = 0.0;
++    // 1. scores of head sl for the subgroup's positions. Q of the head, per pair of blocks: the even
++    // block shifted by two bytes over dwords 0..8 (zeros against the scales), the odd block as is.
++    uint qe[2][9], qo[2][8];
++    float qd[4];
++    [[unroll]] for (uint pr = 0; pr < 2; ++pr) {
++        const uvec4 a0 = uvec4(qq[sl * 8 + pr * 4 + 0]);
++        const uvec4 a1 = uvec4(qq[sl * 8 + pr * 4 + 1]);
++        const uvec4 b0 = uvec4(qq[sl * 8 + pr * 4 + 2]);
++        const uvec4 b1 = uvec4(qq[sl * 8 + pr * 4 + 3]);
++        const uint e[8] = { a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w };
++        qe[pr][0] = e[0] << 16;
++        [[unroll]] for (uint i = 1; i < 8; ++i) {
++            qe[pr][i] = (e[i - 1] >> 16) | (e[i] << 16);
+         }
++        qe[pr][8] = e[7] >> 16;
++        qo[pr][0] = b0.x; qo[pr][1] = b0.y; qo[pr][2] = b0.z; qo[pr][3] = b0.w;
++        qo[pr][4] = b1.x; qo[pr][5] = b1.y; qo[pr][6] = b1.z; qo[pr][7] = b1.w;
++    }
++    [[unroll]] for (uint b = 0; b < 4; ++b) {
++        qd[b] = qdsh[sl * 4 + b];
++    }
++
++    float s[PS];
++    [[unroll]] for (uint pp = 0; pp < PS; ++pp) {
++        float acc = 0.0;
+         if ((DIAG & 1) == 0) {
+-        const uint kw = (ik2 * p.nb12 + ik3 * p.nb13 + (j0 + jl) * p.nb11 * 34) / 8;
+-        uint wr[34];
+-        [[unroll]] for (uint i = 0; i < 17; ++i) {
+-            const uvec2 t = data_k2[kw + i];
+-            wr[2 * i] = t.x;
+-            wr[2 * i + 1] = t.y;
+-        }
+-        [[unroll]] for (uint pr = 0; pr < 2; ++pr) {
+-            int ke[8], ko[8];
+-            [[unroll]] for (uint i = 0; i < 8; ++i) {
+-                ke[i] = int((wr[pr * 17 + i] >> 16) | (wr[pr * 17 + i + 1] << 16));
+-                ko[i] = int(wr[pr * 17 + 9 + i]);
+-            }
+-            const float de = unpackHalf2x16(wr[pr * 17]).x;
+-            const float dd = unpackHalf2x16(wr[pr * 17 + 8]).y;
+-            [[unroll]] for (uint h = 0; h < HPT; ++h) {
+-                const uint qi = (h0 + h) * 8 + pr * 4;
+-                const ivec4 a0 = qq[qi + 0];
+-                const ivec4 a1 = qq[qi + 1];
+-                const ivec4 b0 = qq[qi + 2];
+-                const ivec4 b1 = qq[qi + 3];
+-                int ae = dotPacked4x8EXT(a0.x, ke[0]);
+-                ae    += dotPacked4x8EXT(a0.y, ke[1]);
+-                ae    += dotPacked4x8EXT(a0.z, ke[2]);
+-                ae    += dotPacked4x8EXT(a0.w, ke[3]);
+-                ae    += dotPacked4x8EXT(a1.x, ke[4]);
+-                ae    += dotPacked4x8EXT(a1.y, ke[5]);
+-                ae    += dotPacked4x8EXT(a1.z, ke[6]);
+-                ae    += dotPacked4x8EXT(a1.w, ke[7]);
+-                int ao = dotPacked4x8EXT(b0.x, ko[0]);
+-                ao    += dotPacked4x8EXT(b0.y, ko[1]);
+-                ao    += dotPacked4x8EXT(b0.z, ko[2]);
+-                ao    += dotPacked4x8EXT(b0.w, ko[3]);
+-                ao    += dotPacked4x8EXT(b1.x, ko[4]);
+-                ao    += dotPacked4x8EXT(b1.y, ko[5]);
+-                ao    += dotPacked4x8EXT(b1.z, ko[6]);
+-                ao    += dotPacked4x8EXT(b1.w, ko[7]);
+-                const uint di = (h0 + h) * 4 + pr * 2;
+-                s[h] += float(ae) * (qdsh[di] * de) + float(ao) * (qdsh[di + 1] * dd);
++            [[unroll]] for (uint pr = 0; pr < 2; ++pr) {
++                int ae = 0;
++                [[unroll]] for (uint i = 0; i < 9; ++i) {
++                    ae += dotPacked4x8EXT(int(qe[pr][i]), int(KDW(pp, pr * 17 + i)));
++                }
++                int ao = 0;
++                [[unroll]] for (uint i = 0; i < 8; ++i) {
++                    ao += dotPacked4x8EXT(int(qo[pr][i]), int(KDW(pp, pr * 17 + 9 + i)));
++                }
++                const float de = unpackHalf2x16(KDW(pp, pr * 17)).x;
++                const float dd = unpackHalf2x16(KDW(pp, pr * 17 + 8)).y;
++                acc += float(ae) * (qd[2 * pr] * de) + float(ao) * (qd[2 * pr + 1] * dd);
+             }
+         }
+-        }
+-        if (HAS_MASK != 0) {
+-            const float m = float(data_m[j0 + jl]);
+-            [[unroll]] for (uint h = 0; h < HPT; ++h) {
+-                s[h] += m;
+-            }
+-        }
+-    } else {
+-        [[unroll]] for (uint h = 0; h < HPT; ++h) {
+-            s[h] = NEG_INF;
+-        }
++        s[pp] = pp < np ? acc + subgroupShuffle(mk, pp) : NEG_INF;
+     }
+-    [[unroll]] for (uint c = 0; c < HPT / 4; ++c) {
+-        psh[jl * NC + h0 / 4 + c] = vec4(s[c * 4 + 0], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]);
+-    }
+-    barrier();
+ 
+-    // 2. max of each head over the chunk, then the exponentials
++    // 2. max and sum of each head over the chunk: each subgroup's, then across the subgroups
+     {
+-        const uint c = tid % NC;
+-        const uint jp = (tid / NC) * PP;
+-        vec4 m = psh[jp * NC + c];
+-        [[unroll]] for (uint i = 1; i < PP; ++i) {
+-            m = max(m, psh[(jp + i) * NC + c]);
++        float m = s[0];
++        [[unroll]] for (uint pp = 1; pp < PS; ++pp) {
++            m = max(m, s[pp]);
+         }
+-        red[tid] = m;
++        redm[sg * G + sl] = m;
+     }
+     barrier();
+-    [[unroll]] for (uint st = WG / 2; st >= NC; st >>= 1) {
+-        if (tid < st) {
+-            red[tid] = max(red[tid], red[tid + st]);
+-        }
+-        barrier();
+-    }
+-    // red[c] now holds the max of column c; the floor keeps exp() finite in a fully masked chunk
+-    bool any_live = false;
+-    [[unroll]] for (uint c = 0; c < NC; ++c) {
+-        any_live = any_live || any(greaterThan(red[c], vec4(NEG_FLT_MAX_OVER_2)));
+-    }
+-    [[unroll]] for (uint c = 0; c < HPT / 4; ++c) {
+-        const vec4 mc = max(red[h0 / 4 + c], vec4(NEG_FLT_MAX_OVER_2));
+-        psh[jl * NC + h0 / 4 + c] = exp(vec4(s[c * 4 + 0], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]) - mc);
++    float mx = NEG_INF;
++    [[unroll]] for (uint k = 0; k < NSG; ++k) {
++        mx = max(mx, redm[k * G + sl]);
+     }
+-    barrier();
+-
+-    // row sums of the exponentials, the same way as the max
++    // the floor keeps exp() finite in a fully masked chunk
++    const bool any_live = subgroupAny(mx > NEG_FLT_MAX_OVER_2);
++    mx = max(mx, NEG_FLT_MAX_OVER_2);
+     {
+-        const uint c = tid % NC;
+-        const uint jp = (tid / NC) * PP;
+-        vec4 sm = psh[jp * NC + c];
+-        [[unroll]] for (uint i = 1; i < PP; ++i) {
+-            sm += psh[(jp + i) * NC + c];
++        float ls = 0.0;
++        [[unroll]] for (uint pp = 0; pp < PS; ++pp) {
++            const float e = exp(s[pp] - mx);
++            ls += e;
++            psh[(sl / 4) * CH + pj + pp][sl % 4] = e;
+         }
+-        redl[tid] = sm;
++        reds[sg * G + sl] = ls;
+     }
+     barrier();
+-    [[unroll]] for (uint st = WG / 2; st >= NC; st >>= 1) {
+-        if (tid < st) {
+-            redl[tid] += redl[tid + st];
+-        }
+-        barrier();
+-    }
+ 
+     // 3. O = P x V. Four streams of 32 threads each take a quarter of the chunk; in a stream, lane l
+     // owns values 4g..4g+3 of all 16 heads. Within 16 lanes all blocks have the same parity: lanes
+-    // 0-7 block 0, 8-15 block 2, 16-23 block 1, 24-31 block 3.
++    // 0-7 block 0, 8-15 block 2, 16-23 block 1, 24-31 block 3. P of positions j..j+U-1: lane sl reads
++    // position j + sl % U, columns (sl / U) * CPL .. + CPL - 1.
+     const uint l   = tid % 32;
+     const uint sid = tid / 32;
+     const uint blk = ((l >> 3) & 1) * 2 + (l >> 4);
+@@ -269,75 +263,83 @@ void main() {
+     const uint jb = min(ja + CH / 4, jn);
+     const uint vstride = p.nb21 * 34 / 4;
+     uint vw = (ik2 * p.nb22 + iv3 * p.nb23 + (j0 + ja) * p.nb21 * 34) / 4;
+-    // U positions per iteration, all loads first, so that each thread has several in flight
+-    const uint U = 2;
+-    uint j = ja;
+-    for (; j + U <= jb; j += U, vw += U * vstride) {
++    for (uint j = ja; j < jb; j += U, vw += U * vstride) {
++        vec4 pv[CPL];
++        [[unroll]] for (uint t = 0; t < CPL; ++t) {
++            pv[t] = psh[((sl / U) * CPL + t) * CH + j + sl % U];
++        }
+         uint w0[U], w1[U], wdv[U];
+         [[unroll]] for (uint u = 0; u < U; ++u) {
+-            w0[u]  = data_v[vw + u * vstride + wq0];
+-            w1[u]  = data_v[vw + u * vstride + wq1];
+-            wdv[u] = data_v[vw + u * vstride + wd];
++            if (j + u < jb) {
++                w0[u]  = data_v[vw + u * vstride + wq0];
++                w1[u]  = data_v[vw + u * vstride + wq1];
++                wdv[u] = data_v[vw + u * vstride + wd];
++            }
+         }
+         [[unroll]] for (uint u = 0; u < U; ++u) {
+-            const vec2 dv = unpackHalf2x16(wdv[u]);
+-            const uint qv = odd ? w0[u] : ((w0[u] >> 16) | (w1[u] << 16));
+-            const vec4 vf = vec4(unpack8(int32_t(qv)));
+-            const float d = odd ? dv.y : dv.x;
+-            [[unroll]] for (uint c = 0; c < NC; ++c) {
+-                const vec4 pd = psh[(j + u) * NC + c] * d;
+-                o[c * 4 + 0] += pd.x * vf;
+-                o[c * 4 + 1] += pd.y * vf;
+-                o[c * 4 + 2] += pd.z * vf;
+-                o[c * 4 + 3] += pd.w * vf;
++            if (j + u < jb) {
++                const vec2 dv = unpackHalf2x16(wdv[u]);
++                const uint qv = odd ? w0[u] : ((w0[u] >> 16) | (w1[u] << 16));
++                const vec4 vf = vec4(unpack8(int32_t(qv)));
++                const float d = odd ? dv.y : dv.x;
++                [[unroll]] for (uint c = 0; c < NC; ++c) {
++                    const uint src = (c / CPL) * U + u;
++                    const vec4 pc = vec4(subgroupShuffle(pv[c % CPL].x, src), subgroupShuffle(pv[c % CPL].y, src),
++                                         subgroupShuffle(pv[c % CPL].z, src), subgroupShuffle(pv[c % CPL].w, src)) * d;
++                    o[c * 4 + 0] += pc.x * vf;
++                    o[c * 4 + 1] += pc.y * vf;
++                    o[c * 4 + 2] += pc.z * vf;
++                    o[c * 4 + 3] += pc.w * vf;
++                }
+             }
+         }
+     }
+-    for (; j < jb; ++j, vw += vstride) {
+-        const uint w0 = data_v[vw + wq0];
+-        const uint w1 = data_v[vw + wq1];
+-        const vec2 dv = unpackHalf2x16(data_v[vw + wd]);
+-        const uint qv = odd ? w0 : ((w0 >> 16) | (w1 << 16));
+-        const vec4 vf = vec4(unpack8(int32_t(qv)));
+-        const float d = odd ? dv.y : dv.x;
+-        [[unroll]] for (uint c = 0; c < NC; ++c) {
+-            const vec4 pd = psh[j * NC + c] * d;
+-            o[c * 4 + 0] += pd.x * vf;
+-            o[c * 4 + 1] += pd.y * vf;
+-            o[c * 4 + 2] += pd.z * vf;
+-            o[c * 4 + 3] += pd.w * vf;
+-        }
+-    }
+ 
+-    // add up the four streams: 3 and 2 into 1 and 0, then 1 into 0
+-    if (sid >= 2) {
+-        [[unroll]] for (uint h = 0; h < G; ++h) {
+-            comb[((sid - 2) * G + h) * 32 + l] = o[h];
+-        }
+-    }
++    // add up the four streams through psh, free once every stream is done with P: HP heads per pass,
++    // 3 and 2 into 1 and 0, then 1 into 0
++    const uint HP = CH * NC / 64;
+     barrier();
+-    if (sid < 2) {
+-        [[unroll]] for (uint h = 0; h < G; ++h) {
+-            o[h] += comb[(sid * G + h) * 32 + l];
++    [[unroll]] for (uint hb = 0; hb < G; hb += HP) {
++        if (sid >= 2) {
++            [[unroll]] for (uint h = 0; h < HP; ++h) {
++                psh[((sid - 2) * HP + h) * 32 + l] = o[hb + h];
++            }
+         }
+-    }
+-    barrier();
+-    if (sid == 1) {
+-        [[unroll]] for (uint h = 0; h < G; ++h) {
+-            comb[h * 32 + l] = o[h];
++        barrier();
++        if (sid < 2) {
++            [[unroll]] for (uint h = 0; h < HP; ++h) {
++                o[hb + h] += psh[(sid * HP + h) * 32 + l];
++            }
++        }
++        barrier();
++        if (sid == 1) {
++            [[unroll]] for (uint h = 0; h < HP; ++h) {
++                psh[h * 32 + l] = o[hb + h];
++            }
+         }
++        barrier();
++        if (sid == 0) {
++            [[unroll]] for (uint h = 0; h < HP; ++h) {
++                o[hb + h] += psh[h * 32 + l];
++            }
++        }
++        barrier();
+     }
+-    barrier();
+     if (sid == 0) {
+         // split-k partials, laid out as fa_split_k_reduce reads them
+         const uint ob = (D * p.ne1 * (chunk + p.k_num * p.ne2 * iq3)) / 4;
+         [[unroll]] for (uint h = 0; h < G; ++h) {
+-            data_ov4[ob + (iq2 + h) * (D / 4) + g] = o[h] + comb[h * 32 + l];
++            data_ov4[ob + (iq2 + h) * (D / 4) + g] = o[h];
+         }
+         if (l < G) {
++            // lanes 0..15 of subgroup 0 hold head l's max; the sums are in reds
++            float ls = 0.0;
++            [[unroll]] for (uint k = 0; k < NSG; ++k) {
++                ls += reds[k * G + l];
++            }
+             const uint lm = D * p.ne1 * p.ne2 * p.ne3 * p.k_num + p.ne1 * 2 * (chunk + p.k_num * p.ne2 * iq3);
+-            data_o[lm + iq2 + l] = redl[l / 4][l % 4];
+-            data_o[lm + p.ne1 + iq2 + l] = max(red[l / 4][l % 4], NEG_FLT_MAX_OVER_2);
++            data_o[lm + iq2 + l] = ls;
++            data_o[lm + p.ne1 + iq2 + l] = mx;
+         }
+     }
+ }
+-- 
+2.55.0.windows.3
+
