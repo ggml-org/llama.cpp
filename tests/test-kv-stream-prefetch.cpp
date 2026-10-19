@@ -17,6 +17,12 @@ static bool wait_feedback(llama_kv_stream_resident & resident, uint64_t samples)
     return false;
 }
 
+static bool same_feedback(const llama_kv_stream_feedback & a,const llama_kv_stream_feedback & b) {
+    return a.available==b.available && a.epoch==b.epoch && a.samples==b.samples && a.misses==b.misses &&
+        a.copy_busy_ratio==b.copy_busy_ratio && a.peak_slots==b.peak_slots &&
+        a.layer_samples==b.layer_samples && a.layer_misses==b.layer_misses;
+}
+
 // Withhold completion delivery without holding the GPU; exercise backpressure and stale-result rejection deterministically.
 struct feedback_delivery_gate {
     using lookup = void * (*)(ggml_backend_reg_t,const char *);
@@ -90,13 +96,116 @@ int main(int argc, char ** argv) {
     const bool sequence = measured || (argc > 1 && std::strcmp(argv[1],"--bench-sequence") == 0);
     const bool bench = sequence || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
     const bool ring_guard_only = argc > 1 && std::strcmp(argv[1], "--cuda-ring-guard") == 0;
-    const bool cuda = bench || ring_guard_only || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
+    const bool read_feedback_only = argc > 1 && std::strcmp(argv[1],"--cuda-read-feedback") == 0;
+    const bool cuda = read_feedback_only || bench || ring_guard_only || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
     if (bench) return benchmark(backend.get(),sequence,measured,fallback);
     testing t;
     if (ring_guard_only) t.set_filter("(retained_mtp_slots_are_not_overwritten_by_target_prefetch|full_mtp_ring_rejects_target_sequence_without_submission|mapped_target_stream_avoids_mtp_ring_in_shared_pool)");
+    if (read_feedback_only) t.set_filter("borrowed_reads_preserve_target_feedback_identity_and_samples");
+    if (cuda) t.test("borrowed_reads_preserve_target_feedback_identity_and_samples",[&](testing & t) {
+        for (uint32_t dimension : {256u,512u}) for (size_t active : {1025u,4097u}) for (auto pair : {
+            std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16},
+            std::pair{GGML_TYPE_Q5_0,GGML_TYPE_Q5_1},std::pair{GGML_TYPE_Q4_1,GGML_TYPE_Q8_0},
+            std::pair{GGML_TYPE_BF16,GGML_TYPE_F32},std::pair{GGML_TYPE_F32,GGML_TYPE_BF16}}) {
+            t.out << "read feedback D" << dimension << ' ' << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second)
+                << " active=" << active << std::endl;
+            feedback_delivery_gate delivery(backend.get()); delivery.blocked=false;
+            fixture f(backend.get(),true,pair.first,pair.second,8192,false,2,4,8,dimension,dimension);
+            f.policy.initial_ring_slots=2; f.policy.fixed_ring=true;
+            if (!t.assert_true(f.attach())) return;
+            auto pin=f.binding->acquire();
+            if (!t.assert_true(f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true) && f.resident->configure_feedback(true,1))) return;
+            const auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+            size_t bytes=0;
+            if (!t.assert_true(get && get() && ggml_kv_stream_workspace_query(get(),backend.get(),
+                    {f.policy.shape,32,4,f.host->layout().tokens},ggml_kv_stream_workspace_kind::decode,bytes))) return;
+            block_workspace workspace(f,bytes);
+            block_inputs target(f,active,1,false,32);
+            const auto target_expected=stock_attention(f,target,1);
+            auto target_run=[&](size_t span) {
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,span,active,{1,true}))) return false;
+                for (uint32_t layer : {0u,1u})
+                    if (!t.assert_true(f.resident->compute_streamed(layer,target.q,target.mask,target.output,
+                            active,1.0f/16,workspace.lease.get(),true,span))) return false;
+                ggml_backend_synchronize(backend.get());
+                return t.assert_true("target attention stays native-exact",same_float_bits(target_expected,target.read()));
+            };
+            if (!target_run(1)) return;
+            auto uploads=f.resident->sequence_stats().feedback_uploads;
+            if (!t.assert_true(uploads && wait_feedback(*f.resident,uploads))) return;
+            auto before=f.resident->feedback();
+            const auto generation=f.content->generation(),mirror=f.content->mirror_epoch();
+            std::vector<uint8_t> host_bytes(f.host->bytes());
+            std::memcpy(host_bytes.data(),ggml_backend_buffer_get_base(f.host->buffer()),host_bytes.size());
+            auto read_run=[&](uint32_t queries) {
+                t.out << "borrowed feedback TG" << queries << std::endl;
+                block_inputs reader(f,active,queries,false,32);
+                const auto expected=stock_attention(f,reader,1);
+                if (!t.assert_true(f.resident->begin_sequence({1},active,1,active,{queries,true,true}))) return false;
+                if (!t.assert_true(f.resident->compute_streamed(1,reader.q,reader.mask,reader.output,
+                        active,1.0f/16,workspace.lease.get(),true,1))) return false;
+                // Reused KV can leave only attention queued; tensor_get does not join its backend stream.
+                ggml_backend_synchronize(backend.get());
+                if (!t.assert_true("borrowed attention retains exact native output",same_float_bits(expected,reader.read()))) return false;
+                if (!t.assert_true("assistant-only work preserves target feedback",same_feedback(before,f.resident->feedback()))) return false;
+                return t.assert_equal("borrowed reads do not submit policy-training probes",size_t(0),f.resident->sequence_stats().feedback_uploads);
+            };
+            for (uint32_t queries : {3u,1u,2u,4u,1u}) if (!read_run(queries)) return;
+            if (!t.assert_true(f.resident->prime_sequence({1},active,1,active,{3,true,true}))) return;
+            f.resident->cancel_sequence();
+            t.assert_true("cancelling borrowed lookahead does not reset target training",same_feedback(before,f.resident->feedback()));
+            block_inputs rejected(f,active,1,false,32);
+            if (!t.assert_true(f.resident->prime_sequence({1},active,1,active,{1,true,true}))) return;
+            t.assert_true("invalid borrowed attention rejects before producing output",!f.resident->compute_streamed(
+                1,rejected.q,rejected.mask,rejected.output,active,0,workspace.lease.get(),true,1));
+            ggml_backend_synchronize(backend.get());
+            const auto rejected_output=rejected.read();
+            t.assert_true("failed borrowed attention leaves output untouched",std::all_of(
+                rejected_output.begin(),rejected_output.end(),[](float value) { return value==-77; }));
+            t.assert_true("failed borrowed attention does not reset target training",same_feedback(before,f.resident->feedback()));
+            t.assert_true(!f.resident->begin_sequence({1},active,1,active-1,{1,true,true}));
+            t.assert_true("invalid borrowed frontier cannot change target feedback",same_feedback(before,f.resident->feedback()));
+            uploads=before.samples;
+            if (!target_run(1)) return;
+            uploads+=f.resident->sequence_stats().feedback_uploads;
+            if (!t.assert_true(wait_feedback(*f.resident,uploads))) return;
+            t.assert_equal("target counters continue across borrowed work",uploads,f.resident->feedback().samples);
+            t.assert_equal(before.epoch,f.resident->feedback().epoch);
+            before=f.resident->feedback();
+            delivery.blocked=true;
+            if (!target_run(1)) return;
+            uploads=before.samples+f.resident->sequence_stats().feedback_uploads;
+            if (!read_run(3)) return;
+            delivery.blocked=false;
+            if (!t.assert_true("pending target reports survive a later borrowed read",wait_feedback(*f.resident,uploads))) return;
+            t.assert_equal(before.epoch,f.resident->feedback().epoch);
+            t.assert_equal(uploads,f.resident->feedback().samples);
+            before=f.resident->feedback();
+            if (dimension==512 && active==4097 && pair.first==GGML_TYPE_Q8_0) {
+                for (size_t trial=0;trial<17;++trial) {
+                    if (!read_run(3) || !target_run(2)) return;
+                    uploads+=f.resident->sequence_stats().feedback_uploads;
+                    if (!t.assert_true(wait_feedback(*f.resident,uploads))) return;
+                    before=f.resident->feedback();
+                }
+                t.assert_equal("borrowed queries do not restart target span trials",size_t(1),f.resident->suggested_span_pages());
+            }
+            t.assert_equal(generation,f.content->generation());
+            t.assert_equal(mirror,f.content->mirror_epoch());
+            t.assert_true("feedback isolation does not change authoritative KV bytes",
+                std::memcmp(host_bytes.data(),ggml_backend_buffer_get_base(f.host->buffer()),host_bytes.size())==0);
+            if (!t.assert_true(f.content->invalidate())) return;
+            t.assert_true("unknown content changes still invalidate target feedback",!f.resident->feedback().available);
+            if (!target_run(1)) return;
+            if (!t.assert_true(wait_feedback(*f.resident,f.resident->sequence_stats().feedback_uploads))) return;
+            t.assert_true(f.resident->feedback().epoch!=before.epoch);
+        }
+    });
     if (cuda) t.test("completed_runtime_feedback_is_consumable_without_publishing_a_layout", [&](testing & t) {
         uint64_t previous_instance_epoch = 0;
         for (bool fallback : {false,true}) {

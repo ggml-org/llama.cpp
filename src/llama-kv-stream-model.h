@@ -146,6 +146,7 @@ public:
     size_t pool_grant_bytes() const noexcept;
     size_t writer_grant_bytes() const noexcept;
     size_t attention_grant_bytes() const noexcept;
+    // Target copy counts and timing share one role; borrowed transfer counts remain in sequence_stats(read).
     bool runtime_diagnostics(llama_kv_stream_runtime_diagnostics & output) const noexcept;
 private:
     llama_kv_stream_model() = default;

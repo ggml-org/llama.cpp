@@ -295,7 +295,7 @@ struct llama_kv_stream_resident::implementation {
         }
         if (success) retained.advance(content->generation(),content->mirror_epoch());
         else retained.clear();
-        if (measuring) {
+        if (measuring && !sequence->read_only) {
             if (success && sequence->started && sequence->feedback_valid && sequence->profile) {
                 if (sequence->measurement_active) record_feedback(sequence->span);
             } else reset_feedback();
@@ -504,7 +504,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
             if (layers[i] >= s.physical_layers.size() || std::find(layers.begin(),layers.begin()+i,layers[i]) != layers.begin()+i) return false;
             prefixes.push_back(std::min(seq->padded,s.placement(layers[i]).planes.tokens));
             const size_t immutable = stable == active ? seq->padded : stable/s.page.tokens*s.page.tokens;
-            seq->profile |= feedback_context.decode && seq->queries == 1 && prefixes.back() < immutable;
+            seq->profile |= !feedback_context.read_only && feedback_context.decode && seq->queries == 1 && prefixes.back() < immutable;
         }
         const std::vector<uint8_t> empty;
         const auto & blocked = seq->ring_guard ? seq->ring_guard->blocked_slots() : empty;
@@ -1270,7 +1270,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     }
     llama_kv_stream_host_layer host;
     if (!s.content->host()->layer(layer,host)) return false;
-    if (s.measuring) {
+    // Borrowed attention uses the same transport, not the target's policy-training identity.
+    if (s.measuring && (!cross || !s.sequence->read_only)) {
         if (!cross) s.prepare_feedback(active_tokens,uint32_t(q->ne[1]),{layer});
         else if (s.sequence->next == 0) s.prepare_feedback(active_tokens,s.sequence->queries,s.sequence->layers);
         else if (s.feedback_queries != uint32_t(q->ne[1])) s.sequence->feedback_valid = false;

@@ -1339,7 +1339,7 @@ bool llama_kv_stream_model::runtime_diagnostics(
         return true;
     }
     const auto & policy = impl->session->policy();
-    const auto copies = impl->session->sequence_stats();
+    const auto copies = impl->append_stats;
     const auto timing = impl->session->copy_feedback();
     output = {
         impl->session->layout_revision(),

@@ -487,6 +487,17 @@ int main(int argc,char ** argv) {
                 t.assert_true("read proxy matches native bits across backend queues",same_float_bits(expected,actual));
                 t.assert_equal(active,f.model->tokens());
             }
+            const auto target_stats=f.model->sequence_stats(llama_kv_stream_access_role::append);
+            if (!t.assert_true(f.model->schedule_next_consumer(llama_kv_stream_access_role::read,{}) && reader->prefetch(queries))) return;
+            if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(child.get(),graph))) return;
+            const auto read_stats=f.model->sequence_stats(llama_kv_stream_access_role::read);
+            llama_kv_stream_runtime_diagnostics target_diagnostics;
+            if (!t.assert_true(f.model->runtime_diagnostics(target_diagnostics))) return;
+            if (pair.first==GGML_TYPE_F16 && active==24577)
+                t.assert_true("large source exercises read-only H2D accounting",read_stats.copy_bytes>0);
+            if (!t.assert_equal("target diagnostics do not substitute borrowed-read bytes",target_stats.copy_bytes,target_diagnostics.last_copy_bytes)) return;
+            t.assert_equal(target_stats.copy_calls,target_diagnostics.last_copy_calls);
+            t.assert_equal(target_stats.copy_bytes,f.model->sequence_stats(llama_kv_stream_access_role::append).copy_bytes);
             if (!t.assert_true(f.model->schedule_next_consumer(llama_kv_stream_access_role::read,intent) && reader->prefetch(queries))) return;
             if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(child.get(),graph))) return;
             t.assert_true(f.model->prefetch_primed());
@@ -502,12 +513,17 @@ int main(int argc,char ** argv) {
             auto malformed=*out; malformed.src[4]=input.q;
             t.assert_true(!ggml_backend_execution_supports(reader->buffer(),dev,&malformed));
             t.assert_equal(GGML_STATUS_FAILED,ggml_backend_execution_compute(reader->buffer(),child.get(),&malformed));
+            const auto completed_read=f.model->sequence_stats(llama_kv_stream_access_role::read);
             {
                 backend_drain_fault failure(child.get(),1);
                 t.assert_equal(GGML_STATUS_FAILED,ggml_backend_execution_compute(reader->buffer(),child.get(),out));
                 t.assert_equal(size_t(1),failure.calls);
             }
             t.assert_true(reader->ready() && f.model->complete());
+            t.assert_true(f.model->runtime_diagnostics(target_diagnostics));
+            t.assert_equal(target_stats.copy_bytes,target_diagnostics.last_copy_bytes);
+            t.assert_equal(completed_read.copy_bytes,f.model->sequence_stats(llama_kv_stream_access_role::read).copy_bytes);
+            t.assert_equal(completed_read.copy_calls,f.model->sequence_stats(llama_kv_stream_access_role::read).copy_calls);
             llama_memory_cache_requirement after;
             t.assert_true(f.model->read_source(after) && after.identity.id == before.identity.id &&
                 after.identity.generation == before.identity.generation);
