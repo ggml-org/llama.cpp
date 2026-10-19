@@ -147,12 +147,19 @@
 	.code-preview-wrapper pre {
 		background: transparent;
 		padding: 0;
+		/* Stretch to the content's intrinsic width so a single long line
+		   propagates its overflow to this scrolling wrapper instead of being
+		   clipped at the wrapper's width with no way to scroll to it. */
+		width: max-content;
+		min-width: 100%;
 	}
 
 	.code-preview-wrapper code {
 		background: transparent;
 		display: block;
 		padding: 0.5rem;
+		width: max-content;
+		min-width: 100%;
 	}
 
 	:global(.dark) .code-preview-wrapper {
