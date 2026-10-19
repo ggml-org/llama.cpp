@@ -380,7 +380,7 @@ void ggml_cuda_mul_mat_q(
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, prec_src1);
 }
 
-bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
+bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts, bool src0_contiguous) {
 #ifdef GGML_CUDA_FORCE_CUBLAS
     return false;
 #endif // GGML_CUDA_FORCE_CUBLAS
@@ -441,7 +441,8 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         // for MoE, mmq is faster even without native dp4a
         // TODO: check if cards older than pascal might benefit from this as well
         // the cuBLAS fallback needs a converter for non-contiguous src0, use MMQ if there is none
-        return (cc >= GGML_CUDA_CC_PASCAL && n_experts > 0) || ggml_get_to_fp32_nc_cuda(type) == nullptr;
+        return (cc >= GGML_CUDA_CC_PASCAL && n_experts > 0) ||
+            (!src0_contiguous && ggml_get_to_fp32_nc_cuda(type) == nullptr);
     }
 
 #ifdef GGML_CUDA_FORCE_MMQ
