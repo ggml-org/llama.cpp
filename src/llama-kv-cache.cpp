@@ -781,7 +781,7 @@ bool llama_kv_cache::bounded_prefix_available(const llama_kv_cells & full,size_t
         if (llama_hparams::is_masked_swa(n_swa,swa_type,full.pos_get(uint32_t(middle)),last)) first=middle+1;
         else end=middle;
     }
-    return llama_kv_stream_bounded_contains(full,first,retained,v_cells[0]);
+    return llama_kv_stream_bounded_contains(full,first,retained,v_cells[0],has_cell_ext());
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {

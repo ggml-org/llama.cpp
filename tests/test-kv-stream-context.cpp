@@ -2035,6 +2035,215 @@ static void test_gemma_candidate_loop(testing & t,llama_model * model,const char
     }
 }
 
+// Exercise the server's accepted-prefix contract with real target writes and the stock MTP driver.
+static void test_gemma_acceptance(testing & t,llama_model * model,const char * path,bool compact) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4 && path)) return;
+    auto mp=llama_model_default_params(); mp.n_gpu_layers=999;
+    model_ptr assistant(llama_model_load_from_file(path,mp),llama_model_free);
+    if (!t.assert_true(assistant && assistant->arch == LLM_ARCH_GEMMA4_ASSISTANT)) return;
+    const size_t width=model->hparams.n_embd_out();
+    const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(model));
+    kv_stream_bit_oracle oracle;
+    for (bool streamed : {false,true}) {
+        if (streamed) oracle.compare();
+        auto cp=llama_context_default_params();
+        cp.n_ctx=4096; cp.n_batch=cp.n_ubatch=compact ? 32 : 256; cp.n_seq_max=1;
+        cp.n_threads=cp.n_threads_batch=8; cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.shared_device_memory_bytes=streamed ? size_t(compact ? 480 : 1024)*1048576 : 0;
+        cp.kv_stream_verify_max=streamed ? 4 : 0;
+        context_ptr target(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true(bool(target))) return;
+        auto dp=cp; dp.n_batch=dp.n_ubatch=1;
+        dp.shared_device_memory_bytes=0; dp.kv_stream_verify_max=0;
+        dp.ctx_type=LLAMA_CONTEXT_TYPE_MTP; dp.ctx_other=target.get();
+        context_ptr draft(llama_init_from_model(assistant.get(),dp),llama_free);
+        if (!t.assert_true(bool(draft))) return;
+        llama_set_embeddings_nextn(target.get(),true,false);
+        llama_set_embeddings_nextn(draft.get(),true,true);
+        const auto resources=llama_memory_kv_resources_get(llama_get_memory(target.get()));
+        if (!t.assert_true(resources.full && resources.bounded && !resources.recurrent)) return;
+        auto * stream=resources.full->get_kv_stream();
+        auto * physical_parent=target->get_compute_memory()->shared_parent();
+        const auto words=common_tokenize(target.get(),"A woodland stream flows past trees and birds. ",true);
+        if (!t.assert_true(!words.empty())) return;
+        llama_tokens history;
+        common_batch batch(target.get());
+        common_speculative_ptr spec;
+        const auto carry=[&] {
+            std::vector<uint8_t> bytes;
+            if (!common_speculative_get_state(spec.get(),0,bytes)) throw std::runtime_error("missing Gemma carry state");
+            return bytes;
+        };
+        const auto canonical=[&](kv_stream_bit_oracle & out,const std::string & label) {
+            llama_synchronize(target.get()); llama_synchronize(draft.get());
+            const size_t frontier=history.size();
+            for (auto * cache : {resources.full,resources.bounded}) {
+                const bool local=cache == resources.bounded;
+                const auto tag=label+(local ? "/local" : "/full");
+                const size_t first=local && frontier > model->hparams.n_swa ? frontier-model->hparams.n_swa : 0;
+                const auto & cells=cache->get_cells(0);
+                std::vector<int64_t> metadata;
+                const bool extended=model->hparams.n_pos_per_embd() > 1 || model->hparams.ple_n_heads > 0;
+                for (const auto & item : cells.seq_pos_get(0)) {
+                    if (item.first < 0 || size_t(item.first) >= frontier) throw std::runtime_error("Gemma cache retained a rejected suffix");
+                    if (size_t(item.first) < first) continue;
+                    metadata.push_back(item.first);
+                    if (extended) {
+                        const auto & ext=cells.ext_get(item.second);
+                        metadata.insert(metadata.end(),{ext.x,ext.y,ext.tok});
+                    }
+                }
+                if (metadata.size() != (frontier-first)*(extended ? 4 : 1)) throw std::runtime_error("incomplete Gemma visible cache metadata");
+                out.bytes(tag+"/positions",metadata.data(),metadata.size()*sizeof(int64_t));
+                kv_stream_exact_kv(out,tag,cache,first,frontier-first);
+            }
+        };
+        const auto submit=[&](const std::string & label,const llama_tokens & tokens,bool decode) {
+            batch.clear();
+            for (size_t row=0;row<tokens.size();++row) batch.add(tokens[row],llama_pos(history.size()+row),0,decode || row+1 == tokens.size());
+            llama_set_kv_stream_decode(target.get(),decode);
+            if (!t.assert_equal(label,0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return false;
+            if (spec && !t.assert_true(common_speculative_process(spec.get(),batch))) return false;
+            history.insert(history.end(),tokens.begin(),tokens.end());
+            if (decode) for (size_t row=0;row<tokens.size();++row) {
+                const auto * values=llama_get_logits_ith(target.get(),int(row));
+                const auto * hidden=llama_get_embeddings_nextn_ith(target.get(),int(row));
+                if (!t.assert_true(values && hidden)) return false;
+                oracle.bytes(label+"/logits/"+std::to_string(row),values,vocab*sizeof(float));
+                oracle.bytes(label+"/hidden/"+std::to_string(row),hidden,width*sizeof(float));
+            }
+            return true;
+        };
+        const auto prefill=[&](size_t frontier,size_t salt) {
+            while (history.size() < frontier) {
+                llama_tokens tokens(std::min(size_t(cp.n_ubatch),frontier-history.size()));
+                for (size_t row=0;row<tokens.size();++row) tokens[row]=words[(history.size()+row+salt)%words.size()];
+                if (!submit("prefill/"+std::to_string(history.size()),tokens,false)) return false;
+            }
+            return true;
+        };
+        if (!prefill(compact ? 2303 : 1279,0)) return;
+        llama_token next=0;
+        const auto sample=[&](int row) {
+            const auto * values=llama_get_logits_ith(target.get(),row);
+            if (!values) throw std::runtime_error("missing Gemma correction logits");
+            return llama_token(std::max_element(values,values+vocab)-values);
+        };
+        next=sample(-1);
+        const auto predict=[&](const std::string & label,int depth,llama_token anchor) {
+            llama_tokens result;
+            common_speculative_get_draft_params(spec.get(),0)={true,depth,llama_pos(history.size()),anchor,&history,&result,nullptr,0.0f,123};
+            common_speculative_draft(spec.get());
+            if (result.size() != size_t(depth)) throw std::runtime_error("incomplete Gemma acceptance draft");
+            oracle.bytes(label,result.data(),result.size()*sizeof(llama_token));
+            return result;
+        };
+        for (int depth=1;depth<=3;++depth) {
+            spec.reset();
+            common_params_speculative params;
+            params.types={COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+            params.draft.ctx_tgt=target.get(); params.draft.ctx_dft=draft.get();
+            params.draft.n_max=depth; params.draft.backend_sampling=true;
+            spec.reset(common_speculative_init(params,1));
+            if (!t.assert_true(bool(spec))) return;
+            common_speculative_begin(spec.get(),0,history);
+            if (!t.assert_true(common_speculative_process(spec.get(),batch))) return;
+            for (int accepted=0;accepted<=depth;++accepted) {
+                const std::string label="depth/"+std::to_string(depth)+"/accept/"+std::to_string(accepted);
+                const size_t first=history.size();
+                const auto proposed=predict(label+"/proposals",depth,next);
+                llama_tokens verified{next}; verified.insert(verified.end(),proposed.begin(),proposed.end());
+                if (!submit(label+"/verify",verified,true)) return;
+                const auto correction=sample(accepted);
+                const auto * hidden=llama_get_embeddings_nextn_ith(target.get(),accepted);
+                if (!t.assert_true(hidden != nullptr)) return;
+                const std::vector<float> selected(hidden,hidden+width);
+                common_speculative_accept(spec.get(),0,uint16_t(accepted));
+                const auto selected_carry=carry();
+                if (!t.assert_true("acceptance chooses the matching target hidden row",selected_carry.size() == sizeof(uint32_t)+width*sizeof(float) &&
+                        !std::memcmp(selected_carry.data()+sizeof(uint32_t),selected.data(),width*sizeof(float)))) return;
+                const size_t frontier=first+size_t(accepted)+1;
+                if (!t.assert_true("accepted prefix truncation succeeds",llama_memory_seq_rm(llama_get_memory(target.get()),0,llama_pos(frontier),-1))) return;
+                history.resize(frontier);
+                canonical(oracle,label+"/accepted-cache");
+                oracle.bytes(label+"/accepted-carry",selected_carry.data(),selected_carry.size());
+                (void)predict(label+"/after-accept",depth,correction);
+                if (!submit(label+"/correction",{correction},true)) return;
+                next=sample(-1);
+                if (stream) {
+                    t.assert_equal(history.size(),stream->tokens());
+                    t.assert_true(target->get_compute_memory()->shared_parent() == physical_parent &&
+                        draft->get_compute_memory()->shared_parent() == physical_parent);
+                    if (compact) {
+                        llama_context_memory_diagnostics usage;
+                        t.assert_true("acceptance profile exercises streaming",target->get_compute_memory()->diagnostics(usage) && usage.streaming_active);
+                    }
+                }
+            }
+            const std::string label="depth/"+std::to_string(depth)+"/cancel";
+            const size_t first=history.size();
+            const auto saved_carry=carry();
+            common_prompt_checkpoint checkpoint;
+            checkpoint.update_tgt(target.get(),0,LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            kv_stream_bit_oracle cancelled;
+            canonical(cancelled,"entry");
+            const auto proposed=predict(label+"/proposals",depth,next);
+            llama_tokens verified{next}; verified.insert(verified.end(),proposed.begin(),proposed.end());
+            if (!submit(label+"/provisional",verified,true)) return;
+            if (!t.assert_true("cancelled verification restores the saved target prefix",
+                    checkpoint.load_tgt(target.get(),0,LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) &&
+                    llama_memory_seq_rm(llama_get_memory(target.get()),0,llama_pos(first),-1))) return;
+            history.resize(first);
+            common_speculative_set_state(spec.get(),0,saved_carry);
+            cancelled.compare(); canonical(cancelled,"entry"); cancelled.finish();
+            if (!t.assert_true("cancellation retry produces the same draft",predict(label+"/retry",depth,next) == proposed)) return;
+            canonical(oracle,label+"/restored-cache");
+            if (!submit(label+"/resume",{next},true)) return;
+            next=sample(-1);
+        }
+        // Match the server's extra-token headroom before the final speculative round.
+        if (!prefill(cp.n_ctx-3,0)) return;
+        next=sample(-1);
+        kv_stream_bit_oracle boundary;
+        canonical(boundary,"end-prefix");
+        batch.clear();
+        for (int row=0;row<4;++row) batch.add(words[size_t(row)%words.size()],llama_pos(history.size()+row),0,true);
+        llama_set_kv_stream_decode(target.get(),true);
+        if (!t.assert_true("oversized final verification rejects before mutation",llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()) != 0)) return;
+        boundary.compare(); canonical(boundary,"end-prefix"); boundary.finish();
+        const auto proposed=predict("end/proposals",1,next);
+        if (!submit("end/verify",{next,proposed.front()},true)) return;
+        common_speculative_accept(spec.get(),0,1);
+        if (!submit("end/correction",{sample(-1)},true)) return;
+        t.assert_equal(size_t(cp.n_ctx),history.size());
+        const auto empty_requests=history;
+        common_speculative_get_draft_params(spec.get(),0).drafting=false;
+        common_speculative_draft(spec.get());
+        t.assert_true("no drafting is scheduled once context headroom is exhausted",history == empty_requests);
+        for (size_t request=0;request<2;++request) {
+            llama_memory_clear(llama_get_memory(target.get()),true);
+            llama_memory_clear(llama_get_memory(draft.get()),true);
+            history.clear();
+            const llama_tokens short_prompt(17,words[(request+1)%words.size()]);
+            common_speculative_begin(spec.get(),0,short_prompt);
+            const auto empty=carry();
+            t.assert_true("new empty request resets hidden carry",empty.size() == sizeof(uint32_t)+width*sizeof(float) &&
+                std::all_of(empty.begin()+sizeof(uint32_t),empty.end(),[](uint8_t value) { return value == 0; }));
+            if (!submit("request/"+std::to_string(request)+"/prefill",short_prompt,false)) return;
+            canonical(oracle,"request/"+std::to_string(request)+"/cache");
+            const auto proposed=predict("request/"+std::to_string(request)+"/proposals",3,sample(-1));
+            t.assert_equal(size_t(3),proposed.size());
+            const auto request_carry=carry();
+            oracle.bytes("request/"+std::to_string(request)+"/carry",request_carry.data(),request_carry.size());
+        }
+        spec.reset();
+        if (streamed) oracle.finish();
+        std::fprintf(stderr,"Gemma acceptance: streamed=%d records=%zu bytes=%llu\n",int(streamed),oracle.records(),(unsigned long long)oracle.byte_count());
+    }
+}
+
 static void test_gemma_common_startup(testing & t,const char * target_path,const char * assistant_path) {
     common_params params;
     params.model.path=target_path;
@@ -2094,6 +2303,17 @@ static void test_gemma_common_startup(testing & t,const char * target_path,const
         return t.assert_true(result && std::all_of(result,result+vocab,[](float value) { return std::isfinite(value); }));
     };
     if (!predict(64,63)) return;
+    auto * full=llama_memory_kv_resources_get(llama_get_memory(target)).full;
+    auto * reader_source=full ? full->get_kv_stream() : nullptr;
+    llama_memory_cache_requirement before_probe,after_probe;
+    if (!t.assert_true(reader_source && reader_source->read_source(before_probe))) return;
+    const auto revision=parent->graph_binding_revision();
+    t.assert_equal("shared assistant rollback classification performs no ordinary decode probe",
+        COMMON_CONTEXT_SEQ_RM_TYPE_PART,common_context_can_seq_rm(draft));
+    t.assert_true(reader_source->read_source(after_probe) &&
+        before_probe.identity.id == after_probe.identity.id && before_probe.identity.generation == after_probe.identity.generation &&
+        reader_source->tokens() == 64);
+    t.assert_equal(revision,parent->graph_binding_revision());
     llama_set_kv_stream_decode(target,true);
     batch.clear();
     for (int row=0;row<4;++row) batch.add(words[size_t(row)%words.size()],64+row,0,true);
@@ -2537,6 +2757,14 @@ int main(int argc,char ** argv) {
     }
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-acceptance")) {
+        if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
+        const bool compact=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-memory"); });
+        t.test("Gemma_acceptance_rollback_and_request_reuse_match_native",[&](testing & t) {
+            test_gemma_acceptance(t,model.get(),argv[i+1],compact);
+        });
+        return t.summary();
+    }
     for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-candidate-loop")) {
         if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
         t.test("Gemma_common_candidate_loop_matches_native_fixed_position_predictions",[&](testing & t) {

@@ -95,6 +95,21 @@ And then the test in question can be run in another terminal:
 And this should trigger the breakpoint and allow inspection of the server state
 in the debugger terminal.
 
+### Adaptive Gemma assistant qualification
+
+This offline harness compares native and adaptive execution in this binary with matching Gemma 4 target/assistant files and Q8_0/Q4_0 cache types. It uses Python's standard library and starts temporary loopback servers, without changing or stopping production services. Free the GPU first. UVM is disabled in both controls; native allocation must fit on the device. Assistant weights remain outside the arena.
+
+```sh
+python3 tools/server/tests/test_adaptive_gemma.py \
+  --server ./build-v2/bin/llama-server \
+  --model /path/to/gemma-4-31B-it-Q3_K_M.gguf \
+  --assistant /path/to/mtp-gemma-4-31B-it-Q8_0.gguf \
+  --arena-mib 1024 --context 4096 --prefill 1333 --predict 64 \
+  --depths 1,2,3 --output /path/to/gemma-test-results
+```
+
+Each depth checks fresh, cached and changed prompts, then disconnect cancellation and the next clean request. Complete token IDs must match native execution, the assistant must actually draft, and all requested outputs must arrive. The native control explicitly selects matching draft KV types; adaptive execution inherits the target types and does not permit draft overrides. Model/backend behavior is compared under matching execution modes, not against no-MTP TG1. This is a finite text-only correctness qualification, not full-native-context performance or Gemma vision qualification. Logs, exact launch commands and accepted responses are retained per mode. `test_adaptive_gemma_harness.py` checks launch and process-group cleanup contracts without loading a model.
+
 ### Adaptive KV vision qualification
 
 This standalone harness needs only Python's standard library and local model/projector files. It starts temporary loopback servers and stops them in cleanup, generates deterministic PNG inputs, and disables UVM in those test processes by default, including any inherited UVM setting. Free the GPU beforehand; it does not manage production containers.

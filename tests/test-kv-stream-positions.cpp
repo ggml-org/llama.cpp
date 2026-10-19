@@ -240,5 +240,25 @@ int main() {
         full.rm(3);
         t.assert_true(!llama_kv_stream_bounded_contains(full,2,8,local));
     });
+    t.test("bounded_history_can_use_the_native_position_only_checkpoint_contract", [](testing & t) {
+        auto full=cells_with({0,1,2,3,4,5,6,7});
+        llama_kv_cells local; local.resize(6);
+        for (uint32_t row=2;row<8;++row) {
+            const auto slot=(row+2)%6;
+            local.pos_set(slot,llama_pos(row)); local.seq_add(slot,0);
+        }
+        t.assert_true(!llama_kv_stream_bounded_contains(full,2,8,local));
+        t.assert_true(llama_kv_stream_bounded_contains(full,2,8,local,false));
+        const uint32_t changed=(4+2)%6;
+        local.seq_add(changed,1);
+        t.assert_true(!llama_kv_stream_bounded_contains(full,2,8,local,false));
+        local.seq_rm(changed,1);
+        local.rm(changed);
+        t.assert_true(!llama_kv_stream_bounded_contains(full,2,8,local,false));
+        local.pos_set(changed,4); local.seq_add(changed,0);
+        t.assert_true(llama_kv_stream_bounded_contains(full,2,8,local,false));
+        full.rm(3);
+        t.assert_true(!llama_kv_stream_bounded_contains(full,2,8,local,false));
+    });
     return t.summary();
 }

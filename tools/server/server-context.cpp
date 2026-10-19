@@ -1161,12 +1161,12 @@ private:
             SRV_ERR("%s", "KV streaming requires --fit off and an admitted embedded MTP or DFlash2 pairing\n");
             return false;
         }
-        if (streamed_mtp && (!streaming || !spec_mtp || has_draft ||
+        if (streamed_mtp && (!streaming || !spec_mtp ||
                 std::any_of(params.speculative.types.begin(), params.speculative.types.end(),
                     [](auto type) { return type != COMMON_SPECULATIVE_TYPE_NONE &&
                         type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP; }) || params.n_parallel != 1 ||
                 params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 3)) {
-            SRV_ERR("%s", "adaptive MTP requires serial embedded Qwen MTP, 1-3 draft tokens, and a KV stream pool or arena; cache support is checked during context initialization\n");
+            SRV_ERR("%s", "adaptive MTP requires serial execution, 1-3 draft tokens, and a KV stream pool or arena; embedded/shared-KV model pairing is checked during context initialization\n");
             return false;
         }
 

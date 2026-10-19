@@ -1690,6 +1690,11 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         return COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     }
 
+    // Shared-KV MTP owns no appendable cache; a two-token probe is invalid for its hidden-conditioned TG1 input.
+    if (llama_get_ctx_other(ctx) && llama_model_n_layer_nextn(llama_get_model(ctx)) > 0) {
+        return COMMON_CONTEXT_SEQ_RM_TYPE_PART;
+    }
+
     if (llama_n_rs_seq(ctx) > 0) {
         COM_TRC("%s", "the context supports bounded partial sequence removal\n");
         return COMMON_CONTEXT_SEQ_RM_TYPE_RS;

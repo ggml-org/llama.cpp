@@ -99,7 +99,7 @@ bool llama_kv_stream_suffix(const llama_kv_cells & cells, size_t count,
 }
 
 bool llama_kv_stream_bounded_contains(const llama_kv_cells & source,size_t first,size_t end,
-        const llama_kv_cells & local) noexcept {
+        const llama_kv_cells & local,bool match_extended) noexcept {
     if (first > end || end > source.size() || end-first > local.get_used()) return false;
     if (first == end) return true;
     if (source.is_empty(uint32_t(first))) return false;
@@ -109,8 +109,10 @@ bool llama_kv_stream_bounded_contains(const llama_kv_cells & source,size_t first
         const auto row=uint32_t(index);
         if (source.is_empty(row) || source.seq_count(row) != 1 || !source.seq_has(row,0) ||
                 found == positions.end() || found->first != source.pos_get(row) || local.seq_count(found->second) != 1) return false;
-        const auto a=source.ext_get(row), b=local.ext_get(found->second);
-        if (a.x != b.x || a.y != b.y || a.tok != b.tok) return false;
+        if (match_extended) {
+            const auto a=source.ext_get(row), b=local.ext_get(found->second);
+            if (a.x != b.x || a.y != b.y || a.tok != b.tok) return false;
+        }
     }
     return true;
 }
