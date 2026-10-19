@@ -3910,7 +3910,8 @@ ggml_tensor * llm_graph_context::build_rs(
            uint32_t   rs_size,
             int32_t   rs_zero,
         const llm_graph_get_rows_fn & get_state_rows,
-               bool   in_place) const {
+               bool   in_place,
+               bool   from_cache) const {
 
     GGML_UNUSED(rs_size);
     ggml_tensor * states = ggml_reshape_2d(ctx0, s, state_size, s->ne[1]);
@@ -3931,6 +3932,9 @@ ggml_tensor * llm_graph_context::build_rs(
     ggml_tensor * output_states;
     if (get_state_rows) {
         output_states = get_state_rows(ctx0, states, state_copy_main);
+    } else if (!from_cache) {
+        // rollback snapshots: the states are never in place, so the readers read the gathered states directly
+        output_states = ggml_view_2d(ctx0, states_all, state_size, n_seqs, states_all->nb[1], 0);
     } else {
         // move the gathered states into their cells, the readers then read them from the cache
         // when the states are already in place the gather and the move have no rows, so the graph only changes in size
@@ -3996,7 +4000,11 @@ ggml_tensor * llm_graph_context::build_rs(
     const auto * kv_state = inp->mctx;
 
     const bool in_place = inp->rs_in_place && !get_state_rows;
-    GGML_ASSERT(get_state_rows || s->type == GGML_TYPE_F32); // the states are read from the cache, the gather is F32
+
+    // with rollback snapshots the states are never in place, so reading them from the cache would only add a move.
+    // n_rs_seq is fixed for the context, so the graph keeps the same shape
+    const bool from_cache = kv_state->get_n_rs_seq() == 0;
+    GGML_ASSERT(get_state_rows || !from_cache || s->type == GGML_TYPE_F32); // the states are read from the cache, the gather is F32
 
     // a custom getter reads the states of the ubatch straight from the cache, so the gather skips the first
     // state: it still holds the n_rs - n_seqs extra states and copies no state of a single sequence ubatch
@@ -4004,7 +4012,7 @@ ggml_tensor * llm_graph_context::build_rs(
 
     return build_rs(s, state_copy, inp->s_copy_main, state_size, n_seqs,
                     kv_state->get_n_rs(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
-                    get_state_rows, in_place);
+                    get_state_rows, in_place, from_cache);
 }
 
 ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(

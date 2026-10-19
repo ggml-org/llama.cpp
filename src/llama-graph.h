@@ -1405,7 +1405,8 @@ struct llm_graph_context {
                uint32_t   rs_size,
                 int32_t   rs_zero,
             const llm_graph_get_rows_fn & get_state_rows = nullptr,
-                   bool   in_place = false) const;
+                   bool   in_place = false,
+                   bool   from_cache = true) const;
 
     llm_graph_input_rs * build_rs_inp() const;
 

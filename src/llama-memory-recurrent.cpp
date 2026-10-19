@@ -1363,6 +1363,10 @@ uint32_t llama_memory_recurrent_context::get_size() const {
     return mem->size;
 }
 
+uint32_t llama_memory_recurrent_context::get_n_rs_seq() const {
+    return mem->n_rs_seq;
+}
+
 ggml_tensor * llama_memory_recurrent_context::get_r_l(int32_t il) const {
     return mem->r_l[il];
 }
