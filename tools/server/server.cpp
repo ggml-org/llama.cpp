@@ -1,3 +1,4 @@
+#include "server-connect.h"
 #include "server-context.h"
 #include "server-http.h"
 #include "server-models.h"
@@ -191,6 +192,20 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
         params.model_alias.insert(model_name);
     }
 
+    // check early, so a missing llama-connect fails-fast
+    if (params.server_connect) {
+        const std::string reason = server_connect::unavailable_reason(params);
+        if (!reason.empty()) {
+            SRV_ERR("--connect is not available: %s\n", reason.c_str());
+            return 1;
+        }
+        params.server_connect_code = server_connect::resolve_code(params.server_connect_code);
+    } else if (!params.server_connect_code.empty()) {
+        // the code is only meaningful while the tunnel runs, and /props keys off it being set
+        SRV_WRN("%s", "--connect-code is ignored without --connect\n");
+        params.server_connect_code.clear();
+    }
+
     // note: this is guaranteed to out-live ctx_http and tools
     server_mcp mcp_mgr;
 
@@ -345,6 +360,10 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     std::vector<std::string> warn_names;
     if (is_router_server) {
         warn_names.push_back("router mode");
+    }
+
+    if (params.server_connect) {
+        warn_names.push_back("peer-to-peer tunnel (llama-connect, experimental)");
     }
 
     if (params.ui_mcp_proxy) {
@@ -523,6 +542,16 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
 
     for (const auto & address : ctx_http.listening_addresses) {
         SRV_INF("listening on %s\n", address.c_str());
+    }
+
+    // spawn only once listening, so the port is bound and the child startup health check reaches us. the destructor stops it
+    server_connect connect_proc;
+    if (params.server_connect && !connect_proc.start(params, ctx_http.port)) {
+        SRV_ERR("%s", "exiting due to llama-connect error\n");
+        ctx_http.stop();
+        ctx_http.join();
+        clean_up();
+        return 1;
     }
 
     if (is_router_server) {
