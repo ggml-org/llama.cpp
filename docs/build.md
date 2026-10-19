@@ -852,6 +852,36 @@ WebGPU allows cross-platform access to the GPU from supported browsers. We utili
 
 Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/src/emdawnwebgpu/) to download or build the emdawnwebgpu package (Note that it might be safer to build the emdawnwebgpu package locally, so that it stays in sync with the version of Dawn you have installed above). When building using CMake, the path to the emdawnwebgpu port file needs to be set with the flag `EMDAWNWEBGPU_DIR`.
 
+## WASI
+
+Requires [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) 34+ with `WASI_SDK_PATH` set. Only the libraries build (`llama-common` does not support WASI yet), so link your program against them:
+
+```bash
+FLAGS="-msimd128 -D_WASI_EMULATED_SIGNAL -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"
+cmake -B build-wasi -DCMAKE_TOOLCHAIN_FILE=$WASI_SDK_PATH/share/cmake/wasi-sdk-p2.cmake \
+    -DCMAKE_C_FLAGS="$FLAGS" -DCMAKE_CXX_FLAGS="$FLAGS" -DCMAKE_HAVE_LIBC_PTHREAD=1 \
+    -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_BUILD_COMMON=OFF
+cmake --build build-wasi --target llama
+
+$WASI_SDK_PATH/bin/clang++ --target=wasm32-wasip3 -O3 $FLAGS -I include -I ggml/include examples/simple/simple.cpp \
+    build-wasi/src/libllama.a build-wasi/ggml/src/libggml*.a -lunwind -ldl -Wl,-z,stack-size=8388608 -o llama-simple.wasm
+wasmtime run -W exceptions=y --dir models llama-simple.wasm -m models/model.gguf "Hello"
+```
+
+### wasi:webgpu
+
+The WebGPU backend can target [wasi:webgpu](https://github.com/WebAssembly/wasi-webgpu) via [wasi-webgpu-headers](https://github.com/wasi-gfx/wasi-webgpu-headers) (with its submodule) and Dawn's `dawn-headers` release. Point `Dawn_DIR` at a directory containing this `DawnConfig.cmake` next to both:
+
+```cmake
+set(_wasi_webgpu "${CMAKE_CURRENT_LIST_DIR}/wasi-webgpu-headers")
+add_library(dawn::webgpu_dawn INTERFACE IMPORTED)
+set_target_properties(dawn::webgpu_dawn PROPERTIES
+    INTERFACE_SOURCES "${_wasi_webgpu}/webgpu.c;${_wasi_webgpu}/async_futures.c;${_wasi_webgpu}/imports.c;${_wasi_webgpu}/imports_component_type.o"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/dawn-headers/include/webgpu_upstream;${_wasi_webgpu}")
+```
+
+Then build as above, but with `wasi-sdk-p3.cmake` / `--target=wasm32-wasip3`, `-DGGML_WEBGPU=ON -DDawn_DIR=...` at configure, and `build-wasi/ggml/src/ggml-webgpu/libggml-webgpu.a` added at link. See `.github/workflows/build-wasi.yml` for a more complete example.
+
 ## IBM Z & LinuxONE
 
 To read documentation for how to build on IBM Z & LinuxONE, [click here](./build-s390x.md)
