@@ -905,6 +905,64 @@ struct flash_attn_load_tile_impl<warp_size, nwarps, I, J, stride_tile, false, oo
     }
 };
 
+// q8_0 K/V: dequantize the blocks to half2 in registers during the global->shared copy so the shared tile
+// layout is identical to the f16 path and all downstream math is unchanged. The caller applies the column
+// offset in units of QK8_0 blocks, stride_KV is in blocks and the tile rows are k_VKQ_0 + i.
+template <int warp_size, int nwarps, int I, int J, int stride_tile, bool oob_check, bool use_sparse, bool KV_indirection>
+struct flash_attn_load_tile_impl<warp_size, nwarps, I, J, stride_tile, false, oob_check, use_sparse, KV_indirection, false, block_q8_0, half2> {
+    static __device__ __forceinline__ void load(
+            const block_q8_0 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int D2, const int stride_KV,
+            const int k_VKQ_0, const int i_sup, const int32_t * const __restrict__ indices) {
+        static_assert(!use_sparse && !KV_indirection, "q8_0 tile reader only supports the dense path");
+        GGML_UNUSED_VARS(D2, indices);
+
+        if constexpr (J > 0 && J % QK8_0 == 0) {
+#ifdef FP16_AVAILABLE
+            constexpr int blocks_j = J / QK8_0; // q8_0 blocks per tile row
+            const int nthreads = nwarps*warp_size;
+
+            for (int g = threadIdx.y*warp_size + threadIdx.x; g < I*blocks_j; g += nthreads) {
+                const int i = g / blocks_j;
+                const int b = g % blocks_j;
+
+                half2 * dst = tile_KV + i*stride_tile + b*(QK8_0/2);
+
+                if (oob_check && i >= i_sup) {
+#pragma unroll
+                    for (int l = 0; l < QK8_0/2; ++l) {
+                        dst[l] = make_half2(0.0f, 0.0f);
+                    }
+                } else {
+                    const block_q8_0 * blk = KV + int64_t(k_VKQ_0 + i)*stride_KV + b;
+                    const half2 d = __half2half2(blk->d);
+#pragma unroll
+                    for (int l = 0; l < QK8_0; l += 2) {
+                        dst[l/2] = d * make_half2(blk->qs[l + 0], blk->qs[l + 1]);
+                    }
+                }
+            }
+#else
+            GGML_UNUSED_VARS(KV, tile_KV, stride_KV, k_VKQ_0, i_sup);
+            NO_DEVICE_CODE;
+#endif // FP16_AVAILABLE
+        } else {
+            GGML_UNUSED_VARS(KV, tile_KV, stride_KV, k_VKQ_0, i_sup);
+        }
+    }
+};
+
+// fp32 accumulation (pre-Volta NVIDIA) is never used together with the q8_0 readers, see
+// ggml_cuda_flash_attn_ext_tile(). The instantiation still has to compile.
+template <int warp_size, int nwarps, int I, int J, int stride_tile, bool oob_check, bool use_sparse, bool KV_indirection>
+struct flash_attn_load_tile_impl<warp_size, nwarps, I, J, stride_tile, false, oob_check, use_sparse, KV_indirection, false, block_q8_0, float> {
+    static __device__ __forceinline__ void load(
+            const block_q8_0 * const __restrict__ KV, float * const __restrict__ tile_KV, const int D2, const int stride_KV,
+            const int k_VKQ_0, const int i_sup, const int32_t * const __restrict__ indices) {
+        GGML_UNUSED_VARS(KV, tile_KV, D2, stride_KV, k_VKQ_0, i_sup, indices);
+        NO_DEVICE_CODE;
+    }
+};
+
 template <int warp_size, int nwarps, int I, int J, int stride_tile, bool use_cp_async, bool oob_check, bool use_sparse, bool KV_indirection, bool use_swizzle, typename T_src, typename T_dst>
 static __device__ __forceinline__ void flash_attn_load_tile(
         const T_src * const __restrict__ KV, T_dst * const __restrict__ tile_KV, const int D2, const int stride_KV,
@@ -918,6 +976,8 @@ template <ggml_type type>
 static __host__ __device__ auto ggml_cuda_fattn_kv_dtype() {
     if constexpr (type == GGML_TYPE_F16) {
         return half2{};
+    } else if constexpr (type == GGML_TYPE_Q8_0) {
+        return block_q8_0{};
     } else {
         static_assert(type == -1, "bad type");
     }

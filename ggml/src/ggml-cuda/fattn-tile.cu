@@ -63,6 +63,21 @@ void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
+    // q8_0 K/V are dequantized in-kernel during the global->shared copy, no f16 scratch is needed.
+    if constexpr (GGML_CUDA_FA_Q8_0_Q8_0) {
+        if (ggml_cuda_fattn_kv_native_q8_0(K, V)) {
+            ggml_cuda_flash_attn_ext_tile_switch_head_size<GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst);
+            return;
+        }
+    }
+
+    if constexpr (GGML_CUDA_FA_F16_Q8_0) {
+        if (ggml_cuda_fattn_kv_native_v_q8_0(K, V)) {
+            ggml_cuda_flash_attn_ext_tile_switch_head_size<GGML_TYPE_F16, GGML_TYPE_Q8_0>(ctx, dst);
+            return;
+        }
+    }
+
     if constexpr (GGML_CUDA_FA_F16_F16) {
         if (K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
             ggml_cuda_flash_attn_ext_tile_switch_head_size<GGML_TYPE_F16, GGML_TYPE_F16>(ctx, dst);
