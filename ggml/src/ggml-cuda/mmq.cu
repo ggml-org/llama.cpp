@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include "convert.cuh"
 #include "mmq.cuh"
 #include "quantize.cuh"
 #include "mmid.cuh"
@@ -439,7 +440,8 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
     if (ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_DP4A) {
         // for MoE, mmq is faster even without native dp4a
         // TODO: check if cards older than pascal might benefit from this as well
-        return cc >= GGML_CUDA_CC_PASCAL && n_experts > 0;
+        // the cuBLAS fallback needs a converter for non-contiguous src0, use MMQ if there is none
+        return (cc >= GGML_CUDA_CC_PASCAL && n_experts > 0) || ggml_get_to_fp32_nc_cuda(type) == nullptr;
     }
 
 #ifdef GGML_CUDA_FORCE_MMQ
