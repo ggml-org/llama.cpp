@@ -636,6 +636,11 @@ static bool ggml_metal_fusion_check_moe_reduce(
         if (!match.experts->data || !match.weights->data || !match.dst->data) {
             return false;
         }
+
+        // the fused kernel reads experts and weights while writing dst, so dst must not overlap either input
+        if (ggml_metal_fusion_overlap(match.dst, match.experts) || ggml_metal_fusion_overlap(match.dst, match.weights)) {
+            return false;
+        }
     }
 
     return true;
