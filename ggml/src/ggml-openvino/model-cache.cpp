@@ -150,6 +150,12 @@ bool make_dirs(const std::string & path) {
         // Create each intermediate component (skip a leading "/" root).
         if (sep && acc.size() > 1) {
             std::string component = acc.substr(0, acc.size() - 1);
+#if defined(_WIN32)
+            // A drive root such as "D:" cannot be mkdir'ed (EACCES, not EEXIST).
+            if (component.size() == 2 && component[1] == ':') {
+                continue;
+            }
+#endif
             if (!make_dir(component)) {
                 return false;
             }
