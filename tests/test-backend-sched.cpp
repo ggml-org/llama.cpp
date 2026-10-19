@@ -168,12 +168,12 @@ static ggml_backend_sched_t create_test_scheduler(std::vector<ggml_backend_t> ba
 }
 
 // the nodes of the graph together with the backend each of them is assigned to
-struct sched_graph {
+struct helper_graph {
     ggml_cgraph *              gf;
     std::vector<ggml_tensor *> nodes;
     std::vector<int>           backend_id;
 
-    sched_graph(ggml_context * ctx, size_t graph_size) : gf(ggml_new_graph_custom(ctx, graph_size, false)) {}
+    helper_graph(ggml_context * ctx, size_t graph_size) : gf(ggml_new_graph_custom(ctx, graph_size, false)) {}
 
     ggml_tensor * add(ggml_tensor * node, int backend) {
         nodes.push_back(node);
@@ -184,14 +184,14 @@ struct sched_graph {
     }
 };
 
-struct sched_check {
+struct helper_check {
     ggml_tensor * tensor;   // Tensor for which to check the data.
     float         expected; // The expected value that the tensor data should have after graph execution.
 };
 
 // executes the graph, then checks the number of splits and the results
-static test_result run_and_check(ggml_backend_sched_t sched, const sched_graph & g,
-        const std::vector<ggml_backend_t> & backends, const std::vector<sched_check> & checks, int64_t ne) {
+static test_result run_and_check(ggml_backend_sched_t sched, const helper_graph & g,
+        const std::vector<ggml_backend_t> & backends, const std::vector<helper_check> & checks, int64_t ne) {
 
     // ggml_backend_sched_set_tensor_backend does not validate the op, an unsupported one would abort inside the backend
     for (size_t i = 0; i < g.nodes.size(); i++) {
@@ -226,7 +226,7 @@ static test_result run_and_check(ggml_backend_sched_t sched, const sched_graph &
     }
 
     std::vector<float> data(ne);
-    for (const sched_check & c : checks) {
+    for (const helper_check & c : checks) {
         ggml_backend_tensor_get(c.tensor, data.data(), 0, ggml_nbytes(c.tensor));
         for (int64_t i = 0; i < ne; i++) {
             if (data[i] != c.expected) {
@@ -371,7 +371,7 @@ static test_result stress_test_linked_list(const std::vector<ggml_backend_t> & b
     };
     ggml_context * ctx_compute = ggml_init(params_compute);
 
-    sched_graph g(ctx_compute, graph_size);
+    helper_graph g(ctx_compute, graph_size);
 
     int64_t       sum = 0;
     ggml_tensor * out = nullptr;
@@ -439,11 +439,11 @@ static test_result stress_test_dag(const std::vector<ggml_backend_t> & backends,
     };
     ggml_context * ctx_compute = ggml_init(params_compute);
 
-    sched_graph g(ctx_compute, graph_size);
+    helper_graph g(ctx_compute, graph_size);
 
     std::vector<ggml_tensor *> lane(n_lanes);
     std::vector<int64_t>       value(n_lanes);
-    std::vector<sched_check>   checks;
+    std::vector<helper_check>  checks;
 
     // every lane starts at a different value, so that a misrouted copy changes a sum instead of going unnoticed
     auto seed = [&](int b, const char * prefix) {
@@ -529,7 +529,7 @@ static test_result stress_test_dag(const std::vector<ggml_backend_t> & backends,
     check_lanes();
 
     test_result ok = TEST_OK;
-    for (const sched_check & c : checks) {
+    for (const helper_check & c : checks) {
         if (c.expected >= float(1 << 24)) { // the counts have to stay exact in f32
             ok = fail("expected result %.0f does not fit into the f32 mantissa, lower n_rounds", c.expected);
             break;
@@ -628,7 +628,7 @@ static test_result test_inputless_splits_scheduling(ggml_backend_t gpu, ggml_bac
     };
     ggml_context * ctx_compute = ggml_init(params_compute);
 
-    sched_graph g(ctx_compute, graph_size);
+    helper_graph g(ctx_compute, graph_size);
 
     // GPU: add then sleep - occupies the GPU while later splits run
     ggml_tensor * delayed = g.add(ggml_add(ctx_compute, zero_gpu, one_gpu), GPU);
@@ -714,7 +714,7 @@ static test_result test_chain_all_backends(const std::vector<ggml_backend_t> & b
     };
     ggml_context * ctx_compute = ggml_init(params_compute);
 
-    sched_graph g(ctx_compute, graph_size);
+    helper_graph g(ctx_compute, graph_size);
 
     ggml_tensor * out = nullptr;
     for (size_t k = 0; k < n_nodes; k++) {
@@ -779,7 +779,7 @@ static test_result test_pair_user_inputs(const std::vector<ggml_backend_t> & bac
     };
     ggml_context * ctx_compute = ggml_init(params_compute);
 
-    sched_graph g(ctx_compute, graph_size);
+    helper_graph g(ctx_compute, graph_size);
 
     ggml_tensor * out = g.add(ggml_add(ctx_compute, consts.zero[b_send], consts.one[b_send]), b_send);
 
@@ -830,7 +830,7 @@ static test_result test_y_shaped_graph(const std::vector<ggml_backend_t> & backe
     };
     ggml_context * ctx_compute = ggml_init(params_compute);
 
-    sched_graph g(ctx_compute, graph_size);
+    helper_graph g(ctx_compute, graph_size);
 
     ggml_tensor * seed_a = g.add(ggml_add(ctx_compute, consts.zero[backend_a], consts.one[backend_a]), backend_a);
     ggml_set_name(seed_a, "seed_a");
