@@ -955,7 +955,7 @@ bool llama_kv_stream_session::prefetch_read(const llama_memory_cache_read_bindin
         s.pin=s.binding->acquire();
         if (!s.pin) return false;
         const size_t span=std::max(size_t(1),s.resident->suggested_span_pages());
-        if (!s.resident->prime_sequence({layer},s.committed,span,s.committed,{queries,true})) {
+        if (!s.resident->prime_sequence({layer},s.committed,span,s.committed,{queries,true,true})) {
             s.pin.reset(); return false;
         }
         s.span=span; s.primed=s.primed_read=true; s.primed_active=s.committed;
@@ -987,13 +987,13 @@ bool llama_kv_stream_session::read_attention(const llama_memory_cache_read_bindi
         const bool adopted=s.primed && s.primed_read && s.pin && s.primed_active == s.committed &&
             s.primed_layer == layer && s.primed_queries == q->ne[1] && s.primed_heads == q->ne[2] &&
             s.primed_epoch == s.content->mirror_epoch() &&
-            s.resident->adopt_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true});
+            s.resident->adopt_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true,true});
         if (!adopted) {
             if (!s.drain()) { s.poisoned=true; return false; }
             s.pin=s.binding->acquire();
             if (!s.pin) return false;
             s.span=std::max(size_t(1),s.resident->suggested_span_pages());
-            if (!s.resident->begin_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true})) {
+            if (!s.resident->begin_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true,true})) {
                 s.drain(); s.poisoned=true; return false;
             }
         }

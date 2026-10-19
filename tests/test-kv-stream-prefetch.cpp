@@ -294,6 +294,63 @@ int main(int argc, char ** argv) {
             t.assert_true(!f.resident->sequence_active());
         }
     });
+    t.test("retained_ring_pages_require_exact_source_rows_and_completed_identity", [](testing & t) {
+        llama_kv_stream_ring_cache cache;
+        t.assert_true(!cache.reset(0,256) && !cache.reset(4,0));
+        if (!t.assert_true(cache.reset(4,256))) return;
+        cache.synchronize(7,11);
+        for (size_t slot=0;slot<4;++slot) {
+            t.assert_true(!cache.contains(slot,3,slot*256,256));
+            t.assert_true(cache.record(slot,3,slot*256,slot == 3 ? 1 : 256));
+        }
+        t.assert_true(cache.contains(3,3,768,1));
+        t.assert_true(!cache.contains(3,3,768,2) && !cache.contains(3,2,768,1));
+        t.assert_true(!cache.contains(0,3,256,256));
+        t.assert_true(!cache.record(4,3,1024,1) && !cache.record(0,3,1,256));
+        t.assert_true(!cache.record(0,3,0,0) && !cache.record(0,3,0,257));
+        t.assert_true(!cache.record(0,3,SIZE_MAX-255,256));
+        t.assert_true(!cache.invalidate(3,2) && cache.contains(3,3,768,1));
+        t.assert_true(!cache.invalidate_rows(3,SIZE_MAX,2) && cache.contains(3,3,768,1));
+        t.assert_true(cache.invalidate_rows(2,0,1024) && cache.contains(0,3,0,256));
+        t.assert_true(cache.invalidate_rows(3,769,1) && !cache.contains(3,3,768,1));
+        t.assert_true(cache.contains(2,3,512,256));
+        cache.advance(8,12);
+        cache.synchronize(8,12);
+        t.assert_true(cache.contains(2,3,512,256));
+        cache.synchronize(8,13);
+        t.assert_true(!cache.contains(2,3,512,256));
+        t.assert_true(cache.record(2,3,512,256));
+        cache.synchronize(9,13);
+        t.assert_true(!cache.contains(2,3,512,256));
+        t.assert_true(cache.record(2,3,512,256) && cache.invalidate(2,1));
+        t.assert_true(!cache.contains(2,3,512,256));
+        t.assert_true(cache.record(2,3,512,256));
+        t.assert_true(!cache.reset(SIZE_MAX,256) && cache.contains(2,3,512,256));
+        t.assert_equal(size_t(4),cache.size());
+    });
+    t.test("reservation_preview_and_short_reuse_runs_preserve_fifo_and_wrap", [](testing & t) {
+        llama_kv_stream_prefetch_plan plan;
+        if (!t.assert_true(plan.start({256,512},1537,1792,256,4,4,1537))) return;
+        llama_kv_stream_prefetch_request next,again;
+        t.assert_true(plan.preview(next) && plan.preview(again));
+        t.assert_equal(size_t(0),plan.pending());
+        t.assert_true(next.first == again.first && next.slot == again.slot && next.pages == 4);
+        t.assert_true(!plan.reserve(again,0) && plan.pending() == 0);
+        t.assert_true(plan.reserve(next,1) && next.first == 256 && next.pages == 1 && next.slot == 0);
+        t.assert_true(plan.mark_submitted(0,false));
+        t.assert_true(plan.reserve(next,2) && next.first == 512 && next.pages == 2 && next.slot == 1);
+        t.assert_true(plan.mark_submitted(1,true) && plan.request(1)->reused);
+        t.assert_true(plan.consume(1) && plan.consume(2));
+        t.assert_true(plan.reserve(next,4) && next.first == 1024 && next.pages == 1 && next.slot == 3);
+        t.assert_true(plan.mark_submitted(0));
+        t.assert_true(plan.reserve(next,4) && next.first == 1280 && next.pages == 2 && next.slot == 0);
+        t.assert_true(plan.mark_submitted(1) && plan.consume(1) && plan.consume(2));
+        t.assert_true(plan.preview(next) && next.layer == 1 && next.first == 512 && next.slot == 2);
+        t.assert_true(plan.reserve(again,1) && again.first == next.first && again.slot == next.slot);
+        llama_kv_stream_prefetch_plan mutable_tail;
+        t.assert_true(mutable_tail.start({0},257,512,256,2,2,0) && mutable_tail.reserve(next));
+        t.assert_true(!mutable_tail.mark_submitted(0,true));
+    });
     t.test("query_width_changes_preserve_only_same_extent_immutable_prefetch", [](testing & t) {
         for (size_t active : {size_t(514),size_t(515),size_t(516),size_t(517),size_t(518),size_t(519),size_t(520),size_t(521)}) {
             llama_kv_stream_prefetch_plan plan;

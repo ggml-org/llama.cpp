@@ -57,6 +57,7 @@ struct llama_kv_stream_resident::implementation {
     const ggml_kv_stream_copy_ops * copy_ops = nullptr;
     std::shared_ptr<void> prepared_copies;
     ggml_backend_buffer_t copy_host = nullptr;
+    llama_kv_stream_ring_cache retained;
     struct prefetch_sequence {
         llama_kv_stream_prefetch_plan plan;
         std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard;
@@ -69,6 +70,7 @@ struct llama_kv_stream_resident::implementation {
         uint32_t queries = 0;
         bool profile = false;
         bool decode = false;
+        bool read_only = false, reused_pending = false;
         llama_kv_stream_prefetch_stats stats;
     };
     std::unique_ptr<prefetch_sequence> sequence;
@@ -123,6 +125,7 @@ struct llama_kv_stream_resident::implementation {
             const size_t index = size_t(std::find(seq.layers.begin()+seq.next,seq.layers.end(),span.layer)-seq.layers.begin());
             const size_t stride = span.operand == ggml_kv_stream_operand::k ? page.k_token_bytes : page.v_token_bytes;
             if (span.offset/stride < placement(span.layer).planes.tokens) seq.resident_dirty[index] = true;
+            GGML_ASSERT(retained.invalidate_rows(span.layer,span.offset/stride,span.bytes/stride));
         }
         seq.generation = content->generation(); seq.epoch = content->mirror_epoch(); valid = false;
         if (tracked) { feedback_generation = seq.generation; feedback_epoch = seq.epoch; }
@@ -212,11 +215,28 @@ struct llama_kv_stream_resident::implementation {
         const auto submit = [&](size_t index) {
             const auto & r = *seq.plan.request(index);
             if (r.submitted || !seq.plan.can_submit(r)) return true;
+            bool reuse=seq.read_only && r.stable && retained.size();
+            for (size_t i=0;reuse && i<r.pages;++i) {
+                const size_t first=r.first+i*page.tokens;
+                reuse=retained.contains(r.slot+i,seq.layers[r.layer],first,std::min(page.tokens,seq.active-first));
+            }
+            if (reuse) {
+                if (!seq.plan.mark_submitted(index,true)) return false;
+                seq.stats.reused_pages+=r.pages;
+                seq.stats.reused_bytes+=std::min(r.tokens,seq.active-r.first)*(page.k_token_bytes+page.v_token_bytes);
+                return true;
+            }
             if (!seq.started) {
                 if (!ensure_copies(binding.initial_policy.ring_slots)) return false;
                 if (!(measuring ? copy_ops->begin_with_feedback(copies.get(),seq.profile) : copy_ops->begin(copies.get()))) return false;
                 seq.started = true;
                 seq.measurement_active=measuring && seq.profile && copy_ops->feedback_id(copies.get());
+                seq.reused_pending=false;
+            }
+            // Cached reads have no upload record. The existing producer fence protects later slot overwrites.
+            if (seq.reused_pending) {
+                if (!copy_ops->fence_producer(copies.get())) return false;
+                seq.reused_pending=false;
             }
             bool feedback_eligible=r.stable;
             if (measuring) {
@@ -232,8 +252,13 @@ struct llama_kv_stream_resident::implementation {
             const size_t live = std::min(r.tokens,seq.active-r.first);
             const void * k = static_cast<const char *>(host.k)+r.first*page.k_token_bytes;
             const void * v = static_cast<const char *>(host.v)+r.first*page.v_token_bytes;
+            if (retained.size() && !retained.invalidate(r.slot,r.pages)) return false;
             if (!(measuring ? copy_ops->enqueue_span_with_feedback(copies.get(),r.slot,k,v,live,r.tokens,feedback_eligible) :
                     copy_ops->enqueue_span(copies.get(),r.slot,k,v,live,r.tokens))) return false;
+            for (size_t i=0;retained.size() && i<r.pages;++i) {
+                const size_t first=r.first+i*page.tokens;
+                if (!retained.record(r.slot+i,seq.layers[r.layer],first,std::min(page.tokens,seq.active-first))) return false;
+            }
             if (!seq.plan.mark_submitted(index)) return false;
             seq.stats.max_layer_distance = std::max(seq.stats.max_layer_distance,r.layer-seq.next);
             return true;
@@ -241,7 +266,18 @@ struct llama_kv_stream_resident::implementation {
         // Only layer entry changes readiness of existing reservations; refill checks only newly added requests.
         if (newly_ready) for (size_t i = 0; i < seq.plan.pending(); ++i) if (!submit(i)) return false;
         llama_kv_stream_prefetch_request r;
-        while (seq.plan.reserve(r)) {
+        for (;;) {
+            size_t limit=SIZE_MAX;
+            if (seq.read_only && retained.size()) {
+                if (!seq.plan.preview(r)) break;
+                const auto hit=[&](size_t i) {
+                    const size_t first=r.first+i*page.tokens;
+                    return retained.contains(r.slot+i,seq.layers[r.layer],first,std::min(page.tokens,seq.active-first));
+                };
+                const bool reused=hit(0);
+                for (limit=1;limit<r.pages && hit(limit) == reused;++limit) {}
+            }
+            if (!seq.plan.reserve(r,limit)) break;
             seq.stats.peak_pages = std::max(seq.stats.peak_pages,seq.plan.used());
             if (!submit(seq.plan.pending()-1)) return false;
         }
@@ -257,6 +293,8 @@ struct llama_kv_stream_resident::implementation {
             const auto copied = copy_ops->stats(copies.get());
             finished_sequence.copy_bytes = copied.bytes; finished_sequence.copy_calls = copied.calls;
         }
+        if (success) retained.advance(content->generation(),content->mirror_epoch());
+        else retained.clear();
         if (measuring) {
             if (success && sequence->started && sequence->feedback_valid && sequence->profile) {
                 if (sequence->measurement_active) record_feedback(sequence->span);
@@ -450,6 +488,8 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
     }
     if (stable == SIZE_MAX) stable = active;
     if (stable > active) return false;
+    if (feedback_context.read_only && (!feedback_context.decode || !feedback_context.query_tokens || stable != active ||
+            !s.resumed_decode || ring_guard || copy_ops()->version < 8 || !copy_ops()->fence_producer)) return false;
     try {
         auto seq = std::make_unique<implementation::prefetch_sequence>();
         seq->ring_guard = std::move(ring_guard);
@@ -458,6 +498,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
         seq->active = active; seq->padded = (active+255)/256*256; seq->span = span; seq->stable = stable;
         seq->queries = feedback_context.query_tokens;
         seq->decode = feedback_context.decode;
+        seq->read_only = feedback_context.read_only;
         std::vector<size_t> prefixes;
         for (size_t i = 0; i < layers.size(); ++i) {
             if (layers[i] >= s.physical_layers.size() || std::find(layers.begin(),layers.begin()+i,layers[i]) != layers.begin()+i) return false;
@@ -481,6 +522,9 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
         s.busy = true; s.valid = false;
         struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
         if (!s.refresh(seq->padded,UINT32_MAX,defer_clean_sync)) return false;
+        if (seq->ring_guard) s.retained.clear();
+        if (seq->read_only && !s.retained.size() && !s.retained.reset(s.binding.initial_policy.ring_slots,s.page.tokens)) return false;
+        s.retained.synchronize(s.content->generation(),s.content->mirror_epoch());
         seq->generation = s.content->generation(); seq->epoch = s.content->mirror_epoch();
         if (feedback_tracked) {
             s.feedback_generation=seq->generation;
@@ -512,6 +556,7 @@ bool llama_kv_stream_resident::adopt_sequence(const std::vector<uint32_t> & laye
     const bool flexible=seq.queries == 0;
     if (seq.next || seq.layers != layers || (!flexible && seq.active != active) || seq.span != span || seq.stable != stable ||
             (!flexible && seq.queries != feedback_context.query_tokens) || seq.decode != feedback_context.decode ||
+            seq.read_only != feedback_context.read_only ||
             seq.ring_guard != ring_guard) return false;
     if (flexible) {
         if (!feedback_context.query_tokens || !seq.plan.retarget(active)) return false;
@@ -546,14 +591,16 @@ llama_kv_stream_prefetch_stats llama_kv_stream_resident::sequence_stats() const 
     auto result = s.sequence->stats; result.pending_pages = s.sequence->plan.used();
     if (s.sequence->started) {
         auto copy = s.copy_ops->stats(s.copies.get()); result.copy_bytes = copy.bytes; result.copy_calls = copy.calls;
-        for (size_t i = 0; i < s.sequence->plan.pending(); ++i) {
-            const auto * r = s.sequence->plan.request(i);
-            if (!r->submitted) continue;
-            for (size_t page = 0; page < r->pages; ++page) result.ready_pages += s.copy_ops->ready(s.copies.get(),r->slot+page);
-        }
-        const auto * front = s.sequence->plan.front();
-        result.demand_ready = front && front->submitted && s.copy_ops->ready(s.copies.get(),front->slot);
     }
+    for (size_t i = 0; i < s.sequence->plan.pending(); ++i) {
+        const auto * r = s.sequence->plan.request(i);
+        if (!r->submitted) continue;
+        for (size_t page = 0; page < r->pages; ++page) result.ready_pages += r->reused ||
+            (s.sequence->started && s.copy_ops->ready(s.copies.get(),r->slot+page));
+    }
+    const auto * front = s.sequence->plan.front();
+    result.demand_ready = front && front->submitted && (front->reused ||
+        (s.sequence->started && s.copy_ops->ready(s.copies.get(),front->slot)));
     return result;
 }
 
@@ -793,6 +840,7 @@ bool llama_kv_stream_resident::configure_writes(size_t maximum, ggml_backend_mem
         if (!base || base%128 || base > UINTPTR_MAX-bytes || pool > UINTPTR_MAX-s.binding.capacity ||
                 (base < pool+s.binding.capacity && pool < base+bytes)) return false;
     }
+    if (!workspace) s.retained.clear();
     decltype(s.writer_lease) lease(ggml_backend_memory_lease_retain(workspace),ggml_backend_memory_lease_free);
     s.busy = true;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
@@ -878,6 +926,7 @@ bool llama_kv_stream_resident::prepare_write_pair(uint32_t layer, size_t first, 
         if (!s.compatible() || first > s.placement(layer).planes.tokens ||
                 rows > s.placement(layer).planes.tokens-first) return false;
     }
+    if (!s.retained.invalidate_rows(layer,first,rows)) return false;
     s.write_stats={};
     s.busy=true;
     struct guard { bool & busy; ~guard() { busy=false; } } operation{s.busy};
@@ -999,6 +1048,7 @@ bool llama_kv_stream_resident::write_rows(uint32_t layer, ggml_kv_stream_operand
     const auto host = s.content->host();
     if (first > host->config().context_tokens || rows > host->config().context_tokens - first ||
             first > s.placement(layer).planes.tokens || rows > s.placement(layer).planes.tokens - first) return false;
+    s.retained.clear();
     s.busy = true; s.valid = false;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
     // SET_ROWS queues behind earlier backend work; each tile drains before any resident overwrite.
@@ -1062,6 +1112,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     auto & s = *impl;
     if (s.busy || s.capturing()) return false; // Rejection must not drain/cancel an outer call or active capture.
     const bool cross = bool(s.sequence);
+    if (!cross) s.retained.clear();
     if (!cross && s.measuring) s.run_started = std::chrono::steady_clock::now();
     struct session_guard {
         implementation & s; bool enabled, keep = false;
@@ -1337,13 +1388,13 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             return false;
         }
         if (s.measuring && s.sequence->profile) {
-            for (const auto & request : requests) if (request.stable)
+            for (const auto & request : requests) if (request.stable && !request.reused)
                 layer_ranges.push_back({request.slot,request.pages});
             if (!layer_ranges.empty() && !s.copy_ops->probe_layer(
                     s.copies.get(),layer_ranges.data(),layer_ranges.size())) return false;
         }
         for (const auto & request : requests)
-            if (!s.copy_ops->acquire_span(s.copies.get(),request.slot,request.pages)) return false;
+            if (!request.reused && !s.copy_ops->acquire_span(s.copies.get(),request.slot,request.pages)) return false;
 
         k=s.descriptor(layer,false,padded); v=s.descriptor(layer,true,padded);
         k.buffer=v.buffer=s.binding.buffer;
@@ -1372,7 +1423,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         }
         s.sequence->span_plans.push_back(std::move(plan));
         for (const auto & request : requests) {
-            if (!s.copy_ops->release_span(s.copies.get(),request.slot,request.pages)) return false;
+            if (request.reused) s.sequence->reused_pending=true;
+            else if (!s.copy_ops->release_span(s.copies.get(),request.slot,request.pages)) return false;
             if (!s.sequence->plan.consume(request.pages)) return false;
         }
         if (!s.fill_sequence()) {
@@ -1483,12 +1535,14 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
                 if (!ggml_backend_execution_set_mask_bounds(&op,mask)) return false;
             } else op.src[3]=mask;
             for (const auto & request : requests)
-                if (!s.copy_ops->acquire_span(s.copies.get(),request.slot,request.pages)) return false;
+                if (!request.reused && !s.copy_ops->acquire_span(s.copies.get(),request.slot,request.pages)) return false;
             const ggml_kv_stream_span_plan_view view{s.binding.config.shape,sources.data(),sources.size(),padded,size_t(q->ne[1])};
             if (!ops->resume_spans(s.backend,&op,wb,resume_plan,view,wave_first,end)) return false;
             ++s.attention_calls; prefix_pending=false;
-            for (const auto & request : requests)
-                if (!s.copy_ops->release_span(s.copies.get(),request.slot,request.pages)) return false;
+            for (const auto & request : requests) {
+                if (request.reused) s.sequence->reused_pending=true;
+                else if (!s.copy_ops->release_span(s.copies.get(),request.slot,request.pages)) return false;
+            }
             for (const auto & request : requests)
                 if (!s.sequence->plan.consume(request.pages)) return false;
             if (!s.fill_sequence()) return false;
@@ -1540,8 +1594,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
                 if (resumed && cross) {
                     for (size_t i=0;i<grouped_requests;++i) {
                         const auto * request=s.sequence->plan.request(i);
-                        if (!request || !s.copy_ops->acquire_span(
-                                s.copies.get(),request->slot,request->pages)) return false;
+                        if (!request || (!request->reused && !s.copy_ops->acquire_span(
+                                s.copies.get(),request->slot,request->pages))) return false;
                     }
                 } else if (s.measuring) {
                     if (!s.copy_ops->acquire_span(s.copies.get(),slot+offset,consumed)) return false;
@@ -1556,7 +1610,9 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
                     for (size_t i=0;i<grouped_requests;++i) {
                         const auto * request=s.sequence->plan.request(i);
                         if (!request) return false;
-                        if (s.copy_ops->version >= 10 && s.copy_ops->release_span) {
+                        if (request->reused) {
+                            s.sequence->reused_pending=true;
+                        } else if (s.copy_ops->version >= 10 && s.copy_ops->release_span) {
                             if (!s.copy_ops->release_span(s.copies.get(),request->slot,request->pages)) return false;
                         } else for (size_t page=0;page<request->pages;++page) {
                             if (!s.copy_ops->release(s.copies.get(),request->slot+page)) return false;

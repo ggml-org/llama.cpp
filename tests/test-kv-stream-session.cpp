@@ -104,7 +104,8 @@ int main(int argc, char ** argv) {
     const bool wave_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wave-batching");
     const bool consumer_only = argc > 1 && !std::strcmp(argv[1],"--cuda-consumer-prefetch");
     const bool read_only = argc > 1 && !std::strcmp(argv[1],"--cuda-read-only");
-    const bool cuda = read_only || consumer_only || physical_map_only || guard_only || page_boundary_only || short_prefill_only || prefill_tail_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool read_reuse = argc > 1 && !std::strcmp(argv[1],"--cuda-read-reuse");
+    const bool cuda = read_reuse || read_only || consumer_only || physical_map_only || guard_only || page_boundary_only || short_prefill_only || prefill_tail_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -118,6 +119,7 @@ int main(int argc, char ** argv) {
     if (wave_only) t.set_filter("wrapped_resume_waves_reduce_launches_without_changing_tokens");
     if (consumer_only) t.set_filter("explicit_consumer_prefetch_adopts_actual_query_width_without_extra_uploads");
     if (read_only) t.set_filter("borrowed_attention_reads_committed_layers_without_appending");
+    if (read_reuse) t.set_filter("immutable_reader_reuses_only_still_present_ring_pages");
     if (cuda) t.test("borrowed_attention_reads_committed_layers_without_appending",[&](testing & t) {
         auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
@@ -254,6 +256,86 @@ int main(int argc, char ** argv) {
                             session->attention(layer,next_append.q,next_append.mask,next_append.output,1.0f/16))) return;
                 t.assert_true("append after graph reattachment matches native bits",same_float_bits(stock_attention(f,next_append,1),next_append.read()));
             }
+        }
+    });
+    if (cuda) t.test("immutable_reader_reuses_only_still_present_ring_pages",[&](testing & t) {
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(get && get())) return;
+        for (uint32_t dimension : {256u,512u}) for (auto pair : {
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16},
+                std::pair{GGML_TYPE_F32,GGML_TYPE_BF16},std::pair{GGML_TYPE_Q4_1,GGML_TYPE_Q5_0},
+                std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q5_1},std::pair{GGML_TYPE_Q4_0,GGML_TYPE_F16}})
+                for (size_t active : {1025u,1281u,4097u}) for (uint32_t queries : {1u,2u,3u,4u}) {
+            t.out << "retained D" << dimension << ' ' << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second)
+                << " active=" << active << " TG" << queries << std::endl;
+            fixture f(backend.get(),true,pair.first,pair.second,8192,false,2,4,8,dimension,dimension);
+            f.policy.initial_ring_slots=2; f.policy.fixed_ring=true;
+            size_t bytes=0;
+            if (!t.assert_true(ggml_kv_stream_workspace_query(get(),backend.get(),{f.policy.shape,32,4,f.host->layout().tokens},
+                    ggml_kv_stream_workspace_kind::decode,bytes))) return;
+            block_workspace writer(f,131072,19),attention(f,bytes,29);
+            llama_kv_stream_session_config config{f.policy,4,32,false,true,true};
+            config.initial_decode=true; config.span_workspace_bytes=bytes;
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,config,f.lease.get(),writer.lease.get(),attention.lease.get());
+            if (!t.assert_true(bool(session) && session->restore(active))) return;
+            llama_memory_cache_requirement source;
+            if (!t.assert_true(session->read_source(source))) return;
+            auto alias=source; alias.identity={source.identity.id+100,1}; alias.source=source.identity;
+            alias.role=llama_memory_cache_role::read_only_source; alias.layers=1; alias.source_first_layer=1;
+            llama_memory_cache_read_binding binding;
+            if (!t.assert_true(llama_memory_cache_read_binding_make(alias,source,0,uint32_t(active),session->layout_revision(),binding))) return;
+            llama_kv_stream_policy_layout layout;
+            if (!t.assert_true(llama_kv_stream_policy_layout_make(f.policy,session->policy(),active,layout).status == llama_kv_stream_policy_status::success)) return;
+            const size_t prefix=std::min(active,layout.layers[1].planes.tokens);
+            const size_t row=f.host->layout().k_token_bytes+f.host->layout().v_token_bytes;
+            const size_t pages=((active+255)/256*256-prefix)/256;
+            if (!t.assert_equal(size_t(768),prefix)) return;
+            block_inputs input(f,active,queries,false,32);
+            for (uint32_t repeat=0;repeat<3;++repeat) {
+                auto query=input.qdata;
+                for (auto & value : query) value*=float(repeat+1);
+                ggml_backend_tensor_set(input.q,query.data(),0,query.size()*sizeof(float));
+                const auto expected=stock_attention(f,input,1);
+                if (!t.assert_true(session->prefetch_read(binding,queries,32) && session->read_attention(
+                        binding,input.q,input.mask,input.output,1.0f/16))) return;
+                if (!t.assert_true("ring retention preserves exact native arithmetic for each new query",same_float_bits(expected,input.read()))) return;
+                const size_t saved=repeat ? (pages <= 2 ? active-prefix : pages == 3 ? 256 : 0) : 0;
+                if (!t.assert_equal("only missing live rows are uploaded",(active-prefix-saved)*row,session->sequence_stats().copy_bytes)) return;
+                t.assert_equal(saved*row,session->sequence_stats().reused_bytes);
+                t.assert_equal(active,session->tokens());
+                t.assert_equal(source.identity.generation,f.content->generation());
+            }
+            const auto expected=input.read();
+            if (!t.assert_true(session->prefetch_read(binding,queries,32) && session->set_attention_workspace(nullptr,true) &&
+                    session->set_attention_workspace(attention.lease.get(),true))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("cancelled lookahead cannot advertise unqualified retained pages",same_float_bits(expected,input.read()));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
+            auto other=binding; other.cache.source_first_layer=0;
+            if (!t.assert_true(session->read_attention(other,input.q,input.mask,input.output,1.0f/16))) return;
+            if (!t.assert_true(same_float_bits(stock_attention(f,input,0),input.read()))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("a different layer cannot donate stale ring contents",same_float_bits(expected,input.read()));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
+            ggml_backend_buffer_clear(ggml_backend_memory_lease_buffer(f.lease.get()),0);
+            if (!t.assert_true(f.content->reset_mirror() && session->reconstruct(active))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("physical mirror invalidation requires refilling every missing row",same_float_bits(expected,input.read()));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
+            std::vector<uint8_t> zeros((active-prefix)*f.host->layout().v_token_bytes,0);
+            llama_kv_stream_write changed;
+            if (!t.assert_true(f.content->prepare({{1,ggml_kv_stream_operand::v,prefix*f.host->layout().v_token_bytes,
+                    zeros.data(),zeros.size()}},changed) && f.content->commit(changed) && session->reconstruct(active))) return;
+            t.assert_true("old-generation read bindings reject without changing output",!session->read_attention(
+                binding,input.q,input.mask,input.output,1.0f/16) && same_float_bits(expected,input.read()) && !session->failed());
+            if (!t.assert_true(session->read_source(source))) return;
+            alias.source=source.identity;
+            if (!t.assert_true(llama_memory_cache_read_binding_make(alias,source,0,uint32_t(active),session->layout_revision(),binding))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            const auto rewritten=stock_attention(f,input,1);
+            t.assert_true("same-frontier rewritten bytes replace retained pages",same_float_bits(rewritten,input.read()) && !same_float_bits(expected,rewritten));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
         }
     });
     if (cuda) t.test("wrapped_resume_waves_reduce_launches_without_changing_tokens",[&](testing & t) {
