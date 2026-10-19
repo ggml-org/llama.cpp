@@ -126,6 +126,7 @@ struct hmx_fa_vtcm_layout {
     // Region byte sizes reused by the device at runtime (not just for allocation).
     size_t q_tile_bytes;
     size_t o_tile_bytes;
+    size_t k_tile_bytes;
     size_t s_tile_bytes;       // S and P tiles (same size)
     size_t d_tile_bytes;       // d_tiles[0..1] + d_inv_l, allocated back to back
     size_t m_line_bytes;       // one mask row
@@ -140,6 +141,8 @@ struct hmx_fa_vtcm_layout {
     bool   pipeline;
     size_t total_bytes;
 };
+
+#define FA_MAX_KV_BLOCKS 1024
 
 // Build the VTCM layout.
 
@@ -224,6 +227,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
 
     L->q_tile_bytes        = q_tile_size;
     L->o_tile_bytes        = o_tile_size;
+    L->k_tile_bytes        = k_tile_size;
     L->col_vec_bytes       = col_vec_size;
     L->s_tile_bytes        = s_tile_size;
     // Measured from the actual offsets rather than assumed to be N * d_tile_size, so
@@ -332,8 +336,12 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
 
     // Pipeline constraint: cap Bc so n_kv_blocks >= FA_MIN_KV_BLOCKS.
     // Only relax when kv_len is too short to form enough blocks.
-    const size_t Bc_limit     = can_pipeline ? hex_align_down(kv_len / FA_MIN_KV_BLOCKS, bc_unit) :
-                                               (kv_len >= bc_unit ? hex_align_down(kv_len, bc_unit) : bc_unit);
+    size_t Bc_limit     = can_pipeline ? hex_align_down(kv_len / FA_MIN_KV_BLOCKS, bc_unit) :
+                                         (kv_len >= bc_unit ? hex_align_down(kv_len, bc_unit) : bc_unit);
+    // For small-Q SWA-sized KV caches (qo_len <= 16, kv_len <= 2048), cap Bc at 256 for block-skipping granularity
+    if (qo_len <= 16 && kv_len <= 2048 && Bc_limit > 256) {
+        Bc_limit = 256;
+    }
     // Cost coefficients calibrated from profiling
     const size_t c_q_fixed    = 800;   // per-Q-block: q_load + epilogue o_update + o_norm + o_store
     const size_t c_iter_base  = 200;   // per-KV-iter base (HMX dot/update + DMA)
