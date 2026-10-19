@@ -17,6 +17,7 @@ class llama_kv_stream_model;
 class llama_kv_stream_logical_cache;
 class llama_kv_stream_mtp_proxy;
 class llama_kv_stream_read_proxy;
+struct llama_kv_stream_next_consumer;
 class llama_context_memory;
 struct llama_memory_bounded_kv_layout;
 class llama_memory_bounded_kv;
@@ -202,6 +203,8 @@ public:
     ggml_type type_v() const;
 
     std::vector<uint32_t> get_layer_ids() const;
+    // First streamed source follows this cache's actual graph-layer order, not the target's layer count.
+    bool shared_stream_consumer(uint32_t query_tokens, llama_kv_stream_next_consumer & output) const noexcept;
     // Describe one serial homogeneous SWA allocation without changing stock cells, tensors or masks.
     bool describe_bounded_storage(uint64_t identity,uint64_t generation,uint32_t history_rows,
             uint32_t headroom_rows,llama_memory_bounded_kv_layout & output) const;

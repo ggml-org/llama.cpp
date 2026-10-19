@@ -133,7 +133,7 @@ int main(int argc, char ** argv) {
             size_t bytes=0;
             if (!t.assert_true(ggml_kv_stream_workspace_query(get(),backend.get(),
                     {f.policy.shape,32,4,f.host->layout().tokens},ggml_kv_stream_workspace_kind::decode,bytes))) return;
-            block_workspace writer(f,131072,19), attention(f,bytes,29);
+            block_workspace writer(f,131072,19), attention(f,bytes,29), graph_workspace(f,262144,49);
             llama_kv_stream_session_config config{f.policy,4,32,false,true,true};
             config.initial_decode=true; config.cross_token_prefetch=true; config.span_workspace_bytes=bytes;
             auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
@@ -154,6 +154,7 @@ int main(int argc, char ** argv) {
             if (!ggml_kv_stream_resume_plan_query(get(),backend.get(),
                     {f.policy.shape,heads,queries,input.padded},native)) {
                 if (!t.assert_true("the required 32-head geometry is compiled",heads != 32)) return;
+                t.assert_true(!session->prefetch_read(binding,queries,heads));
                 t.assert_true(!session->read_attention(binding,input.q,input.mask,input.output,1.0f/16));
                 t.assert_true(same_float_bits(untouched,input.read()) && !session->failed());
                 t.out << "unsupported narrower-head family rejected before execution" << std::endl;
@@ -169,6 +170,7 @@ int main(int argc, char ** argv) {
                 if (invalid == 5) ++bad.first_position;
                 if (invalid == 6) --bad.end_position;
                 if (invalid == 7) bad.cache.layers=2;
+                t.assert_true(!session->prefetch_read(bad,queries,heads));
                 t.assert_true(!session->read_attention(bad,input.q,input.mask,input.output,1.0f/16));
                 t.assert_true(same_float_bits(untouched,input.read()) && !session->failed());
             }
@@ -176,7 +178,25 @@ int main(int argc, char ** argv) {
             std::memcpy(before.data(),ggml_backend_buffer_get_base(f.host->buffer()),before.size());
             const auto generation=f.content->generation(),revision=session->layout_revision();
             for (uint32_t repeat=0;repeat<2;++repeat) {
+                if (!t.assert_true(session->set_workspaces({graph_workspace.lease.get()}))) return;
+                if (!t.assert_true("a committed borrowed source admits read lookahead",session->prefetch_read(binding,queries,heads))) return;
+                const auto primed=session->sequence_stats();
+                t.assert_true(session->prefetch_primed() && primed.primed);
+                t.assert_true("identical borrowed lookahead is idempotent",session->prefetch_read(binding,queries,heads));
+                t.assert_equal(primed.copy_calls,session->sequence_stats().copy_calls);
+                auto stale=binding; ++stale.cache.source.generation;
+                t.assert_true(!session->prefetch_read(stale,queries,heads) && session->prefetch_primed());
+                session->release_graphs();
+                if (!t.assert_true(session->set_workspaces({}))) return;
+                if (!t.assert_true("retiring target graph grants preserves immutable read lookahead",session->prefetch_primed())) return;
+                t.assert_equal(primed.copy_calls,session->sequence_stats().copy_calls);
                 if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+                t.assert_true("matching borrowed attention adopts prefetched requests",session->sequence_stats().adopted && !session->prefetch_primed());
+                llama_kv_stream_policy_layout layout;
+                if (!t.assert_true(llama_kv_stream_policy_layout_make(f.policy,session->policy(),active,layout).status == llama_kv_stream_policy_status::success)) return;
+                const size_t prefix=std::min(active,layout.layers[1].planes.tokens);
+                t.assert_equal("read lookahead uploads each nonresident row once",
+                    (active-prefix)*(f.host->layout().k_token_bytes+f.host->layout().v_token_bytes),session->sequence_stats().copy_bytes);
                 t.assert_true("borrowed read completes queued spans before returning",!probe.pending);
                 t.assert_true("borrowed output matches native bits",same_float_bits(stock_attention(f,input,1),input.read()));
                 t.assert_equal(active,session->tokens());
@@ -184,6 +204,11 @@ int main(int argc, char ** argv) {
                 t.assert_equal(revision,session->layout_revision());
                 t.assert_true("borrowed read leaves target idle and usable",!session->active() && !session->failed());
             }
+            auto other=binding; other.cache.source_first_layer=0;
+            if (!t.assert_true(session->prefetch_read(other,queries,heads))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("a different source layer drains lookahead rather than adopting it",!session->sequence_stats().adopted &&
+                same_float_bits(stock_attention(f,input,1),input.read()) && !session->failed());
             std::memcpy(after.data(),ggml_backend_buffer_get_base(f.host->buffer()),after.size());
             t.assert_true("borrowed reads preserve every authoritative host byte",before == after);
             block_workspace short_attention(f,bytes-1,39);
@@ -193,19 +218,42 @@ int main(int argc, char ** argv) {
             t.assert_equal(grant,session->granted_bytes());
             const auto completed=input.read();
             if (!t.assert_true(session->set_attention_workspace(nullptr,true))) return;
+            t.assert_true(!session->prefetch_read(binding,queries,heads));
             t.assert_true("borrowed read rejects detached scratch without poisoning",!session->read_attention(
                 binding,input.q,input.mask,input.output,1.0f/16) && !session->failed());
             t.assert_true(same_float_bits(completed,input.read()));
             if (!t.assert_true(session->set_attention_workspace(attention.lease.get(),true))) return;
-            session_inputs kv(backend.get(),1,size_t(dimension)*4); block_inputs append(f,active+1,1,false,32);
+            if (!t.assert_true(session->prefetch_read(binding,queries,heads))) return;
+            if (!t.assert_true("target reattaches graph and writer grants before publication",
+                    session->set_workspaces({graph_workspace.lease.get()}))) return;
+            session_inputs kv(backend.get(),1,size_t(dimension)*4);
+            block_inputs append(f,active+1,1,false,32,ggml_backend_memory_lease_buffer(graph_workspace.lease.get()));
             if (!t.assert_true(session->begin(active+1,1,true))) return;
+            t.assert_true("a target append cancels borrowed lookahead",!session->prefetch_primed());
             t.assert_true("active target hides read source",!session->read_source(source));
+            t.assert_true(!session->prefetch_read(binding,queries,heads));
             t.assert_true("active target rejects borrowed read",!session->read_attention(binding,input.q,input.mask,input.output,1.0f/16));
-            for (uint32_t layer=0;layer<2;++layer)
-                if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+            for (uint32_t layer=0;layer<2;++layer) {
+                if (!t.assert_true("target publication resumes after graph handoff",session->produce(layer,kv.k,kv.v))) return;
+                if (!t.assert_true("target attention resumes after graph handoff",
                         session->attention(layer,append.q,append.mask,append.output,1.0f/16))) return;
+            }
             t.assert_true("completed append invalidates old read binding",!session->read_attention(binding,input.q,input.mask,input.output,1.0f/16));
+            t.assert_true(!session->prefetch_read(binding,queries,heads));
             t.assert_equal(active+1,session->tokens());
+            if (session->prefetch_primed()) {
+                const auto primed=session->sequence_stats();
+                if (!t.assert_true(session->set_workspaces({graph_workspace.lease.get()}))) return;
+                t.assert_true("reattaching target graph grants preserves append lookahead",session->prefetch_primed());
+                t.assert_equal(primed.copy_calls,session->sequence_stats().copy_calls);
+                block_inputs next_append(f,active+2,1,false,32,ggml_backend_memory_lease_buffer(graph_workspace.lease.get()));
+                if (!t.assert_true(session->begin(active+2,1,true))) return;
+                t.assert_true("graph handoff keeps the next append adoptable",session->sequence_stats().adopted);
+                for (uint32_t layer=0;layer<2;++layer)
+                    if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                            session->attention(layer,next_append.q,next_append.mask,next_append.output,1.0f/16))) return;
+                t.assert_true("append after graph reattachment matches native bits",same_float_bits(stock_attention(f,next_append,1),next_append.read()));
+            }
         }
     });
     if (cuda) t.test("wrapped_resume_waves_reduce_launches_without_changing_tokens",[&](testing & t) {

@@ -24,12 +24,19 @@ struct block_inputs {
     std::vector<float> qdata;
     size_t active, queries, padded, query_heads, value_width;
     // Keep the full causal-mask row pitch while the two attention calls use separate key slices.
-    block_inputs(fixture & f, size_t active, size_t queries, bool masked = false, size_t query_heads = 4) : active(active), queries(queries), padded((active+255)/256*256), query_heads(query_heads), value_width(size_t(f.policy.shape.head_dim_v)) {
+    block_inputs(fixture & f, size_t active, size_t queries, bool masked = false, size_t query_heads = 4,
+            ggml_backend_buffer_t workspace = nullptr) : active(active), queries(queries), padded((active+255)/256*256), query_heads(query_heads), value_width(size_t(f.policy.shape.head_dim_v)) {
         context.reset(ggml_init({65536, nullptr, true}));
         q = ggml_new_tensor_3d(context.get(), GGML_TYPE_F32, f.policy.shape.head_dim_k, int64_t(queries), int64_t(query_heads));
         mask = ggml_new_tensor_2d(context.get(), GGML_TYPE_F16, int64_t(padded), int64_t(queries));
         output = ggml_new_tensor_3d(context.get(), GGML_TYPE_F32, int64_t(value_width), int64_t(query_heads), int64_t(queries));
-        buffer.reset(ggml_backend_alloc_ctx_tensors(context.get(), f.backend)); GGML_ASSERT(buffer);
+        if (workspace) {
+            buffer.reset(ggml_backend_buffer_retain(workspace));
+            ggml_tallocr allocator;
+            GGML_ASSERT(ggml_tallocr_new_range(&allocator,workspace,0,ggml_backend_buffer_get_size(workspace)));
+            for (auto * tensor : {q,mask,output}) GGML_ASSERT(ggml_tallocr_alloc(&allocator,tensor) == GGML_STATUS_SUCCESS);
+        } else buffer.reset(ggml_backend_alloc_ctx_tensors(context.get(), f.backend));
+        GGML_ASSERT(buffer);
         qdata.resize(queries*query_heads*size_t(f.policy.shape.head_dim_k));
         for (size_t i = 0; i < qdata.size(); ++i) qdata[i] = .3f*std::cos(float(i%211)*.07f);
         std::vector<ggml_fp16_t> masks(padded*queries);

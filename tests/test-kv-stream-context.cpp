@@ -2278,6 +2278,13 @@ static void test_gemma_common_startup(testing & t,const char * target_path,const
     auto speculative=common_speculative_init_from_params(draft_params,main->model(),target);
     auto * draft=speculative ? speculative->context() : nullptr;
     if (!t.assert_true("common Gemma assistant startup succeeds",draft != nullptr)) return;
+    auto * full=llama_memory_kv_resources_get(llama_get_memory(target)).full;
+    auto * reader_source=full ? full->get_kv_stream() : nullptr;
+    if (!t.assert_true(reader_source && llama_kv_stream_schedule_next(target,draft,3))) return;
+    const auto next_read=reader_source->next_consumer(llama_kv_stream_access_role::append);
+    t.assert_true("shared MTP schedules an immutable source read, not a new append",
+        next_read.access == llama_kv_stream_access_role::read && next_read.cache_id == reader_source->host()->cache_id() &&
+        next_read.layer+1 == full->get_layer_ids().size() && next_read.query_tokens == 1 && next_read.future_tokens == 0);
     t.assert_equal("target warmup graphs are retired before assistant weight loading",uint32_t(1),
         probe.observed.load(std::memory_order_relaxed));
     t.assert_true(draft->get_compute_memory()->borrows_serial_parent());
@@ -2298,13 +2305,13 @@ static void test_gemma_common_startup(testing & t,const char * target_path,const
         common_batch read(draft);
         const auto id=read.add(llama_token(std::max_element(logits,logits+vocab)-logits),position,0,true);
         read.set_embd(id,{hidden,1,width});
+        if (!t.assert_true(llama_kv_stream_schedule_next(draft,target,0))) return false;
         if (!t.assert_equal("common assistant reads target outputs",0,llama_process(draft,LLAMA_PROCESS_TYPE_DECODE,read.get()))) return false;
+        if (!t.assert_true("actual assistant adopts source lookahead",reader_source->sequence_stats(llama_kv_stream_access_role::read).adopted)) return false;
         const auto * result=llama_get_logits_ith(draft,-1);
         return t.assert_true(result && std::all_of(result,result+vocab,[](float value) { return std::isfinite(value); }));
     };
     if (!predict(64,63)) return;
-    auto * full=llama_memory_kv_resources_get(llama_get_memory(target)).full;
-    auto * reader_source=full ? full->get_kv_stream() : nullptr;
     llama_memory_cache_requirement before_probe,after_probe;
     if (!t.assert_true(reader_source && reader_source->read_source(before_probe))) return;
     const auto revision=parent->graph_binding_revision();
@@ -2319,7 +2326,9 @@ static void test_gemma_common_startup(testing & t,const char * target_path,const
     for (int row=0;row<4;++row) batch.add(words[size_t(row)%words.size()],64+row,0,true);
     if (!t.assert_equal("common target verifies declared four-query batch",0,
             llama_process(target,LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+    t.assert_true("target verification hands its committed source to MTP",reader_source->prefetch_primed());
     if (!predict(68,3)) return;
+    t.assert_true(llama_kv_stream_schedule_next(target,nullptr,0));
     speculative.reset();
     t.assert_true(!parent->has_speculative_consumer());
     batch.clear(); batch.add(words.front(),68,0,true);

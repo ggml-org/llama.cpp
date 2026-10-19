@@ -777,7 +777,9 @@ ggml_tensor * llama_kv_stream_resident::attention(ggml_context * context, uint32
 // Default scratch borrows the idle ring; a separate leased region also permits online sequence producers.
 bool llama_kv_stream_resident::configure_writes(size_t maximum, ggml_backend_memory_lease_t workspace) {
     auto & s = *impl;
-    if (s.busy || s.sequence || s.capturing() || s.poisoned || !s.compatible() || !maximum) return false;
+    // Primed copies precede every writer; replacing a disjoint leased staging grant cannot overwrite them.
+    const bool idle_prime=s.sequence && s.sequence->primed && !s.sequence->next && s.pending_writes.empty();
+    if (s.busy || (s.sequence && (!idle_prime || !workspace)) || s.capturing() || s.poisoned || !s.compatible() || !maximum) return false;
     auto * buffer = s.binding.buffer;
     size_t bytes = s.layout.ring.bytes;
     if (workspace) {
@@ -1606,7 +1608,8 @@ llama_kv_stream_write_stats llama_kv_stream_resident::last_write_stats() const n
 
 // Drop the single cached graph/source reference before a caller reclaims prefill input workspace.
 void llama_kv_stream_resident::release_write_workspace() {
-    if (impl->busy || impl->sequence || impl->capturing()) return;
+    const bool idle_prime=impl->sequence && impl->sequence->primed && !impl->sequence->next && impl->pending_writes.empty();
+    if (impl->busy || (impl->sequence && !idle_prime) || impl->capturing()) return;
     ggml_backend_synchronize(impl->backend);
     impl->writer.reset();
     impl->writer_lease.reset();

@@ -47,6 +47,8 @@ public:
     bool attention(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale);
     // Describe only a completed source. Readers still need a matching binding revision and completion fence.
     bool read_source(llama_memory_cache_requirement & output) const noexcept;
+    // Queue one immutable source read without advancing its frontier. Matching attention adopts the queued work.
+    bool prefetch_read(const llama_memory_cache_read_binding & binding, uint32_t query_tokens, uint32_t query_heads);
     // Synchronous correctness path over one committed layer; neither appends KV nor requires complete-layer residency.
     bool read_attention(const llama_memory_cache_read_binding & binding,
             ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale);

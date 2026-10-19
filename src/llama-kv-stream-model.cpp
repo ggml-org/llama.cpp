@@ -194,6 +194,23 @@ bool llama_kv_stream_read_proxy::disarm() noexcept {
     return true;
 }
 
+// Intent identifies this existing alias; publication supplies the later read's current generation.
+bool llama_kv_stream_read_proxy::next_consumer(uint32_t queries,llama_kv_stream_next_consumer & output) const noexcept {
+    if (!queries || queries > impl->queries || !impl->alias_id || impl->alias_id == impl->host->cache_id()) return false;
+    llama_kv_stream_next_consumer next;
+    next.access=llama_kv_stream_access_role::read;
+    next.cache_id=impl->host->cache_id(); next.reader_id=impl->alias_id;
+    next.layer=impl->layer; next.query_tokens=queries; next.query_heads=impl->heads;
+    output=next;
+    return true;
+}
+
+// Start transport before the reader graph computes its query, but only inside a current leased frame.
+bool llama_kv_stream_read_proxy::prefetch(uint32_t queries) {
+    return impl->current() && queries && queries <= impl->queries &&
+        impl->source->prefetch_read(impl->binding,queries,impl->heads);
+}
+
 struct llama_kv_stream_model::implementation {
     llama_kv_stream_model_config config;
     std::shared_ptr<llama_kv_stream_host> host;
@@ -201,10 +218,31 @@ struct llama_kv_stream_model::implementation {
     llama_kv_stream_policy_config physical_policy;
     std::shared_ptr<llama_kv_stream_logical_cache> auxiliary_cache;
     std::shared_ptr<llama_kv_stream_transfer> transfer;
-    uint64_t next_cache=0;
-    uint32_t next_future=0;
+    llama_kv_stream_next_consumer after_append,after_read;
+    llama_kv_stream_prefetch_stats append_stats,read_stats;
     bool decoding=false, auxiliary_handoff=false;
     bool acquire_mtp_layer(size_t future_tokens, bool prefetch);
+    // The owning cache is shared; only the declared access role selects a frozen read or a future append.
+    bool prefetch_next(const llama_kv_stream_next_consumer & next) {
+        if (!session || !next.cache_id) return false;
+        if (next.access == llama_kv_stream_access_role::read) {
+            llama_memory_cache_requirement source;
+            if (!session->read_source(source)) return false;
+            auto alias=source;
+            alias.identity={next.reader_id,1}; alias.source=source.identity;
+            alias.role=llama_memory_cache_role::read_only_source;
+            alias.layers=1; alias.source_first_layer=next.layer;
+            llama_memory_cache_read_binding binding;
+            return llama_memory_cache_read_binding_make(alias,source,0,uint32_t(session->tokens()),
+                session->layout_revision(),binding) && session->prefetch_read(binding,next.query_tokens,next.query_heads);
+        }
+        if (next.cache_id == host->cache_id()) return session->prefetch_decode(next.future_tokens);
+        if (auxiliary_cache && next.cache_id == auxiliary_cache->identity().id && auxiliary_cache->tokens() >= 4 && !mtp_owner) {
+            const size_t future=std::min(size_t(next.future_tokens),config.host.context_tokens-session->tokens());
+            return acquire_mtp_layer(future,true);
+        }
+        return false;
+    }
     bool complete() const {
         return session && !session->device_suspended() && !external_mutation && !session->active() &&
             !session->failed() && !pending_k;
@@ -266,7 +304,7 @@ struct llama_kv_stream_model::implementation {
         session_config.initial_decode = config.resume_decode &&
             (policy.pool_bytes > config.pool_bytes ||
              ggml_backend_buffer_get_size(attention_buffer) == decode_bytes);
-        session_config.cross_token_prefetch = config.cross_token_prefetch && config.resume_decode && !next_cache;
+        session_config.cross_token_prefetch = config.cross_token_prefetch && config.resume_decode && !after_append.cache_id;
         session_config.span_workspace_bytes = span_bytes;
         session_config.pool_resource = pool_id;
         session_config.writer_resource = writer_id;
@@ -497,14 +535,10 @@ struct llama_kv_stream_model::implementation {
         }
         float scale; std::memcpy(&scale,op->op_params,sizeof(scale));
         const bool ok = session->attention(layer,op->src[0],op->src[5] ? op->src[5] : op->src[3],op,scale);
-        if (ok && decoding && !session->active() && auxiliary_cache &&
-                next_cache == auxiliary_cache->identity().id && auxiliary_cache->tokens() >= 4 && !mtp_owner) {
-            const size_t future=std::min(size_t(next_future),config.host.context_tokens-session->tokens());
-            if (!acquire_mtp_layer(future,true))
-                LLAMA_LOG_DEBUG("%s: next-cache prefetch deferred to demand admission\n",__func__);
+        if (ok && !session->active()) {
+            append_stats=session->sequence_stats();
+            if (decoding) prefetch_next(after_append);
         }
-        if (ok && decoding && !session->active() && next_cache == host->cache_id())
-            session->prefetch_decode(next_future);
         if (!ok) LLAMA_LOG_WARN("%s: target attention failed at layer %u, rows %u\n",
             __func__, layer, queries);
         return ok ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
@@ -950,14 +984,62 @@ bool llama_kv_stream_model::release_mtp_layer() {
 
 // Register an actual cache consumer rather than infer it from the model architecture.
 bool llama_kv_stream_model::schedule_next_cache(uint64_t cache_id, uint32_t future_tokens) {
+    if (future_tokens > impl->config.max_decode_rows) return false;
+    llama_kv_stream_next_consumer next;
+    next.cache_id=cache_id; next.future_tokens=cache_id ? future_tokens : 0;
+    return schedule_next_consumer(llama_kv_stream_access_role::append,next);
+}
+
+// Repeating an unchanged intent must not drain the transport that already serves it.
+static bool same_consumer(const llama_kv_stream_next_consumer & a,const llama_kv_stream_next_consumer & b) {
+    return a.access == b.access && a.cache_id == b.cache_id && a.reader_id == b.reader_id && a.layer == b.layer &&
+        a.query_tokens == b.query_tokens && a.query_heads == b.query_heads && a.future_tokens == b.future_tokens;
+}
+
+bool llama_kv_stream_model::schedule_next_consumer(llama_kv_stream_access_role producer,const llama_kv_stream_next_consumer & next) {
     auto & s=*impl;
-    if (future_tokens > s.config.max_decode_rows ||
-            (cache_id && cache_id != s.host->cache_id() &&
-                (!s.auxiliary_cache || cache_id != s.auxiliary_cache->identity().id))) return false;
-    const bool automatic=s.config.cross_token_prefetch && s.config.resume_decode && !cache_id;
-    if (s.session && !s.session->set_automatic_prefetch(automatic)) return false;
-    s.next_cache=cache_id; s.next_future=future_tokens;
+    if ((producer != llama_kv_stream_access_role::append && producer != llama_kv_stream_access_role::read) ||
+            (s.session && s.session->active())) return false;
+    if (next.access == llama_kv_stream_access_role::append) {
+        if (next.reader_id || next.layer || next.query_tokens || next.query_heads || next.future_tokens > s.config.max_decode_rows ||
+                (!next.cache_id && next.future_tokens) || (next.cache_id && next.cache_id != s.host->cache_id() &&
+                (!s.auxiliary_cache || next.cache_id != s.auxiliary_cache->identity().id))) return false;
+    } else if (next.access == llama_kv_stream_access_role::read) {
+        if (next.cache_id != s.host->cache_id() || !next.reader_id || next.reader_id == next.cache_id ||
+                next.layer >= s.host->config().layers || !next.query_tokens || next.query_tokens > s.config.max_decode_rows ||
+                next.query_tokens > s.config.max_batch_rows || !next.query_heads || next.query_heads > s.config.query_heads ||
+                next.query_heads%s.config.host.shape.heads || next.future_tokens) return false;
+    } else return false;
+    auto & current=producer == llama_kv_stream_access_role::append ? s.after_append : s.after_read;
+    if (same_consumer(current,next)) {
+        if (producer == llama_kv_stream_access_role::append && !next.cache_id) s.after_read={};
+        return true;
+    }
+    if (producer == llama_kv_stream_access_role::append) {
+        const bool automatic=s.config.cross_token_prefetch && s.config.resume_decode && !next.cache_id;
+        if (s.session && !s.session->set_automatic_prefetch(automatic)) return false;
+    }
+    current=next;
+    if (producer == llama_kv_stream_access_role::append && !next.cache_id) s.after_read={};
     return true;
+}
+
+llama_kv_stream_next_consumer llama_kv_stream_model::next_consumer(llama_kv_stream_access_role producer) const noexcept {
+    if (producer == llama_kv_stream_access_role::append) return impl->after_append;
+    return producer == llama_kv_stream_access_role::read ? impl->after_read : llama_kv_stream_next_consumer{};
+}
+
+llama_kv_stream_prefetch_stats llama_kv_stream_model::sequence_stats(llama_kv_stream_access_role producer) const noexcept {
+    if (producer == llama_kv_stream_access_role::append) return impl->append_stats;
+    return producer == llama_kv_stream_access_role::read ? impl->read_stats : llama_kv_stream_prefetch_stats{};
+}
+
+// A confidence cutoff can finish before the configured last prediction; the next consumer is still the target.
+bool llama_kv_stream_model::finish_read_access() {
+    llama_kv_stream_next_consumer next; next.cache_id=impl->host->cache_id();
+    if (!schedule_next_consumer(llama_kv_stream_access_role::read,next)) return false;
+    impl->prefetch_next(next);
+    return complete();
 }
 
 bool llama_kv_stream_model::wait_auxiliary_population(ggml_backend_t consumer) {
@@ -970,7 +1052,7 @@ bool llama_kv_stream_model::wait_auxiliary_population(ggml_backend_t consumer) {
 bool llama_kv_stream_model::prefetch_target_after(ggml_backend_t last_reader) {
     auto & s=*impl;
     if (s.auxiliary_handoff) return true;
-    if (!s.next_cache || !s.transfer || !s.session || !s.mtp_owner ||
+    if (!s.after_append.cache_id || !s.transfer || !s.session || !s.mtp_owner ||
             !s.transfer->order(last_reader,s.config.backend) || !s.session->release_ring_guard_ordered()) return false;
     s.auxiliary_handoff=true;
     s.session->prefetch_decode(0);
@@ -1027,7 +1109,13 @@ bool llama_kv_stream_model::read_source(llama_memory_cache_requirement & output,
 }
 bool llama_kv_stream_model::read_attention(const llama_memory_cache_read_binding & binding,
         ggml_tensor * q,ggml_tensor * mask,ggml_tensor * output,float scale) {
-    return complete() && impl->session->read_attention(binding,q,mask,output,scale);
+    if (!complete() || !impl->session->read_attention(binding,q,mask,output,scale)) return false;
+    impl->read_stats=impl->session->sequence_stats();
+    impl->prefetch_next(impl->after_read);
+    return true;
+}
+bool llama_kv_stream_model::prefetch_read(const llama_memory_cache_read_binding & binding,uint32_t queries,uint32_t heads) {
+    return complete() && impl->session->prefetch_read(binding,queries,heads);
 }
 bool llama_kv_stream_model::device_suspended() const noexcept { return impl->session ? impl->session->device_suspended() : impl->suspended; }
 bool llama_kv_stream_model::suspend_ready() const noexcept {

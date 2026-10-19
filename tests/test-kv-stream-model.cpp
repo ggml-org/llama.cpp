@@ -409,6 +409,35 @@ int main(int argc,char ** argv) {
             const auto bytes=f.model->device_grant_bytes();
             auto reader=llama_kv_stream_read_proxy::create(*f.model,*f.owner,1,format,32,4);
             if (!t.assert_true(bool(reader))) return;
+            llama_kv_stream_next_consumer intent;
+            if (!t.assert_true(reader->next_consumer(queries,intent))) return;
+            t.assert_true(intent.access == llama_kv_stream_access_role::read);
+            t.assert_equal(f.model->host()->cache_id(),intent.cache_id);
+            t.assert_equal(uint32_t(1),intent.layer);
+            t.assert_equal(queries,intent.query_tokens);
+            t.assert_equal(uint32_t(32),intent.query_heads);
+            t.assert_true(intent.reader_id && intent.reader_id != intent.cache_id);
+            if (!t.assert_true(f.model->schedule_next_consumer(llama_kv_stream_access_role::append,intent))) return;
+            llama_kv_stream_next_consumer target;
+            target.cache_id=intent.cache_id;
+            if (!t.assert_true(f.model->schedule_next_consumer(llama_kv_stream_access_role::read,target))) return;
+            t.assert_true(f.model->next_consumer(llama_kv_stream_access_role::append).access == llama_kv_stream_access_role::read);
+            t.assert_true(f.model->next_consumer(llama_kv_stream_access_role::read).access == llama_kv_stream_access_role::append);
+            for (int invalid=0;invalid<9;++invalid) {
+                auto bad=intent;
+                if (invalid == 0) ++bad.cache_id;
+                if (invalid == 1) bad.reader_id=0;
+                if (invalid == 2) bad.layer=2;
+                if (invalid == 3) bad.query_tokens=0;
+                if (invalid == 4) bad.query_heads=33;
+                if (invalid == 5) bad.future_tokens=1;
+                if (invalid == 6) bad.access=static_cast<llama_kv_stream_access_role>(2);
+                if (invalid == 7) bad.reader_id=bad.cache_id;
+                if (invalid == 8) bad.query_tokens=5;
+                t.assert_true(!f.model->schedule_next_consumer(llama_kv_stream_access_role::append,bad));
+                t.assert_equal(intent.reader_id,f.model->next_consumer(llama_kv_stream_access_role::append).reader_id);
+            }
+            t.assert_true(!reader->prefetch(queries));
             t.assert_equal(bytes,f.model->device_grant_bytes());
             t.assert_true(!reader->arm());
             t.assert_true(!llama_kv_stream_read_proxy::create(*f.model,*f.owner,2,format,32,1));
@@ -448,11 +477,25 @@ int main(int argc,char ** argv) {
             t.assert_true(std::all_of(actual.begin(),actual.end(),[](float value) { return value == -77; }));
             if (!t.assert_true(reader->arm() && reader->ready())) return;
             for (uint32_t repeat=0;repeat<2;++repeat) {
+                if (!t.assert_true(f.model->schedule_next_consumer(llama_kv_stream_access_role::read,repeat ? target : intent))) return;
+                if (!repeat && !t.assert_true(reader->prefetch(queries))) return;
                 if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(child.get(),graph))) return;
+                t.assert_true("a stock proxy graph adopts its source lookahead",f.model->sequence_stats(llama_kv_stream_access_role::read).adopted);
+                if (!repeat) t.assert_true("the next prediction is primed without a new target append",f.model->prefetch_primed());
+                t.assert_equal(intent.reader_id,f.model->next_consumer(llama_kv_stream_access_role::append).reader_id);
                 ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
                 t.assert_true("read proxy matches native bits across backend queues",same_float_bits(expected,actual));
                 t.assert_equal(active,f.model->tokens());
             }
+            if (!t.assert_true(f.model->schedule_next_consumer(llama_kv_stream_access_role::read,intent) && reader->prefetch(queries))) return;
+            if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_graph_compute(child.get(),graph))) return;
+            t.assert_true(f.model->prefetch_primed());
+            if (!t.assert_true("an early draft cutoff restores the target successor",f.model->finish_read_access())) return;
+            t.assert_true(f.model->next_consumer(llama_kv_stream_access_role::read).access == llama_kv_stream_access_role::append);
+            t.assert_equal(intent.reader_id,f.model->next_consumer(llama_kv_stream_access_role::append).reader_id);
+            t.assert_equal(active,f.model->tokens());
+            ggml_backend_tensor_get(out,actual.data(),0,ggml_nbytes(out));
+            t.assert_true(same_float_bits(expected,actual));
             auto write=*out; write.op=GGML_OP_SET_ROWS;
             t.assert_true(!ggml_backend_execution_supports(reader->buffer(),dev,&write));
             t.assert_equal(GGML_STATUS_FAILED,ggml_backend_execution_compute(reader->buffer(),child.get(),&write));

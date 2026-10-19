@@ -5094,7 +5094,22 @@ bool llama_kv_stream_mtp_release(llama_context * ctx) {
 
 bool llama_kv_stream_schedule_next(llama_context * producer, llama_context * consumer, uint32_t future_tokens) {
     if (!producer) return false;
+    if (producer->get_cparams().kv_shared_read) {
+        auto * parent=producer->get_cparams().ctx_other;
+        auto * source=llama_mtp_target_stream(parent);
+        if (!source || (consumer && consumer != parent)) return false;
+        llama_kv_stream_next_consumer next;
+        if (consumer) { next.cache_id=source->host()->cache_id(); next.future_tokens=future_tokens; }
+        else if (!producer->get_kv_resources().full || !producer->get_kv_resources().full->shared_stream_consumer(1,next)) return false;
+        return source->schedule_next_consumer(llama_kv_stream_access_role::read,next);
+    }
     auto * target=llama_mtp_target_stream(producer);
+    if (target && consumer && consumer->get_cparams().kv_shared_read && consumer->get_cparams().ctx_other == producer) {
+        llama_kv_stream_next_consumer next;
+        auto * cache=consumer->get_kv_resources().full;
+        return cache && cache->shared_stream_consumer(1,next) &&
+            target->schedule_next_consumer(llama_kv_stream_access_role::append,next);
+    }
     if (target && !consumer) return target->schedule_next_cache(0,0);
     if (target && producer == consumer) return target->schedule_next_cache(target->host()->cache_id(),future_tokens);
     auto * next_cache=consumer ? dynamic_cast<llama_kv_cache *>(llama_get_memory(consumer)) : nullptr;
@@ -5111,6 +5126,10 @@ bool llama_kv_stream_schedule_next(llama_context * producer, llama_context * con
 }
 
 bool llama_kv_stream_finish_access(llama_context * producer) {
+    if (producer && producer->get_cparams().kv_shared_read) {
+        auto * source=llama_mtp_target_stream(producer->get_cparams().ctx_other);
+        return source && source->finish_read_access();
+    }
     auto * cache=producer ? dynamic_cast<llama_kv_cache *>(llama_get_memory(producer)) : nullptr;
     return !cache || cache->finish_serial_access();
 }

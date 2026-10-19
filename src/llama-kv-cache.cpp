@@ -71,7 +71,17 @@ bool llama_kv_cache::arm_shared_stream_reader() {
         release_shared_stream_reader();
         return false;
     }
+    // Only the next full graph source owns lookahead. Later sources can replace the intent when reached.
+    try {
+        if (!shared_readers.front()->prefetch(1) && !shared_readers.front()->ready()) {
+            release_shared_stream_reader(); return false;
+        }
+    } catch (...) { release_shared_stream_reader(); throw; }
     return true;
+}
+
+bool llama_kv_cache::shared_stream_consumer(uint32_t queries,llama_kv_stream_next_consumer & output) const noexcept {
+    return !shared_readers.empty() && shared_readers.front()->next_consumer(queries,output);
 }
 
 bool llama_kv_cache::release_shared_stream_reader() noexcept {

@@ -50,6 +50,22 @@ static bool decode_workspace_bytes(ggml_backend_t backend, const llama_kv_stream
     return true;
 }
 
+// A read lookahead uses the same admitted geometry and scratch as its later attention call.
+static bool read_workspace_supported(ggml_backend_t backend,const llama_kv_stream_session_config & config,
+        size_t capacity,size_t active,uint32_t queries,uint32_t heads,ggml_backend_memory_lease_t lease) {
+    if (!lease || !queries || queries > config.max_decode_rows || queries > config.max_batch_rows ||
+            !heads || heads > config.query_heads || !config.policy.shape.heads || heads%config.policy.shape.heads) return false;
+    auto * workspace=ggml_backend_memory_lease_buffer(lease);
+    auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+        ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)),"ggml_backend_kv_stream_partial_ops"));
+    size_t needed=0;
+    ggml_kv_stream_resume_plan selected;
+    return workspace && get && get() && ggml_kv_stream_resume_plan_query(get(),backend,
+        {config.policy.shape,heads,queries,(active+255)/256*256},selected) &&
+        ggml_kv_stream_workspace_query(get(),backend,{config.policy.shape,heads,queries,capacity},
+            ggml_kv_stream_workspace_kind::decode,needed) && needed <= ggml_backend_buffer_get_size(workspace);
+}
+
 struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     struct pool_rebind;
     struct pool_candidate {
@@ -85,8 +101,11 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     uint64_t revision = 0, expected_generation = 0;
     bool running = false, produced = false, poisoned = false, busy = false;
     bool direct_mode = false, report_layout = false, primed = false;
+    bool primed_read = false;
     size_t primed_active = 0;
     uint32_t primed_queries = 1;
+    uint32_t primed_layer = UINT32_MAX, primed_heads = 0;
+    uint64_t primed_epoch = 0;
     pool_rebind * transition = nullptr;
     bool transition_closed = false;
     bool device_suspended = false;
@@ -103,7 +122,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     // End copy use before releasing the execution pin that owns native metadata.
     bool drain() override {
         if (resident) resident->cancel_sequence();
-        primed = false; primed_active = 0;
+        primed = primed_read = false; primed_active = 0;
         ggml_backend_synchronize(backend);
         const bool retired = retire_publication();
         pin.reset();
@@ -141,7 +160,8 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         if (!pin || !resident->prime_sequence(order,active,next_span,committed,{queries,true},ring_guard)) {
             pin.reset(); return false;
         }
-        state=decision.next; span=next_span; primed=true; primed_active=active; primed_queries=queries;
+        state=decision.next; span=next_span; primed=true; primed_read=false; primed_active=active; primed_queries=queries;
+        primed_epoch=content->mirror_epoch();
         return true;
     }
     bool attention_bytes(bool decode, size_t & bytes) const {
@@ -655,7 +675,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
     try {
         bool adopted=false;
         if (s.primed) {
-            bool policy_stable=decode && (!s.primed_queries || queries == s.primed_queries);
+            bool policy_stable=!s.primed_read && decode && (!s.primed_queries || queries == s.primed_queries);
             if (policy_stable) {
                 llama_kv_stream_policy_decision decision;
                 policy_stable=s.resident->recommend_policy(s.state,active,queries,decision,true,false) &&
@@ -670,7 +690,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
             if (!adopted) {
                 s.resident->cancel_sequence(); s.pin.reset();
             }
-            s.primed=false; s.primed_active=0;
+            s.primed=s.primed_read=false; s.primed_active=0;
         }
         if (!adopted) {
             llama_kv_stream_policy_decision decision;
@@ -918,6 +938,33 @@ bool llama_kv_stream_session::read_source(llama_memory_cache_requirement & outpu
     return true;
 }
 
+bool llama_kv_stream_session::prefetch_read(const llama_memory_cache_read_binding & binding,
+        uint32_t queries,uint32_t heads) {
+    auto & s=*impl;
+    llama_memory_cache_requirement source;
+    if (!read_source(source) || s.ring_guard || binding.cache.layers != 1 ||
+            !llama_memory_cache_read_binding_valid(binding,source,0,uint32_t(s.committed),s.revision) ||
+            !read_workspace_supported(s.backend,s.config,s.content->host()->layout().tokens,
+                s.committed,queries,heads,s.leases[2].get())) return false;
+    const uint32_t layer=binding.cache.source_first_layer;
+    if (s.primed && s.primed_read && s.primed_active == s.committed && s.primed_layer == layer &&
+            s.primed_queries == queries && s.primed_heads == heads && s.primed_epoch == s.content->mirror_epoch()) return true;
+    session_operation operation(s.busy);
+    try {
+        if (!s.drain()) { s.poisoned=true; return false; }
+        s.pin=s.binding->acquire();
+        if (!s.pin) return false;
+        const size_t span=std::max(size_t(1),s.resident->suggested_span_pages());
+        if (!s.resident->prime_sequence({layer},s.committed,span,s.committed,{queries,true})) {
+            s.pin.reset(); return false;
+        }
+        s.span=span; s.primed=s.primed_read=true; s.primed_active=s.committed;
+        s.primed_layer=layer; s.primed_queries=queries; s.primed_heads=heads;
+        s.primed_epoch=s.content->mirror_epoch();
+        return true;
+    } catch (...) { s.drain(); s.poisoned=true; throw; }
+}
+
 bool llama_kv_stream_session::read_attention(const llama_memory_cache_read_binding & binding,
         ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale) {
     auto & s=*impl;
@@ -932,27 +979,26 @@ bool llama_kv_stream_session::read_attention(const llama_memory_cache_read_bindi
             output->ne[2] != q->ne[1] || output->ne[3] != 1 || mask->type != GGML_TYPE_F16 ||
             mask->ne[0] < int64_t((s.committed+255)/256*256) || mask->ne[1] != q->ne[1] ||
             mask->ne[2] != 1 || mask->ne[3] != 1) return false;
-    auto * workspace=ggml_backend_memory_lease_buffer(s.leases[2].get());
-    if (!workspace) return false;
-    auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
-        ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend)),"ggml_backend_kv_stream_partial_ops"));
-    size_t needed=0;
-    ggml_kv_stream_resume_plan selected;
-    if (!get || !get() || !ggml_kv_stream_resume_plan_query(get(),s.backend,
-            {s.config.policy.shape,uint32_t(q->ne[2]),uint32_t(q->ne[1]),(s.committed+255)/256*256},selected) ||
-            !ggml_kv_stream_workspace_query(get(),s.backend,
-            {s.config.policy.shape,uint32_t(q->ne[2]),uint32_t(q->ne[1]),s.content->host()->layout().tokens},
-            ggml_kv_stream_workspace_kind::decode,needed) ||
-            needed > ggml_backend_buffer_get_size(workspace)) return false;
+    if (!read_workspace_supported(s.backend,s.config,s.content->host()->layout().tokens,
+            s.committed,uint32_t(q->ne[1]),uint32_t(q->ne[2]),s.leases[2].get())) return false;
     session_operation operation(s.busy);
     try {
-        if (!s.drain()) { s.poisoned=true; return false; }
-        s.pin=s.binding->acquire();
-        if (!s.pin) return false;
         const uint32_t layer=binding.cache.source_first_layer;
-        const size_t span=std::max(size_t(1),s.resident->suggested_span_pages());
-        if (!s.resident->begin_sequence({layer},s.committed,span,s.committed,{uint32_t(q->ne[1]),true}) ||
-                !s.resident->compute_streamed(layer,q,mask,output,s.committed,scale,s.leases[2].get(),true,span)) {
+        const bool adopted=s.primed && s.primed_read && s.pin && s.primed_active == s.committed &&
+            s.primed_layer == layer && s.primed_queries == q->ne[1] && s.primed_heads == q->ne[2] &&
+            s.primed_epoch == s.content->mirror_epoch() &&
+            s.resident->adopt_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true});
+        if (!adopted) {
+            if (!s.drain()) { s.poisoned=true; return false; }
+            s.pin=s.binding->acquire();
+            if (!s.pin) return false;
+            s.span=std::max(size_t(1),s.resident->suggested_span_pages());
+            if (!s.resident->begin_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true})) {
+                s.drain(); s.poisoned=true; return false;
+            }
+        }
+        s.primed=s.primed_read=false; s.primed_active=0;
+        if (!s.resident->compute_streamed(layer,q,mask,output,s.committed,scale,s.leases[2].get(),true,s.span)) {
             s.drain(); s.poisoned=true; return false;
         }
         // DMA retirement does not complete resident-only attention.
@@ -1051,6 +1097,7 @@ bool llama_kv_stream_session::prefetch_decode(uint32_t query_tokens) {
     auto & s=*impl;
     if (s.busy || s.running || s.transition || s.transition_closed || s.publication.pending()) return false;
     session_operation operation(s.busy);
+    if (s.primed_read && !s.drain()) { s.poisoned=true; return false; }
     return s.prime_next(query_tokens);
 }
 
@@ -1286,7 +1333,12 @@ bool llama_kv_stream_session::set_workspaces(const std::vector<ggml_backend_memo
         retained.emplace_back(ggml_backend_memory_lease_retain(lease),ggml_backend_memory_lease_free);
     }
     auto bindings = workspaces;
-    if (!s.drain()) { s.poisoned=true; return false; }
+    // Lookahead owns pool and host bytes, not the graph grants being retired or rebound.
+    const bool keep_prime=s.primed && s.pin &&
+        !s.publication.pending() && s.content->generation() == s.expected_generation &&
+        s.primed_epoch == s.content->mirror_epoch();
+    if (keep_prime) ggml_backend_synchronize(s.backend);
+    else if (!s.drain()) { s.poisoned=true; return false; }
     s.graphs.clear();
     s.resident->release_write_workspace();
     if (!bindings.empty()) {
