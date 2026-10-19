@@ -867,6 +867,12 @@ static int32_t get_logits_mixed(
 }
 
 static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
+    // TODO: enable CPU KV cache tests with tensor split after the meta backend handles the attention transfers.
+    if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR && !offload_kqv) {
+        LOG("FP8 attention: tensor split with CPU KV cache is not supported, skipping\n");
+        return;
+    }
+
     ggml_context_ptr scale_ctx(ggml_init({ 4096, nullptr, true }));
     ggml_tensor * k_scale = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1);
     ggml_tensor * v_scale = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1);
