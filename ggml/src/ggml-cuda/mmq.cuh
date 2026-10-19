@@ -376,6 +376,20 @@ static constexpr __device__ int ggml_cuda_mmq_get_rows_per_warp(ggml_type type, 
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).rows_per_warp();
 }
 
+static constexpr __host__ __device__ bool ggml_cuda_mmq_min_mma_layout(const ggml_cuda_mmq_config & config) {
+    return config.type == GGML_TYPE_Q5_K && config.J == 128 && config.I == 128 && config.nthreads == 256 &&
+        config.K_vram == QK_K && config.sram_layout == GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_1;
+}
+
+template <ggml_type type, int J, bool fallback>
+static constexpr __device__ bool ggml_cuda_mmq_use_min_mma() {
+#ifdef TURING_MMA_AVAILABLE
+    return ggml_cuda_mmq_min_mma_layout(ggml_cuda_mmq_get_config(type, J, fallback, GGML_PREC_Q8));
+#else
+    return false;
+#endif // TURING_MMA_AVAILABLE
+}
+
 #define MMQ_DP4A_TXS_Q4_0    tile_x_sizes{I*MMQ_TILE_NE_K   + I, I*MMQ_TILE_NE_K/QI4_0   + I/QI4_0,     0}
 #define MMQ_DP4A_TXS_Q4_1    tile_x_sizes{I*MMQ_TILE_NE_K   + I, I*MMQ_TILE_NE_K/QI4_1   + I/QI4_1,     0}
 #define MMQ_DP4A_TXS_Q8_0    tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I*MMQ_TILE_NE_K*2/QI8_0 + I/(QI8_0/2), 0}
@@ -915,6 +929,10 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
                 tile_y[l] = by0[l];
             }
+            if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                constexpr int stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback, prec_src1);
+                ggml_cuda_mmq_load_min_sums(by0, (half2 *) (tile_x + I*stride), 0);
+            }
         }
 
         __syncthreads();
@@ -931,11 +949,20 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
                 tile_y[l] = by0[l];
             }
+            if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                constexpr int stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback, prec_src1);
+                ggml_cuda_mmq_load_min_sums(by0, (half2 *) (tile_x + I*stride), 2);
+            }
         }
 
         __syncthreads();
 
         vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+        if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+            constexpr int stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback, prec_src1);
+            ggml_cuda_mmq_vec_dot_min_mma<type, J, fallback>(tile_x, tile_x + I*stride, sum);
+        }
 
         __syncthreads();
     }
@@ -1389,7 +1416,9 @@ static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const i
     const size_t nbs_ids = config.J*sizeof(int);
     const size_t nbs_x = ggml_cuda_mmq_get_nbytes_shared_x(config, cc);
     const size_t nbs_y = config.J * (sizeof(block_q8_1_mmq));
-    return nbs_ids + nbs_x + GGML_PAD(nbs_y, config.nthreads*sizeof(int));
+    const size_t nbs_sums = turing_mma_available(cc) && ggml_cuda_mmq_min_mma_layout(config) ?
+        config.J*(QK_K/QK8_1)*sizeof(half) : 0;
+    return nbs_ids + nbs_x + GGML_PAD(nbs_y, config.nthreads*sizeof(int)) + nbs_sums;
 }
 
 template <ggml_type type, int J, bool fallback, ggml_prec prec_src1>

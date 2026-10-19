@@ -924,7 +924,20 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #pragma unroll
             for (int l = 0; l < int(sizeof(int)); ++l) {
-                x_dm[i*sram_stride + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+                if constexpr (!ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                    x_dm[i*sram_stride + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+                }
+            }
+            if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                const half2 dm0 = dm*make_half2(sc8[0], m8[0]);
+                const half2 dm1 = dm*make_half2(sc8[1], m8[1]);
+                const half2 dm2 = dm*make_half2(sc8[2], m8[2]);
+                const half2 dm3 = dm*make_half2(sc8[3], m8[3]);
+                // Keep the original half values; pack scales and minima separately for ldmatrix.
+                x_dm[i*sram_stride + 2*ksc + 0] = __halves2half2(dm0.x, dm1.x);
+                x_dm[i*sram_stride + 2*ksc + 1] = __halves2half2(dm2.x, dm3.x);
+                x_dm[i*sram_stride + 2*ksc + 4] = __halves2half2(dm0.y, dm1.y);
+                x_dm[i*sram_stride + 2*ksc + 5] = __halves2half2(dm2.y, dm3.y);
             }
         }
     }

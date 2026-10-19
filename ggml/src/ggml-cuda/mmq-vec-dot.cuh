@@ -401,7 +401,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
                 const int k0 = k00 + k01;
 
-                dmA[n][l][k01/QI8_1] = __half22float2(x_dm[i*sram_stride + k0/QI8_1]);
+                if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                    dmA[n][l][k01/QI8_1] = make_float2(__half2float(((const half *) x_dm)[2*i*sram_stride + k0/QI8_1]), 0.0f);
+                } else {
+                    dmA[n][l][k01/QI8_1] = __half22float2(x_dm[i*sram_stride + k0/QI8_1]);
+                }
             }
         }
     }
@@ -430,12 +434,60 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].x*dsB[l%2].x*C.x[l];
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].y*dsB[l%2].y;
+                    if constexpr (!ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                        sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].y*dsB[l%2].y;
+                    }
                 }
             }
         }
     }
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+}
+
+// Stage the original half-rounded sums from two consecutive Q8_1 MMQ tiles.
+static __device__ __forceinline__ void ggml_cuda_mmq_load_min_sums(const int * y, half2 * sums, const int offset) {
+    const int tid = threadIdx.y*32 + threadIdx.x;
+    const int col = tid/2;
+    const int pair = tid%2;
+    const auto * block = (const block_q8_1_mmq *) y + col;
+    sums[col*4 + offset + pair] = __halves2half2(block->ds4[2*pair].y, block->ds4[2*pair + 1].y);
+}
+
+template <ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_min_mma(const int * x, const int * y, float * sum) {
+#ifdef TURING_MMA_AVAILABLE
+    typedef tile<16, 4, half2> tile_A;
+    typedef tile< 8, 4, half2> tile_B;
+    typedef tile<16, 8, float> tile_C;
+    constexpr int stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback, GGML_PREC_Q8);
+    constexpr int ntx = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback, GGML_PREC_Q8)/tile_C::I;
+    const int i0 = (threadIdx.y/ntx)*(ntx*tile_A::I);
+    const half2 * mins = (const half2 *) x + 2*MMQ_TILE_NE_K + 4;
+    const int * sums = y + (threadIdx.y%ntx)*tile_C::J*4;
+    tile_A A[ntx];
+#pragma unroll
+    for (int n = 0; n < ntx; ++n) {
+        load_ldmatrix(A[n], mins + (i0 + n*tile_A::I)*stride, stride);
+    }
+#pragma unroll
+    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+        tile_B B;
+        ((int *) B.x)[0] = sums[(j0 + threadIdx.x/4)*4 + threadIdx.x%4];
+#pragma unroll
+        for (int n = 0; n < ntx; ++n) {
+            // Keep the correction independent of the main accumulator's dependency chain.
+            tile_C C = {};
+            mma(C, A[n], B);
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l];
+            }
+        }
+    }
+#else
+    GGML_UNUSED_VARS(x, y, sum);
+    NO_DEVICE_CODE;
+#endif // TURING_MMA_AVAILABLE
 }
 
 // Used for NVFP4, Q3_K, IQ2_S, and IQ2_XS
@@ -1234,4 +1286,3 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
     }
 }
-
