@@ -6,6 +6,7 @@
 #include "ggml-openvino/ggml-decoder.h"
 #include "ggml.h"
 #include "model-cache.h"
+#include "npu/npu_config.h"
 #include "openvino/frontend.h"
 #include "openvino/input_model.h"
 
@@ -1648,17 +1649,6 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
     return GGML_STATUS_SUCCESS;
 }
 
-ov::AnyMap without_npuw(const ov::AnyMap & config) {
-    ov::AnyMap out;
-    for (const auto & kv : config) {
-        if (kv.first.rfind("NPUW", 0) == 0 || kv.first == "NPU_USE_NPUW") {
-            continue;
-        }
-        out.insert(kv);
-    }
-    return out;
-}
-
 enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared_ptr<ov_runtime_context> & r_ctx) {
     auto & core = ov_singleton_core();
 
@@ -1699,7 +1689,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         fprintf(stderr, "GGML OpenVINO profiling: static graph kind=%s, input_tokens=%lld, chunk_size=%d\n",
                 is_prefill ? "prefill" : "decode", static_cast<long long>(input_tokens), prefill_chunk_size);
     }
-    const ov::AnyMap compile_config = no_kv_cache ? without_npuw(config) : config;
+    const ov::AnyMap compile_config = no_kv_cache ? ggml_openvino_npu_without_npuw(config) : config;
     if (m_params.n_heads_kv == -1) {
         prefill_chunk_size = inp_pos->ne[0];
     }
@@ -1828,20 +1818,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 decode_c_params.attention_size = m_params.ctx_per_seq;
                 decode_c_params.attention_size_swa = m_params.ctx_per_seq_swa;
             }
-            ov::AnyMap prefill_config = compile_config;
-            if (ggml_openvino_npu_hfa_prefill_enabled()) {
-                prefill_config["NPUW_ATTN_HISTORY_SIZE_INPUT"] = local_decoder->get_hfa_history_input_name();
-                prefill_config["NPUW_ONLINE_PIPELINE"] = "REP";
-                prefill_config["NPUW_ONLINE_ISOLATE"] = "ATTN";
-                prefill_config["NPUW_ONLINE_KEEP_BLOCK_SIZE"] = "4";
-                prefill_config["NPUW_UNFOLD_IREQS"] = "NO";
-                prefill_config["NPUW_ATTN"] = "HFA";
-                prefill_config["NPUW_ATTN_HFA_FUSED"] = "YES";
-            }
-            ov::AnyMap decode_config = compile_config;
-            if (device == "NPU" && decode_config.find("NPUW_UNFOLD_IREQS") == decode_config.end()) {
-                decode_config["NPUW_UNFOLD_IREQS"] = "YES";
-            }
+            const ov::AnyMap prefill_config = ggml_openvino_npu_prefill_config(compile_config, *local_decoder);
+            const ov::AnyMap decode_config = ggml_openvino_npu_decode_config(compile_config, device);
 
             const std::string model_cache_dir = ggml_openvino_model_cache_dir();
             const bool self_contained = device == "NPU" && !model_cache_dir.empty() &&

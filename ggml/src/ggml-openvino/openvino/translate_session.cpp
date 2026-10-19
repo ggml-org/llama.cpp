@@ -5,15 +5,9 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
-#include "pass/align_eltwise_ranks.h"
-#include "pass/fuse_argsort_topk.h"
-#include "pass/fuse_moe_compressed.h"
-#include "pass/fuse_moe_router.h"
-#include "pass/fuse_to_conv.h"
-#include "pass/kv_state_seq_axis.h"
+#include "pipelines/pipeline.h"
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/mark_dequantization_subgraph.h"
-#include "pass/squeeze_matmul.h"
 #include "rt_info/weightless_caching_attributes.hpp"
 
 #include <algorithm>
@@ -487,52 +481,14 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
     {
         ov::pass::Manager manager;
         manager.set_per_pass_validation(true);
-        manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
-        // Marks the Convert/Subtract/Multiply nodes of our GatherMatmul dequantization chain
-        // (make_int4_weights/make_int8_weights, for_gather_matmul=true) with disable_constant_folding,
-        // so it survives ConstantFolding regardless of whether the target plugin's own
-        // is_decompression_multiply() recognizes GatherMatmul as a valid consumer.
-        manager.register_pass<ov::pass::MarkDequantization>(
-            std::vector<ov::element::Type>{ov::element::u8, ov::element::i8, ov::element::u4, ov::element::i4});
-        manager.register_pass<pass::FuseToConv>();
-        manager.register_pass<pass::FuseArgsortTopK>();
-
-        // MOECompressed has no CPU plugin implementation, so enable it by default only on GPU.
-        // GGML_OPENVINO_MOE_OP=0 keeps the unfused GatherMatmul path for fallback/debugging.
-        if (ggml_openvino_is_gpu() &&
-            ggml_openvino_getenv_int("GGML_OPENVINO_MOE_OP", 1) != 0) {
-            manager.register_pass<pass::FuseMoeRouter>();
-            manager.register_pass<pass::FuseMoeCompressed>();
-            // Same fusion for models whose gate and up projections share one fused expert
-            // weight (gemma-4). It only matches that shape and only when the experts carry an
-            // integer zero point, so it is a no-op on the separate-gate/up models above.
-            manager.register_pass<pass::FuseMoeCompressedFusedGateUp>();
+        const auto traits = pipeline::analyze_graph(*ggml_model_decoder);
+        ov::pass::MakeStateful::ParamResPairs kv_param_res_pairs;
+        if (traits.is_stateful) {
+            kv_param_res_pairs = get_kv_param_res_pairs(model, ggml_model_decoder->get_kv_param_res_names());
         }
-
-        // Workaround for an OpenVINO GPU-plugin defect: an eltwise op whose operands differ in
-        // rank is computed wrongly once the plugin fuses it as a post-op into `rms`. gemma-4
-        // dense under stateful execution adds a rank-3 residual to the rank-4 norm output and
-        // decodes garbage on GPU while CPU is correct. Equalising the ranks is a no-op for
-        // NUMPY broadcasting and makes the fused path correct.
-        // Remove once the plugin guards that fusion. Opt out with
-        // GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN=1.
-        if (ggml_openvino_is_gpu() && !ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN")) {
-            manager.register_pass<pass::AlignEltwiseOperandRanks>();
-        }
-
-        if (ggml_model_decoder->is_stateful()) {
-            const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
-            const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
-            manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
-            // Must run after MakeStateful, which is what creates the ReadValue/Assign pairs.
-            if (!ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT")) {
-                manager.register_pass<pass::KVStateSeqAxis>();
-            }
-        }
-
-        if (ggml_model_decoder->is_static()) {
-            manager.register_pass<pass::SqueezeMatmul>();
-        }
+        pipeline::register_common_passes(manager, traits);
+        pipeline::register_device_passes(manager, traits);
+        pipeline::register_execution_passes(manager, traits, kv_param_res_pairs);
         manager.run_passes(model);
         if (ggml_model_decoder->is_stateful()) {
             ov::preprocess::PrePostProcessor ppp(model);
