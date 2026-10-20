@@ -491,12 +491,8 @@ static test_result stress_test_dag(const std::vector<ggml_backend_t> & backends,
                 check_lanes();
                 seed(b, "restart");
                 break;
-            case 4:
-                lane[0]  = g.add(ggml_add(ctx_compute.get(), prev[0], consts.one[b]), b);
-                value[0] = value_prev[0] + 1;
-                ggml_format_name(lane[0], "r%d_single", round);
-                break;
-            default:
+            case 2:
+            case 3:
                 for (int l = 0; l < n_lanes; l++) {
                     const int  partner    = (l + 1 + round) % n_lanes;
                     const bool reach_back = round >= 2 && l == round % n_lanes;
@@ -509,6 +505,13 @@ static test_result stress_test_dag(const std::vector<ggml_backend_t> & backends,
                     ggml_format_name(lane[l], "r%d_lane%d", round, l);
                 }
                 break;
+            case 4:
+                lane[0]  = g.add(ggml_add(ctx_compute.get(), prev[0], consts.one[b]), b);
+                value[0] = value_prev[0] + 1;
+                ggml_format_name(lane[0], "r%d_single", round);
+                break;
+            default:
+                GGML_ABORT("unexpected round %d", round);
         }
 
         older       = prev;
