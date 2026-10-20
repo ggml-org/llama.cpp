@@ -296,7 +296,6 @@ static void ggml_sycl_op_topk_moe(ggml_backend_sycl_context &     ctx,
             break;
         default:
             GGML_ASSERT(false && "fatal error");
-            break;
     }
 }
 

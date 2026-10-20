@@ -2,9 +2,15 @@ function(ggml_get_flags CCID CCVER)
     set(C_FLAGS "")
     set(CXX_FLAGS "")
 
-    if (CCID MATCHES "Clang")
+    if (CCID MATCHES "Clang" OR CCID MATCHES "IntelLLVM")
         set(C_FLAGS   -Wunreachable-code-break -Wunreachable-code-return)
         set(CXX_FLAGS -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi)
+
+        if (CCID STREQUAL "IntelLLVM")
+            # for Intel DPC++ and LLVM SYCL, using debug does not disable optimization
+            list(APPEND C_FLAGS    -Rno-debug-disables-optimization)
+            list(APPEND CXX_FLAGS  -Rno-debug-disables-optimization)
+        endif()
 
         if (
             (CCID STREQUAL "Clang"      AND CCVER VERSION_GREATER_EQUAL 3.8.0) OR
