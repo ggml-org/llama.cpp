@@ -1,0 +1,49 @@
+{
+  "description": "Actual README Gemma8Ki/MTP3 arena-finder run after POSIX port-restart regression fix",
+  "target": "gemma-4-31B-it-Q3_K_M.gguf",
+  "assistant": "mtp-gemma-4-31B-it-Q8_0.gguf",
+  "target_sha256": "d2d7a0f9117eb1a9a4b8b68bbb53c1ce5d1f602c45b9028dc12add0d0056f4fd",
+  "assistant_sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de",
+  "result": {
+    "arena_mib": 1032,
+    "initial_arena_mib": 2240,
+    "next_mib_rejected": 1033,
+    "context_size": 8192,
+    "cache_type_k": "q8_0",
+    "cache_type_v": "q4_0",
+    "spec_mode": "mtp",
+    "draft_length": 3,
+    "prompt_tokens": 7921,
+    "decode_tokens": 256,
+    "projector_configured": false,
+    "vision_execution_validated": false,
+    "uvm": false,
+    "reserve_mib": 0
+  },
+  "request_counts": {
+    "cache_n": 0,
+    "prompt_n": 7921,
+    "predicted_n": 256,
+    "draft_n": 217,
+    "draft_n_accepted": 182
+  },
+  "probes": 17,
+  "probes_sha256": "6bb0c141d575a99458707ad4220e66fcea7be6f4dcdbc121be0e98eaad831012",
+  "selected_log_sha256": "51d1d15e5e78af3b85d3701aef9166dc9aeda0d7e3411f25d07198e941169631",
+  "rejected_neighbor_log_sha256": "f7cefb1d22a6b6010a124eb774622fd9efbc0086a1e397ac953100e5f2e1d68f",
+  "finder_source_sha256": "35dbcbdc3e359514e7557cc3081294a4a95c4aa956d008bfaf3c8de99ee2416b",
+  "validated_finder_source_commit": "efb55a27ba6c6a425ed80ce165a33273e995fa16",
+  "run_started_from_commit": "0ad8b9fe0a3fff4cd526586f98293576120ccdee",
+  "runtime_files_sha256": {
+    "llama-server": "997d42b066bb2ef3b011b5092c4f9db674bb04fac9de2361d49172ac80dafccd",
+    "libllama.so.0": "51dd9eaf20c25956bd786ef4f454d4dad4526e31af803ab78790cd5ab8cf8a0f",
+    "libllama-common.so.0": "42e26838b5bac01a914444aa465c9a0fee8bb041e60fe20a83415dcab29213e7",
+    "libllama-server-impl.so": "94001a00ac7c69125ec4bc8e522ce24ef9491b0e4b61f5844e237edd738620e2",
+    "libggml-cuda.so.0": "9f040a24cf23f05846699cf2d96cb2ecfde7aed2aeb22297b2e635dc43558aa3",
+    "libggml-base.so.0": "d8a0021f6ff6b2270a7a77cf0ea41640ec390f4c3a64e9ef3abd1876cf97f514",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libmtmd.so.0": "88da0c39bf658d2e5621db02b8c924cff77bc28955c28ede969505651fc5ee18"
+  },
+  "scope": "One full-workload fit on the reference RTX5070Ti, not a portable recommendation or a statistical performance measurement. Assistant weights remain outside the arena. Production restored healthy."
+}
