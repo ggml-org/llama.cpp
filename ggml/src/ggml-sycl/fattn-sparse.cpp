@@ -202,7 +202,8 @@ bool ggml_sycl_flash_attn_ext_sparse(ggml_backend_sycl_context & ctx, ggml_tenso
     uint8_t *    d_V    = v_alloc.get();
     sycl::half * d_mask = m_alloc.get();
 
-    SYCL_CHECK(CHECK_TRY_ERROR(stream->memset(d_cnt, 0, sizeof(int32_t))));
+    // reset with a kernel: on Level Zero a queue memset is not always ordered before the next kernel
+    stream->single_task([=]() { *d_cnt = 0; });
 
     sparse_fa_compact_mask(stream, (const sycl::half *) mask->data,
                            d_idx, d_cnt, n_kv, n_kv_g);
