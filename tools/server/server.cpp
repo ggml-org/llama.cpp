@@ -247,6 +247,7 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
         routes.post_control                = models_routes->proxy_post;
         routes.post_responses_oai          = models_routes->proxy_post;
         routes.post_transcriptions_oai     = models_routes->proxy_post;
+        routes.post_tts                    = models_routes->proxy_post;
         routes.ws_realtime                 = models_routes->proxy_ws;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
@@ -293,6 +294,7 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     ctx_http.post("/responses",                ex_wrapper(routes.post_responses_oai));
     ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
+    ctx_http.post("/tts",                      ex_wrapper(routes.post_tts));
     ctx_http.ws  ("/v1/realtime",              routes.ws_realtime);
     ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));

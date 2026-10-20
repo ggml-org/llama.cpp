@@ -114,7 +114,10 @@ const char * get_media_marker();
 //
 
 // output modalities for architecture.output_modalities in GET /models
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type);
+// has_cap_chat: false for a tts-only model, has_cap_tts: the model can generate audio
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type, bool has_cap_chat, bool has_cap_tts);
+// same, with the decision type read from a loaded model
+std::vector<std::string> server_model_output_modalities(const llama_model * model, bool has_cap_chat, bool has_cap_tts);
 
 // architecture object of GET /models; shared by the direct server and the router
 json server_model_architecture_json(

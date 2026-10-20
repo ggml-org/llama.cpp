@@ -1235,6 +1235,9 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
         info.n_ctx_train = gguf_get_val_u32(gguf_ctx.get(), ctx_id);
     }
 
+    // same key as llama_model_chat_template(model, nullptr)
+    info.has_chat_tmpl = gguf_find_key(gguf_ctx.get(), "tokenizer.chat_template") >= 0;
+
     return info;
 }
 

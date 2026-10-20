@@ -521,25 +521,29 @@ void server_model_meta::update_caps(const common_params & base) {
         return;
     }
 
-    // read the output modalities and the trained context from the GGUF metadata
-    std::vector<std::string> output_modalities = {"text"};
-    if (!params.model.path.empty()) {
-        const common_gguf_info info = common_get_gguf_info(params.model.path);
-        output_modalities = server_model_output_modalities(info.decision_type);
-        n_ctx_train       = info.n_ctx_train;
-    }
-
     bool inp_image = false;
     bool inp_audio = false;
+    bool gen_audio = false;
     try {
         if (!params.no_mmproj && !params.mmproj.path.empty()) {
             mtmd_caps caps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
             inp_image = caps.inp_vision;
             inp_audio = caps.inp_audio;
+            gen_audio = caps.gen_audio;
         }
     } catch (const std::exception & e) {
         LOG_WRN("failed to read the multimodal capabilities of '%s': %s\n", name.c_str(), e.what());
         // keep the output modalities from the GGUF metadata
+    }
+
+    // read the output modalities and the trained context from the GGUF metadata
+    std::vector<std::string> output_modalities = {"text"};
+    if (!params.model.path.empty()) {
+        const common_gguf_info info = common_get_gguf_info(params.model.path);
+        // same rule as mtmd_helper_model_can_chat()
+        const bool can_chat = !gen_audio || info.has_chat_tmpl;
+        output_modalities = server_model_output_modalities(info.decision_type, can_chat, gen_audio);
+        n_ctx_train       = info.n_ctx_train;
     }
 
     // offline discovery cannot see video; a loaded model reports it

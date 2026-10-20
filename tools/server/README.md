@@ -802,6 +802,50 @@ curl http://127.0.0.1:8012/v1/rerank \
     }' | jq
 ```
 
+### POST `/tts`: Generate speech audio from text
+
+Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info, see [tts/README.md](../tts/README.md)
+
+*Options:*
+
+`input`: The text to speak (alias: `prompt`).
+
+`lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
+
+`speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence.
+
+`top_k`, `top_p`: Sampling params for the acoustic code predictor. Optional, model-dependent defaults apply.
+
+`repeat_penalty`: Repetition penalty applied to the backbone sampler over the whole generation (default `1.05`). Without this, the backbone can loop and re-generate the same utterance.
+
+`seed`: RNG seed for both the backbone sampler and the codec/vocoder (`-1` = random, the default). Set to a fixed value for reproducible output.
+
+`n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
+
+`response_format`: `wav` (default) or `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`).
+
+`stream`: If `true`, the response is streamed as audio becomes available instead of waiting for the full generation to finish. WAV streaming writes an RFC-noncompliant header with an unknown (`0xFFFFFFFF`) size field, since the final length isn't known up front; most players and decoders (ffmpeg, VLC, ...) handle this by reading until EOF.
+
+Note: it's highly recommended to always provide a speaker reference voice; otherwise, the model's performance may be degraded.
+
+*Examples:*
+
+```shell
+curl -X POST http://127.0.0.1:9931/tts \
+    -H "Content-Type: application/json" \
+    -d '{"input": "Hello, this is a test."}' \
+    -o output.wav
+```
+
+With a speaker reference uploaded as a file (`multipart/form-data`), instead of base64-encoding it into the JSON body:
+
+```shell
+curl -X POST http://127.0.0.1:9931/tts \
+    -F "input=Hello, this is a test." \
+    -F "speaker_ref=@/path/to/speaker-reference.wav;type=audio/wav" \
+    -o output.wav
+```
+
 ### POST `/infill`: For code infilling.
 
 Takes a prefix and a suffix and returns the predicted completion as stream.
@@ -1262,11 +1306,12 @@ Each object in `data` has an `architecture` object. It has two string arrays:
 - `input_modalities` lists what the model can read. It always has `text`, plus each media type that the model supports.
 - `output_modalities` lists what the model can produce.
 
-One output value is special:
+Some output values are special:
 
 | Value | Meaning |
 |---|---|
 | `decisions` | The model is a native decision model. Serve it with [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api). |
+| `audio` | The model can generate speech. Serve it with [`/tts`](#post-tts-generate-speech-audio-from-text). A TTS-only model has `["audio"]` without `text`. |
 
 A language model that classifies with prompts does not get `decisions`. Only native decision models do.
 
@@ -2054,7 +2099,7 @@ Note:
     - If a model is not running, it will be added or updated according to the source
 2. When the model is loaded, the info from `/v1/models` is forwarded to router's `/v1/models`. This includes metadata about the model and the runtime instance.
 
-Each object in `data` has the same `architecture` object as [`GET /v1/models`](#get-v1models-openai-compatible-model-info-api) of a direct server. The server computes both arrays offline. It does not load the model, download files, or run inference. `output_modalities` comes from the GGUF metadata. `input_modalities` comes from the projector file. A native decision model shows `decisions` before its first load, after unload, and while it sleeps:
+Each object in `data` has the same `architecture` object as [`GET /v1/models`](#get-v1models-openai-compatible-model-info-api) of a direct server. The server computes both arrays offline. It does not load the model, download files, or run inference. `output_modalities` comes from the GGUF metadata, plus `audio` when the projector file can generate speech. `input_modalities` comes from the projector file. A native decision model shows `decisions` before its first load, after unload, and while it sleeps:
 
 ```json
 {

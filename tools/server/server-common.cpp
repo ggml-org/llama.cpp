@@ -202,7 +202,8 @@ const char * get_media_marker() {
 // model output modalities
 //
 
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type) {
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type, bool has_cap_chat, bool has_cap_tts) {
+    std::vector<std::string> out;
     switch (decision_type) {
         case COMMON_DECISION_TYPE_OPENJEV:
         case COMMON_DECISION_TYPE_LEV:
@@ -216,13 +217,27 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_LFM2_D1:
         case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
         case COMMON_DECISION_TYPE_H2O_LIGHTNING:
-            return {"decisions"};
+            out = {"decisions"};
+            break;
         case COMMON_DECISION_TYPE_GRANITE_SWITCH:
-            return {"text", "decisions"};
+            out = {"text", "decisions"};
+            break;
         default:
-            // fallback when there is no decision type or the metadata is bad
-            return {"text"};
+            // a tts-only model cannot generate text
+            if (has_cap_chat || !has_cap_tts) {
+                // fallback when there is no decision type or the metadata is bad
+                out = {"text"};
+            }
+            break;
     }
+    if (has_cap_tts) {
+        out.push_back("audio");
+    }
+    return out;
+}
+
+std::vector<std::string> server_model_output_modalities(const llama_model * model, bool has_cap_chat, bool has_cap_tts) {
+    return server_model_output_modalities(common_get_decision_type(model), has_cap_chat, has_cap_tts);
 }
 
 json server_model_architecture_json(

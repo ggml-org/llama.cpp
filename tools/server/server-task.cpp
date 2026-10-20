@@ -1509,6 +1509,17 @@ json server_task_result_rerank::to_json() {
 }
 
 //
+// server_task_result_tts
+//
+json server_task_result_tts::to_json() {
+    return json {
+        {"sample_rate", sample_rate},
+        {"n_bytes",     audio.size()},
+        {"final",       final},
+    };
+}
+
+//
 // server_task_result_decision
 //
 json server_task_result_decision::to_json() {
