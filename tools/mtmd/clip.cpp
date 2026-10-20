@@ -1593,10 +1593,8 @@ struct clip_model_loader {
                         }
                         hparams.image_resize_algo_rf = hparams.image_resize_algo;
                         hparams.image_resize_algo_ov = hparams.image_resize_algo;
-                        // the tiles stretch the image to the grid (d1-omni vision.py)
-                        if (model.proj_type == PROJECTOR_TYPE_D1OMNI_V) {
-                            hparams.image_pad_rf = PAD_NONE;
-                        }
+                        // the tiles stretch the image to the grid (Lfm2VlImageProcessor, d1-omni vision.py)
+                        hparams.image_pad_rf = PAD_NONE;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // defaults for GGUFs converted before tiling params were written
                         // ref: https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B/blob/main/processor_config.json
