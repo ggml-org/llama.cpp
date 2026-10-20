@@ -53,6 +53,63 @@ struct feedback_delivery_gate {
     ~feedback_delivery_gate() { reg->iface.get_proc_address = previous; }
 };
 
+// Observe real queue submissions and attention calls without adding waits.
+struct prefill_pipeline_probe {
+    using lookup = void * (*)(ggml_backend_reg_t,const char *);
+    struct event { char kind; size_t slot, pages; };
+    inline static lookup previous = nullptr;
+    inline static const ggml_kv_stream_copy_ops * copies = nullptr;
+    inline static const ggml_kv_stream_partial_ops * partial = nullptr;
+    inline static ggml_kv_stream_copy_ops copy_ops{};
+    inline static ggml_kv_stream_partial_ops partial_ops{};
+    inline static std::vector<event> events;
+    inline static size_t acquired = 0;
+    inline static size_t fail_enqueue = 0, fail_acquire = 0, fail_release = 0;
+    static void reset() { events.clear(); acquired=fail_enqueue=fail_acquire=fail_release=0; }
+    ggml_backend_reg_t reg;
+    explicit prefill_pipeline_probe(ggml_backend_t backend) : reg(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend))) {
+        auto copy = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
+        auto attention = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+        GGML_ASSERT(copy && copy() && copy()->version >= 10 && attention && attention() && attention()->resume_spans);
+        copies=copy(); partial=attention(); copy_ops=*copies; partial_ops=*partial;
+        reset();
+        copy_ops.enqueue_span=[](void * queue,size_t slot,const void * k,const void * v,size_t live,size_t padded) {
+            events.push_back({'q',slot,(padded+255)/256});
+            const bool result=copies->enqueue_span(queue,slot,k,v,live,padded);
+            return result && !(fail_enqueue && --fail_enqueue == 0);
+        };
+        copy_ops.enqueue_span_with_feedback=[](void * queue,size_t slot,const void * k,const void * v,size_t live,size_t padded,bool eligible) {
+            events.push_back({'q',slot,(padded+255)/256});
+            const bool result=copies->enqueue_span_with_feedback(queue,slot,k,v,live,padded,eligible);
+            return result && !(fail_enqueue && --fail_enqueue == 0);
+        };
+        copy_ops.acquire_span=[](void * queue,size_t slot,size_t count) {
+            events.push_back({'a',slot,count}); acquired+=count;
+            const bool result=copies->acquire_span(queue,slot,count);
+            return result && !(fail_acquire && --fail_acquire == 0);
+        };
+        copy_ops.release_span=[](void * queue,size_t slot,size_t count) {
+            events.push_back({'r',slot,count});
+            const bool result=copies->release_span(queue,slot,count);
+            return result && !(fail_release && --fail_release == 0);
+        };
+        partial_ops.resume_spans=[](ggml_backend_t backend,const ggml_tensor * op,ggml_backend_buffer_t workspace,
+                const ggml_kv_stream_resume_plan & plan,const ggml_kv_stream_span_plan_view & view,size_t first,size_t end) {
+            events.push_back({'x',0,acquired}); acquired=0;
+            return partial->resume_spans(backend,op,workspace,plan,view,first,end);
+        };
+        previous=reg->iface.get_proc_address;
+        reg->iface.get_proc_address=[](ggml_backend_reg_t reg,const char * name) -> void * {
+            if (!std::strcmp(name,"ggml_backend_kv_stream_copy_ops"))
+                return reinterpret_cast<void *>(+[]() -> const ggml_kv_stream_copy_ops * { return &copy_ops; });
+            if (!std::strcmp(name,"ggml_backend_kv_stream_partial_ops"))
+                return reinterpret_cast<void *>(+[]() -> const ggml_kv_stream_partial_ops * { return &partial_ops; });
+            return previous(reg,name);
+        };
+    }
+    ~prefill_pipeline_probe() { reg->iface.get_proc_address=previous; }
+};
+
 // Eight attention consumers with fixed synthetic Q; this is not a model/server benchmark.
 static int benchmark(ggml_backend_t backend, bool sequence, bool measured, bool fallback) {
     for (size_t active : {size_t(257),size_t(2049),size_t(8193)}) for (size_t queries : {size_t(1),size_t(33)}) {
@@ -97,7 +154,8 @@ int main(int argc, char ** argv) {
     const bool bench = sequence || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
     const bool ring_guard_only = argc > 1 && std::strcmp(argv[1], "--cuda-ring-guard") == 0;
     const bool read_feedback_only = argc > 1 && std::strcmp(argv[1],"--cuda-read-feedback") == 0;
-    const bool cuda = read_feedback_only || bench || ring_guard_only || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
+    const bool pipeline_only = argc > 1 && std::strcmp(argv[1],"--cuda-prefill-pipeline") == 0;
+    const bool cuda = pipeline_only || read_feedback_only || bench || ring_guard_only || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -105,6 +163,126 @@ int main(int argc, char ** argv) {
     testing t;
     if (ring_guard_only) t.set_filter("(retained_mtp_slots_are_not_overwritten_by_target_prefetch|full_mtp_ring_rejects_target_sequence_without_submission|mapped_target_stream_avoids_mtp_ring_in_shared_pool)");
     if (read_feedback_only) t.set_filter("borrowed_reads_preserve_target_feedback_identity_and_samples");
+    if (pipeline_only) t.set_filter("wide_prefill_pipelines_two_encoded_waves");
+    if (pipeline_only) t.test("wide_prefill_pipelines_two_encoded_waves",[&](testing & t) {
+        for (uint32_t dimension : {256u,512u}) for (size_t active : {2049u,8193u})
+        for (size_t slots : {1u,2u,3u,12u,13u}) for (const auto & pair : {
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16},
+                std::pair{GGML_TYPE_Q5_0,GGML_TYPE_Q5_1},std::pair{GGML_TYPE_Q4_1,GGML_TYPE_Q8_0},
+                std::pair{GGML_TYPE_BF16,GGML_TYPE_F32},std::pair{GGML_TYPE_F32,GGML_TYPE_BF16}}) {
+            prefill_pipeline_probe probe(backend.get());
+            fixture f(backend.get(),true,pair.first,pair.second,active,false,2,4,slots+2,dimension,dimension);
+            f.policy.initial_ring_slots=uint32_t(slots); f.policy.fixed_ring=true;
+            llama_kv_stream_policy_state placement;
+            if (!t.assert_true(llama_kv_stream_policy_initialize(f.policy,placement).status == llama_kv_stream_policy_status::success &&
+                    placement.ring_slots == slots && f.attach(&placement) && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true))) return;
+            auto pin=f.binding->acquire();
+            const auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+            std::vector<uint8_t> host_bytes(f.host->bytes());
+            std::memcpy(host_bytes.data(),ggml_backend_buffer_get_base(f.host->buffer()),host_bytes.size());
+            const auto generation=f.content->generation();
+            for (uint32_t queries : {64u,128u,256u}) {
+                const uint32_t heads=dimension == 512 ? 32 : 24;
+                std::printf("prefill-pipeline-case dim=%u k=%s v=%s active=%zu slots=%zu queries=%u\n",
+                    dimension,ggml_type_name(pair.first),ggml_type_name(pair.second),active,slots,queries);
+                std::fflush(stdout);
+                size_t bytes=0;
+                if (!t.assert_true(bool(pin) && ggml_kv_stream_workspace_query(get(),backend.get(),
+                        {f.policy.shape,heads,queries,(active+255)/256*256},ggml_kv_stream_workspace_kind::prefill,bytes) &&
+                        f.resident->configure_prefill_workspace(bytes))) return;
+                block_workspace workspace(f,bytes);
+                block_inputs input(f,active,queries,false,heads);
+                const std::array<std::vector<float>,2> expected{stock_attention(f,input,0),stock_attention(f,input,1)};
+                ggml_context_ptr context(ggml_init({16384,nullptr,true}));
+                auto * bounds=ggml_new_tensor_2d(context.get(),GGML_TYPE_I32,4,queries);
+                ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(context.get(),backend.get()));
+                if (!t.assert_true(bool(buffer))) return;
+                std::vector<int32_t> intervals(4*queries);
+                for (uint32_t row=0;row<queries;++row) {
+                    intervals[4*row]=0; intervals[4*row+1]=int32_t(active-queries+row+1);
+                    intervals[4*row+2]=int32_t(input.padded); intervals[4*row+3]=1;
+                }
+                ggml_backend_tensor_set(bounds,intervals.data(),0,ggml_nbytes(bounds));
+                const std::vector<float> sentinel(ggml_nelements(input.output),-77);
+                const auto reset_output=[&] { ggml_backend_tensor_set(input.output,sentinel.data(),0,ggml_nbytes(input.output)); };
+                const auto run=[&](ggml_tensor * mask) {
+                    prefill_pipeline_probe::reset(); reset_output();
+                    if (!t.assert_true(f.resident->begin_sequence({0,1},active,32,SIZE_MAX,{queries,false}))) return false;
+                    for (uint32_t layer : {0u,1u}) {
+                        if (!t.assert_true(f.resident->compute_streamed(layer,input.q,mask,input.output,
+                                active,1.0f/16,workspace.lease.get(),true,32))) return false;
+                        ggml_backend_synchronize(backend.get());
+                        if (!t.assert_true("pipelined prefill retains exact native output",same_float_bits(expected[layer],input.read()))) return false;
+                    }
+                    return t.assert_true(!f.resident->sequence_active());
+                };
+                for (bool compact : {false,true}) {
+                    if (!run(compact ? bounds : input.mask)) return;
+                    size_t initial=0,maximum_upload=0,maximum_wave=0,first_upload=0;
+                    bool consuming=false,refill_before_other_wave=false;
+                    const auto & events=prefill_pipeline_probe::events;
+                    for (size_t i=0;i<events.size();++i) {
+                        const auto & event=events[i];
+                        if (event.kind=='a') consuming=true;
+                        if (event.kind=='q') {
+                            if (!first_upload) first_upload=event.pages;
+                            initial+=!consuming; maximum_upload=std::max(maximum_upload,event.pages);
+                        }
+                        if (event.kind=='x') maximum_wave=std::max(maximum_wave,event.pages);
+                        if (event.kind=='r') {
+                            bool refilled=false;
+                            for (size_t j=i+1;j<events.size();++j) {
+                                if (events[j].kind=='q' && events[j].slot == event.slot) refilled=true;
+                                if (events[j].kind=='a') {
+                                    refill_before_other_wave |= refilled && events[j].slot != event.slot;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    const size_t half=slots/2+slots%2;
+                    const size_t nonresident=input.padded/256-placement.resident_pages_per_layer;
+                    if (queries >= 128) {
+                        if (!t.assert_true("wide prefill queues two bounded waves before consuming the ring",
+                                initial >= (slots > 1 ? 2u : 1u) && maximum_upload <= half &&
+                                maximum_wave > 0 && maximum_wave <= half)) return;
+                        if (slots > 1 && nonresident > slots &&
+                                !t.assert_true("consumed slots refill before the other queued wave is acquired",refill_before_other_wave)) return;
+                    } else if (!t.assert_equal("small-query prefill retains its original transfer ceiling",
+                            std::min(size_t(32),std::min(slots,nonresident)),first_upload)) return;
+                    if (!t.assert_equal(generation,f.content->generation()) ||
+                            !t.assert_true("pipelined reads preserve encoded host history",!std::memcmp(host_bytes.data(),
+                                ggml_backend_buffer_get_base(f.host->buffer()),host_bytes.size())) ||
+                            !t.assert_true(f.resident->sequence_stats().copy_bytes > 0 && f.resident->sequence_stats().peak_pages <= slots)) return;
+                }
+                if (dimension == 512 && active == 8193 && slots == 13 && queries == 256 && pair.first == GGML_TYPE_Q8_0) {
+                    reset_output();
+                    if (!t.assert_true(f.resident->prime_sequence({0,1},active,32,SIZE_MAX,{queries,false}))) return;
+                    f.resident->cancel_sequence(); ggml_backend_synchronize(backend.get());
+                    if (!t.assert_true(!f.resident->sequence_active() && same_float_bits(sentinel,input.read())) || !run(bounds)) return;
+                    for (int fault=0;fault<3;++fault) {
+                        prefill_pipeline_probe::reset(); reset_output();
+                        if (fault == 0) prefill_pipeline_probe::fail_enqueue=3;
+                        if (fault == 1) prefill_pipeline_probe::fail_acquire=1;
+                        if (fault == 2) prefill_pipeline_probe::fail_release=1;
+                        if (!t.assert_true(f.resident->begin_sequence({0,1},active,32,SIZE_MAX,{queries,false}))) return;
+                        const bool result=f.resident->compute_streamed(0,input.q,bounds,input.output,
+                            active,1.0f/16,workspace.lease.get(),true,32);
+                        ggml_backend_synchronize(backend.get());
+                        if (!t.assert_true("queued pipeline failure drains and closes the sequence",!result && !f.resident->sequence_active()) ||
+                                !t.assert_true("partial pipeline failure leaves public output unchanged",same_float_bits(sentinel,input.read())) ||
+                                !t.assert_equal(size_t(0),fault == 0 ? prefill_pipeline_probe::fail_enqueue :
+                                    fault == 1 ? prefill_pipeline_probe::fail_acquire : prefill_pipeline_probe::fail_release) ||
+                                !run(bounds)) return;
+                    }
+                    if (!t.assert_equal(generation,f.content->generation()) ||
+                            !t.assert_true(!std::memcmp(host_bytes.data(),ggml_backend_buffer_get_base(f.host->buffer()),host_bytes.size()))) return;
+                }
+            }
+        }
+    });
     if (cuda) t.test("borrowed_reads_preserve_target_feedback_identity_and_samples",[&](testing & t) {
         for (uint32_t dimension : {256u,512u}) for (size_t active : {1025u,4097u}) for (auto pair : {
             std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16},

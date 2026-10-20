@@ -512,7 +512,12 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
             [&](size_t prefix) { return prefix < seq->padded; });
         if (streamed && !blocked.empty() && std::none_of(blocked.begin(), blocked.end(),
                 [](uint8_t value) { return value == 0; })) return false;
-        if (!seq->plan.start(prefixes,active,seq->padded,s.page.tokens,s.binding.initial_policy.ring_slots,span,stable,blocked)) return false;
+        // Keep another encoded wave queued while wide prefill consumes the first.
+        const size_t slots=s.binding.initial_policy.ring_slots;
+        const bool pipeline=!feedback_context.decode && feedback_context.query_tokens >= 128 && s.prefill_scratch_bytes &&
+            copy_ops()->version >= 10 && copy_ops()->acquire_span && copy_ops()->release_span;
+        const size_t transfer_span=pipeline ? std::min(span,slots/2+slots%2) : span;
+        if (!seq->plan.start(prefixes,active,seq->padded,s.page.tokens,slots,transfer_span,stable,blocked)) return false;
         seq->stats.feedback_stride=s.sampler.stride();
         if (seq->profile) s.sampler.begin_run();
         if (streamed && !s.enter_streamed()) return false;
@@ -1163,6 +1168,9 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     const bool span_resume=resumed && cross && !segmented && ops->version >= 11 &&
         ops->resume_spans && resume_plan.span_resume && s.pool_lease && s.copy_ops &&
         s.copy_ops->version >= 10 && s.copy_ops->acquire_span && s.copy_ops->release_span;
+    const bool pipeline_prefill=bounded_prefill && q->ne[1] >= 128 && s.copy_ops &&
+        s.copy_ops->version >= 10 && s.copy_ops->acquire_span && s.copy_ops->release_span;
+    const size_t resume_group_pages=pipeline_prefill ? std::min(size_t(96),slots/2+slots%2) : 96;
     bool prefix_pending=span_resume && prefix && blocks;
     // Short prefills use the same encoded gather and stock kernel as longer prefills.
     const bool native = s.native_graph_attention && !resumed && (prefill || q->ne[1] != 2 || segmented || !s.resumed_decode);
@@ -1491,7 +1499,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         const size_t first = prefix+block*s.page.tokens;
         if (span_resume) {
             llama_kv_stream_prefetch_wave wave;
-            if (!s.sequence->plan.ready_wave(96,prefix_pending ? 2 : 3,wave)) return false;
+            if (!s.sequence->plan.ready_wave(resume_group_pages,prefix_pending ? 2 : 3,wave)) return false;
             std::vector<ggml_kv_stream_span> sources;
             std::vector<llama_kv_stream_prefetch_request> requests;
             sources.reserve(3); requests.reserve(wave.requests);
@@ -1560,7 +1568,6 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             grouped_requests = 1;
             // Keep DMA requests at 32 pages, but amortize resumed-attention launches over three
             // physically contiguous ready batches. Each request retains its own ready fence.
-            constexpr size_t resume_group_pages = 96;
             if (resumed && span_pages == 32) {
                 while (pages < resume_group_pages) {
                     const auto * next = s.sequence->plan.request(grouped_requests);
