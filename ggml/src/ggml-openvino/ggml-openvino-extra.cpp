@@ -589,6 +589,11 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         layout.is_symmetric = true;
         break;
 
+    case GGML_TYPE_Q5_0:
+        // i8 weights (5-bit values minus 16), symmetric (scale only)
+        layout.is_symmetric = true;
+        break;
+
     case GGML_TYPE_Q5_1:
         // u8 weights (5-bit values), asymmetric (scale + zero point)
         break;

@@ -171,6 +171,38 @@ void extract_q4_1_data(const ggml_tensor * tensor,
     }
 }
 
+// Extracts (weight, scales) from Q5_0 tensors.
+// Data layout is: |16 bit scale|32 bit qh (5th bits)|32 x 4bit low nibbles|.
+// Reconstructed quant q in [0,31]: q = (low nibble) | (qh_bit << 4). Dequant: (q - 16) * d.
+// Weights are stored as signed i8 (q - 16), symmetric like Q8_0, so there is no zero point.
+void extract_q5_0_data(const ggml_tensor * tensor, ov::Tensor & weights_arr, ov::Tensor & scales_arr) {
+    const uint64_t bytes_per_block = 22;  // 2 scale + 4 qh + 16 (32x0.5) weights
+    const int qk = 32;
+
+    OPENVINO_ASSERT(weights_arr.get_element_type() == ov::element::i8, "Q5_0 weights are extracted as i8");
+
+    auto * data = static_cast<uint8_t *>(tensor->data);
+    auto * weights = static_cast<int8_t *>(weights_arr.data());
+    auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+        const uint8_t * block = data + i * bytes_per_block;
+        uint16_t d;
+        memcpy(&d, block, sizeof(d));
+        uint32_t qh;
+        memcpy(&qh, block + 2, sizeof(qh));
+        const uint8_t * qs = block + 6;
+        int8_t * dst = weights + i * qk;
+        scales[i] = ov::float16::from_bits(d);
+        for (int j = 0; j < qk / 2; ++j) {
+            const uint8_t bit_lo = (qh >> j) & 1;
+            const uint8_t bit_hi = (qh >> (j + qk / 2)) & 1;
+            dst[j] = static_cast<int8_t>(((qs[j] & 0x0F) | (bit_lo << 4)) - 16);        // first 16 weights
+            dst[j + qk / 2] = static_cast<int8_t>(((qs[j] >> 4) | (bit_hi << 4)) - 16);  // last 16 weights
+        }
+    });
+}
+
 // Extracts (weight, scales, zp) from Q5_1 tensors.
 // Data layout is: |16 bit scale|16 bit min|32 bit qh (5th bits)|32 x 4bit low nibbles|.
 // Reconstructed quant q in [0,31]: q = (low nibble) | (qh_bit << 4). Dequant: w*d + m.
@@ -1044,6 +1076,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         weights_per_block = 32;
         break;
     case GGML_TYPE_Q8_0:
+    case GGML_TYPE_Q5_0:
     case GGML_TYPE_Q5_1:
     case GGML_TYPE_Q5_K:
         is_u4 = false;
@@ -1075,6 +1108,9 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         break;
     case GGML_TYPE_Q4_K:
         extract_q4_k_data(&temp_tensor, weights, scales, zp, use_bias);
+        break;
+    case GGML_TYPE_Q5_0:
+        extract_q5_0_data(&temp_tensor, weights, scales);
         break;
     case GGML_TYPE_Q5_1:
         extract_q5_1_data(&temp_tensor, weights, scales, zp, use_bias);
