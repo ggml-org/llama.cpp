@@ -2436,6 +2436,143 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
     }
 }
 
+static bool ggml_metal_buffer_data_span(const size_t * data_offsets, const size_t * sizes, size_t n_tensors, size_t * min_data, size_t * max_data) {
+    bool found = false;
+
+    for (size_t i = 0; i < n_tensors; i++) {
+        if (sizes[i] == 0) {
+            continue;
+        }
+
+        const size_t end = data_offsets[i] + sizes[i];
+        if (!found) {
+            *min_data = data_offsets[i];
+            *max_data = end;
+            found = true;
+        } else {
+            if (data_offsets[i] < *min_data) {
+                *min_data = data_offsets[i];
+            }
+            if (end > *max_data) {
+                *max_data = end;
+            }
+        }
+    }
+
+    return found;
+}
+
+void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor ** tensors, const void * data,
+        const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
+    if (buf->is_shared) {
+        for (size_t i = 0; i < n_tensors; i++) {
+            if (sizes[i] == 0) {
+                continue;
+            }
+            memcpy((char *) tensors[i]->data + offsets[i], (const char *) data + data_offsets[i], sizes[i]);
+        }
+        return;
+    }
+
+    size_t min_data = 0, max_data = 0;
+    if (!ggml_metal_buffer_data_span(data_offsets, sizes, n_tensors, &min_data, &max_data)) {
+        return;
+    }
+
+    @autoreleasepool {
+        void * data_ptr = (void *)(uintptr_t) ((const char *) data + min_data);
+        id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
+                                                               length:max_data - min_data
+                                                              options:MTLResourceStorageModeShared
+                                                          deallocator:nil];
+
+        GGML_ASSERT(buf_src);
+
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            for (size_t i = 0; i < n_tensors; i++) {
+                if (sizes[i] == 0) {
+                    continue;
+                }
+
+                struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf, tensors[i]);
+                bid_dst.offs += offsets[i];
+
+                [encoder copyFromBuffer:buf_src
+                           sourceOffset:data_offsets[i] - min_data
+                               toBuffer:bid_dst.metal
+                      destinationOffset:bid_dst.offs
+                                   size:sizes[i]];
+            }
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+
+        [buf_src release];
+    }
+}
+
+void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_tensor ** tensors, void * data,
+        const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
+    if (buf->is_shared) {
+        for (size_t i = 0; i < n_tensors; i++) {
+            if (sizes[i] == 0) {
+                continue;
+            }
+            memcpy((char *) data + data_offsets[i], (const char *) tensors[i]->data + offsets[i], sizes[i]);
+        }
+        return;
+    }
+
+    size_t min_data = 0, max_data = 0;
+    if (!ggml_metal_buffer_data_span(data_offsets, sizes, n_tensors, &min_data, &max_data)) {
+        return;
+    }
+
+    @autoreleasepool {
+        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:(char *) data + min_data
+                                                               length:max_data - min_data
+                                                              options:MTLResourceStorageModeShared
+                                                          deallocator:nil];
+
+        GGML_ASSERT(buf_dst);
+
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            for (size_t i = 0; i < n_tensors; i++) {
+                if (sizes[i] == 0) {
+                    continue;
+                }
+
+                struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(buf, tensors[i]);
+                bid_src.offs += offsets[i];
+
+                [encoder copyFromBuffer:bid_src.metal
+                           sourceOffset:bid_src.offs
+                               toBuffer:buf_dst
+                      destinationOffset:data_offsets[i] - min_data
+                                   size:sizes[i]];
+            }
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+
+        [buf_dst release];
+    }
+}
+
 bool ggml_metal_buffer_cpy_tensor(ggml_metal_buffer_t buf_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t)src->buffer->context;
 

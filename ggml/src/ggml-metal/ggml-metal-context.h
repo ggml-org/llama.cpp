@@ -21,6 +21,8 @@ void ggml_metal_synchronize(ggml_metal_t ctx);
 
 void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
 void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size);
+void ggml_metal_set_tensor_n_async(ggml_metal_t ctx, struct ggml_tensor ** tensors, const void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
+void ggml_metal_get_tensor_n_async(ggml_metal_t ctx, const struct ggml_tensor ** tensors, void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
 bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, const struct ggml_tensor * src, struct ggml_tensor * dst);
 
 enum ggml_status ggml_metal_graph_compute (ggml_metal_t ctx, struct ggml_cgraph * gf);
