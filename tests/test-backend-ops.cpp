@@ -12199,6 +12199,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // POOL_1D max over MoE down-projection amax shapes:
+    // amax is [1, n_expert, n_tokens] after reducing the whole intermediate dim.
+    for (int64_t n_ff : { 2048, 4096, 8192 }) {
+        for (int64_t n_expert : { 8, 16 }) {
+            for (int64_t n_tokens : { 1, 512 }) {
+                test_cases.emplace_back(new test_pool1d(
+                    GGML_OP_POOL_MAX, GGML_TYPE_F32, {n_ff, n_expert, n_tokens, 1}, n_ff, n_ff, 0));
+            }
+        }
+    }
+
     // LEAKY_RELU at FFN activation width, for direct comparison with RELU
     for (int64_t n_tokens : {512, 2048}) {
         test_cases.emplace_back(new test_leaky_relu(GGML_TYPE_F32, { 17408, n_tokens, 1, 1 }, 0.1f));

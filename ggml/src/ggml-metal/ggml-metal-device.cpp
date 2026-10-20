@@ -1567,6 +1567,28 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argmax(ggml_meta
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argmax_part(ggml_metal_library_t lib) {
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, "kernel_argmax_part_f32");
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, "kernel_argmax_part_f32", "kernel_argmax_part_f32", nullptr);
+    }
+
+    res.smem = 32*(sizeof(float) + sizeof(int32_t));
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argmax_final(ggml_metal_library_t lib) {
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, "kernel_argmax_final_f32");
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, "kernel_argmax_final_f32", "kernel_argmax_final_f32", nullptr);
+    }
+
+    res.smem = 32*(sizeof(float) + sizeof(int32_t));
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argsort(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_ARGSORT);
 
