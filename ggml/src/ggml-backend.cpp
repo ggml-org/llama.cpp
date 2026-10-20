@@ -426,7 +426,7 @@ static bool ggml_backend_tensor_batch_is_2d(
     const size_t stride_tensor0 = offsets[1] - offsets[0];
     const size_t stride_data0   = data_offsets[1] - data_offsets[0];
 
-    for (size_t i = 2; i < n_tensors; i++) {
+    for (size_t i = 1; i < n_tensors; i++) {
         if (tensors[i] != tensor || sizes[i] != size0) {
             return false;
         }

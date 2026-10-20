@@ -67,6 +67,7 @@ static bool test_backend_tensor_n(ggml_backend_t backend) {
     ggml_tensor * t0 = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 3);
     ggml_tensor * t1 = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 2);
     ggml_tensor * t2 = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+    ggml_tensor * t3 = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 3);
     ggml_tensor * t_big = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 6);
 
     ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
@@ -90,6 +91,17 @@ static bool test_backend_tensor_n(ggml_backend_t backend) {
         std::vector<size_t> offsets = { 0, 8, 16 };
         std::vector<size_t> sizes = { 8, 8, 8 };
         std::vector<size_t> data_offsets = { 0, 8, 16 };
+
+        if (!run_tensor_n_case(tensors, offsets, sizes, data_offsets)) {
+            return false;
+        }
+    }
+
+    {
+        std::vector<ggml_tensor *> tensors = { t0, t3 };
+        std::vector<size_t> offsets = { 0, 0 };
+        std::vector<size_t> sizes = { 3*4, 3*4 };
+        std::vector<size_t> data_offsets = { 0, 3*4 };
 
         if (!run_tensor_n_case(tensors, offsets, sizes, data_offsets)) {
             return false;
