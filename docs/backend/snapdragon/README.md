@@ -6,8 +6,8 @@ The cross-compilation toolchain images are provided by the
 [Qualcomm Snapdragon Toolchain registry](https://github.com/snapdragon-toolchain).
 These Docker images include the Android NDK, OpenCL SDK, Hexagon SDK, CMake, and the necessary cross-compilers:
 
-* **Android toolchain**: `ghcr.io/snapdragon-toolchain/arm64-android:v0.7`
-* **Linux toolchain**: `ghcr.io/snapdragon-toolchain/arm64-linux:v0.7`
+* **Android toolchain**: `ghcr.io/snapdragon-toolchain/arm64-android:v0.8`
+* **Linux toolchain**: `ghcr.io/snapdragon-toolchain/arm64-linux:v0.8`
 
 The unified build utility (`scripts/snapdragon/build.py`) automatically pulls
 and orchestrates these containers to perform target compilation.
@@ -40,7 +40,7 @@ Alternatively, you can build llama.cpp manually by entering the cross-compilatio
 
 ```bash
 # Start the cross-compilation container manually:
-~/src/llama.cpp$ docker run -it --rm -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.7
+~/src/llama.cpp$ docker run -it --rm -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.8
 
 # Inside the container, build the project using presets:
 [d]/workspace> cp docs/backend/snapdragon/CMakeUserPresets.json .
@@ -53,7 +53,7 @@ Preset CMake variables:
   GGML_HEXAGON="ON"
   GGML_OPENCL="ON"
   GGML_OPENMP="OFF"
-  HEXAGON_SDK_ROOT="/opt/hexagon/6.6.0.0"
+  HEXAGON_SDK_ROOT="/opt/hexagon/6.7.0.0"
 ...
 -- Including OpenCL backend
 -- Including Hexagon backend

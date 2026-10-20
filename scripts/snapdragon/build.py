@@ -11,6 +11,9 @@ import platform
 import shutil
 import logging
 import glob
+import shlex
+import tarfile
+import tempfile
 
 from sdk import validate_windows_sdks
 
@@ -19,19 +22,70 @@ logger = logging.getLogger("build")
 
 def parse_target(target_str):
     if not target_str:
-        return None, None
-    if target_str.startswith("adb") or target_str.startswith("android"):
-        parts = target_str.split(":", 1)
-        serial = parts[1] if len(parts) > 1 else None
-        return "android", serial
-    elif target_str.startswith("lnx") or target_str.startswith("linux") or target_str.startswith("ubuntu"):
-        parts = target_str.split(":", 1)
-        host = parts[1] if len(parts) > 1 else None
-        return "linux", host
+        return None, None, None
+
+    parts = target_str.split(":")
+    target_name = parts[0]
+
+    if target_name in ("adb", "android"):
+        serial = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "android", serial, "adb"
+    elif target_name in ("lnx", "linux", "ubuntu"):
+        if len(parts) > 1 and parts[1] == "adb":
+            serial = ":".join(parts[2:]) if len(parts) > 2 else None
+            return "linux", serial, "adb"
+        host = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "linux", host, "ssh"
     elif target_str in ("wos", "windows"):
-        return "windows", None
+        return "windows", None, None
     else:
-        return None, None
+        return None, None, None
+
+
+def default_target_dir(target_type, target_transport, home_dir):
+    if target_type == "android":
+        return "/data/local/tmp/llama.cpp"
+    if target_type == "linux":
+        if home_dir:
+            return home_dir.rstrip("/") + "/llama.cpp"
+        if target_transport == "adb":
+            return "/home/llama.cpp"
+        return "~/llama.cpp"
+    return "~/llama.cpp"
+
+
+def normalize_target_dir(target_dir):
+    target_dir = target_dir.rstrip("/")
+    if not target_dir or target_dir == "/":
+        raise RuntimeError("target directory must not be the filesystem root")
+    return target_dir
+
+
+def adb_root(adb_cmd):
+    root_cmd = adb_cmd + ["root"]
+    logger.info(f"+ {' '.join(root_cmd)}")
+    res = subprocess.run(root_cmd)
+    if res.returncode != 0:
+        logger.error("ADB root failed.")
+        sys.exit(res.returncode)
+
+    wait_cmd = adb_cmd + ["wait-for-device"]
+    logger.info(f"+ {' '.join(wait_cmd)}")
+    res = subprocess.run(wait_cmd)
+    if res.returncode != 0:
+        logger.error("ADB wait-for-device failed.")
+        sys.exit(res.returncode)
+
+
+def make_package_archive(src_path):
+    fd, archive_path = tempfile.mkstemp(prefix="llama-cpp-", suffix=".tar.gz")
+    os.close(fd)
+    with tarfile.open(archive_path, "w:gz", dereference=False) as tar:
+        for item in os.listdir(src_path):
+            if item.startswith("."):
+                continue
+            tar.add(os.path.join(src_path, item), arcname=item, recursive=True)
+    return archive_path
 
 
 def get_uid_gid():
@@ -45,7 +99,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Build llama.cpp for Snapdragon using cross-compilation docker containers or natively."
     )
-    parser.add_argument("--target", default="android", help="Compilation target and deployment definition (e.g. android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, windows/wos) (default: android)")
+    parser.add_argument("--target", default="android", help="Compilation target and deployment definition (e.g. android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, windows/wos) (default: android)")
     parser.add_argument("--build-dir", help="Build directory name (defaults to build-TARGET[-dbg], e.g. build-android)")
     parser.add_argument("--install-dir", help="Install directory name (defaults to pkg-TARGET[-dbg], e.g. pkg-android)")
     parser.add_argument("--jobs", "-j", type=int, help="Number of build jobs (defaults to CPU thread count)")
@@ -53,21 +107,22 @@ def main():
     parser.add_argument("--preset", help="Override the CMake preset to use")
     parser.add_argument("--debug", action="store_true", help="Build in debug mode (uses -debug presets instead of -release)")
     parser.add_argument("--hex-only", "--hexagon-only", action="store_true", help="Only build and push ggml-hexagon and libggml-htp libraries")
-    parser.add_argument("--hex-arch", choices=["v73", "v75", "v79", "v81", "73", "75", "79", "81"], help="Specific Hexagon DSP architecture to build with --hex-only (default: all)")
+    parser.add_argument("--hex-arch", choices=["v73", "v75", "v79", "v81", "v85", "73", "75", "79", "81", "85"], help="Specific Hexagon DSP architecture to build with --hex-only (default: all)")
 
     # Push options
     parser.add_argument("--push", action="store_true", help="Push built package to the target device via ADB or SSH/SCP")
-    parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux)")
+    parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux, /home/llama.cpp for Linux via ADB)")
+    parser.add_argument("--home-dir", help="Home directory for Linux targets when deriving the default target directory")
 
     # Toolchain options
-    parser.add_argument("--toolchain-version", default="v0.7", help="Docker toolchain image version/tag (default: v0.7)")
+    parser.add_argument("--toolchain-version", default="v0.8", help="Docker toolchain image version/tag (default: v0.8)")
     parser.add_argument("--toolchain-url", default="ghcr.io/snapdragon-toolchain", help="Docker toolchain registry URL/namespace (default: ghcr.io/snapdragon-toolchain)")
 
     args = parser.parse_args()
 
-    target_type, target_val = parse_target(args.target)
+    target_type, target_val, target_transport = parse_target(args.target)
     if not target_type:
-        logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
+        logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
         sys.exit(1)
 
     if target_type == "windows":
@@ -140,7 +195,7 @@ def main():
         if hex_arch:
             hex_targets = ["ggml-hexagon", f"htp-{hex_arch}"]
         else:
-            hex_targets = ["ggml-hexagon", "htp-v73", "htp-v75", "htp-v79", "htp-v81"]
+            hex_targets = ["ggml-hexagon", "htp-v73", "htp-v75", "htp-v79", "htp-v81", "htp-v85"]
 
     if args.no_docker:
         # Native/local host build
@@ -218,8 +273,8 @@ def main():
         # Resolve target directory on device
         target_dir = args.target_dir
         if not target_dir:
-            target_dir = "/data/local/tmp/llama.cpp" if target_type == "android" else "~/llama.cpp"
-        target_dir = target_dir.rstrip("/")
+            target_dir = default_target_dir(target_type, target_transport, args.home_dir)
+        target_dir = normalize_target_dir(target_dir)
 
         sub_items = [item for item in os.listdir(src_path) if not item.startswith(".")]
 
@@ -235,14 +290,23 @@ def main():
                 logger.error(f"Error: no hexagon libraries found in {lib_dir} to push.")
                 sys.exit(1)
 
-        if target_type == "android":
+        if target_transport == "adb":
             adb_cmd = ["adb"]
             if target_val: # serial
                 adb_cmd += ["-s", target_val]
 
+            if target_type == "linux":
+                adb_root(adb_cmd)
+
             if args.hex_only:
-                logger.info("\nPushing Hexagon libraries to Android device via ADB...")
+                logger.info("\nPushing Hexagon libraries to target device via ADB...")
                 target_lib_dir = f"{target_dir}/lib"
+                mkdir_cmd = adb_cmd + ["shell", f"mkdir -p {shlex.quote(target_lib_dir)}"]
+                logger.info(f"+ {' '.join(mkdir_cmd)}")
+                res = subprocess.run(mkdir_cmd)
+                if res.returncode != 0:
+                    logger.error("ADB mkdir failed.")
+                    sys.exit(res.returncode)
                 for lib in hex_libs:
                     push_cmd = adb_cmd + ["push", lib, f"{target_lib_dir}/"]
                     logger.info(f"+ {' '.join(push_cmd)}")
@@ -251,6 +315,44 @@ def main():
                         logger.error("ADB push failed.")
                         sys.exit(res.returncode)
                 logger.info("Hexagon libraries deployed successfully!")
+            elif target_type == "linux":
+                logger.info("\nDeploying Linux package to target device via ADB tar...")
+                remote_archive = f"/tmp/llama.cpp-package-{os.getpid()}.tar.gz"
+                archive_path = make_package_archive(src_path)
+                try:
+                    mkdir_cmd = adb_cmd + ["shell", f"mkdir -p {shlex.quote(target_dir)}"]
+                    logger.info(f"+ {' '.join(mkdir_cmd)}")
+                    res = subprocess.run(mkdir_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB mkdir failed.")
+                        sys.exit(res.returncode)
+
+                    if sub_items:
+                        clean_paths = " ".join(shlex.quote(f"{target_dir}/{item}") for item in sub_items)
+                        clean_cmd = adb_cmd + ["shell", f"rm -rf {clean_paths}"]
+                        logger.info(f"+ {' '.join(clean_cmd)}")
+                        subprocess.run(clean_cmd)
+
+                    push_cmd = adb_cmd + ["push", archive_path, remote_archive]
+                    logger.info(f"+ {' '.join(push_cmd)}")
+                    res = subprocess.run(push_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB push failed.")
+                        sys.exit(res.returncode)
+
+                    extract_cmd = adb_cmd + ["shell", f"tar -xzf {shlex.quote(remote_archive)} -C {shlex.quote(target_dir)} && rm -f {shlex.quote(remote_archive)}"]
+                    logger.info(f"+ {' '.join(extract_cmd)}")
+                    res = subprocess.run(extract_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB untar failed.")
+                        sys.exit(res.returncode)
+
+                    chmod_cmd = adb_cmd + ["shell", f"chmod -R 755 {shlex.quote(target_dir)}/bin 2>/dev/null || true"]
+                    logger.info(f"+ {' '.join(chmod_cmd)}")
+                    subprocess.run(chmod_cmd)
+                finally:
+                    os.unlink(archive_path)
+                logger.info("ADB tar deploy completed successfully!")
             else:
                 # Clean stale package files on device
                 if sub_items:

@@ -8399,9 +8399,9 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
             if (opt_arch < 73) {
                 GGML_LOG_WARN("ggml-hex: Hexagon arch v%d is under supported range, capping at v73\n", opt_arch);
                 opt_arch = 73;
-            } else if (opt_arch > 81) {
-                GGML_LOG_WARN("ggml-hex: Hexagon arch v%d is over supported range, capping at v81\n", opt_arch);
-                opt_arch = 81;
+            } else if (opt_arch > 85) {
+                GGML_LOG_WARN("ggml-hex: Hexagon arch v%d is over supported range, capping at v85\n", opt_arch);
+                opt_arch = 85;
             }
         }
     } else {
