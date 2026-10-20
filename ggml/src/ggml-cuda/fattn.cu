@@ -1085,6 +1085,25 @@ __global__ void flash_attn_ext_mma_convert_rows_kernel(
         output[(first+i)/2] = ggml_cuda_fattn_decode_pair<type>(source+int64_t(row)*source_stride,first+i,contiguous);
 }
 
+bool ggml_cuda_flash_attn_ext_mma_prepare_rows(ggml_backend_cuda_context & ctx, ggml_type type);
+
+// Load the existing row converter before a maximum-fit phase arena occupies the device.
+bool ggml_cuda_flash_attn_ext_mma_prepare_rows(ggml_backend_cuda_context & ctx, ggml_type type) {
+    ggml_cuda_set_device(ctx.device);
+    cudaFuncAttributes attributes{};
+    cudaError_t status;
+    switch (type) {
+#define PREPARE(TYPE) case GGML_TYPE_##TYPE: status = cudaFuncGetAttributes(&attributes,flash_attn_ext_mma_convert_rows_kernel<GGML_TYPE_##TYPE>); break;
+        PREPARE(F32) PREPARE(F16) PREPARE(BF16) PREPARE(Q8_0)
+        PREPARE(Q4_0) PREPARE(Q4_1) PREPARE(Q5_0) PREPARE(Q5_1)
+#undef PREPARE
+        default: return false;
+    }
+    if (status == cudaSuccess) return true;
+    (void) cudaGetLastError();
+    return false;
+}
+
 bool ggml_cuda_flash_attn_ext_mma_convert_rows(
         ggml_backend_cuda_context & ctx, ggml_type type,
         const char * source, half * destination, int rows, int64_t source_stride, int64_t destination_stride,
