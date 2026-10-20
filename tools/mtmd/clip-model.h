@@ -73,7 +73,8 @@ struct clip_hparams {
     int32_t preproc_min_tiles = 0;
     int32_t preproc_max_tiles = 0;
     int32_t max_slice_nums = 9; // llava-uhd slice cap; per-model, carried in the GGUF
-    int32_t preproc_tile_size = 0; // local tile size (deepseek-ocr)
+    int32_t preproc_tile_size = 0; // local tile size (deepseek-ocr, lfm2)
+    float preproc_max_pixels_tolerance = 1.0f;
     resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
     resize_algo image_resize_algo_ov = RESIZE_ALGO_BICUBIC;
     pad_style image_pad_rf = PAD_CEIL;  // padding style for the refined image (e.g. llava-1.6)

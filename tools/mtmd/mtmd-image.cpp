@@ -947,8 +947,9 @@ bool mtmd_image_preprocessor_lfm2::should_tile(
     const int h_bar = std::max(hparams.patch_size, round_by_factor(original_size.height));
     const int w_bar = std::max(hparams.patch_size, round_by_factor(original_size.width));
 
-    return static_cast<double>(h_bar) * static_cast<double>(w_bar) >
-           static_cast<double>(hparams.image_max_pixels) * max_pixels_tolerance;
+    return hparams.preproc_max_tiles > 1 &&
+           static_cast<double>(h_bar) * static_cast<double>(w_bar) >
+           static_cast<double>(hparams.image_max_pixels) * hparams.preproc_max_pixels_tolerance;
 }
 
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lfm2::get_slice_instructions(const clip_image_size & original_size) const {
@@ -959,6 +960,7 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lf
                             { align_size, hparams.image_min_pixels, hparams.image_max_pixels, 0 });
 
     const bool needs_tiling = should_tile(hparams, original_size);
+    const int  tile_size    = hparams.preproc_tile_size;
 
     if (!needs_tiling) {
         inst.refined_size = clip_image_size{0, 0};
@@ -1009,6 +1011,7 @@ clip_image_size mtmd_image_preprocessor_lfm2::find_closest_aspect_ratio(
             best_ratio_diff = ratio_diff;
             best_ratio = ratio;
         } else if (ratio_diff == best_ratio_diff) {
+            const int   tile_size   = hparams.preproc_tile_size;
             const float target_area = static_cast<float>(tile_size * tile_size * ratio.width * ratio.height);
             if (area > 0.5f * target_area) {
                 best_ratio = ratio;
@@ -1019,6 +1022,8 @@ clip_image_size mtmd_image_preprocessor_lfm2::find_closest_aspect_ratio(
 }
 
 std::vector<clip_image_size> mtmd_image_preprocessor_lfm2::get_target_ratios() const {
+    const int min_tiles = hparams.preproc_min_tiles;
+    const int max_tiles = hparams.preproc_max_tiles;
     std::vector<clip_image_size> ratios;
     for (int n = min_tiles; n <= max_tiles; n++) {
         for (int w = 1; w <= n; w++) {

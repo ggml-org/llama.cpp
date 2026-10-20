@@ -96,6 +96,10 @@ MAKE_TEST(test_image_preprocessor_lfm2) {
     hparams.patch_size = 16;
     hparams.n_merge = 2;
     hparams.set_limit_image_tokens(64, 256);
+    hparams.preproc_min_tiles            = 2;
+    hparams.preproc_max_tiles            = 10;
+    hparams.preproc_tile_size            = 512;
+    hparams.preproc_max_pixels_tolerance = 2.0f;
 
     // { image size, expected tiling }
     const std::vector<std::pair<clip_image_size, bool>> cases = {
@@ -116,6 +120,12 @@ MAKE_TEST(test_image_preprocessor_lfm2) {
             std::string(expected ? "tiled" : "single"),
             std::string(actual   ? "tiled" : "single"));
     }
+
+    // do_image_splitting=false
+    hparams.preproc_min_tiles = 1;
+    hparams.preproc_max_tiles = 1;
+    t.assert_equal("tiling for 1024x977 with max_tiles=1", std::string("single"),
+            std::string(mtmd_image_preprocessor_lfm2::should_tile(hparams, { 1024, 977 }) ? "tiled" : "single"));
 }
 
 //
