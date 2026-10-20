@@ -1,0 +1,113 @@
+{
+  "description": "Final60-point Gemma4Q3_K_M Q8/Q4 maximum-fit sweep with common conversion and pipeline",
+  "gpu": "NVIDIA GeForce RTX 5070 Ti, GPU-94db7ceb-31fc-464c-1ba7-7a0a2ca672a6, 610.57.04, 16303 MiB",
+  "profile": {
+    "contexts": [
+      8192,
+      16384,
+      24576,
+      32768,
+      40960,
+      49152,
+      57344,
+      65536,
+      73728,
+      81920,
+      90112,
+      98304,
+      106496,
+      114688,
+      122880
+    ],
+    "depths": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "outputs": 256,
+    "headroom": 15,
+    "cache_k": "q8_0",
+    "cache_v": "q4_0",
+    "batch": 256,
+    "ubatch": 256,
+    "uvm": false,
+    "policy": "independent maximum-fit per mode/context"
+  },
+  "runtime_id": "ad1d8e468efe72a862296e827d2588762ea517f7dd8e940feb36bb46c9320269",
+  "sweep_source_commit": "ca2fb5b94af77e0b99bacd69e756e3a1047fe5dd",
+  "sweep_source_diff_sha256": "d7fedc9f43b37f5cef7d6d669196f8f2a06d0f1096c0948daac48cc520eafe5b",
+  "sweep_code_sha256": "821e358ca2e0f4eb5d739ed0b6ad2caa00ab9b98c2973bf21c8f8c7c512c1b66",
+  "qualified_binary_build_source_commit": "88335d2e0749f10463bb09a5fb52bd238afb3027",
+  "qualified_binary_build_source_diff_sha256": "4a1b2023cd471739f9c8457634213eedc1c80247ced2432d4877bcd4c13689d6",
+  "runtime_source_sha256": {
+    "src/llama-kv-stream-resident.cpp": "8a0673e19f1949463e7637bcff6a5bbe1118e46c323230a892ce8534d1488dd0",
+    "tests/test-kv-stream-prefetch.cpp": "a4fc3bc18326a5c7bb4a1770228cb8e0058e167ac6aaca22bad15f519cd65dbc",
+    "ggml/src/ggml-cuda/fattn.cu": "08982e3126c5a9ab609b88c50b559088d16bd2d9f6e8f8c0dded630d128d9085",
+    "ggml/src/ggml-cuda/kv-stream-partial.cu": "b1b6c988ae66dde71d35fc319391bde1ae55778dff6bb9f31e52c8e45c0b9c22"
+  },
+  "binaries": {
+    "llama-server": "997d42b066bb2ef3b011b5092c4f9db674bb04fac9de2361d49172ac80dafccd",
+    "libllama.so.0": "51dd9eaf20c25956bd786ef4f454d4dad4526e31af803ab78790cd5ab8cf8a0f",
+    "libllama-common.so.0": "42e26838b5bac01a914444aa465c9a0fee8bb041e60fe20a83415dcab29213e7",
+    "libllama-server-impl.so": "94001a00ac7c69125ec4bc8e522ce24ef9491b0e4b61f5844e237edd738620e2",
+    "libggml-base.so.0": "d8a0021f6ff6b2270a7a77cf0ea41640ec390f4c3a64e9ef3abd1876cf97f514",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libggml-cuda.so.0": "9f040a24cf23f05846699cf2d96cb2ecfde7aed2aeb22297b2e635dc43558aa3",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libmtmd.so.0": "88da0c39bf658d2e5621db02b8c924cff77bc28955c28ede969505651fc5ee18"
+  },
+  "inputs": {
+    "gemma-4-31B-it-Q3_K_M.gguf": {
+      "size": 14736608192,
+      "sha256": "d2d7a0f9117eb1a9a4b8b68bbb53c1ce5d1f602c45b9028dc12add0d0056f4fd"
+    },
+    "mtp-gemma-4-31B-it-Q8_0.gguf": {
+      "size": 514687104,
+      "sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de"
+    },
+    "online-articles-262144-words.txt": {
+      "size": 1662873,
+      "sha256": "ca19e089c46f80c2f661d31a1312aeda21fbc73bd17ddf371e5f3a0befa9102e"
+    }
+  },
+  "audit": {
+    "audited": true,
+    "points": 60,
+    "generated_ids_checked": 15360,
+    "contexts_ki": [
+      8,
+      16,
+      24,
+      32,
+      40,
+      48,
+      56,
+      64,
+      72,
+      80,
+      88,
+      96,
+      104,
+      112,
+      120
+    ],
+    "mtp_lengths": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "independent_maxima_with_rejected_one_mib_upper_neighbor": 60,
+    "all_accepted_and_probe_logs_reviewed": 428,
+    "expected_capacity_rejection_probes": 247,
+    "expected_quota_lower_bound_probes": 0,
+    "source_runtime_inputs_controller_gpu_and_artifact_hashes_verified": true,
+    "runtime_id": "ad1d8e468efe72a862296e827d2588762ea517f7dd8e940feb36bb46c9320269",
+    "commit": "ca2fb5b94af77e0b99bacd69e756e3a1047fe5dd",
+    "production_live_healthy": true,
+    "scope": "Full-workload maximum-fit performance/accounting sweep, not long-context native numerical equivalence or repeated statistical trials"
+  },
+  "scope": "Single measured full-workload point per mode/capacity, not repeated statistics or native numerical equivalence at long contexts. All60have actual rejected1MiB upper neighbors. Assistant weights live outside the arena and reduce the independently fitted arena.",
+  "binary_origin_note": "Source-only stage commit did not rebuild or relabel measured binaries. This sweep uses the identical qualified9-core binary cohort, with current commit and pending4benchmark-script changes pinned separately."
+}

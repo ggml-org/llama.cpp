@@ -61,8 +61,10 @@ def arguments(argv=None):
             args.spec_mode == "mtp" and 1 <= args.draft_length <= 3 or
             args.spec_mode == "dflash" and 1 <= args.draft_length <= 7):
         parser.error("target-only uses length 0; MTP supports 1-3; DFlash supports 1-7")
-    if bool(args.model_draft) != (args.spec_mode == "dflash"):
-        parser.error("--model-draft is required only for DFlash")
+    if args.spec_mode == "dflash" and not args.model_draft:
+        parser.error("--model-draft is required for DFlash")
+    if args.spec_mode == "none" and args.model_draft:
+        parser.error("--model-draft requires MTP or DFlash")
     if args.image and not args.mmproj or args.mmproj and args.spec_mode == "dflash":
         parser.error("--image requires --mmproj; vision+DFlash is unsupported")
     if args.prompt_file and not args.image or args.prompt_tokens is not None and args.image:
@@ -207,6 +209,7 @@ def fit(args):
         "command":server_command(args,maximum), "uvm":False, "reserve_mib":0,
         "context_size":args.context_size, "cache_type_k":args.cache_type_k, "cache_type_v":args.cache_type_v,
         "spec_mode":args.spec_mode, "draft_length":args.draft_length, "images":[str(path) for path in args.image],
+        "model_draft":str(args.model_draft) if args.model_draft else None,
         "prompt_file":str(args.prompt_file) if args.prompt_file else None,
         "projector_configured":bool(args.mmproj), "vision_execution_validated":bool(args.image),
         "prompt_tokens":None if args.image else args.prompt_tokens or args.context_size-args.decode_tokens-15,

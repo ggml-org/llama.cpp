@@ -18,6 +18,39 @@ class ArenaFinderTests(unittest.TestCase):
     def args(self, *extra):
         return FINDER.arguments(["--model", "model.gguf", "--context-size", "8192", *extra])
 
+    def test_mtp_allows_an_optional_external_assistant_with_inherited_cache_types(self):
+        args=self.args("--spec-mode","mtp","--model-draft","assistant.gguf","--cache-type-k","q5_1","--cache-type-v","q8_0")
+        command=FINDER.server_command(args,1024)
+        self.assertEqual(command[command.index("--model-draft")+1],"assistant.gguf")
+        self.assertEqual(command[command.index("--spec-draft-ngl")+1],"999")
+        self.assertNotIn("--spec-draft-type-k",command)
+        self.assertNotIn("--spec-draft-type-v",command)
+        self.assertNotIn("--model-draft",FINDER.server_command(self.args("--spec-mode","mtp"),1024))
+        with self.assertRaises(SystemExit):
+            self.args("--spec-mode","none","--model-draft","assistant.gguf")
+
+    def test_fitted_report_records_the_external_assistant(self):
+        args=self.args("--spec-mode","mtp","--model-draft","assistant.gguf")
+        with tempfile.TemporaryDirectory() as temp:
+            args.output=Path(temp)
+            with patch.object(FINDER.SWEEP,"find_max_arena_mib",return_value=1024):
+                report=FINDER.fit(args)
+        self.assertEqual(report["model_draft"],"assistant.gguf")
+        self.assertIn("assistant.gguf",report["shell_command"])
+
+    def test_persistent_cache_quota_rejection_keeps_its_exact_lower_bound(self):
+        args=self.args()
+        with tempfile.TemporaryDirectory() as temp:
+            args.output=Path(temp)
+            def reject(*command,**kwargs):
+                kwargs["stdout"].write("persistent local cache does not fit the declared shared arena: insufficient arena quota; required=788880128, available=536870912, additional=252009216 bytes; phase=1, resource=6\n")
+                return object()
+            with patch.object(FINDER.subprocess,"Popen",side_effect=reject), \
+                    patch.object(FINDER.SWEEP,"wait_ready",side_effect=RuntimeError("startup")), \
+                    patch.object(FINDER.SWEEP,"stop_process"),self.assertRaises(FINDER.SWEEP.ArenaTooSmallError) as failure:
+                FINDER.probe(args,512)
+            self.assertEqual(failure.exception.minimum_mib,753)
+
     def test_initial_arena_is_an_optional_guess_not_a_final_arena_setting(self):
         self.assertEqual(self.args().initial_arena_mib, 2240)
         self.assertEqual(self.args("--initial-arena-mib", "1000").initial_arena_mib, 1000)

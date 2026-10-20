@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -34,6 +35,7 @@ def parse_mtp_lengths(value: str) -> tuple[int, ...]:
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, type=Path)
+    parser.add_argument("--model-draft",type=Path,help="optional external MTP assistant; never loaded for length 0")
     parser.add_argument(
         "--prefill-text", type=Path, default=ROOT / "benchmarks/data/online-articles-262144-words.txt",
         help="UTF-8 article text to tokenize once and use as the prefill prefix (default: benchmarks/data/online-articles-262144-words.txt)",
@@ -48,6 +50,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--prompt-headroom", type=int,
                         help="reserve this many positions beyond decode tokens; use 15 to match DFlash2 D=7 controls")
     parser.add_argument("--decode-tokens", type=int, default=256)
+    parser.add_argument("--request-timeout",type=float,default=1800,help="full-workload request timeout in seconds (1..43200)")
     parser.add_argument("--arena-mib", type=int, default=2368,
                         help="fixed arena size in MiB, or starting probe when --auto-max-arena is set")
     parser.add_argument("--auto-max-arena", action="store_true",
@@ -66,7 +69,10 @@ def arguments() -> argparse.Namespace:
         "--mtp-lengths", type=parse_mtp_lengths, default=(0,), metavar="N[,N...]",
         help="maximum MTP draft lengths to sweep (0=target-only baseline; supported: 1-4; default: 0)",
     )
-    return parser.parse_args()
+    args=parser.parse_args()
+    if not math.isfinite(args.request_timeout) or not 1<=args.request_timeout<=43200:
+        parser.error("--request-timeout must be finite and within 1..43200 seconds")
+    return args
 
 
 def server_command(args: argparse.Namespace, context: int, mtp_length: int, arena_mib: int | None = None) -> list[str]:
@@ -85,6 +91,8 @@ def server_command(args: argparse.Namespace, context: int, mtp_length: int, aren
         "--cache-type-v", getattr(args, "cache_type_v", "q4_0"),
         "--kv-stream-arena-mib", str(args.arena_mib if arena_mib is None else arena_mib),
         "--fit", "off",
+        "--offline",
+        "--no-context-shift",
         "--no-mmproj",
         "--host", "127.0.0.1",
         "--port", str(args.port),
@@ -97,13 +105,16 @@ def server_command(args: argparse.Namespace, context: int, mtp_length: int, aren
             "--spec-type", "draft-mtp",
             "--spec-draft-n-max", str(mtp_length),
         ]
+        if getattr(args,"model_draft",None) is not None:
+            command += ["--model-draft",str(args.model_draft),"--spec-draft-ngl","999",
+                "--spec-draft-n-min","0","--spec-draft-p-min","0"]
         if getattr(args, "no_kv_stream_rs_rollback", False):
             command.append("--no-kv-stream-rs-rollback")
     return command
 
 
 def server_environment(uvm: bool) -> dict[str, str]:
-    env = os.environ.copy()
+    env = {key:value for key,value in os.environ.items() if not key.startswith("LLAMA_ARG_")}
     if uvm:
         env["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] = "1"
     else:
@@ -144,11 +155,11 @@ class ArenaTooSmallError(RuntimeError):
 
 
 def arena_minimum_mib(log_text: str) -> int | None:
-    lines = re.findall(r"shared arena quota insufficient[^\r\n]*", log_text, re.IGNORECASE)
+    lines = re.findall(r"(?:shared arena quota insufficient|persistent local cache does not fit the declared shared arena:\s*insufficient arena quota)[^\r\n]*", log_text, re.IGNORECASE)
     if not lines:
         return None
     required = [int(value) for line in lines for value in
-                re.findall(r"(?:required|compute minimum)=(\d+) bytes", line, re.IGNORECASE)]
+                re.findall(r"(?:required|compute minimum)=(\d+)(?=[,\s;]|$)", line, re.IGNORECASE)]
     # Older binaries may reject the quota without reporting its exact minimum.
     return (max(required) + 1048575) // 1048576 if required else 0
 
@@ -342,7 +353,7 @@ def probe_arena(args: argparse.Namespace, context: int, mtp_length: int, arena_m
                         "cache_prompt": False,
                         "stream": True,
                         "return_tokens": True,
-                    }, timeout=1800)
+                    }, timeout=getattr(args,"request_timeout",1800))
                     timing = result["timings"]
                     if timing.get("prompt_n") != prompt_count or timing.get("predicted_n") != args.decode_tokens or len(result["tokens"]) != args.decode_tokens:
                         raise RuntimeError(f"arena full workload did not complete: timings={timing}, token_ids={len(result['tokens'])}")
@@ -480,7 +491,7 @@ def plot(rows: list[dict], output: Path, args: argparse.Namespace) -> None:
     fig.text(
         0.5,
         0.015,
-        f"Context-matched capacity | Q8_0 K / Q4_0 V | batch/ubatch {args.batch_size}/{args.ubatch_size} | "
+        f"Context-matched capacity | {getattr(args,'cache_type_k','q8_0')} K / {getattr(args,'cache_type_v','q4_0')} V | batch/ubatch {args.batch_size}/{args.ubatch_size} | "
         f"{args.decode_tokens} decoded tokens | UVM {'on' if args.uvm else 'off'}",
         ha="center",
         fontsize=9,
@@ -498,6 +509,10 @@ def main() -> int:
     if args.no_kv_stream_rs_rollback and not any(args.mtp_lengths):
         raise SystemExit("--no-kv-stream-rs-rollback requires an MTP length")
     args.model = args.model.resolve()
+    if args.model_draft is not None:
+        args.model_draft=args.model_draft.resolve()
+        if not args.model_draft.is_file():
+            raise SystemExit(f"draft model does not exist: {args.model_draft}")
     args.prefill_text = args.prefill_text.resolve()
     args.server = args.server.resolve()
     args.output = args.output.resolve()
@@ -605,7 +620,7 @@ def main() -> int:
                                 "stream": True,
                                 "return_tokens": True,
                             },
-                            timeout=1800,
+                            timeout=args.request_timeout,
                         )
                         timing = result["timings"]
                         if timing.get("prompt_n") != prompt_tokens or timing.get("predicted_n") != args.decode_tokens:
@@ -637,6 +652,8 @@ def main() -> int:
                 "uvm": args.uvm,
                 "budget_policy": "maximum-fit" if args.auto_max_arena else "fixed",
                 "command": server_command(args,context,mtp_length,arena_mib),
+                "model": str(args.model),
+                "model_draft": str(args.model_draft) if mtp_length and args.model_draft is not None else None,
                 "context_capacity": context,
                 "cache_type_k": args.cache_type_k,
                 "cache_type_v": args.cache_type_v,
@@ -649,6 +666,7 @@ def main() -> int:
                 "decode_tokens": args.decode_tokens,
                 "decoded_first_10_text": decoded_first_10_text,
                 "decoded_last_10_text": decoded_last_10_text,
+                "decoded_token_ids": decoded_tokens,
                 "arena_mib": arena_mib,
                 "prefill_tps": float(timing["prompt_per_second"]),
                 "decode_tps": decode_tps,
