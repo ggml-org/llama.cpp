@@ -2773,44 +2773,6 @@ static void ggml_backend_cuda_get_tensor_2d_async(ggml_backend_t backend, const 
         data, stride_data, (const char *) tensor->data + offset, stride_tensor, size, n_copies, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
 }
 
-static void ggml_backend_cuda_set_tensor_n_async(ggml_backend_t backend, ggml_tensor ** tensors, const void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
-
-    for (size_t i = 0; i < n_tensors; i++) {
-        ggml_backend_buffer_t buf = tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
-        GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
-
-        if (sizes[i] == 0) {
-            continue;
-        }
-        CUDA_CHECK(cudaMemcpyAsync(
-            (char *) tensors[i]->data + offsets[i],
-            (const char *) data + data_offsets[i],
-            sizes[i],
-            cudaMemcpyHostToDevice,
-            cuda_ctx->stream()));
-    }
-}
-
-static void ggml_backend_cuda_get_tensor_n_async(ggml_backend_t backend, const struct ggml_tensor ** tensors, void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
-
-    for (size_t i = 0; i < n_tensors; i++) {
-        ggml_backend_buffer_t buf = tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
-        GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
-
-        if (sizes[i] == 0) {
-            continue;
-        }
-        CUDA_CHECK(cudaMemcpyAsync(
-            (char *) data + data_offsets[i],
-            (const char *) tensors[i]->data + offsets[i],
-            sizes[i],
-            cudaMemcpyDeviceToHost,
-            cuda_ctx->stream()));
-    }
-}
-
 static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
     ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
@@ -5501,8 +5463,6 @@ static const ggml_backend_i ggml_backend_cuda_interface = {
     /* .event_record            = */ ggml_backend_cuda_event_record,
     /* .event_wait              = */ ggml_backend_cuda_event_wait,
     /* .graph_optimize          = */ ggml_backend_cuda_graph_optimize,
-    /* .set_tensor_n_async      = */ ggml_backend_cuda_set_tensor_n_async,
-    /* .get_tensor_n_async      = */ ggml_backend_cuda_get_tensor_n_async,
 };
 
 static ggml_guid_t ggml_backend_cuda_guid() {

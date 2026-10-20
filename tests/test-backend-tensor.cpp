@@ -9,12 +9,10 @@
 #include <vector>
 
 static bool run_tensor_n_case(
-        ggml_backend_t backend,
         std::vector<ggml_tensor *> & tensors,
         const std::vector<size_t> & offsets,
         const std::vector<size_t> & sizes,
-        const std::vector<size_t> & data_offsets,
-        bool use_async) {
+        const std::vector<size_t> & data_offsets) {
     const size_t n = tensors.size();
 
     std::vector<const ggml_tensor *> const_tensors(tensors.begin(), tensors.end());
@@ -28,19 +26,9 @@ static bool run_tensor_n_case(
         memset(data.data() + data_offsets[i], (int) (0x40 + i*0x10), sizes[i]);
     }
 
-    if (use_async) {
-        ggml_backend_tensor_set_n_async(backend, tensors.data(), data.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
-        ggml_backend_synchronize(backend);
-    } else {
-        ggml_backend_tensor_set_n(tensors.data(), data.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
-    }
+    ggml_backend_tensor_set_n(tensors.data(), data.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
 
-    if (use_async) {
-        ggml_backend_tensor_get_n_async(backend, const_tensors.data(), out.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
-        ggml_backend_synchronize(backend);
-    } else {
-        ggml_backend_tensor_get_n(const_tensors.data(), out.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
-    }
+    ggml_backend_tensor_get_n(const_tensors.data(), out.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
 
     for (size_t i = 0; i < n; i++) {
         if (sizes[i] == 0) {
@@ -92,10 +80,7 @@ static bool test_backend_tensor_n(ggml_backend_t backend) {
         std::vector<size_t> sizes = { 3*4, 2*4, 4*4, 0 };
         std::vector<size_t> data_offsets = { 0, 3*4, 5*4, 64 };
 
-        if (!run_tensor_n_case(backend, tensors, offsets, sizes, data_offsets, false)) {
-            return false;
-        }
-        if (!run_tensor_n_case(backend, tensors, offsets, sizes, data_offsets, true)) {
+        if (!run_tensor_n_case(tensors, offsets, sizes, data_offsets)) {
             return false;
         }
     }
@@ -106,10 +91,7 @@ static bool test_backend_tensor_n(ggml_backend_t backend) {
         std::vector<size_t> sizes = { 8, 8, 8 };
         std::vector<size_t> data_offsets = { 0, 8, 16 };
 
-        if (!run_tensor_n_case(backend, tensors, offsets, sizes, data_offsets, false)) {
-            return false;
-        }
-        if (!run_tensor_n_case(backend, tensors, offsets, sizes, data_offsets, true)) {
+        if (!run_tensor_n_case(tensors, offsets, sizes, data_offsets)) {
             return false;
         }
     }

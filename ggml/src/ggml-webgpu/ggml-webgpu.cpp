@@ -3938,6 +3938,9 @@ static ggml_backend_buffer_i ggml_backend_webgpu_buffer_interface = {
     /* .cpy_tensor      = */ NULL,  // TODO: optional, implement this
     /* .clear           = */ ggml_backend_webgpu_buffer_clear,
     /* .reset           = */ NULL,  // TODO: optional, think it coordinates with
+    /* .set_tensor_n = */ NULL,
+    /* .get_tensor_n = */ NULL,
+    /* .cpy_tensor_n = */ NULL,
                                     // .init_tensor
 };
 

@@ -513,68 +513,6 @@ void ggml_backend_tensor_get_2d_async(ggml_backend_t backend, const struct ggml_
     backend->iface.get_tensor_2d_async(backend, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
 }
 
-void ggml_backend_tensor_set_n_async(ggml_backend_t backend, struct ggml_tensor ** tensors, const void * data,
-        const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
-    GGML_ASSERT(backend);
-    if (n_tensors == 0) {
-        return;
-    }
-
-    for (size_t i = 0; i < n_tensors; i++) {
-        GGML_ASSERT(tensors[i] != NULL);
-        GGML_ASSERT(tensors[i]->data != NULL && "tensor not allocated");
-        GGML_ASSERT(offsets[i] + sizes[i] <= ggml_nbytes(tensors[i]) && "tensor write out of bounds");
-    }
-
-    if (backend->iface.set_tensor_n_async != NULL) {
-        backend->iface.set_tensor_n_async(backend, tensors, data, offsets, sizes, data_offsets, n_tensors);
-        return;
-    }
-
-    size_t base_offset = 0, size = 0, stride_tensor = 0, stride_data = 0;
-    if (ggml_backend_tensor_batch_is_2d((const struct ggml_tensor * const *) tensors, offsets, sizes, data_offsets, n_tensors,
-                &base_offset, &size, &stride_tensor, &stride_data)) {
-        ggml_backend_tensor_set_2d_async(backend, tensors[0], (const char *) data + data_offsets[0], base_offset, size,
-                n_tensors, stride_tensor, stride_data);
-        return;
-    }
-
-    for (size_t i = 0; i < n_tensors; i++) {
-        ggml_backend_tensor_set_async(backend, tensors[i], (const char *) data + data_offsets[i], offsets[i], sizes[i]);
-    }
-}
-
-void ggml_backend_tensor_get_n_async(ggml_backend_t backend, const struct ggml_tensor ** tensors, void * data,
-        const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
-    GGML_ASSERT(backend);
-    if (n_tensors == 0) {
-        return;
-    }
-
-    for (size_t i = 0; i < n_tensors; i++) {
-        GGML_ASSERT(tensors[i] != NULL);
-        GGML_ASSERT(tensors[i]->data != NULL && "tensor not allocated");
-        GGML_ASSERT(offsets[i] + sizes[i] <= ggml_nbytes(tensors[i]) && "tensor read out of bounds");
-    }
-
-    if (backend->iface.get_tensor_n_async != NULL) {
-        backend->iface.get_tensor_n_async(backend, tensors, data, offsets, sizes, data_offsets, n_tensors);
-        return;
-    }
-
-    size_t base_offset = 0, size = 0, stride_tensor = 0, stride_data = 0;
-    if (ggml_backend_tensor_batch_is_2d((const struct ggml_tensor * const *) tensors, offsets, sizes, data_offsets, n_tensors,
-                &base_offset, &size, &stride_tensor, &stride_data)) {
-        ggml_backend_tensor_get_2d_async(backend, tensors[0], (char *) data + data_offsets[0], base_offset, size,
-                n_tensors, stride_tensor, stride_data);
-        return;
-    }
-
-    for (size_t i = 0; i < n_tensors; i++) {
-        ggml_backend_tensor_get_async(backend, tensors[i], (char *) data + data_offsets[i], offsets[i], sizes[i]);
-    }
-}
-
 void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     GGML_ASSERT(tensor);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
@@ -1067,6 +1005,9 @@ static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
     /* .cpy_tensor      = */ NULL,
     /* .clear           = */ ggml_backend_multi_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n = */ NULL,
+    /* .get_tensor_n = */ NULL,
+    /* .cpy_tensor_n = */ NULL,
 };
 
 ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
@@ -2746,6 +2687,9 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
     /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cpu_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n = */ NULL,
+    /* .get_tensor_n = */ NULL,
+    /* .cpy_tensor_n = */ NULL,
 };
 
 static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
@@ -2760,6 +2704,9 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
     /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cpu_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n = */ NULL,
+    /* .get_tensor_n = */ NULL,
+    /* .cpy_tensor_n = */ NULL,
 };
 
 // CPU backend buffer type

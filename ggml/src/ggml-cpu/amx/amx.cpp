@@ -116,6 +116,9 @@ static ggml_backend_buffer_i ggml_backend_amx_buffer_interface = {
     /* .cpy_tensor      = */ nullptr,
     /* .clear           = */ ggml_backend_amx_buffer_clear,
     /* .reset           = */ nullptr,
+    /* .set_tensor_n = */ NULL,
+    /* .get_tensor_n = */ NULL,
+    /* .cpy_tensor_n = */ NULL,
 };
 
 static const char * ggml_backend_amx_buffer_type_get_name(ggml_backend_buffer_type_t buft) {

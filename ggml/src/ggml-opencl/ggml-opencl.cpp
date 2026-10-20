@@ -14143,6 +14143,9 @@ static ggml_backend_buffer_i ggml_backend_opencl_buffer_interface = {
     /* .cpy_tensor      = */ NULL,
     /* .clear           = */ ggml_backend_opencl_buffer_clear,
     /* .reset           = */ ggml_backend_opencl_buffer_reset,
+    /* .set_tensor_n = */ NULL,
+    /* .get_tensor_n = */ NULL,
+    /* .cpy_tensor_n = */ NULL,
 };
 
 //

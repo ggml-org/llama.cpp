@@ -160,9 +160,6 @@ extern "C" {
         // (optional) sort/optimize the nodes in the graph
         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph, struct ggml_backend_graph_optimize_params * params);
 
-        // (optional) batched asynchronous tensor data access
-        void (*set_tensor_n_async)(ggml_backend_t backend,       struct ggml_tensor ** tensors, const void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
-        void (*get_tensor_n_async)(ggml_backend_t backend, const struct ggml_tensor ** tensors,       void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
     };
 
     struct ggml_backend {
