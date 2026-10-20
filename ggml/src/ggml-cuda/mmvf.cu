@@ -862,6 +862,18 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, int warp_size, const
                 if (src0_small && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
+                // MMF tiles 32 rows per block, so a matrix of few rows leaves most SMs idle while MMVF runs a block
+                // per row: with a long enough K, MMVF wins for the small batches of speculative decoding as long as
+                // its work (rows x batch) stays small relative to the SM count, with a budget that grows with K
+                if (src0_small && src0_ne[0] >= 1024) {
+                    const bool    blackwell = cc >= GGML_CUDA_CC_BLACKWELL;
+                    const int     nsm       = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+                    const int64_t max_ncols = blackwell ? MMVF_MAX_BATCH_SIZE : 5;
+                    const int64_t max_k     = blackwell ? 6144 : 4096;
+                    if (ne11 <= max_ncols && src0_ne[1]*ne11*256 <= nsm*std::min(src0_ne[0], max_k)) {
+                        return true;
+                    }
+                }
                 if (ampere_mma_available(cc)) {
                     return src0_small && ne11 == 1;
                 }
