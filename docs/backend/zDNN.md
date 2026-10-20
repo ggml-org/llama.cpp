@@ -2,6 +2,7 @@
 
 > [!WARNING]
 > **Note:** zDNN is **not** the same as ZenDNN.
+>
 > - **zDNN** (this page): IBM's Deep Neural Network acceleration library for IBM Z & LinuxONE Mainframes
 > - **ZenDNN**: AMD's deep learning library for AMD EPYC CPUs ([see ZenDNN documentation](ZenDNN.md))
 
@@ -45,6 +46,14 @@ The IBM zDNN backend has the following CMake options that control the behaviour 
 | Environment Variable  | Default Value | Description                                                                            |
 | --------------------- | ------------- | -------------------------------------------------------------------------------------- |
 | `GGML_ZDNN_HIGH_PREC` | `0`           | Set to `1` to requantize Q8_0 weights in smaller groups, for lower loss at lower speed |
+
+## Performance Tunables
+
+| Flag Option             | Default Value | Description                                            |
+| ----------------------- | ------------- | ------------------------------------------------------ |
+| `--flash-attn` or `-fa` | `auto`        | Set to `on` to run attention on the NNPA (Recommended) |
+
+Note: Set `-fa on` explicitly. Flash Attention fuses each layer's attention (the KQ matrix multiplication, softmax and KQV matrix multiplication) into one `FLASH_ATTN_EXT` operation, which zDNN runs on the NNPA instead of the CPU. The speedup grows with the context length. With `auto`, llama.cpp currently turns Flash Attention off, because the operation runs on a different device than the layer. zDNN runs it when the KV cache is F16 (the default), the model uses no attention sinks, ALiBi or logit softcapping, and there is one KV cache stream (one sequence, or `--kv-unified`). Otherwise it falls back to the CPU.
 
 ## 1. Install zDNN Library
 
