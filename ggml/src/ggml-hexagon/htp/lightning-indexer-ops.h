@@ -15,6 +15,7 @@ extern "C" {
 #define HTP_LID_KV_BLOCK   64 // kv rows per block (HVX and HMX Bc)
 #define HTP_LID_TOKENS_MAX 32 // max tokens per Q tile (HVX splat path)
 #define HTP_LID_HMX_TOKENS_MAX 512 // HMX can keep more tokens; VTCM decides
+#define HTP_LID_N_BUF      4  // K / mask / output buffers per thread (two blocks computed, two in flight)
 
 // Mirrored from hmx-utils.h so the host can size VTCM without pulling DSP headers
 #ifndef HMX_FP16_TILE_N_ROWS
@@ -47,7 +48,7 @@ _Static_assert(sizeof(struct htp_lid_kernel_params) <= 128, "htp_lid_kernel_para
 
 // VTCM layout shared by host (fit check) and device (buffer offsets).
 // Shared regions: Q splats (one f16 vector per q element) and head weight splats for the current token tile.
-// Per-thread regions: Q prep staging, K / mask / output double buffers, transposed K and transpose scratch.
+// Per-thread regions: Q prep staging, K / mask / output buffers, two transposed K blocks and transpose scratch.
 struct htp_lid_vtcm_layout {
     size_t off_q;
     size_t off_w;
@@ -64,10 +65,10 @@ struct htp_lid_vtcm_layout {
     size_t size_o_row;   // f32 output row of one kv block, padded
 
     size_t size_qs;      // per thread
-    size_t size_k_buf;   // one of two K buffers
-    size_t size_kt;      // per thread: transposed K block plus two 64x64 scratch tiles
-    size_t size_m_buf;   // one of two mask buffers
-    size_t size_o_buf;   // one of two output buffers
+    size_t size_k_buf;   // one K buffer
+    size_t size_kt;      // per thread: two transposed K blocks, two 64x64 scratch tiles, Q8_0 block scales
+    size_t size_m_buf;   // one mask buffer
+    size_t size_o_buf;   // one output buffer
 
     size_t total_bytes;
 };
@@ -81,7 +82,7 @@ static inline void htp_lid_vtcm_layout_build(struct htp_lid_vtcm_layout * L, siz
 
     L->size_qs    = n_head * L->size_qs_row + hex_round_up(n_head * sizeof(float), 128) + L->size_q_row;
     L->size_k_buf = HTP_LID_KV_BLOCK * L->size_k_row;
-    L->size_kt    = (hex_round_up(D, HTP_LID_KV_BLOCK) + 2 * HTP_LID_KV_BLOCK) * 128;
+    L->size_kt    = (2 * hex_round_up(D, HTP_LID_KV_BLOCK) + 2 * HTP_LID_KV_BLOCK + D / 32) * 128;
     L->size_m_buf = n_tok * L->size_m_row;
     L->size_o_buf = n_tok * L->size_o_row;
 
@@ -89,10 +90,10 @@ static inline void htp_lid_vtcm_layout_build(struct htp_lid_vtcm_layout * L, siz
     VTCM_LAYOUT_ALLOC(off, off_q,  n_tok * n_head * D * 128);
     VTCM_LAYOUT_ALLOC(off, off_w,  n_tok * n_head * 128);
     VTCM_LAYOUT_ALLOC(off, off_qs, n_threads * L->size_qs);
-    VTCM_LAYOUT_ALLOC(off, off_k,  n_threads * 2 * L->size_k_buf);
+    VTCM_LAYOUT_ALLOC(off, off_k,  n_threads * HTP_LID_N_BUF * L->size_k_buf);
     VTCM_LAYOUT_ALLOC(off, off_kt, n_threads * L->size_kt);
-    VTCM_LAYOUT_ALLOC(off, off_m,  n_threads * 2 * L->size_m_buf);
-    VTCM_LAYOUT_ALLOC(off, off_o,  n_threads * 2 * L->size_o_buf);
+    VTCM_LAYOUT_ALLOC(off, off_m,  n_threads * HTP_LID_N_BUF * L->size_m_buf);
+    VTCM_LAYOUT_ALLOC(off, off_o,  n_threads * HTP_LID_N_BUF * L->size_o_buf);
 
     L->total_bytes = off;
 }
