@@ -329,13 +329,16 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
             ggml_tensor * cls_tok;
 
             old_pos_embd = ggml_view_2d(ctx0, new_pos_embd, new_pos_embd->ne[0], src_size * src_size,
-                                        ggml_row_size(new_pos_embd->type, new_pos_embd->ne[0]), 0);
+                                        new_pos_embd->nb[1], new_pos_embd->nb[1]);
             cls_tok      = ggml_view_2d(ctx0, new_pos_embd, new_pos_embd->ne[0], 1,
-                                        ggml_row_size(new_pos_embd->type, new_pos_embd->ne[0]), src_size * src_size);
-            new_pos_embd = ggml_interpolate(ctx0, old_pos_embd, tgt_size, tgt_size, new_pos_embd->ne[0], 1,
+                                        new_pos_embd->nb[1], 0);
+            old_pos_embd = ggml_reshape_3d(ctx0, old_pos_embd, n_embd, src_size, src_size);
+            old_pos_embd = ggml_permute(ctx0, old_pos_embd, 2, 0, 1, 3);
+            new_pos_embd = ggml_interpolate(ctx0, old_pos_embd, tgt_size, tgt_size, n_embd, 1,
                                             GGML_SCALE_MODE_BICUBIC);
-            new_pos_embd = ggml_reshape_3d(ctx0, new_pos_embd, n_embd, tgt_size * tgt_size, 1);
-            new_pos_embd = ggml_concat(ctx0, new_pos_embd, cls_tok, 1);
+            new_pos_embd = ggml_permute(ctx0, new_pos_embd, 1, 2, 0, 3);
+            new_pos_embd = ggml_cont_2d(ctx0, new_pos_embd, n_embd, tgt_size * tgt_size);
+            new_pos_embd = ggml_concat(ctx0, cls_tok, new_pos_embd, 1);
             n_pos        = tgt_size * tgt_size + 1;
         }
 
