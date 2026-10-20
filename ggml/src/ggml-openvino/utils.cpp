@@ -56,13 +56,12 @@ namespace {
 std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder,
                                                     const std::string & name,
                                                     const ggml_tensor * ggml_tensor) {
-    static const bool kv_slice_disabled = ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_SLICE");
-    if (kv_slice_disabled) {
-        return std::nullopt;
-    }
-    const bool static_npu_slice =
-        ggml_decoder->is_static() && ggml_decoder->m_is_prefill && ggml_openvino_npu_kv_slice_enabled();
-    if ((ggml_decoder->is_static() && !static_npu_slice) || ggml_decoder->is_stateful()) {
+    // Static graphs bake the sliced length into the prefill graph (see ggml_openvino_static_kv_slice_enabled);
+    // decode keeps its full-context graph.
+    const bool slice = ggml_decoder->is_static() ?
+                           ggml_decoder->m_is_prefill && ggml_openvino_static_kv_slice_enabled() :
+                           ggml_openvino_dynamic_kv_slice_enabled();
+    if (!slice || ggml_decoder->is_stateful()) {
         return std::nullopt;
     }
     if (ggml_tensor->op != GGML_OP_NONE || ggml_tensor->view_src != nullptr) {
@@ -142,7 +141,7 @@ std::optional<ov::Tensor> try_make_kv_4d_tensor(const std::shared_ptr<GgmlOvDeco
 // Column count of a static KQ mask input; must match GgmlOvDecoder::get_graph_input_shape().
 static size_t get_static_attention_size(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name) {
     const bool is_swa = ggml_decoder->is_swa_mask(ggml_decoder->get_input_ggml_tensor(name));
-    if (ggml_decoder->m_is_prefill && ggml_openvino_npu_kv_slice_enabled()) {
+    if (ggml_decoder->m_is_prefill && ggml_openvino_static_kv_slice_enabled()) {
         const auto params = ggml_decoder->get_compute_params();
         const int attention_size = is_swa ? params.attention_size_swa : params.attention_size;
         if (attention_size > 0) {
@@ -165,7 +164,7 @@ static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurren
     uint64_t extra_cfg = 1;  // Graph-ordinal port names (invalidate older disk-cache blobs).
     extra_cfg = extra_cfg * 131 + (stateful ? (recurrent ? 2u : 1u) : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_reduce_compile_mem_enabled() ? 1u : 0u);
-    extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_SLICE") ? 1u : 0u);
+    extra_cfg = extra_cfg * 131 + (ggml_openvino_dynamic_kv_slice_enabled() ? 0u : 1u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_ENABLE_KV_4D") > 0 ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (manual_gqa_enabled ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? 1u : 0u);
@@ -1736,7 +1735,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         ggml_decoder = entry->ptr;
         old_m_params = ggml_decoder->get_model_params();
         cache_hit = old_m_params.can_reuse_statically(m_params);
-        if (cache_hit && is_prefill && ggml_openvino_npu_kv_slice_enabled()) {
+        if (cache_hit && is_prefill && ggml_openvino_static_kv_slice_enabled()) {
             const auto old_c_params = ggml_decoder->get_compute_params();
             cache_hit = old_c_params.attention_size == c_params.attention_size &&
                         old_c_params.attention_size_swa == c_params.attention_size_swa;
@@ -1814,7 +1813,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             GGML_LOG_DEBUG("ggml-openvino: shared compiled model HIT (static)\n");
         } else {
             auto decode_c_params = c_params;
-            if (ggml_openvino_npu_kv_slice_enabled()) {
+            if (ggml_openvino_static_kv_slice_enabled()) {
                 decode_c_params.attention_size = m_params.ctx_per_seq;
                 decode_c_params.attention_size_swa = m_params.ctx_per_seq_swa;
             }
@@ -1841,7 +1840,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 base_extra = base_extra * 131 + static_cast<uint64_t>(ggml_openvino_getenv_int("GGML_OPENVINO_TOKEN_EMBD_I8"));
                 base_extra = base_extra * 131 + static_cast<uint64_t>(ggml_openvino_getenv_int("GGML_OPENVINO_TOKEN_EMBD_I4"));
                 base_extra = base_extra * 131 + static_cast<uint64_t>(ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KEEP_Q4_0"));
-                base_extra = base_extra * 131 + static_cast<uint64_t>(ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KV_SLICE"));
+                base_extra = base_extra * 131 + (ggml_openvino_static_kv_slice_enabled() ? 1u : 0u);
                 base_extra = ggml_openvino_model_cache_mix_string(
                     base_extra, ggml_openvino_getenv_str("GGML_OPENVINO_NPU_CONFIG"));
                 base_extra = ggml_openvino_model_cache_mix_string(

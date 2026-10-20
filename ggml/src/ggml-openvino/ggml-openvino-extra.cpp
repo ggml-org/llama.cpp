@@ -166,6 +166,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_GDN_Q_SCALE",
         "GGML_OPENVINO_NPU_L0_HOST_TENSORS",
         "GGML_OPENVINO_NPU_KV_SLICE",
+        "GGML_OPENVINO_KV_SLICE",
         "GGML_OPENVINO_NPU_HFA_PREFILL",
         "GGML_OPENVINO_SELF_CONTAINED_BLOB",
         "GGML_OPENVINO_SELF_CONTAINED_MMAP",
@@ -347,7 +348,28 @@ bool ggml_openvino_is_gpu() {
     return has_prefix(ggml_openvino_get_device_name(), "GPU");
 }
 
-bool ggml_openvino_npu_kv_slice_enabled() {
+// -1: GGML_OPENVINO_KV_SLICE unset, use the mode's default (or its deprecated alias)
+static int kv_slice_setting() {
+    const char * value = ggml_openvino_getenv_str("GGML_OPENVINO_KV_SLICE");
+    if (value == nullptr || *value == '\0') {
+        return -1;
+    }
+    return ggml_openvino_getenv_int("GGML_OPENVINO_KV_SLICE") != 0 ? 1 : 0;
+}
+
+bool ggml_openvino_dynamic_kv_slice_enabled() {
+    const int setting = kv_slice_setting();
+    if (setting >= 0) {
+        return setting != 0;
+    }
+    return ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_SLICE") == 0;
+}
+
+bool ggml_openvino_static_kv_slice_enabled() {
+    const int setting = kv_slice_setting();
+    if (setting >= 0) {
+        return setting != 0;
+    }
     return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KV_SLICE") != 0;
 }
 
