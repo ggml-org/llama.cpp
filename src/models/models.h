@@ -86,6 +86,9 @@ struct llm_build_delta_net_base : public llm_graph_context {
             int64_t              conv_channels,
             int                  il);
 
+    // I32 [Kw] = {Kw-1, ..., 0} rollback slot of each conv window, shared by every layer of the graph
+    ggml_tensor * rs_slot_rev = nullptr;
+
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
     // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
     ggml_tensor * build_recurrent_attn(

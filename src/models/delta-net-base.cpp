@@ -496,26 +496,34 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
         //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
 
-        const int64_t K = (int64_t) cparams.n_rs_seq + 1;
+        const int64_t K  = (int64_t) cparams.n_rs_seq + 1;
+        const int64_t n  = conv_input->ne[0] - conv_states->ne[0]; // n_seq_tokens
+        const int64_t Kw = std::min(n + 1, K);                     // windows that exist in this ubatch
 
-        for (int64_t t = 1; t <= K; ++t) {
-            const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
-            const int64_t s_slot = K - t;
-
-            ggml_tensor * conv_state_last =
-                ggml_view_3d(ctx0, conv_input,
-                        conv_kernel_size - 1, conv_channels, n_seqs,
-                        conv_input->nb[1], conv_input->nb[2],
-                        ggml_row_size(conv_input->type, s_idx));
-
-            ggml_tensor * conv_state_update =
-                ggml_view_2d(ctx0,
-                        conv_states_all, row_count, n_seqs,
-                        conv_states_all->nb[1],
-                        (s_slot * mem_size + kv_head) * row_size);
-
-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
+        // {Kw-1, ..., 0} as I32, built once per graph: a descending argsort of an ascending range
+        if (rs_slot_rev == nullptr) {
+            rs_slot_rev = ggml_argsort(ctx0, ggml_arange(ctx0, 0.0f, (float) Kw, 1.0f), GGML_SORT_ORDER_DESC);
+            cb(rs_slot_rev, "rs_slot_rev", -1);
         }
+
+        // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w
+        // slots reaching back past this ubatch are left unwritten, like the ssm snapshots in build_recurrent_attn
+        // the windows overlap, so the view is created with one window and widened after the size check
+        ggml_tensor * windows = ggml_view_4d(ctx0, conv_input,
+                conv_kernel_size - 1, 1, conv_channels, n_seqs,
+                ggml_element_size(conv_input), conv_input->nb[1], conv_input->nb[2],
+                ggml_row_size(conv_input->type, n - (Kw - 1)));
+        windows->ne[1] = Kw;
+
+        // [d-1, slot, channel, seq] view of the cells of this ubatch
+        ggml_tensor * slots = ggml_view_4d(ctx0, conv_states_all,
+                conv_kernel_size - 1, K, conv_channels, n_seqs,
+                (size_t) mem_size * row_size,
+                ggml_row_size(conv_states_all->type, conv_kernel_size - 1),
+                conv_states_all->nb[1],
+                kv_head * row_size);
+
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, rs_slot_rev));
     }
 
     return conv_input;
