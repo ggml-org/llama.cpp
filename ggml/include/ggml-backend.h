@@ -71,6 +71,7 @@ extern "C" {
 
     // tensor copy between different backends
     GGML_API void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor * dst);
+    GGML_API void ggml_backend_tensor_copy_n(const struct ggml_tensor ** srcs, struct ggml_tensor ** dsts, size_t n_tensors);
 
     //
     // Backend (stream)

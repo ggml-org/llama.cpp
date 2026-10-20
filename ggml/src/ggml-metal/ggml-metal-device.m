@@ -2614,6 +2614,70 @@ bool ggml_metal_buffer_cpy_tensor(ggml_metal_buffer_t buf_dst, const struct ggml
     return true;
 }
 
+bool ggml_metal_buffer_cpy_tensor_n(ggml_metal_buffer_t buf_dst, const struct ggml_tensor ** srcs, struct ggml_tensor ** dsts, size_t n_tensors) {
+    if (n_tensors == 0) {
+        return true;
+    }
+
+    bool all_shared = true;
+    for (size_t i = 0; i < n_tensors; ++i) {
+        ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t)srcs[i]->buffer->context;
+        if (!buf_dst->is_shared || !buf_src->is_shared) {
+            all_shared = false;
+            break;
+        }
+    }
+
+    if (all_shared) {
+        for (size_t i = 0; i < n_tensors; ++i) {
+            memcpy(dsts[i]->data, srcs[i]->data, ggml_nbytes(srcs[i]));
+        }
+        return true;
+    }
+
+    // for private buffers, we need to use Metal blit commands
+    @autoreleasepool {
+        struct ggml_metal_buffer_id * bid_srcs = malloc(n_tensors * sizeof(struct ggml_metal_buffer_id));
+        struct ggml_metal_buffer_id * bid_dsts = malloc(n_tensors * sizeof(struct ggml_metal_buffer_id));
+
+        for (size_t i = 0; i < n_tensors; ++i) {
+            ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t)srcs[i]->buffer->context;
+            bid_srcs[i] = ggml_metal_buffer_get_id(buf_src, srcs[i]);
+            bid_dsts[i] = ggml_metal_buffer_get_id(buf_dst, dsts[i]);
+
+            if (bid_srcs[i].metal == nil || bid_dsts[i].metal == nil) {
+                free(bid_srcs);
+                free(bid_dsts);
+                return false;
+            }
+        }
+
+        id<MTLCommandBuffer> cmd_buf = [buf_dst->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            for (size_t i = 0; i < n_tensors; ++i) {
+                [encoder copyFromBuffer:bid_srcs[i].metal
+                           sourceOffset:bid_srcs[i].offs
+                               toBuffer:bid_dsts[i].metal
+                      destinationOffset:bid_dsts[i].offs
+                                   size:ggml_nbytes(srcs[i])];
+            }
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+
+        free(bid_srcs);
+        free(bid_dsts);
+    }
+
+    return true;
+}
+
 void ggml_metal_buffer_clear(ggml_metal_buffer_t buf, uint8_t value) {
     if (buf->is_shared) {
         memset(buf->all_data, value, buf->all_size);

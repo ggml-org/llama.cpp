@@ -71,6 +71,8 @@ extern "C" {
         // (optional) batched tensor data copies
         void         (*set_tensor_n) (ggml_backend_buffer_t buffer,       struct ggml_tensor ** tensors, const void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
         void         (*get_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor ** tensors,       void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
+        // (optional) batched tensor copies
+        bool         (*cpy_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor ** srcs, struct ggml_tensor ** dsts, size_t n_tensors);
     };
 
     struct ggml_backend_buffer {
