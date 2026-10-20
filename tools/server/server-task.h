@@ -18,6 +18,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_RERANK,
     SERVER_TASK_TYPE_DECISION,
     SERVER_TASK_TYPE_INFILL,
+    SERVER_TASK_TYPE_TRANSCRIBE_RT,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
@@ -46,6 +47,14 @@ enum stop_type {
     STOP_TYPE_EOS,
     STOP_TYPE_WORD,
     STOP_TYPE_LIMIT,
+};
+
+enum server_control_action {
+    SERVER_CONTROL_ACTION_NONE,
+    SERVER_CONTROL_ACTION_REASONING_END,
+    SERVER_CONTROL_ACTION_AUDIO_APPEND, // push control_audio into the slot's audio stream
+    SERVER_CONTROL_ACTION_AUDIO_COMMIT, // flush the audio stream, more audio can follow
+    SERVER_CONTROL_ACTION_AUDIO_END,    // flush the audio stream and end it
 };
 
 struct task_params {
@@ -86,8 +95,9 @@ struct task_params {
     std::string        oaicompat_cmpl_id;
 
     // realtime control (SERVER_TASK_TYPE_CONTROL)
-    std::string        control_action;
-    std::string        control_cmpl_id;
+    server_control_action control_action = SERVER_CONTROL_ACTION_NONE;
+    std::string           control_cmpl_id;
+    std::vector<float>    control_audio; // PCM F32 samples for SERVER_CONTROL_ACTION_AUDIO_APPEND
 
     // reported in generation_settings, parsing itself is owned by the chat session
     common_chat_format      chat_format      = COMMON_CHAT_FORMAT_CONTENT_ONLY;
@@ -233,6 +243,7 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_TRANSCRIBE_RT:
                 return true;
             case SERVER_TASK_TYPE_DECISION:
                 return !decision.labels.empty();
@@ -245,6 +256,7 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_TRANSCRIBE_RT:
                 return true;
             default:
                 return false;

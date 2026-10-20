@@ -1899,6 +1899,81 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     return proxy;
 }
 
+void server_models::proxy_ws(const server_http_req & req, server_http_context::ws_conn & conn, const std::string & name) {
+    auto send_error = [&conn](const std::string & message) {
+        conn.send(safe_json_to_str(json {
+            {"type", "error"},
+            {"error", {{"type", "server_error"}, {"code", nullptr}, {"message", message}, {"param", nullptr}}},
+        }));
+        conn.close();
+    };
+
+    auto meta = get_meta(name);
+    if (!meta.has_value() || !meta->is_running()) {
+        send_error("model name=" + name + " is not running");
+        return;
+    }
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        mapping[name].meta.last_used = ggml_time_ms();
+        mapping[name].req_count++;
+    }
+    SRV_INF("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
+
+    std::string url = std::string("ws://") + CHILD_ADDR + ":" + std::to_string(meta->port) + req.path;
+    if (!req.query_string.empty()) {
+        url += '?' + req.query_string;
+    }
+    // the client library adds its own upgrade headers
+    httplib::Headers headers;
+    for (const auto & [key, value] : req.headers) {
+        std::string lower = key;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0) {
+            continue;
+        }
+        headers.emplace(key, value);
+    }
+
+    {
+        httplib::ws::WebSocketClient upstream(url, headers);
+        if (!upstream.connect()) {
+            send_error("failed to connect to model name=" + name);
+        } else {
+            // client to child
+            std::thread pump([&]() {
+                std::string msg;
+                while (true) {
+                    const int res = conn.read(msg);
+                    if (res == 0 || !(res == 1 ? upstream.send(msg) : upstream.send(msg.data(), msg.size()))) {
+                        break;
+                    }
+                }
+                upstream.close();
+            });
+            // child to client
+            std::string msg;
+            while (true) {
+                const auto res = upstream.read(msg);
+                if (res == httplib::ws::Fail || !(res == httplib::ws::Text ? conn.send(msg) : conn.send_binary(msg))) {
+                    break;
+                }
+            }
+            conn.close();
+            pump.join();
+        }
+    }
+
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end() && it->second.req_count > 0) {
+        it->second.req_count--;
+        if (it->second.req_count == 0) {
+            sched->tick(lk);
+        }
+    }
+}
+
 void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
     server_state state;
     json payload;
@@ -2275,6 +2350,24 @@ void server_models_routes::init_routes() {
             models.ensure_model_ready(name, req.should_stop);
         }
         return models.proxy_request(req, method, name, false);
+    };
+
+    this->proxy_ws = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        std::string name = req.get_param("model");
+        bool autoload = is_autoload(params, req);
+        auto error_res = std::make_unique<server_http_res>();
+        if (!router_validate_model(name, models, autoload, error_res)) {
+            // error_res holds {"error": {...}}, send it as a websocket error event
+            json err = json::parse(error_res->data);
+            err["type"] = "error";
+            conn.send(safe_json_to_str(err));
+            conn.close();
+            return;
+        }
+        if (autoload) {
+            models.ensure_model_ready(name, req.should_stop);
+        }
+        models.proxy_ws(req, conn, name);
     };
 
     this->proxy_post = [this](const server_http_req & req) {
