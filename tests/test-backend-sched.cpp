@@ -793,7 +793,7 @@ static test_result test_pair_user_inputs(const std::vector<ggml_backend_t> & bac
 // Tests Y-shaped scheduling: two parallel lanes merging into 1. Lane A and B, merging into a single split.
 // The lanes join in a final split on backend_a that receives one activation from each of the two backend_b splits.
 static test_result test_y_shaped_graph(const std::vector<ggml_backend_t> & backends, int backend_a, int backend_b, int64_t tensor_len,
-        bool use_device_host_buft) {
+        int32_t sleep_us, bool use_device_host_buft) {
 
     const size_t graph_size = 64;
 
@@ -813,8 +813,19 @@ static test_result test_y_shaped_graph(const std::vector<ggml_backend_t> & backe
     ggml_tensor * seed_a = g.add(ggml_add(ctx_compute.get(), consts.zero[backend_a], consts.one[backend_a]), backend_a);
     ggml_set_name(seed_a, "seed_a");
 
+    // only lane a sleeps, so that lane b is scheduled while it is still running
+    if (sleep_us > 0) {
+        seed_a = g.add(ggml_sleep(ctx_compute.get(), seed_a, sleep_us), backend_a);
+        ggml_set_name(seed_a, "seed_a_delayed");
+    }
+
     ggml_tensor * lane_a = g.add(ggml_add(ctx_compute.get(), seed_a, consts.one[backend_b]), backend_b);
     ggml_set_name(lane_a, "lane_a");
+
+    if (sleep_us > 0) {
+        lane_a = g.add(ggml_sleep(ctx_compute.get(), lane_a, sleep_us), backend_b);
+        ggml_set_name(lane_a, "lane_a_delayed");
+    }
 
     ggml_tensor * seed_b = g.add(ggml_add(ctx_compute.get(), consts.zero[backend_a], consts.one[backend_a]), backend_a);
     ggml_set_name(seed_b, "seed_b");
@@ -1004,8 +1015,10 @@ int main(int argc, char ** argv) {
                 }
 
                 for (int tensor_len : { 1, 4096 }) {
-                    case_begin("test_y_shaped        %-8s -> %-8s tensor_len = %4d", name_a, name_b, tensor_len);
-                    case_end(test_y_shaped_graph(backend_ptrs, (int) backend_a, (int) backend_b, tensor_len, use_device_host_buft));
+                    for (int32_t sleep_us : { 0, 80 }) {
+                        case_begin("test_y_shaped        %-8s -> %-8s sleep_us = %4d, tensor_len = %4d", name_a, name_b, sleep_us, tensor_len);
+                        case_end(test_y_shaped_graph(backend_ptrs, (int) backend_a, (int) backend_b, tensor_len, sleep_us, use_device_host_buft));
+                    }
                 }
             }
         }
