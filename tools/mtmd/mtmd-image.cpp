@@ -873,16 +873,28 @@ mtmd_image_preproc_out mtmd_image_preprocessor_glm5v::preprocess(const clip_imag
 
 clip_image_size mtmd_image_preprocessor_longest_edge::get_target_size(const clip_hparams & hparams, const clip_image_size & original_size) {
     GGML_ASSERT(hparams.image_longest_edge > 0);
+    clip_image_size size = original_size;
+    if (hparams.image_floor_before_align) {
+        const double ratio = double(std::max(size.width, size.height)) / hparams.image_longest_edge;
+        if (ratio > 1.0) {
+            size.width  = static_cast<int>(std::floor(size.width / ratio));
+            size.height = static_cast<int>(std::floor(size.height / ratio));
+            if (size.width <= 0 || size.height <= 0) {
+                throw std::runtime_error("image dimensions must be positive after resizing");
+            }
+        }
+    }
+
     // the original pixtral model doesn't have n_merge
     const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
     return img_tool::calc_size_preserved_ratio(
-        original_size,
+        size,
         {
             /* align_size   */ hparams.patch_size * cur_merge,
             /* min_pixels   */ std::max(0, hparams.image_min_pixels),
             /* max_pixels   */ std::max(0, hparams.image_max_pixels),
             /* longest_edge */ std::min(hparams.image_longest_edge,
-                                        std::max(original_size.width, original_size.height)),
+                                        std::max(size.width, size.height)),
         });
 }
 

@@ -804,7 +804,11 @@ struct mtmd_context {
                 {
                     // https://github.com/huggingface/transformers/blob/1cd110c6cb6a6237614130c470e9a902dbc1a4bd/docs/source/en/model_doc/pixtral.md
                     img_end = "[IMG_END]";
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                    if (clip_get_hparams(ctx_v)->image_longest_edge > 0) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
+                    } else {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                    }
                 } break;
             case PROJECTOR_TYPE_PHI4:
                 {
