@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import socket
@@ -17,6 +18,33 @@ SPEC.loader.exec_module(FINDER)
 class ArenaFinderTests(unittest.TestCase):
     def args(self, *extra):
         return FINDER.arguments(["--model", "model.gguf", "--context-size", "8192", *extra])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX listener restart contract")
+    def test_completed_probe_socket_does_not_block_the_next_probe(self):
+        with socket.socket() as listener, socket.socket() as client:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            address = listener.getsockname()
+            client.settimeout(5)
+            client.connect(address)
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                connection.shutdown(socket.SHUT_WR)
+                self.assertEqual(client.recv(1), b"")
+                client.close()
+                self.assertEqual(connection.recv(1), b"")
+        with socket.socket() as closed:
+            with self.assertRaises(OSError):
+                closed.bind(address)
+        with tempfile.TemporaryDirectory() as temporary:
+            args = self.args("--port", str(address[1]))
+            args.output = Path(temporary)
+            with patch.object(FINDER.subprocess, "Popen", side_effect=RuntimeError("after preflight")) as popen:
+                with self.assertRaisesRegex(RuntimeError, "after preflight"):
+                    FINDER.probe(args, 1024)
+                popen.assert_called_once()
 
     def test_mtp_allows_an_optional_external_assistant_with_inherited_cache_types(self):
         args=self.args("--spec-mode","mtp","--model-draft","assistant.gguf","--cache-type-k","q5_1","--cache-type-v","q8_0")
@@ -164,14 +192,17 @@ class ArenaFinderTests(unittest.TestCase):
 
     def test_an_occupied_port_cannot_be_mistaken_for_the_new_server(self):
         args = self.args()
-        with socket.socket() as listener, tempfile.TemporaryDirectory() as temp:
-            listener.bind(("127.0.0.1", 0))
-            listener.listen()
-            args.port = listener.getsockname()[1]
-            args.output = Path(temp)
-            with patch.object(FINDER.subprocess, "Popen") as popen, self.assertRaisesRegex(RuntimeError, "port"):
-                FINDER.probe(args, 1000)
-            popen.assert_not_called()
+        for reusable in ((False, True) if os.name == "posix" else (False,)):
+            with self.subTest(reusable=reusable), socket.socket() as listener, tempfile.TemporaryDirectory() as temp:
+                if reusable:
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                args.port = listener.getsockname()[1]
+                args.output = Path(temp)
+                with patch.object(FINDER.subprocess, "Popen") as popen, self.assertRaisesRegex(RuntimeError, "port"):
+                    FINDER.probe(args, 1000)
+                popen.assert_not_called()
 
     def test_memory_failures_keep_lower_quota_and_upper_oom_bounds_distinct(self):
         args = self.args()

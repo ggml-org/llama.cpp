@@ -142,6 +142,8 @@ def validate_result(args, result, expected_prompt):
 def probe(args, candidate):
     try:
         with socket.socket() as available:
+            if os.name == "posix":
+                available.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             available.bind(("127.0.0.1", args.port))
     except OSError as error:
         raise RuntimeError(f"port {args.port} is unavailable; choose --port for this finder") from error
