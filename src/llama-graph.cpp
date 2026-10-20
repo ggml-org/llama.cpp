@@ -4001,8 +4001,7 @@ ggml_tensor * llm_graph_context::build_rs(
 
     const bool in_place = inp->rs_in_place && !get_state_rows;
 
-    // with rollback snapshots the states are never in place, so reading them from the cache would only add a move.
-    // n_rs_seq is fixed for the context, so the graph keeps the same shape
+    // rollback snapshots are never in place; n_rs_seq is fixed per context, so the graph shape is stable
     const bool from_cache = kv_state->get_n_rs_seq() == 0;
     GGML_ASSERT(get_state_rows || !from_cache || s->type == GGML_TYPE_F32); // the states are read from the cache, the gather is F32
 
