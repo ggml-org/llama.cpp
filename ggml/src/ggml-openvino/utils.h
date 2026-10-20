@@ -25,7 +25,7 @@ struct graph_key {
     int n_leaves;
     std::string first_node_name;
     std::string last_node_name;
-    // Each entry: "<node_idx>:<src_idx>:<op_type>"
+    // Each entry: "<src_name>:<src_idx>:<op_type>"
     std::vector<std::string> input_srcs;
 
     graph_key(const ggml_cgraph * cgraph, bool include_inputs = false) : n_nodes(cgraph->n_nodes), n_leaves(cgraph->n_leafs) {
@@ -52,9 +52,8 @@ struct graph_key {
                 if (src == nullptr || src->buffer == nullptr || node_set.count(src) || src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                     continue;
                 }
-
-                input_srcs.push_back(std::to_string(node_idx) + ":" + std::to_string(src_idx) + ":" +
-                    GgmlOvDecoder::compute_op_type(node));
+                input_srcs.push_back(GgmlOvDecoder::get_tensor_name(cgraph, src) + ":" + std::to_string(src_idx) +
+                                          ":" + GgmlOvDecoder::compute_op_type(node));
             }
         }
     }
