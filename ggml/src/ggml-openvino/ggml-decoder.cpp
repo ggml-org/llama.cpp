@@ -196,6 +196,17 @@ std::string GgmlOvDecoder::get_tensor_name(const ggml_cgraph * cgraph, const ggm
         if (leaf != cgraph->leafs + cgraph->n_leafs) {
             return std::string(tensor->name) + "#l" + std::to_string(leaf - cgraph->leafs);
         }
+        if (cgraph->leafs == nullptr || cgraph->n_leafs == 0) {
+            // ggml_graph_view sets n_leafs to 0, loop over all node srcs to give each leaf a unique name
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                auto *cur_node = cgraph->nodes[i];
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    if (cur_node->src[j] == tensor) {
+                        return std::string(tensor->name) + "#l" + std::to_string(i * GGML_MAX_SRC + j);
+                    }
+                }
+            }
+        }
     }
     return tensor->name;
 }
