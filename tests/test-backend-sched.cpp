@@ -658,7 +658,8 @@ static test_result test_inputless_splits_scheduling(ggml_backend_t gpu, ggml_bac
 }
 
 // Test that all async backends transmit their activations to the following async backend correctly. No user inputs tested.
-static test_result test_chain_all_backends(const std::vector<ggml_backend_t> & backends, int64_t tensor_len, bool use_device_host_buft) {
+static test_result test_chain_all_backends(const std::vector<ggml_backend_t> & backends, int64_t tensor_len, int32_t sleep_us,
+        bool use_device_host_buft) {
 
     const int n_backends = (int) backends.size();
 
@@ -680,7 +681,8 @@ static test_result test_chain_all_backends(const std::vector<ggml_backend_t> & b
     }
 
     const size_t n_nodes    = seq.size();
-    const size_t graph_size = n_nodes + n_backends + 1; // see sched->hash_set FIXME, one "one" per backend plus the "zero" that starts the chain
+    const size_t n_sleeps   = sleep_us > 0 ? n_nodes : 0; // one sleep per split
+    const size_t graph_size = n_nodes + n_sleeps + n_backends + 1; // see sched->hash_set FIXME, one "one" per backend plus the "zero" that starts the chain
 
     backend_consts consts(backends, tensor_len);
 
@@ -700,6 +702,11 @@ static test_result test_chain_all_backends(const std::vector<ggml_backend_t> & b
         const int b = seq[k];
 
         out = g.add(ggml_add(ctx_compute.get(), k == 0 ? consts.zero[b] : out, consts.one[b]), b);
+
+        // the sleep keeps the backend busy, so that the next one has to wait for this split
+        if (sleep_us > 0) {
+            out = g.add(ggml_sleep(ctx_compute.get(), out, sleep_us), b);
+        }
     }
     ggml_set_name(out, "out");
     ggml_set_output(out);
@@ -958,8 +965,10 @@ int main(int argc, char ** argv) {
         log_maybe("\n");
 
         for (int tensor_len : { 2, 4096 }) {
-            case_begin("test_chain_all_backends tensor_len = %4d", tensor_len);
-            case_end(test_chain_all_backends(backend_ptrs, tensor_len, use_device_host_buft));
+            for (int32_t sleep_us : { 0, 80 }) {
+                case_begin("test_chain_all_backends sleep_us = %4d, tensor_len = %4d", sleep_us, tensor_len);
+                case_end(test_chain_all_backends(backend_ptrs, tensor_len, sleep_us, use_device_host_buft));
+            }
         }
 
         log_maybe("\n");
