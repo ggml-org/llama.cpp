@@ -119,7 +119,15 @@ bool ggml_openvino_is_npu();
 
 // NPU-only opt-in performance toggles (all default off). Centralized here so each
 // env-var name lives in one place; see docs/backend/OPENVINO.md for semantics.
-bool ggml_openvino_npu_kv_slice_enabled();
+// KV-cache slicing: bind the KV cache, and size the KQ masks, at the attended length instead of the full context.
+// One mechanism, two modes:
+//   dynamic graphs (CPU/GPU): the KV input is a view over the cache; the graph is not recompiled. On by default.
+//   static graphs (NPU, or any device with GGML_OPENVINO_FORCE_STATIC): the prefill graph is compiled at the aligned
+//   attended length and recompiled when it changes; decode keeps the full context. Off by default.
+// GGML_OPENVINO_KV_SLICE: unset = the default of each mode, 0 = off in both, 1 = on in both.
+// Deprecated aliases: GGML_OPENVINO_DISABLE_KV_SLICE=1 (dynamic off), GGML_OPENVINO_NPU_KV_SLICE=1 (static on).
+bool ggml_openvino_dynamic_kv_slice_enabled();
+bool ggml_openvino_static_kv_slice_enabled();
 bool ggml_openvino_npu_fast_mask_enabled();
 bool ggml_openvino_npu_l0_host_tensors_enabled();
 bool ggml_openvino_npu_hfa_prefill_enabled();
