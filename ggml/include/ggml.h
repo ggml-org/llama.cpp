@@ -2707,6 +2707,28 @@ extern "C" {
             struct ggml_tensor  * state,
             int64_t               K);
 
+    // gated delta net with recorded updates (ReplaySSM), scalar gate only. An update is s = exp(g) * s + k * delta^T,
+    // with delta = (v - exp(g) * s^T k) * beta. rec holds two halves of R updates per sequence, as rows of S_v * H_v
+    // floats (half h starts at row h * (2R + 1)):
+    //   rec      : [S_v * H_v, 2 * (2 * R + 1), n_seqs] -- per half, row 2t: k_t of every value head, row 2t + 1:
+    //              delta_t, row 2R: exp(g_t) at t * H_v + h
+    //   n_commit : [2, n_seqs] I32 -- the first n_commit[0, s] updates of half n_commit[1, s] are applied to state
+    //              before the tokens
+    // the output packs the attention scores and one state. With record (n_tokens <= R) this batch writes its updates
+    // into the other half of rec, in place, and the state is the committed one (s0 with the n_commit updates), not the
+    // state after the tokens: a later batch commits the tokens it keeps.
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_rec(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * rec,
+            struct ggml_tensor  * n_commit,
+            bool                  record);
+
     // DSA lightning indexer
     //
     // q:       [n_embd_idx, n_head_idx, n_batch, ne3 ]

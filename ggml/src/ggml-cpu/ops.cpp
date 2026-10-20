@@ -11358,11 +11358,17 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
-    const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+    // ReplaySSM (ggml_gated_delta_net_rec): updates to commit first, and whether this batch records its own
+    const ggml_tensor * src_rec    = dst->src[6];
+    const ggml_tensor * src_commit = dst->src[7];
+    const bool    record = ggml_get_op_params_i32(dst, 1) != 0;
+    const int64_t R      = src_rec ? (src_rec->ne[1]/2 - 1)/2 : 0;
+
+    const int64_t per_thread = S_v + (K > 1 || record ? S_v * S_v : 0);
     const int ith = params->ith;
 
     float * delta       = (float *)params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
-    float * state_work  = K > 1 ? (delta + S_v) : nullptr;
+    float * state_work  = K > 1 || record ? (delta + S_v) : nullptr;
 
     // output layout: [attn_scores | new_states]
     // attn_scores: S_v * H * n_tokens * n_seqs    floats
@@ -11395,15 +11401,41 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         const int64_t ik3 = iv3 / rk3;
 
         // For K=1, write directly to the single output slot to avoid an extra memcpy at the end.
-        // For K>1, work in scratch and copy out per-token when the slot is in range.
-        float * s_out = (K > 1)
-            ? state_work
-            : state_out_base + (iv3 * H + iv1) * S_v * S_v;
+        // For K>1, work in scratch and copy out per-token when the slot is in range; with record, the slot gets the
+        // committed state and the tokens run in scratch.
+        float * s_slot = state_out_base + (iv3 * H + iv1) * S_v * S_v;
+        float * s_out  = (K > 1 || record) ? state_work : s_slot;
 
         // copy input state into the working buffer and operate in-place
         // state layout [S_v, S_v, H, n_seqs]: seq iv3 starts at iv3 * state_seq_stride.
         const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
         memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+
+        // commit: the recorded updates, the same operations as the token loop below
+        float * rec_out = nullptr; // this sequence's k and delta rows in the half being written
+        float * g_out   = nullptr; // its exp(g) row
+        if (src_rec) {
+            // updates from one half of rec, this batch's into the other
+            const int32_t * nc      = (const int32_t *) ((const char *) src_commit->data + iv3 * src_commit->nb[1]);
+            const int32_t   m       = nc[0];
+            const int32_t   half    = nc[1];
+            float *         rec_seq = (float *) ((char *) src_rec->data + iv3 * src_rec->nb[2]);
+            const float *   rec     = rec_seq + half * (2*R + 1) * S_v * H;
+            GGML_ASSERT(m >= 0 && m <= R && (half == 0 || half == 1));
+            for (int64_t t = 0; t < m; ++t) {
+                const float * k_r = rec + (2*t    )*S_v*H + iv1*S_v;
+                const float * d_r = rec + (2*t + 1)*S_v*H + iv1*S_v;
+                ggml_vec_scale_f32(S_v * S_v, s_out, rec[2*R*S_v*H + t*H + iv1]);
+                for (int64_t j = 0; j < S_v; ++j) {
+                    ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_r, d_r[j]);
+                }
+            }
+            if (record) {
+                memcpy(s_slot, s_out, S_v * S_v * sizeof(float));
+                rec_out = rec_seq + (1 - half) * (2*R + 1) * S_v * H;
+                g_out   = rec_out + 2*R*S_v*H;
+            }
+        }
 
         // attn output pointer for first token of this (head, seq)
         float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
@@ -11437,6 +11469,12 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
                 float sum = 0.0f;
                 ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
                 delta[j] = (v_d[j] - sum) * beta_val;
+            }
+
+            if (rec_out) {
+                memcpy(rec_out + (2*t    )*S_v*H + iv1*S_v, k_d,   S_v * sizeof(float));
+                memcpy(rec_out + (2*t + 1)*S_v*H + iv1*S_v, delta, S_v * sizeof(float));
+                g_out[t*H + iv1] = expf(g_d[0]);
             }
 
             // outer product: S[i][j] += k[i] * delta[j] => M[j][i] += delta[j] * k[i]

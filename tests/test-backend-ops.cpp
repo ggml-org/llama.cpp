@@ -5407,6 +5407,92 @@ struct test_gated_delta_net : public test_case {
     }
 };
 
+// GGML_OP_GATED_DELTA_NET with recorded updates (ReplaySSM): commit n_commit updates, then run (and record) the tokens
+struct test_gated_delta_net_rec : public test_case {
+    const int64_t head_count;
+    const int64_t head_size;
+    const int64_t n_seq_tokens;
+    const int64_t n_seqs;
+    const int     v_repeat;
+    const int64_t R;
+    const int     commit; // sequence s commits (commit + s) % (R + 1) updates from half s % 2
+    const bool    record;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GATED_DELTA_NET_REC";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR8(head_count, head_size, n_seq_tokens, n_seqs, v_repeat, R, commit, record);
+    }
+
+    test_gated_delta_net_rec(int64_t head_count = 4, int64_t head_size = 64, int64_t n_seq_tokens = 4, int64_t n_seqs = 1,
+            int v_repeat = 3, int64_t R = 17, int commit = 3, bool record = true)
+        : head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), v_repeat(v_repeat),
+          R(R), commit(commit), record(record) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t H = head_count * v_repeat;
+        ggml_tensor * q     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_count, n_seq_tokens, n_seqs);
+        ggml_tensor * k     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_count, n_seq_tokens, n_seqs);
+        ggml_tensor * v     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, H, n_seq_tokens, n_seqs);
+        ggml_tensor * g     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, H, n_seq_tokens, n_seqs);
+        ggml_tensor * beta  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, H, n_seq_tokens, n_seqs);
+        ggml_tensor * state = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_size, H, n_seqs);
+        ggml_tensor * rec   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size * H, 2 * (2 * R + 1), n_seqs);
+        ggml_tensor * n_com = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 2, n_seqs);
+        ggml_set_name(g,     "g");
+        ggml_set_name(beta,  "beta");
+        ggml_set_name(v,     "v");
+        ggml_set_name(rec,   "rec");
+        ggml_set_name(n_com, "n_commit");
+        q = ggml_l2_norm(ctx, q, 1e-6f);
+        k = ggml_l2_norm(ctx, k, 1e-6f);
+        ggml_tensor * out = ggml_gated_delta_net_rec(ctx, q, k, v, g, beta, state, rec, n_com, record);
+        // the op writes this batch's updates into rec in place: compare rec as it is after the op too
+        ggml_tensor * after = ggml_add(ctx, rec, ggml_scale(ctx, ggml_sum(ctx, out), 0.0f));
+        return ggml_concat(ctx, ggml_reshape_1d(ctx, out, ggml_nelements(out)),
+                ggml_reshape_1d(ctx, after, ggml_nelements(after)), 0);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) { continue; }
+            if (strcmp(t->name, "g") == 0) {
+                init_tensor_uniform(t, -20.0f, -1e-4f);
+            } else if (strcmp(t->name, "beta") == 0) {
+                init_tensor_uniform(t, 0.0f, 1.0f);
+            } else if (strcmp(t->name, "v") == 0) {
+                init_tensor_uniform(t, -0.3f, 5.0f);
+            } else if (strcmp(t->name, "rec") == 0) {
+                // k and delta rows, then exp(g) in (0, 1]
+                std::vector<float> data(ggml_nelements(t));
+                std::mt19937 rng(1234);
+                std::uniform_real_distribution<float> kd(-0.5f, 0.5f), ge(0.2f, 1.0f);
+                const int64_t row = t->ne[0];
+                for (int64_t s = 0; s < t->ne[2]; ++s) {
+                    for (int64_t r = 0; r < t->ne[1]; ++r) {
+                        for (int64_t i = 0; i < row; ++i) {
+                            data[(s * t->ne[1] + r) * row + i] = r % (2 * R + 1) == 2 * R ? ge(rng) : kd(rng);
+                        }
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (strcmp(t->name, "n_commit") == 0) {
+                std::vector<int32_t> data(2 * n_seqs);
+                for (int64_t s = 0; s < n_seqs; ++s) {
+                    data[2 * s]     = (int32_t) ((commit + s) % (R + 1));
+                    data[2 * s + 1] = (int32_t) (s % 2);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_GATED_DELTA_NET + GGML_OP_CPY (recurrent cache fusion)
 struct test_gated_delta_net_cache_fusion : public test_case {
     const ggml_type type;
@@ -13010,6 +13096,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_moe_reduce(2048, 15, 40, false, true));
     test_cases.emplace_back(new test_moe_reduce(2048, 16, 32, false, true));
 
+    for (int64_t n_seq_tokens : { 1, 4, 17 }) {
+        for (int commit : { 0, 3, 17 }) {
+            test_cases.emplace_back(new test_gated_delta_net_rec(4, 64, n_seq_tokens, 1, 3, 17, commit, true));
+            test_cases.emplace_back(new test_gated_delta_net_rec(16, 128, n_seq_tokens, 1, 3, 17, commit, true));
+        }
+    }
+    test_cases.emplace_back(new test_gated_delta_net_rec(4, 64, 4, 2, 3, 17, 5, true));
+    test_cases.emplace_back(new test_gated_delta_net_rec(4, 64, 4, 1, 3, 4, 2, true));
+    test_cases.emplace_back(new test_gated_delta_net_rec(4, 64, 64, 1, 3, 17, 5, false));
+    test_cases.emplace_back(new test_gated_delta_net_rec(16, 128, 64, 1, 3, 17, 9, false));
+    test_cases.emplace_back(new test_gated_delta_net_rec(4, 64, 1, 2, 3, 17, 16, false));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));

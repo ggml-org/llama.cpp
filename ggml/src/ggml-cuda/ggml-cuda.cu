@@ -3088,7 +3088,7 @@ static int ggml_cuda_gdn_state_rows_plan(
     const int64_t D        = S_v * S_v * v->ne[1];
     const int64_t K        = ggml_get_op_params_i32(gdn, 0);
     // the MMA path's candidates (ggml_cuda_gdn_mma_args_from_tensor) read src[5]
-    if (n_seqs != 1 || (g->ne[0] == 1 && K < n_tokens && S_v == 128 && q->ne[0] == 128)) {
+    if (n_seqs != 1 || (g->ne[0] == 1 && K < n_tokens && S_v == 128 && q->ne[0] == 128 && gdn->src[6] == nullptr)) {
         return -1;
     }
     ggml_cuda_gated_delta_net_fused_cache fused;

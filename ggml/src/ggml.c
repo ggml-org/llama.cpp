@@ -6500,6 +6500,56 @@ struct ggml_tensor * ggml_gated_delta_net(
     return result;
 }
 
+struct ggml_tensor * ggml_gated_delta_net_rec(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * rec,
+        struct ggml_tensor  * n_commit,
+        bool                  record) {
+    GGML_ASSERT(ggml_is_contiguous_rows(q) && ggml_is_contiguous_rows(k) && ggml_is_contiguous_rows(v));
+    GGML_ASSERT(ggml_is_contiguous(g) && ggml_is_contiguous(beta) && ggml_is_contiguous(state));
+    GGML_ASSERT(q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F32 && v->type == GGML_TYPE_F32);
+    GGML_ASSERT(g->type == GGML_TYPE_F32 && beta->type == GGML_TYPE_F32 && state->type == GGML_TYPE_F32);
+
+    const int64_t S_v      = v->ne[0];
+    const int64_t H        = v->ne[1];
+    const int64_t n_tokens = v->ne[2];
+    const int64_t n_seqs   = v->ne[3];
+    const int64_t R        = (rec->ne[1]/2 - 1)/2;
+
+    GGML_ASSERT(g->ne[0] == 1 && beta->ne[0] == 1);
+    GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H && state->ne[3] == n_seqs);
+    GGML_ASSERT(rec->type == GGML_TYPE_F32 && n_commit->type == GGML_TYPE_I32);
+    GGML_ASSERT(rec->ne[0] == S_v*H && rec->ne[1] == 2*(2*R + 1) && rec->ne[2] == n_seqs && rec->ne[3] == 1);
+    GGML_ASSERT(rec->nb[0] == sizeof(float) && rec->nb[1] == S_v*H*sizeof(float));
+    GGML_ASSERT(R >= 1 && R <= S_v);
+    GGML_ASSERT(n_commit->ne[0] == 2 && n_commit->ne[1] == n_seqs && ggml_is_contiguous(n_commit));
+    GGML_ASSERT(!record || n_tokens <= R);
+
+    const int64_t ne[4] = { S_v*H, n_tokens*n_seqs + S_v*n_seqs, 1, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    ggml_set_op_params_i32(result, 0, 1);
+    ggml_set_op_params_i32(result, 1, record ? 1 : 0);
+
+    result->op     = GGML_OP_GATED_DELTA_NET;
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = g;
+    result->src[4] = beta;
+    result->src[5] = state;
+    result->src[6] = rec;
+    result->src[7] = n_commit;
+
+    return result;
+}
+
 // ggml_lightning_indexer
 
 struct ggml_tensor * ggml_lightning_indexer(
