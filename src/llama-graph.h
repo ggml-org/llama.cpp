@@ -294,6 +294,16 @@ public:
     ggml_tensor * s_copy_main; // I32 [n_seqs]
     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
 
+    // ReplaySSM (llama_memory_recurrent::n_rs_rec): the SSM state source without the rollback snapshot, and the
+    // recorded updates each sequence commits first; null without
+    ggml_tensor * s_copy_s      = nullptr; // I32 [n_rs]
+    ggml_tensor * s_copy_s_main = nullptr; // I32 [n_seqs]
+    ggml_tensor * s_copy_s_tail = nullptr; // I32 [n_rs - 1]
+    ggml_tensor * rec_commit    = nullptr; // I32 [2, n_seqs]: updates to commit, and the half of the records
+
+    // fill the inputs from a recurrent memory context (also for the hybrid memories' inputs)
+    void set_input_rs(const llama_memory_recurrent_context * mctx_rs);
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse
@@ -1429,6 +1439,14 @@ struct llm_graph_context {
     llm_graph_input_rs * build_rs_inp() const;
 
     ggml_tensor * build_rs(
+            llm_graph_input_rs * inp,
+            ggml_tensor * s,
+                int32_t   state_size,
+                int32_t   n_seqs,
+            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
+
+    // the SSM state of a delta-net layer: as build_rs, but with ReplaySSM from the state without rollback snapshots
+    ggml_tensor * build_rs_s(
             llm_graph_input_rs * inp,
             ggml_tensor * s,
                 int32_t   state_size,

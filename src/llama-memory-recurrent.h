@@ -24,7 +24,8 @@ public:
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_rs_seq,
-        const layer_filter_cb & filter);
+        const layer_filter_cb & filter,
+                     uint32_t   n_rs_rec = 0);
 
     ~llama_memory_recurrent() = default;
 
@@ -78,6 +79,31 @@ public:
 
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
+    // ReplaySSM (ggml_gated_delta_net_rec): with n_rs_rec > 0 the SSM state has no rollback snapshots. A ubatch of at
+    // most n_rs_rec tokens records its updates instead of advancing the state, and the next ubatch commits the ones
+    // that were kept: all of them, or as many as a seq_rm left. The conv state keeps its snapshots (n_rs_seq).
+    // One sequence only.
+    uint32_t n_rs_rec = 0;
+
+    struct rec_state {
+        uint32_t  n    = 0;  // updates the last ubatch recorded
+        llama_pos p0   = -1; // the position of the first
+        uint32_t  m    = 0;  // updates the next ubatch commits
+        uint32_t  half = 0;  // the half of the records they are in (the next recording ubatch writes the other)
+    };
+    rec_state rec;
+
+    // set by apply for the ubatch being built: whether it records, and the updates it commits first and their half
+    bool     rec_recording   = false;
+    uint32_t rec_commit      = 0;
+    uint32_t rec_commit_half = 0;
+
+    bool rec_records(const llama_ubatch & ubatch) const {
+        return n_rs_rec > 0 && ubatch.n_seq_tokens <= n_rs_rec;
+    }
+
+    void rec_apply(const llama_ubatch & ubatch);
+
     // computed before each graph build
     uint32_t n = 0;
 
@@ -113,6 +139,8 @@ public:
     std::vector<ggml_tensor *> s_l;
     // a second conv history that must stay replicated across devices, so it cannot share the r row
     std::vector<ggml_tensor *> p_l;
+    // ReplaySSM records: two halves of [ssm_d_inner, 2 n_rs_rec + 1] per cell (see ggml_gated_delta_net_rec)
+    std::vector<ggml_tensor *> u_l;
 
 private:
     //const llama_model & model;
@@ -179,8 +207,17 @@ public:
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
     ggml_tensor * get_p_l(int32_t il) const;
+    ggml_tensor * get_u_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+
+    // ReplaySSM: the state source without the rollback snapshot (the SSM state has none), whether the ubatch records,
+    // and the updates it commits first (see llama_memory_recurrent::n_rs_rec)
+    int32_t  s_copy_s(int i) const;
+    uint32_t get_n_rs_rec() const;
+    bool     rec_records(const llama_ubatch & ubatch) const;
+    uint32_t rec_commit() const;
+    uint32_t rec_commit_half() const;
 
 private:
     const llama_memory_status status;

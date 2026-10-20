@@ -42,7 +42,9 @@ public:
     const layer_filter_cb & filter_recr = nullptr,
                             /* KV streaming of the attention layers, see llama_kv_cache */
                    size_t   attn_stream_resident_size = 0,
-                   size_t   attn_stream_resident_size_decode = 0);
+                   size_t   attn_stream_resident_size_decode = 0,
+                            /* ReplaySSM records of the recurrent layers, see llama_memory_recurrent */
+                 uint32_t   recurrent_n_rs_rec = 0);
 
     ~llama_memory_hybrid() = default;
 

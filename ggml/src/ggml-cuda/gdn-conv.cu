@@ -223,7 +223,7 @@ static bool gdn_conv_check(const ggml_cgraph * cgraph, int i, gdn_conv_match & m
 // cache, for rollback) are written by one kernel from the state and x, which also writes the concat when the conv
 // reads it at its own node. In short batches (the verify of a speculative step) this replaces the generic
 // non-contiguous concat (one block per channel for T + 3 columns) and the K copy launches.
-#define GDN_SNAP_MAX 8
+#define GDN_SNAP_MAX 32
 
 struct gdn_snaps {
     float * dst[GDN_SNAP_MAX]; // the copy's destination, [3 * C] contiguous

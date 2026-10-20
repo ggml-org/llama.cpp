@@ -202,6 +202,8 @@ llama_context::llama_context(
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
     }
+    cparams.n_rs_rec = params.rs_replay && cparams.n_rs_seq > 0 && llm_arch_supports_rs_replay(model.arch) ?
+        cparams.n_rs_seq + 1 : 0;
 
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
@@ -422,6 +424,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+    LLAMA_LOG_INFO("%s: n_rs_rec              = %u\n",   __func__, cparams.n_rs_rec);
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 
@@ -4142,6 +4145,7 @@ llama_context_params llama_context_default_params() {
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
+        /*.rs_replay                   =*/ false,
         /*.n_outputs_max               =*/ 0,
         /*.n_outputs_max_per_seq       =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
