@@ -215,6 +215,7 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_VLLM_D3:
         case COMMON_DECISION_TYPE_LFM2_D1:
         case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
+        case COMMON_DECISION_TYPE_H2O_LIGHTNING:
             return {"decisions"};
         case COMMON_DECISION_TYPE_GRANITE_SWITCH:
             return {"text", "decisions"};

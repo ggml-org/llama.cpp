@@ -1401,6 +1401,9 @@ class GGUFWriter:
     def add_decision_max_head_tokens(self, value: int) -> None:
         self.add_uint32(Keys.Decision.MAX_HEAD_TOKENS.format(arch=self.arch), value)
 
+    def add_decision_labels(self, labels: Sequence[str]) -> None:
+        self.add_array(Keys.Decision.LABELS.format(arch=self.arch), labels)
+
     def add_decision_temperature(self, name: str, value: float) -> None:
         self.add_float32(Keys.Decision.TEMPERATURE.format(arch=self.arch, name=name), value)
 

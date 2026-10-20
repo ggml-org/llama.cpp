@@ -1549,6 +1549,9 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         hparams.n_cls_out = classifier_labels.size();
     }
 
+    // for decision models
+    ml.get_arr(LLM_KV_DECISION_LABELS, decision_labels, false);
+
     // per-arch hparams
     load_arch_hparams(ml);
 
@@ -3433,6 +3436,14 @@ uint32_t llama_model_n_cls_out(const struct llama_model * model) {
 const char * llama_model_cls_label(const struct llama_model * model, uint32_t i) {
     if (i < model->classifier_labels.size()) {
         return model->classifier_labels[i].c_str();
+    }
+
+    return nullptr;
+}
+
+const char * llama_model_decision_label(const struct llama_model * model, uint32_t i) {
+    if (i < model->decision_labels.size()) {
+        return model->decision_labels[i].c_str();
     }
 
     return nullptr;

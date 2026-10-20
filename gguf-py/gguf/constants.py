@@ -344,6 +344,7 @@ class Keys:
         ROUTING_BLOCK_COUNT = "{arch}.decision.routing_block_count"
         HEAD_COUNT         = "{arch}.decision.head_count"
         MAX_HEAD_TOKENS    = "{arch}.decision.max_head_tokens"
+        LABELS             = "{arch}.decision.labels"  # the text of the token read for each option, in order
         TEMPERATURE        = "{arch}.decision.temperature.{name}"  # name: "<type>" or "<type>.<n_opt bucket>"
         SCORE_BIAS         = "{arch}.decision.score_bias.{n}.{i}"  # added to the logit of level i of a score question with n levels
 
@@ -6339,6 +6340,7 @@ class DecisionType:
     LFM2_D1 = "lfm2-d1"  # same as openjev, the labels depend on the question type
     LFM2_D1_OMNI = "lfm2-d1-omni"  # same head as laya on a bidirectional LFM2 trunk, other prompt layout
     GRANITE_SWITCH = "granite-switch"  # same as openjev, run by the decision aLoRA of granite switch
+    H2O_LIGHTNING = "h2o-lightning"  # same as openjev, labels read after an answer prefill
 
 
 class VisionProjectorType:

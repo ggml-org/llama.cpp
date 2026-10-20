@@ -1175,6 +1175,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_LFM2_D1,        "lfm2-d1"       },
     { COMMON_DECISION_TYPE_LFM2_D1_OMNI,   "lfm2-d1-omni"  },
     { COMMON_DECISION_TYPE_GRANITE_SWITCH, "granite-switch"},
+    { COMMON_DECISION_TYPE_H2O_LIGHTNING,  "h2o-lightning" },
     // for future models, ALWAYS add org name prefix to avoid name collisions, e.g. "orgname-modelname"
 };
 
