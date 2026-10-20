@@ -783,12 +783,17 @@ bool llama_kv_cache::bounded_prefix_available(const llama_kv_cells & full,size_t
     if (bounded_pending || !n_swa || n_swa > INT32_MAX || n_stream != 1 || n_seq_max != 1 ||
             (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED && swa_type != LLAMA_SWA_TYPE_SYMMETRIC) ||
             retained > full.size() || full.is_empty(uint32_t(retained-1))) return false;
-    const auto last=full.pos_get(uint32_t(retained-1));
+    auto query=full.pos_get(uint32_t(retained-1));
+    // Single-position appends query the next token. A native checkpoint need not retain the previous query's oldest row.
+    if (hparams.n_pos_per_embd() == 1) {
+        if (query == INT32_MAX) return false;
+        ++query;
+    }
     size_t first=0, end=retained;
     while (first < end) {
         const auto middle=first+(end-first)/2;
         if (full.is_empty(uint32_t(middle))) return false;
-        if (llama_hparams::is_masked_swa(n_swa,swa_type,full.pos_get(uint32_t(middle)),last)) first=middle+1;
+        if (llama_hparams::is_masked_swa(n_swa,swa_type,full.pos_get(uint32_t(middle)),query)) first=middle+1;
         else end=middle;
     }
     return llama_kv_stream_bounded_contains(full,first,retained,v_cells[0],has_cell_ext());

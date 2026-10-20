@@ -1004,6 +1004,37 @@ static void test_gemma_lifecycle(testing & t, llama_model * model) {
     if (!t.assert_true(append(0,17,9))) return;
     t.assert_equal(llama_pos(16),cache.seq_pos_max(0));
     t.assert_equal(size_t(17),stream->tokens());
+
+    cache.clear(true);
+    if (!t.assert_true(append(0,1329,3))) return;
+    image_writer checkpoint;
+    cache.state_write(checkpoint,0,LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    const auto checkpoint_window=local_window();
+    if (!t.assert_true(append(1329,1027,3))) return;
+    const auto full_before_restore=positions(*cache.get_base());
+    image_reader partial(checkpoint.bytes);
+    cache.state_read(partial,0,LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    t.assert_equal(checkpoint.bytes.size(),partial.n_bytes());
+    t.assert_equal(size_t(2356),stream->tokens());
+    t.assert_true(full_before_restore == positions(*cache.get_base()));
+    t.assert_true(checkpoint_window == local_window());
+    t.assert_equal(llama_pos(305),cache.get_swa()->seq_pos_min(0));
+    t.assert_true(llama_hparams::is_masked_swa(model->hparams.n_swa,model->hparams.swa_type,304,1328));
+    t.assert_true("a checkpoint without enough history cannot replay two tokens",!cache.seq_rm(0,1327,-1));
+    t.assert_equal(size_t(2356),stream->tokens());
+    t.assert_true(full_before_restore == positions(*cache.get_base()));
+    t.assert_true(checkpoint_window == local_window());
+    if (!t.assert_true(cache.get_swa()->seq_rm(0,305,306))) return;
+    t.assert_true("a missing row visible to the next query still rejects",!cache.seq_rm(0,1328,-1));
+    t.assert_equal(size_t(2356),stream->tokens());
+    t.assert_true(full_before_restore == positions(*cache.get_base()));
+    image_reader retry(checkpoint.bytes);
+    cache.state_read(retry,0,LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    t.assert_true(checkpoint_window == local_window());
+    if (!t.assert_true("a native partial checkpoint permits replay of its final token",cache.seq_rm(0,1328,-1))) return;
+    t.assert_equal(size_t(1328),stream->tokens());
+    if (!t.assert_true(append(1328,1,3))) return;
+    t.assert_true("checkpoint replay recovers exact visible local KV",checkpoint_window == local_window());
 }
 
 // Measure native local attention before storage exists, then reuse one parent through both text phases.
