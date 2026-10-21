@@ -1607,7 +1607,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				[...request.messages, { content: compactionPrompt, role: MessageRole.USER }],
 				{
 					...this.getApiOptions(),
-					custom: { chat_template_kwargs: { enable_thinking: false } },
 					model: effectiveModel,
 					onChunk: (chunk: string) => {
 						summary += chunk;
