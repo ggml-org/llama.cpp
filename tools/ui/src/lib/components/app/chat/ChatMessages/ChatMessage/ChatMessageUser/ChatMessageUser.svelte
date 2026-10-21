@@ -29,7 +29,11 @@
 	const processingState = useProcessingState();
 
 	const currentConfig = $derived(settingsStore.config);
-	const isActivelyProcessing = $derived(isLastUserMessage && chatStore.isLoading);
+	// A compaction summary reports its own progress on the compaction row, so
+	// the summarized turn does not show live reading stats while it runs.
+	const isActivelyProcessing = $derived(
+		isLastUserMessage && chatStore.isLoading && !chatStore.isCompacting(message.convId)
+	);
 
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {

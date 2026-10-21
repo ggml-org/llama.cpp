@@ -52,6 +52,9 @@
 	let isStreaming = $derived(chatStore.isStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
+	// A compaction summary reports its own progress on the compaction row, so
+	// this turn stays quiet while it runs instead of duplicating the indicator.
+	let isCompacting = $derived(chatStore.isCompacting(message.convId));
 
 	// during a router auto-load the message has no model yet: target the model frozen in the
 	// persisted stream state (survives a reload), then fall back to the dropdown selection
@@ -66,6 +69,7 @@
 	let showProcessingInfoTop = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
+			!isCompacting &&
 			hasNoContent &&
 			!isAgentic &&
 			isLastAssistantMessage
@@ -74,6 +78,7 @@
 	let showProcessingInfoBottom = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
+			!isCompacting &&
 			(!hasNoContent || isAgentic) &&
 			isLastAssistantMessage
 	);
