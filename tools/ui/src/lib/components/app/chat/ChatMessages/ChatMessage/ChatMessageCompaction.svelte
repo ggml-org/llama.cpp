@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FoldVertical } from '@lucide/svelte';
+	import { FoldVertical, Loader2 } from '@lucide/svelte';
 	import {
 		ChatMessageActionIcons,
 		ChatMessageAssistantModel,
@@ -130,8 +130,8 @@
 			bind:open
 			class="my-2"
 			collapsible={hasContent}
-			icon={FoldVertical}
-			iconClass="h-3.5 w-3.5"
+			icon={isSummarizing ? Loader2 : FoldVertical}
+			iconClass={isSummarizing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
 			onToggle={handleToggle}
 			shimmerTitle={isSummarizing || !hasContent}
 			{title}
