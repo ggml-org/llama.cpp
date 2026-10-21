@@ -7,6 +7,30 @@ using namespace ggml_cuda_mma;
 
 #include "mmq.cuh"
 
+// RDNA4: the int32 WMMA accumulator of a K block starts at the bits of 1.5 * 2^23, so its bits read as a float are
+// 1.5 * 2^23 + sum while |sum| < 2^22 (a 32-value int8 block sums to at most 32 * 128 * 128 = 2^19). Subtracting
+// 1.5 * 2^23 gives the sum exactly, as v_cvt_f32_i32 does, but as a v_sub_f32, which dual-issues (VOPD) with the scale
+// FMAs; v_cvt_f32_i32 has no VOPD form.
+template <typename tile_C>
+static __device__ __forceinline__ void ggml_cuda_mmq_acc_init(tile_C & C) {
+#if defined(RDNA4)
+#pragma unroll
+    for (int l = 0; l < tile_C::ne; ++l) {
+        C.x[l] = 0x4B400000;
+    }
+#else
+    GGML_UNUSED(C);
+#endif // defined(RDNA4)
+}
+
+static __device__ __forceinline__ float ggml_cuda_mmq_acc_f32(const int x) {
+#if defined(RDNA4)
+    return __int_as_float(x) - 12582912.0f;
+#else
+    return x;
+#endif // defined(RDNA4)
+}
+
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_0_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -187,13 +211,14 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
                 tile_C C;
+                ggml_cuda_mmq_acc_init(C);
                 mma(C, A[n], B);
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_A::I + tile_C::get_i(l);
                     const float dA = x_df[i*sram_stride + k0/QI8_0];
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*dA*dB;
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += ggml_cuda_mmq_acc_f32(C.x[l])*dA*dB;
                 }
             }
         }
@@ -351,13 +376,14 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
                 tile_C C;
+                ggml_cuda_mmq_acc_init(C);
                 mma(C, A[n], B);
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_A::I + tile_C::get_i(l);
                     float2 dmA = __half22float2(x_dm[i*sram_stride + k0/QI8_1]);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA.x*dsB.x*C.x[l];
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA.x*dsB.x*ggml_cuda_mmq_acc_f32(C.x[l]);
                     sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA.y*dsB.y;
                 }
             }
@@ -515,12 +541,13 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
                 tile_C C;
+                ggml_cuda_mmq_acc_init(C);
                 mma(C, A[n], B);
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_C::I + tile_C::get_i(l);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * x_df[i*sram_stride + k0/4] * dB;
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += ggml_cuda_mmq_acc_f32(C.x[l]) * x_df[i*sram_stride + k0/4] * dB;
                 }
             }
         }
@@ -1049,13 +1076,15 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
                 tile_C C;
+                ggml_cuda_mmq_acc_init(C);
                 mma(C, A[n], B);
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_C::I + tile_C::get_i(l);
                     const int8_t * sc = (const int8_t *) (x_sc + i*sram_stride + k00/16);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[i*sram_stride] * dB;
+                    // |C| <= 16 * 32 * 128 and |sc| <= 128, so |C * sc| <= 2^23: the float product is exact, as the int product was
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += ggml_cuda_mmq_acc_f32(C.x[l]) * (float) sc[k01/4] * x_df[i*sram_stride] * dB;
                 }
             }
         }
