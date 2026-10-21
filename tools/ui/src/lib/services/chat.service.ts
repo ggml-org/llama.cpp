@@ -41,6 +41,7 @@ import type {
 	ApiChatMessageData,
 	ApiStreamSession
 } from '$lib/types/api';
+import type { OpenAIToolDefinition } from '$lib/types/mcp';
 import { isAbortError } from '$lib/utils/abort';
 import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
@@ -835,13 +836,15 @@ export class ChatService {
 	/**
 	 * Fire-and-forget request to pre-encode the conversation in the server's KV cache.
 	 * Re-submits the full conversation with n_predict=0 so the server processes the prompt
-	 * without generating tokens, warming the cache for the next turn.
+	 * without generating tokens, warming the cache for the next turn. The tools the next
+	 * turn offers render ahead of the messages, so they go along to warm that very prefix.
 	 */
 	static async preEncode(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		model?: string | null,
 		excludeReasoning?: boolean,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		tools?: OpenAIToolDefinition[]
 	): Promise<ChatMessageTimings | null> {
 		const normalizedMessages: ApiChatMessageData[] =
 			await ChatService.normalizeMessagesForApi(messages);
@@ -861,7 +864,8 @@ export class ChatService {
 				return mapped;
 			}),
 			n_predict: 0,
-			stream: false
+			stream: false,
+			tools: tools && tools.length > 0 ? tools : undefined
 		};
 
 		if (model) {

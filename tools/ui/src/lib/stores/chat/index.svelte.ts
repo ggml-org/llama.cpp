@@ -46,6 +46,7 @@ import type {
 	DatabaseMessageExtra,
 	ErrorDialogState
 } from '$lib/types';
+import type { AgenticToolPolicy } from '$lib/types/agentic';
 import {
 	canCompactMessages,
 	compactionCut,
@@ -1251,10 +1252,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				await DatabaseService.updateMessage(messageId, updates);
 			}
 		};
-		const toolPolicy = {
-			disabledToolCategories: conversationsStore.preferences.getDisabledToolCategories(),
-			disabledTools: conversationsStore.preferences.getDisabledTools()
-		};
+		const toolPolicy = this.toolPolicy();
 
 		{
 			const agenticResult = await agenticStore.runAgenticFlow({
@@ -1592,10 +1590,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			// reuses the prefix it cached and only the instruction is new.
 			const request = await agenticStore.requestFor(
 				await ChatService.normalizeMessagesForApi(source.slice(0, cut)),
-				{
-					disabledToolCategories: conversationsStore.preferences.getDisabledToolCategories(),
-					disabledTools: conversationsStore.preferences.getDisabledTools()
-				}
+				this.toolPolicy()
 			);
 			const configValue = settingsStore.config;
 			const compactionPrompt =
@@ -1682,6 +1677,14 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 	}
 
+	/** The tool policy of the active conversation, the one its requests run under. */
+	private toolPolicy(): AgenticToolPolicy {
+		return {
+			disabledToolCategories: conversationsStore.preferences.getDisabledToolCategories(),
+			disabledTools: conversationsStore.preferences.getDisabledTools()
+		};
+	}
+
 	/**
 	 * Pre-encodes the compacted branch and stamps the returned prompt
 	 * timings on the compaction node, so the context gauge reflects the
@@ -1712,8 +1715,20 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 			const allMessages = await conversationsStore.getConversationMessages(convId);
 			const branchPath = [...filterByLeafNodeId(allMessages, nodeId, false)];
-			const messages = sliceAtLastCompaction(branchPath);
-			const timings = await ChatService.preEncode(messages, model, undefined, signal);
+			// The next turn reads the compacted branch with the tools, message
+			// shaping and reasoning handling of the chat, so the pre-encode sends
+			// the same and warms the very prefix that turn extends.
+			const request = await agenticStore.requestFor(
+				await ChatService.normalizeMessagesForApi(sliceAtLastCompaction(branchPath)),
+				this.toolPolicy()
+			);
+			const timings = await ChatService.preEncode(
+				request.messages,
+				model,
+				Boolean(settingsStore.config.excludeReasoningFromContext),
+				signal,
+				request.tools
+			);
 
 			if (!timings || signal.aborted) {
 				if (!signal.aborted) {
