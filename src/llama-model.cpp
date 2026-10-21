@@ -1753,7 +1753,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             const std::string name = tn_scale.str();
             const ggml_tensor * meta = ml.get_tensor_meta(name.c_str());
             if (meta == nullptr) {
-                return nullptr;
+                const int64_t tid = gguf_find_tensor(ml.metadata, name.c_str());
+                if (tid == -1) {
+                    return nullptr;
+                }
+                const int64_t * ne = gguf_get_tensor_ne(ml.metadata, tid);
+                return create_tensor(tn_scale, {ne[0], ne[1]}, TENSOR_NOT_REQUIRED);
             }
             if (meta->ne[1] > 1) {
                 return create_tensor(tn_scale, {meta->ne[0], meta->ne[1]}, TENSOR_NOT_REQUIRED);

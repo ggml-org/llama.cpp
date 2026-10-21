@@ -2995,13 +2995,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cur = ggml_mul(ctx0, cur, v_scale);
         }
     } else {
-        // A cache without an exported scale stores raw FP8 values.
-        if ((k->type == GGML_TYPE_F8_E4M3 && !k_scale) || (v->type == GGML_TYPE_F8_E4M3 && !v_scale)) {
+        // A cache without an exported scale uses a unit scale.
+        if ((ggml_needs_scale(k->type) && !k_scale) || (ggml_needs_scale(v->type) && !v_scale)) {
             ggml_tensor * unit_scale = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1), 1.0f);
-            if (k->type == GGML_TYPE_F8_E4M3 && !k_scale) {
+            if (ggml_needs_scale(k->type) && !k_scale) {
                 k_scale = unit_scale;
             }
-            if (v->type == GGML_TYPE_F8_E4M3 && !v_scale) {
+            if (ggml_needs_scale(v->type) && !v_scale) {
                 v_scale = unit_scale;
             }
         }
@@ -3197,24 +3197,20 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
-static bool is_type_scaled(ggml_type type) {
-    return type == GGML_TYPE_F8_E4M3;
-}
-
 static void build_attn_scale_kv_inputs(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         ggml_tensor * & k,
         ggml_tensor * & v,
         int32_t il) {
-    if (is_type_scaled(mctx->type_k()) && k) {
+    if (ggml_needs_scale(mctx->type_k()) && k) {
         ggml_tensor * scale = mctx->get_k_scale(il);
         if (scale) {
             k = ggml_div(ctx, k, scale);
         }
     }
 
-    if (is_type_scaled(mctx->type_v()) && v) {
+    if (ggml_needs_scale(mctx->type_v()) && v) {
         ggml_tensor * scale = mctx->get_v_scale(il);
         if (scale) {
             v = ggml_div(ctx, v, scale);
@@ -3282,8 +3278,8 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * kq_mask = inp->get_kq_mask();
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il,
-            is_type_scaled(mctx_cur->type_k()) ? mctx_cur->get_k_scale(il) : nullptr,
-            is_type_scaled(mctx_cur->type_v()) ? mctx_cur->get_v_scale(il) : nullptr);
+            ggml_needs_scale(mctx_cur->type_k()) ? mctx_cur->get_k_scale(il) : nullptr,
+            ggml_needs_scale(mctx_cur->type_v()) ? mctx_cur->get_v_scale(il) : nullptr);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {
@@ -3570,8 +3566,8 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il,
-            is_type_scaled(mctx_cur->type_k()) ? mctx_cur->get_k_scale(il) : nullptr,
-            is_type_scaled(mctx_cur->type_v()) ? mctx_cur->get_v_scale(il) : nullptr);
+            ggml_needs_scale(mctx_cur->type_k()) ? mctx_cur->get_k_scale(il) : nullptr,
+            ggml_needs_scale(mctx_cur->type_v()) ? mctx_cur->get_v_scale(il) : nullptr);
     cb(cur, "kqv_out", il);
 
     if (v_rot) {
