@@ -193,18 +193,38 @@
               port="''${LLAMA_ARG_PORT:-8080}"
               ctx_size="''${LLAMA_ARG_CTX_SIZE:-262144}"
               resident_mib="''${LLAMA_ARG_KV_RESIDENT_MIB:-450}"
-              resident_mib_decode="''${LLAMA_ARG_KV_RESIDENT_MIB_DECODE:-2100}"
+              # Drafts roll back from recorded delta-net updates instead of state snapshots (ReplaySSM): the recurrent
+              # buffer is 274 instead of 598.5 MiB with the drafts below, n-gram drafts roll back in place instead of
+              # checkpoint, restore and replay, and the verify writes no snapshots. The decode budget takes the memory
+              # it frees: 2420 instead of 2100 MiB decoded 6.3% faster at 262k (peak 16,196 of 16,304 MiB, measured
+              # without a desktop session). LLAMA_SPEC_RS_REPLAY=0 keeps the snapshots, and with them the previous
+              # drafts and budget (MTP 3, ngram-mod n_max 16, 2100 MiB), which fit beside them.
+              rs_replay="''${LLAMA_SPEC_RS_REPLAY:-1}"
+              if [ "$rs_replay" != 0 ]; then
+                rs_replay_args=(--spec-rs-replay)
+                rs_replay_note=", ReplaySSM rollback"
+                draft_n_max=4
+                ngram_n_max=32
+                resident_mib_decode_default=2420
+              else
+                rs_replay_args=()
+                rs_replay_note=", state snapshots"
+                draft_n_max=3
+                ngram_n_max=16
+                resident_mib_decode_default=2100
+              fi
+              resident_mib_decode="''${LLAMA_ARG_KV_RESIDENT_MIB_DECODE:-$resident_mib_decode_default}"
               # The model's embedded Qwen template defaults to reasoning effort xhigh, which can reason through the
               # whole token budget without answering. Requests can still ask for more via reasoning_effort.
               reasoning_effort="''${LLAMA_REASONING_EFFORT:-medium}"
               alias_name="''${LLAMA_ARG_ALIAS:-qwen3.8-27b}"
-              # MTP drafts 3 tokens every step; ngram-mod drafts instead when the output repeats the context (code
-              # being copied or edited): up to 16 tokens after a 24-token match. On copies and edits that decoded 2-2.6x
-              # faster than MTP alone at 8k and 1.8x at 71k; on reasoning it rarely drafts (about -2% at 71k). n_max 64
-              # was faster at 8k but slower at depth. The match length stays at the default 24: in agent sessions its
-              # false drafts (~80-100 ms each: checkpoint, 17-token verify, restore and replay) cost under 0.5% of decode
-              # with 24 and 32 alike, and the longest coding session gained 4.4% with 24. A later
-              # --spec-ngram-mod-n-match overrides it.
+              # MTP drafts 4 tokens every step; ngram-mod drafts instead when the output repeats the context (code
+              # being copied or edited): up to 32 tokens after a 24-token match (n_min 12). With ReplaySSM, against MTP
+              # 3 and n_max 16: explain 78.0 -> 80.9 t/s at 8k and 59.9 -> 63.5 at 139k, verbatim copy 290.7 -> 422.5
+              # at 8k and 143.7 -> 172.8 at 139k. A 16-token match (n_min 8) copied as fast but drafted twice as many
+              # speculative n-gram tokens on reasoning. With snapshots, n-gram drafts on copies and edits decoded
+              # 2-2.6x faster than MTP alone at 8k and 1.8x at 71k; on reasoning they rarely draft. A later
+              # --spec-draft-n-max or --spec-ngram-mod-n-* overrides these.
               # Its decode buffers take ~40 MiB more VRAM; measured without a desktop session (peak 16,140 of 16,304
               # MiB at 71k). LLAMA_SPEC_TYPE=draft-mtp turns n-gram drafts off.
               # (Not LLAMA_ARG_SPEC_TYPE: the server reads that too, and --spec-type adds to the list.)
@@ -215,7 +235,7 @@
               # --spec-draft-sampling greedy overrides it.
               spec_type="''${LLAMA_SPEC_TYPE:-draft-mtp,ngram-mod}"
               spec_note=""
-              case "$spec_type" in *ngram-mod*) spec_note=" (ngram-mod n_max 16, n_min 12, n_match 24)" ;; esac
+              case "$spec_type" in *ngram-mod*) spec_note=" (ngram-mod n_max $ngram_n_max, n_min 12, n_match 24)" ;; esac
 
               {
                 echo "=========================================================="
@@ -226,7 +246,7 @@
                 echo " Context:     $ctx_size tokens"
                 echo " KV resident: $resident_mib MiB (prefill), $resident_mib_decode MiB (decode)"
                 echo " Reasoning:   effort $reasoning_effort by default (per request: reasoning_effort)"
-                echo " Speculative: $spec_type$spec_note, probabilistic MTP drafts"
+                echo " Speculative: $spec_type$spec_note, $draft_n_max probabilistic MTP drafts$rs_replay_note"
                 echo " Devices:     ROCR_VISIBLE_DEVICES=$ROCR_VISIBLE_DEVICES"
                 echo " Tuning env:  GPU_MAX_HW_QUEUES=''${GPU_MAX_HW_QUEUES:-default}" \
                   "ROC_ACTIVE_WAIT_TIMEOUT=''${ROC_ACTIVE_WAIT_TIMEOUT:-default}" \
@@ -253,10 +273,12 @@
                 --kv-resident-mib "$resident_mib" \
                 --kv-resident-mib-decode "$resident_mib_decode" \
                 --spec-type "$spec_type" \
-                --spec-ngram-mod-n-max 16 \
+                --spec-draft-n-max "$draft_n_max" \
+                --spec-ngram-mod-n-max "$ngram_n_max" \
                 --spec-ngram-mod-n-min 12 \
                 --spec-ngram-mod-n-match 24 \
                 --spec-draft-sampling probabilistic \
+                "''${rs_replay_args[@]}" \
                 --chat-template-kwargs "{\"reasoning_effort\":\"$reasoning_effort\"}" \
                 -b 2048 \
                 -ub 512 \
