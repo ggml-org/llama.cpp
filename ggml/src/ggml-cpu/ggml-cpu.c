@@ -1791,7 +1791,7 @@ static void ggml_compute_forward_mul_mat_id(
         ggml_barrier(params->threadpool);
 
         const float * sd = (const float *) scale->data;
-        const bool per_ch_exp = scale->ne[1] == ne02;
+        const bool per_ch_exp = scale->ne[0] == ne0 && scale->ne[1] == ne02;
         const bool per_expert = ggml_nelements(scale) == ne02;
         const int64_t nr = ne1 * ne2;
         for (int64_t ir = ith; ir < nr; ir += nth) {
