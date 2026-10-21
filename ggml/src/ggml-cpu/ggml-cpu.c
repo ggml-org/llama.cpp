@@ -2941,7 +2941,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_ADD:
                 case GGML_OP_ADD_ID:
                     {
-                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3) {
+                        if (ggml_is_quantized(node->src[0]->type) || ggml_needs_scale(node->src[0]->type)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
                     } break;
@@ -2989,7 +2989,7 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_OUT_PROD:
                     {
-                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3 ||
+                        if (ggml_is_quantized(node->src[0]->type) || ggml_needs_scale(node->src[0]->type) ||
                             node->src[0]->type == GGML_TYPE_F16) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
