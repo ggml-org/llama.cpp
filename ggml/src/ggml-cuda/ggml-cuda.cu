@@ -2261,6 +2261,7 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     // mmvq can fold the per-expert weight scale (src[3]) into its epilogue for NVFP4
     const bool scale_fold = dst->src[3] != NULL &&
         src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[3]) == src0->ne[2] &&
+        ggml_is_contiguous(dst->src[3]) &&
         ggml_cuda_should_fuse_mul_mat_vec_q(dst);
     ggml_cuda_mm_fusion_args_host fusion = {};
     if (scale_fold) {
@@ -2424,7 +2425,8 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 #define CUDA_MUL_MAT_SCALE_BLOCK_SIZE 256
 static __global__ void mul_mat_scale_dense(float * dst, const float * scale,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3,
-        int64_t sne0, int64_t sne1, int64_t sne2, int64_t sne3) {
+        int64_t sne0, int64_t sne1, int64_t sne2, int64_t sne3,
+        size_t snb0, size_t snb1, size_t snb2, size_t snb3) {
     const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= ne0*ne1*ne2*ne3) {
         return;
@@ -2433,13 +2435,14 @@ static __global__ void mul_mat_scale_dense(float * dst, const float * scale,
     const int64_t i1 = (i / ne0) % ne1;
     const int64_t i2 = (i / (ne0*ne1)) % ne2;
     const int64_t i3 = i / (ne0*ne1*ne2);
-    const int64_t si = (i0 % sne0) + (i1 % sne1)*sne0 + (i2 % sne2)*sne0*sne1 + (i3 % sne3)*sne0*sne1*sne2;
-    dst[i] *= scale[si];
+    const size_t si = (i0 % sne0)*snb0 + (i1 % sne1)*snb1 + (i2 % sne2)*snb2 + (i3 % sne3)*snb3;
+    dst[i] *= *(const float *) ((const char *) scale + si);
 }
 
-// sne0 == 0: scalar per-expert scale[expert]; sne0 > 0: per-channel-per-expert scale[i0 + expert*sne0]
+// strides are in bytes; channel_stride is zero for per-expert scalar scales
 static __global__ void mul_mat_scale_id(float * dst, const float * scale, const int32_t * ids,
-        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ids_s0, int64_t ids_s1, int64_t sne0) {
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ids_s0, int64_t ids_s1,
+        size_t channel_stride, size_t expert_stride) {
     const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= ne0*ne1*ne2) {
         return;
@@ -2448,13 +2451,13 @@ static __global__ void mul_mat_scale_id(float * dst, const float * scale, const 
     const int64_t i1 = (i / ne0) % ne1;
     const int64_t i2 = i / (ne0*ne1);
     const int64_t expert = ids[i1*ids_s0 + i2*ids_s1];
-    dst[i] *= scale[sne0 > 0 ? i0 + expert*sne0 : expert];
+    dst[i] *= *(const float *) ((const char *) scale + i0*channel_stride + expert*expert_stride);
 }
 
 static void ggml_cuda_op_mul_mat_scale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const bool is_id = dst->op == GGML_OP_MUL_MAT_ID;
     const ggml_tensor * scale = is_id ? dst->src[3] : dst->src[2];
-    GGML_ASSERT(scale != NULL && scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale));
+    GGML_ASSERT(scale != NULL && scale->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_is_contiguous(dst));
 
     float       * dst_d   = (float       *) dst->data;
@@ -2474,13 +2477,15 @@ static void ggml_cuda_op_mul_mat_scale(ggml_backend_cuda_context & ctx, ggml_ten
         const int64_t blocks = (total + CUDA_MUL_MAT_SCALE_BLOCK_SIZE - 1) / CUDA_MUL_MAT_SCALE_BLOCK_SIZE;
         mul_mat_scale_id<<<blocks, CUDA_MUL_MAT_SCALE_BLOCK_SIZE, 0, stream>>>(
             dst_d, scale_d, (const int32_t *) ids->data, ne0, ne1, ne2,
-            ids->nb[0]/sizeof(int32_t), ids->nb[1]/sizeof(int32_t), per_channel_expert ? scale->ne[0] : 0);
+            ids->nb[0]/sizeof(int32_t), ids->nb[1]/sizeof(int32_t),
+            per_channel_expert ? scale->nb[0] : 0, per_channel_expert ? scale->nb[1] : scale->nb[0]);
     } else {
         const int64_t total  = ne0*ne1*ne2*ne3;
         const int64_t blocks = (total + CUDA_MUL_MAT_SCALE_BLOCK_SIZE - 1) / CUDA_MUL_MAT_SCALE_BLOCK_SIZE;
         mul_mat_scale_dense<<<blocks, CUDA_MUL_MAT_SCALE_BLOCK_SIZE, 0, stream>>>(
             dst_d, scale_d, ne0, ne1, ne2, ne3,
-            scale->ne[0], scale->ne[1], scale->ne[2], scale->ne[3]);
+            scale->ne[0], scale->ne[1], scale->ne[2], scale->ne[3],
+            scale->nb[0], scale->nb[1], scale->nb[2], scale->nb[3]);
     }
     CUDA_CHECK(cudaGetLastError());
 }
