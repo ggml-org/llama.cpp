@@ -27,6 +27,11 @@
 		 * has nothing to show yet and turns into a collapsible once it has.
 		 */
 		collapsible?: boolean;
+		/**
+		 * Drop the reasoning-style rule and indent, for a body that spans the
+		 * message width on its own.
+		 */
+		flushBody?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -35,6 +40,7 @@
 		children,
 		class: className = '',
 		collapsible = true,
+		flushBody = false,
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
@@ -158,7 +164,12 @@
 		<Collapsible.Content forceMount>
 			<CollapsibleRegion {open}>
 				<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
-					<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
+					<div
+						class={cn(
+							'min-w-0 pb-2 my-2',
+							!flushBody && 'border-l border-muted-foreground/20 pl-4'
+						)}
+					>
 						{@render children()}
 					</div>
 				</div>

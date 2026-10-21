@@ -2,7 +2,6 @@
 	import { FoldVertical, Loader2 } from '@lucide/svelte';
 	import {
 		ChatMessageActionIcons,
-		ChatMessageAssistantModel,
 		ChatMessageAssistantStatistics,
 		ChatMessageEditForm,
 		CollapsibleContentBlock,
@@ -11,7 +10,7 @@
 	import { COLLAPSIBLE_TRANSITION_MS } from '$lib/constants';
 	import { getChatMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, conversationsStore, serverStore, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import type { DatabaseMessage } from '$lib/types';
 	import { compactionTokensBefore, formatNumber } from '$lib/utils';
 
@@ -32,11 +31,6 @@
 	const editCtx = getChatMessageEditContext();
 
 	const currentConfig = $derived(settingsStore.config);
-	const isRouter = $derived(serverStore.isRouterMode);
-	// The model the server reported for the summary, so a compaction says who
-	// wrote it and the selector can re-summarize with another child.
-	const displayedModel = $derived(message.model ?? null);
-
 	const hasContent = $derived(message.content.trim().length > 0);
 
 	// Only the node a running summary writes to reports progress: a finished
@@ -130,6 +124,7 @@
 			bind:open
 			class="my-2"
 			collapsible={hasContent}
+			flushBody
 			icon={isSummarizing ? Loader2 : FoldVertical}
 			iconClass={isSummarizing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
 			onToggle={handleToggle}
@@ -139,27 +134,17 @@
 		>
 			<MarkdownContent class="text-muted-foreground" content={message.content} />
 
-			<!-- The summary's own metadata lives with the summary, so the divider
-			     stays a one-line headline. -->
-			{#if displayedModel}
-				<div class="info my-6 grid gap-4 tabular-nums">
-					<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
-						<ChatMessageAssistantModel
-							{displayedModel}
-							isLoading={chatStore.isLoading}
-							{isRouter}
-							{onRegenerate}
-						/>
-
-						<ChatMessageAssistantStatistics
-							isLoading={chatStore.isLoading}
-							{message}
-							{processingState}
-							showMessageStats={currentConfig.showMessageStats}
-						/>
-					</div>
-				</div>
-			{/if}
+			<!-- The summary's own statistics live with the summary, so the divider
+			     stays a one-line headline. Only the conversation model writes the
+			     summary, so there is no selector to swap it with. -->
+			<div class="info my-6 grid gap-4 tabular-nums">
+				<ChatMessageAssistantStatistics
+					isLoading={chatStore.isLoading}
+					{message}
+					{processingState}
+					showMessageStats={currentConfig.showMessageStats}
+				/>
+			</div>
 
 			{#if hasContent && !isSummarizing}
 				<!-- Copy, edit, fork, regenerate and delete all apply to the summary:
