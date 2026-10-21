@@ -523,11 +523,6 @@ struct mtmd_context {
 
     // generation context
     struct clip_ctx * ctx_gen_a; // audio
-    std::vector<int32_t> gen_out_codes; // this frame's 16 sampled codes (GEN_CODE)
-    std::vector<float>   gen_out_feats; // this frame's continuous features, if any (GEN_CODE)
-    std::vector<float>   gen_out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
-    std::vector<float>   gen_out_audio; // decoded PCM samples for the current frame (GEN_WAV)
-    std::vector<uint8_t> gen_out_state; // state to feed into the next GEN_WAV call
 
     bool print_timings;
     int n_threads;
@@ -2080,7 +2075,6 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     mtmd_gen_inp inp{};
     inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
-    inp.seed = UINT32_MAX;
     if (!ctx->ctx_gen_a) {
         return inp;
     }
@@ -2104,10 +2098,56 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     return inp;
 }
 
-static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+struct mtmd_gen_state {
+    clip_ctx * ctx_clip = nullptr;
+    clip_gen_state * clip_state = nullptr;
+
+    std::vector<int32_t> out_codes; // this frame's 16 sampled codes (GEN_CODE)
+    std::vector<float>   out_feats; // this frame's continuous features, if any (GEN_CODE)
+    std::vector<float>   out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
+    std::vector<float>   out_audio; // decoded PCM samples for the current frame (GEN_WAV)
+
+    ~mtmd_gen_state() {
+        clip_gen_state_free(clip_state);
+    }
+};
+
+mtmd_gen_state_params mtmd_gen_state_params_default(void) {
+    mtmd_gen_state_params params{};
+    params.seed = UINT32_MAX;
+    return params;
+}
+
+mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params params) {
+    if (!ctx->ctx_gen_a) {
+        LOG_ERR("%s: model does not support audio generation\n", __func__);
+        return nullptr;
+    }
+    auto st = std::make_unique<mtmd_gen_state>();
+    st->ctx_clip   = ctx->ctx_gen_a;
+    st->clip_state = clip_gen_state_init(ctx->ctx_gen_a, params.seed);
+    if (!st->clip_state) {
+        return nullptr;
+    }
+    return st.release();
+}
+
+void mtmd_gen_state_free(mtmd_gen_state * state) {
+    delete state;
+}
+
+void mtmd_gen_state_reset(mtmd_gen_state * state) {
+    clip_gen_state_reset(state->clip_state);
+}
+
+static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     clip_ctx * ctx_clip = ctx->ctx_gen_a;
     if (!ctx_clip) {
         LOG_ERR("%s: model does not support audio generation\n", __func__);
+        return 1;
+    }
+    if (!state || state->ctx_clip != ctx_clip) {
+        LOG_ERR("%s: invalid gen state\n", __func__);
         return 1;
     }
 
@@ -2139,24 +2179,24 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
         params.code0         = inp->code0;
         params.top_k         = inp->top_k;
         params.top_p         = inp->top_p;
-        params.seed          = inp->seed;
         params.temp          = inp->temp;
         params.out_is_eos    = &is_eos;
+        params.gen_state     = state->clip_state;
 
         if (!clip_encode(ctx_clip, &params)) {
             LOG_ERR("%s: clip_encode failed (gen_code)\n", __func__);
             return 1;
         }
 
-        ctx->gen_out_embd  = std::move(out_embd);
-        ctx->gen_out_codes = std::move(out_codes);
-        ctx->gen_out_feats = std::move(out_feats);
+        state->out_embd  = std::move(out_embd);
+        state->out_codes = std::move(out_codes);
+        state->out_feats = std::move(out_feats);
 
-        out->embd      = ctx->gen_out_embd.data();
-        out->codes     = ctx->gen_out_codes.data();
-        out->n_codes   = ctx->gen_out_codes.size();
-        out->feats     = ctx->gen_out_feats.data();
-        out->n_feats   = ctx->gen_out_feats.size();
+        out->embd      = state->out_embd.data();
+        out->codes     = state->out_codes.data();
+        out->n_codes   = state->out_codes.size();
+        out->feats     = state->out_feats.data();
+        out->n_feats   = state->out_feats.size();
         out->is_eos    = is_eos;
         return 0;
     }
@@ -2175,10 +2215,6 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
     } else {
         in_feats.assign(inp->feats, inp->feats + inp->n_feats);
     }
-    std::vector<uint8_t> in_state;
-    if (inp->state_data) {
-        in_state.assign(inp->state_data, inp->state_data + inp->state_size);
-    }
 
     // gen_wav has no hidden-state input, the batch entry is an unused placeholder
     // TODO @ngxson : some models in the future may require hidden-state input, need to update this code later
@@ -2194,30 +2230,25 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
     params.imgs        = &batch;
     params.n_threads   = ctx->n_threads;
     params.gen_process = CLIP_GEN_PROCESS_GEN_WAV;
-    // gen_wav draws no randomness, but keep the seed so it does not reseed mid-generation
-    params.seed        = inp->seed;
     params.codes       = has_codes ? &in_codes : nullptr;
     params.feats       = has_feats ? &in_feats : nullptr;
-    params.out_audio   = &ctx->gen_out_audio;
-    params.state_in    = inp->state_data ? &in_state : nullptr;
-    params.state_out   = &ctx->gen_out_state;
+    params.out_audio   = &state->out_audio;
+    params.gen_state   = state->clip_state;
 
     if (!clip_encode(ctx_clip, &params)) {
         LOG_ERR("%s: clip_encode failed (code2wav)\n", __func__);
         return 1;
     }
 
-    out->audio      = ctx->gen_out_audio.data();
-    out->n_samples  = ctx->gen_out_audio.size();
-    out->state_data = (const char *) ctx->gen_out_state.data();
-    out->state_size = ctx->gen_out_state.size();
+    out->audio      = state->out_audio.data();
+    out->n_samples  = state->out_audio.size();
 
     return 0;
 }
 
-int32_t mtmd_gen_audio_process(mtmd_context * ctx, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
+int32_t mtmd_gen_audio_process(mtmd_context * ctx, mtmd_gen_state * state, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
     try {
-        return mtmd_gen_audio_process_impl(ctx, inp, out);
+        return mtmd_gen_audio_process_impl(ctx, state, inp, out);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return 1;

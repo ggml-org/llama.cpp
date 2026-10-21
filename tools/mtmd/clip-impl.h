@@ -16,6 +16,7 @@
 #include <vector>
 #include <memory>
 #include <fstream>
+#include <random>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -461,6 +462,15 @@ struct clip_enc_state {
     ggml_backend_buffer_ptr buf;
     std::vector<ggml_tensor *> k; // per layer [n_embd_kv, n_ctx]
     std::vector<ggml_tensor *> v;
+};
+
+// per-sequence state of audio generation, see clip_gen_state_init()
+struct clip_gen_state {
+    std::mt19937 rng;
+
+    ggml_context_ptr        ctx_data;
+    ggml_backend_buffer_ptr buf;
+    std::vector<ggml_tensor *> slots; // same order as list_gen_state_slots(), F32 [ne0, ne1]
 };
 
 // forward declaration

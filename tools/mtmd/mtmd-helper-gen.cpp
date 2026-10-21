@@ -105,12 +105,25 @@ public:
     virtual int32_t flush() = 0;
 
 protected:
+    // one state per generation, so a fixed seed always gives the same output
+    bool init_gen_state(uint32_t seed) {
+        mtmd_gen_state_params params = mtmd_gen_state_params_default();
+        params.seed = seed;
+        gen_state.reset(mtmd_gen_state_init(mctx, params));
+        if (!gen_state) {
+            LOG_ERR("mtmd_helper_gen_audio: failed to create the gen state\n");
+            return false;
+        }
+        return true;
+    }
+
     llama_context * lctx;
     mtmd_context  * mctx;
     const llama_model * model;
     const llama_vocab  * vocab;
     int n_embd;
     mtmd_gen_audio_info info;
+    mtmd::gen_state_ptr gen_state;
 };
 
 // Qwen3-TTS: backbone samples codec_0, code_predictor gives the other 15 codebooks,
@@ -123,7 +136,7 @@ public:
         seq_id = 0;
         pos = 0;
         codes_buf.clear();
-        c2w_state.clear();
+        gen_state.reset();
         audio_pcm.clear();
         overlay.clear();
         h_state_buf.clear();
@@ -220,9 +233,11 @@ public:
         const mtmd_gen_inp def = mtmd_gen_inp_default(mctx);
         top_k = inp->top_k > 0 ? inp->top_k : def.top_k;
         top_p = inp->top_p > 0 ? inp->top_p : def.top_p;
-        seed  = inp->seed;
         out_type = inp->out_type;
         stream = inp->stream;
+        if (!init_gen_state(inp->seed)) {
+            return 1;
+        }
 
         // the prompt above holds the whole text stream up to tts_eos, so every generated
         // frame adds tts_pad on top of the codes embedding
@@ -279,9 +294,8 @@ public:
         inp.embd  = const_cast<float *>(h_state_in);
         inp.top_k = top_k;
         inp.top_p = top_p;
-        inp.seed  = seed;
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: gen_code process failed\n");
             return 1;
         }
@@ -449,16 +463,12 @@ private:
         inp.type       = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
         inp.codes      = codes_buf.data();
         inp.n_codes    = codes_buf.size();
-        inp.seed       = seed; // same seed as gen_code, else clip reseeds mid-generation
-        inp.state_data = c2w_state.empty() ? nullptr : (const char *) c2w_state.data();
-        inp.state_size = c2w_state.size();
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: gen_wav process failed\n");
             return false;
         }
         audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
-        c2w_state.assign(out.state_data, out.state_data + out.state_size);
         codes_buf.clear();
         return true;
     }
@@ -491,9 +501,7 @@ private:
     int prompt_pos = 0;
     int32_t  top_k = 50;
     float    top_p = 1.0f;
-    uint32_t seed  = UINT32_MAX;
     std::vector<int32_t> codes_buf;
-    std::vector<uint8_t> c2w_state;
     std::vector<float>   audio_pcm;
     std::vector<float> overlay;
     std::vector<float> h_state_buf;
@@ -539,7 +547,7 @@ public:
         seq_id = 0;
         pos = 0;
         feats_buf.clear();
-        dec_state.clear();
+        gen_state.reset();
         audio_pcm.clear();
         h_state_buf.clear();
         out_buf.clear();
@@ -623,9 +631,11 @@ public:
         prompt_batch->set_position_normal(0, seq_id);
         prompt_pos = 0;
 
-        seed     = inp->seed;
         out_type = inp->out_type;
         stream   = inp->stream;
+        if (!init_gen_state(inp->seed)) {
+            return 1;
+        }
 
         return 0;
     }
@@ -663,13 +673,11 @@ public:
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
         inp.embd = const_cast<float *>(h_state_in);
-        // clip only reseeds when the seed changes, so pass the same one on every step
-        inp.seed = seed;
         if (pack.temp > 0.0f) {
             inp.temp = pack.temp;
         }
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: flow decode failed\n");
             return 1;
         }
@@ -895,7 +903,7 @@ private:
             return 1;
         }
         // the decoder restarts too, the next chunk's audio is not continuous with this one
-        dec_state.clear();
+        mtmd_gen_state_reset(gen_state.get());
 
         if (chunk_idx + 1 >= chunks.size()) {
             *out_stop    = true;
@@ -1023,16 +1031,12 @@ private:
         inp.type       = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
         inp.feats      = feats_buf.data();
         inp.n_feats    = feats_buf.size();
-        inp.seed       = seed;
-        inp.state_data = dec_state.empty() ? nullptr : (const char *) dec_state.data();
-        inp.state_size = dec_state.size();
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: mimi decode failed\n");
             return false;
         }
         audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
-        dec_state.assign(out.state_data, out.state_data + out.state_size);
         feats_buf.clear();
         return true;
     }
@@ -1049,7 +1053,6 @@ private:
     std::unique_ptr<decode_embd_batch> prompt_batch;
     int n_prompt = 0;
     int prompt_pos = 0;
-    uint32_t seed = UINT32_MAX;
     // end-of-speech is latched, then a few more frames are generated as tail padding
     int step_idx = 0;
     int eos_step = -1;
@@ -1064,7 +1067,6 @@ private:
     // latents are decoded a window at a time, the decoder state bridges the windows
     size_t window_frames = 8;
     std::vector<float>   feats_buf;
-    std::vector<uint8_t> dec_state;
     std::vector<float>   audio_pcm;
     std::vector<float>   h_state_buf;
     mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
