@@ -7,11 +7,12 @@
 struct gdn_conv_match {
     int                 conv_idx = -1;
     const ggml_tensor * x        = nullptr; // [C, T] F32 contiguous, the root of the transposed view
-    const ggml_tensor * state    = nullptr; // [3, C] F32 contiguous
+    const ggml_tensor * state    = nullptr; // [3, C] F32: column j of channel c at j * st_j + c * st_c
     const ggml_tensor * concat   = nullptr; // [T + 3, C] F32 contiguous
     const ggml_tensor * w        = nullptr; // [4, C] F32 contiguous
     ggml_tensor *       out      = nullptr; // the silu node
     int64_t C = 0, T = 0;
+    int     st_j = 1, st_c = 3;  // the state's strides in floats (3 and 1: contiguous; ReplaySSM: a transposed window)
     bool    in_place = false; // the conv output is x's memory
 };
 
@@ -42,7 +43,8 @@ static __global__ void gdn_conv_save_halo(const float * __restrict__ x, float * 
 // halos. A block covers BS channels and tt steps; within its tile a thread reads row t + 1 before writing row t of its
 // own column, so y may be x.
 template <int BS>
-static __global__ void __launch_bounds__(BS) gdn_conv_direct(const float * __restrict__ state, const float * x,
+static __global__ void __launch_bounds__(BS) gdn_conv_direct(const float * __restrict__ state, const int st_j,
+                                                            const int st_c, const float * x,
                                                             const float * __restrict__ halo, const int halo_stride,
                                                             const float * __restrict__ w, float * y,
                                                             const int C, const int T, const int tt, const float b) {
@@ -62,7 +64,7 @@ static __global__ void __launch_bounds__(BS) gdn_conv_direct(const float * __res
     for (int j = 0; j < 4; ++j) {
         const int jp = t0 + j; // concat column
         if (jp < 3) {
-            xw[j] = state[c * 3 + jp];
+            xw[j] = state[c * st_c + jp * st_j];
         } else if (halo != nullptr && j < 3) {
             xw[j] = halo[(size_t) c * halo_stride + 3 * k + j];
         } else {
@@ -87,7 +89,8 @@ static __global__ void __launch_bounds__(BS) gdn_conv_direct(const float * __res
     }
 }
 
-// the concat of build_conv_state: CONCAT(state [3, C], TRANSPOSE(x [C, T])) -> [T + 3, C], F32 and contiguous
+// the concat of build_conv_state: CONCAT(state [3, C], TRANSPOSE(x [C, T])) -> [T + 3, C], F32 and contiguous. The
+// state is contiguous, or with ReplaySSM the transposed window gathered from the time-major conv records.
 static bool gdn_concat_match(const ggml_tensor * cc, gdn_conv_match & m) {
     if (cc->op != GGML_OP_CONCAT || cc->type != GGML_TYPE_F32 || ggml_get_op_params_i32(cc, 0) != 0) {
         return false;
@@ -103,7 +106,8 @@ static bool gdn_concat_match(const ggml_tensor * cc, gdn_conv_match & m) {
     }
     const int64_t C = x->ne[0];
     const int64_t T = x->ne[1];
-    if (st->ne[0] != 3 || st->ne[1] != C || st->ne[2] != 1 || st->ne[3] != 1 || !ggml_is_contiguous(st)) {
+    if (st->ne[0] != 3 || st->ne[1] != C || st->ne[2] != 1 || st->ne[3] != 1 || st->nb[0] % sizeof(float) != 0 ||
+            st->nb[1] % sizeof(float) != 0) {
         return false;
     }
     if (tr->ne[0] != T || tr->ne[1] != C || tr->view_offs != 0) {
@@ -117,6 +121,8 @@ static bool gdn_concat_match(const ggml_tensor * cc, gdn_conv_match & m) {
     m.concat = cc;
     m.C      = C;
     m.T      = T;
+    m.st_j   = (int) (st->nb[0] / sizeof(float));
+    m.st_c   = (int) (st->nb[1] / sizeof(float));
     return true;
 }
 
@@ -220,36 +226,43 @@ static bool gdn_conv_check(const ggml_cgraph * cgraph, int i, gdn_conv_match & m
 }
 
 // The snapshot copies after the concat (CPY of its last 3 columns as of each of the last K tokens into the recurrent
-// cache, for rollback) are written by one kernel from the state and x, which also writes the concat when the conv
-// reads it at its own node. In short batches (the verify of a speculative step) this replaces the generic
-// non-contiguous concat (one block per channel for T + 3 columns) and the K copy launches.
+// cache, for rollback; with ReplaySSM one copy of the columns the next batch can start from into the time-major conv
+// records) are written by one kernel from the state and x, which also writes the concat when the conv reads it at its
+// own node. In short batches (the verify of a speculative step) this replaces the generic non-contiguous concat (one
+// block per channel for T + 3 columns) and the copy launches.
 #define GDN_SNAP_MAX 32
 
 struct gdn_snaps {
-    float * dst[GDN_SNAP_MAX]; // the copy's destination, [3 * C] contiguous
+    float * dst[GDN_SNAP_MAX]; // the copy's destination
     int     col[GDN_SNAP_MAX]; // the first concat column it copies
+    int     w[GDN_SNAP_MAX];   // the columns it copies
+    int     sj[GDN_SNAP_MAX];  // destination strides in floats: column j of channel c at j * sj + c * sc
+    int     sc[GDN_SNAP_MAX];
     int     n;
 };
 
-// concat columns [col0, T + 3) of every channel: into out if not null, and into the snapshots that cover them
-static __global__ void gdn_concat_snapshots(const float * __restrict__ state, const float * __restrict__ x,
-                                            float * __restrict__ out, const int C, const int T, const int col0,
-                                            const int row_stride, const gdn_snaps snaps) {
+// concat columns [col0, T + 3) of every channel: into out if not null, and into the snapshots that cover them.
+// Consecutive threads take consecutive columns of a channel, or with c_fast (time-major snapshots) consecutive
+// channels of a column.
+static __global__ void gdn_concat_snapshots(const float * __restrict__ state, const int st_j, const int st_c,
+                                            const float * __restrict__ x, float * __restrict__ out, const int C,
+                                            const int T, const int col0, const int row_stride, const bool c_fast,
+                                            const gdn_snaps snaps) {
     const int     ncols = T + 3 - col0;
     const int64_t idx   = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= (int64_t) C * ncols) {
         return;
     }
-    const int   c = (int) (idx / ncols);
-    const int   j = col0 + (int) (idx % ncols);
-    const float v = j < 3 ? state[c * 3 + j] : x[(size_t) (j - 3) * C + c];
+    const int   c = c_fast ? (int) (idx % C) : (int) (idx / ncols);
+    const int   j = col0 + (c_fast ? (int) (idx / C) : (int) (idx % ncols));
+    const float v = j < 3 ? state[c * st_c + j * st_j] : x[(size_t) (j - 3) * C + c];
     if (out != nullptr) {
         out[(size_t) c * row_stride + j] = v;
     }
     for (int k = 0; k < snaps.n; ++k) {
         const int r = j - snaps.col[k];
-        if (r >= 0 && r < 3) {
-            snaps.dst[k][c * 3 + r] = v;
+        if (r >= 0 && r < snaps.w[k]) {
+            snaps.dst[k][(size_t) c * snaps.sc[k] + (size_t) r * snaps.sj[k]] = v;
         }
     }
 }
@@ -269,21 +282,36 @@ static int gdn_snap_check(const ggml_cgraph * cgraph, int i, gdn_conv_match & m,
     int last = -1;
     for (int n = i + 1; n < cgraph->n_nodes; ++n) {
         const ggml_tensor * t = cgraph->nodes[n];
-        if (t->op == GGML_OP_VIEW) {
+        if (t->op == GGML_OP_VIEW || t->op == GGML_OP_TRANSPOSE || t->op == GGML_OP_RESHAPE || t->op == GGML_OP_PERMUTE) {
             continue;
         }
         if (t->op != GGML_OP_CPY || (t->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 || s.n == GDN_SNAP_MAX) {
             break;
         }
+        // the source: columns [col, col + w) of every channel of the concat
         const ggml_tensor * v = t->src[0];
-        if (v->op != GGML_OP_VIEW || v->view_src != cc || v->type != GGML_TYPE_F32 || v->ne[0] != 3 || v->ne[1] != m.C ||
+        if (v->op != GGML_OP_VIEW || v->view_src != cc || v->type != GGML_TYPE_F32 || v->ne[1] != m.C ||
                 v->ne[2] != 1 || v->ne[3] != 1 || v->nb[0] != sizeof(float) || v->nb[1] != cc->nb[1] ||
-                v->view_offs % sizeof(float) != 0 || v->view_offs / sizeof(float) + 3 > (size_t) (m.T + 3)) {
+                v->view_offs % sizeof(float) != 0 || v->view_offs / sizeof(float) + v->ne[0] > (size_t) (m.T + 3)) {
             break;
         }
-        if (t->type != GGML_TYPE_F32 || !ggml_is_contiguous(t) || ggml_nelements(t) != 3 * m.C ||
-                ggml_cuda_tensors_overlap(t, m.x) || ggml_cuda_tensors_overlap(t, m.state) ||
-                ggml_cuda_tensors_overlap(t, cc)) {
+        const int64_t w = v->ne[0];
+        // the destination: [w * C] contiguous (a snapshot), or a [w, C] view (the ReplaySSM conv records)
+        int sj, sc;
+        if (t->type != GGML_TYPE_F32 || ggml_nelements(t) != w * m.C) {
+            break;
+        }
+        if (ggml_is_contiguous(t)) {
+            sj = 1;
+            sc = (int) w;
+        } else if (t->ne[0] == w && t->ne[1] == m.C && t->ne[2] == 1 && t->ne[3] == 1 && t->nb[0] % sizeof(float) == 0 &&
+                   t->nb[1] % sizeof(float) == 0) {
+            sj = (int) (t->nb[0] / sizeof(float));
+            sc = (int) (t->nb[1] / sizeof(float));
+        } else {
+            break;
+        }
+        if (ggml_cuda_tensors_overlap(t, m.x) || ggml_cuda_tensors_overlap(t, m.state) || ggml_cuda_tensors_overlap(t, cc)) {
             break;
         }
         bool disjoint = true;
@@ -296,6 +324,9 @@ static int gdn_snap_check(const ggml_cgraph * cgraph, int i, gdn_conv_match & m,
         copies[s.n] = t;
         s.dst[s.n]  = (float *) t->data;
         s.col[s.n]  = (int) (v->view_offs / sizeof(float));
+        s.w[s.n]    = (int) w;
+        s.sj[s.n]   = sj;
+        s.sc[s.n]   = sc;
         s.n++;
         last = n;
     }
@@ -330,10 +361,14 @@ int ggml_cuda_try_fuse_gdn_conv(ggml_backend_cuda_context & ctx, const ggml_cgra
                 col0 = std::min(col0, s.col[k]);
             }
         }
+        bool c_fast = false;
+        for (int k = 0; k < s.n; ++k) {
+            c_fast = c_fast || s.sc[k] == 1;
+        }
         const int64_t n = m.C * (m.T + 3 - col0);
         gdn_concat_snapshots<<<(unsigned) ((n + 255) / 256), 256, 0, ctx.stream()>>>(
-            (const float *) m.state->data, (const float *) m.x->data, direct ? nullptr : (float *) m.concat->data,
-            (int) m.C, (int) m.T, col0, row_stride, s);
+            (const float *) m.state->data, m.st_j, m.st_c, (const float *) m.x->data,
+            direct ? nullptr : (float *) m.concat->data, (int) m.C, (int) m.T, col0, row_stride, c_fast, s);
         CUDA_CHECK(cudaGetLastError());
 
         if (direct) {
@@ -351,7 +386,8 @@ int ggml_cuda_try_fuse_gdn_conv(ggml_backend_cuda_context & ctx, const ggml_cgra
             }
             const dim3 grid((unsigned) (m.C / BS), (unsigned) ntiles);
             gdn_conv_direct<BS><<<grid, BS, 0, ctx.stream()>>>(
-                (const float *) m.state->data, (const float *) m.x->data, halo, row_stride, (const float *) m.w->data,
+                (const float *) m.state->data, m.st_j, m.st_c, (const float *) m.x->data, halo, row_stride,
+                (const float *) m.w->data,
                 (float *) m.out->data, (int) m.C, (int) m.T, TT, 0.0f);
             CUDA_CHECK(cudaGetLastError());
         }

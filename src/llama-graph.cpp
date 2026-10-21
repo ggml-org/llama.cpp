@@ -405,7 +405,8 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
 void llm_graph_input_rs::set_input_rs(const llama_memory_recurrent_context * mctx_rs) {
     const int64_t n_rs = mctx_rs->get_n_rs();
 
-    if (s_copy) {
+    // with ReplaySSM no layer reads s_copy (s_copy_s and rec_conv replace it), so it has no buffer
+    if (s_copy && s_copy->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
         int32_t * data = (int32_t *) s_copy->data;
 
@@ -429,6 +430,15 @@ void llm_graph_input_rs::set_input_rs(const llama_memory_recurrent_context * mct
         for (int64_t i = 0; i < rec_commit->ne[1]; ++i) {
             data[2*i]     = (int32_t) mctx_rs->rec_commit();
             data[2*i + 1] = (int32_t) mctx_rs->rec_commit_half();
+        }
+    }
+
+    if (rec_conv) {
+        // the window of the committed tokens starts as many columns into the conv records
+        GGML_ASSERT(ggml_backend_buffer_is_host(rec_conv->buffer));
+        int32_t * data = (int32_t *) rec_conv->data;
+        for (int64_t j = 0; j < rec_conv->ne[0]; ++j) {
+            data[j] = (int32_t) (mctx_rs->rec_commit() + j);
         }
     }
 }
@@ -4002,6 +4012,10 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
         inp->rec_commit = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 2, n_seqs);
         ggml_set_input(inp->rec_commit);
         ggml_set_name(inp->rec_commit, "rs_rec_commit");
+
+        inp->rec_conv = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_rec_conv_w());
+        ggml_set_input(inp->rec_conv);
+        ggml_set_name(inp->rec_conv, "rs_rec_conv");
     }
 
     inp->head = mctx_cur->get_head();

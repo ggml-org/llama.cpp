@@ -9,11 +9,13 @@ constexpr int gdn_cols_per_warp = 4;
 // ReplaySSM (ggml_gated_delta_net_rec): recorded updates committed to the state before the tokens, and where this
 // batch's own updates go when it records (the state written is then the committed one)
 struct gdn_rec_args {
-    float *         rec      = nullptr; // two halves of [S_v*H, 2R + 1] per sequence; null without ReplaySSM
+    float *         rec      = nullptr; // per sequence: R rows of delta [S_v*H], then two halves of R rows of k
+                                        // [S_v*H_k] and of exp(g) [H]; null without ReplaySSM
     int64_t         rec_seq  = 0;       // sequence stride of rec, in floats
-    const int32_t * n_commit = nullptr; // [2, n_seqs]: updates to commit, and the half they are in
-    bool            record   = false;   // this batch writes its updates into the other half
+    const int32_t * n_commit = nullptr; // [2, n_seqs]: updates to commit, and the half of k and exp(g) they are in
+    bool            record   = false;   // this batch writes its updates (k and exp(g) into the other half)
     int             R        = 0;
+    int             H_k      = 0;       // key heads
 };
 
 template <int S_v, bool KDA, bool keep_rs_t, int cols_per_warp = gdn_cols_per_warp>
@@ -91,19 +93,22 @@ gated_delta_net_cuda(const float * q,
     }
 
     // commit: the recorded updates, written as the token loop's update below so that the result is the same
-    float * rec_out = nullptr; // this sequence's k and delta rows in the half being written
-    float * g_out   = nullptr; // its exp(g) row
+    float * d_out = nullptr; // this batch's delta rows, over the committed ones (a column reads its own first)
+    float * k_out = nullptr; // its k rows in the half being written, when this head writes them for its key head
+    float * g_out = nullptr; // its exp(g) rows in that half
     if constexpr (!KDA) {
         if (ra.rec != nullptr) {
-            const int64_t row     = S_v * H;
+            const int64_t row_d   = S_v * H;
+            const int64_t row_k   = S_v * ra.H_k;
             const int     m       = ra.n_commit[2 * sequence];
             const int     half    = ra.n_commit[2 * sequence + 1];
-            float *       rec_seq = ra.rec + sequence * ra.rec_seq;
-            const float * rec     = rec_seq + half * (2 * ra.R + 1) * row;
+            float *       rec_d   = ra.rec + sequence * ra.rec_seq;
+            float *       rec_k   = rec_d + ra.R * row_d;
+            float *       rec_g   = rec_k + 2 * ra.R * row_k;
             for (int t = 0; t < m; t++) {
-                const float * k_r = rec + (2*t) * row + h_idx * S_v;
-                const float   d   = rec[(2*t + 1) * row + h_idx * S_v + col];
-                const float   g_r = rec[2 * ra.R * row + t * H + h_idx];
+                const float * k_r = rec_k + (half * ra.R + t) * row_k + iq1 * S_v;
+                const float   d   = rec_d[t * row_d + h_idx * S_v + col];
+                const float   g_r = rec_g[(half * ra.R + t) * H + h_idx];
 #pragma unroll
                 for (int r = 0; r < rows_per_lane; r++) {
                     const int i = r * lanes_per_col + lane_in_col;
@@ -112,8 +117,9 @@ gated_delta_net_cuda(const float * q,
             }
             if (ra.record) {
                 // recording: the committed state is the output, the tokens only record their updates
-                rec_out = rec_seq + (1 - half) * (2 * ra.R + 1) * row;
-                g_out   = rec_out + 2 * ra.R * row;
+                d_out = rec_d + h_idx * S_v;
+                k_out = h_idx == iq1 ? rec_k + (1 - half) * ra.R * row_k + iq1 * S_v : nullptr;
+                g_out = rec_g + (1 - half) * ra.R * H + h_idx;
 #pragma unroll
                 for (int r = 0; r < rows_per_lane; r++) {
                     const int i          = r * lanes_per_col + lane_in_col;
@@ -158,19 +164,21 @@ gated_delta_net_cuda(const float * q,
             // delta[col] = (v[col] - g * kv[col]) * beta
             float delta_col = (v_t[col] - g_val * kv_col) * beta_val;
 
-            if (rec_out != nullptr) {
-                const int64_t row = S_v * H;
+            if (d_out != nullptr) {
                 if (col == 0) {
+                    if (k_out != nullptr) {
 #pragma unroll
-                    for (int r = 0; r < rows_per_lane; r++) {
-                        rec_out[(2*t) * row + h_idx * S_v + r * lanes_per_col + lane_in_col] = k_reg[r];
+                        for (int r = 0; r < rows_per_lane; r++) {
+                            k_out[t * S_v * ra.H_k + r * lanes_per_col + lane_in_col] = k_reg[r];
+                        }
                     }
                     if (lane_in_col == 0) {
-                        g_out[t * H + h_idx] = g_val;
+                        g_out[t * H] = g_val;
                     }
                 }
+                // after the reductions above: every lane of this column has read the committed delta
                 if (lane_in_col == 0) {
-                    rec_out[(2*t + 1) * row + h_idx * S_v + col] = delta_col;
+                    d_out[t * S_v * H + col] = delta_col;
                 }
             }
 
@@ -236,7 +244,7 @@ gated_delta_net_cuda(const float * q,
         }
     }
 
-    if (rec_out != nullptr) {
+    if (d_out != nullptr) {
         return;
     }
 
@@ -436,10 +444,11 @@ static void ggml_cuda_op_gated_delta_net_impl(
     if (dst->src[6] != nullptr) {
         const ggml_tensor * rec = dst->src[6];
         ra.rec      = (float *) rec->data;
-        ra.rec_seq  = (int64_t) (rec->nb[2] / sizeof(float));
+        ra.rec_seq  = (int64_t) (rec->nb[1] / sizeof(float));
         ra.n_commit = (const int32_t *) dst->src[7]->data;
         ra.record   = ggml_get_op_params_i32(dst, 1) != 0;
-        ra.R        = (int) ((rec->ne[1] / 2 - 1) / 2);
+        ra.R        = ggml_get_op_params_i32(dst, 2);
+        ra.H_k      = (int) src_k->ne[1];
     }
 
     if (state_ids == nullptr) {

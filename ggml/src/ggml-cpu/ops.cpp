@@ -11362,7 +11362,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     const ggml_tensor * src_rec    = dst->src[6];
     const ggml_tensor * src_commit = dst->src[7];
     const bool    record = ggml_get_op_params_i32(dst, 1) != 0;
-    const int64_t R      = src_rec ? (src_rec->ne[1]/2 - 1)/2 : 0;
+    const int64_t R      = src_rec ? ggml_get_op_params_i32(dst, 2) : 0;
 
     const int64_t per_thread = S_v + (K > 1 || record ? S_v * S_v : 0);
     const int ith = params->ith;
@@ -11412,28 +11412,31 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         memcpy(s_out, s_in, S_v * S_v * sizeof(float));
 
         // commit: the recorded updates, the same operations as the token loop below
-        float * rec_out = nullptr; // this sequence's k and delta rows in the half being written
-        float * g_out   = nullptr; // its exp(g) row
+        float * d_out = nullptr; // this batch's delta rows (over the committed ones: this head reads its own first)
+        float * k_out = nullptr; // its k rows in the half being written, when this head writes them for its key head
+        float * g_out = nullptr; // its exp(g) rows in that half
         if (src_rec) {
-            // updates from one half of rec, this batch's into the other
+            // per sequence: R rows of delta, two halves of R rows of k (per key head) and of exp(g)
             const int32_t * nc      = (const int32_t *) ((const char *) src_commit->data + iv3 * src_commit->nb[1]);
             const int32_t   m       = nc[0];
             const int32_t   half    = nc[1];
-            float *         rec_seq = (float *) ((char *) src_rec->data + iv3 * src_rec->nb[2]);
-            const float *   rec     = rec_seq + half * (2*R + 1) * S_v * H;
+            float *         rec_d   = (float *) ((char *) src_rec->data + iv3 * src_rec->nb[1]);
+            float *         rec_k   = rec_d + R*S_v*H;
+            float *         rec_g   = rec_k + 2*R*S_v*nek1;
             GGML_ASSERT(m >= 0 && m <= R && (half == 0 || half == 1));
             for (int64_t t = 0; t < m; ++t) {
-                const float * k_r = rec + (2*t    )*S_v*H + iv1*S_v;
-                const float * d_r = rec + (2*t + 1)*S_v*H + iv1*S_v;
-                ggml_vec_scale_f32(S_v * S_v, s_out, rec[2*R*S_v*H + t*H + iv1]);
+                const float * k_r = rec_k + (half*R + t)*S_v*nek1 + ik1*S_v;
+                const float * d_r = rec_d + t*S_v*H + iv1*S_v;
+                ggml_vec_scale_f32(S_v * S_v, s_out, rec_g[(half*R + t)*H + iv1]);
                 for (int64_t j = 0; j < S_v; ++j) {
                     ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_r, d_r[j]);
                 }
             }
             if (record) {
                 memcpy(s_slot, s_out, S_v * S_v * sizeof(float));
-                rec_out = rec_seq + (1 - half) * (2*R + 1) * S_v * H;
-                g_out   = rec_out + 2*R*S_v*H;
+                d_out = rec_d + iv1*S_v;
+                k_out = iv1 == ik1 ? rec_k + (1 - half)*R*S_v*nek1 + ik1*S_v : nullptr;
+                g_out = rec_g + (1 - half)*R*H + iv1;
             }
         }
 
@@ -11471,10 +11474,12 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
                 delta[j] = (v_d[j] - sum) * beta_val;
             }
 
-            if (rec_out) {
-                memcpy(rec_out + (2*t    )*S_v*H + iv1*S_v, k_d,   S_v * sizeof(float));
-                memcpy(rec_out + (2*t + 1)*S_v*H + iv1*S_v, delta, S_v * sizeof(float));
-                g_out[t*H + iv1] = expf(g_d[0]);
+            if (d_out) {
+                memcpy(d_out + t*S_v*H, delta, S_v * sizeof(float));
+                if (k_out) {
+                    memcpy(k_out + t*S_v*nek1, k_d, S_v * sizeof(float));
+                }
+                g_out[t*H] = expf(g_d[0]);
             }
 
             // outer product: S[i][j] += k[i] * delta[j] => M[j][i] += delta[j] * k[i]

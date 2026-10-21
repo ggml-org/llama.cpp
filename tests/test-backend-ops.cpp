@@ -5012,6 +5012,78 @@ struct test_gdn_conv_state : public test_case {
     }
 };
 
+// The ReplaySSM conv input: the window gathered from a cell's time-major conv records at the commit offset,
+// CONCAT(window^T, x^T), the copy of the columns the next batch can start from back into the records (all of them when
+// the batch records, else the last 3), then SSM_CONV + SILU (fused in the CUDA backend)
+struct test_gdn_conv_rec : public test_case {
+    const int64_t C;
+    const int64_t T;
+    const int64_t R;
+    const int     off; // the window's first column
+    const bool    record;
+
+    std::vector<ggml_tensor *> checked;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GDN_CONV_REC";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return checked; }
+
+    std::string vars() override {
+        return VARS_TO_STR5(C, T, R, off, record);
+    }
+
+    test_gdn_conv_rec(int64_t C = 512, int64_t T = 4, int64_t R = 17, int off = 2, bool record = true)
+        : C(C), T(T), R(R), off(off), record(record) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * cells = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, 3 + R);
+        ggml_set_name(cells, "cells");
+        ggml_tensor * idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 3);
+        ggml_set_name(idx, "idx");
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, T);
+        ggml_set_name(x, "x");
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, C);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * window = ggml_get_rows(ctx, cells, idx);
+        ggml_tensor * cc = ggml_concat(ctx, ggml_transpose(ctx, window), ggml_transpose(ctx, x), 0);
+        ggml_set_name(cc, "conv_input");
+
+        checked.clear();
+        const int64_t col0 = record ? 0 : T;
+        const int64_t wd   = record ? 3 + T : 3;
+        ggml_tensor * src = ggml_view_2d(ctx, cc, wd, C, cc->nb[1], ggml_row_size(cc->type, col0));
+        ggml_tensor * dst = ggml_view_2d(ctx, cells, C, wd, cells->nb[1], 0);
+        ggml_tensor * cpy = ggml_cpy(ctx, src, ggml_transpose(ctx, dst));
+        checked.push_back(cpy);
+        if (mode == MODE_TEST) {
+            ggml_build_forward_expand(gf, cpy);
+        }
+
+        ggml_tensor * out = ggml_silu(ctx, ggml_ssm_conv(ctx, cc, w));
+        ggml_set_name(out, "out");
+        checked.push_back(out);
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) { continue; }
+            if (strcmp(t->name, "idx") == 0) {
+                const int32_t data[3] = { off, off + 1, off + 2 };
+                ggml_backend_tensor_set(t, data, 0, sizeof(data));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_SSM_SCAN
 struct test_ssm_scan : public test_case {
     const ggml_type type;
@@ -5440,7 +5512,9 @@ struct test_gated_delta_net_rec : public test_case {
         ggml_tensor * g     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, H, n_seq_tokens, n_seqs);
         ggml_tensor * beta  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, H, n_seq_tokens, n_seqs);
         ggml_tensor * state = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_size, H, n_seqs);
-        ggml_tensor * rec   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size * H, 2 * (2 * R + 1), n_seqs);
+        // per sequence: R rows of delta, two halves of R rows of k and of exp(g)
+        ggml_tensor * rec   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                R * (head_size * H + 2 * head_size * head_count + 2 * H), n_seqs);
         ggml_tensor * n_com = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 2, n_seqs);
         ggml_set_name(g,     "g");
         ggml_set_name(beta,  "beta");
@@ -5466,16 +5540,14 @@ struct test_gated_delta_net_rec : public test_case {
             } else if (strcmp(t->name, "v") == 0) {
                 init_tensor_uniform(t, -0.3f, 5.0f);
             } else if (strcmp(t->name, "rec") == 0) {
-                // k and delta rows, then exp(g) in (0, 1]
+                // delta and k rows, then exp(g) in (0, 1]
                 std::vector<float> data(ggml_nelements(t));
                 std::mt19937 rng(1234);
                 std::uniform_real_distribution<float> kd(-0.5f, 0.5f), ge(0.2f, 1.0f);
-                const int64_t row = t->ne[0];
-                for (int64_t s = 0; s < t->ne[2]; ++s) {
-                    for (int64_t r = 0; r < t->ne[1]; ++r) {
-                        for (int64_t i = 0; i < row; ++i) {
-                            data[(s * t->ne[1] + r) * row + i] = r % (2 * R + 1) == 2 * R ? ge(rng) : kd(rng);
-                        }
+                const int64_t n_g = 2 * R * head_count * v_repeat;
+                for (int64_t s = 0; s < t->ne[1]; ++s) {
+                    for (int64_t i = 0; i < t->ne[0]; ++i) {
+                        data[s * t->ne[0] + i] = i >= t->ne[0] - n_g ? ge(rng) : kd(rng);
                     }
                 }
                 ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
@@ -11679,6 +11751,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_gdn_conv_state(10240, T, 4));
     }
     test_cases.emplace_back(new test_gdn_conv_state(512, 4, 1));
+    // ReplaySSM: verify batches record their conv input; prefill ubatches keep their last columns
+    for (int64_t T : {1, 4, 5, 17}) {
+        test_cases.emplace_back(new test_gdn_conv_rec(10240, T, 17, (int) (T % 4), true));
+    }
+    test_cases.emplace_back(new test_gdn_conv_rec(10240, 33, 33, 33, true));
+    test_cases.emplace_back(new test_gdn_conv_rec(10240, 5, 33, 20, true));
+    test_cases.emplace_back(new test_gdn_conv_rec(10240, 64, 17, 9, false));
+    test_cases.emplace_back(new test_gdn_conv_rec(10240, 256, 17, 17, false));
+    test_cases.emplace_back(new test_gdn_conv_rec(512, 4, 4, 1, true));
 
     // fused ssm_conv + (optional) bias_add + silu. The bias-only graph (no silu) is intentionally
     // not tested since there's no fusion for that pattern in ggml_cuda_can_fuse.
@@ -13107,6 +13188,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net_rec(4, 64, 64, 1, 3, 17, 5, false));
     test_cases.emplace_back(new test_gated_delta_net_rec(16, 128, 64, 1, 3, 17, 9, false));
     test_cases.emplace_back(new test_gated_delta_net_rec(4, 64, 1, 2, 3, 17, 16, false));
+    // ngram-mod n_max 32: 33-token verifies
+    test_cases.emplace_back(new test_gated_delta_net_rec(16, 128, 33, 1, 3, 33, 33, true));
+    test_cases.emplace_back(new test_gated_delta_net_rec(16, 128, 5, 1, 3, 33, 21, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));

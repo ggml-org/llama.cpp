@@ -6520,14 +6520,17 @@ struct ggml_tensor * ggml_gated_delta_net_rec(
     const int64_t H        = v->ne[1];
     const int64_t n_tokens = v->ne[2];
     const int64_t n_seqs   = v->ne[3];
-    const int64_t R        = (rec->ne[1]/2 - 1)/2;
+    const int64_t H_k      = k->ne[1];
+    // floats per recorded update: delta, two halves of k and of exp(g)
+    const int64_t per_rec  = S_v*H + 2*S_v*H_k + 2*H;
+    const int64_t R        = rec->ne[0] / per_rec;
 
     GGML_ASSERT(g->ne[0] == 1 && beta->ne[0] == 1);
+    GGML_ASSERT(k->ne[0] == S_v && H % H_k == 0);
     GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H && state->ne[3] == n_seqs);
     GGML_ASSERT(rec->type == GGML_TYPE_F32 && n_commit->type == GGML_TYPE_I32);
-    GGML_ASSERT(rec->ne[0] == S_v*H && rec->ne[1] == 2*(2*R + 1) && rec->ne[2] == n_seqs && rec->ne[3] == 1);
-    GGML_ASSERT(rec->nb[0] == sizeof(float) && rec->nb[1] == S_v*H*sizeof(float));
-    GGML_ASSERT(R >= 1 && R <= S_v);
+    GGML_ASSERT(rec->ne[0] == R*per_rec && R >= 1 && rec->ne[1] == n_seqs && rec->ne[2] == 1 && rec->ne[3] == 1);
+    GGML_ASSERT(rec->nb[0] == sizeof(float));
     GGML_ASSERT(n_commit->ne[0] == 2 && n_commit->ne[1] == n_seqs && ggml_is_contiguous(n_commit));
     GGML_ASSERT(!record || n_tokens <= R);
 
@@ -6536,6 +6539,7 @@ struct ggml_tensor * ggml_gated_delta_net_rec(
 
     ggml_set_op_params_i32(result, 0, 1);
     ggml_set_op_params_i32(result, 1, record ? 1 : 0);
+    ggml_set_op_params_i32(result, 2, (int32_t) R);
 
     result->op     = GGML_OP_GATED_DELTA_NET;
     result->src[0] = q;

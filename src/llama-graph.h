@@ -300,6 +300,7 @@ public:
     ggml_tensor * s_copy_s_main = nullptr; // I32 [n_seqs]
     ggml_tensor * s_copy_s_tail = nullptr; // I32 [n_rs - 1]
     ggml_tensor * rec_commit    = nullptr; // I32 [2, n_seqs]: updates to commit, and the half of the records
+    ggml_tensor * rec_conv      = nullptr; // I32 [d_conv - 1]: the conv window's columns in the conv records
 
     // fill the inputs from a recurrent memory context (also for the hybrid memories' inputs)
     void set_input_rs(const llama_memory_recurrent_context * mctx_rs);
