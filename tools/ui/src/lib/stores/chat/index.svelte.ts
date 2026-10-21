@@ -1187,13 +1187,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 				// Pre-encode conversation in KV cache for faster next turn
 				if (settingsStore.config.preEncodeConversation) {
-					this.triggerPreEncode(
-						allMessages,
-						assistantMessage,
-						streamedContent,
-						effectiveModel,
-						!!settingsStore.config.excludeReasoningFromContext
-					);
+					void this.triggerPreEncode(convId, lastCreatedInFlow, effectiveModel);
 				}
 			},
 			onModel: (modelName: string) => recordModel(modelName),
@@ -1323,6 +1317,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
 					await conversationsStore.updateCurrentNode(currentMessageId);
 					cleanupStreamingState();
+
+					// Pre-encode conversation in KV cache for faster next turn
+					if (settingsStore.config.preEncodeConversation) {
+						void this.triggerPreEncode(convId, currentMessageId, effectiveModel);
+					}
 
 					if (onComplete) await onComplete(content);
 
@@ -1454,6 +1453,34 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		convId: string
 	): { response: string; messageId: string } | undefined {
 		return this.chatStreamingStates.get(convId);
+	}
+
+	/**
+	 * Pre-encodes the branch ending at the leaf as the next turn reads it: the
+	 * stored path cut at its last compaction, with the tools, message shaping
+	 * and reasoning handling of the chat, so the server warms the very prefix
+	 * that turn extends. Its prompt timings, or null when it returned none.
+	 */
+	private async preEncodeBranch(
+		convId: string,
+		leafId: string,
+		model: string | null | undefined,
+		signal: AbortSignal
+	): Promise<ChatMessageTimings | null> {
+		const allMessages = await conversationsStore.getConversationMessages(convId);
+		const branchPath = [...filterByLeafNodeId(allMessages, leafId, false)];
+		const request = await agenticStore.requestFor(
+			await ChatService.normalizeMessagesForApi(sliceAtLastCompaction(branchPath)),
+			this.toolPolicy()
+		);
+
+		return ChatService.preEncode(
+			request.messages,
+			model,
+			Boolean(settingsStore.config.excludeReasoningFromContext),
+			signal,
+			request.tools
+		);
 	}
 
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
@@ -1713,22 +1740,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				return;
 			}
 
-			const allMessages = await conversationsStore.getConversationMessages(convId);
-			const branchPath = [...filterByLeafNodeId(allMessages, nodeId, false)];
-			// The next turn reads the compacted branch with the tools, message
-			// shaping and reasoning handling of the chat, so the pre-encode sends
-			// the same and warms the very prefix that turn extends.
-			const request = await agenticStore.requestFor(
-				await ChatService.normalizeMessagesForApi(sliceAtLastCompaction(branchPath)),
-				this.toolPolicy()
-			);
-			const timings = await ChatService.preEncode(
-				request.messages,
-				model,
-				Boolean(settingsStore.config.excludeReasoningFromContext),
-				signal,
-				request.tools
-			);
+			const timings = await this.preEncodeBranch(convId, nodeId, model, signal);
 
 			if (!timings || signal.aborted) {
 				if (!signal.aborted) {
@@ -1762,12 +1774,14 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 	}
 
+	/**
+	 * Pre-encodes the branch ending at the leaf when every slot is idle, so
+	 * the next turn finds its prefix already in the server KV cache.
+	 */
 	private async triggerPreEncode(
-		allMessages: DatabaseMessage[],
-		assistantMessage: DatabaseMessage,
-		assistantContent: string,
-		model?: string | null,
-		excludeReasoning?: boolean
+		convId: string,
+		leafId: string,
+		model?: string | null
 	): Promise<void> {
 		this.cancelPreEncode();
 		this.preEncodeAbortController = new AbortController();
@@ -1779,12 +1793,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 			if (!allIdle || signal.aborted) return;
 
-			const messagesWithAssistant: DatabaseMessage[] = [
-				...allMessages,
-				{ ...assistantMessage, content: assistantContent }
-			];
-
-			await ChatService.preEncode(messagesWithAssistant, model, excludeReasoning, signal);
+			await this.preEncodeBranch(convId, leafId, model, signal);
 		} catch (err) {
 			if (!isAbortError(err)) {
 				console.warn('[ChatStore] Pre-encode failed:', err);
