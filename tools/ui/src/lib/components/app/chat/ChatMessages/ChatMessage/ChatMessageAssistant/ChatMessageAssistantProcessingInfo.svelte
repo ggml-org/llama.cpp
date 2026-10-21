@@ -5,22 +5,15 @@
 	interface Props {
 		modelLoadingText: string | null;
 		processingState: UseProcessingStateReturn;
-		/** `inline` drops the chat-turn margins for callers that own the layout. */
-		position: 'top' | 'bottom' | 'inline';
+		position: 'top' | 'bottom';
 	}
 
 	let { modelLoadingText, position, processingState }: Props = $props();
 
-	const wrapperClass = $derived.by(() => {
-		if (position === 'top') return 'mt-6 w-full max-w-3xl';
-
-		if (position === 'bottom') return 'mt-4 w-full max-w-3xl';
-
-		return 'w-full';
-	});
+	const marginClass = $derived(position === 'top' ? 'mt-6' : 'mt-4');
 </script>
 
-<div in:fade class={wrapperClass}>
+<div in:fade class="{marginClass} w-full max-w-3xl">
 	<div class="flex flex-col items-start gap-2">
 		<span class="shimmer-text text-sm">
 			{modelLoadingText ??

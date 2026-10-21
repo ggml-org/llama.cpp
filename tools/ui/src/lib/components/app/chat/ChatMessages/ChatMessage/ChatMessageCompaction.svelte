@@ -1,16 +1,16 @@
 <script lang="ts">
-	import { FoldVertical, Loader2 } from '@lucide/svelte';
+	import { FoldVertical } from '@lucide/svelte';
 	import {
 		ChatMessageActionIcons,
+		ChatMessageAssistantModel,
 		ChatMessageAssistantStatistics,
 		ChatMessageEditForm,
 		CollapsibleContentBlock,
 		MarkdownContent
 	} from '$lib/components/app';
-	import { COLLAPSIBLE_TRANSITION_MS } from '$lib/constants';
 	import { getChatMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, serverStore, settingsStore } from '$lib/stores';
 	import type { DatabaseMessage } from '$lib/types';
 	import { compactionTokensBefore, formatNumber } from '$lib/utils';
 
@@ -31,6 +31,10 @@
 	const editCtx = getChatMessageEditContext();
 
 	const currentConfig = $derived(settingsStore.config);
+	const isRouter = $derived(serverStore.isRouterMode);
+	// The model the server reported for the summary, so a compaction says who
+	// wrote it and the selector can re-summarize with another child.
+	const displayedModel = $derived(message.model ?? null);
 
 	const hasContent = $derived(message.content.trim().length > 0);
 
@@ -84,40 +88,9 @@
 
 		open = isSummarizing;
 	});
-
-	let rootEl = $state<HTMLDivElement>();
-	// The scroll waiting for the body to reach its height, so closing the block
-	// before that leaves no scroll behind it.
-	let settleTimer: ReturnType<typeof setTimeout> | null = null;
-
-	/**
-	 * A toggle hands the reader the block's own boundary, just below the tabs: one
-	 * scroll, and only once the body has its height - before that the page is too
-	 * short to scroll the divider up there and the call would clamp.
-	 */
-	function handleToggle() {
-		userChoseOpen = open;
-		cancelSettledScroll();
-
-		if (!rootEl) return;
-
-		settleTimer = setTimeout(() => {
-			settleTimer = null;
-			rootEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-		}, COLLAPSIBLE_TRANSITION_MS);
-	}
-
-	function cancelSettledScroll() {
-		if (settleTimer === null) return;
-
-		clearTimeout(settleTimer);
-		settleTimer = null;
-	}
-
-	$effect(() => cancelSettledScroll);
 </script>
 
-<div bind:this={rootEl} class="scroll-mt-[calc(var(--chat-tabs-height,0px)+1rem)] {className}">
+<div class={className}>
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
@@ -125,27 +98,36 @@
 			bind:open
 			class="my-2"
 			collapsible={hasContent}
-			flushBody
-			icon={isSummarizing ? Loader2 : FoldVertical}
-			iconClass={isSummarizing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
-			onToggle={handleToggle}
+			icon={FoldVertical}
+			iconClass="h-3.5 w-3.5"
+			onToggle={() => (userChoseOpen = open)}
 			shimmerTitle={isSummarizing || !hasContent}
 			{title}
 			variant="divider"
 		>
 			<MarkdownContent class="text-muted-foreground" content={message.content} />
 
-			<!-- The summary's own statistics live with the summary, so the divider
-			     stays a one-line headline. Only the conversation model writes the
-			     summary, so there is no selector to swap it with. -->
-			<div class="info my-6 grid gap-4 tabular-nums">
-				<ChatMessageAssistantStatistics
-					isLoading={chatStore.isLoading}
-					{message}
-					{processingState}
-					showMessageStats={currentConfig.showMessageStats}
-				/>
-			</div>
+			<!-- The summary's own metadata lives with the summary, so the divider
+			     stays a one-line headline. -->
+			{#if displayedModel}
+				<div class="info my-6 grid gap-4 tabular-nums">
+					<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+						<ChatMessageAssistantModel
+							{displayedModel}
+							isLoading={chatStore.isLoading}
+							{isRouter}
+							{onRegenerate}
+						/>
+
+						<ChatMessageAssistantStatistics
+							isLoading={chatStore.isLoading}
+							{message}
+							{processingState}
+							showMessageStats={currentConfig.showMessageStats}
+						/>
+					</div>
+				</div>
+			{/if}
 
 			{#if hasContent && !isSummarizing}
 				<!-- Copy, edit, fork, regenerate and delete all apply to the summary:

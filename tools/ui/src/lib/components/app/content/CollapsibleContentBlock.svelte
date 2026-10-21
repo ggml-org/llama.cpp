@@ -1,6 +1,5 @@
 <script lang="ts">
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import CollapsibleRegion from '$lib/components/app/misc/CollapsibleRegion.svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { cn } from '$lib/components/ui/utils';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
@@ -27,11 +26,6 @@
 		 * has nothing to show yet and turns into a collapsible once it has.
 		 */
 		collapsible?: boolean;
-		/**
-		 * Drop the reasoning-style rule and indent, for a body that spans the
-		 * message width on its own.
-		 */
-		flushBody?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -40,7 +34,6 @@
 		children,
 		class: className = '',
 		collapsible = true,
-		flushBody = false,
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
@@ -157,23 +150,17 @@
 	{/if}
 
 	{#if collapsible}
-		<!-- Content is force-mounted so the trigger keeps a real `aria-controls` target;
-		     the region owns opening and closing. It animates the height instead of
-		     snapping it, and unmounts the body once the collapse is over - a closed
-		     block still costs nothing, which matters while tokens stream past it. -->
-		<Collapsible.Content forceMount>
-			<CollapsibleRegion {open}>
+		<Collapsible.Content>
+			<!-- Collapsible.Content renders its children unconditionally and only sets
+			     `hidden`, so a closed block would keep re-rendering its whole body on
+			     every streamed token. Gate on `open` so collapsed content costs nothing. -->
+			{#if open}
 				<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
-					<div
-						class={cn(
-							'min-w-0 pb-2 my-2',
-							!flushBody && 'border-l border-muted-foreground/20 pl-4'
-						)}
-					>
+					<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
 						{@render children()}
 					</div>
 				</div>
-			</CollapsibleRegion>
+			{/if}
 		</Collapsible.Content>
 	{/if}
 </Collapsible.Root>
