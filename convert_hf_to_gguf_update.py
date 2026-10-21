@@ -101,6 +101,7 @@ models = [
     {"name": "command-r",        "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereForAI/c4ai-command-r-v01", },
     {"name": "tiny_aya",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereLabs/tiny-aya-base", },
     {"name": "cohere2moe",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereLabs/North-Mini-Code-1.0", },
+    {"name": "flint",            "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/RecursiveSI/flint", },
     {"name": "qwen2",            "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen1.5-7B", },
     {"name": "olmo",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/allenai/OLMo-1.7-7B-hf", },
     {"name": "dbrx",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/databricks/dbrx-base", },

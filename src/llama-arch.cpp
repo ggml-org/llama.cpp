@@ -35,6 +35,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN2VL,          "qwen2vl"          },
     { LLM_ARCH_SENSENOVA_U1,     "sensenova_u1"     },
     { LLM_ARCH_QWEN3,            "qwen3"            },
+    { LLM_ARCH_FLINT,            "flint"            },
     { LLM_ARCH_QWEN3MOE,         "qwen3moe"         },
     { LLM_ARCH_QWEN3NEXT,        "qwen3next"        },
     { LLM_ARCH_QWEN3VL,          "qwen3vl"          },

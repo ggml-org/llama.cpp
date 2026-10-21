@@ -1684,7 +1684,10 @@ llm_graph_amax_src1 llm_graph_context::build_amax_src1_f16(
     constexpr float k_ln_2   = 0.6931471805599453f;
 
     ggml_tensor * e;
-    e = ggml_scale(ctx0, amax, 1.0f/32768.0f);
+    // note: this can technically be:
+    // e = ggml_scale(ctx0, amax, 1.0f/32768.0f);
+    // but we leave x32 headroom for the F16 sums of 32 values in Q8 activation blocks
+    e = ggml_scale(ctx0, amax, 1.0f/1024.0f);
     e = ggml_log  (ctx0, e);
     e = ggml_scale(ctx0, e, k_log2_e);
     e = ggml_ceil (ctx0, e);
@@ -2505,7 +2508,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         //       ref: https://github.com/ggml-org/llama.cpp/pull/30656#issuecomment-6269597922
         llm_graph_amax_src1 amax_src1 = { nullptr, nullptr };
 
-        if (arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_MELLUM) {
+        if (arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_MELLUM || arch == LLM_ARCH_FLINT) {
             amax_src1 = build_amax_src1_f16(cur);
             cur = amax_src1.res;
         }

@@ -1122,7 +1122,7 @@ struct llm_graph_context {
               ggml_tensor * slots = nullptr) const;
 
     // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
-    // when the values already fit in F16, the factors are exactly 1.0f
+    // keep both individual values and Q8 activation block sums within F16 range
     llm_graph_amax_src1 build_amax_src1_f16(
               ggml_tensor * cur) const;
 

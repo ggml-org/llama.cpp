@@ -71,6 +71,9 @@ falcon              ,0   ,any     ,ADD+ADD                     ,      2
 falcon              ,0   ,any     ,NORM+MUL+ADD                ,      5
 falcon-h1           ,0   ,any     ,ADD+ADD                     ,      2
 falcon-h1           ,0   ,any     ,RMS_NORM+MUL                ,      9
+flint               ,0   ,any     ,ADD+ADD                     ,      1
+flint               ,0   ,any     ,MUL+ADD                     ,      2
+flint               ,0   ,any     ,RMS_NORM+MUL                ,      9
 gemma               ,0   ,any     ,RMS_NORM+MUL                ,      5
 gemma2              ,0   ,any     ,RMS_NORM+MUL                ,      5
 gemma2              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
