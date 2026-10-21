@@ -1581,6 +1581,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			: undefined;
 
 		let summary = '';
+		// a summary the output limit cut is no summary
+		let truncated = false;
 		let summaryModel = node.model;
 		let summaryTimings: ChatMessageCompactionTimings | undefined;
 
@@ -1634,6 +1636,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 						summary += chunk;
 						writeNode({ content: summary });
 					},
+					onComplete: (
+						_content: string,
+						_reasoning?: string,
+						_timings?: ChatMessageTimings,
+						_toolCalls?: string,
+						finishReason?: string
+					) => {
+						truncated = finishReason === COMPACTION.FINISH_CUT;
+					},
 					onModel: (modelName: string) => {
 						summaryModel = modelName;
 						writeNode({ model: modelName });
@@ -1658,6 +1669,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				compactionStreamId,
 				abortController.signal
 			);
+
+			if (truncated) throw new Error('The output limit cut the compaction summary');
 
 			if (!summary.trim()) {
 				await rollback();

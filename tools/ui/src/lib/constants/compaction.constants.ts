@@ -10,6 +10,8 @@ export const COMPACTION = {
 	DEFAULT_PRESERVED_STEPS: 10,
 	DEFAULT_PROMPT:
 		'Summarize this conversation so it can seamlessly continue in a fresh context. Capture: the overall goal, key facts and decisions, the current state of any ongoing work (including code, file names, and data discussed), and what remains to be done. Write the summary as dense prose addressed to the assistant that will resume the conversation. Return ONLY the summary, nothing else.',
+	// Why the model stops once its output limit cut the answer.
+	FINISH_CUT: 'length',
 	// Server stream sessions are matched by exact id or by the id::* prefix,
 	// so a prefixed identity keeps the summary stream inside the visibility
 	// kick and byte-offset resume machinery while the reload probe for the

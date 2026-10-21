@@ -433,7 +433,8 @@ export class ChatService {
 			response: string,
 			reasoningContent?: string,
 			timings?: ChatMessageTimings,
-			toolCalls?: string
+			toolCalls?: string,
+			finishReason?: string
 		) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
@@ -477,6 +478,8 @@ export class ChatService {
 		let fullReasoningContent = '';
 		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
 		let lastTimings: ChatMessageTimings | undefined;
+		// why the model stopped, length once the output limit cut the answer
+		let finishReason: string | undefined;
 		let streamFinished = false;
 		let modelEmitted = false;
 		let idEmitted = false;
@@ -626,6 +629,9 @@ export class ChatService {
 							try {
 								const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
 								const choice = parsed.choices?.[0];
+
+								if (choice?.finish_reason) finishReason = choice.finish_reason;
+
 								const content = choice?.delta?.content;
 								const reasoningContent = choice?.delta?.reasoning_content;
 								const toolCalls = choice?.delta?.tool_calls;
@@ -754,7 +760,8 @@ export class ChatService {
 					aggregatedContent,
 					fullReasoningContent || undefined,
 					lastTimings,
-					finalToolCalls
+					finalToolCalls,
+					finishReason
 				);
 			}
 		} catch (error) {
@@ -1472,7 +1479,8 @@ export class ChatService {
 			response: string,
 			reasoningContent?: string,
 			timings?: ChatMessageTimings,
-			toolCalls?: string
+			toolCalls?: string,
+			finishReason?: string
 		) => void,
 		onError?: (error: Error) => void,
 		onToolCallChunk?: (chunk: string) => void,
@@ -1518,7 +1526,13 @@ export class ChatService {
 				throw noResponseError;
 			}
 
-			onComplete?.(content, reasoningContent, undefined, serializedToolCalls);
+			onComplete?.(
+				content,
+				reasoningContent,
+				undefined,
+				serializedToolCalls,
+				data.choices[0]?.finish_reason ?? undefined
+			);
 
 			return content;
 		} catch (error) {

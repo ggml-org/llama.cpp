@@ -59,9 +59,11 @@ export function sliceAtLastCompaction(messages: DatabaseMessage[]): DatabaseMess
 	const compactionNode = messages[boundary];
 	const framedNode: DatabaseMessage = {
 		...compactionNode,
+		// a replacement function keeps the summary literal: a string would read
+		// $& or $$ in it as patterns
 		content: COMPACTION.CONTEXT_TEMPLATE.replace(
 			COMPACTION.SUMMARY_PLACEHOLDER,
-			compactionNode.content
+			() => compactionNode.content
 		)
 	};
 	const steps = before.filter((m) => !isPrefix(m) && m.type !== MessageType.COMPACTION);

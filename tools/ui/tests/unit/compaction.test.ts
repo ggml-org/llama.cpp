@@ -64,12 +64,20 @@ describe('sliceAtLastCompaction', () => {
 		const sliced = sliceAtLastCompaction(messages);
 		const framed = COMPACTION.CONTEXT_TEMPLATE.replace(
 			COMPACTION.SUMMARY_PLACEHOLDER,
-			'summary text'
+			() => 'summary text'
 		);
 
 		expect(sliced[0].content).toBe(framed);
 		expect(sliced[0].role).toBe(MessageRole.USER);
 		expect(node.content).toBe('summary text');
+	});
+
+	it('frames a summary as written, whatever it holds', () => {
+		const summary = "echo $HOME $& $$ $'";
+		const sliced = sliceAtLastCompaction([makeCompactionNode('c1', summary)]);
+		const [before, after] = COMPACTION.CONTEXT_TEMPLATE.split(COMPACTION.SUMMARY_PLACEHOLDER);
+
+		expect(sliced[0].content).toBe(before + summary + after);
 	});
 
 	it('slices at the last boundary when the branch was compacted twice', () => {
