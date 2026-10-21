@@ -281,6 +281,22 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
 
+    ggml_tensor * Q = dst->src[0];
+    ggml_tensor * K = dst->src[1];
+    ggml_tensor * V = dst->src[2];
+    if (K && Q && K->ne[0] != Q->ne[0] && Q->ne[0] > 0 && K->ne[0] % Q->ne[0] == 0) {
+        const int64_t d = Q->ne[0];
+        const int64_t n_heads = (K->ne[0] * K->ne[2]) / d;
+        K->ne[0] = d;
+        K->ne[2] = n_heads;
+    }
+    if (V && Q && V->ne[0] != Q->ne[0] && Q->ne[0] > 0 && V->ne[0] % Q->ne[0] == 0) {
+        const int64_t d = Q->ne[0];
+        const int64_t n_heads = (V->ne[0] * V->ne[2]) / d;
+        V->ne[0] = d;
+        V->ne[2] = n_heads;
+    }
+
     // sparse nodes are gathered down to n_kv_max rows and re-dispatched here
     if (ggml_sycl_flash_attn_ext_sparse(ctx, dst)) {
         return;
