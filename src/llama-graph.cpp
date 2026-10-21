@@ -3009,7 +3009,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * v_mla,
              int64_t   n_kv_max,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * k_scale,
+         ggml_tensor * v_scale) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -3030,6 +3032,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     GGML_ASSERT(use_flash_attn || kv_rows == nullptr);
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
+
+        if (k_scale) {
+            q = ggml_mul(ctx0, q, k_scale);
+        }
 
         if (v_trans) {
             v = ggml_transpose(ctx0, v);
@@ -3076,8 +3082,21 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+        if (v_scale) {
+            cur = ggml_mul(ctx0, cur, v_scale);
+        }
     } else {
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
+        // A cache without an exported scale stores raw FP8 values.
+        if ((k->type == GGML_TYPE_F8_E4M3 && !k_scale) || (v->type == GGML_TYPE_F8_E4M3 && !v_scale)) {
+            ggml_tensor * unit_scale = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1), 1.0f);
+            if (k->type == GGML_TYPE_F8_E4M3 && !k_scale) {
+                k_scale = unit_scale;
+            }
+            if (v->type == GGML_TYPE_F8_E4M3 && !v_scale) {
+                v_scale = unit_scale;
+            }
+        }
+        ggml_tensor * kq = ggml_mul_mat_ext(ctx0, k, q, k_scale, nullptr);
         cb(kq, "kq", il);
 
         ggml_prec_set_acc(kq, GGML_PREC_BF16);
@@ -3119,7 +3138,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cb(v, "v_cont", il);
         }
 
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
+        ggml_tensor * kqv = ggml_mul_mat_ext(ctx0, v, kq, v_scale, nullptr);
         cb(kqv, "kqv", il);
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
@@ -3265,38 +3284,20 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
 static void build_attn_scale_kv_inputs(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
-        ggml_tensor * & q,
         ggml_tensor * & k,
         ggml_tensor * & v,
         int32_t il) {
-    if (ggml_tensor * scale = mctx->get_k_scale(il)) {
-        // Store K/s and move its dequant scale to Q: (Q*s) dot (K/s) = Q dot K.
-        q = ggml_mul(ctx, q, scale);
-        if (k) {
+    if (k) {
+        if (ggml_tensor * scale = mctx->get_k_scale(il)) {
             k = ggml_div(ctx, k, scale);
         }
     }
 
     if (v) {
-        // Store V/s here and restore its dequant scale after the weighted sum.
-        ggml_tensor * scale = mctx->get_v_scale(il);
-        if (scale) {
+        if (ggml_tensor * scale = mctx->get_v_scale(il)) {
             v = ggml_div(ctx, v, scale);
         }
     }
-}
-
-static ggml_tensor * build_attn_scale_kv_output(
-        ggml_context * ctx,
-        const llama_kv_cache_context * mctx,
-        ggml_tensor * cur,
-        int32_t il) {
-    if (ggml_tensor * scale = mctx->get_v_scale(il)) {
-        // P*(V/s)*s = P*V.
-        cur = ggml_mul(ctx, cur, scale);
-    }
-
-    return cur;
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -3327,7 +3328,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto * mctx_cur = inp->mctx;
 
-    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, k_cur, v_cur, il);
 
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
@@ -3361,8 +3362,8 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
-    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il,
+            mctx_cur->get_k_scale(il), mctx_cur->get_v_scale(il));
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot[il]) {
@@ -3615,7 +3616,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto * mctx_iswa = inp->mctx;
     const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
 
-    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, k_cur, v_cur, il);
 
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
@@ -3657,8 +3658,8 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = use_kv_cur ? k_cur : mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
-    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il,
+            mctx_cur->get_k_scale(il), mctx_cur->get_v_scale(il));
     cb(cur, "kqv_out", il);
 
     if (v_rot) {
