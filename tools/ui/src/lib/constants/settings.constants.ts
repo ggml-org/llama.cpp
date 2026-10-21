@@ -185,6 +185,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.TEXTAREA
 			},
 			{
+				defaultValue: COMPACTION.DEFAULT_PRESERVED_STEPS,
+				help: 'Last steps a compaction keeps as written after the summary: a user message, or an assistant message with its tool results.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.COMPACTION_PRESERVED_STEPS,
+				label: 'Compaction preserved steps',
+				type: SettingsFieldType.INPUT
+			},
+			{
 				defaultValue: false,
 				help: 'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
 				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,

@@ -13,7 +13,6 @@
 	import * as Drawer from '$lib/components/ui/drawer';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
 	import { agenticStore, chatStore, conversationsStore, deviceStore } from '$lib/stores';
-	import { canCompactMessages } from '$lib/utils';
 	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();
@@ -57,7 +56,7 @@
 			(gauge.activeModelId !== null || gauge.isActiveModelLoaded)
 	);
 
-	const showCompactButton = $derived(canCompactMessages(conversationsStore.activeMessages));
+	const showCompactButton = $derived(chatStore.canCompact(conversationsStore.activeMessages));
 
 	const isCompactDisabled = $derived.by(() => {
 		const convId = conversationsStore.activeConversation?.id;

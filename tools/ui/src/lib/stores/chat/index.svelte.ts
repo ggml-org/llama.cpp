@@ -47,6 +47,7 @@ import type {
 } from '$lib/types';
 import {
 	canCompactMessages,
+	compactionCut,
 	filterByLeafNodeId,
 	findMessageById,
 	formatCwdMessage,
@@ -245,6 +246,14 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	}
 
 	/**
+	 * Whether the branch holds a step to summarize before the steps a
+	 * compaction preserves.
+	 */
+	canCompact(messages: DatabaseMessage[]): boolean {
+		return canCompactMessages(messages, this.compactionPreserve());
+	}
+
+	/**
 	 * Resets the loading, streaming and processing state for a conversation
 	 * after a generation ends or errors. Shared by the flows' exit paths.
 	 */
@@ -296,8 +305,10 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		// Snapshot of the reactive branch: the compaction node created below
 		// must not leak into the summarization request.
 		const source = sliceAtLastCompaction([...conversationsStore.activeMessages]);
+		const preserve = this.compactionPreserve();
+		const cut = compactionCut(source, preserve);
 
-		if (!canCompactMessages(source)) return;
+		if (cut === null) return;
 
 		this.showErrorDialog(null);
 		this.setChatLoading(convId, true);
@@ -330,8 +341,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		let summary = '';
 
 		try {
-			const apiMessages: ApiChatMessageData[] = await Promise.all(
-				source.map((m) => ChatService.convertDbMessageToApiChatMessageData(m))
+			// The request is the one the chat sends, its options, tools and
+			// message shaping, cut before the preserved steps: the server
+			// reuses the prefix it cached and only the instruction is new.
+			const request = await agenticStore.requestFor(
+				await ChatService.normalizeMessagesForApi(source.slice(0, cut)),
+				{
+					disabledToolCategories: conversationsStore.preferences.getDisabledToolCategories(),
+					disabledTools: conversationsStore.preferences.getDisabledTools()
+				}
 			);
 			const configValue = settingsStore.config;
 			const compactionPrompt =
@@ -339,13 +357,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 					? configValue.compactionPrompt
 					: COMPACTION.DEFAULT_PROMPT;
 
-			apiMessages.push({ content: compactionPrompt, role: MessageRole.USER });
-
 			await ChatService.sendMessage(
-				apiMessages,
+				[...request.messages, { content: compactionPrompt, role: MessageRole.USER }],
 				{
-					custom: { chat_template_kwargs: { enable_thinking: false } },
-					model: effectiveModel,
+					...this.getApiOptions(),
+					...(effectiveModel ? { model: effectiveModel } : {}),
 					onChunk: (chunk: string) => {
 						summary += chunk;
 
@@ -355,7 +371,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 							if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { content: summary });
 						}
 					},
-					stream: true
+					tools: request.tools
 				},
 				// Registered under the prefixed identity: the visibility kick
 				// and byte-offset resume protect the summary through tab
@@ -371,7 +387,13 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				return;
 			}
 
-			await DatabaseService.updateMessage(node.id, { content: summary });
+			await DatabaseService.updateMessage(node.id, { content: summary, kept: preserve });
+
+			if (conversationsStore.activeConversation?.id === convId) {
+				const idx = conversationsStore.findMessageIndex(node.id);
+
+				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { kept: preserve });
+			}
 
 			// Re-encoding the reduced prefix is part of the compaction
 			// itself: it rebuilds the server KV cache on the summary and
@@ -1406,6 +1428,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			for (const c of this.abortControllers.values()) c.abort();
 			this.abortControllers.clear();
 		}
+	}
+
+	/** The steps a compaction keeps as written, as the settings set them. */
+	private compactionPreserve(): number {
+		return Number(settingsStore.config.compactionPreservedSteps);
 	}
 
 	private async generateTitleWithLLM(

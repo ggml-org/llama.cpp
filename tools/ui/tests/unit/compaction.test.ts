@@ -1,7 +1,7 @@
 import { COMPACTION } from '$lib/constants';
 import { MessageRole, MessageType } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types';
-import { canCompactMessages, sliceAtLastCompaction } from '$lib/utils';
+import { canCompactMessages, compactionCut, sliceAtLastCompaction } from '$lib/utils';
 import { describe, expect, it } from 'vitest';
 
 const CONV_ID = 'conv';
@@ -24,8 +24,8 @@ function makeMessage(
 	} as DatabaseMessage;
 }
 
-function makeCompactionNode(id: string, summary: string): DatabaseMessage {
-	return makeMessage(id, MessageRole.USER, summary, MessageType.COMPACTION);
+function makeCompactionNode(id: string, summary: string, kept?: number): DatabaseMessage {
+	return { ...makeMessage(id, MessageRole.USER, summary, MessageType.COMPACTION), kept };
 }
 
 describe('sliceAtLastCompaction', () => {
@@ -91,47 +91,123 @@ describe('sliceAtLastCompaction', () => {
 	});
 });
 
-describe('canCompactMessages', () => {
-	it('rejects a branch with no assistant turn', () => {
-		expect(canCompactMessages([makeMessage('u1', MessageRole.USER, 'hi')])).toBe(false);
+describe('sliceAtLastCompaction with kept steps', () => {
+	const ids = (messages: DatabaseMessage[]) => messages.map((m) => m.id);
+
+	it('keeps the last steps before the node, a tool result with its call', () => {
+		const messages = [
+			makeMessage('s1', MessageRole.SYSTEM, 'be brief', MessageType.SYSTEM),
+			makeMessage('u1', MessageRole.USER, 'first'),
+			makeMessage('a1', MessageRole.ASSISTANT, 'calling'),
+			makeMessage('t1', MessageRole.TOOL, 'result'),
+			makeMessage('u2', MessageRole.USER, 'second'),
+			makeMessage('a2', MessageRole.ASSISTANT, 'answer'),
+			makeCompactionNode('c1', 'summary', 3),
+			makeMessage('u3', MessageRole.USER, 'next')
+		];
+
+		expect(ids(sliceAtLastCompaction(messages))).toEqual([
+			's1',
+			'c1',
+			'a1',
+			't1',
+			'u2',
+			'a2',
+			'u3'
+		]);
 	});
 
-	it('accepts a branch with a non-empty assistant turn', () => {
+	it('counts the kept steps across an older node, which it drops', () => {
+		const messages = [
+			makeMessage('u1', MessageRole.USER, 'first'),
+			makeMessage('a1', MessageRole.ASSISTANT, 'one'),
+			makeCompactionNode('c1', 'first summary', 1),
+			makeMessage('u2', MessageRole.USER, 'second'),
+			makeMessage('a2', MessageRole.ASSISTANT, 'two'),
+			makeCompactionNode('c2', 'second summary', 3),
+			makeMessage('u3', MessageRole.USER, 'next')
+		];
+
+		expect(ids(sliceAtLastCompaction(messages))).toEqual(['c2', 'a1', 'u2', 'a2', 'u3']);
+	});
+
+	it('keeps every step when it keeps more than there are, and none without kept', () => {
+		const messages = [
+			makeMessage('u1', MessageRole.USER, 'first'),
+			makeMessage('a1', MessageRole.ASSISTANT, 'one'),
+			makeCompactionNode('c1', 'summary', 9)
+		];
+
+		expect(ids(sliceAtLastCompaction(messages))).toEqual(['c1', 'u1', 'a1']);
+		expect(
+			ids(sliceAtLastCompaction([...messages.slice(0, 2), makeCompactionNode('c1', 's')]))
+		).toEqual(['c1']);
+	});
+});
+
+describe('compactionCut', () => {
+	const view = [
+		makeMessage('s1', MessageRole.SYSTEM, 'be brief', MessageType.SYSTEM),
+		makeMessage('u1', MessageRole.USER, 'first'),
+		makeMessage('a1', MessageRole.ASSISTANT, 'calling'),
+		makeMessage('t1', MessageRole.TOOL, 'result'),
+		makeMessage('u2', MessageRole.USER, 'second'),
+		makeMessage('a2', MessageRole.ASSISTANT, 'answer')
+	];
+
+	it('cuts before the preserved steps, never between a call and its result', () => {
+		expect(compactionCut(view, 2)).toBe(4);
+		expect(compactionCut(view, 3)).toBe(2);
+		expect(compactionCut(view, 0)).toBe(view.length);
+	});
+
+	it('cuts nowhere when no step lies before the preserved ones', () => {
+		expect(compactionCut(view, 4)).toBeNull();
+		expect(compactionCut(view, 5)).toBeNull();
+	});
+
+	it('leaves the preserved steps as the model reads them once compacted', () => {
+		const cut = compactionCut(view, 2)!;
+		const compacted = sliceAtLastCompaction([...view, makeCompactionNode('c1', 'summary', 2)]);
+
+		expect(compacted.slice(2)).toEqual(view.slice(cut));
+		expect(compacted.slice(0, 2).map((m) => m.id)).toEqual(['s1', 'c1']);
+	});
+});
+
+describe('canCompactMessages', () => {
+	it('rejects a branch with no step before the preserved ones', () => {
+		expect(canCompactMessages([makeMessage('u1', MessageRole.USER, 'hi')], 1)).toBe(false);
+	});
+
+	it('accepts a branch with a step before the preserved ones', () => {
 		const messages = [
 			makeMessage('u1', MessageRole.USER, 'hi'),
 			makeMessage('a1', MessageRole.ASSISTANT, 'hello')
 		];
 
-		expect(canCompactMessages(messages)).toBe(true);
+		expect(canCompactMessages(messages, 1)).toBe(true);
+		expect(canCompactMessages(messages, 2)).toBe(false);
 	});
 
-	it('rejects a branch whose only assistant turn is empty', () => {
-		const messages = [
-			makeMessage('u1', MessageRole.USER, 'hi'),
-			makeMessage('a1', MessageRole.ASSISTANT, '   ')
-		];
-
-		expect(canCompactMessages(messages)).toBe(false);
-	});
-
-	it('rejects a branch with nothing after the last compaction node', () => {
+	it('rejects a branch with nothing new since the last compaction', () => {
 		const messages = [
 			makeMessage('u1', MessageRole.USER, 'hi'),
 			makeMessage('a1', MessageRole.ASSISTANT, 'hello'),
-			makeCompactionNode('c1', 'summary')
+			makeCompactionNode('c1', 'summary', 1)
 		];
 
-		expect(canCompactMessages(messages)).toBe(false);
+		expect(canCompactMessages(messages, 1)).toBe(false);
 	});
 
-	it('accepts a compacted branch once a new assistant turn exists', () => {
+	it('accepts a compacted branch once a new step exists past the preserved ones', () => {
 		const messages = [
 			makeCompactionNode('c1', 'summary'),
 			makeMessage('u1', MessageRole.USER, 'next'),
 			makeMessage('a1', MessageRole.ASSISTANT, 'reply')
 		];
 
-		expect(canCompactMessages(messages)).toBe(true);
+		expect(canCompactMessages(messages, 1)).toBe(true);
 	});
 
 	it('accepts a branch whose trailing compaction node is empty', () => {
@@ -141,6 +217,6 @@ describe('canCompactMessages', () => {
 			makeCompactionNode('c1', '')
 		];
 
-		expect(canCompactMessages(messages)).toBe(true);
+		expect(canCompactMessages(messages, 1)).toBe(true);
 	});
 });
