@@ -19,6 +19,7 @@ struct ggml_cuda_batch_get_descriptor {
 };
 
 static __global__ void ggml_cuda_batch_get_kernel(const ggml_cuda_batch_get_descriptor * copies, size_t count) {
+    // Assign one warp to each descriptor; extra warps have no work.
     constexpr int warp = ggml_cuda_get_physical_warp_size();
     const size_t index = ((size_t) blockIdx.x * blockDim.x + threadIdx.x) / warp;
     if (index >= count) {
@@ -26,6 +27,7 @@ static __global__ void ggml_cuda_batch_get_kernel(const ggml_cuda_batch_get_desc
     }
     const int lane = threadIdx.x % warp;
     const auto copy = copies[index];
+    // Use 16-, 4-, or 2-byte copies when both pointers meet that alignment; lanes copy separate chunks.
     const uintptr_t alignment = (uintptr_t) copy.src | (uintptr_t) copy.dst;
     size_t tail = 0;
     if (alignment % 16 == 0) {
@@ -44,6 +46,7 @@ static __global__ void ggml_cuda_batch_get_kernel(const ggml_cuda_batch_get_desc
         }
         tail = copy.size / 2 * 2;
     }
+    // Copy trailing bytes, or the entire range when no wider alignment is available.
     for (size_t i = tail + lane; i < copy.size; i += warp) {
         ggml_cuda_memcpy_1<1>(copy.dst + i, copy.src + i);
     }
@@ -54,6 +57,7 @@ struct ggml_cuda_batch_get_mapping {
 
     ~ggml_cuda_batch_get_mapping() {
         if (host) {
+            // Unregister and unpin the CPU destination on scope exit; the caller still owns its storage.
             CUDA_CHECK(cudaHostUnregister(host));
         }
     }
@@ -73,8 +77,10 @@ bool ggml_cuda_get_tensor_n(int device,
     GGML_UNUSED(n_tensors);
     return false;
 #else
+    // Limit descriptor storage per batch, not the payload or registered CPU span.
     constexpr size_t max_copies = 1024 * 1024;
     constexpr size_t tile_bytes = 64 * 1024;
+    // Collect CPU destination ranges and count the required copy descriptors.
     std::vector<std::pair<size_t, size_t>> ranges;
     ranges.reserve(n_tensors);
     size_t tiles = 0;
@@ -99,6 +105,7 @@ bool ggml_cuda_get_tensor_n(int device,
             return false;
         }
     }
+    // Find the page-aligned CPU span to register, including gaps between destinations.
 #if defined(_WIN32)
     SYSTEM_INFO system_info;
     GetSystemInfo(&system_info);
@@ -116,6 +123,7 @@ bool ggml_cuda_get_tensor_n(int device,
     }
     const uintptr_t begin = (base + ranges.front().first) / page * page;
     const uintptr_t end = (base + ranges.back().second + page - 1) / page * page;
+    // Allocate per-call descriptor storage on the GPU and in pinned CPU memory; both buffers are freed on scope exit.
     const size_t bytes = tiles * sizeof(ggml_cuda_batch_get_descriptor);
     ggml_backend_buffer_ptr descriptors(ggml_backend_buft_alloc_buffer(ggml_backend_cuda_buffer_type(device), bytes));
     if (!descriptors) {
@@ -126,6 +134,7 @@ bool ggml_cuda_get_tensor_n(int device,
     if (!host_descriptors || ggml_backend_buffer_get_type(host_descriptors.get()) != host_type) {
         return false;
     }
+    // Register and map the existing CPU destination so the kernel can write to it directly.
     ggml_cuda_batch_get_mapping mapping;
     if (cudaHostRegister((void *) begin, end - begin, cudaHostRegisterMapped | cudaHostRegisterPortable) != cudaSuccess) {
         (void) cudaGetLastError();
@@ -141,6 +150,7 @@ bool ggml_cuda_get_tensor_n(int device,
     auto * device_copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(descriptors.get()));
     size_t index = 0;
     size_t consumed = 0;
+    // Fill descriptors in batches, splitting reads into tiles of at most 64 KiB.
     while (index < n_tensors) {
         size_t count = 0;
         while (index < n_tensors && count < tiles) {
@@ -156,12 +166,14 @@ bool ggml_cuda_get_tensor_n(int device,
             }
         }
         if (count) {
+            // Upload this batch's descriptors, then launch the kernel to copy payload bytes into mapped CPU memory.
             CUDA_CHECK(cudaMemcpyAsync(device_copies, copies, count * sizeof(copies[0]), cudaMemcpyHostToDevice, cudaStreamPerThread));
             const int threads = 256;
             const int warp = ggml_cuda_info().devices[device].warp_size;
             const unsigned int blocks = (unsigned int) ((count + threads / warp - 1) / (threads / warp));
             ggml_cuda_batch_get_kernel<<<blocks, threads, 0, cudaStreamPerThread>>>(device_copies, count);
             CUDA_CHECK(cudaGetLastError());
+            // Wait for GPU writes before reusing descriptors or releasing the CPU mapping.
             CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
         }
     }
