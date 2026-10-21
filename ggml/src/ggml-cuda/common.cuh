@@ -131,6 +131,20 @@ static __device__ __forceinline__ void ggml_cuda_syncwarp() {
 #endif // GGML_USE_HIP
 }
 
+// A workgroup barrier for code that only shares data through shared memory. On RDNA4 __syncthreads() is an
+// acquire-release fence over every address space: it waits for all outstanding global loads before the barrier and
+// invalidates the vector caches after it (global_inv). Scoping the fence to LDS keeps global loads in flight across the
+// barrier and the cached lines valid.
+static __device__ __forceinline__ void ggml_cuda_syncthreads_lds() {
+#if defined(GGML_USE_HIP) && defined(RDNA4)
+    __builtin_amdgcn_fence(__ATOMIC_RELEASE, "workgroup", "local");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, "workgroup", "local");
+#else
+    __syncthreads();
+#endif // defined(GGML_USE_HIP) && defined(RDNA4)
+}
+
 static __device__ __forceinline__ void ggml_cuda_pdl_sync() {
 #if defined(GGML_CUDA_USE_PDL) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
     cudaGridDependencySynchronize();

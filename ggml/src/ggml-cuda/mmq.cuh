@@ -917,11 +917,11 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
         }
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
 
         vec_dot(tile_x, tile_y, sum, 0);
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
 
         {
             const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
@@ -933,11 +933,11 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
         }
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
 
         vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
     }
 
     if (fixup) {
