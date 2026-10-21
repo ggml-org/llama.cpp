@@ -1,7 +1,8 @@
 #pragma once
 
-#include "mma.cuh"
 #include "common.cuh"
+#include "mma.cuh"
+#include "mmid.cuh"
 #include "convert.cuh"
 
 using namespace ggml_cuda_mma;
@@ -36,8 +37,9 @@ static constexpr __device__ int mmf_get_padding() {
 struct mmf_ids_data {
     const int32_t * ids_src_compact = nullptr;
     const int32_t * ids_dst_compact = nullptr;
-    const int32_t * expert_bounds_dev = nullptr;
+    const ggml_cuda_mm_id_tile_spec * tile_spec_dev = nullptr;
     int n_experts = 0;
+    int max_tiles = 0;
     int sis1 = 0;
 };
 
@@ -308,7 +310,7 @@ __launch_bounds__(ggml_cuda_get_physical_warp_size()*nwarps, 1)
 static __global__ void mul_mat_f_ids(
         const T * __restrict__ x, const float * __restrict__ y,
         const int32_t * __restrict__ ids_src_compact, const int32_t * __restrict__ ids_dst_compact,
-        const int32_t * __restrict__ expert_bounds, float * __restrict__ dst,
+        const ggml_cuda_mm_id_tile_spec * __restrict__ tile_spec, float * __restrict__ dst,
         const int ncols, const int ncols_dst_total, const int nchannels_dst, const int stride_row, const int stride_col_y, const int stride_col_dst,
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
@@ -349,20 +351,15 @@ static __global__ void mul_mat_f_ids(
     constexpr int ntA = rows_per_block / tile_A::I;
     constexpr int ntB = (cols_per_block + tile_B::I - 1) / tile_B::I;
 
-    const int row0        = blockIdx.x * rows_per_block;
+    const int row0     = blockIdx.x * rows_per_block;
+    const int tile_idx = blockIdx.y;
 
-    const int expert_idx = blockIdx.y;
-    const int expert_start = expert_bounds[expert_idx];
-    const int expert_end   = expert_bounds[expert_idx + 1];
+    const ggml_cuda_mm_id_tile_spec ts = tile_spec[tile_idx];
+
+    const int expert_idx   = ts.expert;
+    const int expert_start = ts.col_low;
+    const int expert_end   = ts.col_high;
     const int ncols_expert = expert_end - expert_start;
-
-    const int tiles_for_expert = (ncols_expert + cols_per_block - 1) / cols_per_block;
-    const int tile_idx = blockIdx.z;
-    if (tile_idx >= tiles_for_expert) {
-        return;
-    }
-
-    const int col_base = tile_idx * cols_per_block;
 
     GGML_UNUSED(channel_ratio);
 
@@ -409,10 +406,9 @@ static __global__ void mul_mat_f_ids(
 #pragma unroll
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const int j = j0 + tile_idx_local*tile_B::I;
-                    const int global_j = col_base + j;
                     float val = 0.0f;
-                    if (j < cols_per_block && global_j < ncols_expert) {
-                        const int src_entry = ids_src_expert[global_j];
+                    if (j < cols_per_block && j < ncols_expert) {
+                        const int src_entry = ids_src_expert[j];
                         const uint2 qrm = fast_div_modulo((uint32_t) src_entry, sis1_fd);
                         const int token   = (int) qrm.x;
                         const int channel = (int) qrm.y;
@@ -462,10 +458,9 @@ static __global__ void mul_mat_f_ids(
 #pragma unroll
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const int j = j0 + tile_idx_local*tile_B::I;
-                    const int global_j = col_base + j;
                     float2 tmp = make_float2(0.0f, 0.0f);
-                    if (j < cols_per_block && global_j < ncols_expert) {
-                        const int src_entry = ids_src_expert[global_j];
+                    if (j < cols_per_block && j < ncols_expert) {
+                        const int src_entry = ids_src_expert[j];
                         const uint2 qrm = fast_div_modulo((uint32_t) src_entry, sis1_fd);
                         const int token   = (int) qrm.x;
                         const int channel = (int) qrm.y;
@@ -564,9 +559,8 @@ static __global__ void mul_mat_f_ids(
             }
         }
 
-        const int global_j = col_base + j;
-        if (j < cols_per_block && global_j < ncols_expert && nchannels_dst > 0) {
-            const int dst_entry = ids_dst_expert[global_j];
+        if (j < cols_per_block && j < ncols_expert && nchannels_dst > 0) {
+            const int dst_entry = ids_dst_expert[j];
             const uint2 qrm = fast_div_modulo((uint32_t) dst_entry, nch_fd);
             const int token = (int) qrm.x;
             if (token < ncols_dst_total) {
@@ -580,7 +574,7 @@ static __global__ void mul_mat_f_ids(
     }
     }
 #else
-    GGML_UNUSED_VARS(x, y, ids_src_compact, ids_dst_compact, expert_bounds, dst,
+    GGML_UNUSED_VARS(x, y, ids_src_compact, ids_dst_compact, tile_spec, dst,
         ncols, ncols_dst_total, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, sis1_fd, nch_fd);
@@ -603,17 +597,16 @@ static inline void mul_mat_f_switch_ids(
     // Use the compact-ids kernel only for larger tiles; for small ncols_dst (< 16)
     // we prefer the normal mul_mat_f path with has_ids=true.
     if (has_ids_data && ncols_dst > 16) {
-        const int max_tiles = (int) ((ncols_dst + cols_per_block - 1) / cols_per_block);
-        if (max_tiles == 0) {
+        if (ids_data->max_tiles == 0) {
             return;
         }
-        dim3 block_nums_ids(block_nums.x, ids_data->n_experts, max_tiles);
+        dim3 block_nums_ids(block_nums.x, ids_data->max_tiles, 1);
 
         const uint3 sis1_fd = ids_data->sis1 > 0 ? init_fastdiv_values((uint32_t) ids_data->sis1) : make_uint3(0, 0, 1);
         const uint3 nch_fd  = init_fastdiv_values((uint32_t) nchannels_dst);
 
         mul_mat_f_ids<T, rows_per_block, cols_per_block, nwarps><<<block_nums_ids, block_dims, nbytes_shared_total, stream>>>
-            (x, y, ids_data->ids_src_compact, ids_data->ids_dst_compact, ids_data->expert_bounds_dev, dst,
+            (x, y, ids_data->ids_src_compact, ids_data->ids_dst_compact, ids_data->tile_spec_dev, dst,
             ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
             channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
             sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
