@@ -4736,32 +4736,64 @@ static bool htp_kparams_solve_lightning_indexer(
     const uint32_t D        = q->ne[0];
     const uint32_t n_head   = q->ne[1];
     const uint32_t n_tokens = q->ne[2];
-    const uint32_t n_threads = (std::min)(htp_session_n_threads(sess), n_kv_blocks);
+    if (htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
+        const uint32_t n_threads = htp_session_n_threads(sess);
+        const uint32_t n_stream  = q->ne[3];
+        const uint32_t n_dot     = D / HMX_FP16_TILE_N_COLS;
 
-    const bool hmx_ok = htp_session_n_hmx(sess) > 0 &&
-                        D % HMX_FP16_TILE_N_COLS == 0 &&
-                        n_head % 2 == 0 &&
-                        n_tokens >= 8 &&
-                        n_tokens * n_head >= HMX_FP16_TILE_N_ROWS;
-    if (hmx_ok) {
+        auto vtcm_usage = [&](uint32_t n_tok, uint32_t kv_block, uint32_t n_qsets) {
+            return htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, kv_block, n_qsets, n_threads);
+        };
+
         uint32_t n_tok = (std::min)(n_tokens, (uint32_t) HTP_LID_HMX_TOKENS_MAX);
-        while (n_tok > 1 && htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, n_threads) > htp_session_vtcm_size(sess)) {
+        while (n_tok > 32 && vtcm_usage(n_tok, 64, 1) > htp_session_vtcm_size(sess)) {
             n_tok /= 2;
         }
 
-        const size_t vtcm_size = htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, n_threads);
-        if (n_tok * n_head >= HMX_FP16_TILE_N_ROWS && vtcm_size <= htp_session_vtcm_size(sess)) {
+        uint32_t n_qsets = n_tok == n_tokens ? (std::min)(n_stream, (uint32_t) HTP_LID_HMX_MAX_QSETS) : 1;
+        while (n_qsets > 1 && vtcm_usage(n_tok, 64, n_qsets) > htp_session_vtcm_size(sess)) {
+            n_qsets /= 2;
+        }
+
+        uint32_t n_qbuf = 1;
+        if (n_qsets == 1 && n_head >= 16 && n_stream * ((n_tokens + n_tok - 1) / n_tok) > 1) {
+            uint32_t nt2 = n_tok;
+            while (nt2 > 32 && vtcm_usage(nt2, 64, 2) > htp_session_vtcm_size(sess)) {
+                nt2 /= 2;
+            }
+            const size_t q_bytes = (size_t) nt2 * n_head * D * sizeof(float);
+            const size_t k_bytes = (size_t) k->ne[2] * ggml_row_size(k->type, D);
+            if (vtcm_usage(nt2, 64, 2) <= htp_session_vtcm_size(sess) && q_bytes >= k_bytes) {
+                n_tok  = nt2;
+                n_qbuf = 2;
+            }
+        }
+
+        const uint32_t n_ch   = (n_tok * n_head + 31) / 32;
+        const uint32_t n_rows = n_qsets * hex_round_up(k->ne[2], 64);
+        const uint32_t bc_max = n_rows <= 512 ? n_rows : (std::max)(256u, n_rows / 4);
+        uint32_t kv_block = 64;
+        while (kv_block < HTP_LID_HMX_KV_BLOCK_MAX && kv_block < bc_max && (kv_block / 32) * n_ch * (n_dot + 1) < 256 &&
+               vtcm_usage(n_tok, kv_block * 2, n_qsets * n_qbuf) <= htp_session_vtcm_size(sess)) {
+            kv_block *= 2;
+        }
+
+        const size_t vtcm_size = vtcm_usage(n_tok, kv_block, n_qsets * n_qbuf);
+        if (vtcm_size <= htp_session_vtcm_size(sess)) {
+            const uint32_t n_blk = (k->ne[2] + kv_block - 1) / kv_block;
             kparams->kernel_type       = HTP_LID_KERNEL_HMX;
             kparams->n_threads         = n_threads;
             kparams->n_tokens_tile     = n_tok;
-            kparams->n_kv_blocks       = n_kv_blocks;
-            kparams->blocks_per_thread = (n_kv_blocks + n_threads - 1) / n_threads;
-            kparams->n_row_pad         = (uint32_t) hex_round_up((size_t) n_tok * n_head, HMX_FP16_TILE_N_ROWS);
+            kparams->n_kv_blocks       = n_blk;
+            kparams->kv_block          = kv_block;
+            kparams->n_qsets           = n_qsets;
+            kparams->n_qbuf            = n_qbuf;
             kparams->vtcm_size         = (uint32_t) vtcm_size;
             return true;
         }
     }
 
+    const uint32_t n_threads = (std::min)(htp_session_n_threads(sess), n_kv_blocks);
     uint32_t n_tok = (std::min)((uint32_t) q->ne[2], (uint32_t) HTP_LID_TOKENS_MAX);
     while (n_tok > 1 && htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads) > htp_session_vtcm_size(sess)) {
         n_tok /= 2;

@@ -543,254 +543,785 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
     (void) nth;
 }
 
-// ----- HMX path (prefill): Q/K as 32x32 f16 tiles, reuse FA QK dot, HVX reduce -----
+// ----- HMX path: K is the activation, Q the weights, head sum by a second HMX pass -----
+//
+// Channel c = t * n_head + h of a token tile. Per kv row tile (32 kv) and token tile u (32 tokens):
+//   mm1: S[kv, c] = relu(k . q_c) * |w_c|  (convert scale |w_c|, pos clamp)
+//   mm2: O[kv, t] = sum_c S[kv, c] * G[c, t], G[c, t] = sign(w_c) for c of token t
+// O tiles hold f16 (kv pair, token) words; gather one token column, add the mask, store f32.
+//
+// A run preps the Q sets of up to n_qsets (stream, token tile) pairs, then pipelines all their kv rows.
+// Row x of a run is kv x % kv_seg of set x / kv_seg (kv_seg = n_kv padded to 64), so a block of Bc rows can
+// span sets: it is split in segments, one per set. HMX computes block g while HVX preps K of g + 1 and extracts O of g - 1.
+
+struct lid_hmx_set {
+    uint32_t is;
+    uint32_t im3;
+    uint32_t t0;
+    uint32_t nt;
+    uint32_t n_ch;
+    uint32_t n_u;
+};
 
 struct htp_lid_hmx_context {
     const struct htp_ops_context * octx;
     struct htp_lid_hmx_vtcm_layout L;
 
-    uint32_t n_row_pad;
-    uint32_t is;
-    uint32_t im3;
-    uint32_t t0;
-    uint32_t nt;
+    uint32_t Bc;
+    uint32_t kv_seg;    // rows per set: n_kv padded to 64
+    struct fastdiv_values kv_seg_div;
+    uint32_t n_blocks;  // per run
+    uint32_t n_tile;    // tokens per token tile
+    uint32_t n_tt;      // token tiles per stream
 
-    // active kv block for reduce
-    uint32_t reduce_bi;
-    uint32_t reduce_nkv;
+    uint32_t n_qsets;   // Q sets per buffer
+    uint32_t qbuf;      // Q buffer of the run (two buffers: the next run's Q is prepped during this run)
 
-    __fp16 *  q_tiles;
+    uint32_t tile0;     // first (stream, token tile) of the run
+    uint32_t n_run;     // sets in the run
+    uint32_t n_qthr;    // threads with Q work in the run
+    uint32_t nt_run;    // tokens of each set in the run
+    uint32_t n_u_run;   // token tiles of 32 of each set in the run
+    int32_t  g;         // current stage
+
+    struct lid_hmx_set sets[HTP_LID_HMX_MAX_QSETS];
+
+    // next run, Q prepped in the stages of this one
+    bool               nx_on;
+    uint32_t           nx_n_run;
+    struct lid_hmx_set nx_sets[HTP_LID_HMX_MAX_QSETS];
+
+    __fp16 *  qw;
+    __fp16 *  gw;
+    uint8_t * sc;
+    uint8_t * sc_id;
+    __fp16 *  s;
     float *   w;
     uint8_t * qs;
     uint8_t * k_raw[2];
-    __fp16 *  k_tiles[2];
-    __fp16 *  s_tiles[2];
-    uint8_t * m_buf[2];
-    uint8_t * o_buf[2];
-    uint8_t * hmx_scales;
+    __fp16 *  k_t[2];
+    __fp16 *  o[2];
+    uint8_t * m[4];
+    uint8_t * out[2];
 };
 
-static void lid_hmx_prep_thread(unsigned int nth, unsigned int ith, void * data) {
+#define LID_HMX_MAX_SEGS HTP_LID_HMX_MAX_QSETS
+
+// Rows of one set in a block: valid rows [x0, x0 + nv) of the block are kv [kv0, kv0 + nv) of the set
+struct lid_hmx_seg {
+    uint32_t set;
+    uint32_t x0;
+    uint32_t kv0;
+    uint32_t nv;
+};
+
+static inline struct lid_hmx_set lid_hmx_set_init(const struct htp_lid_hmx_context * hctx, uint32_t set) {
+    const struct htp_ops_context * octx = hctx->octx;
+    const uint32_t ti = hctx->tile0 + set;
+
+    struct lid_hmx_set S;
+    S.is   = ti / hctx->n_tt;
+    S.im3  = S.is % octx->src[3]->ne[3];
+    S.t0   = (ti % hctx->n_tt) * hctx->n_tile;
+    S.nt   = MIN(hctx->n_tile, octx->src[0]->ne[2] - S.t0);
+    S.n_ch = (S.nt * octx->src[0]->ne[1] + 31) / 32;
+    S.n_u  = (S.nt + 31) / 32;
+    return S;
+}
+
+// Segments of block g with valid rows. Returns their count, n_rows gets the block rows (multiple of 64).
+static inline uint32_t lid_hmx_segs(const struct htp_lid_hmx_context * hctx, uint32_t g, struct lid_hmx_seg * seg, uint32_t * n_rows) {
+    const uint32_t n_kv = hctx->octx->src[1]->ne[2];
+    const uint32_t ks   = hctx->kv_seg;
+    const uint32_t xa   = g * hctx->Bc;
+    const uint32_t xb   = MIN(xa + hctx->Bc, hctx->n_run * ks);
+
+    uint32_t n = 0;
+    for (uint32_t x = xa; x < xb;) {
+        const uint32_t set = fastdiv(x, &hctx->kv_seg_div);
+        const uint32_t kv  = x - set * ks;
+        const uint32_t end = MIN(xb, (set + 1) * ks);
+        if (kv < n_kv) {
+            seg[n].set = set;
+            seg[n].x0  = x - xa;
+            seg[n].kv0 = kv;
+            seg[n].nv  = MIN(n_kv, kv + (end - x)) - kv;
+            n++;
+        }
+        x = end;
+    }
+    *n_rows = xb - xa;
+    return n;
+}
+
+typedef struct {
+    const __fp16 *  qw;
+    const __fp16 *  gw;
+    const uint8_t * sc;
+    uint32_t        rt0;
+    uint32_t        n_rt;
+} lid_hmx_job_seg_t;
+
+typedef struct {
+    lid_hmx_job_seg_t seg[LID_HMX_MAX_SEGS];
+    uint32_t          n_seg;
+
+    const __fp16 *  k_t;
+    const uint8_t * sc_id;
+    __fp16 *        s;
+    __fp16 *        o;
+    uint32_t        n_ch;
+    uint32_t        n_u;
+    uint32_t        n_dot;
+    uint32_t        n_head;
+    uint32_t        n_sg;
+} lid_hmx_job_t;
+
+// acc += sum of n tile products, a and b advance one tile per step
+static inline void lid_hmx_dot(const __fp16 * a, const __fp16 * b, uint32_t n) {
+    for (; n > 32; n -= 32) {
+        asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") :: "r"(65535), "r"(a), "r"(b));
+        a += 32 * HMX_FP16_TILE_N_ELMS;
+        b += 32 * HMX_FP16_TILE_N_ELMS;
+    }
+    asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") :: "r"(n * HMX_FP16_TILE_SIZE - 1), "r"(a), "r"(b));
+}
+
+// Per segment: channel tile outer, row tile inner, one bias load per channel tile. S holds [n_rt][n_sg] tiles.
+static void lid_hmx_worker(void * data) {
+    const lid_hmx_job_t * job = (const lid_hmx_job_t *) data;
+
+    const size_t   dot_stride = (size_t) job->n_dot * HMX_FP16_TILE_N_ELMS;
+    const size_t   s_stride   = (size_t) job->n_sg * HMX_FP16_TILE_N_ELMS;
+    const uint32_t nh         = job->n_head;
+
+    for (uint32_t i = 0; i < job->n_seg; ++i) {
+        const lid_hmx_job_seg_t * sg   = &job->seg[i];
+        const uint32_t            n_rt = sg->n_rt;
+        const __fp16 *            kt   = job->k_t + sg->rt0 * dot_stride;
+        __fp16 *                  ot   = job->o + sg->rt0 * job->n_u * HMX_FP16_TILE_N_ELMS;
+
+        for (uint32_t u = 0; u < job->n_u; ++u) {
+            const uint32_t j0 = u * nh;
+            const uint32_t j1 = MIN(j0 + nh, job->n_ch);
+
+            for (uint32_t c = j0; c < j1; ++c) {
+                const __fp16 * qw = sg->qw + c * dot_stride;
+                __fp16 *       st = job->s + (c - j0) * HMX_FP16_TILE_N_ELMS;
+
+                asm volatile(HMX_SET_BIAS("%0") :: "r"(sg->sc + c * 256));
+                for (uint32_t rt = 0; rt < n_rt; ++rt) {
+                    asm volatile(HMX_CLRACC_F16());
+                    lid_hmx_dot(kt + rt * dot_stride, qw, job->n_dot);
+                    asm volatile("mxmem(%0, %1):after:pos.hf = acc\n" :: "r"(st + rt * s_stride), "r"(0) : "memory");
+                }
+            }
+
+            asm volatile(HMX_SET_BIAS("%0") :: "r"(job->sc_id));
+            for (uint32_t rt = 0; rt < n_rt; ++rt) {
+                asm volatile(HMX_CLRACC_F16());
+                lid_hmx_dot(job->s + rt * s_stride, sg->gw + j0 * HMX_FP16_TILE_N_ELMS, j1 - j0);
+                asm volatile(HMX_STORE_AFTER_F16("%0", "%1") :: "r"(ot + (rt * job->n_u + u) * HMX_FP16_TILE_N_ELMS), "r"(0) : "memory");
+            }
+        }
+    }
+}
+
+// Thread slices: K rows by row pairs of the padded block, mask / output rows by token.
+// Block 0 is prepped together with Q: its K rows go to the threads without Q work.
+static inline void lid_hmx_rows(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g, uint32_t n_rows,
+                                uint32_t * r0, uint32_t * r1) {
+    if (g == 0 && hctx->n_qthr < nth) {
+        if (ith < hctx->n_qthr) {
+            *r0 = *r1 = 0;
+            return;
+        }
+        ith -= hctx->n_qthr;
+        nth -= hctx->n_qthr;
+    }
+    const uint32_t per = hex_round_up((n_rows + nth - 1) / nth, 2);
+    *r0 = MIN(ith * per, n_rows);
+    *r1 = MIN(*r0 + per, n_rows);
+}
+
+static inline void lid_hmx_toks(uint32_t ith, uint32_t nth, uint32_t nt, uint32_t * t0, uint32_t * t1) {
+    const uint32_t per = (nt + nth - 1) / nth;
+    *t0 = MIN(ith * per, nt);
+    *t1 = MIN((ith + 1) * per, nt);
+}
+
+// Push (or only count, push == false) the K row and mask DMAs of block g for this thread, one per segment
+static uint32_t lid_hmx_in(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g, bool push) {
+    const struct htp_ops_context * octx = hctx->octx;
+    const struct htp_tensor *      k    = octx->src[1];
+    const struct htp_tensor *      m    = octx->src[3];
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+
+    struct lid_hmx_seg seg[LID_HMX_MAX_SEGS];
+    uint32_t           n_rows;
+    const uint32_t     n_seg = lid_hmx_segs(hctx, g, seg, &n_rows);
+
+    uint32_t r0, r1, ta, tb;
+    lid_hmx_rows(hctx, ith, nth, g, n_rows, &r0, &r1);
+    lid_hmx_toks(ith, nth, hctx->nt_run, &ta, &tb);
+
+    dma_queue *    dma_q      = octx->ctx->dma[ith];
+    const uint32_t k_row_size = htp_tensor_get_row_size(k->type, k->ne[0]);
+
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < n_seg; ++i) {
+        const struct lid_hmx_set S = hctx->sets[seg[i].set];
+
+        const uint32_t ra = MAX(r0, seg[i].x0);
+        const uint32_t rb = MIN(r1, seg[i].x0 + seg[i].nv);
+        if (ra < rb) {
+            if (push) {
+                dma_queue_push(dma_q, dma_make_data(hctx->k_raw[g % 2] + ra * L->size_k_row,
+                                                    k->data + S.is * k->nb[3] + (seg[i].kv0 + ra - seg[i].x0) * k->nb[2]),
+                               L->size_k_row, k->nb[2], k_row_size, rb - ra);
+            }
+            n++;
+        }
+        if (ta < tb) {
+            if (push) {
+                dma_queue_push(dma_q, dma_make_data(hctx->m[g % 4] + ta * L->size_m_row + seg[i].x0 * sizeof(__fp16),
+                                                    m->data + S.im3 * m->nb[3] + (S.t0 + ta) * m->nb[1] + seg[i].kv0 * sizeof(__fp16)),
+                               L->size_m_row, m->nb[1], seg[i].nv * sizeof(__fp16), tb - ta);
+            }
+            n++;
+        }
+    }
+    return n;
+}
+
+static inline uint32_t lid_hmx_push_in(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
+    return lid_hmx_in(hctx, ith, nth, g, true);
+}
+
+#if __HVX_ARCH__ < 79
+#define LID_MUL_F16(a, b) Q6_Vhf_equals_Wqf32(Q6_Wqf32_vmpy_VhfVhf(a, b))
+#else
+#define LID_MUL_F16(a, b) Q6_Vhf_vmpy_VhfVhf(a, b)
+#endif
+
+// Row pair (a, b) quants of two blocks (64 values each, bytes 0..63) to the two tile vectors, scaled by s0, s1
+static inline void lid_q8_0_pair_store(HVX_Vector * restrict dst, HVX_Vector a, HVX_Vector b, HVX_Vector s0, HVX_Vector s1, bool two) {
+    const HVX_VectorPair qh = Q6_Wh_vunpack_Vb(Q6_V_lo_W(Q6_W_vshuff_VVR(b, a, -1)));
+    dst[0] = LID_MUL_F16(Q6_Vhf_equals_Vh(Q6_V_lo_W(qh)), s0);
+    if (two) {
+        dst[16] = LID_MUL_F16(Q6_Vhf_equals_Vh(Q6_V_hi_W(qh)), s1);
+    }
+}
+
+// Raw Q8_0 rows [r0, r1) to activation tiles, dequant fused with the row pair interleave. Rows >= nv are zero.
+// Per row pair and two blocks: interleave the quants of both rows as bytes, widen, then scale by the (d_r, d_r+1) word.
+static inline void lid_hmx_prep_k_q8_0(__fp16 * restrict k_t, const uint8_t * restrict k_raw, size_t row_stride,
+                                       uint32_t r0, uint32_t r1, uint32_t nv, uint32_t n_dot) {
+    const HVX_Vector     zero = Q6_V_vzero();
+    const HVX_VectorPred q32  = Q6_Q_vsetq_R(32);
+
+    for (uint32_t r = r0; r < r1; r += 2) {
+        const uint8_t * p0 = k_raw + r * row_stride;
+        const uint8_t * p1 = p0 + row_stride;
+        const bool      v0 = r < nv;
+        const bool      v1 = r + 1 < nv;
+
+        HVX_Vector * dst = (HVX_Vector *) (k_t + (r / 32) * n_dot * HMX_FP16_TILE_N_ELMS) + (r % 32) / 2;
+
+        if (n_dot == 4) {
+            // D = 128: the row is 136 bytes, two aligned loads; scales at halfwords 0, 17, 34, 51
+            const HVX_Vector a0 = v0 ? ((const HVX_Vector *) p0)[0] : zero;
+            const HVX_Vector a1 = v0 ? ((const HVX_Vector *) p0)[1] : zero;
+            const HVX_Vector b0 = v1 ? ((const HVX_Vector *) p1)[0] : zero;
+            const HVX_Vector b1 = v1 ? ((const HVX_Vector *) p1)[1] : zero;
+
+            const HVX_VectorPair ds = Q6_W_vshuff_VVR(b0, a0, -SIZEOF_FP16);
+
+            lid_q8_0_pair_store(dst,
+                                Q6_V_vmux_QVV(q32, Q6_V_valign_VVR(a0, a0, 2), Q6_V_valign_VVR(a0, a0, 4)),
+                                Q6_V_vmux_QVV(q32, Q6_V_valign_VVR(b0, b0, 2), Q6_V_valign_VVR(b0, b0, 4)),
+                                hvx_vec_repl4(Q6_V_lo_W(ds)), hvx_vec_repl4(Q6_V_vror_VR(Q6_V_lo_W(ds), 17 * 4)), true);
+            lid_q8_0_pair_store(dst + 32,
+                                Q6_V_vmux_QVV(q32, Q6_V_valign_VVR(a1, a0, 70), Q6_V_valign_VVR(a1, a0, 72)),
+                                Q6_V_vmux_QVV(q32, Q6_V_valign_VVR(b1, b0, 70), Q6_V_valign_VVR(b1, b0, 72)),
+                                hvx_vec_repl4(Q6_V_vror_VR(Q6_V_hi_W(ds), 2 * 4)), hvx_vec_repl4(Q6_V_vror_VR(Q6_V_hi_W(ds), 19 * 4)), true);
+            continue;
+        }
+
+        for (uint32_t i = 0; i < n_dot; i += 2) {
+            const uint8_t * pa = p0 + i * sizeof(block_q8_0);
+            const uint8_t * pb = p1 + i * sizeof(block_q8_0);
+
+            // quants of blocks i, i + 1 in bytes 0..63, scales d_i at byte 0 and d_i+1 at byte 34
+            const HVX_Vector a  = v0 ? Q6_V_vmux_QVV(q32, *(const HVX_UVector *) (pa + 2), *(const HVX_UVector *) (pa + 4)) : zero;
+            const HVX_Vector b  = v1 ? Q6_V_vmux_QVV(q32, *(const HVX_UVector *) (pb + 2), *(const HVX_UVector *) (pb + 4)) : zero;
+            const HVX_Vector da = v0 ? *(const HVX_UVector *) pa : zero;
+            const HVX_Vector db = v1 ? *(const HVX_UVector *) pb : zero;
+            const HVX_Vector ds = Q6_V_lo_W(Q6_W_vshuff_VVR(db, da, -SIZEOF_FP16));
+
+            lid_q8_0_pair_store(dst + i * 16, a, b, hvx_vec_repl4(ds), hvx_vec_repl4(Q6_V_vror_VR(ds, 2 * sizeof(block_q8_0))), i + 1 < n_dot);
+        }
+    }
+}
+
+// F16 rows [r0, r1) to activation tiles: row pairs interleaved. Rows >= nv are zero.
+static inline void lid_hmx_prep_k_f16(__fp16 * restrict k_t, const uint8_t * restrict k_raw, size_t row_stride,
+                                      uint32_t r0, uint32_t r1, uint32_t nv, uint32_t n_dot) {
+    const HVX_Vector zero = Q6_V_vzero();
+
+    for (uint32_t r = r0; r < r1; r += 2) {
+        const HVX_Vector * p0 = (const HVX_Vector *) (k_raw + r * row_stride);
+        const HVX_Vector * p1 = (const HVX_Vector *) (k_raw + (r + 1) * row_stride);
+        const bool         v0 = r < nv;
+        const bool         v1 = r + 1 < nv;
+
+        HVX_Vector * dst = (HVX_Vector *) (k_t + (r / 32) * n_dot * HMX_FP16_TILE_N_ELMS) + (r % 32) / 2;
+
+        for (uint32_t i = 0; i < n_dot; i += 2) {
+            const HVX_VectorPair p = Q6_W_vshuff_VVR(v1 ? p1[i / 2] : zero, v0 ? p0[i / 2] : zero, -SIZEOF_FP16);
+            dst[i * 16] = Q6_V_lo_W(p);
+            if (i + 1 < n_dot) {
+                dst[(i + 1) * 16] = Q6_V_hi_W(p);
+            }
+        }
+    }
+}
+
+// K rows of block g (this thread's rows) to activation tiles, one piece per set; set padding rows are zero
+static void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+    const struct htp_tensor * k = hctx->octx->src[1];
+
+    const uint32_t n_kv   = k->ne[2];
+    const uint32_t ks     = hctx->kv_seg;
+    const uint32_t xa     = g * hctx->Bc;
+    const uint32_t n_rows = MIN(hctx->Bc, hctx->n_run * ks - xa);
+
+    uint32_t r0, r1;
+    lid_hmx_rows(hctx, ith, nth, g, n_rows, &r0, &r1);
+
+    const uint8_t * k_raw = hctx->k_raw[g % 2];
+    __fp16 *        k_t   = hctx->k_t[g % 2];
+    const bool      q8    = k->type == HTP_TYPE_Q8_0;
+
+    for (uint32_t r = r0; r < r1;) {
+        const uint32_t x   = xa + r;
+        const uint32_t set = fastdiv(x, &hctx->kv_seg_div);
+        const uint32_t kv  = x - set * ks;
+        const uint32_t end = MIN(r1, (set + 1) * ks - xa);
+        const uint32_t nv  = r + (kv < n_kv ? n_kv - kv : 0);
+
+        if (q8) {
+            lid_hmx_prep_k_q8_0(k_t, k_raw, L->size_k_row, r, end, nv, L->n_dot);
+        } else {
+            lid_hmx_prep_k_f16(k_t, k_raw, L->size_k_row, r, end, nv, L->n_dot);
+        }
+        r = end;
+    }
+}
+
+// O column of each token (64 kv per gather) + mask -> f32 rows, then one DMA out per segment
+static void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
+    const struct htp_ops_context * octx = hctx->octx;
+    const struct htp_tensor *      dst  = octx->dst;
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+
+    uint32_t ta, tb;
+    lid_hmx_toks(ith, nth, hctx->nt_run, &ta, &tb);
+    if (ta >= tb) {
+        return;
+    }
+
+    struct lid_hmx_seg seg[LID_HMX_MAX_SEGS];
+    uint32_t           n_rows;
+    const uint32_t     n_seg = lid_hmx_segs(hctx, g, seg, &n_rows);
+
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) g);
+
+    const uint32_t n_u = hctx->n_u_run;
+    const uint32_t mu  = (n_u + 1) * HMX_FP16_TILE_SIZE - 1;
+
+    int32_t offs[32] __attribute__((aligned(128)));
+    for (int l = 0; l < 32; l++) {
+        offs[l] = (l / 16) * n_u * HMX_FP16_TILE_SIZE + (l % 16) * 128;
+    }
+    const HVX_Vector v_offs = *(const HVX_Vector *) offs;
+
+    HVX_Vector * gbuf = (HVX_Vector *) (hctx->qs + ith * L->size_qs + 32 * (L->size_qs_row + L->size_qh_row));
+
+    const HVX_Vector zero = Q6_V_vzero();
+    const HVX_Vector ninf = Q6_V_vsplat_R(0xFF800000);
+    const HVX_Vector one  = Q6_Vh_vsplat_R(0x3C00);
+    const HVX_Vector hinf = Q6_Vh_vsplat_R(0xFC00);
+
+    const __fp16 *  o_base = hctx->o[g % 2];
+    const uint8_t * m_buf  = hctx->m[g % 4];
+    uint8_t *       o_buf  = hctx->out[g % 2];
+
+    for (uint32_t i = 0; i < n_seg; ++i) {
+        const uint32_t q0 = seg[i].x0 / 64;
+        const uint32_t q1 = (seg[i].x0 + seg[i].nv + 63) / 64;
+
+        for (uint32_t t = ta; t < tb; ++t) {
+            const uint32_t   u   = t / 32;
+            const HVX_Vector off = Q6_Vw_vadd_VwVw(v_offs, Q6_V_vsplat_R((t % 32) * 4));
+
+            for (uint32_t q = q0; q < q1; ++q) {
+                const __fp16 * base = o_base + (2 * q * n_u + u) * HMX_FP16_TILE_N_ELMS;
+                Q6_vgather_ARMVw(gbuf + q - q0, (size_t) base, mu, off);
+            }
+            hvx_gather_sync(gbuf + q1 - q0 - 1);
+
+            const HVX_Vector * mv = (const HVX_Vector *) (m_buf + t * L->size_m_row);
+            HVX_Vector *       ov = (HVX_Vector *) (o_buf + t * L->size_o_row);
+
+            for (uint32_t q = q0; q < q1; ++q) {
+                const HVX_VectorPair s = hvx_vec_f16_to_f32(gbuf[q - q0]);
+
+                // qf32 math does not keep inf: add a finite mask, then put -inf back
+                const HVX_Vector     m_f16 = mv[q];
+                const HVX_VectorPred m_inf = Q6_Q_vcmp_eq_VhVh(m_f16, hinf);
+                const HVX_VectorPair m_f32 = hvx_vec_f16_to_f32(Q6_V_vmux_QVV(m_inf, zero, m_f16));
+                const HVX_VectorPair f_f32 = hvx_vec_f16_to_f32(Q6_V_vmux_QVV(m_inf, one, zero));
+
+                const HVX_Vector acc0 = HVX_OP_ADD_F32(Q6_V_lo_W(s), Q6_V_lo_W(m_f32));
+                const HVX_Vector acc1 = HVX_OP_ADD_F32(Q6_V_hi_W(s), Q6_V_hi_W(m_f32));
+                ov[2 * q + 0] = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VwVw(Q6_V_lo_W(f_f32), zero), ninf, acc0);
+                ov[2 * q + 1] = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VwVw(Q6_V_hi_W(f_f32), zero), ninf, acc1);
+            }
+        }
+
+        const struct lid_hmx_set S = hctx->sets[seg[i].set];
+        dma_queue_push(octx->ctx->dma[ith],
+                       dma_make_data(dst->data + S.is * dst->nb[3] + (S.t0 + ta) * dst->nb[1] + seg[i].kv0 * sizeof(float),
+                                     o_buf + ta * L->size_o_row + seg[i].x0 * sizeof(float)),
+                       dst->nb[1], L->size_o_row, seg[i].nv * sizeof(float), tb - ta);
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) g);
+}
+
+// Number of output DMAs of block g for this thread
+static inline uint32_t lid_hmx_n_out(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
+    uint32_t ta, tb;
+    lid_hmx_toks(ith, nth, hctx->nt_run, &ta, &tb);
+    if (ta >= tb) {
+        return 0;
+    }
+    struct lid_hmx_seg seg[LID_HMX_MAX_SEGS];
+    uint32_t           n_rows;
+    return lid_hmx_segs(hctx, g, seg, &n_rows);
+}
+
+static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth);
+
+// Pipeline stage g (HMX runs block g meanwhile): prep block g + 1, extract block g - 1
+static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth) {
+    const int32_t g = hctx->g;
+    const int32_t n = (int32_t) hctx->n_blocks;
+
+    struct htp_thread_trace * tr    = &hctx->octx->ctx->trace[ith];
+    dma_queue *               dma_q = hctx->octx->ctx->dma[ith];
+
+    // FIFO order per thread: OUT(g - 3), IN(g + 1), OUT(g - 2). When this stage preps next run Q, also pop
+    // OUT(g - 2) so the queue is empty for the Q DMAs; else leave it in flight for one more stage.
+    const int32_t lag = hctx->nx_on ? 2 : 3;
+
+    uint32_t n_pop = 0;
+    if (lag == 3 && g - 3 >= 0) {
+        n_pop += lid_hmx_n_out(hctx, ith, nth, g - 3);
+    }
+    if (g >= 0 && g + 1 < n) {
+        n_pop += lid_hmx_in(hctx, ith, nth, g + 1, false);
+    }
+    if (lag == 2 && g - 2 >= 0) {
+        n_pop += lid_hmx_n_out(hctx, ith, nth, g - 2);
+    }
+    for (uint32_t i = 0; i < n_pop; ++i) {
+        dma_queue_pop(dma_q);
+    }
+
+    if (hctx->nx_on && g >= 0) {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) g);
+        lid_hmx_q_chunk(hctx, ith, nth);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) g);
+    }
+    if (g + 2 < n) {
+        lid_hmx_push_in(hctx, ith, nth, g + 2);
+    }
+    if (g + 1 < n) {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (g + 1));
+        lid_hmx_prep_k(hctx, ith, nth, g + 1);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (g + 1));
+    }
+    if (g - 1 >= 0) {
+        lid_hmx_extract(hctx, ith, nth, g - 1);
+    }
+    if (g == n) {
+        dma_queue_flush(dma_q);
+    }
+}
+
+static void lid_hmx_stage_thread(unsigned int nth, unsigned int ith, void * data) {
+    lid_hmx_stage((const struct htp_lid_hmx_context *) data, ith, nth);
+}
+
+// Push the Q rows of channel tile c of set S, one DMA per token. Returns the number of DMA descriptors.
+static uint32_t lid_hmx_push_q(const struct htp_lid_hmx_context * hctx, dma_queue * dma_q, uint8_t * qs,
+                               const struct lid_hmx_set * S, uint32_t c) {
+    const struct htp_tensor * q  = hctx->octx->src[0];
+    const uint32_t            nh = q->ne[1];
+    const uint32_t            ch = c * 32;
+    const uint32_t            nr = MIN(32, S->nt * nh - ch);
+
+    uint32_t n = 0;
+    for (uint32_t r = 0; r < nr;) {
+        const uint32_t t   = (ch + r) / nh;
+        const uint32_t h   = (ch + r) - t * nh;
+        const uint32_t cnt = MIN(nh - h, nr - r);
+        dma_queue_push(dma_q, dma_make_data(qs + r * hctx->L.size_qs_row,
+                                            q->data + S->is * q->nb[3] + (S->t0 + t) * q->nb[2] + h * q->nb[1]),
+                       hctx->L.size_qs_row, q->nb[1], q->ne[0] * sizeof(float), cnt);
+        r += cnt;
+        n++;
+    }
+    return n;
+}
+
+// Scales (|w| per channel, f16 in the low half of each word) and G tile (sign(w) at row c, column token(c) % 32)
+// of one channel tile. w points at the tile's 32 channels.
+static inline void lid_hmx_build_sc_g(uint8_t * restrict sc, __fp16 * restrict gt, const float * restrict w,
+                                      uint32_t ch, uint32_t nr, uint32_t nh) {
+    const HVX_Vector zero = Q6_V_vzero();
+    const HVX_Vector wv   = Q6_V_vmux_QVV(Q6_Q_vsetq2_R(nr * sizeof(float)), *(const HVX_Vector *) w, zero);
+
+    HVX_Vector * scv = (HVX_Vector *) sc;
+    scv[0] = hvx_vec_f32_to_f16_shuff(Q6_V_vand_VV(wv, Q6_V_vsplat_R(0x7FFFFFFF)), zero);
+    scv[1] = zero;
+
+    // sign(w) as f16 bits in the low half of each word, then packed: row r in halfword r
+    const HVX_VectorPred nz  = Q6_Q_vcmp_gt_VuwVuw(Q6_V_vand_VV(wv, Q6_V_vsplat_R(0x7FFFFFFF)), zero);
+    const HVX_Vector     sgn = Q6_V_vor_VV(Q6_V_vsplat_R(0x3C00), Q6_Vw_vasr_VwR(Q6_V_vand_VV(wv, Q6_V_vsplat_R(0x80000000)), 16));
+    const HVX_Vector     sv  = Q6_Vh_vpacke_VwVw(zero, Q6_V_vmux_QVV(nz, sgn, zero));
+
+    // token column of each row; -1 for missing rows (only rows 0..31 are used)
+    int16_t tcol[64] __attribute__((aligned(128))) = { 0 };
+    uint32_t t = ch / nh;
+    uint32_t h = ch - t * nh;
+    for (uint32_t r = 0; r < 32; ++r) {
+        tcol[r] = r < nr ? (int16_t) (t % 32) : -1;
+        if (++h == nh) {
+            h = 0;
+            t++;
+        }
+    }
+    const HVX_Vector tv = *(const HVX_Vector *) tcol;
+
+    // halfword 2n and 2n + 1 of a G vector are column n
+    static const int16_t col[64] __attribute__((aligned(128))) = {
+        0,  0,  1,  1,  2,  2,  3,  3,  4,  4,  5,  5,  6,  6,  7,  7,  8,  8,  9,  9,  10, 10,
+        11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21,
+        22, 22, 23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28, 29, 29, 30, 30, 31, 31,
+    };
+    const HVX_Vector cv = *(const HVX_Vector *) col;
+
+    // vector p holds rows 2p, 2p + 1
+    HVX_Vector * gv = (HVX_Vector *) gt;
+    for (uint32_t p = 0; p < 16; ++p) {
+        const HVX_Vector tp = hvx_vec_repl4(Q6_V_vror_VR(tv, p * 4));
+        const HVX_Vector sp = hvx_vec_repl4(Q6_V_vror_VR(sv, p * 4));
+        gv[p] = Q6_V_vmux_QVV(Q6_Q_vcmp_eq_VhVh(cv, tp), sp, zero);
+    }
+}
+
+// Q buffer slot of set
+static inline uint32_t lid_hmx_slot(const struct htp_lid_hmx_context * hctx, uint32_t qbuf, uint32_t set) {
+    return qbuf * hctx->n_qsets + set;
+}
+
+// Scales and G of channel tile c of a Q slot (needs the slot's w)
+static inline void lid_hmx_q_scg(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c) {
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+    const uint32_t nh = hctx->octx->src[0]->ne[1];
+    const uint32_t ch = c * 32;
+
+    lid_hmx_build_sc_g(hctx->sc + (slot * L->n_ch + c) * 256, hctx->gw + (slot * L->n_ch + c) * HMX_FP16_TILE_N_ELMS,
+                       hctx->w + slot * (L->size_w / sizeof(float)) + ch, ch, MIN(32, S->nt * nh - ch), nh);
+}
+
+// Staged f32 Q rows of channel tile c to f16, then to the weight tiles of a Q slot
+static inline void lid_hmx_q_tiles(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c,
+                                   const uint8_t * qs, uint8_t * qh) {
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+    const uint32_t D  = hctx->octx->src[0]->ne[0];
+    const uint32_t nh = hctx->octx->src[0]->ne[1];
+    const uint32_t nr = MIN(32, S->nt * nh - c * 32);
+
+    for (uint32_t r = 0; r < nr; ++r) {
+        hvx_copy_f16_f32_aa(qh + r * L->size_qh_row, qs + r * L->size_qs_row, D);
+    }
+
+    // missing channels must be zero (finite): zero the tiles, then scatter only the valid rows
+    __fp16 * qw = hctx->qw + (slot * L->n_ch + c) * L->n_dot * HMX_FP16_TILE_N_ELMS;
+    if (nr < 32) {
+        for (uint32_t i = 0; i < L->n_dot * 16; ++i) {
+            ((HVX_Vector *) qw)[i] = Q6_V_vzero();
+        }
+    }
+    hmx_interleave_rows_to_tiles(qw, (const __fp16 *) qh, nr, D, L->size_qh_row / sizeof(__fp16), 0, hex_round_up(nr, 2));
+    hvx_gather_sync(qw);
+}
+
+// Stage g share of the next run's Q prep (the DMA queue of the thread is empty here)
+static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth) {
+    const struct htp_ops_context * octx = hctx->octx;
+    const struct htp_tensor *      w    = octx->src[2];
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+
+    const uint32_t nh     = octx->src[0]->ne[1];
+    const uint32_t n_stg  = hctx->n_blocks + 1;
+    const uint32_t n_tot  = hctx->nx_n_run * L->n_ch;
+    const uint32_t a      = hctx->g * n_tot / n_stg;
+    const uint32_t b      = (hctx->g + 1) * n_tot / n_stg;
+    const uint32_t per    = (b - a + nth - 1) / nth;
+    const uint32_t gc0    = MIN(a + ith * per, b);
+    const uint32_t gc1    = MIN(gc0 + per, b);
+    const uint32_t qb     = hctx->qbuf ^ 1;
+
+    dma_queue * dma_q = octx->ctx->dma[ith];
+    uint8_t *   qs    = hctx->qs + ith * L->size_qs;
+    uint8_t *   qh    = qs + 32 * L->size_qs_row;
+
+    for (uint32_t gc = gc0; gc < gc1; ++gc) {
+        const uint32_t             set = gc / L->n_ch;
+        const uint32_t             c   = gc % L->n_ch;
+        const struct lid_hmx_set * S   = &hctx->nx_sets[set];
+        if (c >= S->n_ch) {
+            continue;
+        }
+
+        const uint32_t slot = lid_hmx_slot(hctx, qb, set);
+        const uint32_t ch   = c * 32;
+        const uint32_t ta   = ch / nh;
+        const uint32_t tb   = (MIN(ch + 32, S->nt * nh) - 1) / nh + 1;
+
+        float * wd = hctx->w + slot * (L->size_w / sizeof(float));
+        dma_queue_push(dma_q, dma_make_data(wd + ta * nh, w->data + S->is * w->nb[3] + (S->t0 + ta) * w->nb[1]),
+                       nh * sizeof(float), w->nb[1], nh * sizeof(float), tb - ta);
+        const uint32_t n_dma = 1 + lid_hmx_push_q(hctx, dma_q, qs, S, c);
+        for (uint32_t i = 0; i < n_dma; ++i) {
+            dma_queue_pop(dma_q);
+        }
+
+        lid_hmx_q_scg(hctx, slot, S, c);
+        lid_hmx_q_tiles(hctx, slot, S, c, qs, qh);
+    }
+}
+
+// Q rows to weight tiles, per channel scales |w| and G tiles for all sets of the run, then stage -1 (prep block 0).
+// Q work goes to the first threads (thread 0 starts first), the K rows of block 0 to the others.
+static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_lid_hmx_context *   hctx = (struct htp_lid_hmx_context *) data;
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_tensor *      q    = octx->src[0];
     const struct htp_tensor *      w    = octx->src[2];
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
 
-    const uint32_t D      = q->ne[0];
-    const uint32_t n_head = q->ne[1];
-    const uint32_t nt     = hctx->nt;
-    const uint32_t M      = nt * n_head;
-    const uint32_t M_pad  = hctx->n_row_pad;
-
-    const uint32_t chunk = (M_pad + nth - 1) / nth;
-    const uint32_t r0    = ith * chunk;
-    const uint32_t r1    = MIN(r0 + chunk, M_pad);
-    if (r0 >= r1) {
-        return;
-    }
+    const uint32_t nh = q->ne[1];
 
     struct htp_thread_trace * tr    = &octx->ctx->trace[ith];
     dma_queue *               dma_q = octx->ctx->dma[ith];
-    uint8_t *                 qs    = hctx->qs + ith * L->size_qs;
 
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) r0);
+    const uint32_t n_tot = hctx->n_run * L->n_ch;
+    const uint32_t per   = (n_tot + nth - 1) / nth;
+    const uint32_t gc0   = MIN(ith * per, n_tot);
+    const uint32_t gc1   = MIN(gc0 + per, n_tot);
 
-    // Zero pad rows this thread owns beyond M (n_head is even so M is even)
-    for (uint32_t r = MAX(r0, M); r < r1; ++r) {
-        const uint32_t rt = r / HMX_FP16_TILE_N_ROWS;
-        const uint32_t rr = r % HMX_FP16_TILE_N_ROWS;
-        __fp16 * out_base = hctx->q_tiles + (size_t) rt * HMX_FP16_TILE_N_ROWS * D;
-        for (uint32_t d = 0; d < D / HMX_FP16_TILE_N_COLS; ++d) {
-            ((HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS))[rr / 2] = Q6_V_vzero();
+    uint8_t * qs = hctx->qs + ith * L->size_qs;
+    uint8_t * qh = qs + 32 * L->size_qs_row;
+
+    // all input DMAs in flight at once: w of the sets, Q of the first channel tile, then K and mask of block 0
+    uint32_t n_dma = 0;
+    uint32_t first = gc1;
+    for (uint32_t set = gc0 / L->n_ch; gc0 < gc1 && set <= (gc1 - 1) / L->n_ch; ++set) {
+        const struct lid_hmx_set S = hctx->sets[set];
+
+        const uint32_t c0 = MAX(gc0, set * L->n_ch) - set * L->n_ch;
+        const uint32_t c1 = MIN(MIN(gc1, (set + 1) * L->n_ch) - set * L->n_ch, S.n_ch);
+        if (c0 >= c1) {
+            continue;
         }
+        first = MIN(first, set * L->n_ch + c0);
+
+        const uint32_t ta = c0 * 32 / nh;
+        const uint32_t tb = (MIN(c1 * 32, S.nt * nh) - 1) / nh + 1;
+        float * wd = hctx->w + lid_hmx_slot(hctx, hctx->qbuf, set) * (L->size_w / sizeof(float));
+        dma_queue_push(dma_q, dma_make_data(wd + ta * nh, w->data + S.is * w->nb[3] + (S.t0 + ta) * w->nb[1]),
+                       nh * sizeof(float), w->nb[1], nh * sizeof(float), tb - ta);
+        n_dma++;
     }
 
-    // Even-aligned row pairs in [r0, min(r1, M))
-    uint32_t r = (r0 + 1) & ~1u;
-    for (; r + 1 < r1 && r + 1 < M; r += 2) {
-        const uint32_t t_a  = r / n_head;
-        const uint32_t h_a  = r - t_a * n_head;
-        const uint32_t t_b  = (r + 1) / n_head;
-        const uint32_t h_b  = (r + 1) - t_b * n_head;
-        const uint32_t it_a = hctx->t0 + t_a;
-        const uint32_t it_b = hctx->t0 + t_b;
-
-        dma_queue_push(dma_q, dma_make_data(qs, q->data + it_a * q->nb[2] + hctx->is * q->nb[3] + h_a * q->nb[1]),
-                       L->size_qs_row, q->nb[1], D * sizeof(float), 1);
-        dma_queue_push(dma_q, dma_make_data(qs + L->size_qs_row,
-                                            q->data + it_b * q->nb[2] + hctx->is * q->nb[3] + h_b * q->nb[1]),
-                       L->size_qs_row, q->nb[1], D * sizeof(float), 1);
-        dma_queue_pop(dma_q);
-        dma_queue_pop(dma_q);
-
-        const HVX_Vector * pv0 = (const HVX_Vector *) qs;
-        const HVX_Vector * pv1 = (const HVX_Vector *) (qs + L->size_qs_row);
-
-        const uint32_t rt = r / HMX_FP16_TILE_N_ROWS;
-        const uint32_t rr = r % HMX_FP16_TILE_N_ROWS;
-        __fp16 * out_base = hctx->q_tiles + (size_t) rt * HMX_FP16_TILE_N_ROWS * D;
-
-        for (uint32_t d = 0; d < D; d += 64) {
-            const uint32_t d_tile = d / HMX_FP16_TILE_N_COLS;
-            HVX_Vector v_hf = hvx_vec_f32_to_f16_shuff(pv0[d / 32], pv1[d / 32]);
-            ((HVX_Vector *) (out_base + d_tile * HMX_FP16_TILE_N_ELMS))[rr / 2] = v_hf;
-            if (d + 32 < D) {
-                v_hf = hvx_vec_f32_to_f16_shuff(pv0[d / 32 + 1], pv1[d / 32 + 1]);
-                ((HVX_Vector *) (out_base + (d_tile + 1) * HMX_FP16_TILE_N_ELMS))[rr / 2] = v_hf;
-            }
-        }
+    if (first < gc1) {
+        const struct lid_hmx_set S = hctx->sets[first / L->n_ch];
+        n_dma += lid_hmx_push_q(hctx, dma_q, qs, &S, first % L->n_ch);
     }
 
-    // Weights: one DMA per token whose heads overlap this thread's row range
-    {
-        const size_t   w_stride = hex_round_up(n_head * sizeof(float), 128) / sizeof(float);
-        const uint32_t t_lo     = r0 / n_head;
-        const uint32_t t_hi     = MIN(nt, (MIN(r1, M) + n_head - 1) / n_head);
-        for (uint32_t t = t_lo; t < t_hi; ++t) {
-            const uint32_t it = hctx->t0 + t;
-            dma_queue_push(dma_q, dma_make_data(hctx->w + t * w_stride,
-                                                w->data + it * w->nb[1] + hctx->is * w->nb[3]),
-                           w_stride * sizeof(float), w->nb[1], n_head * sizeof(float), 1);
+    uint32_t n_in = lid_hmx_push_in(hctx, ith, nth, 0);
+
+    for (uint32_t i = 0; i < n_dma; ++i) {
+        dma_queue_pop(dma_q);
+    }
+
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) gc0);
+
+    for (uint32_t gc = first; gc < gc1; ++gc) {
+        const uint32_t           set = gc / L->n_ch;
+        const uint32_t           c   = gc % L->n_ch;
+        const struct lid_hmx_set S   = hctx->sets[set];
+        if (c >= S.n_ch) {
+            continue;
+        }
+
+        uint32_t n_q = 0;
+        if (gc != first) {
+            n_q  = lid_hmx_push_q(hctx, dma_q, qs, &S, c) + n_in;
+            n_in = 0;
+        }
+
+        // scales and G while the Q rows land
+        const uint32_t slot = lid_hmx_slot(hctx, hctx->qbuf, set);
+        lid_hmx_q_scg(hctx, slot, &S, c);
+
+        for (uint32_t i = 0; i < n_q; ++i) {
             dma_queue_pop(dma_q);
         }
+
+        lid_hmx_q_tiles(hctx, slot, &S, c, qs, qh);
     }
 
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) r0);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) gc0);
+
+    for (uint32_t i = 0; i < n_in; ++i) {
+        dma_queue_pop(dma_q);
+    }
+
+    lid_hmx_stage(hctx, ith, nth);
 }
 
-typedef struct {
-    const __fp16 * q_tiles;
-    const __fp16 * k_tiles;
-    __fp16 *       s_tiles;
-    uint32_t       n_row_tiles;
-    uint32_t       n_col_tiles;
-    uint32_t       n_dot_tiles;
-    uint8_t *      hmx_scales;
-} lid_hmx_qk_job_t;
+// Run start when its Q was prepped in the previous run: block 0 K and mask, then stage -1
+static void lid_hmx_first_thread(unsigned int nth, unsigned int ith, void * data) {
+    const struct htp_lid_hmx_context * hctx = (const struct htp_lid_hmx_context *) data;
 
-static void lid_hmx_qk_worker(void * data) {
-    lid_hmx_qk_job_t * job = (lid_hmx_qk_job_t *) data;
-    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int) job->hmx_scales));
-
-    const size_t dot_stride = (size_t) job->n_dot_tiles * HMX_FP16_TILE_N_ELMS;
-    for (uint32_t r = 0; r < job->n_row_tiles; ++r) {
-        const __fp16 * row_tiles = job->q_tiles + r * dot_stride;
-        const __fp16 * col_tiles = job->k_tiles;
-        __fp16 *       out_tile  = job->s_tiles + (size_t) r * job->n_col_tiles * HMX_FP16_TILE_N_ELMS;
-        for (uint32_t c = 0; c < job->n_col_tiles; ++c) {
-            hmx_fa_qk_dot_tile(row_tiles, col_tiles, out_tile, job->n_dot_tiles);
-            col_tiles += dot_stride;
-            out_tile  += HMX_FP16_TILE_N_ELMS;
-        }
+    const uint32_t n_in = lid_hmx_push_in(hctx, ith, nth, 0);
+    for (uint32_t i = 0; i < n_in; ++i) {
+        dma_queue_pop(hctx->octx->ctx->dma[ith]);
     }
-}
-
-// Reduce S tiles: score[t, kv] = sum_h ReLU(S[t*nh+h, kv]) * w[t,h] + mask[t, kv]
-static void lid_hmx_reduce_thread(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_lid_hmx_context *   hctx = (struct htp_lid_hmx_context *) data;
-    const struct htp_ops_context * octx = hctx->octx;
-    const struct htp_tensor *      q    = octx->src[0];
-    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
-
-    const uint32_t bi  = hctx->reduce_bi;
-    const uint32_t nkv = hctx->reduce_nkv;
-    const uint32_t nh  = q->ne[1];
-    const uint32_t nt  = hctx->nt;
-    const uint32_t Bc  = HTP_LID_KV_BLOCK;
-
-    const uint32_t chunk = (nt + nth - 1) / nth;
-    const uint32_t t_lo  = ith * chunk;
-    const uint32_t t_hi  = MIN(t_lo + chunk, nt);
-    if (t_lo >= t_hi) {
-        return;
-    }
-
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) t_lo);
-
-    const __fp16 * s_tiles  = hctx->s_tiles[bi];
-    const float *  w        = hctx->w;
-    const size_t   w_stride = hex_round_up(nh * sizeof(float), 128) / sizeof(float);
-    const uint8_t * m_base  = hctx->m_buf[bi];
-    uint8_t *       o_base  = hctx->o_buf[bi];
-
-    const HVX_Vector v_zero = Q6_V_vzero();
-
-    for (uint32_t t = t_lo; t < t_hi; ++t) {
-        HVX_Vector acc0 = v_zero;
-        HVX_Vector acc1 = v_zero;
-        const float * wt = w + t * w_stride;
-
-        for (uint32_t h = 0; h + 1 < nh; h += 2) {
-            const uint32_t r  = t * nh + h;
-            const uint32_t r0 = r / HMX_FP16_TILE_N_ROWS;
-            const uint32_t r1 = r % HMX_FP16_TILE_N_ROWS;
-
-            const __fp16 * s_ld = s_tiles + (size_t) r0 * HMX_FP16_TILE_N_ROWS * Bc;
-            // Bc=64: one pair of col tiles
-            const __fp16 * in_dtile = s_ld;
-            const HVX_Vector * pv0 = ((const HVX_Vector *) in_dtile) + r1 / 2;
-            const HVX_Vector * pv1 = pv0 + 16;
-
-            HVX_VectorPair vp = Q6_W_vdeal_VVR(*pv1, *pv0, -2);
-            HVX_Vector     s0 = Q6_Vh_vmax_VhVh(Q6_V_lo_W(vp), v_zero);
-            HVX_Vector     s1 = Q6_Vh_vmax_VhVh(Q6_V_hi_W(vp), v_zero);
-
-            const HVX_VectorPair s0f = hvx_vec_f16_to_f32(s0);
-            const HVX_VectorPair s1f = hvx_vec_f16_to_f32(s1);
-            const HVX_Vector     w0  = Q6_V_vsplat_R(*(const uint32_t *) &wt[h + 0]);
-            const HVX_Vector     w1  = Q6_V_vsplat_R(*(const uint32_t *) &wt[h + 1]);
-
-            acc0 = HVX_OP_ADD_F32(acc0, HVX_OP_MUL_F32(Q6_V_lo_W(s0f), w0));
-            acc1 = HVX_OP_ADD_F32(acc1, HVX_OP_MUL_F32(Q6_V_hi_W(s0f), w0));
-            acc0 = HVX_OP_ADD_F32(acc0, HVX_OP_MUL_F32(Q6_V_lo_W(s1f), w1));
-            acc1 = HVX_OP_ADD_F32(acc1, HVX_OP_MUL_F32(Q6_V_hi_W(s1f), w1));
-        }
-        if (nh & 1) {
-            const uint32_t h  = nh - 1;
-            const uint32_t r  = t * nh + h;
-            const uint32_t rp = r & ~1u;
-            const uint32_t r0 = rp / HMX_FP16_TILE_N_ROWS;
-            const uint32_t r1 = rp % HMX_FP16_TILE_N_ROWS;
-            const __fp16 * s_ld = s_tiles + (size_t) r0 * HMX_FP16_TILE_N_ROWS * Bc;
-            const HVX_Vector * pv0 = ((const HVX_Vector *) s_ld) + r1 / 2;
-            const HVX_Vector * pv1 = pv0 + 16;
-            HVX_VectorPair vp = Q6_W_vdeal_VVR(*pv1, *pv0, -2);
-            HVX_Vector s = Q6_Vh_vmax_VhVh((r & 1) ? Q6_V_hi_W(vp) : Q6_V_lo_W(vp), v_zero);
-            const HVX_VectorPair sf = hvx_vec_f16_to_f32(s);
-            const HVX_Vector ww = Q6_V_vsplat_R(*(const uint32_t *) &wt[h]);
-            acc0 = HVX_OP_ADD_F32(acc0, HVX_OP_MUL_F32(Q6_V_lo_W(sf), ww));
-            acc1 = HVX_OP_ADD_F32(acc1, HVX_OP_MUL_F32(Q6_V_hi_W(sf), ww));
-        }
-
-        // mask: f16 -> f32, restore -inf (size_m_row / size_o_row are byte strides)
-        const HVX_Vector     m_f16 = *(const HVX_Vector *) (m_base + t * L->size_m_row);
-        const HVX_VectorPred m_inf = Q6_Q_vcmp_eq_VhVh(m_f16, Q6_Vh_vsplat_R(0xFC00));
-        const HVX_VectorPair m_f32 = hvx_vec_f16_to_f32(Q6_V_vmux_QVV(m_inf, v_zero, m_f16));
-        const HVX_VectorPair f_f32 = hvx_vec_f16_to_f32(Q6_V_vmux_QVV(m_inf, Q6_Vh_vsplat_R(0x3C00), v_zero));
-        const HVX_Vector     ninf  = Q6_V_vsplat_R(0xFF800000);
-
-        acc0 = HVX_OP_ADD_F32(acc0, Q6_V_lo_W(m_f32));
-        acc1 = HVX_OP_ADD_F32(acc1, Q6_V_hi_W(m_f32));
-        acc0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VwVw(Q6_V_lo_W(f_f32), v_zero), ninf, acc0);
-        acc1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VwVw(Q6_V_hi_W(f_f32), v_zero), ninf, acc1);
-
-        HVX_Vector * vo = (HVX_Vector *) (o_base + t * L->size_o_row);
-        vo[0] = acc0;
-        vo[1] = acc1;
-
-        (void) nkv;
-    }
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) t_lo);
+    lid_hmx_stage(hctx, ith, nth);
 }
 
 static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kernel_params * kparams) {
     const struct htp_tensor * q = octx->src[0];
-    const struct htp_tensor * k = octx->src[1];
-    const struct htp_tensor * m = octx->src[3];
-    const struct htp_tensor * dst = octx->dst;
 
     if (!octx->ctx->hmx_enabled || !octx->ctx->hmx_queue) {
         return HTP_STATUS_NO_SUPPORT;
@@ -798,116 +1329,137 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
 
     const uint32_t D      = q->ne[0];
     const uint32_t n_head = q->ne[1];
-    const bool     is_q8  = (k->type == HTP_TYPE_Q8_0);
 
-    if (D % HMX_FP16_TILE_N_COLS != 0 || (n_head % 2) != 0) {
+    if (D % HMX_FP16_TILE_N_COLS != 0) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    struct htp_lid_hmx_context hctx;
-    memset(&hctx, 0, sizeof(hctx));
-    hctx.octx = octx;
-    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, kparams->n_tokens_tile, kparams->n_threads);
-
-    uint8_t * const base = octx->ctx->vtcm_base;
-    hctx.q_tiles      = VTCM_LAYOUT_PTR(__fp16, base, hctx.L.off_q_tiles);
-    hctx.w            = VTCM_LAYOUT_PTR(float, base, hctx.L.off_w);
-    hctx.qs           = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_qs);
-    hctx.k_raw[0]     = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_k_raw[0]);
-    hctx.k_raw[1]     = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_k_raw[1]);
-    hctx.k_tiles[0]   = VTCM_LAYOUT_PTR(__fp16, base, hctx.L.off_k_tiles[0]);
-    hctx.k_tiles[1]   = VTCM_LAYOUT_PTR(__fp16, base, hctx.L.off_k_tiles[1]);
-    hctx.s_tiles[0]   = VTCM_LAYOUT_PTR(__fp16, base, hctx.L.off_s_tiles[0]);
-    hctx.s_tiles[1]   = VTCM_LAYOUT_PTR(__fp16, base, hctx.L.off_s_tiles[1]);
-    hctx.m_buf[0]     = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_m[0]);
-    hctx.m_buf[1]     = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_m[1]);
-    hctx.o_buf[0]     = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_o[0]);
-    hctx.o_buf[1]     = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_o[1]);
-    hctx.hmx_scales   = VTCM_LAYOUT_PTR(uint8_t, base, hctx.L.off_hmx_scales);
-
-    hmx_init_column_scales(hctx.hmx_scales, Q6_V_vsplat_R(0x3c00)); // identity 1.0 f16
-
     const uint32_t n_tokens  = q->ne[2];
     const uint32_t n_stream  = q->ne[3];
-    const uint32_t n_tile    = kparams->n_tokens_tile;
     const uint32_t n_threads = kparams->n_threads;
-    const uint32_t n_kv      = k->ne[2];
-    const uint32_t k_row_sz  = htp_tensor_get_row_size(k->type, D);
-    const uint32_t nbk2      = k->nb[2];
-    const uint32_t nbm1      = m->nb[1];
-    const uint32_t nb1       = dst->nb[1];
+    const uint32_t n_qsets   = kparams->n_qsets;
 
-    hmx_queue_t hmx_q = octx->ctx->hmx_queue;
-    dma_queue * dma0  = octx->ctx->dma[0];
+    struct htp_lid_hmx_context hctx;
+    memset(&hctx, 0, sizeof(hctx));
+    hctx.octx     = octx;
+    hctx.Bc       = kparams->kv_block;
+    hctx.kv_seg   = hex_round_up(octx->src[1]->ne[2], 64);
+    hctx.kv_seg_div = init_fastdiv_values(hctx.kv_seg);
+    hctx.n_tile   = kparams->n_tokens_tile;
+    hctx.n_tt     = (n_tokens + hctx.n_tile - 1) / hctx.n_tile;
+    hctx.n_qsets  = n_qsets;
+    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_threads);
 
-    for (uint32_t is = 0; is < n_stream; ++is) {
-        hctx.is  = is;
-        hctx.im3 = is % m->ne[3];
+    uint8_t * const base = octx->ctx->vtcm_base;
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx.L;
 
-        for (uint32_t t0 = 0; t0 < n_tokens; t0 += n_tile) {
-            hctx.t0       = t0;
-            hctx.nt       = MIN(n_tile, n_tokens - t0);
-            hctx.n_row_pad = (uint32_t) hex_round_up((size_t) hctx.nt * n_head, HMX_FP16_TILE_N_ROWS);
+    hctx.qw    = VTCM_LAYOUT_PTR(__fp16, base, L->off_qw);
+    hctx.gw    = VTCM_LAYOUT_PTR(__fp16, base, L->off_g);
+    hctx.sc    = VTCM_LAYOUT_PTR(uint8_t, base, L->off_sc);
+    hctx.sc_id = VTCM_LAYOUT_PTR(uint8_t, base, L->off_sc_id);
+    hctx.s     = VTCM_LAYOUT_PTR(__fp16, base, L->off_s);
+    hctx.w     = VTCM_LAYOUT_PTR(float, base, L->off_w);
+    hctx.qs    = VTCM_LAYOUT_PTR(uint8_t, base, L->off_qs);
+    for (int i = 0; i < 2; i++) {
+        hctx.k_raw[i] = VTCM_LAYOUT_PTR(uint8_t, base, L->off_k_raw[i]);
+        hctx.k_t[i]   = VTCM_LAYOUT_PTR(__fp16, base, L->off_k_t[i]);
+        hctx.o[i]     = VTCM_LAYOUT_PTR(__fp16, base, L->off_o[i]);
+        hctx.out[i]   = VTCM_LAYOUT_PTR(uint8_t, base, L->off_out[i]);
+    }
+    for (int i = 0; i < 4; i++) {
+        hctx.m[i] = VTCM_LAYOUT_PTR(uint8_t, base, L->off_m[i]);
+    }
 
-            work_queue_run(octx->ctx->work_queue, lid_hmx_prep_thread, &hctx,
-                           MIN(n_threads, hctx.n_row_pad));
+    hmx_init_column_scales(hctx.sc_id, Q6_V_vsplat_R(0x3c00)); // identity 1.0 f16
 
-            const dma_addr_t k_base = k->data + is * k->nb[3];
-            const dma_addr_t m_base = m->data + t0 * nbm1 + hctx.im3 * m->nb[3];
-            const dma_addr_t d_base = dst->data + t0 * nb1 + is * dst->nb[3];
+    hmx_queue_t   hmx_q = octx->ctx->hmx_queue;
+    lid_hmx_job_t job[2];
 
-            const uint32_t n_blk = kparams->n_kv_blocks;
+    const uint32_t n_tiles = n_stream * hctx.n_tt;
 
-            for (uint32_t b = 0; b < n_blk; ++b) {
-                const uint32_t bi  = b & 1;
-                const uint32_t kv0 = b * HTP_LID_KV_BLOCK;
-                const uint32_t nkv = MIN(HTP_LID_KV_BLOCK, n_kv - kv0);
+    for (uint32_t tile0 = 0, r = 0; tile0 < n_tiles; tile0 += n_qsets, ++r) {
+        hctx.tile0 = tile0;
+        hctx.n_run = MIN(n_qsets, n_tiles - tile0);
+        hctx.qbuf  = r % kparams->n_qbuf;
 
-                // DMA K + mask
-                dma_queue_push(dma0, dma_make_data(hctx.k_raw[bi], k_base + kv0 * nbk2),
-                               hctx.L.size_k_row, nbk2, k_row_sz, nkv);
-                dma_queue_push(dma0, dma_make_data(hctx.m_buf[bi], m_base + kv0 * sizeof(__fp16)),
-                               hctx.L.size_m_row, nbm1, nkv * sizeof(__fp16), hctx.nt);
-                dma_queue_pop(dma0);
-                dma_queue_pop(dma0);
+        for (uint32_t i = 0; i < hctx.n_run; ++i) {
+            hctx.sets[i] = lid_hmx_set_init(&hctx, i);
+        }
 
-                if (is_q8) {
-                    for (uint32_t r = 0; r < nkv; ++r) {
-                        lid_dequant_row_q8_0(hctx.k_raw[bi] + r * hctx.L.size_k_row, D);
-                    }
-                }
-                // Zero unused K rows so padded col tiles are clean
-                for (uint32_t r = nkv; r < HTP_LID_KV_BLOCK; ++r) {
-                    hvx_splat_u8_a(hctx.k_raw[bi] + r * hctx.L.size_k_row, 0, hctx.L.size_k_row);
-                }
+        // all sets of a run have the same token count: one set per run, or all tokens in one tile
+        const struct lid_hmx_set S0 = hctx.sets[0];
+        hctx.nt_run   = S0.nt;
+        hctx.n_u_run  = S0.n_u;
+        hctx.n_blocks = (hctx.n_run * hctx.kv_seg + hctx.Bc - 1) / hctx.Bc;
 
-                hmx_interleave_rows_to_tiles(hctx.k_tiles[bi], (const __fp16 *) hctx.k_raw[bi],
-                                             HTP_LID_KV_BLOCK, D, hctx.L.size_k_row / sizeof(__fp16),
-                                             0, HTP_LID_KV_BLOCK);
+        const int32_t  n     = (int32_t) hctx.n_blocks;
+        const uint32_t n_tot = hctx.n_run * L->n_ch;
+        const uint32_t per   = (n_tot + n_threads - 1) / n_threads;
 
-                lid_hmx_qk_job_t job = {
-                    .q_tiles      = hctx.q_tiles,
-                    .k_tiles      = hctx.k_tiles[bi],
-                    .s_tiles      = hctx.s_tiles[bi],
-                    .n_row_tiles  = hctx.L.n_row_tiles,
-                    .n_col_tiles  = hctx.L.n_col_tiles,
-                    .n_dot_tiles  = hctx.L.n_dot_tiles,
-                    .hmx_scales   = hctx.hmx_scales,
-                };
-                // Rebuild n_row_tiles for this tile size (may be smaller than layout max)
-                job.n_row_tiles = hctx.n_row_pad / HMX_FP16_TILE_N_ROWS;
+        hctx.n_qthr = (n_tot + per - 1) / per;
+        hctx.g      = -1;
 
-                hmx_queue_push(hmx_q, hmx_queue_make_desc(lid_hmx_qk_worker, &job));
-                hmx_queue_pop(hmx_q);
+        const bool q_ready = hctx.nx_on;
+        if (q_ready) {
+            hctx.n_qthr = 0;
+            hctx.nx_on  = false;
+            work_queue_run(octx->ctx->work_queue, lid_hmx_first_thread, &hctx, n_threads);
+        } else {
+            work_queue_run(octx->ctx->work_queue, lid_hmx_qprep_thread, &hctx, n_threads);
+        }
 
-                hctx.reduce_bi  = bi;
-                hctx.reduce_nkv = nkv;
-                work_queue_run(octx->ctx->work_queue, lid_hmx_reduce_thread, &hctx, n_threads);
-
-                dma_queue_push(dma0, dma_make_data(d_base + kv0 * sizeof(float), hctx.o_buf[bi]),
-                               nb1, hctx.L.size_o_row, nkv * sizeof(float), hctx.nt);
-                dma_queue_flush(dma0);
+        // with two Q buffers the stages of this run prep the Q of the next one
+        if (kparams->n_qbuf == 2 && tile0 + n_qsets < n_tiles) {
+            struct htp_lid_hmx_context nx = hctx;
+            nx.tile0      = tile0 + n_qsets;
+            hctx.nx_n_run = MIN(n_qsets, n_tiles - nx.tile0);
+            for (uint32_t i = 0; i < hctx.nx_n_run; ++i) {
+                hctx.nx_sets[i] = lid_hmx_set_init(&nx, i);
             }
+            hctx.nx_on = true;
+        }
+
+        for (int32_t g = 0; g < n; ++g) {
+            struct lid_hmx_seg seg[LID_HMX_MAX_SEGS];
+            uint32_t           n_rows;
+            const uint32_t     n_seg = lid_hmx_segs(&hctx, g, seg, &n_rows);
+
+            lid_hmx_job_t * j = &job[g % 2];
+            for (uint32_t i = 0; i < n_seg; ++i) {
+                const uint32_t slot = lid_hmx_slot(&hctx, hctx.qbuf, seg[i].set);
+                j->seg[i].qw   = hctx.qw + slot * L->n_ch * L->n_dot * HMX_FP16_TILE_N_ELMS;
+                j->seg[i].gw   = hctx.gw + slot * L->n_ch * HMX_FP16_TILE_N_ELMS;
+                j->seg[i].sc   = hctx.sc + slot * L->n_ch * 256;
+                j->seg[i].rt0  = seg[i].x0 / 32;
+                j->seg[i].n_rt = (seg[i].nv + 31) / 32;
+            }
+            j->n_seg  = n_seg;
+            j->k_t    = hctx.k_t[g % 2];
+            j->sc_id  = hctx.sc_id;
+            j->s      = hctx.s;
+            j->o      = hctx.o[g % 2];
+            j->n_ch   = S0.n_ch;
+            j->n_u    = S0.n_u;
+            j->n_dot  = L->n_dot;
+            j->n_head = n_head;
+            j->n_sg   = L->n_sg;
+            hmx_queue_push(hmx_q, hmx_queue_make_desc(lid_hmx_worker, j));
+
+            // stage g has work only if there is a next block, a previous one or next run Q work
+            hctx.g = g;
+            if (g + 1 < n || g >= 1 || hctx.nx_on) {
+                work_queue_run(octx->ctx->work_queue, lid_hmx_stage_thread, &hctx, n_threads);
+            }
+
+            hmx_queue_pop(hmx_q);
+        }
+
+        // last stage only extracts; with one token only thread 0 has work
+        hctx.g = n;
+        if (hctx.nt_run == 1 && !hctx.nx_on) {
+            lid_hmx_stage(&hctx, 0, n_threads);
+        } else {
+            work_queue_run(octx->ctx->work_queue, lid_hmx_stage_thread, &hctx, n_threads);
         }
     }
 
