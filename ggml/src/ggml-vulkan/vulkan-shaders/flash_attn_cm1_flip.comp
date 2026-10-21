@@ -48,7 +48,8 @@ const uint32_t fl_kstride = D_pad / 4 + 2;
 const uint32_t fl_vtstride = Bc / 4 + 2;
 const uint32_t fl_vtsize = FL_VT ? HSV_pad * fl_vtstride : 0;
 const uint32_t fl_kvbuf = fl_vtsize > Bc * fl_kstride ? fl_vtsize : Bc * fl_kstride;
-shared uvec2 kvshf[FLIP_DIRECT ? 1 : 2 * fl_kvbuf];
+// 16 B keeps the following shared arrays 16-B aligned for coopmat load/store
+shared uvec2 kvshf[FLIP_DIRECT ? 2 : 2 * fl_kvbuf];
 
 #if defined(ACC_TYPE_MAX)
 const uint32_t fl_sstride = Bc / 4 + 2;
