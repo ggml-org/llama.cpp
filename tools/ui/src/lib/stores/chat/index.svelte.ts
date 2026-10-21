@@ -631,10 +631,9 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	/**
 	 * Re-runs the summary of an existing compaction node in place. The node
 	 * keeps its position in the branch, so the turns below it stay untouched
-	 * while the summarized context is rewritten; an explicit model re-summarizes
-	 * with that model instead of the configured compaction one.
+	 * while the summarized context is rewritten.
 	 */
-	async regenerateCompaction(messageId: string, modelOverride?: string): Promise<void> {
+	async regenerateCompaction(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 
 		if (!activeConv) return;
@@ -660,19 +659,13 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		const previous = { content: node.content, model: node.model };
 
-		await this.summarizeIntoNode(
-			convId,
-			node,
-			source,
-			async () => {
-				const idx = conversationsStore.findMessageIndex(node.id);
+		await this.summarizeIntoNode(convId, node, source, async () => {
+			const idx = conversationsStore.findMessageIndex(node.id);
 
-				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, previous);
+			if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, previous);
 
-				await DatabaseService.updateMessage(node.id, previous);
-			},
-			modelOverride
-		);
+			await DatabaseService.updateMessage(node.id, previous);
+		});
 	}
 
 	async regenerateMessage(messageId: string): Promise<void> {
@@ -1551,17 +1544,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		convId: string,
 		node: DatabaseMessage,
 		source: DatabaseMessage[],
-		rollback: () => Promise<void>,
-		modelOverride?: string
+		rollback: () => Promise<void>
 	): Promise<void> {
 		const abortController = this.getOrCreateAbortController(convId);
 		const compactionStreamId = COMPACTION.STREAM_ID_PREFIX + convId;
-		// Model resolution mirrors the request funnel - the model the row was
-		// re-summarized with, the selected model, then the model the branch was
-		// generated with - so router mode targets the child that owns this
-		// conversation's KV cache.
+		// Model resolution mirrors the request funnel: the selected model
+		// first, then the model the branch was generated with, so router
+		// mode targets the child that owns this conversation's KV cache.
 		const effectiveModel = serverStore.isRouterMode
-			? modelOverride || modelsStore.selectedModelName || getConversationModel(source)
+			? modelsStore.selectedModelName || getConversationModel(source)
 			: undefined;
 
 		let summary = '';
@@ -1611,13 +1602,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				typeof configValue.compactionPrompt === 'string' && configValue.compactionPrompt.trim()
 					? configValue.compactionPrompt
 					: COMPACTION.DEFAULT_PROMPT;
-
-			// A model the row was re-summarized with may not be resident: loading it
-			// on demand keeps that swap working, and the status manager surfaces the
-			// failure toast and throws, so the rollback below restores the node.
-			if (modelOverride && !modelsStore.isModelLoaded(modelOverride)) {
-				await modelsStore.status.load(modelOverride);
-			}
 
 			await ChatService.sendMessage(
 				[...request.messages, { content: compactionPrompt, role: MessageRole.USER }],

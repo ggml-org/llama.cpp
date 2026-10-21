@@ -17,7 +17,7 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		onRegenerate: (modelOverride?: string) => void;
+		onRegenerate: () => void;
 	}
 
 	let { class: className = '', message, onRegenerate }: Props = $props();

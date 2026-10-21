@@ -315,8 +315,8 @@
 		chatActions.regenerateWithBranching(message, modelOverride);
 	}
 
-	function handleRegenerateCompaction(modelOverride?: string) {
-		chatActions.regenerateCompaction(message, modelOverride);
+	function handleRegenerateCompaction() {
+		chatActions.regenerateCompaction(message);
 	}
 
 	function handleContinue() {

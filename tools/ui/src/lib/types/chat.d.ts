@@ -286,7 +286,7 @@ export interface ChatMessageActions {
 	) => void;
 	regenerateWithBranching: (message: DatabaseMessage, modelOverride?: string) => void;
 	/** Re-runs the summary of an existing compaction node and replaces it. */
-	regenerateCompaction: (message: DatabaseMessage, modelOverride?: string) => void;
+	regenerateCompaction: (message: DatabaseMessage) => void;
 	continueAssistantMessage: (message: DatabaseMessage) => void;
 	forkConversation: (
 		message: DatabaseMessage,
