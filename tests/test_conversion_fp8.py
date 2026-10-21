@@ -384,6 +384,25 @@ class TestFP8Conversion(unittest.TestCase):
         self.assertEqual(result["blk.0.attn_q.weight"][0], gguf.GGMLQuantizationType.F8_E4M3)
         np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
 
+    def test_nvfp4_omits_unit_scales(self):
+        for experts in (False, True):
+            with self.subTest(experts=experts):
+                names = ["model.layers.0.self_attn.q_proj.weight"]
+                if experts:
+                    names = [f"model.layers.0.mlp.experts.{expert}.{proj}_proj.weight"
+                             for expert in range(2) for proj in ("gate", "up", "down")]
+                tensors = {}
+                for name in names:
+                    tensors[name] = torch.zeros((2, 32), dtype=torch.uint8)
+                    tensors[name + "_scale"] = torch.ones((2, 4)).to(torch.float8_e4m3fn)
+                result = self.convert(Qwen2MoeModel, tensors, eager=True, scan_nvfp4=True)
+                weights = [name for name in result if name.endswith(".weight")]
+                self.assertEqual(len(weights), 3 if experts else 1)
+                for name in weights:
+                    self.assertEqual(result[name][0], gguf.GGMLQuantizationType.NVFP4)
+                    self.assertNotIn(name.replace(".weight", ".scale"), result)
+                    self.assertNotIn(name.replace(".weight", ".input_scale"), result)
+
 
 class TestInkling2PackedConversion(unittest.TestCase):
     """Conversion of the packed Inkling2 expert weights (see _dequant_expert_chunk in conversion/inkling2.py).
