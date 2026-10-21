@@ -3,7 +3,10 @@
 #if defined(GGML_USE_HIP)
 
 #include "fattn-paged-decode-kernel.cuh"
+#include "fattn-common.cuh"
+#include "fattn-prefill-rdna4.cuh"
 #include "fattn.cuh"
+#include "convert.cuh"
 
 #include <cstdlib>
 
@@ -276,6 +279,24 @@ static __global__ void pd_merge(float * __restrict__ acc, float * __restrict__ a
     }
 }
 
+// The parts run pp_attn_f16 (fattn-prefill-rdna4.cuh) on f16 copies of their K/V instead of the stock kernel;
+// GGML_CUDA_PP_ATTN=0 selects the stock kernel.
+static bool pp_enabled() {
+    static const bool enabled = [] {
+        const char * env = getenv("GGML_CUDA_PP_ATTN");
+        return env == nullptr || atoi(env) != 0;
+    }();
+    return enabled;
+}
+
+// a part's K or V (a strided q8_0 / q4_0 view) as contiguous f16 rows: [ne0, ne1, ne2]
+static void pp_to_f16(const ggml_tensor * t, half * out, cudaStream_t stream) {
+    const size_t ts = ggml_type_size(t->type);
+    GGML_ASSERT(t->nb[0] == ts);
+    to_fp16_nc_cuda_t to_fp16 = ggml_get_to_fp16_nc_cuda(t->type);
+    to_fp16(t->data, out, t->ne[0], t->ne[1], t->ne[2], t->ne[3], t->nb[1] / ts, t->nb[2] / ts, t->nb[3] / ts, stream);
+}
+
 void ggml_cuda_flash_attn_ext_paged_prefill(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
     const ggml_fa_page_runs * runs = ggml_flash_attn_ext_get_page_runs(dst);
@@ -296,7 +317,29 @@ void ggml_cuda_flash_attn_ext_paged_prefill(ggml_backend_cuda_context & ctx, ggm
     auto attend = [&](const char * k_base, const char * v_base, int64_t row0, int64_t col0, int64_t n_tok) {
         pd_part part(dst, k_base, v_base, row0, col0, n_tok, (float *) part_out, part_lse);
         GGML_ASSERT(ggml_cuda_flash_attn_ext_get_alloc_size(ctx.device, &part.dst) + 128 <= scratch.part_size);
-        ggml_cuda_flash_attn_ext(ctx, &part.dst);
+        if (pp_enabled()) {
+            // the f16 copies go where the stock kernel puts its own, in the part's reserved scratch
+            const ggml_cuda_flash_attn_ext_f16_extra_data f16 = ggml_cuda_flash_attn_ext_get_f16_extra_data(&part.dst, true, true);
+            GGML_ASSERT(f16.end <= (uintptr_t) part_out + scratch.part_size);
+            half * k16 = (half *) f16.K;
+            half * v16 = (half *) f16.V;
+            const int64_t n_kv_heads = part.k.ne[2];
+            pp_to_f16(&part.k, k16, stream);
+            pp_to_f16(&part.v, v16, stream);
+            float scale;
+            memcpy(&scale, dst->op_params, sizeof(float));
+            const int64_t n_q = Q->ne[1];
+            const dim3 grid((unsigned) ((n_q + PP_BQ - 1) / PP_BQ), (unsigned) n_kv_heads, 1);
+            pp_attn_f16<<<grid, PP_NW * 32, 0, stream>>>(
+                (const char *) Q->data, Q->nb[1], Q->nb[2],
+                (const char *) k16, PD_D * sizeof(half), n_tok * PD_D * sizeof(half),
+                (const char *) v16, PD_D * sizeof(half), n_tok * PD_D * sizeof(half),
+                part.dst.src[3] ? (const char *) part.mask.data : nullptr, part.dst.src[3] ? part.mask.nb[1] : 0,
+                (float *) part_out, part_lse, (int) n_q, (int) n_tok, (int) Q->ne[2], scale);
+            CUDA_CHECK(cudaGetLastError());
+        } else {
+            ggml_cuda_flash_attn_ext(ctx, &part.dst);
+        }
         pd_merge<<<n_rows, PD_D, 0, stream>>>((float *) dst->data, acc_lse, (const float *) part_out, part_lse, first);
         CUDA_CHECK(cudaGetLastError());
         first = false;
