@@ -179,13 +179,13 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
                 ? format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(gguf_ctx, i)), gguf_get_arr_n(gguf_ctx, i))
                 : gguf_type_name(type);
             const char * name = gguf_get_key(gguf_ctx, i);
-            const std::string value = gguf_kv_to_str(gguf_ctx, i);
+            const size_t MAX_VALUE_LEN = 40;
+            const std::string value = gguf_kv_to_str(gguf_ctx, i, MAX_VALUE_LEN);
 
             if (type != GGUF_TYPE_ARRAY) {
                 adapter.gguf_kv.emplace(name, value);
             }
 
-            const size_t MAX_VALUE_LEN = 40;
             std::string print_value = value.size() > MAX_VALUE_LEN ? format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str()) : value;
             replace_all(print_value, "\n", "\\n");
 
