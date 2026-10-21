@@ -8,6 +8,7 @@
 		CollapsibleContentBlock,
 		MarkdownContent
 	} from '$lib/components/app';
+	import { COLLAPSIBLE_TRANSITION_MS } from '$lib/constants';
 	import { getChatMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, conversationsStore, serverStore, settingsStore } from '$lib/stores';
@@ -88,9 +89,40 @@
 
 		open = isSummarizing;
 	});
+
+	let rootEl = $state<HTMLDivElement>();
+	// The scroll waiting for the body to reach its height, so closing the block
+	// before that leaves no scroll behind it.
+	let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * A toggle hands the reader the block's own boundary, just below the tabs: one
+	 * scroll, and only once the body has its height - before that the page is too
+	 * short to scroll the divider up there and the call would clamp.
+	 */
+	function handleToggle() {
+		userChoseOpen = open;
+		cancelSettledScroll();
+
+		if (!rootEl) return;
+
+		settleTimer = setTimeout(() => {
+			settleTimer = null;
+			rootEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		}, COLLAPSIBLE_TRANSITION_MS);
+	}
+
+	function cancelSettledScroll() {
+		if (settleTimer === null) return;
+
+		clearTimeout(settleTimer);
+		settleTimer = null;
+	}
+
+	$effect(() => cancelSettledScroll);
 </script>
 
-<div class={className}>
+<div bind:this={rootEl} class="scroll-mt-[calc(var(--chat-tabs-height,0px)+1rem)] {className}">
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
@@ -100,7 +132,7 @@
 			collapsible={hasContent}
 			icon={FoldVertical}
 			iconClass="h-3.5 w-3.5"
-			onToggle={() => (userChoseOpen = open)}
+			onToggle={handleToggle}
 			shimmerTitle={isSummarizing || !hasContent}
 			{title}
 			variant="divider"
