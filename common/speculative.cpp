@@ -1462,6 +1462,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     // Hidden rows from the most recent target verification batch, grouped by seq.
     // Row 0 corresponds to the sampled token, row N to the Nth accepted draft token.
+    // Only the first n_verify_h_max rows are kept (a verify has 1 + n_draft rows); the last row is pending_h.
+    static constexpr int32_t n_verify_h_max = 64;
     std::vector<std::vector<float>> verify_h;
     std::vector<int32_t> verify_h_rows;
 
@@ -1760,17 +1762,19 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 continue;
             }
 
+            // a prompt batch has thousands of rows, but accept() only follows a verify (1 + n_draft rows)
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
+            const int32_t n_keep = std::min(n_rows, n_verify_h_max);
             verify_h_rows[seq_id] = n_rows;
-            verify_h[seq_id].resize((size_t) n_rows * n_embd);
+            verify_h[seq_id].resize((size_t) n_keep * n_embd);
 
-            for (int32_t i = 0; i < n_rows; ++i) {
+            for (int32_t i = 0; i < n_keep; ++i) {
                 const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
             }
 
             std::memcpy(pending_h[seq_id].data(),
-                    verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
+                    llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_end[seq_id]), row_bytes);
         }
 
         return true;
@@ -1959,6 +1963,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
+        GGML_ASSERT(i_h < n_verify_h_max && "accept() after a batch of more than n_verify_h_max rows");
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
         std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
 
