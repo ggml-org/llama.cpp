@@ -1719,6 +1719,8 @@ See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/mes
 
 `top_k`: Top-k sampling
 
+`extra_params`: llama.cpp parameters that the Anthropic API has no field for, such as `seed`, `min_p` or `repeat_penalty`, as an object (e.g. `{"seed": 42, "min_p": 0.05}`). Its keys are merged into the converted request and behave as on `/v1/chat/completions`.
+
 `stop_sequences`: Array of stop sequences
 
 `stream`: Enable streaming (default: false)
@@ -1739,7 +1741,8 @@ curl http://localhost:9931/v1/messages \
     "system": "You are a helpful assistant.",
     "messages": [
       {"role": "user", "content": "Hello!"}
-    ]
+    ],
+    "extra_params": {"seed": 42, "min_p": 0.05}
   }'
 ```
 

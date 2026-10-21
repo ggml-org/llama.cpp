@@ -615,6 +615,13 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         }
     }
 
+    // llama.cpp params (e.g. seed, min_p) go under extra_params and are merged into the converted body
+    if (body.contains("extra_params") && body.at("extra_params").is_object()) {
+        for (const auto & [key, value] : body.at("extra_params").items()) {
+            oai_body[key] = value;
+        }
+    }
+
     return oai_body;
 }
 
