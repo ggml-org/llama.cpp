@@ -7,6 +7,8 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
+#include "../src/llama-model.h"
+#include "../src/llama-model-saver.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -1345,7 +1347,23 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
                         //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
                         const std::string path = get_tmp_gguf_path();
-                        llama_model_save_to_file(model_and_ctx_dev.first.get(), path.c_str());
+                        llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
+                        ms.add_kv_from_model();
+                        ms.add_tensors_from_model();
+                        ggml_context_ptr scale_ctx(ggml_init({ 4096, nullptr, false }));
+                        if (arch == LLM_ARCH_DEEPSEEK2 && moe) {
+                            for (uint32_t il = 0; il < model_and_ctx_dev.first->hparams.n_layer(); il++) {
+                                const ggml_tensor * w = model_and_ctx_dev.first->layers[il].ffn_down_exps;
+                                if (w == nullptr) {
+                                    continue;
+                                }
+                                ggml_tensor * s = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, w->ne[2]);
+                                ggml_set_name(s, LLM_TN(arch)(LLM_TENSOR_FFN_DOWN_EXPS, "scale", il).str().c_str());
+                                ggml_set_f32(s, 1.0f); // preserve logits while testing scale buffer probes
+                                ms.add_tensor(s);
+                            }
+                        }
+                        ms.save(path);
                         FILE * file = fopen(path.c_str(), "rb");
                         GGML_ASSERT(file != nullptr);
 
