@@ -469,9 +469,13 @@ static void rms_norm_f32_cuda(
 // of block_size, so lane l of a warp holds element l of a q8_1 block).
 template <int block_size, bool quantize>
 static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, float * sum, float * dst, const float * w,
-                                            const int ncols, const float eps, block_q8_1 * yq) {
+                                            const int ncols, const float eps, block_q8_1 * yq, const int64_t nrows) {
     const int64_t row = blockIdx.x;
     const int     tid = threadIdx.x;
+
+    if (row >= nrows) {
+        return; // a workgroup past the launch-size cliff (ggml_cuda_nblocks_past_cliff)
+    }
 
     extern __shared__ float s_sum[];
 
@@ -964,17 +968,18 @@ int ggml_cuda_try_fuse_add_rms_norm(ggml_backend_cuda_context & ctx, const ggml_
         yq = (block_q8_1 *) cache.reserve(nrows*ncols/QK8_1*sizeof(block_q8_1), stream);
     }
 
+    const int64_t nblocks = ggml_cuda_nblocks_past_cliff(nrows, block_size);
     if (block_size == 256) {
         if (yq) {
-            add_rms_norm_mul_f32<256, true><<<nrows, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, yq);
+            add_rms_norm_mul_f32<256, true><<<nblocks, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, yq, nrows);
         } else {
-            add_rms_norm_mul_f32<256, false><<<nrows, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, nullptr);
+            add_rms_norm_mul_f32<256, false><<<nblocks, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, nullptr, nrows);
         }
     } else {
         if (yq) {
-            add_rms_norm_mul_f32<1024, true><<<nrows, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, yq);
+            add_rms_norm_mul_f32<1024, true><<<nblocks, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, yq, nrows);
         } else {
-            add_rms_norm_mul_f32<1024, false><<<nrows, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, nullptr);
+            add_rms_norm_mul_f32<1024, false><<<nblocks, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, nullptr, nrows);
         }
     }
     CUDA_CHECK(cudaGetLastError());

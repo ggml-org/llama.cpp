@@ -128,7 +128,7 @@ template <norm_rows_mode mode>
 static void norm_rows_launch(ggml_backend_cuda_context & ctx, const ggml_tensor * x, const ggml_tensor * w,
                              const ggml_tensor * z, ggml_tensor * dst, float eps, float scale_out) {
     const int64_t total = x->ne[1]*x->ne[2]*x->ne[3];
-    const dim3 grid((unsigned) ((total + 7) / 8));
+    const dim3 grid((unsigned) ggml_cuda_nblocks_past_cliff((total + 7) / 8, 256));
     rms_rows_f32<mode><<<grid, 256, 0, ctx.stream()>>>(
         (const float *) x->data, w ? (const float *) w->data : nullptr, z ? (const float *) z->data : nullptr,
         (float *) dst->data, (int) x->ne[0], x->ne[1], x->ne[2], total,

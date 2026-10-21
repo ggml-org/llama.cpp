@@ -154,7 +154,7 @@ static bool ggml_cuda_op_fwht_impl(ggml_backend_cuda_context & ctx, const ggml_t
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
     const int rows_per_block = 4;
 
-    const int64_t num_blocks = (rows + rows_per_block - 1) / rows_per_block;
+    const int64_t num_blocks = ggml_cuda_nblocks_past_cliff((rows + rows_per_block - 1) / rows_per_block, warp_size * rows_per_block);
 
     cudaStream_t                         stream = ctx.stream();
     dim3                                 grid_dims(num_blocks, 1, 1);

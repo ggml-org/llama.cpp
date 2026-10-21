@@ -1211,6 +1211,28 @@ const ggml_cuda_device_info & ggml_cuda_info();
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
 
+// RDNA4: a launch whose wavefronts fall in the last 32 below a multiple of the device's wave slots (nsm counts WGPs,
+// 64 wave slots each: 2048 on a 64-CU part) runs 6-10 us longer than the same work one workgroup wider, whatever the
+// kernel does (gfx1201: 512 workgroups of 128 threads 14.3 us, 513 5.7 us; 512 x 1024 threads over 5120-float rows
+// 31.5 us, 513 26.8 us). Returns the workgroup count to launch: nblocks, or the first count past the window. The
+// extra workgroups must return without work.
+static int64_t ggml_cuda_nblocks_past_cliff(const int64_t nblocks, const int nthreads) {
+    const ggml_cuda_device_info::cuda_device_info & info = ggml_cuda_info().devices[ggml_cuda_get_device()];
+    if (!GGML_CUDA_CC_IS_RDNA4(info.cc)) {
+        return nblocks;
+    }
+    const int64_t slots = (int64_t) info.nsm * 64;
+    const int64_t waves = (nthreads + 31) / 32;
+    int64_t n = nblocks;
+    for (int i = 0; i < 64; ++i, ++n) {
+        const int64_t w = n * waves % slots;
+        if (w != 0 && w <= slots - 32) {
+            break;
+        }
+    }
+    return n;
+}
+
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
 
