@@ -779,6 +779,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 1,
         .type_size                = sizeof(ggml_fp8_e4m3_t),
         .is_quantized             = false,
+        .needs_scale              = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_f8_e4m3,
         .from_float_ref           = (ggml_from_float_t) quantize_row_f8_e4m3_ref,
     },
@@ -1380,10 +1381,9 @@ bool ggml_is_quantized(enum ggml_type type) {
     return type_traits[type].is_quantized;
 }
 
-bool ggml_needs_scale_quantized(enum ggml_type type) {
+bool ggml_needs_scale(enum ggml_type type) {
     assert(type >= 0);
     assert(type < GGML_TYPE_COUNT);
-    assert(!type_traits[type].needs_scale || type_traits[type].is_quantized);
     return type_traits[type].needs_scale;
 }
 
@@ -3409,7 +3409,7 @@ struct ggml_tensor * ggml_mul_mat(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b) {
-    if (ggml_needs_scale_quantized(a->type) || ggml_needs_scale_quantized(b->type)) {
+    if (ggml_needs_scale(a->type) || ggml_needs_scale(b->type)) {
         GGML_LOG_ERROR("%s: tensor types %s or %s requires explicit dequantization scales; use ggml_mul_mat_ext instead\n",
                 __func__, ggml_type_name(a->type), ggml_type_name(b->type));
         GGML_ABORT("fatal error");
@@ -3426,8 +3426,8 @@ struct ggml_tensor * ggml_mul_mat_ext(
         struct ggml_tensor  * scale_activations) {
     GGML_ASSERT(ggml_can_mul_mat(a, b));
     GGML_ASSERT(!ggml_is_transposed(a));
-    GGML_ASSERT(!ggml_needs_scale_quantized(a->type) || scale_weight != NULL);
-    if (ggml_needs_scale_quantized(b->type)) {
+    GGML_ASSERT(!ggml_needs_scale(a->type) || scale_weight != NULL);
+    if (ggml_needs_scale(b->type)) {
         GGML_LOG_ERROR("%s: scaled tensor type %s currently cannot be used as the activation tensor\n",
                 __func__, ggml_type_name(b->type));
         GGML_ABORT("fatal error");
@@ -3496,7 +3496,7 @@ struct ggml_tensor * ggml_mul_mat_id(
         struct ggml_tensor  * as,
         struct ggml_tensor  * b,
         struct ggml_tensor  * ids) {
-    GGML_ASSERT(!ggml_needs_scale_quantized(as->type) && !ggml_needs_scale_quantized(b->type));
+    GGML_ASSERT(!ggml_needs_scale(as->type) && !ggml_needs_scale(b->type));
 
     return ggml_mul_mat_id_ext(ctx, as, b, ids, NULL, NULL);
 }
@@ -3510,8 +3510,8 @@ struct ggml_tensor * ggml_mul_mat_id_ext(
         struct ggml_tensor  * scale_activations) {
     GGML_ASSERT(!ggml_is_transposed(as));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
-    GGML_ASSERT(!ggml_needs_scale_quantized(b->type));
-    GGML_ASSERT(!ggml_needs_scale_quantized(as->type) || scale_weight != NULL);
+    GGML_ASSERT(!ggml_needs_scale(b->type));
+    GGML_ASSERT(!ggml_needs_scale(as->type) || scale_weight != NULL);
     GGML_ASSERT(scale_weight == NULL || scale_weight->type == GGML_TYPE_F32);
     GGML_ASSERT(scale_activations == NULL || scale_activations->type == GGML_TYPE_F32);
 
