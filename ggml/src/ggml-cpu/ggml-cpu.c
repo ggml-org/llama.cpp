@@ -1278,7 +1278,7 @@ static void ggml_compute_forward_mul_mat_scale(
 
     ggml_barrier(params->threadpool);
 
-    const float * sd = (const float *) scale->data;
+    const char * sd = (const char *) scale->data;
     const int64_t sne0 = scale->ne[0], sne1 = scale->ne[1], sne2 = scale->ne[2], sne3 = scale->ne[3];
     const int64_t nr = ne1 * ne2 * ne3;
     for (int64_t ir = ith; ir < nr; ir += nth) {
@@ -1286,9 +1286,9 @@ static void ggml_compute_forward_mul_mat_scale(
         const int64_t i2 = (ir / ne1) % ne2;
         const int64_t i3 = ir / (ne1 * ne2);
         float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2 + i3*nb3);
-        const int64_t so = (i1 % sne1)*sne0 + (i2 % sne2)*sne0*sne1 + (i3 % sne3)*sne0*sne1*sne2;
+        const size_t so = (i1 % sne1)*scale->nb[1] + (i2 % sne2)*scale->nb[2] + (i3 % sne3)*scale->nb[3];
         for (int64_t i0 = 0; i0 < ne0; i0++) {
-            dp[i0] *= sd[(i0 % sne0) + so];
+            dp[i0] *= *(const float *) (sd + (i0 % sne0)*scale->nb[0] + so);
         }
     }
 }
@@ -1791,7 +1791,7 @@ static void ggml_compute_forward_mul_mat_id(
     if (scale) {
         ggml_barrier(params->threadpool);
 
-        const float * sd = (const float *) scale->data;
+        const char * sd = (const char *) scale->data;
         const bool per_ch_exp = scale->ne[0] == ne0 && scale->ne[1] == ne02;
         const bool per_expert = ggml_nelements(scale) == ne02;
         const int64_t nr = ne1 * ne2;
@@ -1801,12 +1801,12 @@ static void ggml_compute_forward_mul_mat_id(
             const int32_t expert = *(const int32_t *) ((const char *) ids->data + i1*ids->nb[0] + i2*ids->nb[1]);
             float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2);
             if (per_ch_exp) {
-                const float * sp = sd + (int64_t) expert*ne0;
+                const char * sp = sd + expert*scale->nb[1];
                 for (int64_t i0 = 0; i0 < ne0; i0++) {
-                    dp[i0] *= sp[i0];
+                    dp[i0] *= *(const float *) (sp + i0*scale->nb[0]);
                 }
             } else {
-                const float s = sd[per_expert ? expert : 0];
+                const float s = *(const float *) (sd + (per_expert ? expert*scale->nb[0] : 0));
                 for (int64_t i0 = 0; i0 < ne0; i0++) {
                     dp[i0] *= s;
                 }
