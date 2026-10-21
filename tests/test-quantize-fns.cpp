@@ -268,6 +268,34 @@ static int test_f8_e4m3(bool verbose) {
         }
     }
 
+    for (int n : {0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 65, 129, 257}) {
+        std::vector<uint8_t> x(n + 1);
+        std::vector<float> y(n + 1);
+        double expected = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const uint8_t code = (uint8_t) (i % 254 + (i % 254 >= 127));
+            x[i + 1] = code;
+            y[i + 1] = (i % 7 - 3) * 0.125f;
+            expected += copysignf(F8_E4M3_VALUES[code & 0x7F], code & 0x80 ? -1.0f : 1.0f) * y[i + 1];
+        }
+        float actual;
+        traits_cpu->vec_dot(n, &actual, 0, x.data() + 1, 0, y.data() + 1, 0, 1);
+        const bool failed = fabs(actual - expected) > 1e-5 * std::max(1.0, fabs(expected));
+        num_failed += failed;
+        if (verbose || failed) {
+            printf("f8_e4m3 dot n=%d:                  %s (ref=%f got=%f)\n", n, RESULT_STR[failed], expected, actual);
+        }
+    }
+
+    for (uint8_t code : {0x7F, 0xFF}) {
+        std::vector<uint8_t> x(65, 0);
+        std::vector<float> y(65, 1.0f);
+        x[0] = x.back() = code;
+        float actual;
+        traits_cpu->vec_dot(x.size(), &actual, 0, x.data(), 0, y.data(), 0, 1);
+        num_failed += !isnan(actual);
+    }
+
     if (verbose || num_failed) {
         printf("f8_e4m3 exhaustive conversion:      %s (%d failures)\n", RESULT_STR[num_failed != 0], num_failed);
     }
