@@ -1426,6 +1426,7 @@ private:
     void sync_all_backends();
     void comm_free_device(uint32_t dev_id);
     static bool comm_allreduce_pairwise(void * comm_ctx_v, ggml_tensor ** tensors);
+    static bool comm_bootstrap_exchange(void * user_data, const void * send_buf, void * recv_buf, size_t size);
     bool get_cached_file(uint64_t hash, std::vector<uint8_t> & data);
     ggml_tensor * deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor);
     ggml_tensor * create_node(uint64_t id,
@@ -1436,8 +1437,8 @@ private:
 
     // Per-device state for one communicator.
     struct comm_state {
-        // Sockets to the other servers. Rank 0 holds one per peer, every other rank holds one to
-        // rank 0. The pairwise path reduces over peers[0].
+        // Sockets to the other servers. Rank 0 holds one per peer in rank order, so peers[i] is
+        // rank i + 1. Every other rank holds one to rank 0. The pairwise path reduces over peers[0].
         std::vector<socket_ptr> peers;
         uint32_t                rank = 0;
         uint32_t                world = 0;
@@ -2289,13 +2290,20 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
             LOG_ERROR("[%s] failed to listen on comm port %u\n", __func__, request.port);
             return true;
         }
+        // Store peers[i] as rank i + 1, as comm_bootstrap_exchange needs.
+        // Each peer sends its rank because peers may connect in any order.
+        state.peers.resize(request.world - 1);
         for (uint32_t i = 1; i < request.world; i++) {
             socket_ptr peer = srv->accept();
-            if (peer == nullptr || !comm_caps_handshake(peer, /*recv_first =*/ true)) {
+            uint32_t peer_rank = 0;
+            if (peer == nullptr || !comm_caps_handshake(peer, /*recv_first =*/ true) ||
+                !peer->recv_data(&peer_rank, sizeof(peer_rank)) ||
+                peer_rank == 0 || peer_rank >= request.world || state.peers[peer_rank - 1] != nullptr) {
+                LOG_ERROR("[%s] bad peer connection (rank %u)\n", __func__, peer_rank);
                 state.peers.clear();
                 return true;
             }
-            state.peers.push_back(std::move(peer));
+            state.peers[peer_rank - 1] = std::move(peer);
         }
     } else {
         const std::string host(request.host, strnlen(request.host, sizeof(request.host)));
@@ -2311,7 +2319,8 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
             LOG_ERROR("[%s] failed to connect to peer %s:%u\n", __func__, host.c_str(), request.port);
             return true;
         }
-        if (!comm_caps_handshake(peer, /*recv_first =*/ false)) {
+        if (!comm_caps_handshake(peer, /*recv_first =*/ false) ||
+            !peer->send_data(&request.rank, sizeof(request.rank)) || !peer->flush()) {
             return true;
         }
         state.peers.push_back(std::move(peer));
@@ -2325,61 +2334,32 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
     const bool no_backend_communicator = std::getenv("GGML_RPC_NO_BACKEND_COMMUNICATOR") != nullptr;
 
     ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backends[dev_id]));
-    auto get_unique_id = no_backend_communicator ? nullptr : (ggml_backend_comm_get_unique_id_t)
-        ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_get_unique_id");
-    auto init_rank     = no_backend_communicator ? nullptr : (ggml_backend_comm_init_rank_t)
+    auto init_rank    = (ggml_backend_comm_init_rank_t)
         ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_init_rank");
+    auto allreduce_fn = (ggml_backend_comm_allreduce_tensor_t)
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_allreduce_tensor");
 
-    uint8_t use_backend_communicator = 0;
-    uint8_t id[GGML_BACKEND_COMM_UNIQUE_ID_SIZE] = {};
-
-    // The ranks must agree on backend communicator or pairwise. Each peer reports whether its
-    // backend provides ggml_backend_comm_init_rank, and rank 0 sends back the decision and the
-    // unique id.
-    if (request.rank == 0) {
-        use_backend_communicator = get_unique_id != nullptr && init_rank != nullptr;
-        for (const socket_ptr & peer : state.peers) {
-            uint8_t peer_can = 0;
-            if (!peer->recv_data(&peer_can, sizeof(peer_can))) {
-                state.peers.clear();
-                return true;
-            }
-            use_backend_communicator = use_backend_communicator && peer_can;
-        }
-        if (use_backend_communicator && !get_unique_id(id)) {
-            use_backend_communicator = 0;
-        }
-        for (const socket_ptr & peer : state.peers) {
-            if (!peer->send_data(&use_backend_communicator, sizeof(use_backend_communicator)) ||
-                !peer->send_data(id, sizeof(id)) || !peer->flush()) {
-                state.peers.clear();
-                return true;
-            }
-        }
-    } else {
-        const uint8_t self_can = init_rank != nullptr;
-        if (!state.peers[0]->send_data(&self_can, sizeof(self_can)) || !state.peers[0]->flush() ||
-            !state.peers[0]->recv_data(&use_backend_communicator, sizeof(use_backend_communicator)) ||
-            !state.peers[0]->recv_data(id, sizeof(id))) {
-            state.peers.clear();
-            return true;
-        }
+    // The ranks must agree on backend communicator or pairwise. Every rank shares whether its
+    // backend provides a communicator, and all ranks use it only if every rank can.
+    const uint8_t self_can_use_backend_comm = !no_backend_communicator && init_rank != nullptr && allreduce_fn != nullptr;
+    std::vector<uint8_t> all_can_use_backend_comm(request.world);
+    if (!comm_bootstrap_exchange(&state, &self_can_use_backend_comm, all_can_use_backend_comm.data(),
+                                 sizeof(self_can_use_backend_comm))) {
+        state.peers.clear();
+        return true;
     }
+    const bool use_backend_communicator = std::all_of(all_can_use_backend_comm.begin(), all_can_use_backend_comm.end(),
+                                                      [](uint8_t c) { return c != 0; });
 
     if (use_backend_communicator) {
-        void * backend_ctx = init_rank(backends[dev_id], id, (int) request.rank, (int) request.world);
+        void * backend_ctx = init_rank(backends[dev_id], (int) request.rank, (int) request.world, comm_bootstrap_exchange, &state);
         if (backend_ctx == nullptr) {
             LOG_ERROR("[%s] failed to join communicator as rank %u/%u\n", __func__, request.rank, request.world);
             state.peers.clear();
             return true;
         }
         state.backend_comm_ctx = backend_ctx;
-        state.allreduce_fn     = (ggml_backend_comm_allreduce_tensor_t)
-            ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_allreduce_tensor");
-        if (state.allreduce_fn == nullptr) {
-            comm_free_device(dev_id);
-            return true;
-        }
+        state.allreduce_fn     = allreduce_fn;
         // The sockets have done their job; the collective runs between the backends from here on.
         state.peers.clear();
         LOG_INFO("[%s] device %u using backend communicator, rank %u/%u\n", __func__, dev_id, request.rank, request.world);
@@ -2398,6 +2378,32 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
     LOG_INFO("[%s] device %u using pairwise communicator, rank %u\n", __func__, dev_id, request.rank);
     response.ok = 1;
     return true;
+}
+
+// Bootstrap callback for ggml_backend_comm_init_rank_t, over the peer sockets. Rank 0 collects
+// size bytes from every rank in rank order, then sends the whole array back to every rank.
+// user_data is the comm_state.
+bool rpc_server::comm_bootstrap_exchange(void * user_data, const void * send_buf, void * recv_buf, size_t size) {
+    comm_state & state = *(comm_state *) user_data;
+    uint8_t * recv = (uint8_t *) recv_buf;
+    const size_t total = (size_t) state.world * size;
+
+    if (state.rank == 0) {
+        memcpy(recv, send_buf, size);
+        for (size_t i = 0; i < state.peers.size(); i++) {
+            if (!state.peers[i]->recv_data(recv + (i + 1) * size, size)) {
+                return false;
+            }
+        }
+        for (const socket_ptr & peer : state.peers) {
+            if (!peer->send_data(recv, total) || !peer->flush()) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return state.peers[0]->send_data(send_buf, size) && state.peers[0]->flush() &&
+           state.peers[0]->recv_data(recv, total);
 }
 
 // Reduces this rank's contribution in place, exchanging partials with the peer over peers[0].

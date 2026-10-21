@@ -1307,40 +1307,54 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
 }
 
 #ifdef GGML_USE_NCCL
-// Produces the id that lets the ranks find each other. Every rank must pass it to comm_init_rank.
-static bool ggml_backend_cuda_comm_get_unique_id(void * id_out) {
-    static_assert(sizeof(ncclUniqueId) <= GGML_BACKEND_COMM_UNIQUE_ID_SIZE,
-                  "ncclUniqueId does not fit into GGML_BACKEND_COMM_UNIQUE_ID_SIZE");
-
-    ncclUniqueId id;
-    const ncclResult_t rc = ncclGetUniqueId(&id);
-    if (rc != ncclSuccess) {
-        GGML_LOG_ERROR("%s: ncclGetUniqueId failed (%s)\n", __func__, ncclGetErrorString(rc));
-        return false;
-    }
-
-    memset(id_out, 0, GGML_BACKEND_COMM_UNIQUE_ID_SIZE);
-    memcpy(id_out, &id, sizeof(id));
-    return true;
-}
-
 // Builds the communicator with ncclCommInitRank, for the case where each rank is its own
 // process. Blocks until all world_size ranks have joined.
-static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, const void * id_in, int rank, int world_size) {
-    if (!ggml_backend_is_cuda(backend)) {
-        GGML_LOG_ERROR("%s: backend is not a CUDA backend\n", __func__);
-        return nullptr;
-    }
+static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, int rank, int world_size,
+                                               ggml_backend_comm_bootstrap_callback bootstrap_callback, void * bootstrap_callback_data) {
     if (world_size < 1 || rank < 0 || rank >= world_size) {
         GGML_LOG_ERROR("%s: invalid rank %d for world size %d\n", __func__, rank, world_size);
         return nullptr;
     }
 
-    // NCCL requires one distinct physical GPU per rank, see ggml_backend_cuda_comm_init_nccl.
-    const ggml_cuda_device_info & info = ggml_cuda_info();
-    if (info.device_count > info.physical_device_count) {
-        GGML_LOG_ERROR("%s: CUDA virtual devices are in use, which NCCL does not support\n", __func__);
+    // Every rank sends whether its local checks passed, and rank 0 also sends the NCCL unique id.
+    // So all ranks either join together or fail together, and no rank waits in ncclCommInitRank alone.
+    struct bootstrap_msg {
+        uint8_t      ok;
+        ncclUniqueId id;
+    };
+    bootstrap_msg local;
+    memset(&local, 0, sizeof(local));
+    local.ok = 1;
+
+    if (!ggml_backend_is_cuda(backend)) {
+        GGML_LOG_ERROR("%s: backend is not a CUDA backend\n", __func__);
+        local.ok = 0;
+    } else {
+        // NCCL requires one distinct physical GPU per rank, see ggml_backend_cuda_comm_init_nccl.
+        const ggml_cuda_device_info & info = ggml_cuda_info();
+        if (info.device_count > info.physical_device_count) {
+            GGML_LOG_ERROR("%s: CUDA virtual devices are in use, which NCCL does not support\n", __func__);
+            local.ok = 0;
+        }
+    }
+    if (local.ok && rank == 0) {
+        const ncclResult_t rc = ncclGetUniqueId(&local.id);
+        if (rc != ncclSuccess) {
+            GGML_LOG_ERROR("%s: ncclGetUniqueId failed (%s)\n", __func__, ncclGetErrorString(rc));
+            local.ok = 0;
+        }
+    }
+
+    std::vector<bootstrap_msg> all(world_size);
+    if (!bootstrap_callback(bootstrap_callback_data, &local, all.data(), sizeof(local))) {
+        GGML_LOG_ERROR("%s: bootstrap exchange failed on rank %d\n", __func__, rank);
         return nullptr;
+    }
+    for (int i = 0; i < world_size; i++) {
+        if (!all[i].ok) {
+            GGML_LOG_ERROR("%s: rank %d failed its setup checks\n", __func__, i);
+            return nullptr;
+        }
     }
 
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
@@ -1352,11 +1366,8 @@ static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, const voi
     ret->comms.resize(1);
     ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_nccl;
 
-    ncclUniqueId id;
-    memcpy(&id, id_in, sizeof(id));
-
     ggml_cuda_set_device(cuda_ctx->device);
-    const ncclResult_t rc = ncclCommInitRank(&ret->comms[0], world_size, id, rank);
+    const ncclResult_t rc = ncclCommInitRank(&ret->comms[0], world_size, all[0].id, rank);
     if (rc != ncclSuccess) {
         GGML_LOG_ERROR("%s: ncclCommInitRank failed for rank %d/%d (%s)\n",
                        __func__, rank, world_size, ncclGetErrorString(rc));
@@ -6366,9 +6377,6 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
         return (void *)ggml_backend_cuda_comm_allreduce_tensor;
     }
 #ifdef GGML_USE_NCCL
-    if (strcmp(name, "ggml_backend_comm_get_unique_id") == 0) {
-        return (void *)ggml_backend_cuda_comm_get_unique_id;
-    }
     if (strcmp(name, "ggml_backend_comm_init_rank") == 0) {
         return (void *)ggml_backend_cuda_comm_init_rank;
     }
