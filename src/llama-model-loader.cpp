@@ -1231,9 +1231,18 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         const ggml_tensor * scale_meta = nullptr;
+        ggml_tensor user_scale_meta = {};
         if (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID) {
             const std::string scale_name = LLM_TN_IMPL(tn.arch, tn.tensor, "scale", tn.bid, tn.xid).str();
             scale_meta = get_tensor_meta(scale_name.c_str());
+            if (!scale_meta && files.empty()) {
+                const int64_t tid = gguf_find_tensor(metadata, scale_name.c_str());
+                if (tid != -1) {
+                    user_scale_meta.type = gguf_get_tensor_type(metadata, tid);
+                    memcpy(user_scale_meta.ne, gguf_get_tensor_ne(metadata, tid), sizeof(user_scale_meta.ne));
+                    scale_meta = &user_scale_meta;
+                }
+            }
         }
 
         // select the buffer type for this tensor
