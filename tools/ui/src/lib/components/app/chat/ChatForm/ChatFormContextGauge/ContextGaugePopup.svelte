@@ -8,7 +8,7 @@
 		gaugePopup,
 		gaugePopupClose
 	} from './gauge-popup.svelte';
-	import { FoldVertical } from '@lucide/svelte';
+	import { FoldVertical, Loader2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
@@ -58,12 +58,16 @@
 
 	const showCompactButton = $derived(chatStore.canCompact(conversationsStore.activeMessages));
 
+	const activeConvId = $derived(conversationsStore.activeConversation?.id ?? null);
+
+	// A summary in flight keeps the card open for the numbers, so the action
+	// reports the run instead of inviting a second one.
+	const isCompacting = $derived(activeConvId !== null && chatStore.isCompacting(activeConvId));
+
 	const isCompactDisabled = $derived.by(() => {
-		const convId = conversationsStore.activeConversation?.id;
+		if (!activeConvId) return true;
 
-		if (!convId) return true;
-
-		return chatStore.isChatLoading(convId) || agenticStore.isRunning(convId);
+		return chatStore.isChatLoading(activeConvId) || agenticStore.isRunning(activeConvId);
 	});
 
 	function handleCompact() {
@@ -77,6 +81,26 @@
 		{formatParameters(gauge.contextUsed)}
 		/ {gauge.contextTotal !== null ? formatParameters(gauge.contextTotal) : '-'}
 	</span>
+{/snippet}
+
+{#snippet compactAction()}
+	{#if showCompactButton}
+		<Button
+			class="my-1 mt-3 w-full gap-1.5"
+			disabled={isCompactDisabled}
+			onclick={handleCompact}
+			size="sm"
+			variant="tertiary"
+		>
+			{#if isCompacting}
+				<Loader2 class="h-3.5 w-3.5 animate-spin" />
+				Compacting...
+			{:else}
+				<FoldVertical class="h-3.5 w-3.5" />
+				Compact conversation
+			{/if}
+		</Button>
+	{/if}
 {/snippet}
 
 {#snippet body()}
@@ -107,19 +131,6 @@
 		</div>
 	{:else}
 		<div class="text-xs text-muted-foreground">No context info available</div>
-	{/if}
-
-	{#if showCompactButton}
-		<Button
-			class="w-full gap-1.5"
-			disabled={isCompactDisabled}
-			onclick={handleCompact}
-			size="sm"
-			variant="outline"
-		>
-			<FoldVertical class="h-3.5 w-3.5" />
-			Compact conversation
-		</Button>
 	{/if}
 
 	{#if gauge.hasAnyUsage}
@@ -153,6 +164,8 @@
 				{@render usage()}
 
 				{@render body()}
+
+				{@render compactAction()}
 			</div>
 		</Drawer.Content>
 	</Drawer.Root>
@@ -175,6 +188,8 @@
 			</div>
 
 			{@render body()}
+
+			{@render compactAction()}
 		</div>
 	</div>
 {/if}
