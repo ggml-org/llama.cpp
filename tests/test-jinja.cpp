@@ -1299,6 +1299,18 @@ static void test_namespace(testing & t) {
         json::object(),
         "3"
     );
+
+    test_template(t, "namespace attribute named like a dict method",
+        "{% set ns = namespace(items=[]) %}{{ 'yes' if ns.items else 'no' }}{% set ns.items = ns.items + [1] %}{{ ns.items | length }}{{ 'yes' if ns.items else 'no' }}",
+        json::object(),
+        "no1yes"
+    );
+
+    test_template(t, "dict keeps its methods",
+        "{% set d = dict(items=1) %}{% for k, v in d.items() %}{{ k }}={{ v }}{% endfor %}",
+        json::object(),
+        "items=1"
+    );
 }
 
 static void test_tests(testing & t) {

@@ -425,7 +425,12 @@ const func_builtins & global_builtins() {
             throw raised_exception("Jinja Exception: " + msg);
         }},
         {"dict", toobject},
-        {"namespace", toobject},
+        {"namespace", [](const func_args & args) -> value {
+            // unlike a dict, a namespace has no methods: ns.items is the attribute, as in jinja2
+            value out = toobject(args);
+            cast_val<value_object>(out)->has_builtins = false;
+            return out;
+        }},
         {"strftime_now", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
             std::string format = args.get_pos(0)->as_string().str();
