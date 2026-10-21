@@ -3000,6 +3000,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         return false;
     }
 
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     bool supp = false;
     switch (op->op) {
         case GGML_OP_NONE:

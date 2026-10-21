@@ -1947,18 +1947,7 @@ ggml_tensor * llm_graph_context::build_ffn(
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
                  int   il) const {
-    // Low-precision weights (NVFP4, F8_E4M3) carry a per-tensor dequant scale that must be applied
-    // in dequant space. Route it into the matmul via the ext API so it lands before bias/LoRA.
-    // Architectural *_s (on full-precision weights) stays a post-matmul multiply.
-    auto is_scaled_low_precision = [](ggml_tensor * w) {
-        return w && (w->type == GGML_TYPE_NVFP4 || w->type == GGML_TYPE_F8_E4M3);
-    };
-
-    const bool up_derived   = is_scaled_low_precision(up);
-    const bool gate_derived = is_scaled_low_precision(gate);
-    const bool down_derived = is_scaled_low_precision(down);
-
-    ggml_tensor * tmp = up ? build_lora_mm(up, cur, up_derived ? up_s : nullptr) : cur;
+    ggml_tensor * tmp = up ? build_lora_mm(up, cur, up_s) : cur;
     cb(tmp, "ffn_up", il);
 
     if (up_b) {
@@ -1966,21 +1955,16 @@ ggml_tensor * llm_graph_context::build_ffn(
         cb(tmp, "ffn_up_b", il);
     }
 
-    if (up_s && !up_derived) {
-        tmp = ggml_mul(ctx0, tmp, up_s);
-        cb(tmp, "ffn_up_s", il);
-    }
-
     if (gate) {
         switch (type_gate) {
             case LLM_FFN_SEQ:
                 {
-                    cur = build_lora_mm(gate, tmp, gate_derived ? gate_s : nullptr);
+                    cur = build_lora_mm(gate, tmp, gate_s);
                     cb(cur, "ffn_gate", il);
                 } break;
             case LLM_FFN_PAR:
                 {
-                    cur = build_lora_mm(gate, cur, gate_derived ? gate_s : nullptr);
+                    cur = build_lora_mm(gate, cur, gate_s);
                     cb(cur, "ffn_gate", il);
                 } break;
         }
@@ -1988,11 +1972,6 @@ ggml_tensor * llm_graph_context::build_ffn(
         if (gate_b) {
             cur = ggml_add(ctx0, cur, gate_b);
             cb(cur, "ffn_gate_b", il);
-        }
-
-        if (gate_s && !gate_derived) {
-            cur = ggml_mul(ctx0, cur, gate_s);
-            cb(cur, "ffn_gate_s", il);
         }
 
     } else {
@@ -2116,7 +2095,7 @@ ggml_tensor * llm_graph_context::build_ffn(
     }
 
     if (down) {
-        cur = build_lora_mm(down, cur, down_derived ? down_s : nullptr);
+        cur = build_lora_mm(down, cur, down_s);
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_prec_set_acc(cur, GGML_PREC_F32);
@@ -2129,11 +2108,6 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down_b) {
         cur = ggml_add(ctx0, cur, down_b);
-    }
-
-    if (down_s && !down_derived) {
-        cur = ggml_mul(ctx0, cur, down_s);
-        cb(cur, "ffn_down_s", il);
     }
 
     return cur;

@@ -4438,6 +4438,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
     ggml_tensor * src1 = op->src[1];
     ggml_tensor * src2 = op->src[2];
 
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     // on smaller devices (or CI), tensors may be larger than the max storage buffer size
     if (ggml_nbytes(op) > ctx->webgpu_global_ctx->capabilities.limits.maxStorageBufferBindingSize ||
         (src0 != nullptr &&

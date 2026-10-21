@@ -3037,7 +3037,7 @@ extern "C" {
         int64_t                  blck_size;
         int64_t                  blck_size_interleave; // interleave elements in blocks
         size_t                   type_size;
-        bool                     is_quantized;
+        bool                     is_quantized; // whether it's a block-quantized data-type
         bool                     needs_scale; // whether the quantization type needs a scale factor for valid dequantization
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
