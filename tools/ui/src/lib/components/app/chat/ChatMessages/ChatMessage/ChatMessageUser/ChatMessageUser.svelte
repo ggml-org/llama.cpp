@@ -6,7 +6,7 @@
 		ChatMessageUserBubble
 	} from '$lib/components/app/chat';
 	import { getChatMessageEditContext } from '$lib/contexts';
-	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
+	import { ChatMessageStatisticsMode } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, settingsStore } from '$lib/stores';
 
@@ -107,7 +107,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
+				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}
 	{/if}

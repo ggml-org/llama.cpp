@@ -92,6 +92,12 @@
 			await conversationsStore.navigateToSibling(siblingId);
 		},
 
+		regenerateCompaction: async (message: DatabaseMessage, modelOverride?: string) => {
+			onUserAction?.();
+			await chatStore.regenerateCompaction(message.id, modelOverride);
+			refreshAllMessages();
+		},
+
 		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
 			onUserAction?.();
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);

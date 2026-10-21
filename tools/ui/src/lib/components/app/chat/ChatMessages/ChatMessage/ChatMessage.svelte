@@ -315,6 +315,10 @@
 		chatActions.regenerateWithBranching(message, modelOverride);
 	}
 
+	function handleRegenerateCompaction(modelOverride?: string) {
+		chatActions.regenerateCompaction(message, modelOverride);
+	}
+
 	function handleContinue() {
 		chatActions.continueAssistantMessage(message);
 	}
@@ -412,7 +416,7 @@
 	{:else if mcpPromptExtra}
 		<ChatMessageMcpPrompt class={className} mcpPrompt={mcpPromptExtra} {message} />
 	{:else if isCompaction}
-		<ChatMessageCompaction class={className} {message} />
+		<ChatMessageCompaction class={className} {message} onRegenerate={handleRegenerateCompaction} />
 	{:else if isSynthetic}
 		<ChatMessageSynthetic class={className} {message} />
 	{:else if message.role === MessageRole.USER}

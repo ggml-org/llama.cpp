@@ -212,7 +212,6 @@
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
 			{onRegenerate}
 			rawOutputEnabled={showRawOutput}
-			role={MessageRole.ASSISTANT}
 			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 		/>
 	{/if}
