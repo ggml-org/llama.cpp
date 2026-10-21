@@ -2465,7 +2465,7 @@ static void ggml_cuda_op_mul_mat_scale(ggml_backend_cuda_context & ctx, ggml_ten
 
     // per-expert scale is indexed through ids (scalar [n_expert] or 2D per-channel [n_out, n_expert]);
     // per-tensor / dense scale is a plain broadcast
-    const bool per_channel_expert = is_id && scale->ne[1] == dst->src[0]->ne[2];
+    const bool per_channel_expert = is_id && scale->ne[0] == ne0 && scale->ne[1] == dst->src[0]->ne[2];
     const bool per_expert = is_id && (ggml_nelements(scale) == dst->src[0]->ne[2] || per_channel_expert);
 
     if (per_expert) {
