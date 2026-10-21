@@ -3086,13 +3086,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cur = ggml_mul(ctx0, cur, v_scale);
         }
     } else {
-        // A cache without an exported scale stores raw FP8 values.
-        if ((k->type == GGML_TYPE_F8_E4M3 && !k_scale) || (v->type == GGML_TYPE_F8_E4M3 && !v_scale)) {
+        // A cache without an exported scale uses a unit scale.
+        if ((ggml_needs_scale(k->type) && !k_scale) || (ggml_needs_scale(v->type) && !v_scale)) {
             ggml_tensor * unit_scale = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1), 1.0f);
-            if (k->type == GGML_TYPE_F8_E4M3 && !k_scale) {
+            if (ggml_needs_scale(k->type) && !k_scale) {
                 k_scale = unit_scale;
             }
-            if (v->type == GGML_TYPE_F8_E4M3 && !v_scale) {
+            if (ggml_needs_scale(v->type) && !v_scale) {
                 v_scale = unit_scale;
             }
         }
