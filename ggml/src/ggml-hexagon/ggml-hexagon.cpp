@@ -3015,6 +3015,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         return false;
     }
 
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     bool supp = false;
     if (ggml_op_is_empty(op->op) || ggml_is_empty(op)) {
         supp = true;

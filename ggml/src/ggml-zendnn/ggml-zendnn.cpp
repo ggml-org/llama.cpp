@@ -697,6 +697,10 @@ static bool ggml_zendnn_adaptive_fallback_enabled() {
 }
 
 static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     switch (op->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:

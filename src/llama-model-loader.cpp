@@ -1228,7 +1228,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         const ggml_tensor * scale_meta = nullptr;
-        if ((op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID) && ggml_needs_scale_quantized(t_meta->type)) {
+        if (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID) {
             const std::string scale_name = LLM_TN_IMPL(tn.arch, tn.tensor, "scale", tn.bid, tn.xid).str();
             scale_meta = get_tensor_meta(scale_name.c_str());
         }
