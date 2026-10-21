@@ -1481,12 +1481,11 @@ static void dequantize_block_iq3_xxs(const void * __restrict__ vx, dst_t * __res
 }
 
 template<typename dst_t>
-static void dequantize_block_iq3_xxs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+static void dequantize_block_iq3_xxs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, const int64_t i,
                                              const sycl::nd_item<3> & item_ct1, const int64_t nb,
                                              const uint32_t * iq3xxs_grid,
                                              const uint8_t * ksigns_iq2xs,
                                              const uint8_t * kmask_iq2xs) {
-    const int64_t i   = item_ct1.get_group(2);
     const int64_t tid = item_ct1.get_local_id(2);
 #if QK_K == 256
     const int64_t il = tid / 8;
@@ -1501,7 +1500,7 @@ static void dequantize_block_iq3_xxs_reorder(const void * __restrict__ vx, dst_t
     const uint32_t aux32 = gas[0] | (gas[1] << 16);
     const float dl = (float) d[i] * (0.5f + (aux32 >> 28)) * 0.5f;
     const uint8_t signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
-    dst_t * y = yy + i * QK_K + 32 * ib + 8 * il;
+    dst_t * y = yy + 32 * ib + 8 * il;
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
         y[j+0] = dl * grid1[j] * (signs & kmask_iq2xs[j+0] ? -1.f : 1.f);
@@ -1510,6 +1509,7 @@ static void dequantize_block_iq3_xxs_reorder(const void * __restrict__ vx, dst_t
 #else
     GGML_UNUSED(vx);
     GGML_UNUSED(yy);
+    GGML_UNUSED(i);
     GGML_UNUSED(item_ct1);
     GGML_UNUSED(nb);
     GGML_UNUSED(iq3xxs_grid);
@@ -1551,10 +1551,9 @@ dequantize_block_iq3_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
 
 template <typename dst_t>
 __dpct_inline__ static void
-dequantize_block_iq3_s_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+dequantize_block_iq3_s_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, const int64_t i,
                                const sycl::nd_item<3> & item_ct1, const int64_t nb,
                                const uint8_t * kmask_iq2xs, const uint32_t * iq3s_grid) {
-    const int64_t i   = item_ct1.get_group(2);
     const int64_t tid = item_ct1.get_local_id(2);
 #if QK_K == 256
     const int64_t il = tid / 8;
@@ -1574,7 +1573,7 @@ dequantize_block_iq3_s_reorder(const void * __restrict__ vx, dst_t * __restrict_
         iq3s_grid + (qs_ib[2*il+1] | ((qh[ib] << (7 - 2*il)) & 256)));
     const float dl = (float) d * (1 + 2 * ((scales[ib/2] >> (4 * (ib%2))) & 0xf));
     const uint8_t signs = signs_base[4 * ib + il];
-    dst_t * y = yy + i * QK_K + 32 * ib + 8 * il;
+    dst_t * y = yy + 32 * ib + 8 * il;
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
         y[j+0] = dl * grid1[j] * (signs & kmask_iq2xs[j+0] ? -1.f : 1.f);
@@ -1583,6 +1582,7 @@ dequantize_block_iq3_s_reorder(const void * __restrict__ vx, dst_t * __restrict_
 #else
     GGML_UNUSED(vx);
     GGML_UNUSED(yy);
+    GGML_UNUSED(i);
     GGML_UNUSED(item_ct1);
     GGML_UNUSED(nb);
     GGML_UNUSED(kmask_iq2xs);

@@ -860,7 +860,7 @@ static void fused_dequant_gemm_tile(
     }
 }
 
-template <typename S, typename block_q_t>
+template <typename S, typename block_q_t, bool reordered = false>
 static void fused_dequant_gemm_launch(const void * src0, const typename S::tsb * packed, float * dst, const int M,
                                       const int N, const int Npad, const int K, const int ldd,
                                       const int64_t groups_n, const int64_t groups_m, dpct::queue_ptr stream) {
@@ -871,8 +871,8 @@ static void fused_dequant_gemm_launch(const void * src0, const typename S::tsb *
             sycl::nd_range<2>(sycl::range<2>(groups_n, groups_m * S::WG_SIZE), sycl::range<2>(1, S::WG_SIZE)),
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(S::SG)]] {
                 const int n0 = item.get_group(0) * S::BN;
-                fused_dequant_gemm_tile<S, block_q_t, false>((const block_q_t *) src0, packed, dst, M, Npad, K, ldd,
-                                                      n0, n0, N, tile_a, tile_c, item);
+                fused_dequant_gemm_tile<S, block_q_t, reordered>((const block_q_t *) src0, packed, dst, M, Npad, K,
+                                                      ldd, n0, n0, N, tile_a, tile_c, item);
             });
     });
 }
@@ -974,7 +974,7 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
 }
 
 template <typename S>
-static bool fg_fused_run(ggml_type src0_type, const void * src0, const void * src1, ggml_type src1_type,
+static bool fg_fused_run(ggml_type src0_type, bool src0_reordered, const void * src0, const void * src1, ggml_type src1_type,
                          float * dst, int64_t M, int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool,
                          dpct::queue_ptr stream) {
     const int64_t groups_n = (N + S::BN - 1) / S::BN;
@@ -992,21 +992,27 @@ static bool fg_fused_run(ggml_type src0_type, const void * src0, const void * sr
     }
 
     const typename S::tsb * packed = packed_b.get();
-    return fg_visit_type(src0_type, false, [&](auto tag) {
+    return fg_visit_type(src0_type, src0_reordered, [&](auto tag) {
         using block_q_t = typename decltype(tag)::type;
         if constexpr (fg_plain_ok<block_q_t>()) {
-            fused_dequant_gemm_launch<S, block_q_t>(src0, packed, dst, (int) M, (int) N, Npad, (int) K, (int) ldd,
-                                                    groups_n, groups_m, stream);
+            fused_dequant_gemm_launch<S, block_q_t, decltype(tag)::reordered>(src0, packed, dst, (int) M, (int) N,
+                                                                              Npad, (int) K, (int) ldd, groups_n,
+                                                                              groups_m, stream);
         }
     });
 }
 
-bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, const void * src0, const void * src1, ggml_type src1_type,
+bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, bool src0_reordered, const void * src0, const void * src1, ggml_type src1_type,
                                   int32_t src1_prec, float * dst, int64_t M, int64_t N, int64_t K, int64_t ldd,
                                   ggml_sycl_pool & pool, dpct::queue_ptr stream) {
-    // every BN columns dequantize A again, so wide N is left to the library GEMM
+    // every BN columns dequantize A again, so wide N is left to the library GEMM.
+    // src0_reordered: the persistent weight reorder may have been installed on this
+    // tensor by an earlier small-batch mul_mat; the A stage then has to decode the
+    // SoA layout. Types without an SoA stage (fg_soa<T>::supported == false)
+    // decline via fg_visit_layout and the caller falls through to the
+    // reorder-aware conversion route.
     bool plain_ok = false;
-    fg_visit_type(src0_type, false, [&](auto tag) { plain_ok = fg_plain_ok<typename decltype(tag)::type>(); });
+    fg_visit_type(src0_type, src0_reordered, [&](auto tag) { plain_ok = fg_plain_ok<typename decltype(tag)::type>(); });
     if (g_ggml_sycl_dynamic_precision == GGML_SYCL_DYNAMIC_PRECISION_F32 ||
         !ggml_sycl_xmx_gather_type_enabled(src0_type) || !plain_ok) {
         return false;
@@ -1023,7 +1029,7 @@ bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, const void * src0, const 
     }
     bool launched = false;
     fg_visit_combo(combo, [&](auto s) {
-        launched = fg_fused_run<decltype(s)>(src0_type, src0, src1, src1_type, dst, M, N, K, ldd, pool, stream);
+        launched = fg_fused_run<decltype(s)>(src0_type, src0_reordered, src0, src1, src1_type, dst, M, N, K, ldd, pool, stream);
     });
     return launched;
 }

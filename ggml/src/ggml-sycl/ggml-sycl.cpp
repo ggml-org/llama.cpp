@@ -3154,9 +3154,16 @@ inline void ggml_sycl_op_mul_mat_sycl(
 #endif
 
     // dequantize inside the GEMM instead of writing the f16 weights out and reading them back; src1
-    // goes in its own type, so there is no separate conversion pass
+    // goes in its own type, so there is no separate conversion pass. The A stage
+    // decodes the weight bytes in place, so an installed persistent reorder must be
+    // visible to it: pass the flag through; types without an SoA A-stage decline
+    // inside and this falls through to the reorder-aware conversion route below.
+    bool src0_reordered = false;
+    if (const auto * src0_extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra)) {
+        src0_reordered = src0_extra->optimized_feature.reorder;
+    }
     if (ggml_is_quantized(src0->type) && ggml_is_contiguous(src0) && row_diff == src0->ne[1] &&
-        ggml_sycl_fused_dequant_gemm(src0->type, src0_dd_i, src1_ddf_i, src1->type, ggml_sycl_src1_prec(dst), dst_dd_i,
+        ggml_sycl_fused_dequant_gemm(src0->type, src0_reordered, src0_dd_i, src1_ddf_i, src1->type, ggml_sycl_src1_prec(dst), dst_dd_i,
                                      row_diff, src1_ncols, ne10, ldc, ctx.pool(), stream)) {
         return;
     }
