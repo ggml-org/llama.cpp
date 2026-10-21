@@ -8155,7 +8155,14 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
 
     const uint32_t slope = Br * acctype;
 
-    uint32_t total_size = tmpsh + iq_shmem + Qf + Psh + sfsh + ksh + slope;
+    uint32_t pvsh = 0;
+    if (Br <= MatBr) {
+        const uint32_t pvsh_elem_size = (k_type == GGML_TYPE_BF16) ? 16u : f16vec4;
+        const uint32_t osh_stride = params.row_split * MatBr / 4;
+        pvsh = Br * osh_stride * pvsh_elem_size;
+    }
+
+    uint32_t total_size = tmpsh + iq_shmem + Qf + Psh + sfsh + ksh + pvsh + slope;
 
     if (params.flip) {
         const uint32_t d_pad = std::max(hsk_pad, hsv_pad);
