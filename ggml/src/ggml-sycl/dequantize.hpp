@@ -858,6 +858,26 @@ static void dequantize_block_q8_0_reorder(const void * __restrict__ vx, dst_t * 
 }
 
 template<typename dst_t>
+static void dequantize_block_q8_0_reorder_wide(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
+                                               const sycl::id<1> idx) {
+    const int64_t i = 4 * (int64_t) idx[0];
+
+    const int8_t *     qs    = (const int8_t *) vx;
+    const sycl::half * d_ptr = (const sycl::half *) ((const uint8_t *) vx + k);
+
+    const float d0 = float(d_ptr[i / QK8_0]);
+    const float d1 = float(d_ptr[(i + 2) / QK8_0]);
+
+    sycl::vec<float, 4> p;
+    p[0] = d0 * (float) qs[i + 0];
+    p[1] = d0 * (float) qs[i + 1];
+    p[2] = d1 * (float) qs[i + 2];
+    p[3] = d1 * (float) qs[i + 3];
+
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(yy + i) = p.convert<dst_t, sycl::rounding_mode::automatic>();
+}
+
+template<typename dst_t>
 static void dequantize_block_q4_1(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
                                   const sycl::nd_item<3> &item_ct1) {
 
