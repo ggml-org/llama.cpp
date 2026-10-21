@@ -719,6 +719,7 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY` | Boolean | `0` | Require an existing compiled blob and skip weight uploads and compilation. Requires Linux or Windows mmap loading and a full dynamic CPU/GPU graph on OpenVINO. |
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for **NPU** prefill (NPU-only; ignored on CPU/GPU). Must be a positive integer; otherwise the default is used. |
 | `GGML_OPENVINO_NPU_COMPILE_CONFIG` | String | `not set` | NPU-only compiler mode parameters forwarded to OpenVINO as `NPU_COMPILATION_MODE_PARAMS`, for example `optimization-level=3`. |
+| `GGML_OPENVINO_GDN_Q_SCALE` | Float | unset (disabled) | NPU static path: enable GDN q pre-scaling and set its scale. A positive integer value enables the optimization; unset, zero, negative, or non-numeric values disable it. Values below `64` are clamped to `64`. |
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Keep KV and supported recurrent caches inside the model. Single-slot CPU/GPU execution only.               |
 | `GGML_OPENVINO_DISABLE_CACHE`     | Boolean   | `0`        | Disable the in-process compiled-model / decoder cache (cache is on by default). Set to `1` to disable.      |
 | `GGML_OPENVINO_DISABLE_KV_SLICE`  | Boolean   | `0`        | Disable the KV-cache input-tensor slicing optimization (slicing is on by default on CPU/GPU). Set to `1` to disable. |
@@ -743,6 +744,7 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 
 > [!NOTE]
 > - `GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature for managing caches internally inside the OpenVINO model on CPUs and GPUs. Use a single slot (`-np 1`). KV caches retain the append-based state layout and sequence-axis optimization. Qwen3.5 adds recurrent cache states in their GGML layouts. Qwen3.5 requires an unsplit graph with model caching enabled and no recurrent rollback. A prompt starting at position 0 resets all states. State save/restore, sequence rewind, context shift, and mid-sequence graph replacement are unsupported. Stateful execution is not effective on NPUs.
+> - `GGML_OPENVINO_GDN_Q_SCALE` is for eligible GDN graphs on the NPU static path. Set it to a positive integer such as `64` to enable q pre-scaling; the factor is clamped to at least `64`. Leave it unset or set it to `0` to disable the optimization.
 > - `GGML_OPENVINO_LOG_UNSUPPORTED_OPS` emits logs at `WARN` level (`GGML_LOG_WARN`), which requires application log verbosity `--log-verbosity >= 2` (or `-lv 2`).
 > - With `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1`, use the same compilation settings as the export run. One directory can hold blobs for different models and settings; `GGML_OPENVINO_SPILL_DIR` does not affect the cache key and is ignored in cache-only mode. See [Compiled model cache](../../ggml/src/ggml-openvino/README.md) for the workflow and restrictions.
 
