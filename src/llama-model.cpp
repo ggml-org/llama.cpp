@@ -1746,6 +1746,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         // call the per-model loading function
         load_arch_tensors(ml);
 
+        // TODO: handle omitted unit NVFP4 weight scales; missing scales are unexpected and not supported.
         // generic pass: load optional ".scale" tensors at their stored shape
         // (per-tensor {1}, per-channel {n_out}, per-expert {n_expert}, or per-channel-per-expert {n_out, n_expert})
         auto create_scale = [&](const LLM_TN_IMPL & tn_scale) -> ggml_tensor * {

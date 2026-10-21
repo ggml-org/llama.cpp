@@ -1722,10 +1722,9 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     // as in build_lora_mm: the folded weight reads the transformed input, the LoRA delta reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     // the experts in the MoE cache are selected by their slots
-    // TODO: remap scales to cache slots and pass them to the cached matmul.
     ggml_tensor * res = slots == nullptr ?
         ggml_mul_mat_id_ext(ctx0, w, cur_mm, ids, w_s, nullptr) :
-        ggml_mul_mat_id_ext(ctx0, moe_cache->get_experts(w), cur_mm, slots, nullptr, nullptr);
+        ggml_mul_mat_id_ext(ctx0, moe_cache->get_experts(w), cur_mm, slots, w_s ? moe_cache->get_scales(w) : nullptr, nullptr);
 
     if (prec_policy) {
         prec_policy->apply(res);
@@ -1733,16 +1732,6 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
 
     if (w->type == GGML_TYPE_NVFP4) {
         ggml_prec_set_acc(res, GGML_PREC_BF16);
-    }
-
-    // Cache slots select weights; original expert IDs select scales.
-    if (slots && w_s) {
-        const int64_t n_expert = w_s->ne[0];
-        const int64_t n_tokens = cur->ne[2];
-        ggml_tensor * s = ggml_reshape_3d(ctx0, w_s, 1, n_expert, 1);
-        s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
-        s = ggml_get_rows(ctx0, s, ids);
-        res = ggml_mul(ctx0, res, s);
     }
 
     for (const auto & lora : *loras) {
