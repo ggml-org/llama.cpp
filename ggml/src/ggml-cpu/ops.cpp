@@ -615,7 +615,7 @@ static void ggml_compute_forward_add_q_f32(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    GGML_ASSERT(ggml_is_quantized(src0->type) || src0->type == GGML_TYPE_F8_E4M3);
+    GGML_ASSERT(ggml_is_quantized(src0->type) || ggml_needs_scale(src0->type));
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(ne00 % ggml_blck_size(type) == 0);
 
@@ -965,7 +965,7 @@ static void ggml_compute_forward_add1_q_f32(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    GGML_ASSERT(ggml_is_quantized(src0->type) || src0->type == GGML_TYPE_F8_E4M3);
+    GGML_ASSERT(ggml_is_quantized(src0->type) || ggml_needs_scale(src0->type));
     GGML_ASSERT(dst->type == src0->type);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
 

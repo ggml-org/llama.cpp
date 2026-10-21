@@ -254,7 +254,7 @@ static const ggml_tensor * ggml_cuda_get_mul_mat_scale(const ggml_tensor * scale
     }
 
     const ggml_tensor * scale = scale_lhs_mm ? scale_node->src[1] : scale_node->src[0];
-    if ((mm_node->src[0]->type != GGML_TYPE_NVFP4 && mm_node->src[0]->type != GGML_TYPE_F8_E4M3) || scale_node->type != GGML_TYPE_F32 ||
+    if (!ggml_needs_scale(mm_node->src[0]->type) || scale_node->type != GGML_TYPE_F32 ||
             scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != 1 ||
             !ggml_are_same_shape(scale_node, mm_node)) {
         return nullptr;
@@ -275,7 +275,7 @@ static const ggml_tensor * ggml_cuda_get_mul_mat_id_scale(const ggml_tensor * re
     }
 
     const ggml_tensor * scale = reshape->src[0];
-    if ((mm_node->src[0]->type != GGML_TYPE_NVFP4 && mm_node->src[0]->type != GGML_TYPE_F8_E4M3) || scale_node->type != GGML_TYPE_F32 ||
+    if (!ggml_needs_scale(mm_node->src[0]->type) || scale_node->type != GGML_TYPE_F32 ||
             scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != mm_node->src[0]->ne[2] ||
             !ggml_are_same_shape(scale_node, mm_node)) {
         return nullptr;

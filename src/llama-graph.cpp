@@ -3244,13 +3244,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         if (bias_table) {
             kq_mask = dense_bias_mask();
         }
-        // A cache without an exported scale stores raw FP8 values.
-        if ((k->type == GGML_TYPE_F8_E4M3 && !k_scale) || (v->type == GGML_TYPE_F8_E4M3 && !v_scale)) {
+        // A cache without an exported scale uses a unit scale.
+        if ((ggml_needs_scale(k->type) && !k_scale) || (ggml_needs_scale(v->type) && !v_scale)) {
             ggml_tensor * unit_scale = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1), 1.0f);
-            if (k->type == GGML_TYPE_F8_E4M3 && !k_scale) {
+            if (ggml_needs_scale(k->type) && !k_scale) {
                 k_scale = unit_scale;
             }
-            if (v->type == GGML_TYPE_F8_E4M3 && !v_scale) {
+            if (ggml_needs_scale(v->type) && !v_scale) {
                 v_scale = unit_scale;
             }
         }
@@ -3518,7 +3518,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il,
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, nullptr, nullptr,
             mctx_cur->get_k_scale(il), mctx_cur->get_v_scale(il));
     cb(cur, "kqv_out", il);
 
