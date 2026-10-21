@@ -433,6 +433,11 @@ class NemotronHModel(GraniteHybridModel):
     _ATTN_LAYER_TYPES = {"attention", "full_attention"}
     _MLP_LAYER_TYPES = {"moe"}
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if ".mixer.experts." in name:
+            name = name.replace("backbone.", "model.").replace(".mixer.experts.", ".mlp.experts.")
+        return super()._map_fp8_weight_names(name)
+
     def __init__(self, *args, **kwargs):
         # We have to determine the correct model architecture (MoE vs non-MoE) before
         # calling the parent __init__. This is because the parent constructor

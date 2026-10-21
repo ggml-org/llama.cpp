@@ -21,6 +21,9 @@ from safetensors.torch import save_file
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
+from conversion.llama import LlamaModel
+from conversion.nemotron import NemotronHModel
+from conversion.phi import PhiMoeModel
 from conversion.qwen import Qwen2MoeModel
 
 
@@ -33,8 +36,17 @@ class ForcedF16Model(Qwen2MoeModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
+class OffsetNormModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN2MOE
+
+    def modify_tensors(self, data_torch, name, bid):
+        if name.endswith("input_layernorm.weight"):
+            data_torch = data_torch + 1.0
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 class TestFP8Conversion(unittest.TestCase):
-    def convert(self, model_class, tensors, eager=False, check_lazy=False, scan_nvfp4=False, **kwargs):
+    def convert(self, model_class, tensors, eager=False, check_lazy=False, scan_nvfp4=False, ftype=gguf.LlamaFileType.GUESSED, hparams_override=None, **kwargs):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             hparams = {
@@ -49,9 +61,10 @@ class TestFP8Conversion(unittest.TestCase):
                 "v_head_dim": 2,
                 "quantization_config": {"quant_method": "modelopt"},
             }
+            hparams.update(hparams_override or {})
             (path / "config.json").write_text(json.dumps(hparams))
             save_file(tensors, str(path / "model.safetensors"))
-            model = model_class(path, gguf.LlamaFileType.MOSTLY_F16, path / "out.gguf", hparams=hparams, eager=eager, **kwargs)
+            model = model_class(path, ftype, path / "out.gguf", hparams=hparams, eager=eager, **kwargs)
             reads: list[str] = []
             if check_lazy:
                 self.assertFalse(eager)
@@ -142,6 +155,97 @@ class TestFP8Conversion(unittest.TestCase):
         dtype, data = result["blk.0.attn_q.bias"]
         self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
         np.testing.assert_array_equal(data, [1., -1.])
+
+    def test_fp8_norm_transform(self):
+        for shape in ((4,), (2, 2)):
+            with self.subTest(shape=shape):
+                weight = torch.ones(shape, dtype=torch.float32).to(torch.float8_e4m3fn)
+                result = self.convert(OffsetNormModel, {"model.layers.0.input_layernorm.weight": weight}, check_lazy=True)
+                dtype, data = result["blk.0.attn_norm.weight"]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
+                np.testing.assert_array_equal(data, np.full(shape, 2.))
+
+    def test_explicit_outtypes(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        weight = torch.ones((4, 256), dtype=torch.float32).to(torch.float8_e4m3fn)
+        for ftype, qtype in (
+            (gguf.LlamaFileType.ALL_F32, gguf.GGMLQuantizationType.F32),
+            (gguf.LlamaFileType.MOSTLY_F16, gguf.GGMLQuantizationType.F16),
+            (gguf.LlamaFileType.MOSTLY_BF16, gguf.GGMLQuantizationType.BF16),
+            (gguf.LlamaFileType.MOSTLY_Q8_0, gguf.GGMLQuantizationType.Q8_0),
+            (gguf.LlamaFileType.MOSTLY_TQ1_0, gguf.GGMLQuantizationType.TQ1_0),
+            (gguf.LlamaFileType.MOSTLY_TQ2_0, gguf.GGMLQuantizationType.TQ2_0),
+        ):
+            for eager in (False, True):
+                for scaled in (False, True):
+                    with self.subTest(ftype=ftype, eager=eager, scaled=scaled):
+                        tensors = {name: weight}
+                        if scaled:
+                            tensors[name + "_scale"] = torch.tensor([0.25])
+                            tensors[name.removesuffix("weight") + "input_scale"] = torch.tensor([0.5])
+                        result = self.convert(Qwen2MoeModel, tensors, ftype=ftype, eager=eager, check_lazy=not eager)
+                        self.assertEqual(set(result), {"blk.0.attn_q.weight"})
+                        dtype, data = result["blk.0.attn_q.weight"]
+                        self.assertEqual(dtype, qtype)
+                        np.testing.assert_allclose(gguf.dequantize(data, dtype), np.full((4, 256), 0.25 if scaled else 1.), atol=1e-4)
+
+    def test_embedding_scale_fallback(self):
+        name = "model.embed_tokens.weight"
+        weight = torch.ones((4, 4), dtype=torch.float32).to(torch.float8_e4m3fn)
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                result = self.convert(Qwen2MoeModel, {name: weight, name + "_scale": torch.tensor([0.25])}, eager=eager, check_lazy=not eager)
+                self.assertEqual(set(result), {"token_embd.weight"})
+                dtype, data = result["token_embd.weight"]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                np.testing.assert_array_equal(data, np.full((4, 4), 0.25))
+
+    def test_fp8_scale_formats(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        weight = torch.ones((4, 4), dtype=torch.float32).to(torch.float8_e4m3fn)
+        for suffix, config in (
+            ("_scale_inv", {"quant_method": "fp8"}),
+            ("_scale", {"quant_method": "compressed-tensors", "format": "float-quantized", "config_groups": {"group_0": {"weights": {"type": "float", "num_bits": 8, "strategy": "tensor"}}}}),
+        ):
+            for ftype in (gguf.LlamaFileType.GUESSED, gguf.LlamaFileType.MOSTLY_F16):
+                with self.subTest(suffix=suffix, ftype=ftype):
+                    result = self.convert(Qwen2MoeModel, {name: weight, name + suffix: torch.tensor([0.25])}, ftype=ftype, hparams_override={"quantization_config": config}, check_lazy=True)
+                    dtype, data = result["blk.0.attn_q.weight"]
+                    if ftype == gguf.LlamaFileType.GUESSED:
+                        self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                        np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
+                    else:
+                        self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                        self.assertEqual(set(result), {"blk.0.attn_q.weight"})
+                        np.testing.assert_array_equal(data, np.full((4, 4), 0.25))
+
+    def test_expert_naming(self):
+        for model_class, prefix, projections, hparams in (
+            (LlamaModel, "model.layers.0.block_sparse_moe", (("w1", "gate"), ("w3", "up"), ("w2", "down")), {"num_local_experts": 2}),
+            (PhiMoeModel, "model.layers.0.block_sparse_moe", (("w1", "gate"), ("w3", "up"), ("w2", "down")), {"max_position_embeddings": 16, "rope_scaling": {"original_max_position_embeddings": 16}}),
+            (NemotronHModel, "backbone.layers.0.mixer", (("up_proj", "up"), ("down_proj", "down")), {"num_experts_per_tok": 1, "n_routed_experts": 2, "head_dim": 4, "num_heads": 1, "n_groups": 1, "hybrid_override_pattern": "E"}),
+        ):
+            for eager in (False, True):
+                for mixed in (False, True):
+                    with self.subTest(model=model_class.__name__, eager=eager, mixed=mixed):
+                        tensors = {}
+                        for expert in (1, 0):
+                            for proj, _ in projections:
+                                name = f"{prefix}.experts.{expert}.{proj}.weight"
+                                dtype = torch.float16 if mixed and expert == 1 else torch.float8_e4m3fn
+                                tensors[name] = torch.ones((4, 4), dtype=torch.float32).to(dtype)
+                                tensors[name + "_scale"] = torch.tensor([0.25 * (expert + 1)])
+                        result = self.convert(model_class, tensors, hparams_override=hparams, eager=eager, check_lazy=not eager)
+                        for _, proj in projections:
+                            dtype, data = result[f"blk.0.ffn_{proj}_exps.weight"]
+                            if mixed:
+                                self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                                np.testing.assert_array_equal(data, np.array([np.full((4, 4), 0.25), np.full((4, 4), 0.5)]))
+                                self.assertNotIn(f"blk.0.ffn_{proj}_exps.scale", result)
+                            else:
+                                self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                                np.testing.assert_array_equal(gguf.dequantize(data, dtype), np.ones((2, 4, 4)))
+                                np.testing.assert_array_equal(result[f"blk.0.ffn_{proj}_exps.scale"][1], [0.25, 0.5])
 
     def test_mixed_experts(self):
         for eager in (False, True):

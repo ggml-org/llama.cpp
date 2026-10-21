@@ -177,6 +177,7 @@ class ModelBase:
         self._nvfp4_layer_algo: dict[str, str | None] = {} # per-layer quant_algo, keyed by HF module path
         self._prec_a4: dict[str, bool] = {} # gguf tensor name -> can use 4-bit (A4) activations
         self._fp8_as_q8 = fp8_as_q8
+        self._preserve_fp8 = ftype == gguf.LlamaFileType.GUESSED and not fp8_as_q8
         self._fp8_dequantized: set[str] = set()
         self._fp8_e4m3_preserved: set[str] = set()
 
@@ -620,22 +621,30 @@ class ModelBase:
         for name, value in new_tensors.items():
             self.model_tensors[name] = value
 
-    def _transform_fp8_scale(self, name: str, scale: Tensor) -> Tensor:
-        return scale
-
     def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
-        return (self.map_tensor_name(name),)
+        new_name = self.tensor_map.get_name(name, try_suffixes=(".weight",))
+        return (new_name,) if new_name is not None else ()
 
     def _prepare_fp8_e4m3_tensors(self):
-        if self._fp8_as_q8:
+        if not self._preserve_fp8:
             return
 
         scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
         input_scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
         consumed: list[str] = []
-        candidates: dict[str, tuple[str, Tensor]] = {}
+        candidates: dict[str, tuple[str, Tensor, tuple[str, ...], torch.Size]] = {}
+        weight_dtypes: dict[str, torch.dtype] = {}
         scaled_weights: set[str] = set()
-        expert_pattern = re.compile(r"\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$")
+        expert_pattern = re.compile(r"(\.[^.]*experts)\.(\d+)\.")
+        scale_types = {
+            gguf.MODEL_TENSOR.ATTN_Q, gguf.MODEL_TENSOR.ATTN_K, gguf.MODEL_TENSOR.ATTN_V,
+            gguf.MODEL_TENSOR.ATTN_OUT, gguf.MODEL_TENSOR.ATTN_QKV, gguf.MODEL_TENSOR.ATTN_GATE,
+            gguf.MODEL_TENSOR.FFN_GATE, gguf.MODEL_TENSOR.FFN_UP, gguf.MODEL_TENSOR.FFN_DOWN,
+            gguf.MODEL_TENSOR.FFN_GATE_SHEXP, gguf.MODEL_TENSOR.FFN_UP_SHEXP, gguf.MODEL_TENSOR.FFN_DOWN_SHEXP,
+            gguf.MODEL_TENSOR.FFN_GATE_EXP, gguf.MODEL_TENSOR.FFN_UP_EXP, gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+            gguf.MODEL_TENSOR.SSM_IN, gguf.MODEL_TENSOR.SSM_OUT, gguf.MODEL_TENSOR.SSM_ALPHA, gguf.MODEL_TENSOR.SSM_BETA,
+            gguf.MODEL_TENSOR.NEXTN_EH_PROJ, gguf.MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD, gguf.MODEL_TENSOR.OUTPUT,
+        }
 
         for scale_name in list(self.model_tensors.keys()):
             weight_name = None
@@ -651,6 +660,7 @@ class ModelBase:
 
             scaled_weights.add(weight_name)
             weight = self.model_tensors[weight_name]()
+            weight_dtypes[weight_name] = weight.dtype
             if weight.dtype != torch.float8_e4m3fn or weight.ndim < 2:
                 continue
 
@@ -658,28 +668,33 @@ class ModelBase:
             if prod(scale.shape) != 1:
                 continue
 
-            merged_name = re.sub(r"(\.experts)\.\d+\.", r"\1.", weight_name)
+            merged_name = expert_pattern.sub(r"\1.", weight_name)
             new_names = self._map_fp8_weight_names(merged_name)
             if not new_names:
+                continue
+            if any((mapped := self.tensor_map.get_type_and_name(new_name, try_suffixes=(".weight",))) is None or mapped[0] not in scale_types for new_name in new_names):
                 continue
             bid = next((int(part) for part in new_names[0].split(".") if part.isdecimal()), None)
             self._fp8_e4m3_preserved.add(weight_name)
             if any(new_name.endswith("_norm.weight") or self.tensor_force_quant(weight_name, new_name, bid, weight.ndim) != gguf.GGMLQuantizationType.F8_E4M3 for new_name in new_names):
                 self._fp8_e4m3_preserved.discard(weight_name)
                 continue
-            candidates[weight_name] = (scale_name, scale)
+            candidates[weight_name] = (scale_name, scale, new_names, weight.shape)
 
         expert_groups: dict[str, list[str]] = {}
         for name in self.model_tensors:
-            if expert_pattern.search(name):
-                expert_groups.setdefault(name.split(".experts.")[0], []).append(name)
+            if (match := expert_pattern.search(name)) and name.endswith(".weight"):
+                expert_groups.setdefault(name[:match.end(1)], []).append(name)
         for names in expert_groups.values():
-            dtypes = {self.model_tensors[name]().dtype for name in names}
+            for name in names:
+                if name not in weight_dtypes:
+                    weight_dtypes[name] = self.model_tensors[name]().dtype
+            dtypes = {weight_dtypes[name] for name in names}
             if torch.float8_e4m3fn not in dtypes:
                 continue
             if dtypes == {torch.float8_e4m3fn} and not any(name in scaled_weights for name in names):
                 continue
-            # The converter emits all three projections when the last expert arrives.
+            # The converter merges expert projections together.
             if not all(name in candidates for name in names):
                 for name in names:
                     candidates.pop(name, None)
@@ -688,10 +703,8 @@ class ModelBase:
                         gen = self.model_tensors[name]
                         self.model_tensors[name] = lambda gen=gen: gen().float()
 
-        for weight_name, (scale_name, scale) in candidates.items():
-            weight = self.model_tensors[weight_name]()
+        for weight_name, (scale_name, scale, new_names, shape) in candidates.items():
             scale = LazyTorchTensor.to_eager(scale).float().flatten()
-            scale = self._transform_fp8_scale(weight_name, scale)
 
             weight_prefix = weight_name.removesuffix(".weight")
             # Transformers fine-grained FP8 uses activation_scale while ModelOpt uses input_scale.
@@ -714,28 +727,25 @@ class ModelBase:
 
             expert_match = expert_pattern.search(weight_name)
             if expert_match:
-                bid = int(expert_match.group(1))
                 expert_id = int(expert_match.group(2))
-                proj_type = expert_match.group(3)
-                merged_name = f"model.layers.{bid}.mlp.experts.{proj_type}.weight"
-                new_name = self.map_tensor_name(merged_name)
-                target_name = new_name.replace(".weight", ".scale")
-                entries = scale_tensors.setdefault(target_name, [])
-                assert isinstance(entries, list)
-                cast(list[tuple[int, float]], entries).append((expert_id, float(scale[0])))
-                if input_scale is not None:
-                    target_name = new_name.replace(".weight", ".input_scale")
-                    entries = input_scale_tensors.setdefault(target_name, [])
+                for new_name in new_names:
+                    target_name = new_name.replace(".weight", ".scale")
+                    entries = scale_tensors.setdefault(target_name, [])
                     assert isinstance(entries, list)
-                    cast(list[tuple[int, float]], entries).append((expert_id, float(input_scale[0])))
+                    cast(list[tuple[int, float]], entries).append((expert_id, float(scale[0])))
+                    if input_scale is not None:
+                        target_name = new_name.replace(".weight", ".input_scale")
+                        entries = input_scale_tensors.setdefault(target_name, [])
+                        assert isinstance(entries, list)
+                        cast(list[tuple[int, float]], entries).append((expert_id, float(input_scale[0])))
             else:
-                for new_name in self._map_fp8_weight_names(weight_name):
-                    mapped = self.tensor_map.get_type_and_name(new_name, try_suffixes=(".weight",)) if weight.ndim == 3 else None
+                for new_name in new_names:
+                    mapped = self.tensor_map.get_type_and_name(new_name, try_suffixes=(".weight",)) if len(shape) == 3 else None
                     is_packed_expert = mapped is not None and mapped[0] in (
                         gguf.MODEL_TENSOR.FFN_GATE_EXP, gguf.MODEL_TENSOR.FFN_UP_EXP, gguf.MODEL_TENSOR.FFN_DOWN_EXP,
                     )
                     # Packed expert weights need one scale value per expert.
-                    n_scales = weight.shape[0] if is_packed_expert else 1
+                    n_scales = shape[0] if is_packed_expert else 1
                     scale_tensors[new_name.replace(".weight", ".scale")] = np.repeat(scale.numpy(), n_scales)
                     if input_scale is not None:
                         input_scale_tensors[new_name.replace(".weight", ".input_scale")] = np.repeat(input_scale.numpy(), n_scales)
@@ -1432,7 +1442,8 @@ class ModelBase:
             if name.endswith((".attention.masked_bias", ".attention.bias", ".rotary_emb.inv_freq")):
                 continue
 
-            preserve_fp8_e4m3 = not self._fp8_as_q8 and data_torch.dtype == torch.float8_e4m3fn
+            # FP8 transforms must only reorder values; norms and vectors use numeric F32 transforms.
+            preserve_fp8_e4m3 = self._preserve_fp8 and data_torch.dtype == torch.float8_e4m3fn and data_torch.ndim >= 2 and not name.endswith(("norm.weight", "norm_f.weight"))
             if preserve_fp8_e4m3:
                 self._fp8_e4m3_preserved.add(name)
 
