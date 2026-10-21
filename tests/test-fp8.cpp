@@ -317,7 +317,7 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             LOG("FP8 attention: tensor split requires flash attention, skipping disabled cases\n");
             continue;
         }
-        for (int scaled : { 1, 2, 3 }) {
+        for (int scaled : { 0, 1, 2, 3 }) {
             const float sk = scaled & 1 ? 0.03125f : 1.0f;
             const float sv = scaled & 2 ? 0.125f : 1.0f;
             ggml_backend_tensor_set(k_scale, &sk, 0, sizeof(sk));
@@ -325,15 +325,15 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             model->layers[0].k_cache_scale = scaled & 1 ? k_scale : nullptr;
             model->layers[0].v_cache_scale = scaled & 2 ? v_scale : nullptr;
 
-            std::vector<float> tensors[4];
+            std::vector<float> tensors[6];
             auto params = llama_context_default_params();
             params.n_ctx = 256;
             params.n_batch = n_tokens;
             params.n_ubatch = n_tokens;
             params.n_threads = 1;
             params.n_threads_batch = 1;
-            params.type_k = scaled & 1 ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
-            params.type_v = scaled & 2 ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
+            params.type_k = scaled == 0 || (scaled & 1) ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
+            params.type_v = scaled == 0 || (scaled & 2) ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
             params.flash_attn_type = flash;
             params.offload_kqv = offload_kqv;
             if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
@@ -379,16 +379,23 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             }
             params.cb_eval_user_data = tensors;
             params.cb_eval = [](ggml_tensor * t, bool ask, void * user_data) {
-                const char * names[] = { "Qcur-0", "Kcur-0", "Vcur-0", "kqv_out-0" };
-                for (int i = 0; i < 4; ++i) {
+                const char * names[] = { "Qcur-0", "Kcur-0", "Vcur-0", "kqv_out-0", "kq-0", "kqv-0" };
+                for (int i = 0; i < 6; ++i) {
                     if (strcmp(t->name, names[i]) != 0) {
                         continue;
                     }
                     if (!ask) {
-                        GGML_ASSERT(t->type == GGML_TYPE_F32 && ggml_is_contiguous(t));
                         auto & data = static_cast<std::vector<float> *>(user_data)[i];
-                        data.resize(ggml_nelements(t));
-                        ggml_backend_tensor_get(t, data.data(), 0, data.size()*sizeof(float));
+                        ggml_tensor * value = t;
+                        if (i >= 4) {
+                            GGML_ASSERT(t->op == GGML_OP_MUL_MAT);
+                            value = t->src[2];
+                        }
+                        if (value) {
+                            GGML_ASSERT(value->type == GGML_TYPE_F32 && ggml_is_contiguous(value));
+                            data.resize(ggml_nelements(value));
+                            ggml_backend_tensor_get(value, data.data(), 0, data.size()*sizeof(float));
+                        }
                     }
                     return true;
                 }
@@ -399,8 +406,12 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             GGML_ASSERT(lctx->get_cparams().flash_attn == (flash == LLAMA_FLASH_ATTN_TYPE_ENABLED));
             get_logits(model, lctx.get(), { 1, 2, 3, 4 });
             llama_synchronize(lctx.get());
-            for (const auto & data : tensors) {
-                GGML_ASSERT(data.size() == (size_t) (head_size*n_head*n_tokens));
+            for (int i = 0; i < 4; ++i) {
+                GGML_ASSERT(tensors[i].size() == (size_t) (head_size*n_head*n_tokens));
+            }
+            if (flash == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
+                GGML_ASSERT(tensors[4] == (params.type_k == GGML_TYPE_F8_E4M3 ? std::vector<float>{ sk } : std::vector<float>{}));
+                GGML_ASSERT(tensors[5] == (params.type_v == GGML_TYPE_F8_E4M3 ? std::vector<float>{ sv } : std::vector<float>{}));
             }
 
             // Round the original K/V independently of the cache write graph.
@@ -541,15 +552,19 @@ static test_status test_fp8_kv(const std::string & path, const char * target_bac
     auto params = llama_model_default_params();
     params.devices = cpu_devices;
     params.progress_callback = silent_model_load_progress;
+    bool supports_tensor_split;
     {
         llama_model_ptr model = load_model(path, params);
-        if (model->arch != LLM_ARCH_LLAMA || model->hparams.n_expert > 0) {
-            LOG("FP8 KV: only dense Llama fixtures are supported, skipping %s\n", path.c_str());
+        if ((model->arch != LLM_ARCH_LLAMA && model->arch != LLM_ARCH_GEMMA3) || model->hparams.n_expert > 0) {
+            LOG("FP8 KV: only dense Llama and Gemma3 fixtures are supported, skipping %s\n", path.c_str());
             return test_status::SKIP;
         }
-        LOG("FP8 KV: CPU attention and context shift\n");
+        supports_tensor_split = llama_arch_supports_sm_tensor(model->arch);
+        LOG("FP8 KV: CPU attention\n");
         check_fp8_attention(model.get());
-        check_fp8_context_shift(model.get());
+        if (model->arch == LLM_ARCH_LLAMA) {
+            check_fp8_context_shift(model.get());
+        }
     }
 
     std::vector<ggml_backend_dev_t> devices_meta;
@@ -571,7 +586,7 @@ static test_status test_fp8_kv(const std::string & path, const char * target_bac
         check_fp8_attention(model.get());
         check_fp8_attention(model.get(), false);
     }
-    if (!target_backend && !devices_meta.empty()) {
+    if (!target_backend && supports_tensor_split && !devices_meta.empty()) {
         devices_meta.push_back(nullptr);
         params.devices = devices_meta.data();
         params.split_mode = LLAMA_SPLIT_MODE_TENSOR;
