@@ -363,11 +363,17 @@ struct llama_moe_cache::impl {
             for (int32_t il : g.layers) {
                 n_expert_token += model.hparams.n_expert_used(il);
             }
+            if (n_expert_token == 0) {
+                g.n_slots = 0;
+                continue;
+            }
             if (g.n_slots < n_expert_token) {
                 LLAMA_LOG_WARN("%s: MoE cache is too small to hold the experts of one token for %zu layers, performance may suffer\n", __func__, g.layers.size());
             }
-            // use plain LRU below 1.8 times the experts used by one token
-            const int32_t max_protected = 5LL*g.n_slots >= 9*n_expert_token ? g.n_slots/2 : 0;
+            // grow the protected fraction from zero at 1x to one half at 1.8x the experts used by one token
+            const double cache_ratio = (double) g.n_slots/n_expert_token;
+            const double ramp_progress = std::clamp((cache_ratio - 1.0)/0.8, 0.0, 1.0);
+            const int32_t max_protected = (int32_t) (g.n_slots*ramp_progress*0.5);
             g.slru.init(model.layers.size(), n_expert, g.n_slots, max_protected);
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
             n_tensors_host  += g.layers.size();
