@@ -1351,7 +1351,9 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il,
             ggml_tensor * bias_table = nullptr,   // [n_bins, n_head_q, n_tokens]
-            ggml_tensor * bias_indices = nullptr) const;
+            ggml_tensor * bias_indices = nullptr,
+            ggml_tensor * k_scale = nullptr,
+            ggml_tensor * v_scale = nullptr) const;
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
