@@ -386,6 +386,9 @@ public:
     uint64_t      kv_layout     = 0;
     bool          kv_synced     = false;
 
+    // the attended cells the graph was built for (a compact KQ mask no longer changes with them)
+    uint32_t      n_kv          = 0;
+
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed
     //       llm_graph_params from a previous batch, causing stack-use-after-return

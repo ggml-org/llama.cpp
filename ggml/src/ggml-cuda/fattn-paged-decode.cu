@@ -81,6 +81,7 @@ struct pd_part {
     ggml_tensor v;
     ggml_tensor mask;
     ggml_tensor dst;
+    int         mask_start = 0; // the first column of the part its mask covers (the ones before are visible)
 
     pd_part(const ggml_tensor * fa, const char * k_base, const char * v_base, int64_t row0, int64_t col0, int64_t n_tok,
             float * out, float * lse) {
@@ -95,12 +96,16 @@ struct pd_part {
         k.data = (char *) k_base + row0*K->nb[1];
         v.data = (char *) v_base + row0*V->nb[1];
 
-        if (mask_) {
-            // the mask columns of the part; rows keep their stride
+        // the mask columns of the part; rows keep their stride. A narrow mask covers the columns from
+        // ggml_flash_attn_ext_mask_col0(fa): a part before them has none, the part across it starts its mask there.
+        const int64_t m0 = mask_ ? col0 - ggml_flash_attn_ext_mask_col0(fa) : 0;
+        const bool has_mask = mask_ && m0 + n_tok > 0;
+        if (has_mask) {
+            mask_start = (int) std::max<int64_t>(0, -m0);
             mask = *mask_;
             mask.view_src = nullptr;
-            mask.ne[0] = n_tok;
-            mask.data = (char *) mask_->data + col0*mask_->nb[0];
+            mask.ne[0] = n_tok - mask_start;
+            mask.data = (char *) mask_->data + std::max<int64_t>(0, m0)*mask_->nb[0];
         }
 
         dst = *fa;
@@ -109,10 +114,24 @@ struct pd_part {
         }
         dst.src[1] = &k;
         dst.src[2] = &v;
-        dst.src[3] = mask_ ? &mask : nullptr;
+        dst.src[3] = has_mask ? &mask : nullptr;
         dst.data = out;
         memset(dst.op_params + GGML_FA_PARAM_PAGE_SIZE, 0, sizeof(dst.op_params) - GGML_FA_PARAM_PAGE_SIZE*sizeof(int32_t));
         memcpy(dst.op_params + GGML_FA_PARAM_LSE, &lse, sizeof(lse));
+    }
+};
+
+// dst with a mask of all its K/V columns (for questions about the stock kernel's parts, which get one)
+struct pd_full_mask {
+    ggml_tensor fa;
+    ggml_tensor mask;
+
+    pd_full_mask(const ggml_tensor * dst) : fa(*dst) {
+        if (dst->src[3]) {
+            mask = *dst->src[3];
+            mask.ne[0] = ggml_flash_attn_ext_n_kv(dst);
+            fa.src[3] = &mask;
+        }
     }
 };
 
@@ -133,7 +152,8 @@ bool ggml_cuda_fattn_paged_prefill_enabled(int device, const ggml_tensor * dst) 
         return false;
     }
     // the stock kernel for a part must write the log-sum-exp
-    pd_part part(dst, nullptr, nullptr, 0, 0, std::min<int64_t>(chunk, K->ne[1]), nullptr, nullptr);
+    const pd_full_mask full(dst);
+    pd_part part(&full.fa, nullptr, nullptr, 0, 0, std::min<int64_t>(chunk, K->ne[1]), nullptr, nullptr);
     return ggml_cuda_flash_attn_ext_writes_lse(device, &part.dst);
 }
 
@@ -153,19 +173,23 @@ struct pd_prefill_scratch {
     size_t dst_size;
     size_t part_size;
     size_t lse_size;
+    size_t mask_size; // at the end of the part's scratch: its full mask for the stock kernel (a narrow mask widened)
 
     pd_prefill_scratch(int device, const ggml_tensor * dst) {
         const ggml_tensor * K = dst->src[1];
         const int64_t chunk = (int64_t) pd_prefill_chunk_pages()*PD_PAGE;
         // parts of paged K/V can be as long as a chunk whatever the pool size, parts of contiguous K/V as long as K/V
         const int64_t n_tok = dst->src[GGML_FA_SRC_PAGES] ? chunk : std::min(chunk, K->ne[1]);
-        pd_part part(dst, nullptr, nullptr, 0, 0, n_tok, nullptr, nullptr);
+        // sized for a part with a mask of all its columns, as the stock kernel gets
+        const pd_full_mask full(dst);
+        pd_part part(&full.fa, nullptr, nullptr, 0, 0, n_tok, nullptr, nullptr);
         dst_size  = GGML_PAD(ggml_nbytes(dst), 256);
+        mask_size = dst->src[3] && !pp_enabled() ? GGML_PAD(n_tok*dst->src[3]->ne[1]*sizeof(half), 256) : 0;
         // pp_attn_q reads the quantized K/V and needs only the part's output; the f16 copies inside a part are aligned
         // to 128 B from the start of the buffer
         part_size = pp_enabled()
             ? dst_size
-            : GGML_PAD(ggml_cuda_flash_attn_ext_get_alloc_size(device, &part.dst) + 256, 256);
+            : GGML_PAD(ggml_cuda_flash_attn_ext_get_alloc_size(device, &part.dst) + 256, 256) + mask_size;
         lse_size  = GGML_PAD(dst->src[0]->ne[1]*dst->src[0]->ne[2]*sizeof(float), 256);
     }
 
@@ -238,11 +262,13 @@ void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml
     float2 * ML_part = (float2 *) ((char *) O_part + sh.o_size);
 
     const dim3 grid(n_splits, n_heads, n_tiles);
-    const char * mask_data = mask ? (const char *) mask->data : nullptr;
+    const int     mask_col0 = (int) ggml_flash_attn_ext_mask_col0(dst);
+    // the kernel indexes mask rows by K/V column
+    const char * mask_data = mask ? (const char *) mask->data - (ptrdiff_t) mask_col0*sizeof(half) : nullptr;
     const int64_t mask_nb1 = mask ? mask->nb[1] : 0;
 #define PD_LAUNCH(M, P, MT) \
     pd_partial<M, P, MT><<<grid, PD_NWARPS * 32, 0, stream>>>((const char *) Q->data, Q->nb[1], Q->nb[2], kv_k, kv_v, sync, \
-        mask_data, mask_nb1, scale, n_kv, nb, n_chunks, chunks_per_split, O_part, ML_part)
+        mask_data, mask_nb1, mask_col0, scale, n_kv, nb, n_chunks, chunks_per_split, O_part, ML_part)
     if (n_tiles > 1) {
         // a 32-row tile spans at most 7 query tokens
         if (pages) { PD_LAUNCH(2, true, 8); } else { PD_LAUNCH(2, false, 8); }
@@ -320,10 +346,29 @@ void ggml_cuda_flash_attn_ext_paged_prefill(ggml_backend_cuda_context & ctx, ggm
                 (const char *) Q->data, Q->nb[1], Q->nb[2],
                 (const char *) part.k.data, part.k.nb[1], part.k.nb[2],
                 (const char *) part.v.data, part.v.nb[1], part.v.nb[2],
-                mask_data, mask_nb1, (float *) part_out, part_lse, (int) n_q, (int) n_tok, (int) Q->ne[2], scale);
+                mask_data, mask_nb1, part.mask_start, (float *) part_out, part_lse, (int) n_q, (int) n_tok, (int) Q->ne[2], scale);
             CUDA_CHECK(cudaGetLastError());
         } else {
-            GGML_ASSERT(ggml_cuda_flash_attn_ext_get_alloc_size(ctx.device, &part.dst) + 128 <= scratch.part_size);
+            // the stock kernels get a mask of all the part's columns (one that writes the log-sum-exp may need one)
+            const ggml_tensor * mask = dst->src[3];
+            if (mask && (part.mask_start > 0 || !part.dst.src[3])) {
+                half * full = (half *) (part_out + scratch.part_size - scratch.mask_size);
+                if (part.dst.src[3]) {
+                    ggml_cuda_fattn_widen_mask(&part.mask, part.mask.ne[1], full, n_tok, part.mask_start, stream);
+                } else {
+                    ggml_cuda_fattn_widen_mask(mask, mask->ne[1], full, n_tok, n_tok, stream);
+                    part.mask = *mask;
+                    part.mask.view_src = nullptr;
+                }
+                part.mask.ne[0] = n_tok;
+                part.mask.nb[1] = n_tok*sizeof(half);
+                part.mask.nb[2] = part.mask.nb[1]*part.mask.ne[1];
+                part.mask.nb[3] = part.mask.nb[2]*part.mask.ne[2];
+                part.mask.data  = full;
+                part.mask_start = 0;
+                part.dst.src[3] = &part.mask;
+            }
+            GGML_ASSERT(ggml_cuda_flash_attn_ext_get_alloc_size(ctx.device, &part.dst) + 128 + scratch.mask_size <= scratch.part_size);
             ggml_cuda_flash_attn_ext(ctx, &part.dst);
         }
         pd_merge<<<n_rows, PD_D, 0, stream>>>((float *) dst->data, acc_lse, (const float *) part_out, part_lse, first);

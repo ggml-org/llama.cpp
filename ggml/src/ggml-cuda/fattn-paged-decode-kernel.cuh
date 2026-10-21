@@ -128,7 +128,7 @@ __launch_bounds__(PD_NWARPS * 32, PD_MIN_WAVES_PER_SIMD)
 static __global__ void pd_partial(
         const char * __restrict__ Q, const int64_t q_nb1, const int64_t q_nb2,
         const pd_kv K, const pd_kv V, const pd_sync sync,
-        const char * __restrict__ mask, const int64_t mask_nb1,
+        const char * __restrict__ mask, const int64_t mask_nb1, const int mask_col0,
         const float scale, const int n_kv, const int nb, const int n_chunks, const int chunks_per_split,
         float * __restrict__ O_part, float2 * __restrict__ ML_part) {
 #if PD_RDNA4
@@ -236,7 +236,9 @@ static __global__ void pd_partial(
         for (int j = 0; j < M_LOADS; ++j) {
             const int i = tid + j * PD_NWARPS * 32;
             const int q = tok0 + i / PD_CHUNK, t = c * PD_CHUNK + i % PD_CHUNK;
-            mreg[j] = mask && q < nb && t < n_kv ? ((const half *) (mask + q * mask_nb1))[t] : __float2half(0.0f);
+            // a narrow mask covers the columns from mask_col0 (ggml_flash_attn_ext_mask_col0), the ones before are visible;
+            // mask points mask_col0 columns before its first one
+            mreg[j] = mask && q < nb && t < n_kv && t >= mask_col0 ? ((const half *) (mask + q * mask_nb1))[t] : __float2half(0.0f);
         }
     };
 

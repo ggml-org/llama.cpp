@@ -5627,7 +5627,7 @@ void ggml_flash_attn_ext_set_pages(
     GGML_ASSERT(k->ne[3] == 1 && v->ne[3] == 1);
     GGML_ASSERT(k->ne[1] % page_size == 0 && v->ne[1] == k->ne[1]);
     if (mask) {
-        GGML_ASSERT(mask->ne[0] == pages->ne[0]*page_size);
+        GGML_ASSERT(mask->ne[0] <= pages->ne[0]*page_size);
     }
     if (ring_k) {
         GGML_ASSERT(ring_k->type == k->type && ring_k->ne[0] == k->ne[0] && ring_k->ne[2] == k->ne[2]);

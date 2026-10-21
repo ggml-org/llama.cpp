@@ -9683,7 +9683,8 @@ static void ggml_compute_forward_flash_attn_ext_prec(
 }
 
 // Paged K/V and cross-queue sync (ggml_flash_attn_ext_set_pages, ggml_flash_attn_ext_set_sync): wait for the producer,
-// gather the logical rows into the end of the work buffer, run the contiguous path on them, then release.
+// gather the logical rows into the end of the work buffer, run the contiguous path on them, then release. A mask
+// narrower than the K/V is widened there too (visible columns first).
 static void ggml_compute_forward_flash_attn_ext_paged(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -9705,6 +9706,13 @@ static void ggml_compute_forward_flash_attn_ext_paged(
         d.src[i] = nullptr;
     }
 
+    // the end of the work buffer: [K copy][V copy] when paged, then the widened mask (ggml_graph_plan reserves the space)
+    const ggml_tensor * mask = dst->src[3];
+    const int64_t n_kv_all = ggml_flash_attn_ext_n_kv(dst);
+    const int64_t col0     = ggml_flash_attn_ext_mask_col0(dst);
+    const size_t  size_m   = col0 > 0 ? (size_t) n_kv_all*mask->ne[1]*mask->ne[2]*mask->ne[3]*sizeof(ggml_fp16_t) : 0;
+    char * mbase = (char *) (((uintptr_t) params->wdata + params->wsize - size_m) & ~(uintptr_t) (CACHE_LINE_SIZE - 1));
+
     ggml_tensor kg;
     ggml_tensor vg;
     if (pages) {
@@ -9719,7 +9727,7 @@ static void ggml_compute_forward_flash_attn_ext_paged(
         const size_t row_v = ggml_row_size(v->type, v->ne[0]);
         const size_t size_k = n_kv*row_k*k->ne[2];
         const size_t size_v = n_kv*row_v*v->ne[2];
-        char * base = (char *) (((uintptr_t) params->wdata + params->wsize - size_k - size_v) & ~(uintptr_t) (CACHE_LINE_SIZE - 1));
+        char * base = (char *) (((uintptr_t) mbase - size_k - size_v) & ~(uintptr_t) (CACHE_LINE_SIZE - 1));
 
         kg = *k;
         vg = *v;
@@ -9761,6 +9769,30 @@ static void ggml_compute_forward_flash_attn_ext_paged(
         ggml_barrier(params->threadpool);
     }
 
+    ggml_tensor mg;
+    if (col0 > 0) {
+        mg = *mask;
+        mg.view_src = nullptr;
+        mg.ne[0] = n_kv_all;
+        mg.nb[1] = n_kv_all*sizeof(ggml_fp16_t);
+        mg.nb[2] = mg.nb[1]*mg.ne[1];
+        mg.nb[3] = mg.nb[2]*mg.ne[2];
+        mg.data  = mbase;
+        const int64_t n_rows = mask->ne[1]*mask->ne[2]*mask->ne[3];
+        for (int64_t r = params->ith; r < n_rows; r += params->nth) {
+            const int64_t i1 = r % mask->ne[1], i2 = (r / mask->ne[1]) % mask->ne[2], i3 = r / (mask->ne[1]*mask->ne[2]);
+            ggml_fp16_t * out = (ggml_fp16_t *) ((char *) mg.data + i1*mg.nb[1] + i2*mg.nb[2] + i3*mg.nb[3]);
+            const ggml_fp16_t zero = GGML_CPU_FP32_TO_FP16(0.0f);
+            for (int64_t j = 0; j < col0; ++j) {
+                out[j] = zero;
+            }
+            memcpy(out + col0, (const char *) mask->data + i1*mask->nb[1] + i2*mask->nb[2] + i3*mask->nb[3],
+                   mask->ne[0]*sizeof(ggml_fp16_t));
+        }
+        ggml_barrier(params->threadpool);
+        d.src[3] = &mg;
+    }
+
     ggml_compute_forward_flash_attn_ext_prec(params, &d);
 
     if (tag) {
@@ -9775,7 +9807,7 @@ static void ggml_compute_forward_flash_attn_ext_paged(
 void ggml_compute_forward_flash_attn_ext(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
-    if (dst->src[GGML_FA_SRC_PAGES] || dst->src[GGML_FA_SRC_TAG]) {
+    if (dst->src[GGML_FA_SRC_PAGES] || dst->src[GGML_FA_SRC_TAG] || ggml_flash_attn_ext_mask_col0(dst) > 0) {
         ggml_compute_forward_flash_attn_ext_paged(params, dst);
         return;
     }

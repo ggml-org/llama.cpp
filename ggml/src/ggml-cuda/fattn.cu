@@ -719,8 +719,61 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_TILE;
 }
 
+// out[r][j] = j < col0 ? 0 : src[r][j - col0] for j < n_cols: a mask narrower than the K/V widened to n_cols columns
+static __global__ void fattn_widen_mask(const char * __restrict__ src, const int64_t src_nb1, const int src_ne0,
+        half * __restrict__ out, const int n_cols, const int col0) {
+    const half * s = (const half *) (src + blockIdx.x * src_nb1);
+    half       * o = out + (int64_t) blockIdx.x * n_cols;
+    for (int j = threadIdx.x; j < n_cols; j += blockDim.x) {
+        const int i = j - col0;
+        o[j] = i < 0 ? __float2half(0.0f) : i < src_ne0 ? s[i] : __float2half(-INFINITY);
+    }
+}
+
+void ggml_cuda_fattn_widen_mask(const ggml_tensor * mask, int64_t n_rows, half * out, int64_t n_cols, int64_t col0,
+        cudaStream_t stream) {
+    GGML_ASSERT(mask->type == GGML_TYPE_F16 && n_rows <= INT32_MAX && n_cols <= INT32_MAX);
+    fattn_widen_mask<<<(unsigned) n_rows, 256, 0, stream>>>((const char *) mask->data, mask->nb[1], (int) mask->ne[0],
+        out, (int) n_cols, (int) col0);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// The stock kernels take a mask of every K/V column: a narrower one (ggml_flash_attn_ext_mask_col0) is widened into the
+// end of dst's allocation, after the kernels' f16 copies of K/V: fattn_widened holds dst with that mask.
+struct fattn_widened {
+    ggml_tensor dst;
+    ggml_tensor mask;
+    size_t      size;
+
+    fattn_widened(const ggml_tensor * fa) {
+        const ggml_tensor * m = fa->src[3];
+        dst  = *fa;
+        mask = *m;
+        mask.view_src = nullptr;
+        mask.ne[0] = fa->src[1]->ne[1];
+        mask.nb[1] = mask.ne[0]*sizeof(half);
+        mask.nb[2] = mask.nb[1]*mask.ne[1];
+        mask.nb[3] = mask.nb[2]*mask.ne[2];
+        dst.src[3] = &mask;
+        size = GGML_PAD(ggml_nbytes(&mask), 256);
+    }
+};
+
+static size_t fattn_stock_alloc_size(int device, const ggml_tensor * dst);
+
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
     GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
+
+    // the paged kernels below read a narrow mask directly
+    if (ggml_flash_attn_ext_mask_col0(dst) > 0 &&
+            !ggml_cuda_fattn_paged_prefill_enabled(device, dst) && !ggml_cuda_fattn_paged_decode_enabled(device, dst)) {
+        fattn_widened w(dst);
+        return GGML_PAD(fattn_stock_alloc_size(device, &w.dst), 256) + w.size;
+    }
+    return fattn_stock_alloc_size(device, dst);
+}
+
+static size_t fattn_stock_alloc_size(int device, const ggml_tensor * dst) {
 
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
@@ -773,6 +826,15 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         ggml_cuda_flash_attn_ext_paged_decode(ctx, dst);
         return;
     }
+    if (ggml_flash_attn_ext_mask_col0(dst) > 0) {
+        GGML_ASSERT(!dst->src[GGML_FA_SRC_PAGES]);
+        fattn_widened w(dst);
+        w.mask.data = (char *) dst->data + GGML_PAD(fattn_stock_alloc_size(ctx.device, &w.dst), 256);
+        ggml_cuda_fattn_widen_mask(dst->src[3], w.mask.ne[1]*w.mask.ne[2]*w.mask.ne[3], (half *) w.mask.data,
+            w.mask.ne[0], ggml_flash_attn_ext_mask_col0(dst), ctx.stream());
+        ggml_cuda_flash_attn_ext(ctx, &w.dst);
+        return;
+    }
     ggml_cuda_fattn_sync_wait(ctx, dst);
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
@@ -795,6 +857,10 @@ bool ggml_cuda_flash_attn_ext_writes_lse(int device, const ggml_tensor * dst) {
 }
 
 bool ggml_cuda_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
+    // the sparse K/V set reads the mask's columns as K/V rows
+    if (ggml_flash_attn_ext_mask_col0(dst) > 0 && ggml_get_op_params_i32(dst, 4) != 0) {
+        return false;
+    }
     if (dst->src[GGML_FA_SRC_PAGES]) {
         return ggml_cuda_fattn_paged_prefill_enabled(device, dst) || ggml_cuda_fattn_paged_decode_enabled(device, dst);
     }

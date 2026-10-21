@@ -214,6 +214,18 @@ static inline const struct ggml_fa_page_runs * ggml_flash_attn_ext_get_page_runs
     return p;
 }
 
+// the attended K/V length of a GGML_OP_FLASH_ATTN_EXT: the logical rows when paged
+static inline int64_t ggml_flash_attn_ext_n_kv(const struct ggml_tensor * t) {
+    const struct ggml_tensor * pages = t->src[GGML_FA_SRC_PAGES];
+    return pages ? pages->ne[0]*t->op_params[GGML_FA_PARAM_PAGE_SIZE] : t->src[1]->ne[1];
+}
+
+// a mask narrower than the K/V covers its last mask->ne[0] columns; the columns before this one are visible (0)
+static inline int64_t ggml_flash_attn_ext_mask_col0(const struct ggml_tensor * t) {
+    const struct ggml_tensor * mask = t->src[3];
+    return mask ? ggml_flash_attn_ext_n_kv(t) - mask->ne[0] : 0;
+}
+
 // the page table of a paged GGML_OP_FLASH_ATTN_EXT, in pages->data
 static inline const int32_t * ggml_flash_attn_ext_get_pages(const struct ggml_tensor * t) {
     const struct ggml_tensor * pages = t->src[GGML_FA_SRC_PAGES];

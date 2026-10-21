@@ -203,6 +203,12 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
+    // The KQ mask columns for a ubatch: when every cell before the last ones is visible to all of its tokens (one
+    // sequence in the cache, its cells dense, the ubatch at its top positions), the mask covers only the last columns
+    // (see ggml_flash_attn_ext); otherwise n_kv. sinfo == nullptr: graph reservation (the compact width when allowed).
+    uint32_t get_n_kv_mask(uint32_t n_kv, const slot_info * sinfo, const llama_ubatch & ubatch, bool causal_attn,
+            bool flash_attn) const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
@@ -259,7 +265,8 @@ public:
 
     void set_input_k_shift(ggml_tensor * dst) const;
 
-    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    // n_kv: the attended cells, when dst holds only the last columns of the mask (get_n_kv_mask)
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, int64_t n_kv = -1) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
@@ -352,6 +359,9 @@ private:
     // KV streaming, null if disabled
     std::unique_ptr<llama_kv_stream> stream;
 
+    // the cache's devices take KQ masks of the last columns (get_n_kv_mask); LLAMA_KQ_MASK_COMPACT=0 turns them off
+    bool kq_mask_compact = false;
+
     size_t total_size() const;
 
     size_t size_k_bytes() const;
@@ -432,6 +442,9 @@ public:
 
     uint32_t get_n_kv() const;
 
+    // the KQ mask columns for the ubatch (llama_kv_cache::get_n_kv_mask)
+    uint32_t get_n_kv_mask(const llama_ubatch & ubatch, bool causal_attn, bool flash_attn) const;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 
@@ -511,4 +524,7 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+    // a full-cache context (graph reservation)
+    bool full = false;
 };

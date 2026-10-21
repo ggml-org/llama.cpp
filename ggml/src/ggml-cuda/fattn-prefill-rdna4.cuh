@@ -124,7 +124,7 @@ static __device__ __forceinline__ pp_half2 ppq_h2(const uint32_t w, const uint32
 // clamped, values selected after) so that they are issued together: guarded reads become branches, each with a wait.
 static __device__ __forceinline__ void ppq_store(const ppq_raw & r, const int tid, const int kv0, const int n_kv,
         const int n_q, const int q0, const char * Kh, const int64_t k_nb1, const char * Vh, const int64_t v_nb1,
-        const char * mask, const int64_t mask_nb1, _Float16 * sK, _Float16 * sV, _Float16 * sM) {
+        const char * mask, const int64_t mask_nb1, const int mask_start, _Float16 * sK, _Float16 * sV, _Float16 * sM) {
     const char * Kt = Kh + (int64_t) kv0 * k_nb1;
     const char * Vt = Vh + (int64_t) kv0 * v_nb1;
     const int    kl = n_kv - 1 - kv0; // last valid key of the tile
@@ -149,8 +149,8 @@ static __device__ __forceinline__ void ppq_store(const ppq_raw & r, const int ti
 #pragma unroll
         for (int j = 0; j < PPQ_MP; ++j) {
             const int i = min(tid + j * PPQ_NT, PP_BQ * PP_TILE - 1);
-            const int t = min(q0 + i / PP_TILE, n_q - 1), k = kv0 + min(i % PP_TILE, kl);
-            md[j] = ((const uint16_t *) (mask + (int64_t) t * mask_nb1))[k];
+            const int t = min(q0 + i / PP_TILE, n_q - 1), k = max(kv0 + min(i % PP_TILE, kl), mask_start);
+            md[j] = ((const uint16_t *) (mask + (int64_t) t * mask_nb1))[k - mask_start];
         }
     }
 
@@ -206,7 +206,7 @@ static __device__ __forceinline__ void ppq_store(const ppq_raw & r, const int ti
             uint16_t m = 0;
             if (key > kl) {
                 m = 0xFC00; // -inf
-            } else if (mask && q0 + t < n_q) {
+            } else if (mask && q0 + t < n_q && kv0 + key >= mask_start) {
                 m = md[j];
             }
             ((uint16_t *) sM)[i] = m;
@@ -216,15 +216,16 @@ static __device__ __forceinline__ void ppq_store(const ppq_raw & r, const int ti
 #endif // PP_RDNA4
 
 // Q: f32, token t head h at Q + t * q_nb1 + h * q_nb2 (bytes). K: q8_0 rows of PP_D, key k of KV head g at
-// K + k * k_nb1 + g * k_nb2 (bytes); V: q4_0 likewise. mask: f16, token t key k at mask + t * mask_nb1 (bytes) + 2 k;
-// may be null. dst: f32 [n_q][n_heads][PP_D]; lse: f32 [n_q][n_heads], natural log.
+// K + k * k_nb1 + g * k_nb2 (bytes); V: q4_0 likewise. mask: f16, token t key k >= mask_start at
+// mask + t * mask_nb1 (bytes) + 2 (k - mask_start), keys before mask_start visible; may be null.
+// dst: f32 [n_q][n_heads][PP_D]; lse: f32 [n_q][n_heads], natural log.
 // 6 waves per SIMD (at most 240 VGPRs): two blocks per WGP
 __launch_bounds__(PP_NW * 32, 6)
 static __global__ void pp_attn_q(
         const char * __restrict__ Q, const int64_t q_nb1, const int64_t q_nb2,
         const char * __restrict__ K, const int64_t k_nb1, const int64_t k_nb2,
         const char * __restrict__ V, const int64_t v_nb1, const int64_t v_nb2,
-        const char * __restrict__ mask, const int64_t mask_nb1,
+        const char * __restrict__ mask, const int64_t mask_nb1, const int mask_start,
         float * __restrict__ dst, float * __restrict__ lse,
         const int n_q, const int n_kv, const int n_heads, const float scale) {
 #if PP_RDNA4
@@ -275,7 +276,7 @@ static __global__ void pp_attn_q(
     float l_run = 0.0f;      // the sum of p over this lane's keys
 
     for (int kv0 = 0; kv0 < n_kv; kv0 += PP_TILE) {
-        ppq_store(raw, tid, kv0, n_kv, n_q, q0, Kh, k_nb1, Vh, v_nb1, mask, mask_nb1, sK, sV, sM);
+        ppq_store(raw, tid, kv0, n_kv, n_q, q0, Kh, k_nb1, Vh, v_nb1, mask, mask_nb1, mask_start, sK, sV, sM);
         pp_lds_barrier();
         // the next tile's loads are in flight during this tile's math
         if (kv0 + PP_TILE < n_kv) {

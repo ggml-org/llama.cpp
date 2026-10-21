@@ -9353,7 +9353,8 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
 // GGML_OP_FLASH_ATTN_EXT over paged K/V (ggml_flash_attn_ext_set_pages): a pool laid out like the KV cache (all heads
 // of a token in one row) holds the logical pages in shuffled order next to unused pages; with ring_every > 0, every
 // ring_every-th logical page (starting with page 0) is in a ring instead, in reverse order behind an unused page. The
-// table is row 1 of two, row 0 is garbage.
+// table is row 1 of two, row 0 is garbage. mask_cols > 0 gives a mask of the last mask_cols columns (the rest visible);
+// paged = false attends contiguous K/V of kv rows instead (no table).
 struct test_flash_attn_ext_paged : public test_case {
     static constexpr int64_t page = 256;
     // page runs only above this many query tokens, as llama attaches them (llama_kv_stream::decode_max_tokens)
@@ -9368,9 +9369,18 @@ struct test_flash_attn_ext_paged : public test_case {
     const ggml_type type_V;
     const int ring_every;
     const bool shuffle; // pool pages in random order, else in logical order (the layout of a recency window)
+    const int64_t mask_cols;
+    const bool paged;
 
     std::string vars() override {
-        return VARS_TO_STR9(hs, nh, nr, kv, nb, type_K, type_V, ring_every, shuffle);
+        std::string res = VARS_TO_STR9(hs, nh, nr, kv, nb, type_K, type_V, ring_every, shuffle);
+        if (mask_cols) {
+            res += "," + VAR_TO_STR(mask_cols);
+        }
+        if (!paged) {
+            res += "," + VAR_TO_STR(paged);
+        }
+        return res;
     }
 
     double max_nmse_err() override {
@@ -9383,8 +9393,10 @@ struct test_flash_attn_ext_paged : public test_case {
     }
 
     test_flash_attn_ext_paged(int64_t hs = 256, int64_t nh = 4, int64_t nr = 6, int64_t kv = 1024, int64_t nb = 1,
-            ggml_type type_K = GGML_TYPE_Q8_0, ggml_type type_V = GGML_TYPE_Q4_0, int ring_every = 0, bool shuffle = true)
-        : hs(hs), nh(nh), nr(nr), kv(kv), nb(nb), type_K(type_K), type_V(type_V), ring_every(ring_every), shuffle(shuffle) {}
+            ggml_type type_K = GGML_TYPE_Q8_0, ggml_type type_V = GGML_TYPE_Q4_0, int ring_every = 0, bool shuffle = true,
+            int64_t mask_cols = 0, bool paged = true)
+        : hs(hs), nh(nh), nr(nr), kv(kv), nb(nb), type_K(type_K), type_V(type_V), ring_every(ring_every), shuffle(shuffle),
+          mask_cols(mask_cols), paged(paged) {}
 
     int64_t n_pages() const { return kv / page; }
     int64_t pool_rows() const { return (n_pages() + 3) * page; }
@@ -9419,21 +9431,22 @@ struct test_flash_attn_ext_paged : public test_case {
         ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb, nh*nr, 1);
         ggml_set_name(q, "q");
 
-        ggml_tensor * k = heads(type_K, pool_rows(), "k_pool");
-        ggml_tensor * v = heads(type_V, pool_rows(), "v_pool");
+        ggml_tensor * k = heads(type_K, paged ? pool_rows() : kv, "k_pool");
+        ggml_tensor * v = heads(type_V, paged ? pool_rows() : kv, "v_pool");
 
-        ggml_tensor * rk = ring_every ? heads(type_K, (n_ring() + 1) * page, "k_ring") : nullptr;
-        ggml_tensor * rv = ring_every ? heads(type_V, (n_ring() + 1) * page, "v_ring") : nullptr;
+        ggml_tensor * rk = paged && ring_every ? heads(type_K, (n_ring() + 1) * page, "k_ring") : nullptr;
+        ggml_tensor * rv = paged && ring_every ? heads(type_V, (n_ring() + 1) * page, "v_ring") : nullptr;
 
-        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, 1);
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, mask_cols ? mask_cols : kv, nb, 1, 1);
         ggml_set_name(m, "m");
 
-        ggml_tensor * pages = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_pages(), 2);
-        ggml_set_name(pages, "pages");
-
         ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(hs), 0.0f, 0.0f);
-        ggml_flash_attn_ext_set_pages(out, pages, 1, page, rk, rv);
-        if (nb > decode_max_tokens) {
+        if (paged) {
+            ggml_tensor * pages = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_pages(), 2);
+            ggml_set_name(pages, "pages");
+            ggml_flash_attn_ext_set_pages(out, pages, 1, page, rk, rv);
+        }
+        if (paged && nb > decode_max_tokens) {
             const std::vector<int32_t> tab = table();
             run_list.clear();
             for (int32_t p = 0; p < (int32_t) n_pages(); ++p) {
@@ -10732,6 +10745,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
             test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 3));
         }
+    }
+    // narrow masks (the last mask_cols columns; llama's compact causal mask): paged and contiguous K/V, decode, row-tile
+    // and prefill shapes, aligned and unaligned widths, the start column at a chunked prefill part boundary (6144)
+    for (int kv : { 1024, 8192, 32768, }) {
+        for (int nb : { 1, 4, 8, 17, 96, 97, 512, }) {
+            if (kv == 32768 && nb > 96) {
+                continue;
+            }
+            for (int64_t cols : { (int64_t) GGML_PAD(nb + 255, 256), (int64_t) 300, }) {
+                for (bool paged : { true, false, }) {
+                    test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, paged ? 3 : 0, true, cols, paged));
+                }
+            }
+        }
+    }
+    for (bool paged : { true, false, }) {
+        test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, 8192, 512, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, paged ? 3 : 0, true, 2048, paged));
     }
     for (int kv : { 256, 1024, 8192, 32768, }) {
         for (int nb : { 1, 2, 3, 4, 5, 6, 8, }) {

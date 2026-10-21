@@ -2490,6 +2490,9 @@ extern "C" {
     //   n_head % ne32      == 0
     //   ne3    % ne33      == 0
     //
+    // A mask with fewer than n_kv columns covers the last mask->ne[0] K/V rows; the rows before them are visible (as a
+    // mask value of 0). Supported by the CPU and CUDA/HIP backends.
+    //
     GGML_API struct ggml_tensor * ggml_flash_attn_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -2519,10 +2522,10 @@ extern "C" {
             struct ggml_tensor * sinks);
 
     // Paged K/V: k and v hold a pool of pages of page_size rows ([n_embd, n_pool_rows, n_head_kv, 1]), and the attended
-    // sequence is pages->ne[0]*page_size rows long (the mask's ne[0]). pages (I32 [n_pages, n_tables]) holds page tables,
-    // of which row `table` is used (e.g. one table per layer in one input). In it, entry i >= 0 is the pool page that
-    // holds logical page i, and entry i < 0 means logical page i is page -1 - entry of ring_k/ring_v (same row layout as
-    // k/v). ring_k and ring_v may be NULL if no entry is negative.
+    // sequence is pages->ne[0]*page_size rows long (n_kv for the mask). pages (I32 [n_pages, n_tables]) holds page
+    // tables, of which row `table` is used (e.g. one table per layer in one input). In it, entry i >= 0 is the pool page
+    // that holds logical page i, and entry i < 0 means logical page i is page -1 - entry of ring_k/ring_v (same row
+    // layout as k/v). ring_k and ring_v may be NULL if no entry is negative.
     GGML_API void ggml_flash_attn_ext_set_pages(
             struct ggml_tensor * a,
             struct ggml_tensor * pages,
