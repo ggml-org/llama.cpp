@@ -1308,6 +1308,7 @@ void ggml_compute_forward_mul_mat(
 
     // If tiled is supported, it will execute the full op here and we return
     if (ggml_compute_forward_mul_mat_tiled(params, dst)) {
+        ggml_compute_forward_mul_mat_scale(params, dst);
         return;
     }
 

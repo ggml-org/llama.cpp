@@ -11185,6 +11185,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (int scale_gran : {1, 2}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 1, 1, false, 32, 4, 32, 1.0f, 0, false, scale_gran));
+        for (int64_t n : {1, 8}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 32, n, 256, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 0, 0, 0, scale_gran));
+        }
     }
 
     // FP8 weight-scale coverage (Qwen3.5-35B-A3B-FP8 shapes): dense per-channel + MoE per-channel-per-expert
