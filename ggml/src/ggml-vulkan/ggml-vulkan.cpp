@@ -15622,10 +15622,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
     const vk_device& device = ggml_vk_get_device(ctx->device);
 
-    if (ggml_get_src_scale(op, 0)) {
-        return false;
-    }
-
     const bool uses_bda = (op->op == GGML_OP_IM2COL || op->op == GGML_OP_IM2COL_3D) &&
                           device->shader_int64 && device->buffer_device_address;
 
@@ -15703,6 +15699,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_MUL_MAT_ID:
             {
                 ggml_type src0_type = op->src[0]->type;
+                // matmul paths bind these at their raw offset
+                for (const ggml_tensor * t : std::initializer_list<const ggml_tensor *>{op->src[0], op->src[1], ggml_get_src_scale(op, 0)}) {
+                    if (t && (vk_tensor_offset(t) + t->view_offs) % device->properties.limits.minStorageBufferOffsetAlignment != 0) {
+                        return false;
+                    }
+                }
                 if (op->op == GGML_OP_MUL_MAT_ID) {
                     if (!ggml_vk_use_mul_mat_vec_id(op)) {
                         const ggml_tensor * ids = op->src[2];
