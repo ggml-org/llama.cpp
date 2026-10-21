@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { ChevronDown } from '@lucide/svelte';
 	import { DropdownMenuSearchable, ModelsSelectorList } from '$lib/components/app';
-	import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { modelsStore } from '$lib/stores';
+	import { filterModelOptions, groupModelOptions } from '$lib/utils';
 
 	interface Props {
 		id: string;
@@ -19,11 +19,7 @@
 	let searchTerm = $state('');
 
 	let filteredOptions = $derived(filterModelOptions(modelsStore.models, searchTerm));
-	let groups = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (model) =>
-			modelsStore.isModelLoaded(model)
-		)
-	);
+	let groups = $derived(groupModelOptions(filteredOptions));
 	// The stored value survives a model leaving the router list, so the raw
 	// id is shown when no option matches it.
 	let triggerLabel = $derived(
