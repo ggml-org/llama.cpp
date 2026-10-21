@@ -284,8 +284,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
         if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
-            cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            cur  = build_out_rows( cur, inp_out_ids);
+            inpL = build_out_rows(inpL, inp_out_ids);
         }
         cur = build_norm(cur,
                 model.layers[il].attn_post_norm, nullptr,
@@ -384,7 +384,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
             // TODO @ngxson : improve this
             if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
-                inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
+                inp_this_layer = build_out_rows(inp_this_layer, inp_out_ids);
             }
 
             cur = ggml_mul(ctx0, cur, inp_this_layer);
@@ -422,14 +422,14 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     res->t_h_nextn = cur;
 
     if (crop_after_nextn(inp_out_ids)) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        cur = build_out_rows(cur, inp_out_ids);
     }
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur, model.output_s, GGML_TYPE_F32);
 
     if (hparams.f_final_logit_softcapping) {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
@@ -528,7 +528,10 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
     inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
     cb(inp_per_layer, "inp_per_layer", -1);
 
-    // permute to shape: [n_embd_per_layer, n_tokens, n_layer]
-    inp_per_layer = ggml_cont(ctx0, ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3));
+    // permute to shape: [n_embd_per_layer, n_tokens, n_layer], in the activation type
+    inp_per_layer = ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3);
+    inp_per_layer = inp_per_layer->type == cparams.act_type
+        ? ggml_cont(ctx0, inp_per_layer)
+        : ggml_cast(ctx0, inp_per_layer, cparams.act_type);
     return inp_per_layer;
 }

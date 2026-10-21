@@ -96,8 +96,8 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = build_out_rows(  cur, inp_out_ids);
+            inpSA = build_out_rows(inpSA, inp_out_ids);
         }
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
@@ -134,7 +134,7 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur, model.output_s, GGML_TYPE_F32);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

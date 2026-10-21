@@ -56,6 +56,7 @@ test parameters:
   -ub, --ubatch-size <n>                    (default: 512)
   -ctk, --cache-type-k <t>                  (default: f16)
   -ctv, --cache-type-v <t>                  (default: f16)
+  -at, --act-type <t>                       (default: f32)
   -t, --threads <n>                         (default: system dependent)
   -C, --cpu-mask <hex,hex>                  (default: 0x0)
   --cpu-strict <0|1>                        (default: 0)

@@ -3388,21 +3388,38 @@ static inline bool ggml_can_mul_mat(const struct ggml_tensor * t0, const struct 
            (t1->ne[3]%t0->ne[3] == 0);
 }
 
-struct ggml_tensor * ggml_mul_mat(
+static struct ggml_tensor * ggml_mul_mat_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * b) {
+        struct ggml_tensor  * b,
+        enum   ggml_type      type) {
     GGML_ASSERT(ggml_can_mul_mat(a, b));
     GGML_ASSERT(!ggml_is_transposed(a));
+    GGML_ASSERT(type == GGML_TYPE_F32 || type == GGML_TYPE_F16);
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, type, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
     result->src[1] = b;
 
     return result;
+}
+
+struct ggml_tensor * ggml_mul_mat(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    return ggml_mul_mat_impl(ctx, a, b, GGML_TYPE_F32);
+}
+
+struct ggml_tensor * ggml_mul_mat_cast(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        enum   ggml_type      type) {
+    return ggml_mul_mat_impl(ctx, a, b, type);
 }
 
 void ggml_mul_mat_set_prec(
@@ -3441,13 +3458,15 @@ void ggml_mul_mat_set_hint(
 
     an id of -1 skips the slot: no matrix is selected, c[:,e,t] is set to zero
 */
-struct ggml_tensor * ggml_mul_mat_id(
+static struct ggml_tensor * ggml_mul_mat_id_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * as,
         struct ggml_tensor  * b,
-        struct ggml_tensor  * ids) {
+        struct ggml_tensor  * ids,
+        enum   ggml_type      type) {
     GGML_ASSERT(!ggml_is_transposed(as));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(type == GGML_TYPE_F32 || type == GGML_TYPE_F16);
 
     GGML_ASSERT(as->ne[3] == 1); // as is 3d (one matrix per expert)
     GGML_ASSERT(b->ne[3] == 1); // b is 3d
@@ -3457,7 +3476,7 @@ struct ggml_tensor * ggml_mul_mat_id(
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0); // can broadcast
 
     const int64_t ne[4] = { as->ne[1], ids->ne[0], b->ne[2], 1 };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, type, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT_ID;
     result->src[0] = as;
@@ -3465,6 +3484,23 @@ struct ggml_tensor * ggml_mul_mat_id(
     result->src[2] = ids;
 
     return result;
+}
+
+struct ggml_tensor * ggml_mul_mat_id(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * as,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * ids) {
+    return ggml_mul_mat_id_impl(ctx, as, b, ids, GGML_TYPE_F32);
+}
+
+struct ggml_tensor * ggml_mul_mat_id_cast(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * as,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * ids,
+        enum   ggml_type      type) {
+    return ggml_mul_mat_id_impl(ctx, as, b, ids, type);
 }
 
 // ggml_out_prod
@@ -4003,20 +4039,16 @@ struct ggml_tensor * ggml_transpose(
 
 // ggml_get_rows
 
-struct ggml_tensor * ggml_get_rows(
+static struct ggml_tensor * ggml_get_rows_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * b) {
+        struct ggml_tensor  * b,
+        enum   ggml_type      type) {
     GGML_ASSERT(a->ne[2] == b->ne[1]);
     GGML_ASSERT(a->ne[3] == b->ne[2]);
     GGML_ASSERT(b->ne[3] == 1);
     GGML_ASSERT(b->type == GGML_TYPE_I32);
 
-    // TODO: implement non F32 return
-    enum ggml_type type = GGML_TYPE_F32;
-    if (a->type == GGML_TYPE_I32) {
-        type = a->type;
-    }
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, a->ne[0], b->ne[0], b->ne[1], b->ne[2]);
 
     result->op     = GGML_OP_GET_ROWS;
@@ -4024,6 +4056,23 @@ struct ggml_tensor * ggml_get_rows(
     result->src[1] = b;
 
     return result;
+}
+
+struct ggml_tensor * ggml_get_rows(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    return ggml_get_rows_impl(ctx, a, b, a->type == GGML_TYPE_I32 ? GGML_TYPE_I32 : GGML_TYPE_F32);
+}
+
+struct ggml_tensor * ggml_get_rows_cast(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        enum   ggml_type      type) {
+    GGML_ASSERT(a->type != GGML_TYPE_I32);
+    GGML_ASSERT(type == GGML_TYPE_F32 || type == GGML_TYPE_F16);
+    return ggml_get_rows_impl(ctx, a, b, type);
 }
 
 // ggml_get_rows_back
@@ -5547,7 +5596,7 @@ struct ggml_tensor * ggml_arange(
 
 // ggml_flash_attn_ext
 
-struct ggml_tensor * ggml_flash_attn_ext(
+static struct ggml_tensor * ggml_flash_attn_ext_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * q,
         struct ggml_tensor  * k,
@@ -5555,8 +5604,10 @@ struct ggml_tensor * ggml_flash_attn_ext(
         struct ggml_tensor  * mask,
         float                 scale,
         float                 max_bias,
-        float                 logit_softcap) {
+        float                 logit_softcap,
+        enum   ggml_type      type) {
     GGML_ASSERT(ggml_can_mul_mat(k, q));
+    GGML_ASSERT(type == GGML_TYPE_F32 || type == GGML_TYPE_F16);
     // TODO: check if vT can be multiplied by (k*qT)
 
     GGML_ASSERT(q->ne[3] == k->ne[3]);
@@ -5577,7 +5628,7 @@ struct ggml_tensor * ggml_flash_attn_ext(
 
     // permute(0, 2, 1, 3)
     int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, type, 4, ne);
 
     float params[] = { scale, max_bias, logit_softcap };
     ggml_set_op_params(result, params, sizeof(params));
@@ -5591,6 +5642,30 @@ struct ggml_tensor * ggml_flash_attn_ext(
     return result;
 }
 
+struct ggml_tensor * ggml_flash_attn_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * mask,
+        float                 scale,
+        float                 max_bias,
+        float                 logit_softcap) {
+    return ggml_flash_attn_ext_impl(ctx, q, k, v, mask, scale, max_bias, logit_softcap, GGML_TYPE_F32);
+}
+
+struct ggml_tensor * ggml_flash_attn_ext_cast(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * mask,
+        float                 scale,
+        float                 max_bias,
+        float                 logit_softcap,
+        enum   ggml_type      type) {
+    return ggml_flash_attn_ext_impl(ctx, q, k, v, mask, scale, max_bias, logit_softcap, type);
+}
 
 void ggml_flash_attn_ext_set_prec(
         struct ggml_tensor * a,

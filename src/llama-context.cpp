@@ -369,6 +369,7 @@ llama_context::llama_context(
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
+    cparams.act_type       = params.type_act;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -410,6 +411,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
     LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
     LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
+    LLAMA_LOG_INFO("%s: act_type              = %s\n",   __func__, ggml_type_name(cparams.act_type));
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
@@ -606,6 +608,25 @@ llama_context::~llama_context() {
     ggml_opt_free(opt_ctx);
 }
 
+// the architectures whose graphs have been checked with F16 activations
+// TODO: add more architectures after checking them
+static bool llama_arch_supports_act_f16(llm_arch arch) {
+    switch (arch) {
+        case LLM_ARCH_LLAMA:
+        case LLM_ARCH_QWEN2:
+        case LLM_ARCH_QWEN2VL:
+        case LLM_ARCH_QWEN3:
+        case LLM_ARCH_QWEN3VL:
+        case LLM_ARCH_PHI3:
+        case LLM_ARCH_GEMMA3:
+        case LLM_ARCH_GEMMA3N:
+        case LLM_ARCH_GEMMA4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs) {
     const char * func = __func__;
     auto resolve = [&](const llm_fused_op_probe & probe, bool & enabled) {
@@ -771,6 +792,21 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
     resolve_fused_ops(mctx.get(), n_seqs);
+
+    if (cparams.act_type != GGML_TYPE_F32) {
+        if (!llama_arch_supports_act_f16(model.arch)) {
+            throw std::runtime_error(format("activation type %s is not supported for architecture %s",
+                    ggml_type_name(cparams.act_type), llm_arch_name(model.arch)));
+        }
+        // other backends do not check the result type in supports_op yet
+        for (ggml_backend_t backend : backend_ptrs) {
+            const char * name = ggml_backend_dev_name(ggml_backend_get_device(backend));
+            if (strcmp(name, "CPU") != 0) {
+                throw std::runtime_error(format("activation type %s is not supported with the %s backend",
+                        ggml_type_name(cparams.act_type), name));
+            }
+        }
+    }
 
     // reserve worst-case graph
     int n_splits_pp        = -1;
@@ -2067,6 +2103,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits.data != nullptr);
+            GGML_ASSERT(t_logits->type == GGML_TYPE_F32);
 
             float * logits_out = logits.data + n_outputs_prev*n_vocab;
 
@@ -2081,6 +2118,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         if (embd.data && t_embd && n_outputs > 0) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
+            GGML_ASSERT(t_embd->type == GGML_TYPE_F32);
 
             switch (cparams.pooling_type) {
                 case LLAMA_POOLING_TYPE_NONE:
@@ -2636,6 +2674,36 @@ static void ubatch_prepare_reserve(
     }
 }
 
+// not every backend implements every op with non-F32 activations: fail with the node instead of
+// leaving the scheduler without a backend for it
+static void llama_check_act_type_support(ggml_cgraph * gf, const std::vector<ggml_backend_t> & backends, ggml_type act_type) {
+    for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+        const ggml_tensor * node = ggml_graph_node(gf, i);
+        switch (node->op) {
+            case GGML_OP_NONE:
+            case GGML_OP_VIEW:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_PERMUTE:
+            case GGML_OP_TRANSPOSE:
+                continue;
+            default:
+                break;
+        }
+
+        bool supported = false;
+        for (ggml_backend_t backend : backends) {
+            if (ggml_backend_supports_op(backend, node)) {
+                supported = true;
+                break;
+            }
+        }
+        if (!supported) {
+            throw std::runtime_error(format("activation type %s: no backend supports node '%s' (%s, type %s)",
+                    ggml_type_name(act_type), node->name, ggml_op_desc(node), ggml_type_name(node->type)));
+        }
+    }
+}
+
 ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
@@ -2683,6 +2751,10 @@ ggml_cgraph * llama_context::graph_reserve(
 
     this->n_input_tensors = llama_graph_n_input_tensors(gf);
     this->n_outputs = save_n_outputs;
+
+    if (cparams.act_type != GGML_TYPE_F32) {
+        llama_check_act_type_support(gf, backend_ptrs, cparams.act_type);
+    }
 
     // initialize scheduler with the specified graph
     if (split_only) {
@@ -4019,6 +4091,7 @@ llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.type_act                    =*/ GGML_TYPE_F32,
         /*.moe_cache_size              =*/ 0,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
@@ -4109,6 +4182,11 @@ llama_context * llama_init_from_model(
                 return nullptr;
             }
         }
+    }
+
+    if (params.type_act != GGML_TYPE_F32 && params.type_act != GGML_TYPE_F16) {
+        LLAMA_LOG_ERROR("%s: unsupported activation type %s (supported: f32, f16)\n", __func__, ggml_type_name(params.type_act));
+        return nullptr;
     }
 
     if (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED &&

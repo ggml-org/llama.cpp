@@ -1496,6 +1496,13 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // same as ggml_mul_mat, with the result stored as type (F32 or F16)
+    GGML_API struct ggml_tensor * ggml_mul_mat_cast(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            enum   ggml_type      type);
+
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)
     GGML_DEPRECATED(GGML_API void ggml_mul_mat_set_prec(
@@ -1520,6 +1527,14 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    // same as ggml_mul_mat_id, with the result stored as type (F32 or F16)
+    GGML_API struct ggml_tensor * ggml_mul_mat_id_cast(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * as,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            enum   ggml_type      type);
 
     // A: m columns, n rows,
     // B: p columns, n rows,
@@ -1746,6 +1761,13 @@ extern "C" {
             struct ggml_tensor  * a,  // data
             struct ggml_tensor  * b); // row indices
 
+    // same as ggml_get_rows, with the result stored as type (F32 or F16)
+    GGML_API struct ggml_tensor * ggml_get_rows_cast(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // data
+            struct ggml_tensor  * b,  // row indices
+            enum   ggml_type      type);
+
     GGML_API struct ggml_tensor * ggml_get_rows_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,  // gradients of ggml_get_rows result
@@ -1753,7 +1775,7 @@ extern "C" {
             struct ggml_tensor  * c); // data for ggml_get_rows, only used for its shape
 
     // a TD  [n_embd, ne1,    ne2,    ne3]
-    // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3
+    // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3, TS is F32 or F16
     // c I64 [n_rows, ne11,   ne12,   1]    | c[i] in [0, ne1)
     //
     // undefined behavior if destination rows overlap
@@ -2511,6 +2533,18 @@ extern "C" {
             float                 scale,
             float                 max_bias,
             float                 logit_softcap);
+
+    // same as ggml_flash_attn_ext, with the result stored as type (F32 or F16)
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_cast(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            float                 scale,
+            float                 max_bias,
+            float                 logit_softcap,
+            enum   ggml_type      type);
 
     GGML_DEPRECATED(GGML_API void ggml_flash_attn_ext_set_prec(
             struct ggml_tensor * a,

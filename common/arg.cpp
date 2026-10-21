@@ -330,6 +330,28 @@ static std::string get_all_kv_cache_types() {
     return msg.str();
 }
 
+const std::vector<ggml_type> act_types = {
+    GGML_TYPE_F32,
+    GGML_TYPE_F16,
+};
+
+static ggml_type act_type_from_str(const std::string & s) {
+    for (const auto & type : act_types) {
+        if (ggml_type_name(type) == s) {
+            return type;
+        }
+    }
+    throw std::runtime_error("Unsupported activation type: " + s);
+}
+
+static std::string get_all_act_types() {
+    std::ostringstream msg;
+    for (const auto & type : act_types) {
+        msg << ggml_type_name(type) << (&type == &act_types.back() ? "" : ", ");
+    }
+    return msg.str();
+}
+
 static bool parse_bool_value(const std::string & value) {
     if (is_truthy(value)) {
         return true;
@@ -2471,6 +2493,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.cache_type_v = kv_cache_type_from_str(value);
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
+    add_opt(common_arg(
+        {"-at", "--act-type"}, "TYPE",
+        string_format(
+            "data type of the activations in the compute graph [EXPERIMENTAL]\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_act_types().c_str(),
+            ggml_type_name(params.act_type)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.act_type = act_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_ACT_TYPE"));
     add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
