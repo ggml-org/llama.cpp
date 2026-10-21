@@ -2,6 +2,8 @@
 #include "common.cuh"
 #include "ggml-cpp.h"
 
+#include <climits>
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -77,8 +79,6 @@ bool ggml_cuda_get_tensor_n(int device,
     GGML_UNUSED(n_tensors);
     return false;
 #else
-    // Limit descriptor storage per batch, not the payload or registered CPU span.
-    constexpr size_t max_copies = 1024 * 1024;
     constexpr size_t tile_bytes = 64 * 1024;
     // Collect CPU destination ranges and count the required copy descriptors.
     std::vector<std::pair<size_t, size_t>> ranges;
@@ -93,10 +93,19 @@ bool ggml_cuda_get_tensor_n(int device,
         }
         ranges.emplace_back(data_offsets[i], data_offsets[i] + sizes[i]);
         const size_t count = sizes[i] / tile_bytes + (sizes[i] % tile_bytes != 0);
-        tiles += std::min(count, max_copies - tiles);
+        if (count > SIZE_MAX / sizeof(ggml_cuda_batch_get_descriptor) - tiles) {
+            return false;
+        }
+        tiles += count;
     }
     if (ranges.empty()) {
         return true;
+    }
+    const int threads = 256;
+    const int warps = threads / ggml_cuda_info().devices[device].warp_size;
+    const size_t blocks = tiles / warps + (tiles % warps != 0);
+    if (blocks > INT_MAX) {
+        return false;
     }
     std::sort(ranges.begin(), ranges.end());
     for (size_t i = 1; i < ranges.size(); ++i) {
@@ -148,35 +157,22 @@ bool ggml_cuda_get_tensor_n(int device,
     }
     auto * copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(host_descriptors.get()));
     auto * device_copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(descriptors.get()));
-    size_t index = 0;
-    size_t consumed = 0;
-    // Fill descriptors in batches, splitting reads into tiles of at most 64 KiB.
-    while (index < n_tensors) {
-        size_t count = 0;
-        while (index < n_tensors && count < tiles) {
-            const size_t size = std::min(sizes[index] - consumed, tile_bytes);
-            if (size) {
-                copies[count++] = {(const unsigned char *) tensors[index]->data + offsets[index] + consumed,
-                        destination + (base + data_offsets[index] - begin) + consumed, size};
-            }
-            consumed += size;
-            if (consumed == sizes[index]) {
-                ++index;
-                consumed = 0;
-            }
-        }
-        if (count) {
-            // Upload this batch's descriptors, then launch the kernel to copy payload bytes into mapped CPU memory.
-            CUDA_CHECK(cudaMemcpyAsync(device_copies, copies, count * sizeof(copies[0]), cudaMemcpyHostToDevice, cudaStreamPerThread));
-            const int threads = 256;
-            const int warp = ggml_cuda_info().devices[device].warp_size;
-            const unsigned int blocks = (unsigned int) ((count + threads / warp - 1) / (threads / warp));
-            ggml_cuda_batch_get_kernel<<<blocks, threads, 0, cudaStreamPerThread>>>(device_copies, count);
-            CUDA_CHECK(cudaGetLastError());
-            // Wait for GPU writes before reusing descriptors or releasing the CPU mapping.
-            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    size_t count = 0;
+    // Fill all descriptors, splitting reads into tiles of at most 64 KiB.
+    for (size_t i = 0; i < n_tensors; ++i) {
+        for (size_t pos = 0; pos < sizes[i]; ) {
+            const size_t size = std::min(sizes[i] - pos, tile_bytes);
+            copies[count++] = {(const unsigned char *) tensors[i]->data + offsets[i] + pos,
+                    destination + (base + data_offsets[i] - begin) + pos, size};
+            pos += size;
         }
     }
+    // Upload descriptors, then launch the kernel to copy payload bytes into mapped CPU memory.
+    CUDA_CHECK(cudaMemcpyAsync(device_copies, copies, bytes, cudaMemcpyHostToDevice, cudaStreamPerThread));
+    ggml_cuda_batch_get_kernel<<<(unsigned int) blocks, threads, 0, cudaStreamPerThread>>>(device_copies, count);
+    CUDA_CHECK(cudaGetLastError());
+    // Wait for GPU writes before releasing the CPU mapping and descriptor buffers.
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
     return true;
 #endif
 }
