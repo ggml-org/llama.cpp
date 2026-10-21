@@ -562,7 +562,9 @@ void ggml_compute_forward_dup(
             } break;
         case GGML_TYPE_F8_E4M3:
             {
-                if (dst->type == GGML_TYPE_F32) ggml_compute_forward_dup_flt<ggml_fp8_e4m3_t, float>(params, dst);
+                /**/ if (dst->type == GGML_TYPE_F16)  ggml_compute_forward_dup_flt<ggml_fp8_e4m3_t, ggml_fp16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_BF16) ggml_compute_forward_dup_flt<ggml_fp8_e4m3_t, ggml_bf16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_F32)  ggml_compute_forward_dup_flt<ggml_fp8_e4m3_t, float      >(params, dst);
                 else GGML_ABORT("not implemented");
             } break;
         case GGML_TYPE_I32:
@@ -615,6 +617,7 @@ static void ggml_compute_forward_add_q_f32(
 
     GGML_ASSERT(ggml_is_quantized(src0->type) || src0->type == GGML_TYPE_F8_E4M3);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(ne00 % ggml_blck_size(type) == 0);
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -643,8 +646,6 @@ static void ggml_compute_forward_add_q_f32(
         void  * src0_row = (void *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
         float * src1_row = (float *)((char *) src1->data + (i11*nb11 + i12*nb12 + i13*nb13));
         void  * dst_row  = (void *) ((char *)  dst->data + ( i1*nb1  +  i2*nb2  +  i3*nb3));
-
-        assert(ne00 % 32 == 0);
 
         // unquantize row from src0 to temp buffer
         dequantize_row_q(src0_row, wdata, ne00);

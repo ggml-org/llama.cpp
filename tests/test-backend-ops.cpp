@@ -10744,9 +10744,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_cpy(type_src, GGML_TYPE_F8_E4M3, {32, 2, 3, 4}, {16, 4, 3, 4}, {1, 0, 2, 3}, {0, 2, 1, 3}));
     }
 
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, {32, 2, 3, 4}, {-1,-1,-1,-1}, {0, 0, 0, 0}, {0, 0, 0, 0}, false, {64, 2, 3, 4}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, {32, 2, 3, 4}, {-1,-1,-1,-1}, {1, 0, 2, 3}, {1, 0, 2, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, {32, 2, 3, 4}, {16, 4, 3, 4}, {1, 0, 2, 3}, {0, 2, 1, 3}));
+    for (ggml_type type_dst : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        test_cases.emplace_back(new test_cpy(GGML_TYPE_F8_E4M3, type_dst, {33, 2, 3, 4}));
+        test_cases.emplace_back(new test_cpy(GGML_TYPE_F8_E4M3, type_dst, {32, 2, 3, 4}, {-1,-1,-1,-1}, {0, 0, 0, 0}, {0, 0, 0, 0}, false, {64, 2, 3, 4}));
+        test_cases.emplace_back(new test_cpy(GGML_TYPE_F8_E4M3, type_dst, {32, 2, 3, 4}, {-1,-1,-1,-1}, {1, 0, 2, 3}, {1, 0, 2, 3}));
+        test_cases.emplace_back(new test_cpy(GGML_TYPE_F8_E4M3, type_dst, {32, 2, 3, 4}, {16, 4, 3, 4}, {1, 0, 2, 3}, {0, 2, 1, 3}));
+    }
 
     // quant block count not a multiple of the kernel block size
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q4_0, {96, 1, 1, 1}));
@@ -10877,6 +10880,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         add_test_bin_bcast(type, {128, 1, 8, 1}, {1, 4, 1, 1});
         //add_test_bin_bcast(type, {3, 3, 2560, 1280}, {1, 1, 1, 1});
         //add_test_bin_bcast(type, {3, 3, 2560, 1280}, {2, 1, 1, 1});
+    }
+
+    for (auto op : {ggml_add, ggml_add_inplace}) {
+        for (int64_t n : {1, 7, 33}) {
+            test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F8_E4M3, {n, 5, 2, 1}, {1, 1, 1, 1}, 1, false, false, GGML_TYPE_F32));
+        }
     }
 
     for (auto op : {ggml_add, ggml_mul}) {
