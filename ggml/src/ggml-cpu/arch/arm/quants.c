@@ -921,8 +921,8 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 #if defined(__ARM_FEATURE_SVE)
-// qh is uint8_t qh[4] (32 bits). Do not use this loader for VL >= 512:
-// it reads past qh.
+// Values beyond the first 32 bits of qh are undefined. Do not use this
+// loader for VL > 1024: it may cause a SEGV.
 static inline svbool_t load_as_svbool(const uint8_t * p) {
 #if defined(__GNUC__) || defined(__clang__)
     if (ggml_cpu_get_sve_cnt() * 8 < 512) {
