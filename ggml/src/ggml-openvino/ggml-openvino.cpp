@@ -2409,6 +2409,10 @@ struct supports_op_tally {
 }  // namespace
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     auto res = ggml_backend_openvino_device_supports_op_impl(dev, op);
     const bool supported = res.is_supported;
     if (!supported) {
