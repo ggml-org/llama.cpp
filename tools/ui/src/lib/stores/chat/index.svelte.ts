@@ -38,6 +38,7 @@ import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	ApiChatMessageData,
+	ChatMessageCompactionTimings,
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	ChatStreamCallbacks,
@@ -312,6 +313,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		this.showErrorDialog(null);
 		this.setChatLoading(convId, true);
+
 		const node = await this.addMessage(
 			MessageRole.USER,
 			'',
@@ -320,7 +322,10 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			undefined,
 			true
 		);
-		const rollbackNode = async () => {
+
+		// An interrupted compaction leaves no summary behind, so the node goes
+		// along with the request instead of lingering empty in the branch.
+		await this.summarizeIntoNode(convId, node, source, async () => {
 			const idx = conversationsStore.findMessageIndex(node.id);
 
 			if (idx >= 0) conversationsStore.removeMessageAtIndex(idx);
@@ -328,95 +333,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			await DatabaseService.deleteMessage(node.id);
 
 			if (node.parent) await conversationsStore.updateCurrentNode(node.parent);
-		};
-		const abortController = this.getOrCreateAbortController(convId);
-		const compactionStreamId = COMPACTION.STREAM_ID_PREFIX + convId;
-		// Model resolution mirrors the request funnel: the selected model
-		// first, then the model the branch was generated with, so router
-		// mode targets the child that owns this conversation's KV cache.
-		const effectiveModel = serverStore.isRouterMode
-			? modelsStore.selectedModelName || getConversationModel(source)
-			: undefined;
-
-		let summary = '';
-
-		try {
-			// The request is the one the chat sends, its options, tools and
-			// message shaping, cut before the preserved steps: the server
-			// reuses the prefix it cached and only the instruction is new.
-			const request = await agenticStore.requestFor(
-				await ChatService.normalizeMessagesForApi(source.slice(0, cut)),
-				{
-					disabledToolCategories: conversationsStore.preferences.getDisabledToolCategories(),
-					disabledTools: conversationsStore.preferences.getDisabledTools()
-				}
-			);
-			const configValue = settingsStore.config;
-			const compactionPrompt =
-				typeof configValue.compactionPrompt === 'string' && configValue.compactionPrompt.trim()
-					? configValue.compactionPrompt
-					: COMPACTION.DEFAULT_PROMPT;
-
-			await ChatService.sendMessage(
-				[...request.messages, { content: compactionPrompt, role: MessageRole.USER }],
-				{
-					...this.getApiOptions(),
-					...(effectiveModel ? { model: effectiveModel } : {}),
-					onChunk: (chunk: string) => {
-						summary += chunk;
-
-						if (conversationsStore.activeConversation?.id === convId) {
-							const idx = conversationsStore.findMessageIndex(node.id);
-
-							if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { content: summary });
-						}
-					},
-					tools: request.tools
-				},
-				// Registered under the prefixed identity: the visibility kick
-				// and byte-offset resume protect the summary through tab
-				// switches, while the reload probe for the bare conversation
-				// id never reattaches it as a chat turn.
-				compactionStreamId,
-				abortController.signal
-			);
-
-			if (!summary.trim()) {
-				await rollbackNode();
-
-				return;
-			}
-
-			await DatabaseService.updateMessage(node.id, { content: summary, kept: preserve });
-
-			if (conversationsStore.activeConversation?.id === convId) {
-				const idx = conversationsStore.findMessageIndex(node.id);
-
-				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { kept: preserve });
-			}
-
-			// Re-encoding the reduced prefix is part of the compaction
-			// itself: it rebuilds the server KV cache on the summary and
-			// stamps the true context size on the node for the gauge,
-			// independently of the per-turn pre-fill setting.
-			void this.triggerCompactionPreEncode(convId, node.id, effectiveModel);
-		} catch (error) {
-			await rollbackNode();
-
-			if (isAbortError(error)) {
-				// The server keeps generating a detached summary otherwise.
-				void ChatService.cancelServerStream(compactionStreamId, effectiveModel);
-			} else {
-				console.error('Failed to compact conversation:', error);
-				this.showErrorDialog({
-					message: error instanceof Error ? error.message : 'Unknown error',
-					type: ErrorDialogType.SERVER
-				});
-			}
-		} finally {
-			this.abortControllers.delete(convId);
-			this.setChatLoading(convId, false);
-		}
+		});
 
 		const pending = this.consumePendingMessage(convId);
 
@@ -609,6 +526,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		return this.getChatStreamingState(convId);
 	}
 
+	/** Node id of the summary running for the conv, or null when none runs. */
+	getCompactingNodeId(convId: string): string | null {
+		return this.activity.getCompactingNodeId(convId);
+	}
+
 	async getDeletionInfo(messageId: string): Promise<{
 		totalCount: number;
 		userMessages: number;
@@ -661,6 +583,14 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		return this.activity.isLocal(convId) || this.chatStreamingStates.has(convId);
 	}
 
+	/**
+	 * True while the conv's in-flight run is a compaction summary, which reports
+	 * its own progress on the compaction row.
+	 */
+	isCompacting(convId: string): boolean {
+		return this.activity.isCompacting(convId);
+	}
+
 	isEditing(): boolean {
 		return this.isEditModeActive;
 	}
@@ -696,6 +626,53 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 
 		await this.addMessage(MessageRole.USER, content, MessageType.TEXT, '-1', undefined, true);
+	}
+
+	/**
+	 * Re-runs the summary of an existing compaction node in place. The node
+	 * keeps its position in the branch, so the turns below it stay untouched
+	 * while the summarized context is rewritten; an explicit model re-summarizes
+	 * with that model instead of the configured compaction one.
+	 */
+	async regenerateCompaction(messageId: string, modelOverride?: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		const convId = activeConv.id;
+
+		if (this.isChatLoadingInternal(convId) || agenticStore.isRunning(convId)) return;
+
+		const allMessages = await conversationsStore.getConversationMessages(convId);
+		const node = findMessageById(allMessages, messageId);
+
+		if (!node || node.type !== MessageType.COMPACTION) return;
+
+		// The summary covers the branch above the node: walking the path up to
+		// its parent keeps the old summary from being folded into the new one.
+		const branchPath = node.parent ? [...filterByLeafNodeId(allMessages, node.parent, false)] : [];
+		const source = sliceAtLastCompaction(branchPath);
+
+		if (!this.canCompact(source)) return;
+
+		this.showErrorDialog(null);
+		this.setChatLoading(convId, true);
+
+		const previous = { content: node.content, model: node.model };
+
+		await this.summarizeIntoNode(
+			convId,
+			node,
+			source,
+			async () => {
+				const idx = conversationsStore.findMessageIndex(node.id);
+
+				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, previous);
+
+				await DatabaseService.updateMessage(node.id, previous);
+			},
+			modelOverride
+		);
 	}
 
 	async regenerateMessage(messageId: string): Promise<void> {
@@ -759,6 +736,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.pendingDraftMessage = message;
 		this.pendingDraftFiles = [...files];
 	}
+
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 
@@ -886,7 +864,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			});
 		}
 	}
-
 	setChatLoading(convId: string, loading: boolean): void {
 		if (loading) {
 			this.activity.markLocal(convId);
@@ -1416,6 +1393,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
 		return this.flows.updateMessage(messageId, newContent);
 	}
+
 	private abortRequest(convId?: string): void {
 		if (convId) {
 			const c = this.abortControllers.get(convId);
@@ -1564,6 +1542,164 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	}
 
 	/**
+	 * Streams a fresh summary of `source` into the compaction node and re-stamps
+	 * the reduced context afterwards. `rollback` restores the row when nothing
+	 * usable came back, so an empty or aborted summary never replaces what the
+	 * node already held.
+	 */
+	private async summarizeIntoNode(
+		convId: string,
+		node: DatabaseMessage,
+		source: DatabaseMessage[],
+		rollback: () => Promise<void>,
+		modelOverride?: string
+	): Promise<void> {
+		const abortController = this.getOrCreateAbortController(convId);
+		const compactionStreamId = COMPACTION.STREAM_ID_PREFIX + convId;
+		// Model resolution mirrors the request funnel - the model the row was
+		// re-summarized with, the selected model, then the model the branch was
+		// generated with - so router mode targets the child that owns this
+		// conversation's KV cache.
+		const effectiveModel = serverStore.isRouterMode
+			? modelOverride || modelsStore.selectedModelName || getConversationModel(source)
+			: undefined;
+
+		let summary = '';
+		let summaryModel = node.model;
+		let summaryTimings: ChatMessageCompactionTimings | undefined;
+
+		const writeNode = (updates: Partial<DatabaseMessage>) => {
+			if (conversationsStore.activeConversation?.id !== convId) return;
+
+			const idx = conversationsStore.findMessageIndex(node.id);
+
+			if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
+		};
+
+		// The node is the row that reports this run's progress, so the turns it
+		// summarizes stay quiet for as long as it runs.
+		this.activity.markCompacting(convId, node.id);
+		// Clearing the stored summary first hands the row over to the pending
+		// state, where it reports the prompt progress instead of the stale text.
+		writeNode({ content: '' });
+
+		// The steps the compaction keeps are part of the source the caller
+		// handed over; the summarization itself reads only what lies before
+		// them, so the summary describes the steps the model will still see.
+		const preserve = this.compactionPreserve();
+		const cut = compactionCut(source, preserve);
+
+		if (cut === null) {
+			await rollback();
+
+			return;
+		}
+
+		try {
+			// The request is the one the chat sends, its options, tools and
+			// message shaping, cut before the preserved steps: the server
+			// reuses the prefix it cached and only the instruction is new.
+			const request = await agenticStore.requestFor(
+				await ChatService.normalizeMessagesForApi(source.slice(0, cut)),
+				{
+					disabledToolCategories: conversationsStore.preferences.getDisabledToolCategories(),
+					disabledTools: conversationsStore.preferences.getDisabledTools()
+				}
+			);
+			const configValue = settingsStore.config;
+			const compactionPrompt =
+				typeof configValue.compactionPrompt === 'string' && configValue.compactionPrompt.trim()
+					? configValue.compactionPrompt
+					: COMPACTION.DEFAULT_PROMPT;
+
+			// A model the row was re-summarized with may not be resident: loading it
+			// on demand keeps that swap working, and the status manager surfaces the
+			// failure toast and throws, so the rollback below restores the node.
+			if (modelOverride && !modelsStore.isModelLoaded(modelOverride)) {
+				await modelsStore.status.load(modelOverride);
+			}
+
+			await ChatService.sendMessage(
+				[...request.messages, { content: compactionPrompt, role: MessageRole.USER }],
+				{
+					...this.getApiOptions(),
+					custom: { chat_template_kwargs: { enable_thinking: false } },
+					model: effectiveModel,
+					onChunk: (chunk: string) => {
+						summary += chunk;
+						writeNode({ content: summary });
+					},
+					onModel: (modelName: string) => {
+						summaryModel = modelName;
+						writeNode({ model: modelName });
+					},
+					// The summary streams through the same pipe as a chat turn, which
+					// enables prompt progress on the wire; feeding it to the shared
+					// processing state lets the pending row show the percentage. The
+					// closing event carries the timings the row reports once done.
+					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+						if (timings) summaryTimings = timings;
+
+						this.processing.applyStreamTimings(timings, promptProgress, convId);
+					},
+					stream: true,
+					timings_per_token: true,
+					tools: request.tools
+				},
+				// Registered under the prefixed identity: the visibility kick
+				// and byte-offset resume protect the summary through tab
+				// switches, while the reload probe for the bare conversation
+				// id never reattaches it as a chat turn.
+				compactionStreamId,
+				abortController.signal
+			);
+
+			if (!summary.trim()) {
+				await rollback();
+
+				return;
+			}
+
+			const stored: Partial<DatabaseMessage> = { content: summary, kept: preserve };
+
+			if (summaryModel) stored.model = summaryModel;
+
+			writeNode(stored);
+			await DatabaseService.updateMessage(node.id, stored);
+
+			// Re-encoding the reduced prefix is part of the compaction
+			// itself: it rebuilds the server KV cache on the summary and
+			// stamps the true context size on the node for the gauge,
+			// independently of the per-turn pre-fill setting.
+			void this.triggerCompactionPreEncode(convId, node.id, effectiveModel, summaryTimings);
+		} catch (error) {
+			await rollback();
+
+			if (isAbortError(error)) {
+				// The server keeps generating a detached summary otherwise.
+				void ChatService.cancelServerStream(compactionStreamId, effectiveModel);
+			} else {
+				console.error('Failed to compact conversation:', error);
+				this.showErrorDialog({
+					message: error instanceof Error ? error.message : 'Unknown error',
+					type: ErrorDialogType.SERVER
+				});
+			}
+		} finally {
+			this.abortControllers.delete(convId);
+			// Nothing infers for this conversation anymore: the summarization
+			// progress reported above must not outlive the request, or a
+			// skipped pre-encode would leave the gauge on a live state that
+			// describes the pre-compaction prompt.
+			this.processing.setState(convId, null);
+			this.setChatLoading(convId, false);
+			// Released last: ending it after the loading flag keeps the chat
+			// turns from flashing their own indicator for a tick.
+			this.activity.endCompacting(convId);
+		}
+	}
+
+	/**
 	 * Pre-encodes the compacted branch and stamps the returned prompt
 	 * timings on the compaction node, so the context gauge reflects the
 	 * reduced context as soon as the compaction finishes instead of after
@@ -1572,7 +1708,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	private async triggerCompactionPreEncode(
 		convId: string,
 		nodeId: string,
-		model?: string | null
+		model?: string | null,
+		summaryTimings?: ChatMessageCompactionTimings
 	): Promise<void> {
 		this.cancelPreEncode();
 		this.preEncodeAbortController = new AbortController();
@@ -1603,12 +1740,17 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				return;
 			}
 
-			await DatabaseService.updateMessage(nodeId, { timings });
+			// The row reports both what the summary cost (summaryTimings) and the
+			// size of the context it left behind (timings), so the second is
+			// nested under the first instead of overwriting it.
+			const stamped = summaryTimings ? { ...timings, compaction: summaryTimings } : timings;
+
+			await DatabaseService.updateMessage(nodeId, { timings: stamped });
 
 			if (conversationsStore.activeConversation?.id === convId) {
 				const idx = conversationsStore.findMessageIndex(nodeId);
 
-				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { timings });
+				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { timings: stamped });
 			}
 
 			// Nothing is inferring anymore: clearing the live processing

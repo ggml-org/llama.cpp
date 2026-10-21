@@ -102,6 +102,26 @@ export function canCompactMessages(messages: DatabaseMessage[], preserve: number
 }
 
 /**
+ * The context size the compaction shrank: the timings of the last stamped
+ * message ahead of the node, i.e. what the branch carried when the summary
+ * was requested. Null while nothing ahead of the node is stamped.
+ */
+export function compactionTokensBefore(
+	messages: DatabaseMessage[],
+	node: DatabaseMessage
+): number | null {
+	const nodeIndex = messages.findIndex((m) => m.id === node.id);
+	const timings =
+		nodeIndex > 0 ? lastContextBearingMessage(messages.slice(0, nodeIndex))?.timings : undefined;
+
+	if (!timings) return null;
+
+	const tokens = (timings.prompt_n ?? 0) + (timings.cache_n ?? 0) + (timings.predicted_n ?? 0);
+
+	return tokens > 0 ? tokens : null;
+}
+
+/**
  * Returns the message carrying the current context size of the branch: the
  * latest assistant turn or compaction node holding timings. A compaction
  * node is stamped with the prompt timings of the reduced context by the
