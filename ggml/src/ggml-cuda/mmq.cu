@@ -227,6 +227,25 @@ void ggml_cuda_mul_mat_q(
     }
     GGML_ASSERT(J_best > 0);
 
+    // A weight that fits a few row tiles (the 48-row ssm_alpha/ssm_beta of a gated delta net) gets only a few tiles at
+    // the widest J and leaves most of the GPU idle. On RDNA4 the narrowest tile is then 2-3x faster (512 columns).
+    // Each output still sums its K blocks in the same order, so the result does not change.
+    if (GGML_CUDA_CC_IS_RDNA4(cc) && !ids) {
+        const int nsm = ggml_cuda_info().devices[id].nsm;
+        const ggml_cuda_mmq_config config_best = ggml_cuda_mmq_get_config(src0->type, J_best, fallback, cc, prec_src1);
+        const int64_t ntiles = (ne01 + config_best.I - 1)/config_best.I * ((ne11 + J_best - 1)/J_best) * ne12*ne13;
+        if (4*ntiles < nsm) {
+            for (int J = 8; J < J_best; J += 8) {
+                const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(src0->type, J, fallback, cc, prec_src1);
+                if (config.type != GGML_TYPE_COUNT && mmq_get_nbytes_shared(config, cc) <= smpbo) {
+                    J_best        = J;
+                    nthreads_best = config.nthreads;
+                    break;
+                }
+            }
+        }
+    }
+
     // A tile of size J can read in at most J - 1 extra columns.
     // For simplicity, round up the padding of a full tile to a multiple of the number of bytes that nthreads can load in parallel.
     const size_t src1_load_chunk_size = nthreads_best * sizeof(int);
