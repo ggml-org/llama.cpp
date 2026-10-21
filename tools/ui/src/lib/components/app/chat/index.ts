@@ -412,10 +412,7 @@ export { default as ChatFormPickers } from './ChatForm/ChatFormPickers/ChatFormP
  *
  * @example
  * ```svelte
- * <ChatMessages
- *   messages={activeMessages()}
- *   onUserAction={resetAutoScroll}
- * />
+ * <ChatMessages messages={activeMessages()} onMessagesReady={handleReady} />
  * ```
  */
 export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
@@ -623,7 +620,7 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMes
  *
  * **Architecture:**
  * - Composes ChatMessages, ChatScreenForm, and dialogs
- * - Manages auto-scroll via `createAutoScrollController()` hook
+ * - Follows new content via `createStickToBottom()` while the reader is at the bottom
  * - Handles file upload pipeline (validation → processing → state update)
  * - Integrates with serverStore for loading/error/warning states
  * - Tracks active model for modality validation (vision, audio)

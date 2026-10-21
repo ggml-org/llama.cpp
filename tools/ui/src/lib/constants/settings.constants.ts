@@ -280,7 +280,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
+				help: 'Stop the view from following new content while messages stream, so you control the viewport position yourself.',
 				key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
 				label: 'Disable automatic scroll',
 				type: SettingsFieldType.CHECKBOX
