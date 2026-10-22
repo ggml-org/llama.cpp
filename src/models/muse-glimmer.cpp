@@ -112,7 +112,7 @@ llama_model_muse_glimmer::graph::graph(const llm_graph_params & params)
 
             // SDPA. wo is deferred; the gate goes between attn_out and o_proj.
             cur = build_attn(inp_attn,
-                    NULL, NULL, NULL,
+                    NULL, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -121,7 +121,7 @@ llama_model_muse_glimmer::graph::graph(const llm_graph_params & params)
             cur = ggml_mul(ctx0, cur, gate);
             cb(cur, "attn_gated", il);
 
-            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+            cur = build_lora_mm(model.layers[il].wo, cur);
             cb(cur, "attn_o_proj", il);
         }
 
@@ -143,9 +143,9 @@ llama_model_muse_glimmer::graph::graph(const llm_graph_params & params)
 
         // SwiGLU dense FFN
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   NULL, NULL,
-                model.layers[il].ffn_gate, NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
+                model.layers[il].ffn_up,   NULL,
+                model.layers[il].ffn_gate, NULL,
+                model.layers[il].ffn_down, NULL,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -169,7 +169,7 @@ llama_model_muse_glimmer::graph::graph(const llm_graph_params & params)
     res->t_embd = cur;
 
     // lm_head, followed by output multiplier
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
 
     // Final logit tanh softcap (from gemma3.cpp).
