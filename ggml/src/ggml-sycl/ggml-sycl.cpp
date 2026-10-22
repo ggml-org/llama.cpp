@@ -6912,6 +6912,11 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 return false;
             }
         case GGML_OP_CONV_2D:
+            // WHCN: contiguous [KW,KH,IC,OC] kernel and [W,H,C,N] input
+            // CWHN: channel-fastest input (C fastest) and kernel with OC fastest
+            return (ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1])) ||
+                   (op->src[1]->nb[2] == ggml_type_size(op->src[1]->type) &&
+                    op->src[0]->nb[3] == ggml_type_size(op->src[0]->type));
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_2D:
             return true;
