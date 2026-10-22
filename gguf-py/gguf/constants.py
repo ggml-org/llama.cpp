@@ -6452,6 +6452,7 @@ class VisionProjectorType:
     MINIMAXM3      = "minimax_m3"
     MINICPMV4_6    = "minicpmv4_6"
     MINICPMV4_7    = "minicpmv4_7"
+    MINICPM_OCR_1_0 = "minicpm_ocr_1_0"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
     MIMO_AUDIO     = "mimo_audio"

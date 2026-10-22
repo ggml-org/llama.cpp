@@ -272,3 +272,18 @@ class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
             yield self.format_tensor_name(gguf.MODEL_TENSOR.V_TOK_EMBD_SEP, suffix=""), data_torch[ids]
             return
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+# MiniCPM-OCR 1.0: the 4.6 stack with model_type minicpm_ocr.
+
+@ModelBase.register("MiniCPMOcrForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-OCR-1.0")
+class MiniCPMOCR1_0TextModel(MiniCPMV4_6TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+    no_mtp = True
+
+
+@ModelBase.register("MiniCPMOcrForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-OCR-1.0")
+class MiniCPMOCR1_0VisionModel(MiniCPMV4_6VisionModel):
+    projector_type = gguf.VisionProjectorType.MINICPM_OCR_1_0

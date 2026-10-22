@@ -722,6 +722,7 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
             case PROJECTOR_TYPE_MINICPMV4_7:
+            case PROJECTOR_TYPE_MINICPM_OCR_1_0:
                 {
                     slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
                     tok_ov_img_start  = {lookup_token("<image>")};
@@ -732,7 +733,11 @@ struct mtmd_context {
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
                     use_image_id      = true;
-                    image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
+                    if (clip_get_projector_type(ctx_v) == PROJECTOR_TYPE_MINICPM_OCR_1_0) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpm_ocr_1_0>(ctx_v);
+                    } else {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
+                    }
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
