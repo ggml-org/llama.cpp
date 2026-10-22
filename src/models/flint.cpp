@@ -126,7 +126,7 @@ llama_model_flint::graph::graph(const llm_graph_params & params) :
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, model.layers[il].attn_sinks, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
@@ -142,9 +142,9 @@ llama_model_flint::graph::graph(const llm_graph_params & params) :
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up, NULL, model.layers[il].ffn_up_s,
-                    model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
-                    model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
+                    model.layers[il].ffn_up, NULL,
+                    model.layers[il].ffn_gate, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
@@ -158,18 +158,15 @@ llama_model_flint::graph::graph(const llm_graph_params & params) :
                 LLM_FFN_SILU, hparams.expert_weights_norm,
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
-                il, nullptr, nullptr,
-                model.layers[il].ffn_up_exps_s,
-                model.layers[il].ffn_gate_exps_s,
-                model.layers[il].ffn_down_exps_s);
+                il, nullptr, nullptr);
             cb(moe_out, "ffn_moe_out", il);
 
             {
                 ggml_tensor * ffn_shexp =
                     build_ffn(cur,
-                        model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
-                        model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
-                        model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
+                        model.layers[il].ffn_up_shexp, NULL,
+                        model.layers[il].ffn_gate_shexp, NULL,
+                        model.layers[il].ffn_down_shexp, NULL,
                         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
 
@@ -193,7 +190,7 @@ llama_model_flint::graph::graph(const llm_graph_params & params) :
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

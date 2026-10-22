@@ -192,7 +192,7 @@ llama_model_cohere2moe::graph::graph(const llm_graph_params & params) : llm_grap
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    layer.wo, layer.wo_b, layer.wo_s,
+                    layer.wo, layer.wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
                     1.0f / sqrtf(float(n_embd_head)), il);
         }
@@ -209,9 +209,9 @@ llama_model_cohere2moe::graph::graph(const llm_graph_params & params) : llm_grap
 
         if (layer.ffn_gate_inp == nullptr) {
             cur = build_ffn(ffn_inp,
-                    layer.ffn_up,   nullptr, layer.ffn_up_s,
-                    layer.ffn_gate, nullptr, layer.ffn_gate_s,
-                    layer.ffn_down, nullptr, layer.ffn_down_s,
+                    layer.ffn_up,   nullptr,
+                    layer.ffn_gate, nullptr,
+                    layer.ffn_down, nullptr,
                     nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
@@ -226,17 +226,14 @@ llama_model_cohere2moe::graph::graph(const llm_graph_params & params) : llm_grap
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il,
-                    nullptr, layer.ffn_gate_up_exps,
-                    layer.ffn_up_exps_s,
-                    layer.ffn_gate_exps_s,
-                    layer.ffn_down_exps_s);
+                    nullptr, layer.ffn_gate_up_exps);
             cb(cur, "ffn_moe_out", il);
 
             if (layer.ffn_up_shexp) {
                 ggml_tensor * ffn_shexp = build_ffn(ffn_inp,
-                        layer.ffn_up_shexp,   nullptr, layer.ffn_up_shexp_s,
-                        layer.ffn_gate_shexp, nullptr, layer.ffn_gate_shexp_s,
-                        layer.ffn_down_shexp, nullptr, layer.ffn_down_shexp_s,
+                        layer.ffn_up_shexp,   nullptr,
+                        layer.ffn_gate_shexp, nullptr,
+                        layer.ffn_down_shexp, nullptr,
                         nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
 
@@ -335,7 +332,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llm_graph_params & params) : 
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, /*dim=*/ 0);
     cb(concat, "mtp_concat", il);
 
-    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat);
     cb(cur, "mtp_eh_proj", il);
 
     ggml_tensor * inpL = cur;
@@ -353,7 +350,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llm_graph_params & params) : 
     cb(Vcur, "mtp_Vcur", il);
 
     cur = build_attn(inp_attn,
-            layer.wo, layer.wo_b, layer.wo_s,
+            layer.wo, layer.wo_b,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
             1.0f / sqrtf(float(n_embd_head)), il);
     cb(cur, "mtp_attn_out", il);
@@ -371,17 +368,14 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llm_graph_params & params) : 
             hparams.expert_weights_scale,
             (llama_expert_gating_func_type) hparams.expert_gating_func,
             il,
-            nullptr, layer.ffn_gate_up_exps,
-            layer.ffn_up_exps_s,
-            layer.ffn_gate_exps_s,
-            layer.ffn_down_exps_s);
+            nullptr, layer.ffn_gate_up_exps);
     cb(cur, "mtp_ffn_moe_out", il);
 
     if (layer.ffn_up_shexp) {
         ggml_tensor * ffn_shexp = build_ffn(ffn_inp,
-                layer.ffn_up_shexp,   nullptr, layer.ffn_up_shexp_s,
-                layer.ffn_gate_shexp, nullptr, layer.ffn_gate_shexp_s,
-                layer.ffn_down_shexp, nullptr, layer.ffn_down_shexp_s,
+                layer.ffn_up_shexp,   nullptr,
+                layer.ffn_gate_shexp, nullptr,
+                layer.ffn_down_shexp, nullptr,
                 nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(ffn_shexp, "mtp_ffn_shexp", il);
 
@@ -408,7 +402,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llm_graph_params & params) : 
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     GGML_ASSERT(head_w && "COHERE2MOE MTP: missing LM head (nextn.shared_head_head or model.output)");
-    cur = build_lora_mm(head_w, cur, layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : nullptr);
+    cur = build_lora_mm(head_w, cur);
 
     if (hparams.f_logit_scale) {
         cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
