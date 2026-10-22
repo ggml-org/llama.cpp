@@ -25,6 +25,18 @@ export const DIALOG_SUBMENU_CONTENT = 'w-60';
 export const PANEL_CLOSE_MOBILE_CLASS =
 	'max-md:grid max-md:size-10 max-md:place-items-center max-md:rounded-full max-md:text-muted-foreground max-md:opacity-100 max-md:hover:bg-accent max-md:hover:text-accent-foreground';
 
+/** Shape of a chat tab, shared with the breadcrumb items next to the project tabs. */
+export const TAB_SURFACE_CLASS =
+	'flex h-8 items-center rounded-lg border text-sm whitespace-nowrap backdrop-blur-xl';
+
+/** Tab surface at rest: invisible until hovered. */
+export const TAB_SURFACE_IDLE_CLASS =
+	'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm';
+
+/** Tab surface of the open tab. */
+export const TAB_SURFACE_ACTIVE_CLASS =
+	'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15';
+
 /** Selects the focused chat-form input (either renderer) to restore focus after model actions. */
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';

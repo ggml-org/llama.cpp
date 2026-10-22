@@ -88,9 +88,12 @@
 
 <nav
 	aria-label="Open conversations"
-	class="group sticky pl-1 top-0 z-10 hidden md:block chat-tabs-fade transition-[padding] duration-200 ease-in-out pt-3.25 {uiStore.isSidebarExpanded
-		? CHAT_TABS_MAX_WIDTH.EXPANDED_SIDEBAR
-		: CHAT_TABS_MAX_WIDTH.COLLAPSED_SIDEBAR}"
+	class={[
+		'group sticky pl-1 top-0 z-10 hidden md:block chat-top-fade transition-[padding] duration-200 ease-in-out pt-3.25',
+		uiStore.isSidebarExpanded
+			? CHAT_TABS_MAX_WIDTH.EXPANDED_SIDEBAR
+			: CHAT_TABS_MAX_WIDTH.COLLAPSED_SIDEBAR
+	]}
 >
 	<div class="relative">
 		<ScrollCarousel
@@ -131,15 +134,3 @@
 		></div>
 	</div>
 </nav>
-
-<style>
-	.chat-tabs-fade {
-		background: linear-gradient(
-			to bottom,
-			color-mix(in srgb, var(--background) 100%, transparent) 25%,
-			color-mix(in srgb, var(--background) 80%, transparent) 50%,
-			color-mix(in srgb, var(--background) 40%, transparent) 75%,
-			transparent 100%
-		);
-	}
-</style>

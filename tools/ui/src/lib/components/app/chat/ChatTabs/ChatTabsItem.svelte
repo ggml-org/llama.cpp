@@ -2,7 +2,14 @@
 	import { Loader2, Square, X } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
-	import { ICON_CLASS_SM, ICON_CLASS_XS, UI_DATA_ATTRS } from '$lib/constants';
+	import {
+		ICON_CLASS_SM,
+		ICON_CLASS_XS,
+		TAB_SURFACE_ACTIVE_CLASS,
+		TAB_SURFACE_CLASS,
+		TAB_SURFACE_IDLE_CLASS,
+		UI_DATA_ATTRS
+	} from '$lib/constants';
 	import type { Component } from 'svelte';
 
 	interface Tab {
@@ -59,11 +66,10 @@
 <div
 	{...{ [UI_DATA_ATTRS.ACTIVE_TAB]: isActive ? 'true' : undefined }}
 	class={cn(
-		'relative flex h-8 max-w-52 min-w-0 shrink-0 items-center gap-1 rounded-lg pr-1 text-sm whitespace-nowrap border backdrop-blur-xl first:ml-2',
+		TAB_SURFACE_CLASS,
+		'relative max-w-52 min-w-0 shrink-0 gap-1 pr-1 first:ml-2',
 		isLoading ? 'pl-1' : 'pl-3',
-		isActive
-			? 'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15'
-			: 'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm'
+		isActive ? TAB_SURFACE_ACTIVE_CLASS : TAB_SURFACE_IDLE_CLASS
 	)}
 >
 	<a

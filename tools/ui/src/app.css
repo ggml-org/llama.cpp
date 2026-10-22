@@ -221,6 +221,17 @@
 		scrollbar-width: none;
 	}
 
+	/* Fade at the top edge of the chat, under the tab bar or a sticky header */
+	.chat-top-fade {
+		background: linear-gradient(
+			to bottom,
+			color-mix(in srgb, var(--background) 100%, transparent) 25%,
+			color-mix(in srgb, var(--background) 80%, transparent) 50%,
+			color-mix(in srgb, var(--background) 40%, transparent) 75%,
+			transparent 100%
+		);
+	}
+
 	.shimmer-text {
 		background: linear-gradient(
 			90deg,
