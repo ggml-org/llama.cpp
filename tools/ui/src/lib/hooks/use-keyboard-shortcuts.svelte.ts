@@ -63,7 +63,7 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 				page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
 
 			if (activeId) {
-				void tabsStore.close(activeId, activeId);
+				void tabsStore.close(activeId, true);
 			}
 		}
 

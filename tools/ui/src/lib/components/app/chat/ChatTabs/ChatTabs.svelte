@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ChatTabsItem from './ChatTabsItem.svelte';
 	import ChatTabsNewChatButton from './ChatTabsNewChatButton.svelte';
+	import { SquarePen } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { ScrollCarousel } from '$lib/components/app';
 	import {
@@ -12,30 +13,35 @@
 	} from '$lib/constants';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import { chatStore, conversationsStore, tabsStore, uiStore } from '$lib/stores';
+	import { resolveTabView } from '$lib/utils';
 	import { tick } from 'svelte';
 
 	const carousel = useScrollCarousel();
 
-	let activeId = $derived(page.params.id ?? NEW_CHAT_TAB_ID);
+	let view = $derived(resolveTabView(page, tabsStore.openTabs));
+
+	let activeId = $derived(view.activeId);
 
 	let tabs = $derived(
-		tabsStore.openTabs.map((id) => ({
-			id,
-			isNewChat: id === NEW_CHAT_TAB_ID,
-			name:
-				id === NEW_CHAT_TAB_ID
-					? NEW_CHAT_LABEL
-					: (conversationsStore.conversations.find((c) => c.id === id)?.name ?? UNNAMED_CHAT_LABEL)
-		}))
+		view.ids.map((id) =>
+			id === NEW_CHAT_TAB_ID
+				? { href: view.hrefFor(id), icon: SquarePen, id, name: NEW_CHAT_LABEL }
+				: {
+						href: view.hrefFor(id),
+						id,
+						name:
+							conversationsStore.conversations.find((c) => c.id === id)?.name ?? UNNAMED_CHAT_LABEL
+					}
+		)
 	);
 
 	// hide the New chat button while a new-chat tab is already open
-	let showNewChatButton = $derived(!tabsStore.openTabs.includes(NEW_CHAT_TAB_ID));
+	let showNewChatButton = $derived(!view.ids.includes(NEW_CHAT_TAB_ID));
 
 	let loadingIds = $derived(new Set(chatStore.getAllLoadingChats()));
 
 	function handleClose(id: string) {
-		void tabsStore.close(id, activeId);
+		void tabsStore.close(id, id === activeId, view);
 	}
 
 	function handleStop(id: string, event: MouseEvent) {
@@ -106,7 +112,9 @@
 			{/each}
 
 			{#if showNewChatButton}
-				<ChatTabsNewChatButton onclick={() => void conversationsStore.openNewChat()} />
+				<ChatTabsNewChatButton
+					onclick={() => void tabsStore.openInNewTab(NEW_CHAT_TAB_ID, { activate: true })}
+				/>
 			{/if}
 		</ScrollCarousel>
 

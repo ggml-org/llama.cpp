@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { Loader2, Square, SquarePen, X } from '@lucide/svelte';
+	import { Loader2, Square, X } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
-	import { ICON_CLASS_SM, ICON_CLASS_XS, ROUTES, UI_DATA_ATTRS } from '$lib/constants';
-	import { RouterService } from '$lib/services/router.service';
+	import { ICON_CLASS_SM, ICON_CLASS_XS, UI_DATA_ATTRS } from '$lib/constants';
+	import type { Component } from 'svelte';
 
 	interface Tab {
+		href: string;
+		/** Marks the new-chat tab. */
+		icon?: Component;
 		id: string;
-		isNewChat: boolean;
 		name: string;
 	}
 
@@ -32,8 +34,6 @@
 	}: Props = $props();
 
 	let contentOpacity = $derived(isActive ? '' : 'opacity-45 group-hover:opacity-75');
-
-	let href = $derived(tab.isNewChat ? ROUTES.START : RouterService.chat(tab.id));
 
 	function handleActivate(event: MouseEvent) {
 		// let cmd/ctrl/middle-click fall through so the browser keeps its own
@@ -70,7 +70,7 @@
 		aria-current={isActive ? 'page' : undefined}
 		aria-label={tab.name}
 		class="absolute inset-0 z-0 rounded-lg"
-		{href}
+		href={tab.href}
 		onauxclick={(e) => onAuxClick?.(tab.id, e)}
 		onclick={handleActivate}
 	></a>
@@ -102,8 +102,8 @@
 		</Tooltip.Root>
 	{/if}
 
-	{#if tab.isNewChat}
-		<SquarePen
+	{#if tab.icon}
+		<tab.icon
 			class="pointer-events-none {ICON_CLASS_SM} shrink-0 transition-opacity {contentOpacity}"
 		/>
 	{/if}
