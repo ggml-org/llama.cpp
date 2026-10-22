@@ -1347,6 +1347,8 @@ class ModelBase:
             scale2_name = name.replace(".weight", ".weight_scale_2")
             input_scale_name = name.replace(".weight", ".input_scale")
             if scale_name not in self.model_tensors:
+                if self.model_tensors[name]().dtype == torch.uint8:
+                    raise ValueError(f"Cannot convert NVFP4 weight {name!r}: source block scale {scale_name!r} is missing")
                 continue
             weight = self.model_tensors[name]()
             scale = self.model_tensors[scale_name]()
@@ -1357,9 +1359,11 @@ class ModelBase:
             if weight.ndim != 2 or scale.shape[0] != weight.shape[0] or scale.shape[1] * 8 != weight.shape[1]:
                 raise ValueError(f"NVFP4 weight {name!r} has incompatible shapes: weight {list(weight.shape)}, scale {list(scale.shape)}")
 
+            if scale2_name not in self.model_tensors:
+                raise ValueError(f"Cannot convert NVFP4 weight {name!r}: source weight scale is missing ({scale2_name!r})")
             weight = LazyTorchTensor.to_eager(weight)
             scale = LazyTorchTensor.to_eager(scale)
-            scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
+            scale2 = LazyTorchTensor.to_eager(self.model_tensors[scale2_name]())
             input_scale = LazyTorchTensor.to_eager(self.model_tensors.get(input_scale_name, lambda: torch.tensor(1.0))())
 
             # Mark tensors for removal from model_tensors (already written to gguf)
@@ -1433,6 +1437,15 @@ class ModelBase:
         del experts, merged
 
     def prepare_tensors(self):
+        for name, load in self.model_tensors.items():
+            if not name.endswith(".weight"):
+                continue
+            if load().dtype not in (torch.float8_e4m3fn, torch.float8_e5m2):
+                continue
+            scale_names = (name + "_scale", name + "_scale_inv", name.removesuffix("weight") + "qscale_weight")
+            if not any(scale_name in self.model_tensors for scale_name in scale_names):
+                raise ValueError(f"Cannot convert FP8 weight {name!r}: source weight scale is missing")
+
         # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
         quantization_config = self.hparams.get("quantization_config") or {}
         quant_algo = quantization_config.get("quant_algo")
@@ -1636,6 +1649,15 @@ class ModelBase:
         )
         if any(qkv_buffers):
             raise ValueError("QKV fusion did not consume all buffered tensors")
+
+        tensor_names = {name for shard in self.gguf_writer.tensors for name in shard}
+        for shard in self.gguf_writer.tensors:
+            for name, tensor in shard.items():
+                # Keep in sync with needs_scale in ggml.c.
+                if tensor.dtype in (gguf.GGMLQuantizationType.F8_E4M3, gguf.GGMLQuantizationType.NVFP4, gguf.GGMLQuantizationType.TQ1_0, gguf.GGMLQuantizationType.TQ2_0):
+                    scale_name = name.removesuffix(".weight") + ".scale"
+                    if scale_name not in tensor_names:
+                        raise ValueError(f"Cannot export {name!r} as {tensor.dtype.name}: required scale tensor {scale_name!r} is missing (implicit unit scales are not supported)")
 
     def set_type(self):
         self.gguf_writer.add_type(gguf.GGUFType.MODEL)
