@@ -317,10 +317,10 @@ extern "C" {
     //
     typedef bool (*ggml_backend_sched_eval_callback)(struct ggml_tensor * t, bool ask, void * user_data);
 
-    // Callback while copying input weights of a split
-    // if the user returns false the scheduler simply copies the entire weight
-    // the callback is called only for input weights in host buffers
-    // the callback is called after all non-weight inputs of the split have been copied
+    // Callback while copying the inputs of a split, except the user inputs
+    // if the user returns false the scheduler copies the input itself, if it returns true the input must be in `dst` when the split runs
+    // the copies must be ordered after the work queued on `backend`, e.g. async copies on it, it may still be using `dst`
+    // the input weights in host buffers are copied after all other inputs of the split
     // `src` is the tensor in the previous split
     // `dst` is the copy of `src` in the split
     // `graph` is the compute graph of the split
@@ -372,7 +372,7 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
-    // Set a callback to be called when the inputs weights of a split are being copied
+    // Set a callback to be called when the inputs of a split are being copied
     GGML_API void                 ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data);
 
     // Set a callback to be called when the compute buffers of a graph are being reallocated
