@@ -2724,8 +2724,8 @@ private:
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         const int id_task = slot.task->id;
 
-        // checkpoints past the common prefix were already erased, so an existing one at the same
-        // position holds the same state - keep it instead of copying the state again
+        // stale checkpoints are erased before the prompt is processed, so one at the same position holds the same
+        // state - keep it instead of copying again (except slot-file ones, id_task == -1, which may fail to load)
         for (auto & cur : slot.prompt.checkpoints) {
             if (cur.id_task != -1 && cur.n_tokens == slot.prompt.n_tokens() - n_tokens_cur && cur.pos_min == pos_min && cur.pos_max == pos_max) {
                 SLT_TRC(slot, "reusing context checkpoint at n_tokens = %" PRId64 "\n", cur.n_tokens);
@@ -4147,6 +4147,8 @@ private:
                                     size_t head_c = n_past; // cache
                                     size_t head_p = n_past; // current prompt
 
+                                    const size_t head_p_start = head_p;
+
                                     if (mctx) {
                                         // we should never reach this
                                         GGML_ABORT("not supported by multimodal");
@@ -4188,6 +4190,18 @@ private:
                                     }
 
                                     SLT_DBG(slot, "after context reuse, new n_past = %d\n", n_past);
+
+                                    // shifted chunks replaced the tokens after the common prefix - drop the checkpoints there
+                                    if (n_past > (int) head_p_start) {
+                                        for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
+                                            if (it->n_tokens > (int64_t) head_p_start) {
+                                                SLT_TRC(slot, "erased context checkpoint after cache reuse (n_tokens = %" PRId64 ")\n", it->n_tokens);
+                                                it = slot.prompt.checkpoints.erase(it);
+                                            } else {
+                                                ++it;
+                                            }
+                                        }
+                                    }
                                 }
                             } else {
                                 // if we don't cache the prompt, we have to remove all previous tokens
