@@ -676,6 +676,41 @@ def test_slot_restore_preserves_context_checkpoints(swa_server, filename):
     assert res.body["timings"]["prompt_n"] == n_live
 
 
+# a prompt that differs one token before a checkpoint must not keep or reuse that checkpoint
+def test_checkpoint_after_one_token_divergence(swa_server):
+    server = swa_server
+    server.start()
+
+    res = server.make_request("POST", "/tokenize", data={
+        "content": "The quick brown fox jumps over the lazy dog. " * 20 + "The end of this story is a happy one.",
+    })
+    assert res.status_code == 200
+    a = res.body["tokens"]
+    n = len(a)
+
+    # the end-of-prompt checkpoint of a is at n - 4, b changes the token just before it
+    b = list(a)
+    b[n - 5] = a[n - 5] + 1 if a[n - 5] + 1 != a[n - 4] else a[n - 5] + 2
+    c = b[:n - 4] + a[:16]
+
+    def complete(prompt, cache_prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "id_slot": 1,
+            "cache_prompt": cache_prompt,
+            "n_predict": 8,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    complete(a, True)
+    complete(b, True)
+    cached = complete(c, True)
+    assert cached["timings"]["cache_n"] > 0
+    fresh = complete(c, False)
+    assert cached["content"] == fresh["content"]
+
+
 # checkpoint appendix: magic(4) version(4) count(4), then per checkpoint
 # n_tokens(8) pos_min(4) pos_max(4) and three blobs (target, draft, speculative), each size(8) + data
 def parse_ckpt_appendix(data):

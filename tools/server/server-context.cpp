@@ -2723,14 +2723,23 @@ private:
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         const int id_task = slot.task->id;
+        const int64_t n_tokens_new = slot.prompt.n_tokens() - n_tokens_cur;
 
-        // stale checkpoints are erased before the prompt is processed, so one at the same position holds the same
-        // state - keep it instead of copying again (except slot-file ones, id_task == -1, which may fail to load)
-        for (auto & cur : slot.prompt.checkpoints) {
-            if (cur.id_task != -1 && cur.n_tokens == slot.prompt.n_tokens() - n_tokens_cur && cur.pos_min == pos_min && cur.pos_max == pos_max) {
-                SLT_TRC(slot, "reusing context checkpoint at n_tokens = %" PRId64 "\n", cur.n_tokens);
-                cur.id_task = id_task;
-                return;
+        // checkpoints past the common prefix were erased, so one at the same position holds the same state - keep it
+        // instead of copying again, unless it came from a slot file (id_task == -1, may fail to load)
+        {
+            const auto it = std::find_if(slot.prompt.checkpoints.begin(), slot.prompt.checkpoints.end(),
+                    [&](const common_prompt_checkpoint & cur) { return cur.n_tokens == n_tokens_new; });
+
+            if (it != slot.prompt.checkpoints.end()) {
+                if (it->id_task != -1 && it->pos_min == pos_min && it->pos_max == pos_max) {
+                    SLT_TRC(slot, "reusing context checkpoint at n_tokens = %" PRId64 "\n", it->n_tokens);
+                    it->id_task = id_task;
+                    return;
+                }
+
+                SLT_TRC(slot, "superseding context checkpoint at n_tokens = %" PRId64 "\n", it->n_tokens);
+                slot.prompt.checkpoints.erase(it);
             }
         }
 
@@ -2761,19 +2770,6 @@ private:
                     cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
 
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
-        }
-
-        // replace an existing checkpoint at the same n_tokens instead of appending a duplicate
-        {
-            const int64_t n_tokens_new = slot.prompt.n_tokens() - n_tokens_cur;
-            for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end(); ) {
-                if (it->n_tokens == n_tokens_new) {
-                    SLT_TRC(slot, "superseding context checkpoint at n_tokens = %" PRId64 "\n", it->n_tokens);
-                    it = slot.prompt.checkpoints.erase(it);
-                } else {
-                    ++it;
-                }
-            }
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
@@ -4046,6 +4042,10 @@ private:
                         // keep track how many tokens we can reuse from the previous state
                         int n_past = 0;
 
+                        // number of cached tokens shared with the new prompt, before cache reuse shifts any chunk
+                        // or a checkpoint is restored
+                        int n_prefix = 0;
+
                         // empty prompt passed -> release the slot and send empty response
                         if (input_tokens.empty()) {
                             SLT_WRN(slot, "%s", "empty prompt - releasing slot\n");
@@ -4130,6 +4130,8 @@ private:
                                     n_past = std::min(n_past, slot.alora_invocation_start - 1);
                                 }
 
+                                n_prefix = n_past;
+
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;
 
                                 const bool can_cache_reuse =
@@ -4146,8 +4148,6 @@ private:
 
                                     size_t head_c = n_past; // cache
                                     size_t head_p = n_past; // current prompt
-
-                                    const size_t head_p_start = head_p;
 
                                     if (mctx) {
                                         // we should never reach this
@@ -4190,18 +4190,6 @@ private:
                                     }
 
                                     SLT_DBG(slot, "after context reuse, new n_past = %d\n", n_past);
-
-                                    // shifted chunks replaced the tokens after the common prefix - drop the checkpoints there
-                                    if (n_past > (int) head_p_start) {
-                                        for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
-                                            if (it->n_tokens > (int64_t) head_p_start) {
-                                                SLT_TRC(slot, "erased context checkpoint after cache reuse (n_tokens = %" PRId64 ")\n", it->n_tokens);
-                                                it = slot.prompt.checkpoints.erase(it);
-                                            } else {
-                                                ++it;
-                                            }
-                                        }
-                                    }
                                 }
                             } else {
                                 // if we don't cache the prompt, we have to remove all previous tokens
@@ -4209,9 +4197,6 @@ private:
                             }
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
-
-                            // number of cached tokens shared with the new prompt, before any checkpoint is restored
-                            const int n_prefix = n_past;
 
                             // ref: https://github.com/ggml-org/llama.cpp/pull/24110
                             const bool has_new_tokens = (n_past < slot.task->n_tokens());
@@ -4324,15 +4309,13 @@ private:
 
                             {
                                 // erase any checkpoints with pos_max > pos_next, or that cover tokens not shared with the new prompt
-                                for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
-                                    const auto & cur = *it;
-                                    if (cur.pos_max > pos_next || cur.n_tokens > n_prefix) {
-                                        SLT_TRC(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
-                                        it = slot.prompt.checkpoints.erase(it);
-                                    } else {
-                                        ++it;
+                                slot.prompt.checkpoints.remove_if([&](const common_prompt_checkpoint & cur) {
+                                    if (cur.pos_max <= pos_next && cur.n_tokens <= n_prefix) {
+                                        return false;
                                     }
-                                }
+                                    SLT_TRC(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
+                                    return true;
+                                });
                             }
                         }
 
