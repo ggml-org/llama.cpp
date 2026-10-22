@@ -152,6 +152,16 @@ static inline void lid_dequant_row_q8_0(uint8_t * restrict row, uint32_t D) {
     }
 }
 
+static inline void lid_convert_row_f32_to_f16(uint8_t * row, uint32_t D) {
+    const HVX_Vector zero = Q6_V_vzero();
+    const HVX_Vector * src = (const HVX_Vector *) row;
+    HVX_Vector * dst = (HVX_Vector *) row;
+
+    for (uint32_t d = 0; d < D; d += 64) {
+        dst[d / 64] = hvx_vec_f32_to_f16(src[d / 32], d + 32 < D ? src[d / 32 + 1] : zero);
+    }
+}
+
 // Q8_0 gather transpose limits: tmp (two 64x64 scratch tiles) holds D / 2 pairs, gather offsets are 16 bit
 static inline bool lid_q8_0_gather_ok(size_t row_size, uint32_t D) {
     return D <= 4 * HTP_LID_KV_BLOCK && (HTP_LID_KV_BLOCK - 1) * row_size + (D / QK8_0) * sizeof(block_q8_0) <= 32767;
@@ -428,6 +438,7 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
     const uint32_t n_kv   = k->ne[2];
     const uint32_t nt     = lctx->nt;
 
+    const bool     is_f32     = (k->type == HTP_TYPE_F32);
     const bool     is_q8_0    = (k->type == HTP_TYPE_Q8_0);
     const uint32_t k_row_size = htp_tensor_get_row_size(k->type, D);
 
@@ -464,7 +475,7 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
         dma_queue_push(dma_q, dma_make_data(d_base, spad_o + i * L->size_o_buf),
                        nb1, L->size_o_row, nkv * sizeof(float), 0);
         dma_queue_push(dma_q, dma_make_data(spad_k + i * L->size_k_buf, k_base + kv0 * nbk2),
-                       L->size_k_row, nbk2, k_row_size, nkv);
+                       L->size_k_raw_row, nbk2, k_row_size, nkv);
         dma_queue_push(dma_q, dma_make_data(spad_m + i * L->size_m_buf, m_base + kv0 * sizeof(__fp16)),
                        L->size_m_row, nbm1, nkv * sizeof(__fp16), nt);
     }
@@ -493,11 +504,16 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
             }
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (b + j));
+            if (is_f32) {
+                for (uint32_t r = 0; r < nkv; ++r) {
+                    lid_convert_row_f32_to_f16(k_buf[j] + r * L->size_k_raw_row, D);
+                }
+            }
             if (q8_g) {
-                lid_transpose_q8_0_gather(kt[j], kt_t0, sc, k_buf[j], L->size_k_row, g_offs, D);
+                lid_transpose_q8_0_gather(kt[j], kt_t0, sc, k_buf[j], L->size_k_raw_row, g_offs, D);
             } else {
                 for (uint32_t d0 = 0; d0 < D; d0 += HTP_LID_KV_BLOCK) {
-                    lid_transpose_64x64_f16(kt[j] + d0, k_buf[j] + d0 * sizeof(__fp16), L->size_k_row, nkv, kt_t0, kt_t1);
+                    lid_transpose_64x64_f16(kt[j] + d0, k_buf[j] + d0 * sizeof(__fp16), L->size_k_raw_row, nkv, kt_t0, kt_t1);
                 }
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (b + j));
@@ -531,14 +547,16 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
                 const uint32_t nkv2 = MIN(HTP_LID_KV_BLOCK, n_kv - kv2);
 
                 dma_queue_push(dma_q, dma_make_data(k_buf[j], k_base + kv2 * nbk2),
-                               L->size_k_row, nbk2, k_row_size, nkv2);
+                               L->size_k_raw_row, nbk2, k_row_size, nkv2);
                 dma_queue_push(dma_q, dma_make_data(m_buf[j], m_base + kv2 * sizeof(__fp16)),
                                L->size_m_row, nbm1, nkv2 * sizeof(__fp16), nt);
             }
         }
     }
 
-    dma_queue_flush(dma_q);
+    for (uint32_t i = 0; i < MIN(b1 - b0, HTP_LID_N_BUF); ++i) {
+        dma_queue_pop(dma_q);
+    }
 
     (void) nth;
 }
@@ -776,9 +794,9 @@ static uint32_t lid_hmx_in(const struct htp_lid_hmx_context * hctx, uint32_t ith
         const uint32_t rb = MIN(r1, seg[i].x0 + seg[i].nv);
         if (ra < rb) {
             if (push) {
-                dma_queue_push(dma_q, dma_make_data(hctx->k_raw[g % 2] + ra * L->size_k_row,
+                dma_queue_push(dma_q, dma_make_data(hctx->k_raw[g % 2] + ra * L->size_k_raw_row,
                                                     k->data + S.is * k->nb[3] + (seg[i].kv0 + ra - seg[i].x0) * k->nb[2]),
-                               L->size_k_row, k->nb[2], k_row_size, rb - ra);
+                               L->size_k_raw_row, k->nb[2], k_row_size, rb - ra);
             }
             n++;
         }
@@ -900,8 +918,9 @@ static void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith
     uint32_t r0, r1;
     lid_hmx_rows(hctx, ith, nth, g, n_rows, &r0, &r1);
 
-    const uint8_t * k_raw = hctx->k_raw[g % 2];
+    uint8_t *        k_raw = hctx->k_raw[g % 2];
     __fp16 *        k_t   = hctx->k_t[g % 2];
+    const bool      f32   = k->type == HTP_TYPE_F32;
     const bool      q8    = k->type == HTP_TYPE_Q8_0;
 
     for (uint32_t r = r0; r < r1;) {
@@ -914,7 +933,12 @@ static void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith
         if (q8) {
             lid_hmx_prep_k_q8_0(k_t, k_raw, L->size_k_row, r, end, nv, L->n_dot);
         } else {
-            lid_hmx_prep_k_f16(k_t, k_raw, L->size_k_row, r, end, nv, L->n_dot);
+            if (f32) {
+                for (uint32_t i = r; i < end; ++i) {
+                    lid_convert_row_f32_to_f16(k_raw + i * L->size_k_raw_row, k->ne[0]);
+                }
+            }
+            lid_hmx_prep_k_f16(k_t, k_raw, L->size_k_raw_row, r, end, nv, L->n_dot);
         }
         r = end;
     }
@@ -1059,7 +1083,13 @@ static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith,
         lid_hmx_extract(hctx, ith, nth, g - 1);
     }
     if (g == n) {
-        dma_queue_flush(dma_q);
+        uint32_t n_tail = lid_hmx_n_out(hctx, ith, nth, n - 1);
+        if (lag == 3 && n >= 2) {
+            n_tail += lid_hmx_n_out(hctx, ith, nth, n - 2);
+        }
+        for (uint32_t i = 0; i < n_tail; ++i) {
+            dma_queue_pop(dma_q);
+        }
     }
 }
 
@@ -1323,7 +1353,7 @@ static void lid_hmx_first_thread(unsigned int nth, unsigned int ith, void * data
 static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kernel_params * kparams) {
     const struct htp_tensor * q = octx->src[0];
 
-    if (!octx->ctx->hmx_enabled || !octx->ctx->hmx_queue) {
+    if (!octx->ctx->hmx_enabled) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -1348,7 +1378,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
     hctx.n_tile   = kparams->n_tokens_tile;
     hctx.n_tt     = (n_tokens + hctx.n_tile - 1) / hctx.n_tile;
     hctx.n_qsets  = n_qsets;
-    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_threads);
+    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_threads, octx->src[1]->type == HTP_TYPE_F32);
 
     uint8_t * const base = octx->ctx->vtcm_base;
     const struct htp_lid_hmx_vtcm_layout * L = &hctx.L;
@@ -1425,6 +1455,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
             const uint32_t     n_seg = lid_hmx_segs(&hctx, g, seg, &n_rows);
 
             lid_hmx_job_t * j = &job[g % 2];
+            #pragma clang loop vectorize(disable)
             for (uint32_t i = 0; i < n_seg; ++i) {
                 const uint32_t slot = lid_hmx_slot(&hctx, hctx.qbuf, seg[i].set);
                 j->seg[i].qw   = hctx.qw + slot * L->n_ch * L->n_dot * HMX_FP16_TILE_N_ELMS;
@@ -1454,13 +1485,10 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
             hmx_queue_pop(hmx_q);
         }
 
-        // last stage only extracts; with one token only thread 0 has work
+        // last stage only extracts; with one token only thread 0 has work (same token split for nth 1)
         hctx.g = n;
-        if (hctx.nt_run == 1 && !hctx.nx_on) {
-            lid_hmx_stage(&hctx, 0, n_threads);
-        } else {
-            work_queue_run(octx->ctx->work_queue, lid_hmx_stage_thread, &hctx, n_threads);
-        }
+        const uint32_t n_last = hctx.nt_run == 1 && !hctx.nx_on ? 1 : n_threads;
+        work_queue_run(octx->ctx->work_queue, lid_hmx_stage_thread, &hctx, n_last);
     }
 
     return HTP_STATUS_OK;
@@ -1471,7 +1499,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     const struct htp_tensor * k = octx->src[1];
     const struct htp_tensor * m = octx->src[3];
 
-    if (k->type != HTP_TYPE_F16 && k->type != HTP_TYPE_Q8_0) {
+    if (k->type != HTP_TYPE_F32 && k->type != HTP_TYPE_F16 && k->type != HTP_TYPE_Q8_0) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -1499,7 +1527,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     lctx.n_blocks          = kparams->n_kv_blocks;
     lctx.blocks_per_thread = kparams->blocks_per_thread;
 
-    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_threads);
+    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_threads, k->type == HTP_TYPE_F32);
 
     uint8_t * const base = octx->ctx->vtcm_base;
 
