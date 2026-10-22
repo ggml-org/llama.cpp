@@ -19,6 +19,9 @@ int kv_stream_test_compiled_cc(ggml_backend_t backend);
 bool kv_stream_test_dimension_instance(ggml_backend_t backend,ggml_type key,ggml_type value,
         uint32_t width,uint32_t columns,uint32_t groups,bool mma,bool resume,bool dense,bool report=false);
 bool kv_stream_test_runtime_shared_instances();
+bool kv_stream_test_dimension_resources(ggml_backend_t backend, ggml_type key, ggml_type value,
+        uint32_t width, uint32_t columns, uint32_t groups, bool resume, bool dense,
+        size_t & shared_bytes, size_t & local_bytes, int & registers);
 bool kv_stream_test_native_tile(ggml_backend_t backend,ggml_tensor * op);
 bool kv_stream_test_tile_plan(ggml_backend_t backend,const ggml_tensor * op,size_t tokens,
         ggml_kv_stream_resume_plan & plan,size_t & bound);
@@ -607,7 +610,206 @@ static void check_prepared_prefill(testing & t, bool benchmark, bool automatic =
     }
 }
 
+static void check_d512_pipeline(testing & t, bool hazards) {
+    ggml_backend_load_all();
+    auto * dev=ggml_backend_dev_by_name("CUDA0");
+    if (!t.assert_true(dev != nullptr)) return;
+    ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+    auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+        ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+    const auto * ops=get ? get() : nullptr;
+    if (!t.assert_true(ops && ops->resume_spans)) return;
+    const std::vector<std::pair<ggml_type,ggml_type>> pairs=hazards ?
+        std::vector<std::pair<ggml_type,ggml_type>>{{GGML_TYPE_F16,GGML_TYPE_F16}} :
+        std::vector<std::pair<ggml_type,ggml_type>>{{GGML_TYPE_F32,GGML_TYPE_BF16},
+            {GGML_TYPE_F16,GGML_TYPE_F16},{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},
+            {GGML_TYPE_Q4_1,GGML_TYPE_Q5_0},{GGML_TYPE_Q5_1,GGML_TYPE_Q8_0},{GGML_TYPE_BF16,GGML_TYPE_F32}};
+    for (uint32_t heads : hazards ? std::vector<uint32_t>{32} : std::vector<uint32_t>{24,32})
+        for (size_t active : hazards ? std::vector<size_t>{1057} : std::vector<size_t>{257,4097})
+        for (uint32_t queries : hazards ? std::vector<uint32_t>{129} : std::vector<uint32_t>{5,8,64,129,256})
+        for (const auto & pair : pairs) {
+        fixture f(backend.get(),true,pair.first,pair.second,(active+255)/256*256,false,2,4,0,512,512);
+        if (!t.assert_true(f.attach())) return;
+        block_inputs input(f,active,queries,false,heads);
+        stock_attention_case stock(f,input);
+        stock.run();
+        std::vector<float> expected(ggml_nelements(stock.output));
+        ggml_backend_tensor_get(stock.output,expected.data(),0,ggml_nbytes(stock.output));
+        prepared_prefill_case candidate(f,input,stock,ops,1024);
+        if (!t.assert_true(candidate.initialize() && candidate.same_plan())) return;
+        for (bool compact : {false,true}) for (bool prepared : {false,true}) {
+            if (!t.assert_true(candidate.run(prepared,nullptr,compact))) return;
+            if (!t.assert_true("native operand and accumulation bits",same_float_bits(expected,input.read()))) return;
+        }
+        if (pair.first == GGML_TYPE_F16 && pair.second == GGML_TYPE_F16) {
+            const std::vector<size_t> cuts=input.padded > 1025 ?
+                std::vector<size_t>{0,255,1025,input.padded} : std::vector<size_t>{0,255,257,input.padded};
+            auto storage=span_storage::create(f,0,input.padded,queries,cuts,true);
+            ggml_kv_stream_span_plan_view original;
+            if (!t.assert_true(storage && ggml_kv_stream_span_plan_get_view(storage->plan,original))) return;
+            auto * scratch=ggml_backend_memory_lease_buffer(candidate.scratch->lease.get());
+            const std::vector<float> sentinel(expected.size(),-77);
+            for (bool compact : {false,true}) {
+                auto op=*stock.output;
+                op.buffer=input.output->buffer; op.data=input.output->data;
+                ggml_backend_execution_set_stock_conversion(&op,true);
+                if (compact) {
+                    op.src[3]=nullptr;
+                    if (!t.assert_true(candidate.bounds && ggml_backend_execution_set_mask_bounds(&op,candidate.bounds))) return;
+                }
+                ggml_backend_tensor_set(input.output,sentinel.data(),0,ggml_nbytes(input.output));
+                auto bad=original;
+                bad.count=4;
+                t.assert_true(!ops->resume_spans(f.backend,&op,scratch,candidate.plans[0],bad,0,input.padded));
+                auto wrong=candidate.plans[0];
+                ++wrong.state_bytes;
+                t.assert_true(!ops->resume_spans(f.backend,&op,scratch,wrong,original,0,input.padded));
+                block_workspace short_workspace(f,candidate.plans[0].bytes-1,139);
+                t.assert_true(!ops->resume_spans(f.backend,&op,ggml_backend_memory_lease_buffer(short_workspace.lease.get()),
+                    candidate.plans[0],original,0,input.padded));
+                t.assert_true("rejected waves preserve public output",same_float_bits(sentinel,input.read()));
+                for (size_t first=0;first<input.padded;first+=2048) {
+                    const size_t end=std::min(input.padded,first+2048);
+                    ggml_kv_stream_span clipped[3];
+                    size_t count=0;
+                    for (size_t i=0;i<original.count;++i) {
+                        const auto & source=original.spans[i];
+                        const size_t begin=std::max(first,source.token_begin);
+                        const size_t stop=std::min(end,source.token_begin+source.tokens);
+                        if (begin >= stop) continue;
+                        auto & span=clipped[count++];
+                        span=source;
+                        span.token_begin=begin; span.tokens=stop-begin;
+                        span.k_offset+=(begin-source.token_begin)*f.host->layout().k_token_bytes;
+                        span.v_offset+=(begin-source.token_begin)*f.host->layout().v_token_bytes;
+                    }
+                    const ggml_kv_stream_span_plan_view wave{f.policy.shape,clipped,count,input.padded,queries};
+                    if (!t.assert_true(ops->resume_spans(f.backend,&op,scratch,candidate.plans[0],wave,first,end))) return;
+                    ggml_backend_synchronize(f.backend);
+                    if (end < input.padded) {
+                        if (!t.assert_true("partial wave does not publish output",same_float_bits(sentinel,input.read()))) return;
+                        auto invalid=wave;
+                        invalid.count=4;
+                        t.assert_true(!ops->resume_spans(f.backend,&op,scratch,candidate.plans[0],invalid,first,end));
+                        if (!t.assert_true("rejected continuation preserves output",same_float_bits(sentinel,input.read()))) return;
+                    }
+                }
+                if (!t.assert_true("wrapped waves and retry preserve native bits",same_float_bits(expected,input.read()))) return;
+            }
+        }
+        t.out << "d512-pipeline heads=" << heads << " active=" << active << " queries=" << queries
+            << " k=" << ggml_type_name(pair.first) << " v=" << ggml_type_name(pair.second) << '\n';
+    }
+}
+
 int main(int argc, char ** argv) {
+    if (argc > 1 && (!std::strcmp(argv[1],"--cuda-d512-pipeline") ||
+            !std::strcmp(argv[1],"--cuda-d512-pipeline-hazards"))) {
+        testing t;
+        t.test("d512_feature_pipeline_preserves_order_across_masks_tails_waves_and_rejected_calls", [&](testing & t) {
+            check_d512_pipeline(t,!std::strcmp(argv[1],"--cuda-d512-pipeline-hazards"));
+        });
+        return t.summary();
+    }
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-d512-pipeline-admission")) {
+#ifdef KV_STREAM_PASCAL_CUDA_TEST
+        testing t;
+        t.test("feature_pipeline_reports_total_shared_memory_and_rejects_one_byte_short", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            auto * reg=ggml_backend_dev_backend_reg(dev);
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+            using status=ggml_cuda_kv_stream_plan_status;
+            using style=ggml_cuda_kv_stream_execution_style;
+            using query_t=status (*)(ggml_backend_t,const ggml_tensor *,const ggml_kv_stream_span_plan_view *,style,ggml_cuda_kv_stream_attention_plan &);
+            auto query=reinterpret_cast<query_t>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_cuda_kv_stream_attention_plan"));
+            fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,2304,false,2,4,0,512,512);
+            if (!t.assert_true(get && get() && query && f.attach())) return;
+            block_inputs input(f,2049,129,false,32);
+            stock_attention_case stock(f,input);
+            stock.run();
+            std::vector<float> expected(ggml_nelements(stock.output));
+            ggml_backend_tensor_get(stock.output,expected.data(),0,ggml_nbytes(stock.output));
+            prepared_prefill_case candidate(f,input,stock,get(),1024);
+            if (!t.assert_true(candidate.initialize() && candidate.run(false,nullptr,true))) return;
+            auto storage=span_storage::create(f,0,input.padded,input.queries,{0,255,1025,input.padded},true);
+            ggml_kv_stream_span_plan_view view;
+            if (!t.assert_true(storage && ggml_kv_stream_span_plan_get_view(storage->plan,view))) return;
+            auto op=*stock.output;
+            op.src[3]=nullptr; op.buffer=input.output->buffer; op.data=input.output->data;
+            if (!t.assert_true(ggml_backend_execution_set_mask_bounds(&op,candidate.bounds))) return;
+            ggml_backend_execution_set_stock_conversion(&op,true);
+            ggml_cuda_kv_stream_attention_plan plain, resumed;
+            auto dense=op;
+            dense.src[3]=input.mask; dense.src[5]=nullptr;
+            const auto plain_status=query(backend.get(),&dense,&view,style::spanned,plain);
+            const auto resume_status=query(backend.get(),&op,&view,style::resumable,resumed);
+            t.out << "pipeline-plan-status spanned=" << int(plain_status) << " resumed=" << int(resume_status) << '\n';
+            if (!t.assert_true(plain_status == status::success && resume_status == status::success)) return;
+            size_t shared=0, local=0; int registers=0;
+            if (!t.assert_true(kv_stream_test_dimension_resources(backend.get(),GGML_TYPE_F16,GGML_TYPE_F16,
+                    512,8,8,true,false,shared,local,registers))) return;
+            const size_t total=plain.requirements.shared_bytes+shared;
+            t.assert_equal(total,resumed.requirements.shared_bytes);
+            t.out << "pipeline-shared-quota dynamic=" << plain.requirements.shared_bytes << " static=" << shared
+                << " required=" << total << " reported=" << resumed.requirements.shared_bytes << '\n';
+            const auto saved=resumed;
+            const size_t previous=kv_stream_test_shared_limit(backend.get(),total-1);
+            struct restore {ggml_backend_t backend; size_t limit; ~restore(){kv_stream_test_shared_limit(backend,limit);}} restore_limit{backend.get(),previous};
+            const std::vector<float> sentinel(expected.size(),-77);
+            ggml_backend_tensor_set(input.output,sentinel.data(),0,ggml_nbytes(input.output));
+            t.assert_true(query(backend.get(),&op,&view,style::resumable,resumed) == status::unsupported_launch_resources);
+            t.assert_equal(saved.requirements.scratch_bytes,resumed.requirements.scratch_bytes);
+            t.assert_equal(saved.requirements.shared_bytes,resumed.requirements.shared_bytes);
+            auto * scratch=ggml_backend_memory_lease_buffer(candidate.scratch->lease.get());
+            t.assert_true(!get()->resume_spans(f.backend,&op,scratch,candidate.plans[0],view,0,input.padded));
+            t.assert_true("short shared quota preserves output",same_float_bits(sentinel,input.read()));
+            kv_stream_test_shared_limit(backend.get(),total);
+            if (!t.assert_true(query(backend.get(),&op,&view,style::resumable,resumed) == status::success)) return;
+            if (!t.assert_true(get()->resume_spans(f.backend,&op,scratch,candidate.plans[0],view,0,input.padded))) return;
+            ggml_backend_synchronize(f.backend);
+            t.assert_true("exact shared quota preserves stock bits",same_float_bits(expected,input.read()));
+        });
+        return t.summary();
+#else
+        return 77;
+#endif
+    }
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda-d512-pipeline-resources")) {
+#ifdef KV_STREAM_PASCAL_CUDA_TEST
+        testing t;
+        t.test("feature_pipeline_reserves_shared_memory_only_for_its_compiled_geometry", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+            const bool sm120=kv_stream_test_compiled_cc(backend.get()) == 1200;
+            for (uint32_t width : {256u,512u})
+                for (const auto & pair : {std::make_pair(GGML_TYPE_F16,GGML_TYPE_F16),
+                        std::make_pair(GGML_TYPE_Q8_0,GGML_TYPE_Q4_0)})
+                for (const auto & geometry : {std::make_pair(1u,8u),std::make_pair(2u,8u),
+                        std::make_pair(4u,8u),std::make_pair(8u,8u),std::make_pair(4u,2u),std::make_pair(8u,2u)})
+                for (bool resume : {false,true}) for (bool dense : {false,true}) {
+                size_t shared=SIZE_MAX, local=SIZE_MAX;
+                int registers=0;
+                if (!t.assert_true(kv_stream_test_dimension_resources(backend.get(),pair.first,pair.second,
+                        width,geometry.first,geometry.second,resume,dense,shared,local,registers))) return;
+                const bool pipeline=sm120 && width == 512 && pair.first == GGML_TYPE_F16 &&
+                    geometry.first == 8 && geometry.second == 8 && resume && !dense;
+                t.out << "pipeline-resource width=" << width << " k=" << ggml_type_name(pair.first)
+                    << " columns=" << geometry.first << " groups=" << geometry.second << " resume=" << resume
+                    << " dense=" << dense << " shared=" << shared << " local=" << local << " registers=" << registers << '\n';
+                t.assert_equal(pipeline ? size_t(16384) : size_t(0),shared);
+                t.assert_true(registers > 0);
+            }
+        });
+        return t.summary();
+#else
+        return 77;
+#endif
+    }
     if (argc > 1 && !std::strcmp(argv[1], "--cuda-prefill-preparation-quota")) {
         testing t;
         t.test("prefill_preparation_is_quoted_before_arena_allocation", [](testing & t) {

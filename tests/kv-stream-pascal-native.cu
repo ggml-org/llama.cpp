@@ -60,6 +60,26 @@ bool kv_stream_test_dimension_instance(ggml_backend_t backend, ggml_type key, gg
     return prepared(ggml_cuda_kv_stream_tile_kernel(key,value,columns,groups,width,width));
 }
 
+bool kv_stream_test_dimension_resources(ggml_backend_t backend, ggml_type key, ggml_type value,
+        uint32_t width, uint32_t columns, uint32_t groups, bool resume, bool dense,
+        size_t & shared_bytes, size_t & local_bytes, int & registers) {
+    auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    const void * kernel=width == 512 ? reinterpret_cast<const void *>(ggml_cuda_kv_stream_mma_runtime_kernel(
+        key,value,columns,groups,resume,dense)) : reinterpret_cast<const void *>(ggml_cuda_kv_stream_mma_kernel(
+        key,value,columns,groups,resume,dense,width,width));
+    if (!kernel) return false;
+    cudaFuncAttributes attributes{};
+    if (cudaFuncGetAttributes(&attributes,kernel) != cudaSuccess) {
+        (void) cudaGetLastError();
+        return false;
+    }
+    shared_bytes=attributes.sharedSizeBytes;
+    local_bytes=attributes.localSizeBytes;
+    registers=attributes.numRegs;
+    return true;
+}
+
 // Encoded K/V pairs share one arithmetic body; input/resume policies remain distinct.
 bool kv_stream_test_runtime_shared_instances() {
     const auto first=ggml_cuda_kv_stream_mma_runtime_kernel(GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,8,false,false);

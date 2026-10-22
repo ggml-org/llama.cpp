@@ -326,7 +326,28 @@ Two separate repeated A/B studies use fixed 1 GiB arenas, Q8/Q4, b/ub=256, UVM o
 
 Paired prompts, output IDs and draft counts match; decode median differences stay within 0.17% for conversion and 0.15% for the pipeline. At 8 Ki, conversion gains are smaller and the incremental pipeline change is negligible. [Conversion CSV](benchmarks/data/prefill-conversion-v1.csv) / [profile](benchmarks/data/prefill-conversion-v1.json), [pipeline CSV](benchmarks/data/prefill-pipeline-v1.csv) / [profile](benchmarks/data/prefill-pipeline-v1.json).
 
-Matched Nsight windows confirm the mechanism: at 96 Ki, H2D time overlapping observed GPU kernels increases from 3.2% to 86.6% for Gemma and 2.9% to 62.1% for Qwen, with reader/converter GPU interval unions roughly stable. These are clipped time-interval intersections, not SM occupancy, bandwidth or hardware counters. Instrumented throughput is not the speedup measurement; NCU counters remain unavailable on this machine.
+Matched Nsight windows confirm the mechanism: at 96 Ki, H2D time overlapping observed GPU kernels increases from 3.2% to 86.6% for Gemma and 2.9% to 62.1% for Qwen, with reader/converter GPU interval unions roughly stable. These are clipped time-interval intersections, not SM occupancy, bandwidth or hardware counters. Instrumented throughput is not the speedup measurement; these original captures did not include Nsight Compute counters.
+
+### D512 attention feature pipeline
+
+The SM120 D512 resumable 8-by-8 attention path now double-buffers K/V feature chunks inside the GPU. It preserves the native MMA, softmax, reduction and checkpoint order. Eligibility follows geometry and capabilities, not the model name; Gemma is the full-model reference and Qwen D256 is the regression control.
+
+The following fresh A/B screen compares the shipping conversion-plus-ring implementation with the D512 change. Both use a fixed 1 GiB arena, Q8/Q4 KV, b/ub=256, UVM off, uncached `capacity-271` prompts and 256 outputs. There is one pair per point, not a repeated statistical trial matrix.
+
+| Gemma capacity / mode | Baseline prefill tokens/s | D512 pipeline prefill tokens/s | Prefill change | Decode change |
+| --- | ---: | ---: | ---: | ---: |
+| 8 Ki, target-only | 1324.05 | 1342.56 | +1.40% | +0.34% |
+| 8 Ki, MTP3 | 1304.80 | 1322.29 | +1.34% | +0.14% |
+| 64 Ki, target-only | 834.46 | 895.73 | +7.34% | +0.07% |
+| 64 Ki, MTP3 | 826.07 | 887.00 | +7.38% | -0.16% |
+
+All paired prompt/output IDs, draft counts and decode-pool layouts match. Qwen target-only controls at 8/64 Ki change by less than 0.1% in prefill and 0.4% in decode. [Measurements (CSV)](benchmarks/data/d512-feature-pipeline-v1.csv) / [profile and qualification (JSON)](benchmarks/data/d512-feature-pipeline-v1.json). Do not combine these fixed-arena rates with the independently fitted 120 Ki sweep as if they were one cohort.
+
+The extra buffer is **16 KiB of on-chip shared memory**, not a device allocation or a larger arena minimum. Total user shared memory is 100,136 bytes against the measured 101,376-byte limit; exact-limit and one-byte-short admission are tested. The existing quantized prefill preparation still requires its separately documented 8/16 MiB arena stage. Dense-strided, encoded-direct, D256, other tiles and older architectures retain their previous paths.
+
+Qualification includes all 64 K/V pairs, native-bit and frozen-checkpoint oracles, 120 focused mask/tail/wrapped-wave profiles, 120 native-matched server records, ASan/UBSan and 17 zero-error CUDA memcheck/racecheck/synccheck gates. Only the wide sanitizer fixture uses the user-approved 769 MiB arena; ordinary model execution remains 1 GiB. Two representative affected CUDA units also pass functional compilation for SM61/70/75/86; that is not physical older-GPU runtime qualification. Further model admission is independent of generic D512 kernel support.
+
+The requested follow-up is a separate Gemma MTP3 sweep from 8 through 256 Ki, using `find-max-arena.py` independently at every point and retaining each rejected +1 MiB neighbor. Its prefill/decode overlay with the historical 120 Ki MTP3 series will be published after completion; the existing all-mode 120 Ki data remains unchanged.
 
 ### Stock UVM without KV streaming
 

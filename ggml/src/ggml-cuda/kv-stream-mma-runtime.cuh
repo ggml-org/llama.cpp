@@ -52,6 +52,11 @@ struct ggml_cuda_fattn_mma_runtime_span_kv {
     static constexpr bool spanned=true;
     static constexpr bool staged=encoded;
     static constexpr bool resumable=resume;
+#if defined(CP_ASYNC_AVAILABLE) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1200
+    static constexpr bool feature_pipelined=!encoded && resume && !dense;
+#else
+    static constexpr bool feature_pipelined=false;
+#endif
     // Every supported staging encoding fits the existing FP16 tile; F32 rounds on ingress.
     static constexpr ggml_type key_type=GGML_TYPE_F16, v_type=GGML_TYPE_F16;
     const ggml_cuda_kv_span * spans;
@@ -60,6 +65,11 @@ struct ggml_cuda_fattn_mma_runtime_span_kv {
     ggml_cuda_fattn_mma_resume_control control;
     int slice;
     ggml_type key_format, value_format;
+
+    static __device__ __forceinline__ half2 * feature_buffer() {
+        __shared__ __align__(16) half2 tile[32*128];
+        return tile;
+    }
 
     __device__ inline const int32_t * mask_bounds() const {
         if constexpr (dense) return nullptr;

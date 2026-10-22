@@ -533,6 +533,7 @@ struct mma_span_launch {
     int gqa_ratio = 0;
     int native_blocks_limit = 0;
     size_t shared_bytes = 0;
+    size_t static_shared_bytes = 0;
     size_t span_shared_offset = 0;
     size_t descriptor_bytes = 0;
     size_t fixup_bytes = 0;
@@ -712,7 +713,8 @@ static bool mma_span_launch_make_dimension(
         (void) cudaGetLastError(); return false;
     }
     const auto limit=ggml_cuda_info().devices[ctx.device].smpbo;
-    if (size_t(attributes.sharedSizeBytes) > limit || next.shared_bytes > limit-size_t(attributes.sharedSizeBytes) ||
+    next.static_shared_bytes=attributes.sharedSizeBytes;
+    if (next.static_shared_bytes > limit || next.shared_bytes > limit-next.static_shared_bytes ||
             nthreads > attributes.maxThreadsPerBlock) {
         if (failure) *failure=status::unsupported_launch_resources;
         return false;
@@ -861,7 +863,7 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(
         ggml_cuda_kv_stream_workspace_requirements & output, ggml_cuda_kv_stream_plan_status * failure) {
     mma_span_launch plan;
     if (!mma_span_launch_make(ctx, dst, spans, plan, failure)) return false;
-    output = {true, 0, plan.bytes, 128, plan.shared_bytes, true, true};
+    output = {true, 0, plan.bytes, 128, plan.shared_bytes+plan.static_shared_bytes, true, true};
     return true;
 }
 
@@ -1015,7 +1017,7 @@ bool ggml_cuda_flash_attn_ext_mma_f16_resume_requirements(
         ggml_cuda_kv_stream_workspace_requirements & output, ggml_cuda_kv_stream_plan_status * failure) {
     mma_span_launch plan;
     if (!mma_span_launch_make(ctx,dst,3,plan,failure,true)) return false;
-    output={true,0,plan.bytes,128,plan.shared_bytes,true,true};
+    output={true,0,plan.bytes,128,plan.shared_bytes+plan.static_shared_bytes,true,true};
     return true;
 }
 

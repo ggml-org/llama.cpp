@@ -633,7 +633,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : (swz ? nbatch_V2 : nbatch_V2 + 4);
 
     constexpr bool staged_prefetch = KV::staged && nstages > 1;
-    const half2 * const tile_K_mma = staged_prefetch ? tile_V : tile_K;
+    constexpr bool feature_pipeline = KV::feature_pipelined && DKQ == 512 && DV == 512 && ncols1 == 8 && ncols2 == 8 && !use_sparse && !V_is_K_view;
     const int k_VKQ_0 = kb0 * nbatch_fa;
 #if defined(TURING_MMA_AVAILABLE)
     T_C_KQ KQ_C[nbatch_fa/(np*(cols_per_warp == 8 ? T_C_KQ::I : T_C_KQ::J))];
@@ -659,7 +659,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         }
         kv.template load<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
             (true, V_h2, staged_prefetch ? tile_K : tile_V, nbatch_V2, stride_V, k_VKQ_0, k_VKQ_sup, nullptr, 0);
-    } else {
+    } else if constexpr (!feature_pipeline) {
         // the sparse mask values are gathered per element, always load them synchronously
         constexpr bool use_cp_async = nstages == 1 && !use_sparse;
         if (ncols2 > 1 || mask_h || kv.mask_bounds()) {
@@ -673,8 +673,22 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 #pragma unroll
     for (int k0_start = (DKQ/2-1) - (DKQ/2-1) % nbatch_K2; k0_start >= 0; k0_start -= nbatch_K2) {
         const int k0_stop = k0_start + nbatch_K2 < DKQ/2 ? k0_start + nbatch_K2 : DKQ/2;
+        const half2 * tile_K_mma = staged_prefetch ? tile_V : tile_K;
 
-        if constexpr (nstages <= 1) {
+        if constexpr (feature_pipeline) {
+            static_assert(nstages == 1 && nbatch_fa == 32 && nbatch_K2 == 128 && nbatch_V2 == 128, "unsupported feature pipeline layout");
+            cp_async_wait_all();
+            __syncthreads();
+            if (k0_start) {
+                kv.template load<stride_tile_K,nwarps,nbatch_fa,true,oob_check,false>
+                    (false,kv.offset(K_h2,0),kv.feature_buffer(),nbatch_K2,stride_K,k_VKQ_0,k_VKQ_sup,nullptr,0);
+            } else {
+                tile_K_mma = kv.feature_buffer();
+                // Upper K readers retired before the lower-K iteration reached this point.
+                kv.template load<stride_tile_V,nwarps,nbatch_fa,true,oob_check,false>
+                    (true,kv.offset(V_h2,0),tile_V,nbatch_V2,stride_V,k_VKQ_0,k_VKQ_sup,nullptr,0);
+            }
+        } else if constexpr (nstages <= 1) {
             const int k0_diff = k0_stop - k0_start;
             constexpr bool use_cp_async = nstages == 1;
             kv.template load<stride_tile_K, nwarps, nbatch_fa, use_cp_async && !KV::staged, oob_check, use_sparse>
@@ -1029,8 +1043,26 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     for (int i0_start = 0; i0_start < DV; i0_start += 2*nbatch_V2) {
         static_assert(DV % (2*nbatch_V2) == 0, "bad loop size");
         const int i0_stop = i0_start + 2*nbatch_V2;
+        const half2 * tile_V_mma = tile_V;
 
-        if constexpr (nstages <= 1) {
+        if constexpr (feature_pipeline) {
+            cp_async_wait_all();
+            __syncthreads();
+            if (!i0_start) {
+                kv.template load<stride_tile_V,nwarps,nbatch_fa,true,oob_check,false>
+                    (true,kv.offset(V_h2,nbatch_V2),kv.feature_buffer(),nbatch_V2,stride_V,k_VKQ_0,k_VKQ_sup,nullptr,nbatch_V2);
+            } else {
+                tile_V_mma = kv.feature_buffer();
+                if (!last_iter) {
+                    // Lower V readers have retired; keep the next wave outside this prefetch.
+                    flash_attn_ext_f16_load_mask<ncols1,nwarps,nbatch_fa,true,oob_check,false>
+                        (mask_h,tile_mask,stride_mask,k_VKQ_0+nbatch_fa,nbatch_fa,jt*ncols1,ne01,nullptr,kv.mask_bounds());
+                    kv.template load<stride_tile_K,nwarps,nbatch_fa,true,oob_check,false>
+                        (false,kv.offset(K_h2,DKQ/2-nbatch_K2),tile_K,nbatch_K2,stride_K,
+                            k_VKQ_0+nbatch_fa,nbatch_fa,nullptr,DKQ/2-nbatch_K2);
+                }
+            }
+        } else if constexpr (nstages <= 1) {
             const int i0_diff = i0_stop - i0_start;
             if (!V_is_K_view || i0_stop > 2*nbatch_K2) {
                 constexpr bool use_cp_async = nstages == 1;
@@ -1053,7 +1085,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::J;
 
                 T_A_VKQ A; // Transposed in SRAM but not in registers, gets transposed on load.
-                load_ldmatrix_trans_swizzled<stride_tile_V>(A, tile_V, tile_V_offset_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2);
+                load_ldmatrix_trans_swizzled<stride_tile_V>(A, tile_V_mma, tile_V_offset_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2);
                 if constexpr (T_B_KQ::I == 8) {
                     mma(VKQ_C[i_VKQ_0/T_A_VKQ::I], A, B[k00/(np*T_A_VKQ::J)]);
                 } else {
@@ -1079,7 +1111,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::I;
 
                 T_A_VKQ A; // Transposed in both SRAM and registers, load normally.
-                load_ldmatrix_swizzled<stride_tile_V>(A, tile_V, tile_V_offset_i + k0*stride_tile_V + (i_VKQ_0 - i0_start)/2);
+                load_ldmatrix_swizzled<stride_tile_V>(A, tile_V_mma, tile_V_offset_i + k0*stride_tile_V + (i_VKQ_0 - i0_start)/2);
                 mma(VKQ_C[i_VKQ_0/i0_stride], B[k00/(np*T_A_VKQ::I)], A);
             }
         }
@@ -1262,6 +1294,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     constexpr int  nbatch_combine  = ggml_cuda_fattn_mma_get_nbatch_combine(DKQ, DV, ncols);
     constexpr bool Q_in_reg        = ggml_cuda_fattn_mma_get_Q_in_reg      (DKQ, DV, ncols);
     constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages       (DKQ, DV, ncols1, ncols2, use_sparse);
+    constexpr bool feature_pipeline = KV::feature_pipelined && DKQ == 512 && DV == 512 && ncols1 == 8 && ncols2 == 8 && !use_sparse && !V_is_K_view;
     const uint32_t native_block=kv.block_index(), native_blocks=kv.block_count();
 
     int kb0_start=native_start, kb0_stop=native_stop;
@@ -1320,20 +1353,24 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #if defined(TURING_MMA_AVAILABLE)
         static_assert(thread_bytes == (ncols <= (DKQ == 512 ? 32 : 16) ? DV/2 : DV)+4*sizeof(float), "native checkpoint layout changed");
 #endif
-        // Singleton native slices cannot cross a tile-aligned wave; do not read their absent map/state.
-        if (kb0_start > native_start || kb0_stop < native_stop) {
-            const size_t thread=threadIdx.y*blockDim.x+threadIdx.x;
-            const size_t original_slot=size_t(kv.slice)+native_block;
-            const size_t slot=kv.control.state_per_block ? native_block :
-                kv.control.state_ids ? kv.control.state_ids[original_slot] : original_slot;
-            const uintptr_t checkpoint_address=uintptr_t(kv.control.state)+
-                (slot*blockDim.x*blockDim.y+thread)*thread_bytes;
-            checkpoint=reinterpret_cast<char *>(checkpoint_address);
+        if constexpr (!feature_pipeline) {
+            // Singleton slices cannot cross a wave; their map/state may be absent.
+            if (kb0_start > native_start || kb0_stop < native_stop) {
+                const size_t thread=threadIdx.y*blockDim.x+threadIdx.x;
+                const size_t original_slot=size_t(kv.slice)+native_block;
+                const size_t slot=kv.control.state_per_block ? native_block :
+                    kv.control.state_ids ? kv.control.state_ids[original_slot] : original_slot;
+                checkpoint=reinterpret_cast<char *>(uintptr_t(kv.control.state)+
+                    (slot*blockDim.x*blockDim.y+thread)*thread_bytes);
+            }
         }
         if (kb0_start > native_start) {
-            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(VKQ_C)>(VKQ_C,checkpoint);
-            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_max)>(KQ_max,checkpoint+sizeof(VKQ_C));
-            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_rowsum)>(KQ_rowsum,checkpoint+sizeof(VKQ_C)+sizeof(KQ_max));
+            const char * source=checkpoint;
+            if constexpr (feature_pipeline)
+                source=ggml_cuda_fattn_mma_checkpoint_thread<thread_bytes>(kv.control,kv.slice,native_block);
+            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(VKQ_C)>(VKQ_C,source);
+            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_max)>(KQ_max,source+sizeof(VKQ_C));
+            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_rowsum)>(KQ_rowsum,source+sizeof(VKQ_C)+sizeof(KQ_max));
         }
     }
 
@@ -1409,6 +1446,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         }
         kv.template load<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
             (false, K_h2, tile_K, nbatch_K2, stride_K, kb0*nbatch_fa, k_VKQ_sup, nullptr, 0);
+    } else if constexpr (feature_pipeline) {
+        flash_attn_ext_f16_load_mask<ncols1,nwarps,nbatch_fa,true,false,false>
+            (mask_h,tile_mask,stride_mask,kb0*nbatch_fa,nbatch_fa,jt*ncols1,ne01,nullptr,kv.mask_bounds());
+        kv.template load<stride_tile_K,nwarps,nbatch_fa,true,false,false>
+            (false,kv.offset(K_h2,DKQ/2-nbatch_K2),tile_K,nbatch_K2,stride_K,
+                kb0*nbatch_fa,nbatch_fa,nullptr,DKQ/2-nbatch_K2);
     }
 
     // kb0_start is always < kb0_stop so the last iter can be executed unconditionally.
@@ -1462,9 +1505,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
     if constexpr (KV::resumable) {
         if (kb0_stop < native_stop) {
-            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(VKQ_C)>(checkpoint,VKQ_C);
-            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_max)>(checkpoint+sizeof(VKQ_C),KQ_max);
-            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_rowsum)>(checkpoint+sizeof(VKQ_C)+sizeof(KQ_max),KQ_rowsum);
+            // Resolve only at each copy; do not keep the checkpoint address across the MMA loop.
+            constexpr size_t thread_bytes=sizeof(VKQ_C)+sizeof(KQ_max)+sizeof(KQ_rowsum);
+            char * destination=checkpoint;
+            if constexpr (feature_pipeline)
+                destination=ggml_cuda_fattn_mma_checkpoint_thread<thread_bytes>(kv.control,kv.slice,native_block);
+            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(VKQ_C)>(destination,VKQ_C);
+            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_max)>(destination+sizeof(VKQ_C),KQ_max);
+            ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_rowsum)>(destination+sizeof(VKQ_C)+sizeof(KQ_max),KQ_rowsum);
             return;
         }
     }
