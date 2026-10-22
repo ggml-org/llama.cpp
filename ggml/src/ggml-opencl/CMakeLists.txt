@@ -64,6 +64,7 @@ set(GGML_OPENCL_KERNELS
     add
     add_id
     moe_add_id_glu
+    argmax
     argsort
     tri
     fill
