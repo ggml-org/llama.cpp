@@ -58,6 +58,11 @@ class QwenModel(TextModel):
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> tuple[Tensor, ...] | None:
+        if type(self).modify_tensors is Qwen2Model.modify_tensors and len(self._map_fp8_weight_names(name)) == 1:
+            return (scale,)
+        return None
+
     def set_vocab(self):
         # HuggingFaceBio/Carbon-14B: Qwen3 with the HybridDNATokenizer (Qwen3 BPE plus DNA 6-mers)
         if self._is_hybriddna():
@@ -91,6 +96,11 @@ class Qwen2MoeModel(TextModel):
                 self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
             )
         return super()._map_fp8_weight_names(name)
+
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> tuple[Tensor, ...] | None:
+        if type(self).modify_tensors is Qwen2MoeModel.modify_tensors and len(self._map_fp8_weight_names(name)) == 1:
+            return (scale,)
+        return None
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -394,12 +404,49 @@ class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
         if name.endswith(".linear_attn.in_proj_qkvz.weight"):
             bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
-            # Both split projections keep the original per-tensor scales.
             return (
                 self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid),
                 self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid),
             )
         return super()._map_fp8_weight_names(name)
+
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> tuple[Tensor, ...] | None:
+        if type(self).modify_tensors is not Qwen3NextModel.modify_tensors:
+            return None
+        if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+            return self._split_qkvz(scale)
+        if len(self._map_fp8_weight_names(name)) == 1:
+            return (scale,)
+        return None
+
+    def _split_qkvz(self, data_torch: Tensor) -> tuple[Tensor, Tensor]:
+        # original order:  [q, k, v, z] * head_count
+        # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
+        head_k_dim = self.hparams["linear_key_head_dim"]
+        head_v_dim = self.hparams["linear_value_head_dim"]
+        num_v_heads = self.hparams["linear_num_value_heads"]
+        num_k_heads = self.hparams["linear_num_key_heads"]
+        hidden_size = data_torch.shape[1]
+        split_arg_list_qkvz = [
+            head_k_dim, # q partition
+            head_k_dim, # k partition
+            (num_v_heads // num_k_heads * head_v_dim), # v partition
+            (num_v_heads // num_k_heads * head_v_dim), # z partition
+        ]
+        # view as (n_embd, head_count, [q+k+v+z])
+        data_torch = data_torch.permute(1, 0).contiguous()
+        data_torch = data_torch.view(-1, num_k_heads, sum(split_arg_list_qkvz))
+        # split into q, k, v, z
+        q, k, v, z = torch.split(data_torch, split_arg_list_qkvz, dim=-1)
+        # flatten dim + head_count
+        q = q.contiguous().view(hidden_size, -1)
+        k = k.contiguous().view(hidden_size, -1)
+        v = v.contiguous().view(hidden_size, -1)
+        z = z.contiguous().view(hidden_size, -1)
+        # stack back
+        qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
+        z = z.permute(1, 0).contiguous()
+        return qkv, z
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -431,32 +478,7 @@ class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
             data_torch = data_torch + 1
 
         if "in_proj_qkvz.weight" in name:
-            # original order:  [q, k, v, z] * head_count
-            # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
-            head_k_dim = self.hparams["linear_key_head_dim"]
-            head_v_dim = self.hparams["linear_value_head_dim"]
-            num_v_heads = self.hparams["linear_num_value_heads"]
-            num_k_heads = self.hparams["linear_num_key_heads"]
-            hidden_size = self.hparams["hidden_size"]
-            split_arg_list_qkvz = [
-                head_k_dim, # q partition
-                head_k_dim, # k partition
-                (num_v_heads // num_k_heads * head_v_dim), # v partition
-                (num_v_heads // num_k_heads * head_v_dim), # z partition
-            ]
-            # view as (n_embd, head_count, [q+k+v+z])
-            data_torch = data_torch.permute(1, 0).contiguous()
-            data_torch = data_torch.view(-1, num_k_heads, sum(split_arg_list_qkvz))
-            # split into q, k, v, z
-            q, k, v, z = torch.split(data_torch, split_arg_list_qkvz, dim=-1)
-            # flatten dim + head_count
-            q = q.contiguous().view(hidden_size, -1)
-            k = k.contiguous().view(hidden_size, -1)
-            v = v.contiguous().view(hidden_size, -1)
-            z = z.contiguous().view(hidden_size, -1)
-            # stack back
-            qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
-            z = z.permute(1, 0).contiguous()
+            qkv, z = self._split_qkvz(data_torch)
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV,  bid, ".weight"), qkv)
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid, ".weight"), z)
         else:
