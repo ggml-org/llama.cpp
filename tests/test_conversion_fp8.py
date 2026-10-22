@@ -44,6 +44,15 @@ class OffsetNormModel(Qwen2MoeModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+class ReorderedRowsModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN2MOE
+
+    def modify_tensors(self, data_torch, name, bid):
+        if name.endswith("q_proj.weight"):
+            data_torch = data_torch.flip(0)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 class TestFP8Conversion(unittest.TestCase):
     def convert(self, model_class, tensors, eager=False, check_lazy=False, scan_nvfp4=False, ftype=gguf.LlamaFileType.GUESSED, hparams_override=None, **kwargs):
         with tempfile.TemporaryDirectory() as directory:
@@ -160,6 +169,63 @@ class TestFP8Conversion(unittest.TestCase):
                 config = {"quant_method": "compressed-tensors", "format": "mixed-precision", "config_groups": groups}
                 with self.assertRaisesRegex(ValueError, message):
                     self.convert(Qwen2MoeModel, tensors, hparams_override={"quantization_config": config})
+
+    def test_channel_scales_follow_rope_permutation(self):
+        for n_head, n_kv_head in ((1, 1), (2, 1)):
+            for proj in ("q", "k"):
+                n_rows = 8 if proj == "q" else 8 * n_kv_head // n_head
+                rows = [0, 4, 1, 5, 2, 6, 3, 7] if n_head == 1 else ([0, 2, 1, 3, 4, 6, 5, 7] if proj == "q" else [0, 2, 1, 3])
+                weight = torch.arange(n_rows * 8, dtype=torch.float32).reshape(n_rows, 8).to(torch.float8_e4m3fn)
+                for channel_scale in (False, True):
+                    scales = (torch.arange(1, n_rows + 1, dtype=torch.float32).reshape(n_rows, 1) / 8) if channel_scale else torch.tensor([0.25])
+                    for eager in (False, True):
+                        with self.subTest(proj=proj, n_head=n_head, channel_scale=channel_scale, eager=eager):
+                            name = f"model.layers.0.self_attn.{proj}_proj.weight"
+                            hparams = {"hidden_size": 8, "num_attention_heads": n_head, "num_key_value_heads": n_kv_head}
+                            result = self.convert(LlamaModel, {name: weight, name + "_scale": scales}, eager=eager,
+                                                  check_lazy=not eager, hparams_override=hparams)
+                            target = f"blk.0.attn_{proj}"
+                            dtype, data = result[target + ".weight"]
+                            self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                            actual_scale = result[target + ".scale"][1]
+                            np.testing.assert_array_equal(actual_scale, scales.numpy().flatten()[rows] if channel_scale else [0.25])
+                            np.testing.assert_array_equal(gguf.dequantize(data, dtype) * actual_scale.reshape(-1, 1), (weight.float() * scales).numpy()[rows])
+
+    def test_channel_scales_follow_projection_split(self):
+        name = "model.layers.0.linear_attn.in_proj_qkvz.weight"
+        for n_v_heads, qkv_rows, z_rows in (
+            (2, [0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13], [6, 7, 14, 15]),
+            (4, [0, 1, 12, 13, 2, 3, 14, 15, 4, 5, 6, 7, 16, 17, 18, 19], [8, 9, 10, 11, 20, 21, 22, 23]),
+        ):
+            n_rows = len(qkv_rows) + len(z_rows)
+            weight = torch.arange(n_rows * 4, dtype=torch.float32).reshape(n_rows, 4).to(torch.float8_e4m3fn)
+            hparams = {"mtp_num_hidden_layers": 1, "linear_key_head_dim": 2, "linear_value_head_dim": 2,
+                       "linear_num_key_heads": 2, "linear_num_value_heads": n_v_heads}
+            for channel_scale in (False, True):
+                scales = torch.arange(1, n_rows + 1, dtype=torch.float32).reshape(n_rows, 1) / 32 if channel_scale else torch.tensor([0.25])
+                expected = (weight.float() * scales).numpy()
+                for eager in (False, True):
+                    with self.subTest(n_v_heads=n_v_heads, channel_scale=channel_scale, eager=eager):
+                        result = self.convert(Qwen3NextModel, {name: weight, name + "_scale": scales}, eager=eager,
+                                              check_lazy=not eager, hparams_override=hparams)
+                        for target, rows in (("blk.0.attn_qkv", qkv_rows), ("blk.0.attn_gate", z_rows)):
+                            dtype, data = result[target + ".weight"]
+                            self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                            actual_scale = result[target + ".scale"][1]
+                            np.testing.assert_array_equal(actual_scale, scales.numpy().flatten()[rows] if channel_scale else [0.25])
+                            np.testing.assert_array_equal(gguf.dequantize(data, dtype) * actual_scale.reshape(-1, 1), expected[rows])
+
+    def test_channel_scales_unknown_transform_fallback(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        weight = torch.arange(16, dtype=torch.float32).reshape(4, 4).to(torch.float8_e4m3fn)
+        scales = torch.tensor([0.125, 0.25, 0.5, 1.]).reshape(4, 1)
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                result = self.convert(ReorderedRowsModel, {name: weight, name + "_scale": scales}, eager=eager, check_lazy=not eager)
+                dtype, data = result["blk.0.attn_q.weight"]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                np.testing.assert_array_equal(data, (weight.float() * scales).flip(0).numpy())
+                self.assertNotIn("blk.0.attn_q.scale", result)
 
     def test_mla_scale_fallback(self):
         weight = torch.arange(16, dtype=torch.float32).reshape(4, 4).to(torch.float8_e4m3fn)
