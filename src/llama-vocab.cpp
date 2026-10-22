@@ -2438,7 +2438,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "llama-bpe"||
                     tokenizer_pre == "falcon3"  ||
                     tokenizer_pre == "falcon-h1" ||
-                    tokenizer_pre == "pixtral"  ||
                     tokenizer_pre == "midm-2.0" ||
                     tokenizer_pre == "lfm2"     ||
                     tokenizer_pre == "jina-v5-nano") {
@@ -2566,7 +2565,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "jais") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_JAIS;
             } else if (
-                tokenizer_pre == "tekken") {
+                tokenizer_pre == "tekken" ||
+                tokenizer_pre == "pixtral") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_TEKKEN;
                 clean_spaces = false;
                 ignore_merges = true;
