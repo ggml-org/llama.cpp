@@ -539,6 +539,12 @@ export { default as ChatMessageMcpPrompt } from './ChatMessages/ChatMessage/Chat
 export { default as ChatMessageCwdChange } from './ChatMessages/ChatMessage/ChatMessageCwdChange.svelte';
 
 /**
+ * The `Set working directory to <path>` row itself, shared by the synthetic
+ * cwd message and by the project folder row.
+ */
+export { default as ChatMessageCwdChangeRow } from './ChatMessages/ChatMessage/ChatMessageCwdChangeRow.svelte';
+
+/**
  * Generic wrapper for UI-generated (synthetic) messages. Routes the
  * working-directory change to ChatMessageCwdChange and renders a muted
  * fallback for any other synthetic text, so no synthetic message ever

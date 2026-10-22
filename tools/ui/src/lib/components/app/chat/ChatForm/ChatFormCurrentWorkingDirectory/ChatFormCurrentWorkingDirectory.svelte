@@ -11,14 +11,7 @@
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { ToolsService } from '$lib/services/tools.service';
 	import { conversationsStore, toolsStore } from '$lib/stores';
-	import type { GlobEntry } from '$lib/types';
-	import {
-		abbreviateHome,
-		buildCaseInsensitiveGlob,
-		joinPath,
-		lastPathSegment,
-		runGlobSearchWithChildren
-	} from '$lib/utils';
+	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
 	// Microtask delay so the popover's focus scope tears down first.
 	const FOCUS_DELAY_MS = 0;
@@ -39,6 +32,8 @@
 		onClose?: () => void;
 		/** Fired when the chip is clicked so the host can open the picker. */
 		onOpen?: () => void;
+		/** Renders the chip trigger; off when the host anchors its own trigger. */
+		showChip?: boolean;
 	}
 
 	let {
@@ -50,7 +45,8 @@
 		onChange,
 		onClose,
 		onOpen,
-		query = $bindable('')
+		query = $bindable(''),
+		showChip = true
 	}: Props = $props();
 
 	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
@@ -210,36 +206,15 @@
 		onChange?.(trimmed);
 	}
 
-	// Resolve a browser-picked folder name (which exposes only the leaf name)
-	// to a server-side absolute path; null when the server cannot locate it,
-	// so the caller fails visibly instead of committing a bare leaf name.
-	async function resolveNativeName(name: string): Promise<string | null> {
-		try {
-			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
-				include: buildCaseInsensitiveGlob(name),
-				limit: SEARCH.NATIVE_LIMIT,
-				max_depth: SEARCH.NATIVE_MAX_DEPTH,
-				path: homeBase ?? HOME_TILDE,
-				type: GlobSearchType.DIR
-			});
-			const base = typeof res.base === 'string' ? res.base : '';
-			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-			const match = entries.find(
-				(e) => lastPathSegment(e.path).toLowerCase() === name.toLowerCase()
-			);
-
-			return match ? joinPath(base, match.path) : null;
-		} catch {
-			return null;
-		}
-	}
-
+	// The browser picker exposes only the leaf name, so the folder is resolved
+	// to a server-side path first. A folder the server cannot locate keeps the
+	// previous cwd and fails visibly instead of committing a bare leaf name.
 	async function browseNative() {
 		if (disabled || !window.showDirectoryPicker) return;
 
 		try {
 			const handle = await window.showDirectoryPicker();
-			const path = await resolveNativeName(handle.name);
+			const path = await ToolsService.resolveDirectoryPath(handle.name, homeBase);
 
 			if (path) {
 				setDirectory(path);
@@ -325,23 +300,25 @@
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
 
-<button
-	class={[
-		'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
-		className
-	]}
-	{disabled}
-	onclick={onOpen}
-	type="button"
->
-	<ChatFormCurrentWorkingDirectoryChip
-		{directory}
+{#if showChip}
+	<button
+		class={[
+			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
+			className
+		]}
 		{disabled}
-		{homeBase}
-		onClear={handleDismiss}
-		{showTooltip}
-	/>
-</button>
+		onclick={onOpen}
+		type="button"
+	>
+		<ChatFormCurrentWorkingDirectoryChip
+			{directory}
+			{disabled}
+			{homeBase}
+			onClear={handleDismiss}
+			{showTooltip}
+		/>
+	</button>
+{/if}
 
 <Popover.Root onOpenChange={handleOpenChange} open={isOpen}>
 	<Popover.Trigger
