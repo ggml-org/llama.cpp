@@ -592,6 +592,11 @@ llama_tokens format_prompt_infill(
         const bool spm_infill,
         const llama_tokens & tokens_prompt);
 
+std::string format_rerank_template(
+        const std::string & tmpl,
+        const std::string & query,
+        const std::string & doc);
+
 // format rerank task: [BOS]query[EOS][SEP]doc[EOS].
 // query_files/doc_files carry decoded media for multimodal (Qwen) inputs; when non-empty the
 // prompt is built with get_media_marker() sentinels and spliced via process_mtmd_prompt.

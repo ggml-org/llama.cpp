@@ -1945,6 +1945,26 @@ llama_tokens format_prompt_infill(
     return embd_inp;
 }
 
+std::string format_rerank_template(
+        const std::string & tmpl,
+        const std::string & query,
+        const std::string & doc) {
+    std::string prompt;
+    prompt.reserve(tmpl.size());
+    for (size_t pos = 0; pos < tmpl.size();) {
+        if (tmpl.compare(pos, 7, "{query}") == 0) {
+            prompt += query;
+            pos += 7;
+        } else if (tmpl.compare(pos, 10, "{document}") == 0) {
+            prompt += doc;
+            pos += 10;
+        } else {
+            prompt += tmpl[pos++];
+        }
+    }
+    return prompt;
+}
+
 server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
@@ -1974,9 +1994,7 @@ server_tokens format_prompt_rerank(
             d += get_media_marker();
         }
 
-        std::string prompt = rerank_prompt;
-        string_replace_all(prompt, "{query}"   , q);
-        string_replace_all(prompt, "{document}", d  );
+        std::string prompt = format_rerank_template(rerank_prompt, q, d);
 
         if (query_files.empty() && doc_files.empty()) {
             server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
