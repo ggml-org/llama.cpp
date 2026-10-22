@@ -36,6 +36,7 @@ struct moe_cache_slru {
     int32_t tail[2] = { -1, -1 };
     std::vector<bool> is_protected;
     int32_t n_protected = 0;
+    int32_t n_filled    = 0; // slots that hold an expert
 
     std::vector<uint32_t> seen; // [n_expert]
     uint32_t seen_gen = 0;
@@ -200,6 +201,8 @@ struct moe_cache_slru {
             const int32_t s = victim(il);
             if (key_of[s] >= 0) {
                 slot_map[key_of[s] / n_expert][key_of[s] % n_expert] = empty;
+            } else {
+                n_filled++;
             }
             key_of[s] = il*n_expert + e;
             slots[e] = s;
@@ -799,8 +802,8 @@ struct llama_moe_cache::impl {
             write_trace(il, it_cpu != cpu_parts.end() ? it_cpu->second.n_used : n_expert_used);
         }
 
-        // part of the misses is computed on the CPU, the carry keeps the share right on average
-        const uint32_t share_q = has_cpu ? cpu_share_q : 0;
+        // part of the misses is computed on the CPU once the cache is full, the carry keeps the share right on average
+        const uint32_t share_q = has_cpu && g.slru.n_filled == g.slru.n_slots ? cpu_share_q : 0;
         auto n_cpu = [&](size_t n_miss) {
             const uint64_t acc = (uint64_t) n_miss*share_q + l.cpu_acc;
             l.cpu_acc = acc & 0xffff;
