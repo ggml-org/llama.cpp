@@ -4274,6 +4274,10 @@ private:
                                             if (cur.pos_max > pos_next) {
                                                 return false;
                                             }
+                                            // cache reuse shifted chunks over the tokens this checkpoint covers
+                                            if (n_past > n_prefix && cur.n_tokens > n_prefix) {
+                                                return false;
+                                            }
                                             return cur.pos_min < pos_min_thold || cur.pos_min == 0;
                                         }
                                     );
