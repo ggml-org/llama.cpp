@@ -24,7 +24,7 @@ from conversion.deepseek import DeepseekV2Model
 from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
 from conversion.phi import PhiMoeModel
-from conversion.qwen import Qwen2MoeModel
+from conversion.qwen import Qwen2MoeModel, Qwen3NextModel
 
 
 class ForcedF16Model(Qwen2MoeModel):
@@ -155,6 +155,24 @@ class TestFP8Conversion(unittest.TestCase):
         dtype, data = result["blk.0.attn_q.bias"]
         self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
         np.testing.assert_array_equal(data, [1., -1.])
+
+    def test_fp8_mandatory_f32(self):
+        for name, target, shape in (
+            ("model.layers.0.linear_attn.conv1d.weight", "blk.0.ssm_conv1d.weight", (4, 1, 4)),
+            ("model.layers.0.mlp.gate.weight", "blk.0.ffn_gate_inp.weight", (2, 4)),
+        ):
+            for eager in (False, True):
+                for scaled in (False, True):
+                    with self.subTest(name=name, eager=eager, scaled=scaled):
+                        weight = torch.arange(np.prod(shape), dtype=torch.float32).reshape(shape).to(torch.float8_e4m3fn)
+                        tensors = {name: weight}
+                        if scaled:
+                            tensors[name + "_scale"] = torch.tensor([0.25])
+                        result = self.convert(Qwen3NextModel, tensors, eager=eager, check_lazy=not eager, hparams_override={"mtp_num_hidden_layers": 1})
+                        dtype, data = result[target]
+                        self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
+                        np.testing.assert_array_equal(data, weight.float().squeeze().numpy() * (0.25 if scaled else 1.))
+                        self.assertNotIn(target.removesuffix("weight") + "scale", result)
 
     def test_fp8_norm_transform(self):
         for shape in ((4,), (2, 2)):
