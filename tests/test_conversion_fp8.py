@@ -241,6 +241,44 @@ class TestFP8Conversion(unittest.TestCase):
                 np.testing.assert_array_equal(result["blk.0.attn_k_b.weight"][1], (weight.float()[:2].T * 0.25).numpy()[None])
                 np.testing.assert_array_equal(result["blk.0.attn_v_b.weight"][1], (weight.float()[2:] * 0.25).numpy()[None])
 
+    def test_block_scales_rejected(self):
+        name = "model.layers.0.mlp.down_proj.weight"
+        weight = torch.ones((4, 16)).to(torch.float8_e4m3fn)
+        for block, shape in (((4, 4), (1, 4)), ((2, 8), (2, 2)), ((1, 16), (4, 1)), ((4, 16), (1, 1))):
+            scales = torch.arange(1, int(np.prod(shape)) + 1, dtype=torch.float32).reshape(shape) / 8
+            for method in ("compressed-tensors", "fp8", "modelopt"):
+                config = {"quant_method": method}
+                suffix = "_scale"
+                if method == "compressed-tensors":
+                    config.update(format="float-quantized", config_groups={"group_0": {"weights": {"type": "float", "num_bits": 8, "strategy": "block", "block_structure": list(block)}}})
+                elif method == "fp8":
+                    config["weight_block_size"] = list(block)
+                    suffix = "_scale_inv"
+                elif shape in ((4, 1), (1, 1)):
+                    continue
+                tensors = {name: weight, name + suffix: scales}
+                for eager in (False, True):
+                    with self.subTest(block=block, method=method, eager=eager):
+                        kwargs = {"eager": eager, "hparams_override": {"quantization_config": config}}
+                        with self.assertRaisesRegex(ValueError, "unsupported block/group scale"):
+                            self.convert(LlamaModel, tensors, **kwargs)
+                        if method != "modelopt":
+                            result = self.convert(LlamaModel, tensors, ftype=gguf.LlamaFileType.MOSTLY_F16, **kwargs)
+                            expected = scales.repeat_interleave(block[0], 0).repeat_interleave(block[1], 1)
+                            np.testing.assert_array_equal(result["blk.0.ffn_down.weight"][1], expected.numpy())
+
+    def test_channel_scale_layouts(self):
+        name = "model.layers.0.mlp.down_proj.weight"
+        weight = torch.ones((4, 16)).to(torch.float8_e4m3fn)
+        for shape in ((4,), (4, 1)):
+            scales = torch.arange(1, 5, dtype=torch.float32).reshape(shape) / 8
+            for eager in (False, True):
+                with self.subTest(shape=shape, eager=eager):
+                    config = {"quant_method": "compressed-tensors", "format": "float-quantized", "config_groups": {"group_0": {"weights": {"type": "float", "num_bits": 8, "strategy": "channel"}}}}
+                    result = self.convert(LlamaModel, {name: weight, name + "_scale": scales}, eager=eager, hparams_override={"quantization_config": config})
+                    self.assertEqual(result["blk.0.ffn_down.weight"][0], gguf.GGMLQuantizationType.F8_E4M3)
+                    np.testing.assert_array_equal(result["blk.0.ffn_down.scale"][1], scales.numpy().flatten())
+
     def test_missing_weight_scale_rejected(self):
         name = "model.layers.0.self_attn.q_proj.weight"
         for nvfp4 in (False, True):
