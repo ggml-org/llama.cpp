@@ -172,6 +172,13 @@
 		scrollbar-gutter: stable;
 	}
 
+	/* no elastic bounce past the ends of the page: it drags the sticky and
+	   fixed bars (tab bar, chat form) along and they jump back on release */
+	html,
+	body {
+		overscroll-behavior: none;
+	}
+
 	/* Global scrollbar styling - visible only on hover */
 	* {
 		scrollbar-width: thin;
