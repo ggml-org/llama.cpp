@@ -247,10 +247,7 @@ void ggml_cuda_mul_mat_q(
             ncols_opt = ne12;
 
             // Each expert only sees ne12*n_expert_used/ne02 tokens on average.
-            // On RDNA3 and RDNA4 it is faster to pick the tile size against this value instead of ne12.
-            if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-                ncols_opt = (ne12*n_expert_used + ne02 - 1) / ne02;
-            }
+            ncols_opt = (ne12*n_expert_used + ne02 - 1) / ne02;
         }
 
         J_best = ggml_cuda_mmq_get_J_best(src0->type, ncols_opt, fallback, cc, smpbo, prec_src1, &nthreads_best);
