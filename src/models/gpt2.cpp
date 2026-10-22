@@ -93,7 +93,7 @@ llama_model_gpt2::graph::graph(const llm_graph_params & params) : llm_graph_cont
                     n_embd_head, n_head, n_head_kv, il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
 
@@ -115,9 +115,9 @@ llama_model_gpt2::graph::graph(const llm_graph_params & params) : llm_graph_cont
             cb(cur, "ffn_norm", il);
 
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
-                    NULL,                      NULL,                        NULL,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                    NULL,                      NULL,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                     NULL,
                     LLM_FFN_GELU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
@@ -140,7 +140,7 @@ llama_model_gpt2::graph::graph(const llm_graph_params & params) : llm_graph_cont
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     if (model.output_b) {
         cur = ggml_add(ctx0, cur, model.output_b);
     }

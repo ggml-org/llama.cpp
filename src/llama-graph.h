@@ -24,6 +24,7 @@ struct llama_prec_policy;
 struct llama_hadamard;
 
 class llama_moe_cache;
+struct llama_weight_scales;
 
 struct llama_memory_context_i;
 
@@ -812,6 +813,7 @@ struct llm_graph_params {
 
     ggml_tensor * layer_inp_dev = nullptr; // own layer input device buffer (write)
     ggml_tensor * layer_inp_src = nullptr; // ctx_other's layer input device buffer (read)
+    const llama_weight_scales * w_scales = nullptr;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1076,6 +1078,7 @@ struct llm_graph_context {
 
     ggml_tensor * layer_inp_dev;
     ggml_tensor * layer_inp_src;
+    const llama_weight_scales * w_scales;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1114,19 +1117,20 @@ struct llm_graph_context {
               ggml_tensor * w,
               ggml_tensor * cur) const;
 
-    // do mat_mul, while optionally apply lora and per-tensor scale
+    // scale tensor of a weight, nullptr if it has none
+    ggml_tensor * get_weight_scale(const ggml_tensor * w) const;
+
+    // do mat_mul, while optionally apply lora and the weight scale
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
-              ggml_tensor * cur,
-              ggml_tensor * w_s = nullptr) const;
+              ggml_tensor * cur) const;
 
-    // do mat_mul_id, while optionally apply lora and per-expert scale
+    // do mat_mul_id, while optionally apply lora and the weight scale
     // if slots is set, the experts are read from the MoE cache at these slots (see build_moe_cache_slots)
     ggml_tensor * build_lora_mm_id(
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
-              ggml_tensor * w_s   = nullptr,
               ggml_tensor * slots = nullptr) const;
 
     // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
@@ -1169,13 +1173,10 @@ struct llm_graph_context {
              ggml_tensor * cur,
              ggml_tensor * up,
              ggml_tensor * up_b,
-             ggml_tensor * up_s,
              ggml_tensor * gate,
              ggml_tensor * gate_b,
-             ggml_tensor * gate_s,
              ggml_tensor * down,
              ggml_tensor * down_b,
-             ggml_tensor * down_s,
              ggml_tensor * act_scales,
          llm_ffn_op_type   type_op,
        llm_ffn_gate_type   type_gate,
@@ -1198,9 +1199,6 @@ struct llm_graph_context {
                      int   il,
              ggml_tensor * probs_in = nullptr,
              ggml_tensor * gate_up_exps = nullptr,
-             ggml_tensor * up_exps_s = nullptr,
-             ggml_tensor * gate_exps_s = nullptr,
-             ggml_tensor * down_exps_s = nullptr,
              ggml_tensor * selected_experts_in = nullptr,
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
@@ -1226,9 +1224,6 @@ struct llm_graph_context {
              ggml_tensor * probs_in = nullptr,
              ggml_tensor * gate_up_exps = nullptr,
              ggml_tensor * gate_up_exps_b = nullptr,
-             ggml_tensor * up_exps_s = nullptr,
-             ggml_tensor * gate_exps_s = nullptr,
-             ggml_tensor * down_exps_s = nullptr,
              ggml_tensor * selected_experts_in = nullptr,
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
@@ -1290,7 +1285,6 @@ struct llm_graph_context {
             llm_graph_input_attn_no_cache * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
@@ -1306,7 +1300,6 @@ struct llm_graph_context {
             llm_graph_input_attn_kv * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
@@ -1322,7 +1315,6 @@ struct llm_graph_context {
             llm_graph_input_attn_k * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
@@ -1342,7 +1334,6 @@ struct llm_graph_context {
             llm_graph_input_attn_k_dsa * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
@@ -1368,7 +1359,6 @@ struct llm_graph_context {
             llm_graph_input_attn_kv_iswa * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens] optional
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens] optional
@@ -1386,7 +1376,6 @@ struct llm_graph_context {
             llm_graph_input_attn_k_iswa * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens] optional
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens] optional
@@ -1402,7 +1391,6 @@ struct llm_graph_context {
             llm_graph_input_attn_cross * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
