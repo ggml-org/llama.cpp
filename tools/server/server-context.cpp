@@ -4839,6 +4839,7 @@ private:
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
 
+        const llama_outputs * outputs = nullptr;
         iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
@@ -4897,7 +4898,10 @@ private:
             llama_token id;
             {
                 scoped_timer timer(t_sampl, n_sampl);
-                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+                if (!outputs) {
+                    outputs = llama_get_outputs(ctx_tgt);
+                }
+                id = common_sampler_sample_from_outputs(slot.smpl.get(), outputs, tok_idx);
             }
 
             slot.i_batch = -1;
@@ -4939,7 +4943,6 @@ private:
         });
 
         // speculative decoding - main model sample and accept
-        const llama_outputs * outputs = nullptr;
         iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING || !slot.can_speculate() ||
                     slot.spec_draft.empty() || slot.spec_i_batch.empty()) {

@@ -679,25 +679,8 @@ static llama_token common_sampler_sample_impl(common_sampler * gsmpl, int n_voca
 }
 
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
-    llama_synchronize(ctx);
-
-    // start measuring sampling time after the llama_context synchronization in order to not measure any ongoing async operations
-    const auto tm = gsmpl->tm();
-
-    llama_sampling_output_view output;
-    output.probs = llama_get_sampled_probs_ith(ctx, idx);
-    output.sampled_logits = llama_get_sampled_logits_ith(ctx, idx);
-    output.candidates = llama_get_sampled_candidates_ith(ctx, idx);
-    if (output.probs) {
-        output.n_probs = llama_get_sampled_probs_count_ith(ctx, idx);
-    } else if (output.sampled_logits) {
-        output.n_logits = llama_get_sampled_logits_count_ith(ctx, idx);
-    } else {
-        output.logits = llama_get_logits_ith(ctx, idx);
-    }
-    output.token = llama_get_sampled_token_ith(ctx, idx);
-    const auto * vocab = llama_model_get_vocab(llama_get_model(ctx));
-    return common_sampler_sample_impl(gsmpl, llama_vocab_n_tokens(vocab), output, grammar_first);
+    const auto * outputs = llama_get_outputs(ctx);
+    return common_sampler_sample_from_outputs(gsmpl, outputs, idx, grammar_first);
 }
 
 llama_token common_sampler_sample_from_outputs(common_sampler * gsmpl, const llama_outputs * outputs, int idx, bool grammar_first) {
