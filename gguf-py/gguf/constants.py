@@ -383,6 +383,8 @@ class Keys:
         NORMALIZER_NFC           = "tokenizer.ggml.normalizer.nfc"
         NORMALIZER_LOWERCASE     = "tokenizer.ggml.normalizer.lowercase"
         NORMALIZER_STRIP_ACCENTS = "tokenizer.ggml.normalizer.strip_accents"
+        # Metaspace constants
+        METASPACE_PREPEND_SCHEME = "tokenizer.ggml.metaspace.prepend_scheme"
         # FIM/Infill special tokens constants
         FIM_PRE_ID           = "tokenizer.ggml.fim_pre_token_id"
         FIM_SUF_ID           = "tokenizer.ggml.fim_suf_token_id"

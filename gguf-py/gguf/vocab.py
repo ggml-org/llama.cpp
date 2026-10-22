@@ -56,6 +56,7 @@ class SpecialVocab:
     normalizer_lowercase: bool | None
     normalizer_strip_accents: bool | None
     clean_spaces: bool | None
+    metaspace_prepend_scheme: str | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -72,6 +73,7 @@ class SpecialVocab:
         self.normalizer_lowercase = None
         self.normalizer_strip_accents = None
         self.clean_spaces = None
+        self.metaspace_prepend_scheme = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -126,6 +128,10 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting clean_spaces to {self.clean_spaces}')
             gw.add_clean_spaces(self.clean_spaces)
+        if self.metaspace_prepend_scheme is not None:
+            if not quiet:
+                logger.info(f'Setting metaspace_prepend_scheme to {self.metaspace_prepend_scheme}')
+            gw.add_metaspace_prepend_scheme(self.metaspace_prepend_scheme)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -194,6 +200,16 @@ class SpecialVocab:
             for norm in normalizer.get('normalizers', []):
                 self._parse_normalizer(norm)
 
+    def _parse_pre_tokenizer(self, pre_tokenizer: dict) -> None:
+        # ref: https://huggingface.co/docs/tokenizers/api/pre-tokenizers
+        pre_tokenizer_type = pre_tokenizer.get('type')
+        if pre_tokenizer_type == 'Metaspace':
+            if 'prepend_scheme' in pre_tokenizer:
+                self.metaspace_prepend_scheme = pre_tokenizer['prepend_scheme']
+        elif pre_tokenizer_type == 'Sequence':
+            for pre in pre_tokenizer.get('pretokenizers', []):
+                self._parse_pre_tokenizer(pre)
+
     def _try_load_from_tokenizer_json(self, path: Path) -> bool:
         tokenizer = None
         tokenizer_file = path / 'tokenizer.json'
@@ -229,6 +245,8 @@ class SpecialVocab:
             # Parse normalizer configuration (e.g. Lowercase) into metadata
             if normalizer := tokenizer.get('normalizer'):
                 self._parse_normalizer(normalizer)
+            if pre_tokenizer := tokenizer.get('pre_tokenizer'):
+                self._parse_pre_tokenizer(pre_tokenizer)
             added_tokens = tokenizer.get('added_tokens', {})
         else:
             added_tokens = {}

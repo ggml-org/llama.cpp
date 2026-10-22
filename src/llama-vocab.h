@@ -71,6 +71,14 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_MMBERT            = 60,
     LLAMA_VOCAB_PRE_TYPE_K2_HORIZON        = 61,
     LLAMA_VOCAB_PRE_TYPE_FLINT             = 62,
+    LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL       = 63,
+};
+
+// HF Metaspace pre-tokenizer prepend_scheme
+enum llama_metaspace_prepend_scheme {
+    LLAMA_METASPACE_PREPEND_SCHEME_NEVER  = 0,
+    LLAMA_METASPACE_PREPEND_SCHEME_FIRST  = 1,
+    LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS = 2,
 };
 
 struct LLM_KV;
