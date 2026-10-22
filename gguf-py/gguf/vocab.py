@@ -55,6 +55,7 @@ class SpecialVocab:
     normalizer_nfc: bool | None
     normalizer_lowercase: bool | None
     normalizer_strip_accents: bool | None
+    clean_spaces: bool | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -70,6 +71,7 @@ class SpecialVocab:
         self.normalizer_nfc = None
         self.normalizer_lowercase = None
         self.normalizer_strip_accents = None
+        self.clean_spaces = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -120,6 +122,10 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting normalizer_strip_accents to {self.normalizer_strip_accents}')
             gw.add_normalizer_strip_accents(self.normalizer_strip_accents)
+        if self.clean_spaces is not None:
+            if not quiet:
+                logger.info(f'Setting clean_spaces to {self.clean_spaces}')
+            gw.add_clean_spaces(self.clean_spaces)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -345,6 +351,10 @@ class SpecialVocab:
             self.chat_template = chat_template
         else:
             logger.warning(f'Bad type for chat_template field in {tokenizer_config_file!r} - ignoring')
+        # decode clean-up of spaces before punctuation (transformers clean_up_tokenization_spaces)
+        clean_spaces = tokenizer_config.get('clean_up_tokenization_spaces')
+        if isinstance(clean_spaces, bool):
+            self.clean_spaces = clean_spaces
         for typ in self.special_token_types:
             add_entry = tokenizer_config.get(f'add_{typ}_token')
             if isinstance(add_entry, bool):
