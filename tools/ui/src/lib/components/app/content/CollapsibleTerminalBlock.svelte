@@ -98,9 +98,17 @@
 		<!-- See CollapsibleContentBlock: bits-ui keeps closed content mounted, which
 		     makes a collapsed tool result re-render on every streamed token. -->
 		{#if open}
-			<div class="p-3 pt-1">
+			<div class="terminal-body p-3 pt-1">
 				{@render children()}
 			</div>
 		{/if}
 	</Collapsible.Content>
 </Collapsible.Root>
+
+<style>
+	/* A body that renders no element (exec block while its args stream)
+	   must not leave its padding as a gap under the title. */
+	.terminal-body:not(:has(*)) {
+		padding: 0;
+	}
+</style>
