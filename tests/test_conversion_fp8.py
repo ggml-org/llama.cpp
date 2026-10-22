@@ -164,7 +164,7 @@ class TestFP8Conversion(unittest.TestCase):
             for eager in (False, True):
                 for scaled in (False, True):
                     with self.subTest(name=name, eager=eager, scaled=scaled):
-                        weight = torch.arange(np.prod(shape), dtype=torch.float32).reshape(shape).to(torch.float8_e4m3fn)
+                        weight = torch.arange(int(np.prod(shape)), dtype=torch.float32).reshape(shape).to(torch.float8_e4m3fn)
                         tensors = {name: weight}
                         if scaled:
                             tensors[name + "_scale"] = torch.tensor([0.25])
