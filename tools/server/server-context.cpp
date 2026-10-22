@@ -4309,13 +4309,15 @@ private:
 
                             {
                                 // erase any checkpoints with pos_max > pos_next, or that cover tokens not shared with the new prompt
-                                slot.prompt.checkpoints.remove_if([&](const common_prompt_checkpoint & cur) {
-                                    if (cur.pos_max <= pos_next && cur.n_tokens <= n_prefix) {
-                                        return false;
+                                for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
+                                    const auto & cur = *it;
+                                    if (cur.pos_max > pos_next || cur.n_tokens > n_prefix) {
+                                        SLT_TRC(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
+                                        it = slot.prompt.checkpoints.erase(it);
+                                    } else {
+                                        ++it;
                                     }
-                                    SLT_TRC(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
-                                    return true;
-                                });
+                                }
                             }
                         }
 
