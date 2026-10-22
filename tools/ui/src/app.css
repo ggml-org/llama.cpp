@@ -179,6 +179,16 @@
 		overscroll-behavior: none;
 	}
 
+	/* same for dialogs, whose panels and lists scroll on their own with sticky
+	   headers and footers. Scroll containers only: Firefox treats an
+	   overflow-hidden box (truncated text) as one, and with `none` it would
+	   keep the wheel from reaching the list around it */
+	:is([role='dialog'], [role='alertdialog']),
+	:is([role='dialog'], [role='alertdialog'])
+		:is(.overflow-auto, .overflow-y-auto, [data-slot='scroll-area-viewport']) {
+		overscroll-behavior: none;
+	}
+
 	/* Global scrollbar styling - visible only on hover */
 	* {
 		scrollbar-width: thin;
