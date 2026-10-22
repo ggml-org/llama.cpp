@@ -659,6 +659,18 @@ class ModelBase:
         if not self._preserve_fp8:
             return
 
+        quant_config = self.hparams.get("quantization_config") or {}
+        fp8_configs = [
+            group["weights"] for group in (quant_config.get("config_groups") or {}).values()
+            if isinstance(group, dict) and group.get("weights", {}).get("type") == "float"
+            and group.get("weights", {}).get("num_bits") == 8
+        ]
+        unsupported_layout = quant_config.get("weight_block_size") is not None or any(
+            config.get("strategy") not in (None, "tensor", "channel")
+            or config.get("block_structure") is not None or config.get("group_size") is not None
+            for config in fp8_configs
+        )
+
         scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
         input_scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
         consumed: list[str] = []
@@ -698,10 +710,11 @@ class ModelBase:
             scale = self.model_tensors[scale_name]()
             # Accept per-tensor or per-output-channel scale layouts.
             scale_size = prod(scale.shape)
-            if scale_size != 1 and scale_size != weight.shape[0]:
+            is_channel_scale = 1 <= scale.ndim <= weight.ndim and scale.shape[0] == weight.shape[0] and all(size == 1 for size in scale.shape[1:])
+            if unsupported_layout or (scale_size != 1 and not is_channel_scale):
                 raise ValueError(
                     f"FP8 weight {weight_name!r} has an unsupported block/group scale "
-                    f"(scale numel {scale_size}, weight shape {list(weight.shape)}); "
+                    f"(scale shape {list(scale.shape)}, weight shape {list(weight.shape)}); "
                     f"only per-tensor or per-output-channel scales are supported. "
                     f"Re-run with --fp8-as-q8 to dequantize instead.")
 
