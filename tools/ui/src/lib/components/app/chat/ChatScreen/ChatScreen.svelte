@@ -25,8 +25,7 @@
 		CHAT_FORM_MOVE_OUT_MS,
 		CHAT_FORM_MOVE_SHIFT_PX,
 		CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
-		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
-		ROUTES
+		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS
 	} from '$lib/constants';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -409,7 +408,7 @@
 			{/if}
 
 			<div class="pointer-events-none flex flex-col gap-6 items-center w-full">
-				{#if stick.farFromBottom && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
+				{#if stick.farFromBottom && page.params.id}
 					<ChatScreenActionScrollDown onclick={() => stick.scrollToBottom('smooth')} />
 				{/if}
 			</div>

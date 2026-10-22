@@ -14,4 +14,14 @@ export class RouterService {
 	static project(id: string): string {
 		return `${ROUTES.PROJECTS}/${id}`;
 	}
+
+	/** A chat opened inside its project, with the project's tabs. */
+	static projectChat(projectId: string, id: string): string {
+		return `${RouterService.project(projectId)}/chat/${id}`;
+	}
+
+	/** The new-chat screen of a project; the chat it starts joins the project. */
+	static projectNewChat(projectId: string): string {
+		return `${RouterService.project(projectId)}/chat/new`;
+	}
 }

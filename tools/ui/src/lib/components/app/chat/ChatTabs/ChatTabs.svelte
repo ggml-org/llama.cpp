@@ -2,6 +2,7 @@
 	import ChatTabsItem from './ChatTabsItem.svelte';
 	import ChatTabsNewChatButton from './ChatTabsNewChatButton.svelte';
 	import { ArrowRightToLine, ListX, Square, SquarePen, X } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ContextMenuActions, ScrollCarousel } from '$lib/components/app';
 	import {
@@ -15,42 +16,61 @@
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import { chatStore, conversationsStore, projectsStore, tabsStore, uiStore } from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
-	import { resolveTabView } from '$lib/utils';
-	import { tick } from 'svelte';
+	import { projectNewChatTabId, projectOfNewChatTab, resolveTabView } from '$lib/utils';
+	import { type Snippet, tick } from 'svelte';
+
+	interface Props {
+		/** Sits before the tabs, e.g. the breadcrumb of a project view. */
+		leading?: Snippet;
+	}
+
+	let { leading }: Props = $props();
 
 	const carousel = useScrollCarousel();
 
-	let view = $derived(resolveTabView(page, tabsStore.openTabs));
+	let view = $derived(resolveTabView(page, tabsStore.openTabs, conversationsStore.conversations));
 
 	let activeId = $derived(view.activeId);
 
 	let tabs = $derived(
 		view.ids.map((id) =>
-			id === NEW_CHAT_TAB_ID
+			id === NEW_CHAT_TAB_ID || projectOfNewChatTab(id)
 				? { href: view.hrefFor(id), icon: SquarePen, id, name: NEW_CHAT_LABEL }
 				: chatTab(id)
 		)
 	);
 
-	// a project chat carries its project name before the title, like a breadcrumb
+	// a project chat carries its project name before the title, like a breadcrumb,
+	// except inside the project's own view, which leads with the breadcrumb itself
 	function chatTab(id: string) {
 		const conversation = conversationsStore.conversations.find((c) => c.id === id);
+		const projectId = view.projectId ? undefined : conversation?.projectId;
 
 		return {
 			href: view.hrefFor(id),
 			id,
 			name: conversation?.name ?? UNNAMED_CHAT_LABEL,
-			prefix: conversation?.projectId ? projectsStore.get(conversation.projectId)?.name : undefined
+			prefix: projectId ? projectsStore.get(projectId)?.name : undefined
 		};
 	}
 
-	// hide the New chat button while a new-chat tab is already open
-	let showNewChatButton = $derived(!view.ids.includes(NEW_CHAT_TAB_ID));
+	// the new-chat tab of the view: the regular one, or the project's own
+	let newChatTabId = $derived(
+		view.projectId ? projectNewChatTabId(view.projectId) : NEW_CHAT_TAB_ID
+	);
+
+	// hide the New chat button while that tab is already open
+	let showNewChatButton = $derived(!view.ids.includes(newChatTabId));
 
 	let loadingIds = $derived(new Set(chatStore.getAllLoadingChats()));
 
 	function handleClose(id: string) {
 		void tabsStore.close(id, id === activeId, view);
+	}
+
+	function openNewChat() {
+		void tabsStore.openInNewTab(newChatTabId);
+		void goto(view.hrefFor(newChatTabId));
 	}
 
 	function handleStop(id: string, event: MouseEvent) {
@@ -142,44 +162,48 @@
 			: CHAT_TABS_MAX_WIDTH.COLLAPSED_SIDEBAR
 	]}
 >
-	<div class="relative">
-		<ScrollCarousel
-			{carousel}
-			class="h-10"
-			containerClass="flex h-10 min-w-0 items-center"
-			innerClass="items-center gap-1.25"
-		>
-			{#each tabs as tab (tab.id)}
-				<ContextMenuActions actions={tabActions(tab.id)}>
-					<ChatTabsItem
-						isActive={tab.id === activeId}
-						isLoading={loadingIds.has(tab.id)}
-						onActivate={(id) => tabsStore.activate(id)}
-						onAuxClick={handleAuxClick}
-						onClose={handleClose}
-						onStop={handleStop}
-						{tab}
-					/>
-				</ContextMenuActions>
-			{/each}
+	<div class="flex items-center">
+		{#if leading}
+			<div class="flex shrink-0 items-center pl-2">{@render leading()}</div>
+		{/if}
 
-			{#if showNewChatButton}
-				<ChatTabsNewChatButton
-					onclick={() => void tabsStore.openInNewTab(NEW_CHAT_TAB_ID, { activate: true })}
-				/>
-			{/if}
-		</ScrollCarousel>
+		<div class="relative min-w-0 flex-1">
+			<ScrollCarousel
+				{carousel}
+				class="h-10"
+				containerClass="flex h-10 min-w-0 items-center"
+				innerClass="items-center gap-1.25"
+			>
+				{#each tabs as tab (tab.id)}
+					<ContextMenuActions actions={tabActions(tab.id)}>
+						<ChatTabsItem
+							isActive={tab.id === activeId}
+							isLoading={loadingIds.has(tab.id)}
+							onActivate={(id) => void goto(view.hrefFor(id))}
+							onAuxClick={handleAuxClick}
+							onClose={handleClose}
+							onStop={handleStop}
+							{tab}
+						/>
+					</ContextMenuActions>
+				{/each}
 
-		<div
-			class="pointer-events-none absolute inset-y-0 left-0 z-[5] w-8 bg-gradient-to-r from-background to-transparent transition-opacity {carousel.canScrollLeft
-				? 'opacity-100'
-				: 'opacity-0'}"
-		></div>
+				{#if showNewChatButton}
+					<ChatTabsNewChatButton onclick={openNewChat} />
+				{/if}
+			</ScrollCarousel>
 
-		<div
-			class="pointer-events-none absolute inset-y-0 right-0 z-[5] w-8 bg-gradient-to-l from-background to-transparent transition-opacity {carousel.canScrollRight
-				? 'opacity-100'
-				: 'opacity-0'}"
-		></div>
+			<div
+				class="pointer-events-none absolute inset-y-0 left-0 z-[5] w-8 bg-gradient-to-r from-background to-transparent transition-opacity {carousel.canScrollLeft
+					? 'opacity-100'
+					: 'opacity-0'}"
+			></div>
+
+			<div
+				class="pointer-events-none absolute inset-y-0 right-0 z-[5] w-8 bg-gradient-to-l from-background to-transparent transition-opacity {carousel.canScrollRight
+					? 'opacity-100'
+					: 'opacity-0'}"
+			></div>
+		</div>
 	</div>
 </nav>

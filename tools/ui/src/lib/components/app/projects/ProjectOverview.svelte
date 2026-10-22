@@ -21,7 +21,10 @@
 
 <div class="w-full">
 	{#if conversations.length > 0}
-		<ProjectConversations {conversations} onOpen={(id) => void goto(RouterService.chat(id))} />
+		<ProjectConversations
+			{conversations}
+			onOpen={(id) => void goto(RouterService.projectChat(project.id, id))}
+		/>
 	{:else}
 		<div class="flex flex-col items-center gap-2 px-6 text-center">
 			<MessageSquare class="h-5 w-5 text-muted-foreground" />

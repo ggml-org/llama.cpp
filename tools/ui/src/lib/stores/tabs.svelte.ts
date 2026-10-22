@@ -1,12 +1,16 @@
 /**
  * tabsStore - Reactive State Store for Browser-Style Conversation Tabs
  *
- * Tracks which conversations and the new-chat screen are open as tabs in the
+ * Tracks which conversations and new-chat screens are open as tabs in the
  * chat layout, in order. Conversation tabs hold the conversation id; the
- * new-chat tab of the bare `#/` route is the `NEW_CHAT_TAB_ID` sentinel.
+ * new-chat tab of the bare `#/` route is the `NEW_CHAT_TAB_ID` sentinel, and
+ * a project's new-chat screen has a sentinel of its own (see
+ * `projectNewChatTabId`). The regular view and a project view show different
+ * slices of the same tabs (see `resolveTabView`).
  *
  * Tabs open like in a browser: a plain navigation shows the new target in
- * the current tab, and only `openInNewTab()` adds a tab.
+ * the current tab, and only `openInNewTab()` adds a tab. A project home is
+ * never a tab, so a chat opened from it gets a tab of its own.
  *
  * **Architecture & Relationships:**
  * - **conversationsStore**: owns conversation data; calls `removeTabs()` /
@@ -19,9 +23,14 @@
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { CONVERSATION_TABS_LOCALSTORAGE_KEY, NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
+import {
+	CONVERSATION_TABS_LOCALSTORAGE_KEY,
+	NEW_CHAT_TAB_ID,
+	PROJECT_HOME_TAB_ID,
+	ROUTES
+} from '$lib/constants';
 import { RouterService } from '$lib/services/router.service';
-import type { TabView } from '$lib/utils/chat-tabs';
+import { projectOfNewChatTab, type TabView } from '$lib/utils/chat-tabs';
 import { untrack } from 'svelte';
 
 export class TabsStore {
@@ -113,7 +122,11 @@ export class TabsStore {
 	}
 
 	hrefFor(id: string): string {
-		return id === NEW_CHAT_TAB_ID ? ROUTES.START : RouterService.chat(id);
+		if (id === NEW_CHAT_TAB_ID) return ROUTES.START;
+
+		const projectId = projectOfNewChatTab(id);
+
+		return projectId ? RouterService.projectNewChat(projectId) : RouterService.chat(id);
 	}
 
 	/**
@@ -125,9 +138,11 @@ export class TabsStore {
 	init(validIds: string[]): void {
 		if (!browser) return;
 
-		// the new-chat sentinel is a pseudo-tab, not a conversation, but it is
-		// still kept so a reload on `#/` does not drop the tab the user is on
-		this.openTabs = this.load().filter((id) => id === NEW_CHAT_TAB_ID || validIds.includes(id));
+		// new-chat sentinels are pseudo-tabs, not conversations, but they are
+		// still kept so a reload on a new-chat screen does not drop its tab
+		this.openTabs = this.load().filter(
+			(id) => id === NEW_CHAT_TAB_ID || !!projectOfNewChatTab(id) || validIds.includes(id)
+		);
 		this.initialized = true;
 		this.save();
 
@@ -171,7 +186,7 @@ export class TabsStore {
 	 * navigation. A target already open activates its tab; otherwise the tab
 	 * of the previous route now shows it, and only a navigation from a page
 	 * without a tab adds one.
-	 * @param target - Conversation id or `NEW_CHAT_TAB_ID`
+	 * @param target - Conversation id, `NEW_CHAT_TAB_ID` or `PROJECT_HOME_TAB_ID`
 	 */
 	syncWithRoute(target: string): void {
 		// untrack: callers invoke this from an effect keyed on the route, and
@@ -188,7 +203,8 @@ export class TabsStore {
 
 			this.current = target;
 
-			if (this.openTabs.includes(target)) return;
+			// the project home has no tab; leaving it opens one
+			if (target === PROJECT_HOME_TAB_ID || this.openTabs.includes(target)) return;
 
 			const idx = previous ? this.openTabs.indexOf(previous) : -1;
 
@@ -205,7 +221,16 @@ export class TabsStore {
 			const raw = localStorage.getItem(CONVERSATION_TABS_LOCALSTORAGE_KEY);
 			const parsed: unknown = raw ? JSON.parse(raw) : [];
 
-			return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+			if (Array.isArray(parsed)) return parsed.filter((id) => typeof id === 'string');
+
+			// tabs saved while each project had its own strip: one strip per key
+			if (parsed && typeof parsed === 'object') {
+				return Object.values(parsed).flatMap((strip: { tabs?: unknown }) =>
+					Array.isArray(strip?.tabs) ? strip.tabs.filter((id) => typeof id === 'string') : []
+				);
+			}
+
+			return [];
 		} catch {
 			return [];
 		}

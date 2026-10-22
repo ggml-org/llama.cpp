@@ -3,38 +3,54 @@
 	import {
 		ChatScreen,
 		ChatTabs,
+		ProjectBreadcrumb,
 		ProjectHeader,
 		ProjectIntro,
 		ProjectOverview,
 		ProjectPanels
 	} from '$lib/components/app';
-	import { NEW_CHAT_TAB_ID } from '$lib/constants';
+	import { NEW_CHAT_TAB_ID, PROJECT_HOME_TAB_ID } from '$lib/constants';
 	import { projectsStore, settingsStore, tabsStore } from '$lib/stores';
+	import { resolveTabTarget } from '$lib/utils';
 
 	let { children } = $props();
 
-	// the project home shows the project parts, and no tab bar
-	let project = $derived(
+	let tabTarget = $derived(resolveTabTarget(page));
+
+	let routeProject = $derived(
 		page.params.projectId ? projectsStore.get(page.params.projectId) : undefined
 	);
 
-	// the new-chat screen is the bare `#/` route (no conversation id)
-	let showCenteredEmpty = $derived(!page.params.id && !page.params.projectId);
+	// the project home shows the project parts, and no tab bar
+	let project = $derived(tabTarget === PROJECT_HOME_TAB_ID ? routeProject : undefined);
+
+	// chats under `#/projects/<id>/chat/` lead their tab bar with a way back to the project
+	let viewProject = $derived(tabTarget === PROJECT_HOME_TAB_ID ? undefined : routeProject);
+
+	// new-chat screens (`#/` or a project's) have no conversation id
+	let showCenteredEmpty = $derived(!page.params.id && tabTarget !== PROJECT_HOME_TAB_ID);
+
+	let tabsEnabled = $derived(Boolean(settingsStore.config.conversationTabs));
 
 	let showTabs = $derived(
-		Boolean(settingsStore.config.conversationTabs) &&
-			!page.params.projectId &&
-			(page.params.id || tabsStore.openTabs.some((id) => id !== NEW_CHAT_TAB_ID))
+		tabsEnabled &&
+			tabTarget !== null &&
+			!project &&
+			(!!page.params.id || !!viewProject || tabsStore.openTabs.some((id) => id !== NEW_CHAT_TAB_ID))
 	);
 
 	$effect(() => {
-		const id = page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
-
-		if (id && settingsStore.config.conversationTabs) {
-			tabsStore.syncWithRoute(id);
+		if (tabTarget && tabsEnabled) {
+			tabsStore.syncWithRoute(tabTarget);
 		}
 	});
 </script>
+
+{#snippet viewProjectBreadcrumb()}
+	{#if viewProject}
+		<ProjectBreadcrumb project={viewProject} trailingSeparator />
+	{/if}
+{/snippet}
 
 {#snippet projectHeader()}
 	{#if project}
@@ -64,7 +80,7 @@
      column still fits the viewport and only scrolls when the messages overflow -->
 <div class={showTabs ? 'md:[--chat-tabs-height:3.3125rem] md:[--chat-tabs-offset:3.3125rem]' : ''}>
 	{#if showTabs}
-		<ChatTabs />
+		<ChatTabs leading={viewProject ? viewProjectBreadcrumb : undefined} />
 	{/if}
 
 	<ChatScreen

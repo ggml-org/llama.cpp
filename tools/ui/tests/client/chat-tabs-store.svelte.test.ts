@@ -3,8 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
 import { goto } from '$app/navigation';
-import { CONVERSATION_TABS_LOCALSTORAGE_KEY, NEW_CHAT_TAB_ID } from '$lib/constants';
+import {
+	CONVERSATION_TABS_LOCALSTORAGE_KEY,
+	NEW_CHAT_TAB_ID,
+	PROJECT_HOME_TAB_ID
+} from '$lib/constants';
 import { TabsStore } from '$lib/stores/tabs.svelte';
+import type { DatabaseConversation } from '$lib/types';
+import { projectNewChatTabId, resolveTabView } from '$lib/utils/chat-tabs';
 
 const gotoMock = vi.mocked(goto);
 
@@ -61,6 +67,20 @@ describe('tabsStore route sync', () => {
 		expect(tabs.openTabs).toEqual(['a', 'b']);
 	});
 
+	it('opens a tab for each chat left from a project home, which has none', () => {
+		const tabs = freshStore();
+
+		tabs.syncWithRoute(PROJECT_HOME_TAB_ID);
+		expect(tabs.openTabs).toEqual([]);
+
+		tabs.syncWithRoute('x1');
+		tabs.syncWithRoute(PROJECT_HOME_TAB_ID);
+		tabs.syncWithRoute('x2');
+		tabs.syncWithRoute('x3');
+
+		expect(tabs.openTabs).toEqual(['x1', 'x3']);
+	});
+
 	it('waits for init before applying the route', () => {
 		localStorage.setItem(CONVERSATION_TABS_LOCALSTORAGE_KEY, JSON.stringify(['a', 'b']));
 
@@ -108,10 +128,74 @@ describe('tabsStore explicit tabs', () => {
 	});
 });
 
-describe('tabsStore persistence', () => {
-	it('prunes deleted conversations and keeps the new-chat tab', () => {
-		const tabs = freshStore(['a', NEW_CHAT_TAB_ID, 'gone'], ['a']);
+/**
+ * A project view (`#/projects/<id>/chat/...`) shows the chats of its project
+ * and keeps them in it; the regular view shows every chat.
+ */
+describe('tab views', () => {
+	const conversations = [
+		{ id: 'g', name: 'g' },
+		{ id: 'x', name: 'x', projectId: 'p1' },
+		{ id: 'y', name: 'y', projectId: 'p1' }
+	] as DatabaseConversation[];
+	const open = ['g', 'x', projectNewChatTabId('p1'), 'y'];
+	const projectChat = {
+		params: { id: 'x', projectId: 'p1' },
+		route: { id: '/(chat)/projects/[projectId]/chat/[id]' }
+	};
 
-		expect(tabs.openTabs).toEqual(['a', NEW_CHAT_TAB_ID]);
+	it('shows only the chats of the project, linked inside it', () => {
+		const view = resolveTabView(projectChat, open, conversations);
+
+		expect(view.ids).toEqual(['x', projectNewChatTabId('p1'), 'y']);
+		expect(view.hrefFor('y')).toBe('#/projects/p1/chat/y');
+		expect(view.hrefFor(projectNewChatTabId('p1'))).toBe('#/projects/p1/chat/new');
+	});
+
+	it('keeps project new-chat tabs out of the regular view', () => {
+		const view = resolveTabView(
+			{ params: { id: 'g' }, route: { id: '/(chat)/chat/[id]' } },
+			open,
+			conversations
+		);
+
+		expect(view.ids).toEqual(['g', 'x', 'y']);
+		expect(view.hrefFor('x')).toBe('#/chat/x');
+	});
+
+	it('closes to a neighbour inside the project, then to the project page', async () => {
+		const tabs = freshStore(open, ['g', 'x', 'y']);
+
+		await tabs.close('y', true, resolveTabView(projectChat, tabs.openTabs, conversations));
+		expect(gotoMock).toHaveBeenLastCalledWith('#/projects/p1/chat/new');
+
+		await tabs.close('x', true, resolveTabView(projectChat, tabs.openTabs, conversations));
+		await tabs.close(
+			projectNewChatTabId('p1'),
+			true,
+			resolveTabView(projectChat, tabs.openTabs, conversations)
+		);
+		expect(gotoMock).toHaveBeenLastCalledWith('#/projects/p1');
+		expect(tabs.openTabs).toEqual(['g']);
+	});
+});
+
+describe('tabsStore persistence', () => {
+	it('prunes deleted conversations and keeps the new-chat tabs', () => {
+		const tabs = freshStore(['a', NEW_CHAT_TAB_ID, projectNewChatTabId('p1'), 'gone'], ['a']);
+
+		expect(tabs.openTabs).toEqual(['a', NEW_CHAT_TAB_ID, projectNewChatTabId('p1')]);
+	});
+
+	it('merges tabs saved per project into one strip', () => {
+		const tabs = freshStore(
+			{
+				global: { active: 'a', tabs: ['a'] },
+				p1: { active: 'x', tabs: [PROJECT_HOME_TAB_ID, 'x'] }
+			},
+			['a', 'x']
+		);
+
+		expect(tabs.openTabs).toEqual(['a', 'x']);
 	});
 });

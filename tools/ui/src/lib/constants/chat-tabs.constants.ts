@@ -1,6 +1,9 @@
 /** Sentinel tab id for the bare `#/` new-chat screen */
 export const NEW_CHAT_TAB_ID = 'new-chat';
 
+/** Route target of a project's home page, which never gets a tab */
+export const PROJECT_HOME_TAB_ID = 'project-home';
+
 /** Label shown for the new-chat sentinel tab. */
 export const NEW_CHAT_LABEL = 'New chat';
 

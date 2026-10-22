@@ -683,11 +683,13 @@ export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
  * **ChatTabs** - Browser-style tab bar for open conversations
  *
  * Horizontal strip of tabs rendered above ChatScreen in the chat layout,
- * one per conversation tracked by tabsStore. The active tab follows the
- * route's conversation id; clicking a tab navigates to it, middle-click or
- * the close button closes it (switching to the left neighbor when closing
- * the active tab), and a trailing "+" button starts a new chat. Shows a
- * spinner on tabs with a running generation. Desktop-only.
+ * showing the tabs of the route's view (see `resolveTabView`): every open
+ * tab in the regular view, or the chats of the open project in a project
+ * view, led by the project breadcrumb. The active tab follows the route;
+ * clicking a tab navigates to it, middle-click or the close button closes
+ * it (switching to the left neighbor when closing the active tab), and a
+ * trailing "+" button starts a new chat, inside the project in a project
+ * view. Shows a spinner on tabs with a running generation. Desktop-only.
  */
 export { default as ChatTabs } from './ChatTabs/ChatTabs.svelte';
 
