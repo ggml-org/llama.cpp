@@ -7304,8 +7304,8 @@ static void ggml_vk_mul_mat_scale(ggml_backend_vk_context * ctx, vk_context& sub
     GGML_ASSERT(scale != nullptr && scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale));
     GGML_ASSERT(dst->type == GGML_TYPE_F32 && ggml_is_contiguous(dst));
 
-    const bool per_expert = is_id && ((uint64_t)ggml_nelements(scale) == (uint64_t)dst->src[0]->ne[2] ||
-                                      (uint64_t)scale->ne[1] == (uint64_t)dst->src[0]->ne[2]);
+    const bool per_channel_expert = is_id && scale->ne[0] == dst->ne[0] && scale->ne[1] == dst->src[0]->ne[2];
+    const bool per_expert = is_id && (ggml_nelements(scale) == dst->src[0]->ne[2] || per_channel_expert);
 
     vk_pipeline pipeline = ctx->device->pipeline_mul_mat_scale_f32;
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -7319,7 +7319,7 @@ static void ggml_vk_mul_mat_scale(ggml_backend_vk_context * ctx, vk_context& sub
     const vk_op_mul_mat_scale_push_constants pc = {
         (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)dst->ne[2], (uint32_t)dst->ne[3],
         (uint32_t)scale->ne[0], (uint32_t)scale->ne[1], (uint32_t)scale->ne[2], (uint32_t)scale->ne[3],
-        per_expert ? 1u : 0u,
+        per_channel_expert ? 2u : per_expert ? 1u : 0u,
         per_expert ? (uint32_t)(ids->nb[0] / sizeof(int32_t)) : 0u,
         per_expert ? (uint32_t)(ids->nb[1] / sizeof(int32_t)) : 0u,
     };
@@ -8082,7 +8082,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
         if (ggml_nelements(dst->src[3]) > 1) {
             fusion_flags |= MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_VEC;
         }
-        if (dst->src[3]->ne[1] > 1) {
+        if (dst->src[3]->ne[0] == dst->ne[0] && dst->src[3]->ne[1] == src0->ne[2]) {
             fusion_flags |= MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_2D;
         }
     }

@@ -28,7 +28,7 @@ void main() {
         uint si;
         if (p.per_expert != 0) {
             const uint expert = uint(data_ids[i1 * p.ids_s0 + i2 * p.ids_s1]);
-            si = (p.sne1 > 1) ? (i0 % p.sne0) + expert * p.sne0 : expert;
+            si = (p.per_expert == 2) ? (i0 % p.sne0) + expert * p.sne0 : expert;
         } else {
             si = (i0 % p.sne0)
                + (i1 % p.sne1) * p.sne0
