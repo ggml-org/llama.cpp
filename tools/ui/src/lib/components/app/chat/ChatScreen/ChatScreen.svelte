@@ -43,12 +43,25 @@
 		uiStore
 	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { tick, untrack } from 'svelte';
+	import { type Snippet, tick, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
 
-	let { showCenteredEmpty = false } = $props();
+	interface Props {
+		/** Sits above the messages. */
+		header?: Snippet;
+		/** Scrolls away under the header, e.g. a title. */
+		intro?: Snippet;
+		/** Takes the place of the messages, with the form at the bottom. */
+		overview?: Snippet;
+		/** Sit between the intro and the overview, e.g. a project's instructions and context. */
+		panels?: Snippet;
+		showCenteredEmpty?: boolean;
+	}
+
+	let { header, intro, overview, panels, showCenteredEmpty = false }: Props = $props();
 
 	let emptyFileNames = $state<string[]>([]);
+	let headerHeight = $state(0);
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
@@ -290,6 +303,7 @@
 	<div
 		style:--chat-form-bottom-position={chatFormBottomPosition}
 		style:--chat-form-side-inset={chatFormSideInset}
+		style:--chat-header-height={header && headerHeight > 0 ? `${headerHeight}px` : undefined}
 		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-var(--chat-tabs-offset,0px))] px-4 md:py-0 pt-(--page-top) pb-48 md:pb-4"
 		ondragenter={dragAndDrop.dragHandlers.dragenter}
 		ondragleave={dragAndDrop.dragHandlers.dragleave}
@@ -319,7 +333,31 @@
 			</div>
 		{/if}
 
-		{#if !isEmpty}
+		{#if header}
+			<!-- the tab bar's geometry (pt-3.25, an h-10 row, its leading inset), so
+			     the breadcrumb stays put when a project chat shows the tab bar -->
+			<div bind:clientHeight={headerHeight} class="pb-4 md:pt-3.25 md:pr-4 md:pl-1">
+				<div class="md:flex md:h-10 md:flex-col md:justify-center">
+					{@render header()}
+				</div>
+			</div>
+		{/if}
+
+		{#if panels}
+			<!-- a page with panels (the project home) is one column as wide as the
+			     chat form: intro, panels, then the overview -->
+			<div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
+				{@render intro?.()}
+
+				{@render panels()}
+
+				{@render overview?.()}
+			</div>
+		{:else if overview}
+			<div class="mt-6">
+				{@render overview()}
+			</div>
+		{:else if !isEmpty}
 			<ChatMessages
 				messages={conversationsStore.activeMessages}
 				onMessagesReady={handleMessagesReady}

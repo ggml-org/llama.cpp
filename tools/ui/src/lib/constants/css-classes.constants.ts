@@ -37,6 +37,11 @@ export const TAB_SURFACE_IDLE_CLASS =
 export const TAB_SURFACE_ACTIVE_CLASS =
 	'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15';
 
+/** Trailing control of a panel section header: the trigger of a section menu takes the flat
+ *  look of a solo action icon, so both read as the same control. */
+export const SECTION_ACTION_CLASS =
+	'hover:bg-transparent focus:bg-transparent dark:hover:bg-transparent data-[state=open]:bg-transparent focus-visible:ring-[3px] focus-visible:ring-ring/50';
+
 /** Selects the focused chat-form input (either renderer) to restore focus after model actions. */
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';

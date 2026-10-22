@@ -10,4 +10,8 @@ export class RouterService {
 	static chat(id: string): string {
 		return `${ROUTES.CHAT}/${id}`;
 	}
+
+	static project(id: string): string {
+		return `${ROUTES.PROJECTS}/${id}`;
+	}
 }

@@ -56,3 +56,30 @@ export { default as ProjectPrefix } from './ProjectPrefix.svelte';
  * project entry that opens the project dialog and joins the project it creates.
  */
 export { default as ProjectSubmenu } from './ProjectSubmenu.svelte';
+
+/** **ProjectBreadcrumb** - Part of the project page */
+export { default as ProjectBreadcrumb } from './ProjectBreadcrumb.svelte';
+
+/** **ProjectContext** - Part of the project page */
+export { default as ProjectContext } from './ProjectContext.svelte';
+
+/** **ProjectConversations** - Part of the project page */
+export { default as ProjectConversations } from './ProjectConversations.svelte';
+
+/** **ProjectHeader** - Part of the project page */
+export { default as ProjectHeader } from './ProjectHeader.svelte';
+
+/** **ProjectInstructions** - Part of the project page */
+export { default as ProjectInstructions } from './ProjectInstructions.svelte';
+
+/** **ProjectIntro** - Part of the project page */
+export { default as ProjectIntro } from './ProjectIntro.svelte';
+
+/** **ProjectOverview** - Part of the project page */
+export { default as ProjectOverview } from './ProjectOverview.svelte';
+
+/** **ProjectPanels** - Part of the project page */
+export { default as ProjectPanels } from './ProjectPanels.svelte';
+
+/** **ProjectSection** - Part of the project page */
+export { default as ProjectSection } from './ProjectSection.svelte';
