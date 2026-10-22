@@ -1501,6 +1501,8 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // scale_activations is intended for quantizing higher-precision activations to a lower-precision type.
+    // Divide activations by the scale before quantization, then multiply the matmul result by the scale.
     GGML_API struct ggml_tensor * ggml_mul_mat_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
