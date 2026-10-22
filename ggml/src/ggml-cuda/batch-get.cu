@@ -58,35 +58,43 @@ struct ggml_cuda_batch_get_mapping {
 #endif
 
 bool ggml_cuda_get_tensor_n(int device,
-        const ggml_tensor ** tensors, void * data, const size_t * offsets,
-        const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
+        const ggml_tensor * const * tensors, void * const * data, const size_t * offsets,
+        const size_t * sizes, size_t n_tensors) {
 #if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
     GGML_UNUSED(device);
     GGML_UNUSED(tensors);
     GGML_UNUSED(data);
     GGML_UNUSED(offsets);
     GGML_UNUSED(sizes);
-    GGML_UNUSED(data_offsets);
     GGML_UNUSED(n_tensors);
     return false;
 #else
+    // Provisional dispatch values based on experiments.
+    constexpr size_t min_batch_reads = 128;
+    constexpr size_t max_bytes_per_read = 128 * 1024;
     // Collect non-empty CPU destination ranges.
-    std::vector<std::pair<size_t, size_t>> ranges;
+    std::vector<std::pair<uintptr_t, uintptr_t>> ranges;
     ranges.reserve(n_tensors);
+    size_t payload_bytes = 0;
     for (size_t i = 0; i < n_tensors; ++i) {
         if (sizes[i] == 0) {
             continue;
         }
-        if (data_offsets[i] > SIZE_MAX - sizes[i]) {
+        const uintptr_t address = (uintptr_t) data[i];
+        if (address > UINTPTR_MAX - sizes[i] || payload_bytes > SIZE_MAX - sizes[i]) {
             return false;
         }
-        ranges.emplace_back(data_offsets[i], data_offsets[i] + sizes[i]);
+        payload_bytes += sizes[i];
+        ranges.emplace_back(address, address + sizes[i]);
     }
     if (ranges.empty()) {
         return true;
     }
     const size_t n_copies = ranges.size();
     if (n_copies > SIZE_MAX / sizeof(ggml_cuda_batch_get_descriptor) || n_copies > INT_MAX) {
+        return false;
+    }
+    if (n_copies < min_batch_reads) {
         return false;
     }
     const int threads = 256;
@@ -101,12 +109,12 @@ bool ggml_cuda_get_tensor_n(int device,
         }
     }
     // Find the CPU span to register, including gaps between destinations.
-    const uintptr_t base = (uintptr_t) data;
-    if (base > UINTPTR_MAX - ranges.back().second) {
+    const uintptr_t begin = ranges.front().first;
+    const uintptr_t end = ranges.back().second;
+    const size_t bytes_per_read = payload_bytes / n_copies + (payload_bytes % n_copies != 0);
+    if (bytes_per_read > max_bytes_per_read || end - begin - payload_bytes > payload_bytes) {
         return false;
     }
-    const uintptr_t begin = base + ranges.front().first;
-    const uintptr_t end = base + ranges.back().second;
     // Allocate per-call descriptor storage on the GPU and in pinned CPU memory; both buffers are freed on scope exit.
     const size_t bytes = n_copies * sizeof(ggml_cuda_batch_get_descriptor);
     ggml_backend_buffer_ptr descriptors(ggml_backend_buft_alloc_buffer(ggml_backend_cuda_buffer_type(device), bytes));
@@ -139,7 +147,7 @@ bool ggml_cuda_get_tensor_n(int device,
             continue;
         }
         copies[count++] = {(const unsigned char *) tensors[i]->data + offsets[i],
-                destination + (base + data_offsets[i] - begin), sizes[i]};
+                destination + ((uintptr_t) data[i] - begin), sizes[i]};
     }
     // Upload descriptors, then launch the kernel to copy payload bytes into mapped CPU memory.
     CUDA_CHECK(cudaMemcpyAsync(device_copies, copies, bytes, cudaMemcpyHostToDevice, cudaStreamPerThread));
