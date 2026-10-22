@@ -819,9 +819,10 @@ static void set_fp8_tensor_data(ggml_tensor * tensor, void * userdata) {
         std::vector<float> scales(ggml_nelements(tensor), 1.0f);
         for (const char * name : FP8_TEST_WEIGHTS) {
             if (params.fp8_scales && strncmp(tensor->name, name, strlen(name) - strlen("weight")) == 0) {
-                std::fill(scales.begin(), scales.end(), 0.5f);
+                // Scales above one avoid subnormal Q6_K block scales in the folded reference.
+                std::fill(scales.begin(), scales.end(), 4.0f);
                 if (!strstr(tensor->name, ".input_scale")) {
-                    scales[0] = 0.25f;
+                    scales[0] = 2.0f;
                 }
             }
         }
@@ -843,7 +844,7 @@ static void set_fp8_tensor_data(ggml_tensor * tensor, void * userdata) {
             traits->to_float(fp8.data(), values.data(), values.size());
             const size_t expert_size = tensor->ne[0] * tensor->ne[1];
             for (size_t i = 0; i < values.size(); ++i) {
-                values[i] *= i < expert_size ? 0.25f : 0.5f;
+                values[i] *= i < expert_size ? 2.0f : 4.0f;
             }
             std::vector<ggml_fp16_t> fp16(values.size());
             ggml_fp32_to_fp16_row(values.data(), fp16.data(), values.size());
@@ -877,7 +878,12 @@ static void test_fp8_requantize(const size_t seed, const float stdev) {
         if (!file) {
             throw std::runtime_error("failed to open FP8 test model");
         }
-        auto model_and_ctx = get_model_and_ctx(nullptr, file.get(), seed, stdev, {});
+        // Use the same CPU kernels for scaled weights and the folded reference.
+        const llama_model_tensor_buft_override overrides[] = {
+            {".*", ggml_backend_cpu_buffer_type()},
+            {nullptr, nullptr},
+        };
+        auto model_and_ctx = get_model_and_ctx(nullptr, file.get(), seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, false, overrides);
         return get_logits(model_and_ctx.first.get(), model_and_ctx.second.get(), tokens);
     };
 
