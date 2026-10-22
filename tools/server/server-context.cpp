@@ -2723,23 +2723,14 @@ private:
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         const int id_task = slot.task->id;
-        const int64_t n_tokens_new = slot.prompt.n_tokens() - n_tokens_cur;
 
         // checkpoints past the common prefix were erased, so one at the same position holds the same state - keep it
         // instead of copying again, unless it came from a slot file (id_task == -1, may fail to load)
-        {
-            const auto it = std::find_if(slot.prompt.checkpoints.begin(), slot.prompt.checkpoints.end(),
-                    [&](const common_prompt_checkpoint & cur) { return cur.n_tokens == n_tokens_new; });
-
-            if (it != slot.prompt.checkpoints.end()) {
-                if (it->id_task != -1 && it->pos_min == pos_min && it->pos_max == pos_max) {
-                    SLT_TRC(slot, "reusing context checkpoint at n_tokens = %" PRId64 "\n", it->n_tokens);
-                    it->id_task = id_task;
-                    return;
-                }
-
-                SLT_TRC(slot, "superseding context checkpoint at n_tokens = %" PRId64 "\n", it->n_tokens);
-                slot.prompt.checkpoints.erase(it);
+        for (auto & cur : slot.prompt.checkpoints) {
+            if (cur.id_task != -1 && cur.n_tokens == slot.prompt.n_tokens() - n_tokens_cur && cur.pos_min == pos_min && cur.pos_max == pos_max) {
+                SLT_TRC(slot, "reusing context checkpoint at n_tokens = %" PRId64 "\n", cur.n_tokens);
+                cur.id_task = id_task;
+                return;
             }
         }
 
@@ -2770,6 +2761,19 @@ private:
                     cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
 
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+        }
+
+        // replace an existing checkpoint at the same n_tokens instead of appending a duplicate
+        {
+            const int64_t n_tokens_new = slot.prompt.n_tokens() - n_tokens_cur;
+            for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end(); ) {
+                if (it->n_tokens == n_tokens_new) {
+                    SLT_TRC(slot, "superseding context checkpoint at n_tokens = %" PRId64 "\n", it->n_tokens);
+                    it = slot.prompt.checkpoints.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
