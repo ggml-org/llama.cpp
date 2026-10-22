@@ -147,6 +147,7 @@ class SLRU:
         self.tail = [n_slots - 1, -1]
         self.is_protected = [False] * n_slots
         self.n_protected = 0
+        self.n_filled = 0
         self.seen = [0] * n_expert
         self.seen_gen = 0
 
@@ -246,6 +247,8 @@ class SLRU:
             key = self.key_of[s]
             if key >= 0:
                 self.slot_map[key // self.n_expert][key % self.n_expert] = n_slots
+            else:
+                self.n_filled += 1
             self.key_of[s] = il * self.n_expert + e
             slots[e] = s
             self.move(s, False)
@@ -282,7 +285,7 @@ def replay(trace, size_mib, share, skip_tokens):
             continue
 
         def n_cpu(n_miss):
-            v = n_miss * share_q + acc[il]
+            v = n_miss * (share_q if c.n_filled == c.n_slots else 0) + acc[il]  # the share applies once the cache is full
             acc[il] = v & 0xFFFF
             return v >> 16
 

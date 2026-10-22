@@ -42,6 +42,7 @@ struct moe_cache_lru {
     int32_t head[n_class];
     int32_t tail[n_class];
     std::vector<int8_t>  list_of; // [n_slots] class list of the slot
+    int32_t n_filled = 0;         // slots that hold an expert
 
     std::vector<float>   crf;      // [n_layer*n_expert]
     std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
@@ -267,6 +268,8 @@ struct moe_cache_lru {
             const int32_t s = victim(il);
             if (key_of[s] >= 0) {
                 slot_map[key_layer(key_of[s])][key_expert(key_of[s])] = empty;
+            } else {
+                n_filled++;
             }
             const int32_t key = make_key(il, e);
             key_of[s] = key;
@@ -870,8 +873,8 @@ struct llama_moe_cache::impl {
             write_trace(il, it_cpu != cpu_parts.end() ? it_cpu->second.n_used : n_expert_used);
         }
 
-        // part of the misses is computed on the CPU, the carry keeps the share right on average
-        const uint32_t share_q = has_cpu ? cpu_share_q : 0;
+        // part of the misses is computed on the CPU once the cache is full, the carry keeps the share right on average
+        const uint32_t share_q = has_cpu && g.lru.n_filled == g.lru.n_slots ? cpu_share_q : 0;
         auto n_cpu = [&](size_t n_miss) {
             const uint64_t acc = (uint64_t) n_miss*share_q + l.cpu_acc;
             l.cpu_acc = acc & 0xffff;
