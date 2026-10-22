@@ -111,7 +111,7 @@ llama_model_hunyuan_vl::graph::graph(const llm_graph_params & params) : llm_grap
             cb(Qcur, "Qcur_norm", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -128,9 +128,9 @@ llama_model_hunyuan_vl::graph::graph(const llm_graph_params & params) : llm_grap
         cb(cur, "ffn_norm", il);
         // feed-forward network (non-MoE)
         ggml_tensor * cur_mlp = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL,
+                    model.layers[il].ffn_gate, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur_mlp, "ffn_out", il);
@@ -152,7 +152,7 @@ llama_model_hunyuan_vl::graph::graph(const llm_graph_params & params) : llm_grap
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

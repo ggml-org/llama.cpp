@@ -88,7 +88,7 @@ llama_model_arcee::graph::graph(const llm_graph_params & params) : llm_graph_con
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -109,9 +109,9 @@ llama_model_arcee::graph::graph(const llm_graph_params & params) : llm_graph_con
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   NULL, NULL,
-                NULL,                      NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
+                model.layers[il].ffn_up,   NULL,
+                NULL,                      NULL,
+                model.layers[il].ffn_down, NULL,
                 NULL,
                 LLM_FFN_RELU_SQR, LLM_FFN_SEQ, il);
         cb(cur, "ffn_out", il);
@@ -136,7 +136,7 @@ llama_model_arcee::graph::graph(const llm_graph_params & params) : llm_graph_con
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
