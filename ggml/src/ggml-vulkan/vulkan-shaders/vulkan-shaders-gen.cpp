@@ -885,6 +885,8 @@ void process_shaders() {
     string_to_spv("cpy_f32_bf16","copy.comp", {{"A_TYPE", "float"}, {"D_TYPE", "uint16_t"}, {"DATA_D_BF16", "1"}});
     string_to_spv("cpy_bf16_f32","copy.comp", {{"A_TYPE", "uint16_t"}, {"D_TYPE", "float"}, {"DATA_A_BF16", "1"}});
     string_to_spv("cpy_bf16_f16","copy.comp", {{"A_TYPE", "uint16_t"}, {"D_TYPE", "float16_t"}, {"DATA_A_BF16", "1"}});
+    string_to_spv("cpy_8", "copy.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}});
+    string_to_spv("cpy_f8_e4m3_f16", "copy.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "float16_t"}, {"DATA_A_F8_E4M3", "1"}});
     string_to_spv("contig_cpy_32", "contig_copy.comp", {{"A_TYPE", "uint"}, {"D_TYPE", "uint"}});
     string_to_spv("contig_cpy_f32_i32", "contig_copy.comp", {{"A_TYPE", "float"}, {"D_TYPE", "int"}});
     string_to_spv("contig_cpy_i32_f32", "contig_copy.comp", {{"A_TYPE", "int"}, {"D_TYPE", "float"}});
@@ -894,6 +896,8 @@ void process_shaders() {
     string_to_spv("contig_cpy_f32_bf16","contig_copy.comp",{{"A_TYPE", "float"}, {"D_TYPE", "uint16_t"}, {"DATA_D_BF16", "1"}});
     string_to_spv("contig_cpy_bf16_f32","contig_copy.comp",{{"A_TYPE", "uint16_t"}, {"D_TYPE", "float"}, {"DATA_A_BF16", "1"}});
     string_to_spv("contig_cpy_bf16_f16","contig_copy.comp",{{"A_TYPE", "uint16_t"}, {"D_TYPE", "float16_t"}, {"DATA_A_BF16", "1"}});
+    string_to_spv("contig_cpy_8", "contig_copy.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}});
+    string_to_spv("contig_cpy_f8_e4m3_f16", "contig_copy.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "float16_t"}, {"DATA_A_F8_E4M3", "1"}});
     string_to_spv("cpy_f32_i32", "copy.comp", {{"A_TYPE", "float"}, {"D_TYPE", "int"}});
     string_to_spv("cpy_i32_f32", "copy.comp", {{"A_TYPE", "int"}, {"D_TYPE", "float"}});
 
