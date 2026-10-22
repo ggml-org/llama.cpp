@@ -229,10 +229,10 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
 
             cur = has_swa
                 ? build_attn(inp_attn_iswa,
-                        NULL, NULL, NULL,    // o_proj deferred until after gating
+                        NULL, NULL,    // o_proj deferred until after gating
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
                 : build_attn(inp_attn_kv,
-                        NULL, NULL, NULL,
+                        NULL, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -258,7 +258,7 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
             }
             cb(cur, "attn_gated", il);
 
-            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+            cur = build_lora_mm(model.layers[il].wo, cur);
             cb(cur, "attn_o_proj", il);
         }
 
@@ -293,9 +293,9 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
 
             // Always-on shared expert, summed in parallel.
             ggml_tensor * ffn_shexp = build_ffn(cur,
-                    model.layers[il].ffn_up_shexp,   NULL, NULL,
-                    model.layers[il].ffn_gate_shexp, NULL, NULL,
-                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    model.layers[il].ffn_up_shexp,   NULL,
+                    model.layers[il].ffn_gate_shexp, NULL,
+                    model.layers[il].ffn_down_shexp, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
@@ -305,9 +305,9 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
         } else {
             // Dense FFN for the leading n_layer_dense_lead layers (XS.2: 1, M.1: 3)
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL,
+                    model.layers[il].ffn_gate, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);

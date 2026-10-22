@@ -189,7 +189,7 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     // For Granite architectures - scale logits
     if (hparams.f_logit_scale) {
@@ -223,7 +223,7 @@ ggml_tensor * llama_model_granite_hybrid::graph::build_attention_layer(ggml_tens
     const float kq_scale =
         hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
     cur = build_attn(inp_attn,
-            model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+            model.layers[il].wo, model.layers[il].wo_b,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_out", il);
     return cur;
@@ -246,9 +246,9 @@ ggml_tensor * llama_model_granite_hybrid::graph::build_layer_ffn(ggml_tensor *  
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up, model.layers[il].ffn_up_b, model.layers[il].ffn_up_s,
-                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
-                model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
+                model.layers[il].ffn_up, model.layers[il].ffn_up_b,
+                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
@@ -269,19 +269,16 @@ ggml_tensor * llama_model_granite_hybrid::graph::build_layer_ffn(ggml_tensor *  
                 hparams.expert_weights_scale,
                 LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                 il,
-                nullptr, nullptr,
-                model.layers[il].ffn_up_exps_s,
-                model.layers[il].ffn_gate_exps_s,
-                model.layers[il].ffn_down_exps_s);
+                nullptr, nullptr);
         cb(moe_out, "ffn_moe_out", il);
 
         // For Granite MoE Shared
         if (hparams.n_ff_shexp > 0) {
             ggml_tensor * ffn_shexp =
                 build_ffn(cur,
-                    model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
-                    model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
-                    model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
+                    model.layers[il].ffn_up_shexp, NULL,
+                    model.layers[il].ffn_gate_shexp, NULL,
+                    model.layers[il].ffn_down_shexp, NULL,
                     NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
 

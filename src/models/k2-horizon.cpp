@@ -245,9 +245,9 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
         {
             ggml_tensor * attn_inp = cur; // saved for the output gate
 
-            ggml_tensor * Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
-            ggml_tensor * Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
-            ggml_tensor * Vcur = is_mova_layer ? build_routed_value(layer, cur, il) : build_lora_mm(layer.wv, cur, layer.wv_s);
+            ggml_tensor * Qcur = build_lora_mm(layer.wq, cur);
+            ggml_tensor * Kcur = build_lora_mm(layer.wk, cur);
+            ggml_tensor * Vcur = is_mova_layer ? build_routed_value(layer, cur, il) : build_lora_mm(layer.wv, cur);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -276,19 +276,19 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
             const bool gated = layer.wqkv_gate != nullptr;
 
             cur = build_attn(inp_attn,
-                    gated ? nullptr : layer.wo, gated ? nullptr : layer.wo_b, gated ? nullptr : layer.wo_s,
+                    gated ? nullptr : layer.wo, gated ? nullptr : layer.wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
 
             if (gated) {
                 // softplus with beta = ln(2): log2(1 + 2^x)
                 constexpr float ln2 = 0.6931471805599453f;
-                ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_inp, layer.wqkv_gate_s);
+                ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_inp);
                 gate = ggml_scale(ctx0, gate, ln2);
                 gate = ggml_softplus(ctx0, gate);
                 gate = ggml_scale(ctx0, gate, 1.4426950408889634f); // 1 / ln(2)
 
                 cur = ggml_mul(ctx0, cur, gate);
-                cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+                cur = build_lora_mm(layer.wo, cur);
                 if (layer.wo_b) {
                     cur = ggml_add(ctx0, cur, layer.wo_b);
                 }
@@ -322,9 +322,9 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
 
             if (layer.ffn_gate_shexp) {
                 ggml_tensor * ffn_shexp = build_ffn(cur,
-                        layer.ffn_up_shexp,   NULL, NULL,
-                        layer.ffn_gate_shexp, NULL, NULL,
-                        layer.ffn_down_shexp, NULL, NULL,
+                        layer.ffn_up_shexp,   NULL,
+                        layer.ffn_gate_shexp, NULL,
+                        layer.ffn_down_shexp, NULL,
                         NULL,
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cur = ggml_add(ctx0, moe_out, ffn_shexp);
@@ -333,9 +333,9 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
             }
         } else {
             cur = build_ffn(cur,
-                    layer.ffn_up,   NULL, NULL,
-                    layer.ffn_gate, NULL, NULL,
-                    layer.ffn_down, NULL, NULL,
+                    layer.ffn_up,   NULL,
+                    layer.ffn_gate, NULL,
+                    layer.ffn_down, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
         }
@@ -354,7 +354,7 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

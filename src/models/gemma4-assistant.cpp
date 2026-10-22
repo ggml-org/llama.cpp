@@ -121,7 +121,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     ggml_tensor * xh = ggml_concat(ctx0, x, inp_h, 0);
     cb(xh, "inp_xh", -1);
 
-    ggml_tensor * cur = ggml_mul_mat(ctx0, model.nextn_proj_pre, xh);
+    ggml_tensor * cur = build_lora_mm(model.nextn_proj_pre, xh);
     cb(cur, "pre_proj", -1);
 
     auto *        inp_attn    = build_attn_inp_kv_iswa();
@@ -153,7 +153,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
                              freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Qcur, "Qcur_pos", il);
 
-        cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
+        cur = build_attn(inp_attn, model.layers[il].wo, nullptr,
                 Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
 
         if (il == n_layer_nextn - 1 && inp_out_ids) {
@@ -171,9 +171,9 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   nullptr, nullptr,
-                model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, nullptr,
+                model.layers[il].ffn_up,   nullptr,
+                model.layers[il].ffn_gate, nullptr,
+                model.layers[il].ffn_down, nullptr,
                 nullptr,
                 LLM_FFN_GELU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -197,7 +197,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     cb(logits, "result_output", -1);
     res->t_logits = logits;
 
-    ggml_tensor * h_next = ggml_mul_mat(ctx0, model.nextn_proj_post, cur);
+    ggml_tensor * h_next = build_lora_mm(model.nextn_proj_post, cur);
     cb(h_next, "h_nextn", -1);
     res->t_h_nextn = h_next;
 

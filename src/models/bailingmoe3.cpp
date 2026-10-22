@@ -268,7 +268,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
                     gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv,
                     d_conv, head_dim, n_head, n_seq_tokens, n_seqs, n_tokens, cache_head, mem_size, cparams.n_rs_seq);
 
-            ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ssm_f_a, cur);
+            ggml_tensor * gate = build_lora_mm(layer.ssm_f_a, cur);
             gate = ggml_add(ctx0, gate, layer.ssm_dt_b);
             gate = ggml_reshape_3d(ctx0, gate, head_dim, n_head, n_tokens);
             ggml_tensor * a = ggml_reshape_3d(ctx0, layer.ssm_a, 1, n_head, 1);
@@ -276,7 +276,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
             gate = ggml_reshape_4d(ctx0, gate, head_dim, n_head, n_seq_tokens, n_seqs);
             cb(gate, "kda_gate", il);
 
-            ggml_tensor * beta = ggml_mul_mat(ctx0, layer.ssm_beta, cur);
+            ggml_tensor * beta = build_lora_mm(layer.ssm_beta, cur);
             beta = ggml_sigmoid(ctx0, ggml_reshape_4d(ctx0, beta, 1, n_head, n_seq_tokens, n_seqs));
 
             q = build_gdn_l2_norm(ctx0, q, hparams.f_norm_rms_eps);
@@ -289,25 +289,25 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
             ggml_tensor * out = ggml_cont(ctx0, build_recurrent_attn(
                     inp_rs, states_all, q, k, v, gate, beta, state, il));
 
-            ggml_tensor * out_gate = ggml_mul_mat(ctx0, layer.ssm_g_a, cur);
+            ggml_tensor * out_gate = build_lora_mm(layer.ssm_g_a, cur);
             out_gate = ggml_reshape_3d(ctx0, out_gate, head_dim, n_head, n_tokens);
             out = ggml_reshape_3d(ctx0, out, head_dim, n_head, n_tokens);
             out = build_norm(out, layer.ssm_o_norm, nullptr, LLM_NORM_RMS, il);
             out = ggml_mul(ctx0, out, ggml_sigmoid(ctx0, out_gate));
-            cur = ggml_mul_mat(ctx0, layer.wo, ggml_cont_2d(ctx0, out, d_inner, n_tokens));
+            cur = build_lora_mm(layer.wo, ggml_cont_2d(ctx0, out, d_inner, n_tokens));
             cb(cur, "kda_out", il);
         } else {
             ggml_tensor * attn_input = cur;
             ggml_tensor * q_all;
             if (layer.wq_a) {
-                q_all = ggml_mul_mat(ctx0, layer.wq_a, cur);
+                q_all = build_lora_mm(layer.wq_a, cur);
                 cb(q_all, "q_a", il);
                 q_all = build_norm(q_all, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
                 cb(q_all, "q_a_norm", il);
-                q_all = ggml_mul_mat(ctx0, layer.wq_b, q_all);
+                q_all = build_lora_mm(layer.wq_b, q_all);
                 cb(q_all, "q_b", il);
             } else {
-                q_all = ggml_mul_mat(ctx0, layer.wq, cur);
+                q_all = build_lora_mm(layer.wq, cur);
             }
             ggml_tensor * q_nope = ggml_view_3d(ctx0, q_all, qk_nope_head_dim, n_head, n_tokens,
                     ggml_row_size(q_all->type, qk_head_dim),
@@ -317,7 +317,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
                     ggml_row_size(q_all->type, qk_head_dim) * n_head,
                     ggml_row_size(q_all->type, qk_nope_head_dim));
 
-            ggml_tensor * kv_all = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+            ggml_tensor * kv_all = build_lora_mm(layer.wkv_a_mqa, cur);
             ggml_tensor * kv = ggml_view_2d(ctx0, kv_all, kv_lora_rank, n_tokens,
                     ggml_row_size(kv_all->type, kv_lora_rank + qk_rope_head_dim), 0);
             ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_all, qk_rope_head_dim, 1, n_tokens,
@@ -339,21 +339,21 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
             kv = build_norm(kv, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
 
             q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
-            q_nope = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+            q_nope = build_lora_mm(layer.wk_b, q_nope);
             q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
 
             ggml_tensor * q = ggml_concat(ctx0, q_nope, q_pe, 0);
             kv = ggml_reshape_3d(ctx0, kv, kv_lora_rank, 1, n_tokens);
             ggml_tensor * k = ggml_concat(ctx0, kv, k_pe, 0);
 
-            cur = build_attn(inp_attn, nullptr, nullptr, nullptr,
+            cur = build_attn(inp_attn, nullptr, nullptr,
                     q, k, kv, nullptr, nullptr, layer.wv_b, kq_scale, il);
 
-            ggml_tensor * attn_gate = ggml_mul_mat(ctx0, layer.wqkv_gate, attn_input);
+            ggml_tensor * attn_gate = build_lora_mm(layer.wqkv_gate, attn_input);
             attn_gate = ggml_sigmoid(ctx0, ggml_reshape_3d(ctx0, attn_gate, 1, n_head, n_tokens));
             cur = ggml_reshape_3d(ctx0, cur, v_head_dim, n_head, n_tokens);
             cur = ggml_mul(ctx0, cur, attn_gate);
-            cur = ggml_mul_mat(ctx0, layer.wo, ggml_cont_2d(ctx0, cur, v_head_dim * n_head, n_tokens));
+            cur = build_lora_mm(layer.wo, ggml_cont_2d(ctx0, cur, v_head_dim * n_head, n_tokens));
             cb(cur, "mla_out", il);
         }
 
@@ -367,9 +367,9 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
-                    layer.ffn_up, nullptr, nullptr,
-                    layer.ffn_gate, nullptr, nullptr,
-                    layer.ffn_down, nullptr, nullptr,
+                    layer.ffn_up, nullptr,
+                    layer.ffn_gate, nullptr,
+                    layer.ffn_down, nullptr,
                     nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
         } else {
             ggml_tensor * moe = build_moe_ffn(cur,
@@ -385,9 +385,9 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il);
             ggml_tensor * shared = build_ffn(cur,
-                    layer.ffn_up_shexp, nullptr, nullptr,
-                    layer.ffn_gate_shexp, nullptr, nullptr,
-                    layer.ffn_down_shexp, nullptr, nullptr,
+                    layer.ffn_up_shexp, nullptr,
+                    layer.ffn_gate_shexp, nullptr,
+                    layer.ffn_down_shexp, nullptr,
                     nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cur = ggml_add(ctx0, moe, shared);
         }
@@ -409,7 +409,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = ggml_mul_mat(ctx0, model.output, cur);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
@@ -449,7 +449,7 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
     ggml_tensor * tok_embd = ubatch.token ? ggml_get_rows(ctx0, model.tok_embd, inp->tokens) : inp->embd;
     ggml_tensor * h_norm = build_norm(inp->h, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
-    ggml_tensor * cur = ggml_mul_mat(ctx0, layer.nextn.eh_proj, ggml_concat(ctx0, e_norm, h_norm, 0));
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, ggml_concat(ctx0, e_norm, h_norm, 0));
     cb(cur, "mtp_eh_proj", il);
 
     res->add_input(std::move(inp));
@@ -464,14 +464,14 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
 
     ggml_tensor * q_all;
     if (layer.wq_a) {
-        q_all = ggml_mul_mat(ctx0, layer.wq_a, cur);
+        q_all = build_lora_mm(layer.wq_a, cur);
         cb(q_all, "q_a", il);
         q_all = build_norm(q_all, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
         cb(q_all, "q_a_norm", il);
-        q_all = ggml_mul_mat(ctx0, layer.wq_b, q_all);
+        q_all = build_lora_mm(layer.wq_b, q_all);
         cb(q_all, "q_b", il);
     } else {
-        q_all = ggml_mul_mat(ctx0, layer.wq, cur);
+        q_all = build_lora_mm(layer.wq, cur);
     }
     ggml_tensor * q_nope = ggml_view_3d(ctx0, q_all, qk_nope_head_dim, n_head, n_tokens,
             ggml_row_size(q_all->type, qk_head_dim),
@@ -481,7 +481,7 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
             ggml_row_size(q_all->type, qk_head_dim) * n_head,
             ggml_row_size(q_all->type, qk_nope_head_dim));
 
-    ggml_tensor * kv_all = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+    ggml_tensor * kv_all = build_lora_mm(layer.wkv_a_mqa, cur);
     ggml_tensor * kv = ggml_view_2d(ctx0, kv_all, kv_lora_rank, n_tokens,
             ggml_row_size(kv_all->type, kv_lora_rank + qk_rope_head_dim), 0);
     ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_all, qk_rope_head_dim, 1, n_tokens,
@@ -507,21 +507,21 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
     kv = build_norm(kv, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
 
     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
-    q_nope = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+    q_nope = build_lora_mm(layer.wk_b, q_nope);
     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
 
     ggml_tensor * q = ggml_concat(ctx0, q_nope, q_pe, 0);
     kv = ggml_reshape_3d(ctx0, kv, kv_lora_rank, 1, n_tokens);
     ggml_tensor * k = ggml_concat(ctx0, kv, k_pe, 0);
 
-    cur = build_attn(inp_attn, nullptr, nullptr, nullptr,
+    cur = build_attn(inp_attn, nullptr, nullptr,
             q, k, kv, nullptr, nullptr, layer.wv_b, kq_scale, il);
 
-    ggml_tensor * attn_gate = ggml_mul_mat(ctx0, layer.wqkv_gate, attn_input);
+    ggml_tensor * attn_gate = build_lora_mm(layer.wqkv_gate, attn_input);
     attn_gate = ggml_sigmoid(ctx0, ggml_reshape_3d(ctx0, attn_gate, 1, n_head, n_tokens));
     cur = ggml_reshape_3d(ctx0, cur, v_head_dim, n_head, n_tokens);
     cur = ggml_mul(ctx0, cur, attn_gate);
-    cur = ggml_mul_mat(ctx0, layer.wo, ggml_cont_2d(ctx0, cur, v_head_dim * n_head, n_tokens));
+    cur = build_lora_mm(layer.wo, ggml_cont_2d(ctx0, cur, v_head_dim * n_head, n_tokens));
 
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
     cur = build_norm(ffn_inp, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
@@ -539,9 +539,9 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
             (llama_expert_gating_func_type) hparams.expert_gating_func,
             il);
     ggml_tensor * shared = build_ffn(cur,
-            layer.ffn_up_shexp, nullptr, nullptr,
-            layer.ffn_gate_shexp, nullptr, nullptr,
-            layer.ffn_down_shexp, nullptr, nullptr,
+            layer.ffn_up_shexp, nullptr,
+            layer.ffn_gate_shexp, nullptr,
+            layer.ffn_down_shexp, nullptr,
             nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
     cur = ggml_add(ctx0, moe, shared);
     cur = ggml_add(ctx0, cur, ffn_inp);
@@ -551,7 +551,7 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
     res->t_h_nextn = cur;
 
     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    cur = ggml_mul_mat(ctx0, model.output, cur);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

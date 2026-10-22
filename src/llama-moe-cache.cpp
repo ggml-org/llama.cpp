@@ -155,19 +155,13 @@ struct moe_cache_slru {
 };
 
 // gate, up, down or gate_up, down
-static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer, std::vector<ggml_tensor *> * scales = nullptr) {
+static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer, const llama_weight_scales * ws = nullptr, std::vector<ggml_tensor *> * scales = nullptr) {
     std::vector<ggml_tensor *> res;
-    const struct { ggml_tensor * weight; ggml_tensor * scale; } tensors[] = {
-        { layer.ffn_gate_up_exps, layer.ffn_up_exps_s },
-        { layer.ffn_gate_exps, layer.ffn_gate_exps_s },
-        { layer.ffn_up_exps, layer.ffn_up_exps_s },
-        { layer.ffn_down_exps, layer.ffn_down_exps_s },
-    };
-    for (const auto & t : tensors) {
-        if (t.weight != nullptr) {
-            res.push_back(t.weight);
+    for (ggml_tensor * t : { layer.ffn_gate_up_exps, layer.ffn_gate_exps, layer.ffn_up_exps, layer.ffn_down_exps }) {
+        if (t != nullptr) {
+            res.push_back(t);
             if (scales != nullptr) {
-                scales->push_back(t.scale);
+                scales->push_back(ws->get(t));
             }
         }
     }
@@ -289,7 +283,7 @@ struct llama_moe_cache::impl {
         // only cache layers that keep all of their experts in host memory, on the device the layer is assigned to
         for (size_t il = 0; il < model.layers.size(); ++il) {
             std::vector<ggml_tensor *> scales;
-            auto experts = llama_moe_cache_layer_experts(model.layers[il], &scales);
+            auto experts = llama_moe_cache_layer_experts(model.layers[il], &model.w_scales, &scales);
             if (experts.empty() || !std::all_of(experts.begin(), experts.end(), llama_moe_cache_is_host_weight)) {
                 continue;
             }
@@ -444,7 +438,7 @@ struct llama_moe_cache::impl {
                 layer & l = layers[il];
                 l.ig      = (int32_t) ig;
                 std::vector<ggml_tensor *> scales;
-                l.experts = llama_moe_cache_layer_experts(model.layers[il], &scales);
+                l.experts = llama_moe_cache_layer_experts(model.layers[il], &model.w_scales, &scales);
                 l.scales.resize(l.experts.size());
                 for (size_t ip = 0; ip < l.experts.size(); ++ip) {
                     ggml_tensor * bank   = g.banks[ip];

@@ -185,7 +185,7 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
                 cb(Kcur, "Kcur_normed", il);
             }
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -204,9 +204,9 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
             cb(cur, "ffn_norm", il);
 
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
-                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -230,9 +230,9 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
 
             // Shared experts
             ggml_tensor * shexp_out = build_ffn(ffn_inp_normed,
-                model.layers[il].ffn_up_shexp,   NULL, NULL,
-                model.layers[il].ffn_gate_shexp, NULL, NULL,
-                model.layers[il].ffn_down_shexp, NULL, NULL,
+                model.layers[il].ffn_up_shexp,   NULL,
+                model.layers[il].ffn_gate_shexp, NULL,
+                model.layers[il].ffn_down_shexp, NULL,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(shexp_out, "ffn_moe_shexp", il);
@@ -259,7 +259,7 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

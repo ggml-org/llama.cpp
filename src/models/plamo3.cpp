@@ -138,7 +138,7 @@ llama_model_plamo3::graph<iswa>::graph(const llama_model & model, const llm_grap
         const float attn_scale = 1.0f / sqrtf(float(head_dim_q));
 
         cur = build_attn(inp_attn,
-                model.layers[il].wo, NULL, model.layers[il].wo_s,
+                model.layers[il].wo, NULL,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
         cb(cur, "attn_out", il);
 
@@ -159,9 +159,9 @@ llama_model_plamo3::graph<iswa>::graph(const llama_model & model, const llm_grap
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   NULL, NULL,
-                NULL,                      NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
+                model.layers[il].ffn_up,   NULL,
+                NULL,                      NULL,
+                model.layers[il].ffn_down, NULL,
                 NULL,
                 LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
         cb(cur, "ffn_out", il);
@@ -184,7 +184,7 @@ llama_model_plamo3::graph<iswa>::graph(const llama_model & model, const llm_grap
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     res->t_logits = cur;
 }
 

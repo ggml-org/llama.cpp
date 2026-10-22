@@ -189,7 +189,7 @@ llama_model_granite_swa::graph::graph(
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     // For Granite architectures - scale logits
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
@@ -232,7 +232,7 @@ ggml_tensor * llama_model_granite_swa::graph::build_attention_layer(
 
     // Pass layer.attn_sinks to build_attn for sink-based attention modulation
     cur = build_attn(inp_attn,
-            model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+            model.layers[il].wo, model.layers[il].wo_b,
             Qcur, Kcur, Vcur, nullptr, model.layers[il].attn_sinks, nullptr, kq_scale, il);
     cb(cur, "attn_out", il);
     return cur;
@@ -260,9 +260,9 @@ ggml_tensor * llama_model_granite_swa::graph::build_layer_ffn(
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
-                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
-                model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -291,9 +291,9 @@ ggml_tensor * llama_model_granite_swa::graph::build_layer_ffn(
         // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp
         if (hparams.n_ff_shexp > 0) {
             ggml_tensor * ffn_shexp = build_ffn(cur,
-                model.layers[il].ffn_up_shexp,   NULL, NULL,
-                NULL,                            NULL, NULL,
-                model.layers[il].ffn_down_shexp, NULL, NULL,
+                model.layers[il].ffn_up_shexp,   NULL,
+                NULL,                            NULL,
+                model.layers[il].ffn_down_shexp, NULL,
                 NULL,
                 LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
             cb(ffn_shexp, "ffn_shexp", il);
