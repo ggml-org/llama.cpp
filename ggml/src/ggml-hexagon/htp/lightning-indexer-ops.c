@@ -503,6 +503,12 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
                 htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) (b + j));
             }
 
+            if (is_f32) {
+                for (uint32_t r = 0; r < nkv; ++r) {
+                    lid_convert_row_f32_to_f16(k_buf[j] + r * L->size_k_raw_row, D);
+                }
+            }
+
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (b + j));
             if (is_f32) {
                 for (uint32_t r = 0; r < nkv; ++r) {
