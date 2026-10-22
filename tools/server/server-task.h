@@ -713,7 +713,11 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    // the cached prompt that is better than the current prompt for tokens_new, or states.end()
+    std::list<server_prompt_cache_state>::iterator find(const server_prompt & prompt, const server_tokens & tokens_new);
+
+    // restore the cached prompt from find() and remove it from the cache, states.end() keeps the current prompt
+    bool load(std::list<server_prompt_cache_state>::iterator it_best, server_prompt & prompt, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
 };

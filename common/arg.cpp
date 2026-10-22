@@ -1741,6 +1741,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_IDLE_SLOTS").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--slot-attach"},
+        {"--no-slot-attach"},
+        "start a new prompt from the KV cells of another slot that holds the same prefix (256 tokens or more); the cells are shared, not copied (default: enabled, requires unified KV; turns itself off with --cache-reuse, --context-shift, speculative decoding, LoRA adapters, or a model whose memory cannot share cells; prompts with images or audio do not attach)",
+        [](common_params & params, bool value) {
+            params.slot_attach = value;
+            params.slot_attach_explicit = true;
+        }
+    ).set_env("LLAMA_ARG_SLOT_ATTACH").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
         string_format("whether to use context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),
