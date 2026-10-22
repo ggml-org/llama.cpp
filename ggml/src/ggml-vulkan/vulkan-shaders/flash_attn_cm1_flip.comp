@@ -286,7 +286,7 @@ void main() {
         fl_mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
     }
 
-    uint32_t j = fl_next_tile(start_j);
+    uint32_t j = (FLIP_DIRECT && row0 >= N) ? end_j : fl_next_tile(start_j);
     if (!FLIP_DIRECT && j < end_j) {
         fl_load_k(j, k_offset);
         fl_load_v(j, v_offset);
@@ -359,9 +359,10 @@ void main() {
         if (subgroupAny(mx > M + FL_TAU)) {
             const float Mn = max(M, mx);
             const float alpha = exp(M - Mn);
+            const bool o_empty = subgroupAll(M == NEG_FLT_MAX_OVER_2);
             M = Mn;
             L *= alpha;
-            if (!subgroupAll(alpha == 0.0)) {
+            if (!o_empty) {
                 [[unroll]] for (uint32_t t = 0; t < HSV_pad / 16; ++t) {
                     fl_rescale(Oacc[t], ss_base, lr, lc, alpha);
                 }
