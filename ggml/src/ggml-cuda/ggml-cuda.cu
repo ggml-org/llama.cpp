@@ -64,6 +64,7 @@
 #include "ggml-cuda/wkv.cuh"
 #include "ggml-cuda/gla.cuh"
 #include "ggml-cuda/gated_delta_net.cuh"
+#include "ggml-cuda/gated-delta-net-mma.cuh"
 #include "ggml-cuda/dsv4-hc.cuh"
 #include "ggml-cuda/set.cuh"
 #include "ggml-cuda/set-rows.cuh"
@@ -979,9 +980,9 @@ static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_ty
 static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
 
-    size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT
-        ? ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor)
-        : ggml_nbytes(tensor);
+    size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT  ? ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor)
+                : tensor->op == GGML_OP_GATED_DELTA_NET ? ggml_cuda_gated_delta_net_get_alloc_size(buft_ctx->device, tensor)
+                : ggml_nbytes(tensor);
     int64_t ne0 = tensor->ne[0];
 
     // [TAG_ALLOC_SIZE_EXPAND]
@@ -3073,7 +3074,7 @@ static int ggml_cuda_try_gdn_cache_fusion(
 // cache before the GDN, and for batches the MMA path does not take. Fills the state fields of fused_state_cpy and
 // returns the gather's node index, or -1.
 static int ggml_cuda_gdn_state_rows_plan(
-        const ggml_cgraph * cgraph, int gdn_idx, ggml_cuda_gated_delta_net_fused_cache & fused_state_cpy) {
+        const ggml_cgraph * cgraph, int gdn_idx, ggml_cuda_gated_delta_net_fused_cache & fused_state_cpy, int device) {
     const ggml_tensor * gdn = cgraph->nodes[gdn_idx];
     if (gdn->op != GGML_OP_GATED_DELTA_NET) {
         return -1;
@@ -3087,8 +3088,9 @@ static int ggml_cuda_gdn_state_rows_plan(
     const int64_t n_seqs   = v->ne[3];
     const int64_t D        = S_v * S_v * v->ne[1];
     const int64_t K        = ggml_get_op_params_i32(gdn, 0);
-    // the MMA path's candidates (ggml_cuda_gdn_mma_args_from_tensor) read src[5]
-    if (n_seqs != 1 || (g->ne[0] == 1 && K < n_tokens && S_v == 128 && q->ne[0] == 128 && gdn->src[6] == nullptr)) {
+    // the MMA path's candidates (ggml_cuda_gdn_mma_args_from_tensor) read src[5], except where it reads cache rows
+    if (n_seqs != 1 || (!ggml_cuda_gdn_mma_reads_state_rows(device) && g->ne[0] == 1 && K < n_tokens && S_v == 128 &&
+                        q->ne[0] == 128 && gdn->src[6] == nullptr)) {
         return -1;
     }
     ggml_cuda_gated_delta_net_fused_cache fused;
@@ -4087,7 +4089,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         for (int j = i + 2; j < cgraph->n_nodes && j <= i + 512; ++j) {
             if (cgraph->nodes[j]->op == GGML_OP_GATED_DELTA_NET) {
                 ggml_cuda_gated_delta_net_fused_cache fused_state_cpy;
-                if (ggml_cuda_gdn_state_rows_plan(cgraph, j, fused_state_cpy) == i) {
+                if (ggml_cuda_gdn_state_rows_plan(cgraph, j, fused_state_cpy, cuda_ctx->device) == i) {
                     return 1; // the gather and the no-op node after it
                 }
                 break;
@@ -4100,7 +4102,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         ggml_cuda_gated_delta_net_fused_cache fused_state_cpy;
         const int nodes_to_skip = ggml_cuda_try_gdn_cache_fusion(cgraph, i, fused_state_cpy);
         if (nodes_to_skip > 0) {
-            ggml_cuda_gdn_state_rows_plan(cgraph, i, fused_state_cpy);
+            ggml_cuda_gdn_state_rows_plan(cgraph, i, fused_state_cpy, cuda_ctx->device);
 #ifdef GGML_CUDA_DEBUG
             GGML_LOG_INFO("%s: fused gated_delta_net snapshot copies for %s (skipped %d nodes)\n",
                           __func__, node->name, nodes_to_skip);

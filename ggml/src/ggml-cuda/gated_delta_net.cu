@@ -353,7 +353,12 @@ static ggml_cuda_gdn_mma_args ggml_cuda_gdn_mma_args_from_tensor(const ggml_tens
         (int64_t) (beta->nb[2] / sizeof(float)),
         (int64_t) (beta->nb[3] / sizeof(float)),
         1.0f / sqrtf((float) S_v),
-        g->ne[0] == 1 && ggml_get_op_params_i32(dst, 0) < v->ne[2] && S_v == 128 && q->ne[0] == 128 && dst->src[6] == nullptr,
+        g->ne[0] == 1 && ggml_get_op_params_i32(dst, 0) < v->ne[2] && S_v == 128 && q->ne[0] == 128 &&
+            (dst->src[6] == nullptr || ggml_get_op_params_i32(dst, 1) == 0),
+        dst->src[6] ? (const float *) dst->src[6]->data : nullptr,
+        dst->src[6] ? (int64_t) (dst->src[6]->nb[1] / sizeof(float)) : 0,
+        dst->src[6] ? (const int32_t *) dst->src[7]->data : nullptr,
+        dst->src[6] ? ggml_get_op_params_i32(dst, 2) : 0,
     };
 }
 
@@ -451,10 +456,15 @@ static void ggml_cuda_op_gated_delta_net_impl(
         ra.H_k      = (int) src_k->ne[1];
     }
 
-    if (state_ids == nullptr) {
+    {
         ggml_cuda_gdn_mma_args args = ggml_cuda_gdn_mma_args_from_tensor(dst);
-        args.state_out = state_d;
-        if (ggml_cuda_gdn_mma_launch(ctx.device, args, stream)) {
+        args.state            = s_d;
+        args.state_out        = state_d;
+        args.state_ids        = state_ids;
+        args.state_row_stride = state_row_stride;
+        // the MMA path's scratch follows dst (ggml_cuda_gated_delta_net_get_alloc_size)
+        void * scratch = (char *) dst->data + GGML_PAD(ggml_nbytes(dst), 256);
+        if (ggml_cuda_gdn_mma_launch(scratch, ctx.device, args, stream)) {
             return;
         }
     }
@@ -479,6 +489,11 @@ static void ggml_cuda_op_gated_delta_net_impl(
                 sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, state_ids, state_row_stride, ra, stream);
         }
     }
+}
+
+size_t ggml_cuda_gated_delta_net_get_alloc_size(int device, const ggml_tensor * dst) {
+    const size_t scratch = ggml_cuda_gdn_mma_scratch_size(device, ggml_cuda_gdn_mma_args_from_tensor(dst));
+    return scratch > 0 ? GGML_PAD(ggml_nbytes(dst), 256) + scratch : ggml_nbytes(dst);
 }
 
 void ggml_cuda_op_gated_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

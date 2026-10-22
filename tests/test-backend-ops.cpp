@@ -13290,6 +13290,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_gated_delta_net_state_rows(4, 32, 4, 4, 1));
+    // 16 key heads and >= 64 tokens: the RDNA4 MMA path reads the cache row itself (a full and a partial last chunk)
+    test_cases.emplace_back(new test_gated_delta_net_state_rows(16, 128,  64, 1, 0));
+    test_cases.emplace_back(new test_gated_delta_net_state_rows(16, 128, 100, 1, 0));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
@@ -13838,6 +13841,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 512, 1));  // 4h PP-512
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
+    // Qwen3.5/3.6-27B-like: 16 key heads, 48 value heads (MMA-eligible)
+    for (int n_tokens : { 512, 1024, 2048 }) {
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, n_tokens, 1, 3));
+    }
 
     // lightning_indexer
     for (int kv : { 256, 4096, 65536 }) {

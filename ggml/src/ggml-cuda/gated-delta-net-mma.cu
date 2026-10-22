@@ -381,16 +381,505 @@ template <int C, int V, int BLOCKS = 1> bool init(int device) {
     return available[device];
 }
 
-enum class gdn_path { ar, slice32_one_block, slice32_two_blocks, slice64, whole_head };
+#if defined(GGML_USE_HIP)
+// RDNA4 chunked GDN. A WMMA accumulator holds its 16x16 tile in the register layout of a B operand (lane = column,
+// 8 consecutive rows), so the warp that owns 16 value columns of the state runs the whole chunk recurrence in
+// registers: K S, Q S, delta, (I + A)^-1 delta, P solved and the state update. The terms that do not depend on the
+// state (P, the triangular inverse, the decays) come from a parallel pre-pass in f32. Products use three bf16 passes
+// (hi*hi + hi*lo + lo*hi) into f32 accumulators, as above.
+namespace rdna4 {
+constexpr int C  = 16;     // chunk
+constexpr int DP = D + 8;  // padded LDS row of q and k in bf16, keeps the 16-row A loads off one bank
+
+typedef __attribute__((ext_vector_type(8))) float    f32x8;
+typedef __attribute__((ext_vector_type(4))) uint32_t u32x4;
+
+// per (sequence, head, chunk), written by gdn_chunk_terms
+struct chunk_terms {
+    uint32_t inv_hi[C * C / 2], inv_lo[C * C / 2]; // (I + A)^-1 as row-major bf16 pairs
+    uint32_t p_hi[C * C / 2], p_lo[C * C / 2];     // P = tril(Q K^T * decay)
+    float    decay[C];                             // e^{p_t}
+    float    qdecay[C];                            // scale e^{p_t}
+    float    beta[C];
+    float    tail[C];                              // e^{p_end - p_t}
+    float    chunk_decay;                          // e^{p_end}
+    float    pad[C - 1];
+};
+
+static_assert(sizeof(chunk_terms) % 16 == 0, "chunk terms are copied in 16-byte units");
+
+static __device__ __forceinline__ uint32_t bf16_hi_bits(const float x) {
+    return (__float_as_uint(x) + 0x8000u) & 0xFFFF0000u;
+}
+
+// bf16 pair of (x, y) rounded to nearest, and the pair of their remainders, truncated
+static __device__ __forceinline__ void split2(const float x, const float y, uint32_t & hi, uint32_t & lo) {
+    const uint32_t hx = bf16_hi_bits(x);
+    const uint32_t hy = bf16_hi_bits(y);
+    hi = __builtin_amdgcn_perm(hy, hx, 0x07060302u);
+    lo = __builtin_amdgcn_perm(bf16_hi_bits(y - __uint_as_float(hy)), bf16_hi_bits(x - __uint_as_float(hx)), 0x07060302u);
+}
+
+static __device__ __forceinline__ void split8(const f32x8 & x, u32x4 & hi, u32x4 & lo) {
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        uint32_t h, l;
+        split2(x[2 * i], x[2 * i + 1], h, l);
+        hi[i] = h;
+        lo[i] = l;
+    }
+}
+
+static __device__ __forceinline__ f32x8 wmma(const u32x4 a, const u32x4 b, const f32x8 c) {
+    typedef __attribute__((ext_vector_type(8))) __bf16 bf16x8;
+    return __builtin_amdgcn_wmma_f32_16x16x16_bf16_w32_gfx12(
+        reinterpret_cast<const bf16x8 &>(a), reinterpret_cast<const bf16x8 &>(b), c);
+}
+
+static __device__ __forceinline__ f32x8 wmma3(
+        const u32x4 ah, const u32x4 al, const u32x4 bh, const u32x4 bl, f32x8 c) {
+    c = wmma(al, bl, c);
+    c = wmma(al, bh, c);
+    c = wmma(ah, bl, c);
+    return wmma(ah, bh, c);
+}
+
+// one warp per (sequence, head, chunk). K K^T and Q K^T on WMMA: the A operand of a row-major 16 x 16 slice of K is
+// also the B operand of its transpose, so q and k go from global memory straight into operands.
+static __global__ __launch_bounds__(32) void gdn_chunk_terms(ggml_cuda_gdn_mma_args a, chunk_terms * terms, int64_t n_chunks) {
+#if defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
+    const int64_t item  = blockIdx.x;
+    const int64_t chunk = item % n_chunks;
+    const int     h     = (item / n_chunks) % a.H;
+    const int     seq   = item / (n_chunks * a.H);
+    const int64_t t0    = chunk * C;
+    const int     valid = min((int64_t) C, a.n_tokens - t0);
+    const int     lane  = threadIdx.x;
+    const int     arow  = lane % 16;     // operand row, and the accumulator column
+    const int     row0  = 8 * (lane / 16);
+    const int64_t qoff  = (seq / a.rq3) * a.sq3 + (h % a.H_k) * a.sq1;
+    const int64_t goff  = seq * a.sb3 + h * a.sb1;
+
+    __shared__ float A[C][C + 1];
+
+    // gates: the prefix sum within the chunk, in every lane's view
+    float g = lane < valid ? a.g[goff + (t0 + lane) * a.sb2] : 0.f;
+#pragma unroll
+    for (int offset = 1; offset < C; offset *= 2) {
+        const float previous = __shfl_up_sync(0xffffffff, g, offset, 32);
+        if (lane >= offset) {
+            g += previous;
+        }
+    }
+    const float beta_t = lane < valid ? a.beta[goff + (t0 + lane) * a.sb2] : 0.f;
+    const float p_end  = __shfl_sync(0xffffffff, g, valid - 1, 32);
+    const float p_col  = __shfl_sync(0xffffffff, g, arow, 32);
+
+    f32x8 kk = {}, qk = {};
+    {
+        const int64_t off = qoff + (t0 + min(arow, valid - 1)) * a.sq2 + row0;
+        const bool    ok  = arow < valid;
+#pragma unroll
+        for (int j = 0; j < D / 16; ++j) {
+            const float4 q0 = *reinterpret_cast<const float4 *>(a.q + off + 16 * j);
+            const float4 q1 = *reinterpret_cast<const float4 *>(a.q + off + 16 * j + 4);
+            const float4 k0 = *reinterpret_cast<const float4 *>(a.k + off + 16 * j);
+            const float4 k1 = *reinterpret_cast<const float4 *>(a.k + off + 16 * j + 4);
+            const float  sq = ok ? a.scale : 0.f, sk = ok ? 1.f : 0.f;
+            const f32x8  qv = f32x8{q0.x, q0.y, q0.z, q0.w, q1.x, q1.y, q1.z, q1.w} * sq;
+            const f32x8  kv = f32x8{k0.x, k0.y, k0.z, k0.w, k1.x, k1.y, k1.z, k1.w} * sk;
+            u32x4 qh, ql, kh, kl;
+            split8(qv, qh, ql);
+            split8(kv, kh, kl);
+            kk = wmma3(kh, kl, kh, kl, kk);
+            qk = wmma3(qh, ql, kh, kl, qk);
+        }
+    }
+
+    // lane holds column c = arow, rows r = row0 + i
+    chunk_terms & out = terms[item];
+    uint16_t * p_hi = reinterpret_cast<uint16_t *>(out.p_hi);
+    uint16_t * p_lo = reinterpret_cast<uint16_t *>(out.p_lo);
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        const int   r     = row0 + i, c = arow;
+        const float p_r   = __shfl_sync(0xffffffff, g, r, 32);
+        const float b_r   = __shfl_sync(0xffffffff, beta_t, r, 32);
+        const float decay = r < valid && c <= r ? expf(p_r - p_col) : 0.f;
+        A[r][c]           = c < r ? b_r * kk[i] * decay : 0.f;
+        const float    p  = qk[i] * decay;
+        const uint32_t ph = bf16_hi_bits(p);
+        p_hi[r * C + c]   = ph >> 16;
+        p_lo[r * C + c]   = __float_as_uint(p - __uint_as_float(ph)) >> 16;
+    }
+    __syncthreads();
+    if (lane < C) {
+        // column j of T = (I + A)^-1: T[r][j] = [r == j] - sum_{c < r} A[r][c] T[c][j]
+        const int j = lane;
+        float     T[C];
+#pragma unroll
+        for (int r = 0; r < C; ++r) {
+            float x = r == j ? 1.f : 0.f;
+#pragma unroll
+            for (int c = 0; c < r; ++c) {
+                x -= A[r][c] * T[c];
+            }
+            T[r] = x;
+            const uint32_t th = bf16_hi_bits(x);
+            reinterpret_cast<uint16_t *>(out.inv_hi)[r * C + j] = th >> 16;
+            reinterpret_cast<uint16_t *>(out.inv_lo)[r * C + j] = __float_as_uint(x - __uint_as_float(th)) >> 16;
+        }
+        out.decay[lane]  = expf(g);
+        out.qdecay[lane] = a.scale * expf(g);
+        out.beta[lane]  = beta_t;
+        out.tail[lane]  = expf(p_end - g);
+        if (lane == 0) {
+            out.chunk_decay = expf(p_end);
+        }
+    }
+#else
+    GGML_UNUSED_VARS(a, terms, n_chunks);
+    NO_DEVICE_CODE;
+#endif // defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
+}
+
+// one block per (sequence, head, slice of NW * 16 value columns); warp w owns 16 columns and all of D
+template <int NW>
+static __global__ __launch_bounds__(NW * 32) void gdn_chunk_scan(
+        ggml_cuda_gdn_mma_args a, const chunk_terms * terms, int64_t n_chunks) {
+#if defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
+    constexpr int V     = NW * 16;
+    constexpr int NT    = NW * 32;
+    constexpr int KT    = D / 16;                  // state tiles per warp
+    constexpr int UNITS = (C / 2) * (D / 4) / NT;  // staging units per thread
+    static_assert(D % V == 0, "invalid GDN slice");
+    static_assert((C / 2) * (D / 4) % NT == 0, "q/k staging must divide across threads");
+
+    const int tid   = threadIdx.x, lane = tid % 32, warp = tid / 32;
+    const int slice = blockIdx.x % (D / V);
+    const int h     = (blockIdx.x / (D / V)) % a.H;
+    const int seq   = blockIdx.x / ((D / V) * a.H);
+    const int vcol  = slice * V + warp * 16 + lane % 16; // this lane's value column
+    const int row0  = 8 * (lane / 16);                   // first of this lane's 8 rows in a tile
+    const int arow  = lane % 16;                         // this lane's row of an A operand
+    const int acol  = 4 * (lane / 16);                   // this lane's first bf16 pair of an A operand row
+
+    const int64_t soff  = ((int64_t) seq * a.H + h) * D * D;
+    const int64_t n_tok = a.n_tokens;
+    // chunk bases are uniform; the lane offsets within a chunk fit in 32 bits
+    const float * q_base = a.q + (seq / a.rq3) * a.sq3 + (h % a.H_k) * a.sq1;
+    const float * k_base = a.k + (seq / a.rq3) * a.sq3 + (h % a.H_k) * a.sq1;
+    const float * v_base = a.v + seq * a.sv3 + h * a.sv1;
+    float *       o_base = a.dst + ((int64_t) seq * n_tok * a.H + h) * D;
+    const int     o_tok  = a.H * D;
+    const chunk_terms * terms_h = terms + ((int64_t) seq * a.H + h) * n_chunks;
+
+    // staging: unit m covers tokens 2 tp, 2 tp + 1 and d .. d + 3 of q and k; the 8 token pairs of one d are adjacent
+    // lanes, so the transposed K stores of a warp fall in different banks
+    int qk_off[UNITS][2], st_tp[UNITS], st_d[UNITS];
+#pragma unroll
+    for (int m = 0; m < UNITS; ++m) {
+        const int u = tid + NT * m;
+        st_tp[m] = u % (C / 2);
+        st_d[m]  = 4 * (u / (C / 2));
+#pragma unroll
+        for (int s = 0; s < 2; ++s) {
+            qk_off[m][s] = (2 * st_tp[m] + s) * (int) a.sq2 + st_d[m];
+        }
+    }
+    const int v_off = row0 * (int) a.sv2 + vcol;
+    const int o_off = row0 * o_tok + vcol;
+
+    __shared__ __align__(16) uint32_t q_hi[C][DP / 2], q_lo[C][DP / 2], k_hi[C][DP / 2], k_lo[C][DP / 2];
+    __shared__ __align__(16) uint32_t kt_hi[D][C / 2], kt_lo[D][C / 2];
+    __shared__ __align__(16) chunk_terms ct;
+
+    // state tile j: rows d = 16 j + row0 + i, column vcol; from a cache row when the gather is fused
+    const float * s0 = a.state_ids != nullptr ? a.state + a.state_ids[seq] * a.state_row_stride + (int64_t) h * D * D
+                                              : a.state + soff;
+    f32x8 S[KT];
+#pragma unroll
+    for (int j = 0; j < KT; ++j) {
+        const float4 * src = reinterpret_cast<const float4 *>(s0 + (int64_t) vcol * D + 16 * j + row0);
+        const float4   x0 = src[0], x1 = src[1];
+        S[j] = f32x8{x0.x, x0.y, x0.z, x0.w, x1.x, x1.y, x1.z, x1.w};
+    }
+
+    if (a.rec != nullptr) {
+        // the scalar kernel's commit: S = g S + k d^T for each recorded update
+        const int     m     = a.n_commit[2 * seq];
+        const int     half  = a.n_commit[2 * seq + 1];
+        const int64_t row_d = (int64_t) D * a.H;
+        const int64_t row_k = (int64_t) D * a.H_k;
+        const float * rec_d = a.rec + seq * a.rec_seq;
+        const float * rec_k = rec_d + a.R * row_d;
+        const float * rec_g = rec_k + 2 * a.R * row_k;
+        for (int t = 0; t < m; ++t) {
+            const float * k_r = rec_k + (half * a.R + t) * row_k + (h % a.H_k) * D;
+            const float   d_r = rec_d[t * row_d + h * D + vcol];
+            const float   g_r = rec_g[(half * a.R + t) * a.H + h];
+#pragma unroll
+            for (int j = 0; j < KT; ++j) {
+                const float4 k0 = *reinterpret_cast<const float4 *>(k_r + 16 * j + row0);
+                const float4 k1 = *reinterpret_cast<const float4 *>(k_r + 16 * j + row0 + 4);
+                const f32x8  kv = f32x8{k0.x, k0.y, k0.z, k0.w, k1.x, k1.y, k1.z, k1.w};
+#pragma unroll
+                for (int i = 0; i < 8; ++i) {
+                    S[j][i] = fmaf(g_r, S[j][i], kv[i] * d_r);
+                }
+            }
+        }
+    }
+
+    // the next chunk's q, k, v and terms, loaded a chunk ahead; rows past the end read the last token and are zeroed
+    // in use
+    constexpr int TERMS4 = sizeof(chunk_terms) / sizeof(float4);
+    constexpr int TUNITS = (TERMS4 + NT - 1) / NT;
+    float4 qr[UNITS][2], kr[UNITS][2], tr[TUNITS];
+    float  vr[8];
+    auto fetch = [&](const int64_t t0) {
+        const float4 * tb = reinterpret_cast<const float4 *>(terms_h + t0 / C);
+#pragma unroll
+        for (int m = 0; m < TUNITS; ++m) {
+            if (tid + NT * m < TERMS4) {
+                tr[m] = tb[tid + NT * m];
+            }
+        }
+        const int     last = (int) (n_tok - 1 - t0);  // rows past it are clamped
+        const float * qb   = q_base + t0 * a.sq2;
+        const float * kb   = k_base + t0 * a.sq2;
+        const float * vb   = v_base + t0 * a.sv2;
+        if (last >= C - 1) {
+#pragma unroll
+            for (int m = 0; m < UNITS; ++m) {
+#pragma unroll
+                for (int s = 0; s < 2; ++s) {
+                    qr[m][s] = *reinterpret_cast<const float4 *>(qb + qk_off[m][s]);
+                    kr[m][s] = *reinterpret_cast<const float4 *>(kb + qk_off[m][s]);
+                }
+            }
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+                vr[i] = vb[v_off + i * (int) a.sv2];
+            }
+        } else {
+#pragma unroll
+            for (int m = 0; m < UNITS; ++m) {
+#pragma unroll
+                for (int s = 0; s < 2; ++s) {
+                    const int off = min(2 * st_tp[m] + s, last) * (int) a.sq2 + st_d[m];
+                    qr[m][s]      = *reinterpret_cast<const float4 *>(qb + off);
+                    kr[m][s]      = *reinterpret_cast<const float4 *>(kb + off);
+                }
+            }
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+                vr[i] = vb[min(row0 + i, last) * (int) a.sv2 + vcol];
+            }
+        }
+    };
+    auto stage = [&](const int valid) {
+#pragma unroll
+        for (int m = 0; m < TUNITS; ++m) {
+            if (tid + NT * m < TERMS4) {
+                reinterpret_cast<float4 *>(&ct)[tid + NT * m] = tr[m];
+            }
+        }
+        if (valid < C) {
+#pragma unroll
+            for (int m = 0; m < UNITS; ++m) {
+#pragma unroll
+                for (int s = 0; s < 2; ++s) {
+                    if (2 * st_tp[m] + s >= valid) {
+                        qr[m][s] = kr[m][s] = make_float4(0.f, 0.f, 0.f, 0.f);
+                    }
+                }
+            }
+        }
+#pragma unroll
+        for (int m = 0; m < UNITS; ++m) {
+            const int tp = st_tp[m], d = st_d[m];
+            uint32_t  kh[2][2], kl[2][2]; // [token of the pair][bf16 pair of the four d]
+#pragma unroll
+            for (int s = 0; s < 2; ++s) {
+                const int    t = 2 * tp + s;
+                const float4 q = qr[m][s];
+                const float4 k = kr[m][s];
+                uint32_t     h0, l0, h1, l1;
+                split2(q.x, q.y, h0, l0);
+                split2(q.z, q.w, h1, l1);
+                *reinterpret_cast<uint2 *>(&q_hi[t][d / 2]) = make_uint2(h0, h1);
+                *reinterpret_cast<uint2 *>(&q_lo[t][d / 2]) = make_uint2(l0, l1);
+                split2(k.x, k.y, kh[s][0], kl[s][0]);
+                split2(k.z, k.w, kh[s][1], kl[s][1]);
+                *reinterpret_cast<uint2 *>(&k_hi[t][d / 2]) = make_uint2(kh[s][0], kh[s][1]);
+                *reinterpret_cast<uint2 *>(&k_lo[t][d / 2]) = make_uint2(kl[s][0], kl[s][1]);
+            }
+            // transposed pairs (token 2 tp, 2 tp + 1) of each d, from the same bf16 halves
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                const uint32_t sel = i % 2 ? 0x07060302u : 0x05040100u;
+                kt_hi[d + i][tp]   = __builtin_amdgcn_perm(kh[1][i / 2], kh[0][i / 2], sel);
+                kt_lo[d + i][tp]   = __builtin_amdgcn_perm(kl[1][i / 2], kl[0][i / 2], sel);
+            }
+        }
+    };
+
+    fetch(0);
+    for (int64_t c = 0; c < n_chunks; ++c) {
+        const int64_t t0    = c * C;
+        const int     valid = (int) min((int64_t) C, n_tok - t0);
+
+        __syncthreads();
+        stage(valid);
+        float vin[8];
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            vin[i] = row0 + i < valid ? vr[i] : 0.f;
+        }
+        __syncthreads();
+        if (c + 1 < n_chunks) {
+            fetch(t0 + C);
+        }
+
+        // K S and Q S over D, the state tiles as B operands
+        // operands are loaded one step ahead; the scheduling barrier keeps the compiler from hoisting all of them,
+        // which spills
+        f32x8 ks = {}, qs = {};
+        u32x4 kh = *reinterpret_cast<const u32x4 *>(&k_hi[arow][acol]);
+        u32x4 kl = *reinterpret_cast<const u32x4 *>(&k_lo[arow][acol]);
+        u32x4 qh = *reinterpret_cast<const u32x4 *>(&q_hi[arow][acol]);
+        u32x4 ql = *reinterpret_cast<const u32x4 *>(&q_lo[arow][acol]);
+#pragma unroll
+        for (int j = 0; j < KT; ++j) {
+            u32x4 nkh, nkl, nqh, nql;
+            if (j + 1 < KT) {
+                const int col = 8 * (j + 1) + acol;
+                nkh = *reinterpret_cast<const u32x4 *>(&k_hi[arow][col]);
+                nkl = *reinterpret_cast<const u32x4 *>(&k_lo[arow][col]);
+                nqh = *reinterpret_cast<const u32x4 *>(&q_hi[arow][col]);
+                nql = *reinterpret_cast<const u32x4 *>(&q_lo[arow][col]);
+            }
+            u32x4 sh, sl;
+            split8(S[j], sh, sl);
+            ks = wmma3(kh, kl, sh, sl, ks);
+            qs = wmma3(qh, ql, sh, sl, qs);
+            if (j + 1 < KT) {
+                kh = nkh;
+                kl = nkl;
+                qh = nqh;
+                ql = nql;
+            }
+            __builtin_amdgcn_sched_barrier(0);
+        }
+
+        // delta = beta (v - decay K S); solved = (I + A)^-1 delta; out = scale decay Q S + P solved
+        const u32x4 inv_h  = *reinterpret_cast<const u32x4 *>(&ct.inv_hi[arow * (C / 2) + acol]);
+        const u32x4 inv_l  = *reinterpret_cast<const u32x4 *>(&ct.inv_lo[arow * (C / 2) + acol]);
+        const u32x4 p_h    = *reinterpret_cast<const u32x4 *>(&ct.p_hi[arow * (C / 2) + acol]);
+        const u32x4 p_l    = *reinterpret_cast<const u32x4 *>(&ct.p_lo[arow * (C / 2) + acol]);
+        const f32x8 decay  = *reinterpret_cast<const f32x8 *>(&ct.decay[row0]);
+        const f32x8 qdecay = *reinterpret_cast<const f32x8 *>(&ct.qdecay[row0]);
+        const f32x8 beta   = *reinterpret_cast<const f32x8 *>(&ct.beta[row0]);
+        const f32x8 tail   = *reinterpret_cast<const f32x8 *>(&ct.tail[row0]);
+        const float chunk_decay = ct.chunk_decay;
+        f32x8 delta;
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            delta[i] = beta[i] * (vin[i] - decay[i] * ks[i]);
+        }
+        u32x4 dh, dl;
+        split8(delta, dh, dl);
+        const f32x8 solved = wmma3(inv_h, inv_l, dh, dl, f32x8{});
+        split8(solved, dh, dl);
+        const f32x8 o  = wmma3(p_h, p_l, dh, dl, qdecay * qs);
+        float *     ob = o_base + t0 * o_tok;
+        if (valid == C) {
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+                ob[o_off + i * o_tok] = o[i];
+            }
+        } else {
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+                if (row0 + i < valid) {
+                    ob[o_off + i * o_tok] = o[i];
+                }
+            }
+        }
+
+        // S = e^{p_end} S + K^T (solved e^{p_end - p_t})
+        split8(solved * tail, dh, dl);
+        kh = *reinterpret_cast<const u32x4 *>(&kt_hi[arow][acol]);
+        kl = *reinterpret_cast<const u32x4 *>(&kt_lo[arow][acol]);
+#pragma unroll
+        for (int j = 0; j < KT; ++j) {
+            u32x4 nkh, nkl;
+            if (j + 1 < KT) {
+                nkh = *reinterpret_cast<const u32x4 *>(&kt_hi[16 * (j + 1) + arow][acol]);
+                nkl = *reinterpret_cast<const u32x4 *>(&kt_lo[16 * (j + 1) + arow][acol]);
+            }
+            S[j] = wmma3(kh, kl, dh, dl, S[j] * chunk_decay);
+            if (j + 1 < KT) {
+                kh = nkh;
+                kl = nkl;
+            }
+            __builtin_amdgcn_sched_barrier(0);
+        }
+    }
+
+#pragma unroll
+    for (int j = 0; j < KT; ++j) {
+        float4 * out = reinterpret_cast<float4 *>(a.state_out + soff + (int64_t) vcol * D + 16 * j + row0);
+        out[0] = make_float4(S[j][0], S[j][1], S[j][2], S[j][3]);
+        out[1] = make_float4(S[j][4], S[j][5], S[j][6], S[j][7]);
+    }
+#else
+    GGML_UNUSED_VARS(a, terms, n_chunks);
+    NO_DEVICE_CODE;
+#endif // defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
+}
+
+static size_t scratch_size(const ggml_cuda_gdn_mma_args & a) {
+    return (size_t) (a.n_seqs * a.H * ((a.n_tokens + C - 1) / C)) * sizeof(chunk_terms);
+}
+
+static void launch(void * scratch, const ggml_cuda_gdn_mma_args & a, cudaStream_t stream) {
+    // 4 warps (64 value columns) per block: 96 blocks for 48 heads fill the card's 32 WGPs 3 deep
+    constexpr int NW       = 4;
+    const int64_t n_chunks = (a.n_tokens + C - 1) / C;
+    chunk_terms * terms    = (chunk_terms *) scratch;
+    gdn_chunk_terms<<<a.n_seqs * a.H * n_chunks, 32, 0, stream>>>(a, terms, n_chunks);
+    gdn_chunk_scan<NW><<<a.n_seqs * a.H * (D / (NW * 16)), NW * 32, 0, stream>>>(a, terms, n_chunks);
+}
+}  // namespace rdna4
+#endif // defined(GGML_USE_HIP)
+
+static bool rdna4_device(int device) {
+#ifdef GGML_USE_HIP
+    return GGML_CUDA_CC_IS_RDNA4(ggml_cuda_info().devices[device].cc);
+#else
+    GGML_UNUSED(device);
+    return false;
+#endif // GGML_USE_HIP
+}
+
+enum class gdn_path { ar, slice32_one_block, slice32_two_blocks, slice64, whole_head, rdna4_chunk };
 
 static gdn_path select_gdn_mma_path(int device, const ggml_cuda_gdn_mma_args & a) {
     GGML_ASSERT(device >= 0 && device < GGML_CUDA_MAX_DEVICES);
-    if (!a.eligible || a.H_k != 16 || (a.H != 16 && a.H != 32 && a.H != 48 && a.H != 64) || a.n_tokens < 64 ||
+    // only the RDNA4 path commits ReplaySSM updates and reads cache rows
+    if (!a.eligible || ((a.rec != nullptr || a.state_ids != nullptr) && !rdna4_device(device)) || a.H_k != 16 || (a.H != 16 && a.H != 32 && a.H != 48 && a.H != 64) || a.n_tokens < 64 ||
         a.n_tokens > INT64_MAX - 32 || a.rq3 <= 0 || a.n_seqs <= 0 || a.n_seqs > INT_MAX / (a.H * 4)) {
         return gdn_path::ar;
     }
     const auto & info = ggml_cuda_info().devices[device];
 #ifdef GGML_USE_HIP
+    if (GGML_CUDA_CC_IS_RDNA4(info.cc)) {
+        // GGML_CUDA_GDN_MMA=0 keeps the scalar recurrence
+        static const bool enabled = getenv("GGML_CUDA_GDN_MMA") == nullptr || atoi(getenv("GGML_CUDA_GDN_MMA")) != 0;
+        return enabled ? gdn_path::rdna4_chunk : gdn_path::ar;
+    }
     if (!GGML_CUDA_CC_IS_RDNA3_5(info.cc) || a.n_tokens < 2048) {
         return gdn_path::ar;
     }
@@ -419,7 +908,20 @@ static gdn_path select_gdn_mma_path(int device, const ggml_cuda_gdn_mma_args & a
 }  // namespace
 using namespace ggml_cuda_gated_delta_net_mma;
 
-bool ggml_cuda_gdn_mma_launch(int device, const ggml_cuda_gdn_mma_args & a, cudaStream_t stream) {
+bool ggml_cuda_gdn_mma_reads_state_rows(int device) {
+    return rdna4_device(device);
+}
+
+size_t ggml_cuda_gdn_mma_scratch_size(int device, const ggml_cuda_gdn_mma_args & a) {
+#ifdef GGML_USE_HIP
+    return select_gdn_mma_path(device, a) == gdn_path::rdna4_chunk ? rdna4::scratch_size(a) : 0;
+#else
+    GGML_UNUSED_VARS(device, a);
+    return 0;
+#endif // GGML_USE_HIP
+}
+
+bool ggml_cuda_gdn_mma_launch(void * scratch, int device, const ggml_cuda_gdn_mma_args & a, cudaStream_t stream) {
     if (!a.state_out) {
         return false;
     }
@@ -428,6 +930,12 @@ bool ggml_cuda_gdn_mma_launch(int device, const ggml_cuda_gdn_mma_args & a, cuda
         return false;
     }
 #ifdef GGML_USE_HIP
+    if (path == gdn_path::rdna4_chunk) {
+        GGML_ASSERT(scratch != nullptr);
+        rdna4::launch(scratch, a, stream);
+        CUDA_CHECK(cudaGetLastError());
+        return true;
+    }
     gdn_single<16, 64><<<a.H * a.n_seqs * 2, dim3(32, 8), sizeof(shared<16, 64>), stream>>>(a);
 #else
     if (path == gdn_path::slice32_two_blocks) {
