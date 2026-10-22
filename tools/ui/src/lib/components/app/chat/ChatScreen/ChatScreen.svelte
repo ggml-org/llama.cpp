@@ -11,7 +11,7 @@
 		ChatScreenStreamResumeStatus,
 		ServerLoadingSplash
 	} from '$lib/components/app';
-	import { LANDING_SETTLE_MAX_MS, LANDING_STABLE_FRAMES, ROUTES } from '$lib/constants';
+	import { ROUTES } from '$lib/constants';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -133,11 +133,11 @@
 	let lastScrolledConversationId: string | null = null;
 
 	// Lands at the bottom of a conversation the first time its messages
-	// render, whether the route comes from another conversation or from a
-	// non-conversation route. The page keeps growing after the first pin
-	// without DOM mutations (content-visibility size realizations, syntax
-	// highlight passes), so the instant pin repeats every frame until the
-	// height settles, bailing out on user scroll or conversation change.
+	// render, whether the route comes from another conversation, from a
+	// non-conversation route or from a page refresh. Runs before the first
+	// paint of the new rows, and the landing pin keeps the bottom in place
+	// while the rows settle. Independent of the auto-scroll setting, which
+	// only governs following a streaming response.
 	async function handleMessagesReady(messageCount: number) {
 		if (messageCount === 0) return;
 
@@ -147,36 +147,10 @@
 
 		lastScrolledConversationId = id;
 		await tick();
-		autoScroll.scrollToBottom();
 
-		const container = scroll.chatScrollContainer;
+		if (conversationsStore.activeConversation?.id !== id) return;
 
-		if (!container) return;
-
-		const started = performance.now();
-
-		let stableFrames = 0;
-		let lastHeight = container.scrollHeight;
-
-		const settle = () => {
-			if (autoScroll.userScrolledUp) return;
-
-			if (conversationsStore.activeConversation?.id !== id) return;
-
-			autoScroll.scrollToBottom();
-			const height = container.scrollHeight;
-
-			stableFrames = height === lastHeight ? stableFrames + 1 : 0;
-			lastHeight = height;
-
-			if (stableFrames >= LANDING_STABLE_FRAMES) return;
-
-			if (performance.now() - started > LANDING_SETTLE_MAX_MS) return;
-
-			requestAnimationFrame(settle);
-		};
-
-		requestAnimationFrame(settle);
+		scroll.landAtBottom();
 	}
 
 	function handleSendLikeScroll() {
