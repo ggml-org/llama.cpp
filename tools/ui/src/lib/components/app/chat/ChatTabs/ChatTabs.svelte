@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ChatTabsItem from './ChatTabsItem.svelte';
 	import ChatTabsNewChatButton from './ChatTabsNewChatButton.svelte';
-	import { SquarePen } from '@lucide/svelte';
+	import { ArrowRightToLine, ListX, Square, SquarePen, X } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import { ScrollCarousel } from '$lib/components/app';
+	import { ContextMenuActions, ScrollCarousel } from '$lib/components/app';
 	import {
 		CHAT_TABS_MAX_WIDTH,
 		NEW_CHAT_LABEL,
@@ -13,6 +13,7 @@
 	} from '$lib/constants';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import { chatStore, conversationsStore, tabsStore, uiStore } from '$lib/stores';
+	import type { MenuAction } from '$lib/types';
 	import { resolveTabView } from '$lib/utils';
 	import { tick } from 'svelte';
 
@@ -47,6 +48,44 @@
 	function handleStop(id: string, event: MouseEvent) {
 		event.stopPropagation();
 		void chatStore.stopGenerationForChat(id);
+	}
+
+	function tabActions(id: string): MenuAction[] {
+		const isLoading = loadingIds.has(id);
+		const others = view.ids.filter((tabId) => tabId !== id);
+		const toTheRight = view.ids.slice(view.ids.indexOf(id) + 1);
+
+		return [
+			...(isLoading
+				? [
+						{
+							icon: Square,
+							label: 'Stop generation',
+							onclick: () => void chatStore.stopGenerationForChat(id)
+						}
+					]
+				: []),
+			{
+				icon: X,
+				label: 'Close tab',
+				onclick: () => handleClose(id),
+				separator: isLoading,
+				// the shortcut closes the active tab only
+				shortcut: id === activeId ? ['shift', 'cmd', 'x'] : undefined
+			},
+			{
+				disabled: others.length === 0,
+				icon: ListX,
+				label: 'Close other tabs',
+				onclick: () => void tabsStore.closeMany(others, id, activeId, view)
+			},
+			{
+				disabled: toTheRight.length === 0,
+				icon: ArrowRightToLine,
+				label: 'Close tabs to the right',
+				onclick: () => void tabsStore.closeMany(toTheRight, id, activeId, view)
+			}
+		];
 	}
 
 	function handleAuxClick(id: string, event: MouseEvent) {
@@ -103,15 +142,17 @@
 			innerClass="items-center gap-1.25"
 		>
 			{#each tabs as tab (tab.id)}
-				<ChatTabsItem
-					isActive={tab.id === activeId}
-					isLoading={loadingIds.has(tab.id)}
-					onActivate={(id) => tabsStore.activate(id)}
-					onAuxClick={handleAuxClick}
-					onClose={handleClose}
-					onStop={handleStop}
-					{tab}
-				/>
+				<ContextMenuActions actions={tabActions(tab.id)}>
+					<ChatTabsItem
+						isActive={tab.id === activeId}
+						isLoading={loadingIds.has(tab.id)}
+						onActivate={(id) => tabsStore.activate(id)}
+						onAuxClick={handleAuxClick}
+						onClose={handleClose}
+						onStop={handleStop}
+						{tab}
+					/>
+				</ContextMenuActions>
 			{/each}
 
 			{#if showNewChatButton}
