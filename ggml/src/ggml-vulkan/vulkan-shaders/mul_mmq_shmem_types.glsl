@@ -104,8 +104,16 @@ struct block_a_cache {
 };
 #endif
 
+#if defined(MMQ_SUDOT) && (defined(DATA_A_Q8_0) || defined(DATA_A_MXFP4) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ3_S) || defined(DATA_A_Q3_K) || defined(DATA_A_Q6_K))
+// These quants are signed. MMQ_SUDOT gives them a bias and uses the sum of each half of the q8_1 block to remove it.
+#define MMQ_SUDOT_B_SUMS
+#endif
+
 struct block_b_cache
 {
     int32_t qs[8];
     FLOAT_TYPEV2 ds;
+#ifdef MMQ_SUDOT_B_SUMS
+    int32_t qsum[2];
+#endif
 };
