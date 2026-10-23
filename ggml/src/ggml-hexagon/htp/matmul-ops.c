@@ -1816,7 +1816,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 return HTP_STATUS_NO_SUPPORT;
             }
 
-            const uint32_t qk = QK_Q8_0_TILED;
+            const uint32_t qk = HTP_MM_ACT_BLOCK_K;
             const uint32_t nb = (ne10 + qk - 1) / qk;
             const uint32_t total_nb = act_nrows * nb;
 
@@ -1886,7 +1886,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
     mmctx->vtcm_src0_stride = src0_row_size_padded;
     mmctx->vtcm_act_stride  = act_row_size;
     if (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK || kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW) {
-        mmctx->vtcm_act_raw_stride = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+        mmctx->vtcm_act_raw_stride = htp_mm_act_raw_row_size(ne10);
     } else if (kparams->kernel_type == HTP_MM_KERNEL_HVX_F16_F16_VTCM) {
         mmctx->vtcm_act_raw_stride = hex_round_up(ne10 * sizeof(float), 128);
     } else {
@@ -1904,7 +1904,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             if (need_quant) {
                 hvx_mm_transfer_act_dma(octx, kparams, act, mmctx->vtcm_act_raw, mmctx->vtcm_act_raw_stride, m_start, cur_m_rows);
 
-                const uint32_t qk = QK_Q8_0_TILED;
+                const uint32_t qk = HTP_MM_ACT_BLOCK_K;
                 const uint32_t nb = (ne10 + qk - 1) / qk;
                 const uint32_t total_nb = cur_m_rows * nb;
                 uint32_t quant_tasks;
@@ -3914,7 +3914,7 @@ static int hvx_mm_matmul_id(
     const struct htp_tensor * restrict ids = octx->src[2];
     const size_t src0_row_size = nb01;
 
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (ne10 + qk - 1) / qk;
     const uint32_t total_nb = act_nrows * nb;
 
@@ -3966,7 +3966,7 @@ static int hvx_mm_matmul_id(
 
     mmctx->vtcm_src0_stride    = src0_row_size_padded;
     mmctx->vtcm_act_stride     = act_row_size;
-    mmctx->vtcm_act_raw_stride = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+    mmctx->vtcm_act_raw_stride = htp_mm_act_raw_row_size(ne10);
 
     mmctx->vtcm_src0_size_per_thread = fastdiv(L.src0_bytes, &octx->n_threads_div);
     mmctx->vtcm_act_size_per_thread  = L.act_bytes;
@@ -4081,7 +4081,7 @@ static int hvx_mm_matmul_id_nx(
     const struct htp_tensor * restrict ids  = octx->src[n_weights + 1];
     const size_t src0_row_size = src0->nb[1];
 
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (act->ne[0] + qk - 1) / qk;
     const uint32_t total_nb = act_nrows * nb;
 
@@ -4124,7 +4124,7 @@ static int hvx_mm_matmul_id_nx(
 
     mmctx->vtcm_src0_stride    = 0;
     mmctx->vtcm_act_stride     = act_row_size;
-    mmctx->vtcm_act_raw_stride = hex_round_up(act->ne[0] * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+    mmctx->vtcm_act_raw_stride = htp_mm_act_raw_row_size(act->ne[0]);
 
     mmctx->vtcm_src0_size_per_thread = fastdiv(L.src0_bytes, &octx->n_threads_div);
     mmctx->vtcm_act_size_per_thread  = L.act_bytes;
@@ -4474,7 +4474,7 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (act->ne[0] + qk - 1) / qk;
     const uint32_t total_nb = act_nrows * nb;
 
@@ -4518,7 +4518,7 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
 
     mmctx->vtcm_src0_stride    = 0;
     mmctx->vtcm_act_stride     = act_row_size;
-    mmctx->vtcm_act_raw_stride = hex_round_up(act->ne[0] * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+    mmctx->vtcm_act_raw_stride = htp_mm_act_raw_row_size(act->ne[0]);
 
     mmctx->vtcm_src0_size_per_thread = fastdiv(L.src0_bytes, &octx->n_threads_div);
     mmctx->vtcm_act_size_per_thread  = L.act_bytes;

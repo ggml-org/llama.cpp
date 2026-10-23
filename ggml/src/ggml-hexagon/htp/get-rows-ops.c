@@ -404,7 +404,7 @@ int op_get_rows(struct htp_ops_context * octx) {
 
     if (octx->ctx->mdev.count > 1) {
         uint32_t tasks_per_chunk = 1;
-        htp_tensor_mdev_rows_per_chunk(dst, dst_row_size / dst->ne[0], dst_row_size, &tasks_per_chunk);
+        htp_tensor_mdev_rows_per_chunk(dst, (uint32_t) dst->nb[0], dst_row_size, &tasks_per_chunk);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_tasks, tasks_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         task_start = range.start;
         tasks      = range.count;
@@ -414,7 +414,7 @@ int op_get_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, (uint32_t) kparams->n_threads)) {
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
@@ -428,7 +428,7 @@ int op_get_rows(struct htp_ops_context * octx) {
     grctx.compute_tiled = NULL;
     grctx.task_start = task_start;
     grctx.tasks = tasks;
-    grctx.tasks_per_thread = octx->ctx->mdev.count == 1 ? kparams->tasks_per_thread : fastdiv(tasks + n_threads - 1, &octx->n_threads_div);
+    grctx.tasks_per_thread = fastdiv(tasks + n_threads - 1, &octx->n_threads_div);
     grctx.tile_size   = 0;
     grctx.tile_stride = 0;
     grctx.src0_row_size = src0_row_size;

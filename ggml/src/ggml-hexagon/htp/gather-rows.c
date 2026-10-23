@@ -206,14 +206,22 @@ static void gather_rows_thread_f32(unsigned int nth, unsigned int ith, void * da
 
     struct htp_thread_trace * tr = &task->octx->ctx->trace[ith];
 
-    uint8_t * base   = task->octx->ctx->vtcm_base + ith * kparams->slice;
-    HVX_Vector * tab = (HVX_Vector *) base;
-    HVX_Vector * inc = tab + kparams->vg;
-    HVX_Vector * cur = inc + kparams->vg;
-    uint8_t * region_base = (uint8_t *) (cur + kparams->vg);
+    struct htp_gather_rows_vtcm_layout layout;
+    htp_gather_rows_vtcm_layout_build(&layout, kparams->vg, kparams->region_size, kparams->nr_max, kparams->ne, 4);
 
-    uint8_t * region[2] = { region_base, region_base + kparams->buf_stride };
-    uint8_t * out[2]    = { region[0] + kparams->out_off, region[1] + kparams->out_off };
+    uint8_t * base   = VTCM_LAYOUT_PTR(uint8_t, task->octx->ctx->vtcm_base, (size_t) ith * kparams->slice);
+    HVX_Vector * tab = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_tab);
+    HVX_Vector * inc = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_inc);
+    HVX_Vector * cur = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_cur);
+
+    uint8_t * region[2] = {
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_region0),
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_region1),
+    };
+    uint8_t * out[2] = {
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_out0),
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_out1),
+    };
 
     htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, (uint16_t) r_beg);
     gather_rows_init_tables_f32(tab, inc, kparams, a, b);
@@ -279,14 +287,22 @@ static void gather_rows_thread_f16(unsigned int nth, unsigned int ith, void * da
 
     struct htp_thread_trace * tr = &task->octx->ctx->trace[ith];
 
-    uint8_t * base   = task->octx->ctx->vtcm_base + ith * kparams->slice;
-    HVX_Vector * tab = (HVX_Vector *) base;
-    HVX_Vector * inc = tab + kparams->vg;
-    HVX_Vector * cur = inc + kparams->vg;
-    uint8_t * region_base = (uint8_t *) (cur + kparams->vg);
+    struct htp_gather_rows_vtcm_layout layout;
+    htp_gather_rows_vtcm_layout_build(&layout, kparams->vg, kparams->region_size, kparams->nr_max, kparams->ne, 2);
 
-    uint8_t * region[2] = { region_base, region_base + kparams->buf_stride };
-    uint8_t * out[2]    = { region[0] + kparams->out_off, region[1] + kparams->out_off };
+    uint8_t * base   = VTCM_LAYOUT_PTR(uint8_t, task->octx->ctx->vtcm_base, (size_t) ith * kparams->slice);
+    HVX_Vector * tab = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_tab);
+    HVX_Vector * inc = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_inc);
+    HVX_Vector * cur = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_cur);
+
+    uint8_t * region[2] = {
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_region0),
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_region1),
+    };
+    uint8_t * out[2] = {
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_out0),
+        VTCM_LAYOUT_PTR(uint8_t, base, layout.off_out1),
+    };
 
     htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, (uint16_t) r_beg);
     gather_rows_init_tables_f16(tab, inc, kparams, a, b);

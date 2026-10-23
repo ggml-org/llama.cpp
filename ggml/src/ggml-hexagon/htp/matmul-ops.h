@@ -25,6 +25,7 @@ extern "C" {
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q2_0  640
 
 // --- Activation Tiled Block Sizes (including padding) ---
+#define HTP_MM_ACT_BLOCK_K             128
 #define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
 #define HTP_MM_ACT_TILE_SIZE_Q8_1      1280
 #define HTP_MM_ACT_TILE_SIZE_F16       2048
@@ -74,10 +75,7 @@ struct htp_mm_kernel_params {
     int32_t  aligned_tile_size;  // Aligned weight tile size (padded to 128)
     int32_t  act_row_size;       // Row size for activation scratchpad
     int32_t  vtcm_size;          // Total required scratchpad size in VTCM
-    int32_t  vtcm_src0_size;     // src0 scratchpad size in VTCM
-    int32_t  vtcm_act_size;      // activation scratchpad size in VTCM
     int32_t  vtcm_bias_size;     // bias scratchpad size in VTCM (fused only)
-    int32_t  vtcm_dst_size;      // dst scratchpad size in VTCM
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;
@@ -192,19 +190,19 @@ static inline bool htp_mm_weight_has_offset(int weight_type) {
 
 // --- Activation/Row Size Helpers ---
 static inline size_t htp_mm_q8_0_tiled_row_size(uint32_t ne) {
-    const uint32_t ne_padded = ((ne + 127) / 128) * 128;
+    const uint32_t ne_padded = hex_round_up(ne, HTP_MM_ACT_BLOCK_K);
     const uint32_t nb_32 = ne_padded / 32;
     return nb_32 * HTP_MM_ACT_TILE_SIZE_Q8_0;
 }
 
 static inline size_t htp_mm_q8_1_tiled_row_size(uint32_t ne) {
-    const uint32_t ne_padded = ((ne + 127) / 128) * 128;
+    const uint32_t ne_padded = hex_round_up(ne, HTP_MM_ACT_BLOCK_K);
     const uint32_t nb_32 = ne_padded / 32;
     return nb_32 * HTP_MM_ACT_TILE_SIZE_Q8_1;
 }
 
 static inline size_t htp_mm_f16_tiled_row_size(uint32_t ne) {
-    const uint32_t ne_padded = ((ne + 127) / 128) * 128;
+    const uint32_t ne_padded = hex_round_up(ne, HTP_MM_ACT_BLOCK_K);
     const uint32_t nb_32 = ne_padded / 32;
     return nb_32 * HTP_MM_ACT_TILE_SIZE_F16;
 }
@@ -214,6 +212,10 @@ static inline size_t htp_mm_tiled_act_row_size(int weight_type, uint32_t ne) {
         return htp_mm_f16_tiled_row_size(ne);
     }
     return htp_mm_weight_has_offset(weight_type) ? htp_mm_q8_1_tiled_row_size(ne) : htp_mm_q8_0_tiled_row_size(ne);
+}
+
+static inline size_t htp_mm_act_raw_row_size(uint32_t ne) {
+    return hex_round_up(ne, HTP_MM_ACT_BLOCK_K) * sizeof(float);
 }
 
 static inline size_t htp_mm_round_up(size_t n, size_t m) {
@@ -445,7 +447,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
 
         size_t tiled_act_row_size = htp_mm_tiled_act_row_size(wtype, ne10);
         size_t q_act_sz = hex_round_up(tiled_act_row_size * act_nrows, 128);
-        size_t raw_row_size = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+        size_t raw_row_size = htp_mm_act_raw_row_size(ne10);
 
         src0_sz    = weight_sz_per_thread * n_threads; // shared single-weight prefetch buffer
         act_sz     = q_act_sz;                         // quantized activation buffer
@@ -461,7 +463,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
 
         act_sz = htp_mm_round_up(act_row_size_tiled * act_nrows, 256);
 
-        size_t raw_row_size = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+        size_t raw_row_size = htp_mm_act_raw_row_size(ne10);
 
         src0_sz    = src0_sz_per_thread * n_threads;
         dst_sz     = 0;
@@ -502,7 +504,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
 
                 size_t dst_slice_per_thread = (dst_nrows > 0 && act_nrows == 1) ? htp_mm_round_up((dst_row_size + n_threads - 1) / n_threads, 128) : 0;
                 dst_sz = dst_slice_per_thread * n_threads;
-                size_t raw_row_size = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+                size_t raw_row_size = htp_mm_act_raw_row_size(ne10);
                 act_raw_sz = hex_round_up(raw_row_size * act_nrows, 128);
                 break;
             }
@@ -582,7 +584,7 @@ static inline bool htp_mm_hvx_solve_vtcm_params(
 
     size_t eff_row_size = row_size;
     if (kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
-        eff_row_size += hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+        eff_row_size += htp_mm_act_raw_row_size(ne10);
     }
 
     uint32_t m_chunk = (uint32_t) (avail_act / eff_row_size);

@@ -15,11 +15,10 @@ enum htp_get_rows_kernel_type {
 };
 
 struct htp_get_rows_kernel_params {
-    int32_t  n_threads;
-    int32_t  kernel_type;
-    int32_t  total_tasks;
-    int32_t  tasks_per_thread;
-    int32_t  vtcm_size;
+    uint8_t  kernel_type;
+    uint32_t n_threads;
+    uint32_t total_tasks;
+    uint32_t vtcm_size;
 
     // Fastdiv helpers
     struct fastdiv_values div_ne10;

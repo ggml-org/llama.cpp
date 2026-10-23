@@ -2,6 +2,8 @@
 #define HTP_IM2COL_OPS_H
 
 #include "hex-common.h"
+#include "hex-fastdiv.h"
+#include "htp-vtcm.h"
 #include <stdint.h>
 
 enum htp_im2col_kernel_type {
@@ -11,38 +13,33 @@ enum htp_im2col_kernel_type {
 };
 
 struct htp_im2col_vtcm_layout {
-    uint32_t off_src;
-    uint32_t off_dst;
+    size_t   total_bytes;
+    size_t   off_src;
+    size_t   off_dst;
     uint32_t src_bytes_per_thread;
     uint32_t dst_bytes_per_thread;
-    uint32_t total_bytes;
 };
 
 static inline void htp_im2col_vtcm_layout_build(
-    struct htp_im2col_vtcm_layout * layout,
+    struct htp_im2col_vtcm_layout * L,
     uint32_t src_row_bytes,
     uint32_t dst_row_bytes,
     uint32_t n_threads) {
 
-    layout->src_bytes_per_thread = 2 * src_row_bytes + 256;
-    layout->dst_bytes_per_thread = 2 * dst_row_bytes;
+    L->src_bytes_per_thread = 2 * src_row_bytes + 256;
+    L->dst_bytes_per_thread = 2 * dst_row_bytes;
 
-    layout->off_src     = 0;
-    layout->off_dst     = layout->off_src + layout->src_bytes_per_thread * n_threads;
-    layout->total_bytes = layout->off_dst + layout->dst_bytes_per_thread * n_threads;
+    size_t off = 0;
+    VTCM_LAYOUT_ALLOC(off, off_src, (size_t) L->src_bytes_per_thread * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_dst, (size_t) L->dst_bytes_per_thread * n_threads);
+    L->total_bytes = off;
 }
 
 struct htp_im2col_kernel_params {
     uint8_t  kernel_type;
-    uint8_t  is_2d;
-    uint8_t  is_3d;
     uint8_t  n_threads;
 
     uint32_t vtcm_size;
-    uint32_t off_src;
-    uint32_t off_dst;
-    uint32_t src_bytes_per_thread;
-    uint32_t dst_bytes_per_thread;
     uint32_t src_row_bytes;
     uint32_t dst_row_bytes;
 
@@ -57,6 +54,10 @@ struct htp_im2col_kernel_params {
     uint32_t OD, OH, OW;
     uint32_t patch_stride;
     uint32_t total_rows;
+    uint32_t rows_per_chunk;
+
+    struct fastdiv_values div_OH;
+    struct fastdiv_values div_OD;
 };
 
 #if defined(__cplusplus)
