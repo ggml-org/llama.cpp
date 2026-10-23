@@ -14,6 +14,7 @@
 #include <oneapi/mkl.hpp>
 #include <cstdio>
 #include <chrono>
+#include <vector>
 
 #define MKL_FA_CHUNK_SIZE_KV 8192
 
@@ -130,7 +131,8 @@ static void mkl_fa_online_softmax_chunk(
     int kvh_head,
     const sycl::half * mask_data, int64_t mask_head_stride,
     int64_t mask_row_stride, int mask_n_heads,
-    float logit_softcap, int64_t wg_size) {
+    float logit_softcap, int64_t wg_size,
+    const sycl::event & dep_event) {
 
     // One work-group per query row: exactly q_rows groups of wg_size
     // items. q_rows * wg_size is already a multiple of wg_size, so unlike
@@ -138,6 +140,7 @@ static void mkl_fa_online_softmax_chunk(
     const int64_t wg         = q_rows * wg_size;
     const int     local_size = (int) wg_size;  // stride in the loops below
     stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(dep_event);
         cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int local_id = (int)item.get_local_id(0);
@@ -563,9 +566,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 KQ_max_ptr, KQ_sum_ptr, VKQ_accum_ptr,
                 n_query_rows, DV, wg_size);
 
-            // Sync before MKL GEMM (MKL may use an internal queue)
-            stream->wait();
-
             // 3. KV chunk loop (OUTER): dequant each chunk once, then tile queries.
             for (int chunk_start = 0; chunk_start < n_kv; chunk_start += chunk_size) {
                 int this_chunk = std::min(chunk_size, n_kv - chunk_start);
@@ -579,29 +579,26 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                         mkl_fa_dequant_chunk(stream, V_desc, KQV,
                             V_chunk_f16_ptr, ikvh, chunk_start, this_chunk);
                     }
-                    stream->wait();  // dequant must be ready before MKL GEMM
                     MKL_ACCUM(dequant_time_us, t0);
                 }
 
                 // 3b. Query tile loop (INNER) — bounds KQ_f32/S_f16 footprint.
                 for (int q0 = 0; q0 < n_query_rows; q0 += q_tile_rows) {
                     int q_rows = std::min(q_tile_rows, n_query_rows - q0);
+                    sycl::event kq_done, vkq_done;
 
                     // GEMM: KQ = Q_tile × K_chunk^T
                     {
                         MKL_TAKE_TIME(t0);
-                        sycl::event ev = gemm(*stream,
+                        kq_done = gemm(*stream,
                             transpose::trans, transpose::nontrans,
                             this_chunk, q_rows, DKQ,
                             alpha,
                             K_chunk_f16_ptr, DKQ,
                             Q_head_f16_ptr + (int64_t)q0 * DKQ, DKQ,
                             beta,
-                            KQ_f32_ptr, this_chunk);
-                        try { ev.wait_and_throw(); } catch (sycl::exception & e) {
-                            GGML_LOG_INFO("[MKL-FA] GEMM KQ: %s\n", e.what());
-                            GGML_ABORT("MKL GEMM KQ failed");
-                        }
+                            KQ_f32_ptr, this_chunk,
+                            std::vector<sycl::event>{*stream->ext_oneapi_get_last_event()});
                         MKL_ACCUM(gemm_kq_time_us, t0);
                     }
                     // Online softmax over this chunk for this query tile
@@ -615,26 +612,22 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                             kvh_base_head,
                             mask_batch, mask_head_stride,
                             mask_row_stride, mask_n_heads,
-                            logit_softcap, wg_size);
-                        stream->wait();  // S_f16 must be ready for GEMM
+                            logit_softcap, wg_size, kq_done);
                         MKL_ACCUM(softmax_time_us, t0);
                     }
 
                     // GEMM: VKQ_chunk = S × V_chunk
                     {
                         MKL_TAKE_TIME(t0);
-                        sycl::event ev = gemm(*stream,
+                        vkq_done = gemm(*stream,
                             transpose::nontrans, transpose::nontrans,
                             DV, q_rows, this_chunk,
                             alpha,
                             V_chunk_f16_ptr, DV,
                             S_f16_ptr, this_chunk,
                             beta,
-                            VKQ_chunk_ptr, DV);
-                        try { ev.wait_and_throw(); } catch (sycl::exception & e) {
-                            GGML_LOG_INFO("[MKL-FA] GEMM VKQ: %s\n", e.what());
-                            GGML_ABORT("MKL GEMM VKQ failed");
-                        }
+                            VKQ_chunk_ptr, DV,
+                            std::vector<sycl::event>{*stream->ext_oneapi_get_last_event()});
                         MKL_ACCUM(gemm_vkq_time_us, t0);
                     }
                     // VKQ_accum[q0..] += VKQ_chunk
@@ -644,6 +637,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                             * wg_size;
                         float * accum = VKQ_accum_ptr + (int64_t)q0 * DV;
                         stream->submit([&](sycl::handler & cgh) {
+                            cgh.depends_on(vkq_done);
                             cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
                                 [=](sycl::nd_item<1> item) {
                                     int64_t i = item.get_global_id(0);
