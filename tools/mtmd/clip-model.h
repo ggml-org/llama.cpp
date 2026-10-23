@@ -579,6 +579,18 @@ struct clip_code2wav {
     ggml_tensor * dac_post_conv_b      = nullptr;
 };
 
+struct clip_vocos {
+    ggml_tensor * input_w        = nullptr;
+    ggml_tensor * input_b        = nullptr;
+    ggml_tensor * norm_w         = nullptr;
+    ggml_tensor * norm_b         = nullptr;
+    ggml_tensor * output_norm_w  = nullptr;
+    ggml_tensor * output_norm_b  = nullptr;
+    ggml_tensor * output_w       = nullptr;
+    ggml_tensor * output_b       = nullptr;
+    std::vector<clip_code2wav::upsample_block> blocks;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -844,6 +856,9 @@ struct clip_model {
     ggml_tensor * gen_quant_out_w = nullptr; // latent -> decoder dim
     ggml_tensor * gen_upsample_w  = nullptr; // depthwise convtr, frame rate -> encoder frame rate
     std::vector<clip_layer> gen_tfm_layers; // mimi decoder_transformer
+
+    // soprano: Vocos decoder, hidden states -> STFT coefficients
+    clip_vocos vocos;
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;

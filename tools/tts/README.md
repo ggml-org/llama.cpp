@@ -59,3 +59,28 @@ The [upstream repository](https://huggingface.co/kyutai/pocket-tts) holds one co
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --outfile pocket-tts.gguf
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --mmproj --outfile mmproj-pocket-tts.gguf
 ```
+
+## Soprano
+
+Available params:
+- `--tts-speaker-file` is not supported; the model uses a fixed voice
+- Note: `lang` is not used. Supply normalized English text
+
+Example usage:
+
+```sh
+llama-tts -m soprano.gguf \
+    -mm mmproj-soprano.gguf \
+    -p "Hello world" \
+    --temp 0 \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+Both [Soprano-80M](https://huggingface.co/ekwek/Soprano-80M) and [Soprano-1.1-80M](https://huggingface.co/ekwek/Soprano-1.1-80M) are supported. Convert both files from the same model directory, including `decoder.pth`:
+
+```sh
+python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --outtype f32 --outfile soprano.gguf
+python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --outtype f16 --outfile mmproj-soprano.gguf
+```
