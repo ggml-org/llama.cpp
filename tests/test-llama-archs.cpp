@@ -823,6 +823,56 @@ static std::vector<float> get_logits(
     return ret;
 }
 
+static bool check_moe_scaled_roundtrip(llama_model * model, const std::vector<llama_token> & tokens,
+        const std::vector<ggml_backend_dev_t> & devs,
+        const llama_model_tensor_buft_override * overrides, size_t cache_size, size_t seed, float stdev) {
+    size_t ctx_size = 0;
+    for (const auto & layer : model->layers) {
+        if (const ggml_tensor * w = layer.ffn_down_exps) {
+            ctx_size += ggml_tensor_overhead() + GGML_PAD(w->ne[2]*sizeof(float), GGML_MEM_ALIGN);
+        }
+    }
+    ggml_context_ptr scale_ctx(ggml_init({ ctx_size, nullptr, false }));
+    llama_model_saver ms(model);
+    ms.add_kv_from_model();
+    ms.add_tensors_from_model();
+    for (size_t il = 0; il < model->layers.size(); ++il) {
+        const ggml_tensor * w = model->layers[il].ffn_down_exps;
+        if (w == nullptr) {
+            continue;
+        }
+        ggml_tensor * s = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, w->ne[2]);
+        ggml_set_name(s, LLM_TN(model->arch)(LLM_TENSOR_FFN_DOWN_EXPS, "scale", il).str().c_str());
+        ggml_set_f32(s, 1.0f);
+        ms.add_tensor(s);
+    }
+    const std::string path = get_tmp_gguf_path();
+    ms.save(path);
+    std::unique_ptr<FILE, int (*)(FILE *)> file(fopen(path.c_str(), "rb"), fclose);
+    GGML_ASSERT(file);
+    auto scaled = get_model_and_ctx(nullptr, file.get(), seed, stdev, devs, LLAMA_SPLIT_MODE_LAYER, false, overrides, cache_size);
+    const auto expected = get_logits(scaled.first.get(), scaled.second.get(), tokens);
+
+    llama_model_saver roundtrip_saver(scaled.first.get());
+    roundtrip_saver.add_kv_from_model();
+    roundtrip_saver.add_tensors_from_model();
+    const std::string roundtrip_path = get_tmp_gguf_path();
+    roundtrip_saver.save(roundtrip_path);
+    std::unique_ptr<FILE, int (*)(FILE *)> roundtrip_file(fopen(roundtrip_path.c_str(), "rb"), fclose);
+    GGML_ASSERT(roundtrip_file);
+    auto reloaded = get_model_and_ctx(nullptr, roundtrip_file.get(), seed, stdev, devs, LLAMA_SPLIT_MODE_LAYER, false, overrides, cache_size);
+    const auto actual = get_logits(reloaded.first.get(), reloaded.second.get(), tokens);
+    file.reset();
+    roundtrip_file.reset();
+    std::filesystem::remove(path);
+    std::filesystem::remove(roundtrip_path);
+    if (actual != expected) {
+        fprintf(stderr, "MoE scaled roundtrip: logits differ\n");
+        return false;
+    }
+    return true;
+}
+
 static bool check_moe_cache_scales(llama_model * model, const std::vector<llama_token> & tokens,
         const std::vector<ggml_backend_dev_t> & devs, const llama_model_tensor_buft_override * overrides,
         size_t cache_size, size_t seed, float stdev) {
@@ -1408,19 +1458,6 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
                         ms.add_kv_from_model();
                         ms.add_tensors_from_model();
-                        ggml_context_ptr scale_ctx(ggml_init({ 4096, nullptr, false }));
-                        if (arch == LLM_ARCH_DEEPSEEK2 && moe) {
-                            for (uint32_t il = 0; il < model_and_ctx_dev.first->hparams.n_layer(); il++) {
-                                const ggml_tensor * w = model_and_ctx_dev.first->layers[il].ffn_down_exps;
-                                if (w == nullptr) {
-                                    continue;
-                                }
-                                ggml_tensor * s = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, w->ne[2]);
-                                ggml_set_name(s, LLM_TN(arch)(LLM_TENSOR_FFN_DOWN_EXPS, "scale", il).str().c_str());
-                                ggml_set_f32(s, 1.0f); // preserve logits while testing scale buffer probes
-                                ms.add_tensor(s);
-                            }
-                        }
                         ms.save(path);
                         FILE * file = fopen(path.c_str(), "rb");
                         GGML_ASSERT(file != nullptr);
@@ -1442,6 +1479,11 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
                         fclose(file);
                         std::filesystem::remove(path);
+                        if (arch == LLM_ARCH_DEEPSEEK2 && moe &&
+                                !check_moe_scaled_roundtrip(model_and_ctx_dev.first.get(), tokens, dc.devs, overrides, dc.moe_cache_size, seed, stdev)) {
+                            test_ok = false;
+                            status_roundtrip = "\033[1;31mFAIL\033[0m (scaled)";
+                        }
                     }
                 }
 
