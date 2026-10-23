@@ -625,6 +625,7 @@ static void test_fp8(const std::string & model_path) {
     auto model_params = llama_model_default_params();
     model_params.devices = devices;
     model_params.tensor_buft_overrides = overrides;
+    model_params.use_extra_bufts = false;
     model_params.progress_callback = silent_model_load_progress;
 
     const int64_t n_embd = prepare_models(model_path, input, reference);
