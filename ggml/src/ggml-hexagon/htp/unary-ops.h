@@ -55,6 +55,7 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_LOG:
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
+        case HTP_OP_UNARY_CEIL:
         case HTP_OP_L2_NORM:
         case HTP_OP_TRI:
         case HTP_OP_HADAMARD:
