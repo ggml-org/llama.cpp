@@ -314,6 +314,17 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
+set(LLAMA_LIBS "-lllama")
+if (NOT LLAMA_USE_SYSTEM_GGML)
+    set(LLAMA_LIBS "${LLAMA_LIBS} -lggml -lggml-base")
+endif()
+if (LLAMA_BUILD_COMMON)
+    set(LLAMA_LIBS "${LLAMA_LIBS} -lllama-common")
+endif()
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS AND NOT EMSCRIPTEN)
+    set(LLAMA_LIBS "${LLAMA_LIBS} -lmtmd")
+endif()
+
 configure_file(cmake/llama.pc.in
         "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         @ONLY)
