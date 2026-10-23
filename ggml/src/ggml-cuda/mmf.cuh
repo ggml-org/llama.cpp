@@ -598,27 +598,34 @@ static inline void mul_mat_f_switch_ids(
         const int64_t sample_ratio, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
         const dim3 & block_nums, const dim3 & block_dims, const int nbytes_shared_total, cudaStream_t stream,
         const mmf_ids_data * ids_data) {
-    const bool has_ids_data = ids_data && ids_data->ids_src_compact;
+    // The compact-ids kernel is only used for ncols_dst > 16, which always dispatches with cols_per_block == 16
+    // (see mul_mat_f_switch_cols_per_block). Do not instantiate it for the other tile widths.
+    if constexpr (cols_per_block == 16) {
+        const bool has_ids_data = ids_data && ids_data->ids_src_compact;
 
-    // Use the compact-ids kernel only for larger tiles; for small ncols_dst (< 16)
-    // we prefer the normal mul_mat_f path with has_ids=true.
-    if (has_ids_data && ncols_dst > 16) {
-        const int max_tiles = (int) ((ncols_dst + cols_per_block - 1) / cols_per_block);
-        if (max_tiles == 0) {
+        // Use the compact-ids kernel only for larger tiles; for small ncols_dst (< 16)
+        // we prefer the normal mul_mat_f path with has_ids=true.
+        if (has_ids_data && ncols_dst > 16) {
+            const int max_tiles = (int) ((ncols_dst + cols_per_block - 1) / cols_per_block);
+            if (max_tiles == 0) {
+                return;
+            }
+            dim3 block_nums_ids(block_nums.x, ids_data->n_experts, max_tiles);
+
+            const uint3 sis1_fd = ids_data->sis1 > 0 ? init_fastdiv_values((uint32_t) ids_data->sis1) : make_uint3(0, 0, 1);
+            const uint3 nch_fd  = init_fastdiv_values((uint32_t) nchannels_dst);
+
+            mul_mat_f_ids<T, rows_per_block, cols_per_block, nwarps><<<block_nums_ids, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids_data->ids_src_compact, ids_data->ids_dst_compact, ids_data->expert_bounds_dev, dst,
+                ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
+                sis1_fd, nch_fd);
             return;
         }
-        dim3 block_nums_ids(block_nums.x, ids_data->n_experts, max_tiles);
+    }
 
-        const uint3 sis1_fd = ids_data->sis1 > 0 ? init_fastdiv_values((uint32_t) ids_data->sis1) : make_uint3(0, 0, 1);
-        const uint3 nch_fd  = init_fastdiv_values((uint32_t) nchannels_dst);
-
-        mul_mat_f_ids<T, rows_per_block, cols_per_block, nwarps><<<block_nums_ids, block_dims, nbytes_shared_total, stream>>>
-            (x, y, ids_data->ids_src_compact, ids_data->ids_dst_compact, ids_data->expert_bounds_dev, dst,
-            ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-            channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-            sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
-            sis1_fd, nch_fd);
-    } else if (ids) {
+    if (ids) {
         const int64_t col_tiles = (ncols_dst + cols_per_block - 1) / cols_per_block;
         dim3 block_nums_ids = block_nums;
         block_nums_ids.y *= col_tiles;
