@@ -10317,6 +10317,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {3000, 128, 1, 1}, {3, 128, 1280, 1}, 1, 0, 1, 0, 1, 0, false));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {3000, 128, 1, 1}, {3, 128, 1280, 1}, 1, 0, 1, 0, 1, 0, false));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {3000, 384, 1, 1}, {3, 384,  384, 1}, 1, 0, 1, 0, 1, 0, false));
+    // 1D convs of an audio decoder: long sequences, dilated taps, pointwise kernels
+    for (int d0 : {1, 3, 9}) {
+        test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {2000 + 6 * d0, 96, 1, 1}, {7, 96, 96, 1}, 1, 0, 0, 0, d0, 0, false));
+    }
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {1500, 192, 1, 1}, {1, 192, 192, 1}, 1, 0, 0, 0, 1, 0, false));
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {1001, 64, 1, 1}, {5, 64, 64, 1}, 2, 0, 2, 0, 1, 0, false));
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {777, 48, 2, 1}, {3, 48, 48, 1}, 1, 0, 4, 0, 3, 0, false));
+    // several rows of a few output-col blocks each: a thread's range of blocks can start mid-row
+    for (int64_t n : {5, 7}) {
+        test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {600, 8, n, 1}, {3, 8, 8, 1}, 1, 0, 1, 0, 1, 0, false));
+    }
+    // 2D with a kernel one row tall: with p1 > 0 some output rows fall outside the input height
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {40, 6, 8, 1}, {3, 1, 8, 4}, 1, 1, 1, 1, 1, 1, true));
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {40, 6, 8, 1}, {3, 1, 8, 4}, 1, 1, 1, 0, 1, 1, true));
     for (int s0 : {1, 3}) {
         for (int p0 : {0, 3}) {
             for (int d0 : {1, 3}) {
