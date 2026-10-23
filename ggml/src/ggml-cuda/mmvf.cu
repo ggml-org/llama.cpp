@@ -5,18 +5,6 @@
 #include "mmf.cuh"
 #include "convert.cuh"
 
-#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-static __device__ __forceinline__ nv_bfloat162 mmvf_f8x2_e4m3_to_bf162(__nv_fp8x2_storage_t x) {
-#if CUDART_VERSION >= 13040
-    return static_cast<nv_bfloat162>(__nv_cvt_fp8x2_to_bf162raw(x, __NV_E4M3));
-#else
-    return make_bfloat162(
-        static_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x & 0xFF)),
-        static_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x >> 8)));
-#endif
-}
-#endif
-
 template <typename T, typename type_acc, int ncols_dst, int block_size, bool has_fusion = false, bool is_multi_token_id = false>
 static __global__ void mul_mat_vec_f(
         const T * x_ptr, const void * y_ptr, const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion, float * dst_ptr,
@@ -336,17 +324,17 @@ static __global__ void mul_mat_vec_f(
     } else if constexpr (std::is_same_v<T, ggml_fp8_e4m3_t>) {
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
         const nv_bfloat162 * y2 = (const nv_bfloat162 *) y;
-        const __nv_fp8x2_storage_t * x2 = reinterpret_cast<const __nv_fp8x2_storage_t *>(x);
-        const __nv_fp8x2_storage_t * gate_x2 = reinterpret_cast<const __nv_fp8x2_storage_t *>(gate_x);
+        const __nv_fp8x2_e4m3 * x2 = reinterpret_cast<const __nv_fp8x2_e4m3 *>(x);
+        const __nv_fp8x2_e4m3 * gate_x2 = reinterpret_cast<const __nv_fp8x2_e4m3 *>(gate_x);
         nv_bfloat162 sum_bf[ncols_dst] = {};
         nv_bfloat162 sum_bf_gate[ncols_dst] = {};
 
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
-            const nv_bfloat162 tmpx = mmvf_f8x2_e4m3_to_bf162(x2[col2]);
+            const nv_bfloat162 tmpx = ggml_cuda_cast<nv_bfloat162>(x2[col2]);
             nv_bfloat162 tmpx_gate = {};
             if constexpr (has_fusion) {
                 if (use_gate) {
-                    tmpx_gate = mmvf_f8x2_e4m3_to_bf162(gate_x2[col2]);
+                    tmpx_gate = ggml_cuda_cast<nv_bfloat162>(gate_x2[col2]);
                 }
             }
 #pragma unroll

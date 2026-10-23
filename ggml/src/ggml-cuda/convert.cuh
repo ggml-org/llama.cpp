@@ -38,7 +38,27 @@ template<typename dst_t, typename src_t>
     } else if constexpr (std::is_same_v<dst_t, ggml_fp8_e4m3_t>) {
         return { ggml_cuda_fp32_to_f8_e4m3(ggml_cuda_cast<float>(x)) };
     } else if constexpr (std::is_same_v<src_t, ggml_fp8_e4m3_t>) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if CUDART_VERSION >= 13040
+        if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+            return static_cast<nv_bfloat16>(__nv_cvt_fp8_to_bf16raw(x.bits, __NV_E4M3));
+        }
+#endif
+        if constexpr (std::is_same_v<dst_t, half>) {
+            return static_cast<half>(__nv_cvt_fp8_to_halfraw(x.bits, __NV_E4M3));
+        }
+#endif
         return ggml_cuda_cast<dst_t>(ggml_cuda_f8_e4m3_to_fp32(x.bits));
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    } else if constexpr (std::is_same_v<src_t, __nv_fp8x2_e4m3> && std::is_same_v<dst_t, nv_bfloat162>) {
+#if CUDART_VERSION >= 13040
+        return static_cast<nv_bfloat162>(__nv_cvt_fp8x2_to_bf162raw(x.__x, __NV_E4M3));
+#else
+        return make_bfloat162(
+            ggml_cuda_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x.__x & 0xFF)),
+            ggml_cuda_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x.__x >> 8)));
+#endif
+#endif
     } else if constexpr(std::is_same_v<dst_t, nv_bfloat16>) {
         return __float2bfloat16(float(x));
     } else if constexpr(std::is_same_v<src_t, nv_bfloat16>) {
