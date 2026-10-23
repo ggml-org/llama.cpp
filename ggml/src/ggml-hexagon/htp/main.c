@@ -946,6 +946,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
         case HTP_OP_UNARY_CEIL:
+        case HTP_OP_UNARY_SGN:
         case HTP_OP_L2_NORM:
         case HTP_OP_HADAMARD:
             return op_unary(octx);

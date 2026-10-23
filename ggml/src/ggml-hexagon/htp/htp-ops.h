@@ -113,6 +113,7 @@ enum htp_op_code {
     HTP_OP_GLU_REGLU,
     HTP_OP_GLU_SIGMOID,
     HTP_OP_UNARY_CEIL,
+    HTP_OP_UNARY_SGN,
 
     HTP_OP_INVALID
 };
