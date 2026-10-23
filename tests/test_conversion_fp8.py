@@ -386,10 +386,6 @@ class TestFP8Conversion(unittest.TestCase):
                             with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
                                 self.convert(Qwen2MoeModel, tensors, ftype=ftype, eager=eager)
                             continue
-                        if qtype in (gguf.GGMLQuantizationType.TQ1_0, gguf.GGMLQuantizationType.TQ2_0):
-                            with self.assertRaisesRegex(ValueError, "required scale tensor 'blk.0.attn_q.scale' is missing"):
-                                self.convert(Qwen2MoeModel, tensors, ftype=ftype, eager=eager)
-                            continue
                         result = self.convert(Qwen2MoeModel, tensors, ftype=ftype, eager=eager, check_lazy=not eager)
                         self.assertEqual(set(result), {"blk.0.attn_q.weight"})
                         dtype, data = result["blk.0.attn_q.weight"]
