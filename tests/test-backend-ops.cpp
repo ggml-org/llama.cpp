@@ -9141,9 +9141,10 @@ struct test_top_k_mask : public test_case {
     const int64_t nh;      // rows of top_k per mask row, broadcast over ne2
     const int64_t ns;      // streams
     const bool    real;    // blocks of consecutive cells, live picks, as in a real cache
+    const bool    bcast;   // one mask row for all rows and streams
 
     std::string vars() override {
-        return VARS_TO_STR11(type, n_kv, n_blk, n_pick, n_top, n_extra, score, nb, nh, ns, real);
+        return VARS_TO_STR12(type, n_kv, n_blk, n_pick, n_top, n_extra, score, nb, nh, ns, real, bcast);
     }
 
     // the result is a copy of the mask or -inf, the harness checks the -inf pattern, the finite values must match exactly
@@ -9168,12 +9169,13 @@ struct test_top_k_mask : public test_case {
     }
 
     test_top_k_mask(ggml_type type = GGML_TYPE_F16, int64_t n_kv = 256, int64_t n_blk = 4, int64_t n_pick = 64,
-            int64_t n_top = 16, int64_t n_extra = 3, bool score = true, int64_t nb = 32, int64_t nh = 1, int64_t ns = 1, bool real = false)
+            int64_t n_top = 16, int64_t n_extra = 3, bool score = true, int64_t nb = 32, int64_t nh = 1, int64_t ns = 1, bool real = false,
+            bool bcast = false)
         : type(type), n_kv(n_kv), n_blk(n_blk), n_pick(n_blk ? n_pick : n_kv), n_top(n_top), n_extra(n_extra), score(score),
-          nb(nb), nh(nh), ns(ns), real(real) {}
+          nb(nb), nh(nh), ns(ns), real(real), bcast(bcast) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * m = ggml_new_tensor_4d(ctx, type, n_kv, nb, 1, ns);
+        ggml_tensor * m = bcast ? ggml_new_tensor_1d(ctx, type, n_kv) : ggml_new_tensor_4d(ctx, type, n_kv, nb, 1, ns);
         ggml_set_name(m, "m");
 
         ggml_tensor * top_k = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, n_top, nb, nh, ns);
@@ -10071,6 +10073,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         // blocks picked per head, the mask broadcast over the heads
         test_cases.emplace_back(new test_top_k_mask(type, 512, 16, 32, 4, 0, true, 6, 4, 1));
         test_cases.emplace_back(new test_top_k_mask(type, 1024, 8, 128, 16, 8, false, 3, 2, 2));
+        // one mask row for all rows and streams (QSA)
+        test_cases.emplace_back(new test_top_k_mask(type, 1001, 4, 70, 16, 3, true, 7, 1, 1, false, true));
+        test_cases.emplace_back(new test_top_k_mask(type, 512, 8, 16, 32, 7, true, 5, 1, 4, false, true));
     }
 
     // glu ops

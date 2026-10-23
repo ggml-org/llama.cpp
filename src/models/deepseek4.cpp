@@ -684,7 +684,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_top_k_mask(
     GGML_ASSERT(top_k);
 
     if (cparams.fused_top_k_mask) {
-        ggml_tensor * kq_mask_top_k = build_fused_top_k_mask(kq_mask, top_k, nullptr, nullptr, nullptr, il);
+        ggml_tensor * kq_mask_top_k = build_fused_top_k_mask(kq_mask, top_k, nullptr, nullptr, nullptr, nullptr, il);
         cb(kq_mask_top_k, name, il);
 
         return kq_mask_top_k;
