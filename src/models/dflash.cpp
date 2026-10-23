@@ -49,18 +49,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("invalid LiLiCorr DFlash metadata");
     }
 
-    ml.get_key(LLM_KV_LOG_SNR_CONDITIONING, hparams.dspark_log_snr_conditioning, false);
-    if (hparams.dspark_log_snr_conditioning) {
-        ml.get_key(LLM_KV_MIN_LOG_SNR, hparams.dspark_min_log_snr, true);
-        ml.get_key(LLM_KV_MAX_LOG_SNR, hparams.dspark_max_log_snr, true);
-        if (!std::isfinite(hparams.dspark_min_log_snr) || !std::isfinite(hparams.dspark_max_log_snr)) {
-            throw std::runtime_error("dspark log-SNR conditioning: min_log_snr and max_log_snr must be finite");
-        }
-        if (!(hparams.dspark_max_log_snr > hparams.dspark_min_log_snr)) {
-            throw std::runtime_error("dspark log-SNR conditioning: max_log_snr must be greater than min_log_snr");
-        }
-    }
-
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
     }
@@ -78,6 +66,18 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     // DeepSeek-V4 DSpark backbone: stages are full DSV4 blocks, uniform sliding window (the draft KV ring)
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.dsv4_hc_mult, false);
+
+    ml.get_key(LLM_KV_LOG_SNR_CONDITIONING, hparams.dspark_log_snr_conditioning, false);
+    if (hparams.dspark_log_snr_conditioning) {
+        ml.get_key(LLM_KV_MIN_LOG_SNR, hparams.dspark_min_log_snr, true);
+        ml.get_key(LLM_KV_MAX_LOG_SNR, hparams.dspark_max_log_snr, true);
+    }
+    llm_dspark_log_snr_validate(
+            hparams.dspark_log_snr_conditioning,
+            hparams.dsv4_hc_mult,
+            hparams.dspark_min_log_snr,
+            hparams.dspark_max_log_snr);
+
     if (hparams.dsv4_hc_mult > 0) {
         ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,                hparams.n_lora_q);
         ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,             hparams.n_swa);
@@ -170,11 +170,10 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     if (hparams.dspark_log_snr_conditioning) {
-        const int64_t n_freq = 128;
-        dspark_log_snr_fc1_w = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC1, "weight"), { n_freq, n_embd }, 0);
-        dspark_log_snr_fc1_b = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC1, "bias"),   { n_embd },         0);
-        dspark_log_snr_fc2_w = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC2, "weight"), { n_embd, n_embd }, 0);
-        dspark_log_snr_fc2_b = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC2, "bias"),   { n_embd },         0);
+        dspark_log_snr_fc1_w = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC1, "weight"), { LLM_DSPARK_LOG_SNR_N_FREQ, n_embd }, 0);
+        dspark_log_snr_fc1_b = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC1, "bias"),   { n_embd },                        0);
+        dspark_log_snr_fc2_w = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC2, "weight"), { n_embd, n_embd },                0);
+        dspark_log_snr_fc2_b = create_tensor(tn(LLM_TENSOR_DSPARK_LOG_SNR_FC2, "bias"),   { n_embd },                        0);
         LLAMA_LOG_INFO("%s: DFlash with DSpark log-SNR conditioning (min %.3f, max %.3f)\n",
                 __func__, (double) hparams.dspark_min_log_snr, (double) hparams.dspark_max_log_snr);
     }
@@ -989,28 +988,11 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
                     model.dspark_log_snr_fc1_b && model.dspark_log_snr_fc2_b);
 
         const int64_t n_blocks = ubatch.n_seqs_unq;
-        GGML_ASSERT(n_blocks > 0 && n_tokens % n_blocks == 0 && "log-SNR conditioning requires equal-size blocks");
-        const int64_t block_drafts = n_tokens / n_blocks;
+        std::vector<float> feat = llm_dspark_log_snr_feat(
+                n_tokens, n_blocks, hparams.dspark_min_log_snr, hparams.dspark_max_log_snr);
 
-        const int64_t n_freq  = 128;
-        const int64_t half    = n_freq / 2;
-        const float   min_snr = hparams.dspark_min_log_snr;
-        const float   max_snr = hparams.dspark_max_log_snr;
-
-        std::vector<float> feat((size_t) (n_freq * n_tokens));
-        for (int64_t pos = 0; pos < n_tokens; ++pos) {
-            const float log_snr = (pos % block_drafts == 0) ? max_snr : min_snr;
-            const float tt      = (log_snr - min_snr) / (max_snr - min_snr) * 1000.0f;
-            for (int64_t i = 0; i < half; ++i) {
-                const float freq  = expf(-logf(10000.0f) * (float) i / (float) half);
-                const float angle = tt * freq;
-                feat[(size_t) (pos * n_freq + i)]        = sinf(angle);
-                feat[(size_t) (pos * n_freq + half + i)] = cosf(angle);
-            }
-        }
-
-        auto logsnr_input = std::make_unique<llm_graph_input_dspark_logsnr>(std::move(feat));
-        logsnr_input->feat = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_freq, n_tokens);
+        auto logsnr_input = std::make_unique<llm_graph_input_dspark_logsnr>(std::move(feat), n_blocks);
+        logsnr_input->feat = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, LLM_DSPARK_LOG_SNR_N_FREQ, n_tokens);
         ggml_set_input(logsnr_input->feat);
         ggml_set_name(logsnr_input->feat, "dspark_log_snr_feat");
         ggml_tensor * snr_feat = logsnr_input->feat;
