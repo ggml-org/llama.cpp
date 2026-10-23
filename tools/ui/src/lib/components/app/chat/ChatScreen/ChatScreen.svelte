@@ -11,7 +11,16 @@
 		ChatScreenStreamResumeStatus,
 		ServerLoadingSplash
 	} from '$lib/components/app';
-	import { ROUTES } from '$lib/constants';
+	import {
+		CHAT_FORM_MOVE_IN_EASING,
+		CHAT_FORM_MOVE_IN_MS,
+		CHAT_FORM_MOVE_OUT_EASING,
+		CHAT_FORM_MOVE_OUT_MS,
+		CHAT_FORM_MOVE_SHIFT_PX,
+		CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
+		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
+		ROUTES
+	} from '$lib/constants';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -26,7 +35,7 @@
 		settingsStore
 	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -43,6 +52,10 @@
 	let isEmpty = $derived(
 		showCenteredEmpty && conversationsStore.activeMessages.length === 0 && !chatStore.isLoading
 	);
+	// where the form is drawn: follows `isEmpty` once the form has faded out
+	let isFormCentered = $state(untrack(() => isEmpty));
+	let isFormMoving = false;
+	let formWrapper: HTMLElement | undefined = $state();
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
 	let isServerLoading = $derived(serverStore.loading);
 	let hasPropsError = $derived(!!serverStore.error);
@@ -152,6 +165,54 @@
 
 		scroll.landAtBottom();
 	}
+
+	/**
+	 * Moves the form between its centered and bottom positions: it fades out
+	 * where it is, drifting toward where it goes, and fades
+	 * back in from the other side once it is there. Reduced motion keeps only
+	 * the fade. Re-reads `isEmpty` after each move, so a flip back mid-move
+	 * ends where the screen is.
+	 */
+	async function moveForm() {
+		if (isFormMoving) return;
+
+		isFormMoving = true;
+
+		while (formWrapper && isFormCentered !== isEmpty) {
+			const toCenter = isEmpty;
+			const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+			const shift = reduceMotion ? 0 : (toCenter ? -1 : 1) * CHAT_FORM_MOVE_SHIFT_PX;
+			const shown = { opacity: 1, transform: 'translateY(0)' };
+			// `transform` composes with the `translate` that centers the form
+			const leave = formWrapper.animate(
+				[shown, { opacity: 0, transform: `translateY(${shift}px)` }],
+				{
+					duration: toCenter ? CHAT_FORM_MOVE_OUT_MS : CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
+					easing: CHAT_FORM_MOVE_OUT_EASING,
+					fill: 'forwards'
+				}
+			);
+
+			await leave.finished.catch(() => {});
+
+			isFormCentered = toCenter;
+			await tick();
+
+			// cancelled in the same frame the entry starts, so it never flashes
+			leave.cancel();
+			formWrapper?.animate([{ opacity: 0, transform: `translateY(${-shift}px)` }, shown], {
+				duration: toCenter ? CHAT_FORM_MOVE_IN_MS : CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
+				easing: CHAT_FORM_MOVE_IN_EASING
+			});
+		}
+
+		isFormCentered = isEmpty;
+		isFormMoving = false;
+	}
+
+	$effect(() => {
+		if (isEmpty !== isFormCentered) untrack(() => void moveForm());
+	});
 
 	function handleSendLikeScroll() {
 		if (!deviceStore.isMobile) {
@@ -290,23 +351,26 @@
 		{/if}
 
 		<div
-			style:padding-top={!isEmpty ? 'var(--chat-form-padding-top)' : undefined}
+			bind:this={formWrapper}
+			style:padding-top="var(--chat-form-padding-top)"
 			class={[
-				// animate the centered->bottomed move with transform, not bottom:
-				// layout-property transitions need the main thread every frame and
-				// stutter while a long conversation loads; transform transitions
-				// run on the compositor and stay smooth
-				'pointer-events-none md:sticky fixed  mt-auto transition-transform duration-200',
+				// moves between the centered (empty chat) and bottomed positions with
+				// a fade, see moveForm. Its height in the page is the same in both
+				// (the padding stays, the desktop greeting floats above the form),
+				// so the messages never shift while it moves
+				'pointer-events-none md:sticky fixed mt-auto',
 				deviceStore.isStandalone
 					? 'bottom-6 right-4 left-4'
 					: deviceStore.isIOSSafari
 						? 'bottom-1 left-2 right-2'
 						: 'bottom-2 right-2 left-2',
 				'md:bottom-4',
-				isEmpty ? 'md:translate-y-[calc(-50dvh+7rem)] 2xl:translate-y-[calc(-50dvh+4rem)]' : ''
+				isFormCentered
+					? 'md:translate-y-[calc(-50dvh+7rem)] 2xl:translate-y-[calc(-50dvh+4rem)]'
+					: ''
 			]}
 		>
-			<ChatScreenGreeting {isEmpty} />
+			<ChatScreenGreeting isEmpty={isFormCentered} />
 
 			<ChatScreenServerError />
 
