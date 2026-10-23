@@ -1,4 +1,8 @@
 export const AUTO_SCROLL_INTERVAL = 100;
+// How long after the reader's wheel, touch or scroll key an upward scroll
+// still counts as theirs. Scrolls with no such input (scroll anchoring,
+// blocks re-rendering, programmatic scrolls) never stop auto-scroll.
+export const USER_SCROLL_INTENT_MS = 250;
 // Conversation landing: the page keeps growing after the first bottom pin
 // (lazy rows mounting, content-visibility size realizations, syntax
 // highlight passes), so the pin holds until the page has not resized for

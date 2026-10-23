@@ -20,8 +20,9 @@ export function useChatScreenScroll(autoScroll: AutoScrollController) {
 	let stopLanding: (() => void) | null = null;
 
 	function handleScroll(event: UIEvent) {
-		// Ignore scroll events caused by navigation layout changes or by our own
-		// programmatic scrolls so they don't accidentally disable auto-scroll.
+		// Ignore scroll events caused by navigation layout changes. Programmatic
+		// and layout scrolls cannot stop auto-scroll: only the reader's own
+		// input counts as scrolling up (see AutoScrollController.handleScroll).
 		if (isNavigating || !event.isTrusted) return;
 
 		autoScroll.handleScroll();

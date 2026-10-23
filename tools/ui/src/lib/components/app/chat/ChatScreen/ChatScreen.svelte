@@ -163,9 +163,12 @@
 
 			if (!container) return;
 
-			const lastUserBubble = container.querySelector(
-				'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
-			) as HTMLElement | null;
+			// the bubble of the message just sent: the last user bubble, whether or
+			// not the answer row below it has rendered yet
+			const userBubbles = container.querySelectorAll<HTMLElement>(
+				'.chat-message-user .chat-message-user-bubble'
+			);
+			const lastUserBubble = userBubbles[userBubbles.length - 1] ?? null;
 
 			if (deviceStore.isMobile) {
 				// Keep the last user message bubble just above the input on mobile
