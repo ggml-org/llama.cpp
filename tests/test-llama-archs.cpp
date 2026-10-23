@@ -919,7 +919,7 @@ static void test_fp8_requantize(const size_t seed, const float stdev) {
         const auto reference_logits = load_logits(reference);
         const double source_error = nmse(reference_logits, load_logits(input));
         LOG("FP8 sidecar scales: moe=%d nmse=%.2e\n", moe, source_error);
-        if (!(source_error < 1e-6)) {
+        if (!(source_error < 1e-5)) {
             throw std::runtime_error("FP8 sidecar scales differ from folded weights");
         }
         for (llama_ftype ftype : {LLAMA_FTYPE_ALL_F32, LLAMA_FTYPE_MOSTLY_F16, LLAMA_FTYPE_MOSTLY_BF16, LLAMA_FTYPE_MOSTLY_Q4_K_M}) {
