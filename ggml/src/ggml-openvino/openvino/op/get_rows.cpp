@@ -1,7 +1,9 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
 
+#include <algorithm>
 #include <climits>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
@@ -11,15 +13,155 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/multiply.hpp>
+#include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
+#include <openvino/op/subtract.hpp>
 #include <openvino/op/unsqueeze.hpp>
 
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
+
+namespace {
+
+// Gathering the rows of a quantized embedding table before dequantizing them is on by default on NPU and can be
+// forced either way with GGML_OPENVINO_GATHER_BEFORE_DEQUANT (a positive value enables it, 0 disables it).
+bool gather_before_dequant_enabled() {
+    if (ggml_openvino_getenv_str("GGML_OPENVINO_GATHER_BEFORE_DEQUANT") != nullptr) {
+        return ggml_openvino_getenv_int("GGML_OPENVINO_GATHER_BEFORE_DEQUANT") > 0;
+    }
+    return ggml_openvino_is_npu();
+}
+
+// Gathers the constant `c` along its first axis when it holds one entry per table row. A constant whose dimensions
+// are all 1 broadcasts against every row and is returned unchanged. Returns an empty Output for any other shape.
+Output<Node> gather_table_rows(const Output<Node> & c, const Output<Node> & indices, int64_t rows) {
+    const auto & ps = c.get_partial_shape();
+    if (ps.is_dynamic()) {
+        return {};
+    }
+    if (ps.rank().get_length() > 0 && ps[0].get_length() == rows) {
+        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
+        return std::make_shared<ov::op::v8::Gather>(c, indices, axis);
+    }
+    const auto & shape = ps.to_shape();
+    if (std::all_of(shape.begin(), shape.end(), [](size_t dim) { return dim == 1; })) {
+        return c;
+    }
+    return {};
+}
+
+// A quantized embedding table reaches GET_ROWS as the dequantization chain
+//
+//   [Convert(f32)] <- [Reshape] <- Multiply(scale, [Subtract(zero point)] <- Convert(quantized Constant))
+//
+// built by make_int4_weights()/make_int8_weights(). Gathering after this chain dequantizes the whole table (about
+// 1.3 GB in f16 for a 248320 x 2560 token_embd) for every token. When the table is tied to the output projection,
+// the NPUW partitioner also hands the dequantized table from one submodel to the next. Gathering the rows of the
+// quantized constants and of their scales first dequantizes only the selected rows, and leaves the table to be
+// consumed once, in its quantized form, by the output projection.
+//
+// `data` is the 2D table [rows, cols]; the quantized constant is [rows, groups, group_size] (followed by a Reshape)
+// or [rows, cols] (channel-wise, no Reshape). Returns an empty Output when `data` is not such a chain, so that the
+// caller falls back to a plain Gather.
+Output<Node> gather_before_dequant(const Output<Node> & data, const Output<Node> & indices) {
+    using namespace ov::op;
+
+    const auto indices_rank = indices.get_partial_shape().rank();
+    if (indices_rank.is_dynamic()) {
+        return {};
+    }
+
+    Output<Node> chain = data;
+    const auto top_convert = ov::as_type_ptr<v0::Convert>(chain.get_node_shared_ptr());
+    if (top_convert) {
+        chain = top_convert->input_value(0);
+    }
+    const bool has_reshape = ov::is_type<v1::Reshape>(chain.get_node());
+    if (has_reshape) {
+        chain = chain.get_node()->input_value(0);
+    }
+
+    // Multiply(x, scale): exactly one operand is the scale constant.
+    const auto multiply = ov::as_type_ptr<v1::Multiply>(chain.get_node_shared_ptr());
+    if (!multiply) {
+        return {};
+    }
+    Output<Node> scale;
+    Output<Node> dequant_input;
+    for (size_t i = 0; i < 2; ++i) {
+        if (ov::is_type<v0::Constant>(multiply->input_value(i).get_node())) {
+            scale = multiply->input_value(i);
+            dequant_input = multiply->input_value(1 - i);
+        }
+    }
+    if (!scale.get_node()) {
+        return {};
+    }
+
+    // Optional zero point: Subtract(Convert(q), Constant or Convert(Constant)).
+    Output<Node> zero_point;
+    if (const auto subtract = ov::as_type_ptr<v1::Subtract>(dequant_input.get_node_shared_ptr())) {
+        zero_point = subtract->input_value(1);
+        dequant_input = subtract->input_value(0);
+    }
+
+    const auto convert_q = ov::as_type_ptr<v0::Convert>(dequant_input.get_node_shared_ptr());
+    if (!convert_q || !ov::is_type<v0::Constant>(convert_q->input_value(0).get_node())) {
+        return {};
+    }
+    const Output<Node> quantized = convert_q->input_value(0);
+
+    const auto & quantized_ps = quantized.get_partial_shape();
+    if (quantized_ps.is_dynamic() || quantized_ps.rank().get_length() != (has_reshape ? 3 : 2)) {
+        return {};
+    }
+    const int64_t rows = quantized_ps[0].get_length();
+
+    Output<Node> rows_q = gather_table_rows(quantized, indices, rows);
+    Output<Node> rows_scale = gather_table_rows(scale, indices, rows);
+    if (!rows_q.get_node() || !rows_scale.get_node()) {
+        return {};
+    }
+    Output<Node> result = std::make_shared<v0::Convert>(rows_q, convert_q->get_destination_type());
+
+    if (zero_point.get_node()) {
+        std::shared_ptr<v0::Convert> zero_point_convert =
+            ov::as_type_ptr<v0::Convert>(zero_point.get_node_shared_ptr());
+        const Output<Node> zero_point_const = zero_point_convert ? zero_point_convert->input_value(0) : zero_point;
+        if (!ov::is_type<v0::Constant>(zero_point_const.get_node())) {
+            return {};
+        }
+        Output<Node> rows_zero_point = gather_table_rows(zero_point_const, indices, rows);
+        if (!rows_zero_point.get_node()) {
+            return {};
+        }
+        if (zero_point_convert) {
+            rows_zero_point =
+                std::make_shared<v0::Convert>(rows_zero_point, zero_point_convert->get_destination_type());
+        }
+        result = std::make_shared<v1::Subtract>(result, rows_zero_point);
+    }
+    result = std::make_shared<v1::Multiply>(result, rows_scale);
+
+    if (has_reshape) {
+        // [indices..., groups, group_size] -> [indices..., cols]: keep the index dimensions (0) and infer the rest.
+        std::vector<int64_t> pattern(indices_rank.get_length(), 0);
+        pattern.push_back(-1);
+        result = std::make_shared<v1::Reshape>(
+            result, v0::Constant::create(ov::element::i64, ov::Shape{pattern.size()}, pattern), true);
+    }
+    if (top_convert) {
+        result = std::make_shared<v0::Convert>(result, top_convert->get_destination_type());
+    }
+    return result;
+}
+
+}  // namespace
 
 OutputVector translate_get_rows(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
@@ -159,12 +301,18 @@ OutputVector translate_get_rows(const NodeContext & context) {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
     } else {
+        if (gather_before_dequant_enabled() && data.get_partial_shape().rank() == 2) {
+            res = gather_before_dequant(data, indices);
+        }
         // For a tied embedding the same weight also feeds the lm_head matmul. Gathering the
         // dequantized table would give that dequantization chain a second consumer, forcing the
         // full table to be materialized; gather the packed rows instead and dequantize those.
-        if (auto compressed = gather_compressed_rows(data, indices)) {
-            res = compressed;
-        } else {
+        if (!res.get_node()) {
+            if (auto compressed = gather_compressed_rows(data, indices)) {
+                res = compressed;
+            }
+        }
+        if (!res.get_node()) {
             auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
             res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
         }

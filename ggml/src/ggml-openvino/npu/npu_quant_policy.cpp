@@ -3,6 +3,8 @@
 #include "ggml-impl.h"
 #include "ggml.h"
 
+#include <cstring>
+#include <mutex>
 #include <string>
 
 ExtraQuantType ggml_openvino_get_npu_requant_type() {
@@ -22,6 +24,21 @@ std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const gg
     // GGML_OPENVINO_TOKEN_EMBD_I4 into group-128 int4 (only worth it for a tied embedding,
     // where the table is also the lm_head weight - see gather_compressed_rows).
     if (tensor->type == GGML_TYPE_Q6_K) {
+        // q4_0_c: per-channel u4, q4_0_128: group 128, default: F16
+        if (const char * q = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT")) {
+            ExtraQuantType type = ExtraQuantType::F16;
+            if (strcmp(q, "q4_0_c") == 0) {
+                type = ExtraQuantType::Q4_0_C;
+            } else if (strcmp(q, "q4_0_128") == 0) {
+                type = ExtraQuantType::Q4_0_128;
+            }
+            static std::once_flag logged;
+            std::call_once(logged, [&] {
+                GGML_LOG_INFO("ggml-openvino: NPU token_embd.weight requant type: %s",
+                              (type == ExtraQuantType::F16 ? "F16" : q));
+            });
+            return type;
+        }
         if (ggml_openvino_getenv_int("GGML_OPENVINO_TOKEN_EMBD_I4")) {
             return ExtraQuantType::Q4_0_128;
         }
