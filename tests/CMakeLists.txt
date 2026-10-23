@@ -227,7 +227,7 @@ endif()
 
 llama_build(test-llama-archs.cpp)
 if (GGML_CPU)
-    llama_test(test-llama-archs NAME test-fp8-requantize ARGS -a llama -b CPU -s 1)
+    llama_test(test-llama-archs  NAME test-fp8-requantize  LABEL "main behavior backend"  ARGS -a llama -b CPU -s 1)
 endif()
 
 set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")

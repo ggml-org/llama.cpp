@@ -28,7 +28,7 @@ on:
       '**/*.c',
       '**/*.cpp',
       '**/*.py',
-      '**/requirements*.txt'
+      '**/requirements*.txt',
     ]
 
 cache-mode: none
@@ -73,7 +73,7 @@ jobs:
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install jinja2==3.1.6 -r requirements/requirements-convert_hf_to_gguf.txt
+          pip install -r requirements/requirements-convert_hf_to_gguf.txt
 
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
