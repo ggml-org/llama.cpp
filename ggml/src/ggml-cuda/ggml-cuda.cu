@@ -496,7 +496,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
 #ifdef USE_CUDA_GRAPH
         int n_captured = 0;
         for (const auto & [key, graph] : ctx.cuda_graphs) {
-            n_captured += graph->instance != nullptr;
+            n_captured += graph->instances.size();
         }
         if (n_captured > 0) {
             GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: memory freed, %d captured CUDA graphs must be captured again\n", device, n_captured);
