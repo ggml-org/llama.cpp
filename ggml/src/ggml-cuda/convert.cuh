@@ -58,6 +58,8 @@ template<typename dst_t, typename src_t>
             ggml_cuda_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x.__x & 0xFF)),
             ggml_cuda_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x.__x >> 8)));
 #endif
+    } else if constexpr (std::is_same_v<src_t, __nv_fp8x2_e4m3> && std::is_same_v<dst_t, float2>) {
+        return ggml_cuda_cast<float2>(ggml_cuda_cast<nv_bfloat162>(x));
 #endif
     } else if constexpr(std::is_same_v<dst_t, nv_bfloat16>) {
         return __float2bfloat16(float(x));
