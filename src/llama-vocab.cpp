@@ -422,6 +422,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 };
                 break;
             case LLAMA_VOCAB_PRE_TYPE_TEKKEN:
+            case LLAMA_VOCAB_PRE_TYPE_NEMOTRON_3_5_EMBD:
                 // original regex from tokenizer.json
                 // "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
                 regex_exprs = {
@@ -637,11 +638,22 @@ struct llm_tokenizer_bpe_session {
     }
 
     virtual void tokenize(const std::string & text, std::vector<llama_token> & output) {
+        auto tok_pre = vocab.get_pre_type();
+
+        std::vector<std::string> word_collection;
+        if (tok_pre == LLAMA_VOCAB_PRE_TYPE_NEMOTRON_3_5_EMBD) {
+            static const std::string zwnj = "\xe2\x80\x8c";
+            std::string normalized_text = text;
+            replace_all(normalized_text, "[" + zwnj, "[");
+            replace_all(normalized_text, "<" + zwnj, "<");
+            word_collection = unicode_regex_split(normalized_text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        } else {
+            word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        }
+
         int final_prev_index = -1;
-        auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
 
         symbols_final.clear();
-        auto tok_pre = vocab.get_pre_type();
 
         if (tok_pre == LLAMA_VOCAB_PRE_TYPE_MMBERT) {
             // Metaspace pre-tokenizer: a text starts with an escaped space, and each escaped space starts a new word
@@ -2713,6 +2725,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "k2-horizon") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_K2_HORIZON;
                 clean_spaces = false;
+            } else if (
+                tokenizer_pre == "nemotron-3.5-embed") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_NEMOTRON_3_5_EMBD;
+                ignore_merges = true;
+                add_bos = true;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
