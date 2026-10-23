@@ -1667,7 +1667,7 @@ class ModelBase:
         for shard in self.gguf_writer.tensors:
             for name, tensor in shard.items():
                 # Keep in sync with needs_scale in ggml.c.
-                if tensor.dtype in (gguf.GGMLQuantizationType.F8_E4M3, gguf.GGMLQuantizationType.NVFP4, gguf.GGMLQuantizationType.TQ1_0, gguf.GGMLQuantizationType.TQ2_0):
+                if tensor.dtype in (gguf.GGMLQuantizationType.F8_E4M3, gguf.GGMLQuantizationType.NVFP4):
                     scale_name = name.removesuffix(".weight") + ".scale"
                     if scale_name not in tensor_names:
                         raise ValueError(f"Cannot export {name!r} as {tensor.dtype.name}: required scale tensor {scale_name!r} is missing (implicit unit scales are not supported)")
