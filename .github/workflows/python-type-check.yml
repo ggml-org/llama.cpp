@@ -1,16 +1,16 @@
-name: Python Checks
+name: Python Type-Check
 
 on:
   push:
     paths:
-      - '.github/workflows/python-checks.yml'
+      - '.github/workflows/python-type-check.yml'
       - 'ty.toml'
       - '**.py'
       - '**/requirements*.txt'
       # - 'pyrightconfig.json'
   pull_request:
     paths:
-      - '.github/workflows/python-checks.yml'
+      - '.github/workflows/python-type-check.yml'
       - 'ty.toml'
       - '**.py'
       - '**/requirements*.txt'
@@ -25,9 +25,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python-checks:
+  python-type-check:
     runs-on: ubuntu-slim
-    name: Python checks
+    name: python type-check
     steps:
       - name: Check out source repository
         uses: actions/checkout@v6
@@ -45,5 +45,3 @@ jobs:
       - name: Type-check with ty
         run: |
             ty check --exit-zero-on-warning --output-format=github
-      - name: Test FP8 conversion
-        run: python -m unittest discover -s tests -p 'test_conversion_fp8.py' -v

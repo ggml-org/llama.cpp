@@ -280,6 +280,12 @@ llama_build(test-fusion.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)
 llama_build_and_test(test-jinja.cpp  LABEL behavior)
 llama_test(test-jinja  NAME test-jinja-py  ARGS -py  LABEL "python behavior")
+llama_test_cmd(python3
+    NAME test-conversion-fp8
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_conversion_fp8.py -v
+)
 llama_build_and_test(test-json-schema.cpp  LABEL behavior)
 llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp  LABEL behavior)
