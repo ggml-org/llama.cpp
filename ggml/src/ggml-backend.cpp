@@ -402,6 +402,21 @@ size_t ggml_backend_get_max_size(ggml_backend_t backend) {
     return ggml_backend_buft_get_max_size(ggml_backend_get_default_buffer_type(backend));
 }
 
+template <typename GetBuffer>
+static void ggml_backend_tensor_buft_groups(size_t n_tensors, GetBuffer && get_buffer, std::vector<std::vector<size_t>> & groups) {
+    std::unordered_map<ggml_backend_buffer_type_t, size_t> buft_idx;
+    groups.clear();
+    for (size_t i = 0; i < n_tensors; i++) {
+        ggml_backend_buffer_t buf = get_buffer(i);
+        auto it = buft_idx.find(buf->buft);
+        if (it == buft_idx.end()) {
+            buft_idx[buf->buft] = groups.size();
+            groups.emplace_back();
+        }
+        groups[buft_idx[buf->buft]].push_back(i);
+    }
+}
+
 static bool ggml_backend_tensor_batch_is_2d(
         const struct ggml_tensor * const * tensors,
         const size_t * offsets,
@@ -587,14 +602,19 @@ void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor, void * data, 
     buf->iface.get_tensor_2d(buf, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
 }
 
-void ggml_backend_tensor_set_n(struct ggml_tensor ** tensors, const void * data,
+void ggml_backend_tensor_set_n(const struct ggml_tensor * const * tensors, const void * data,
         const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
     if (n_tensors == 0) {
         return;
     }
 
+    std::vector<const void *> data_ptrs(n_tensors);
+    for (size_t i = 0; i < n_tensors; i++) {
+        data_ptrs[i] = (const char *) data + data_offsets[i];
+    }
+
     ggml_backend_buffer_t buf = NULL;
-    bool same_buffer = true;
+    bool same_buft = true;
 
     for (size_t i = 0; i < n_tensors; i++) {
         GGML_ASSERT(tensors[i] != NULL);
@@ -605,37 +625,70 @@ void ggml_backend_tensor_set_n(struct ggml_tensor ** tensors, const void * data,
 
         if (buf == NULL) {
             buf = tensor_buf;
-        } else if (buf != tensor_buf) {
-            same_buffer = false;
+        } else if (buf->buft != tensor_buf->buft) {
+            same_buft = false;
         }
     }
 
-    if (same_buffer && buf->iface.set_tensor_n != NULL) {
-        buf->iface.set_tensor_n(buf, tensors, data, offsets, sizes, data_offsets, n_tensors);
+    if (same_buft && buf->iface.set_tensor_n != NULL) {
+        buf->iface.set_tensor_n(buf, tensors, data_ptrs.data(), offsets, sizes, n_tensors);
+        return;
+    }
+
+    if (!same_buft) {
+        std::vector<std::vector<size_t>> groups;
+        ggml_backend_tensor_buft_groups(n_tensors, [&](size_t i) {
+            return tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
+        }, groups);
+
+        for (size_t g = 0; g < groups.size(); g++) {
+            std::vector<const ggml_tensor *> g_tensors;
+            std::vector<size_t> g_offsets;
+            std::vector<size_t> g_sizes;
+            std::vector<size_t> g_data_offsets;
+            g_tensors.reserve(groups[g].size());
+            g_offsets.reserve(groups[g].size());
+            g_sizes.reserve(groups[g].size());
+            g_data_offsets.reserve(groups[g].size());
+
+            for (size_t i : groups[g]) {
+                g_tensors.push_back(tensors[i]);
+                g_offsets.push_back(offsets[i]);
+                g_sizes.push_back(sizes[i]);
+                g_data_offsets.push_back(data_offsets[i]);
+            }
+
+            ggml_backend_tensor_set_n(g_tensors.data(), data, g_offsets.data(), g_sizes.data(), g_data_offsets.data(), g_tensors.size());
+        }
         return;
     }
 
     size_t base_offset = 0, size = 0, stride_tensor = 0, stride_data = 0;
-    if (ggml_backend_tensor_batch_is_2d((const struct ggml_tensor * const *) tensors, offsets, sizes, data_offsets, n_tensors,
+    if (ggml_backend_tensor_batch_is_2d(tensors, offsets, sizes, data_offsets, n_tensors,
                 &base_offset, &size, &stride_tensor, &stride_data)) {
-        ggml_backend_tensor_set_2d(tensors[0], (const char *) data + data_offsets[0], base_offset, size,
+        ggml_backend_tensor_set_2d(const_cast<struct ggml_tensor *>(tensors[0]), data_ptrs[0], base_offset, size,
                 n_tensors, stride_tensor, stride_data);
         return;
     }
 
     for (size_t i = 0; i < n_tensors; i++) {
-        ggml_backend_tensor_set(tensors[i], (const char *) data + data_offsets[i], offsets[i], sizes[i]);
+        ggml_backend_tensor_set(const_cast<struct ggml_tensor *>(tensors[i]), data_ptrs[i], offsets[i], sizes[i]);
     }
 }
 
-void ggml_backend_tensor_get_n(const struct ggml_tensor ** tensors, void * data,
+void ggml_backend_tensor_get_n(const struct ggml_tensor * const * tensors, void * data,
         const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
     if (n_tensors == 0) {
         return;
     }
 
+    std::vector<void *> data_ptrs(n_tensors);
+    for (size_t i = 0; i < n_tensors; i++) {
+        data_ptrs[i] = (char *) data + data_offsets[i];
+    }
+
     ggml_backend_buffer_t buf = NULL;
-    bool same_buffer = true;
+    bool same_buft = true;
 
     for (size_t i = 0; i < n_tensors; i++) {
         GGML_ASSERT(tensors[i] != NULL);
@@ -646,26 +699,54 @@ void ggml_backend_tensor_get_n(const struct ggml_tensor ** tensors, void * data,
 
         if (buf == NULL) {
             buf = tensor_buf;
-        } else if (buf != tensor_buf) {
-            same_buffer = false;
+        } else if (buf->buft != tensor_buf->buft) {
+            same_buft = false;
         }
     }
 
-    if (same_buffer && buf->iface.get_tensor_n != NULL) {
-        buf->iface.get_tensor_n(buf, tensors, data, offsets, sizes, data_offsets, n_tensors);
+    if (same_buft && buf->iface.get_tensor_n != NULL) {
+        buf->iface.get_tensor_n(buf, tensors, data_ptrs.data(), offsets, sizes, n_tensors);
+        return;
+    }
+
+    if (!same_buft) {
+        std::vector<std::vector<size_t>> groups;
+        ggml_backend_tensor_buft_groups(n_tensors, [&](size_t i) {
+            return tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
+        }, groups);
+
+        for (size_t g = 0; g < groups.size(); g++) {
+            std::vector<const ggml_tensor *> g_tensors;
+            std::vector<size_t> g_offsets;
+            std::vector<size_t> g_sizes;
+            std::vector<size_t> g_data_offsets;
+            g_tensors.reserve(groups[g].size());
+            g_offsets.reserve(groups[g].size());
+            g_sizes.reserve(groups[g].size());
+            g_data_offsets.reserve(groups[g].size());
+
+            for (size_t i : groups[g]) {
+                g_tensors.push_back(tensors[i]);
+                g_offsets.push_back(offsets[i]);
+                g_sizes.push_back(sizes[i]);
+                g_data_offsets.push_back(data_offsets[i]);
+            }
+
+            ggml_backend_tensor_get_n(g_tensors.data(), data, g_offsets.data(), g_sizes.data(), g_data_offsets.data(), g_tensors.size());
+        }
         return;
     }
 
     size_t base_offset = 0, size = 0, stride_tensor = 0, stride_data = 0;
-    if (ggml_backend_tensor_batch_is_2d((const struct ggml_tensor * const *) tensors, offsets, sizes, data_offsets, n_tensors,
+    if (ggml_backend_tensor_batch_is_2d(tensors, offsets, sizes, data_offsets, n_tensors,
                 &base_offset, &size, &stride_tensor, &stride_data)) {
-        ggml_backend_tensor_get_2d(tensors[0], (char *) data + data_offsets[0], base_offset, size,
+        ggml_backend_tensor_get_2d(tensors[0], data_ptrs[0], base_offset, size,
                 n_tensors, stride_tensor, stride_data);
         return;
     }
 
     for (size_t i = 0; i < n_tensors; i++) {
-        ggml_backend_tensor_get(tensors[i], (char *) data + data_offsets[i], offsets[i], sizes[i]);
+        ggml_backend_tensor_get(tensors[i], data_ptrs[i], offsets[i], sizes[i]);
     }
 }
 
@@ -771,7 +852,7 @@ void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor
     }
 }
 
-void ggml_backend_tensor_copy_n(const struct ggml_tensor ** srcs, struct ggml_tensor ** dsts, size_t n_tensors) {
+void ggml_backend_tensor_copy_n(const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
     if (n_tensors == 0) {
         return;
     }
@@ -780,19 +861,43 @@ void ggml_backend_tensor_copy_n(const struct ggml_tensor ** srcs, struct ggml_te
         GGML_ASSERT(ggml_are_same_layout(srcs[i], dsts[i]) && "cannot copy tensors with different layouts");
     }
 
-    ggml_backend_buffer_t buf = dsts[0]->buffer;
-    bool same_buffer = true;
+    ggml_backend_buffer_t buf = dsts[0]->view_src ? dsts[0]->view_src->buffer : dsts[0]->buffer;
+    bool same_buft = true;
     for (size_t i = 0; i < n_tensors; ++i) {
-        if (dsts[i]->buffer != buf) {
-            same_buffer = false;
+        ggml_backend_buffer_t dst_buf = dsts[i]->view_src ? dsts[i]->view_src->buffer : dsts[i]->buffer;
+        if (dst_buf->buft != buf->buft) {
+            same_buft = false;
             break;
         }
     }
 
-    if (same_buffer && buf->iface.cpy_tensor_n != NULL) {
+    // if cpy_tensor_n returns false, it must not have performed any copies
+    if (same_buft && buf->iface.cpy_tensor_n != NULL) {
         if (buf->iface.cpy_tensor_n(buf, srcs, dsts, n_tensors)) {
             return;
         }
+    }
+
+    if (!same_buft) {
+        std::vector<std::vector<size_t>> groups;
+        ggml_backend_tensor_buft_groups(n_tensors, [&](size_t i) {
+            return dsts[i]->view_src ? dsts[i]->view_src->buffer : dsts[i]->buffer;
+        }, groups);
+
+        for (size_t g = 0; g < groups.size(); g++) {
+            std::vector<const ggml_tensor *> g_srcs;
+            std::vector<ggml_tensor *> g_dsts;
+            g_srcs.reserve(groups[g].size());
+            g_dsts.reserve(groups[g].size());
+
+            for (size_t i : groups[g]) {
+                g_srcs.push_back(srcs[i]);
+                g_dsts.push_back(dsts[i]);
+            }
+
+            ggml_backend_tensor_copy_n(g_srcs.data(), g_dsts.data(), g_srcs.size());
+        }
+        return;
     }
 
     for (size_t i = 0; i < n_tensors; ++i) {

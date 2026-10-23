@@ -2436,7 +2436,7 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
     }
 }
 
-static bool ggml_metal_buffer_data_span(const size_t * data_offsets, const size_t * sizes, size_t n_tensors, size_t * min_data, size_t * max_data) {
+static bool ggml_metal_buffer_data_span(const void * const * data, const size_t * sizes, size_t n_tensors, uintptr_t * min_data, uintptr_t * max_data) {
     bool found = false;
 
     for (size_t i = 0; i < n_tensors; i++) {
@@ -2444,14 +2444,15 @@ static bool ggml_metal_buffer_data_span(const size_t * data_offsets, const size_
             continue;
         }
 
-        const size_t end = data_offsets[i] + sizes[i];
+        const uintptr_t start = (uintptr_t) data[i];
+        const uintptr_t end   = start + sizes[i];
         if (!found) {
-            *min_data = data_offsets[i];
+            *min_data = start;
             *max_data = end;
             found = true;
         } else {
-            if (data_offsets[i] < *min_data) {
-                *min_data = data_offsets[i];
+            if (start < *min_data) {
+                *min_data = start;
             }
             if (end > *max_data) {
                 *max_data = end;
@@ -2462,25 +2463,25 @@ static bool ggml_metal_buffer_data_span(const size_t * data_offsets, const size_
     return found;
 }
 
-void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor ** tensors, const void * data,
-        const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
+void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, const struct ggml_tensor * const * tensors, const void * const * data,
+        const size_t * offsets, const size_t * sizes, size_t n_tensors) {
     if (buf->is_shared) {
         for (size_t i = 0; i < n_tensors; i++) {
             if (sizes[i] == 0) {
                 continue;
             }
-            memcpy((char *) tensors[i]->data + offsets[i], (const char *) data + data_offsets[i], sizes[i]);
+            memcpy((char *) tensors[i]->data + offsets[i], data[i], sizes[i]);
         }
         return;
     }
 
-    size_t min_data = 0, max_data = 0;
-    if (!ggml_metal_buffer_data_span(data_offsets, sizes, n_tensors, &min_data, &max_data)) {
+    uintptr_t min_data = 0, max_data = 0;
+    if (!ggml_metal_buffer_data_span(data, sizes, n_tensors, &min_data, &max_data)) {
         return;
     }
 
     @autoreleasepool {
-        void * data_ptr = (void *)(uintptr_t) ((const char *) data + min_data);
+        void * data_ptr = (void *) min_data;
         id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
                                                                length:max_data - min_data
                                                               options:MTLResourceStorageModeShared
@@ -2498,11 +2499,13 @@ void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor 
                     continue;
                 }
 
-                struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf, tensors[i]);
+                ggml_backend_buffer_t tensor_buf_ggml = tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
+                ggml_metal_buffer_t tensor_buf = (ggml_metal_buffer_t) tensor_buf_ggml->context;
+                struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(tensor_buf, tensors[i]);
                 bid_dst.offs += offsets[i];
 
                 [encoder copyFromBuffer:buf_src
-                           sourceOffset:data_offsets[i] - min_data
+                           sourceOffset:(uintptr_t) data[i] - min_data
                                toBuffer:bid_dst.metal
                       destinationOffset:bid_dst.offs
                                    size:sizes[i]];
@@ -2518,25 +2521,25 @@ void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor 
     }
 }
 
-void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_tensor ** tensors, void * data,
-        const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
+void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_tensor * const * tensors, void * const * data,
+        const size_t * offsets, const size_t * sizes, size_t n_tensors) {
     if (buf->is_shared) {
         for (size_t i = 0; i < n_tensors; i++) {
             if (sizes[i] == 0) {
                 continue;
             }
-            memcpy((char *) data + data_offsets[i], (const char *) tensors[i]->data + offsets[i], sizes[i]);
+            memcpy(data[i], (const char *) tensors[i]->data + offsets[i], sizes[i]);
         }
         return;
     }
 
-    size_t min_data = 0, max_data = 0;
-    if (!ggml_metal_buffer_data_span(data_offsets, sizes, n_tensors, &min_data, &max_data)) {
+    uintptr_t min_data = 0, max_data = 0;
+    if (!ggml_metal_buffer_data_span((const void * const *) data, sizes, n_tensors, &min_data, &max_data)) {
         return;
     }
 
     @autoreleasepool {
-        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:(char *) data + min_data
+        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:(void *) min_data
                                                                length:max_data - min_data
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
@@ -2553,13 +2556,15 @@ void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_t
                     continue;
                 }
 
-                struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(buf, tensors[i]);
+                ggml_backend_buffer_t tensor_buf_ggml = tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
+                ggml_metal_buffer_t tensor_buf = (ggml_metal_buffer_t) tensor_buf_ggml->context;
+                struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(tensor_buf, tensors[i]);
                 bid_src.offs += offsets[i];
 
                 [encoder copyFromBuffer:bid_src.metal
                            sourceOffset:bid_src.offs
                                toBuffer:buf_dst
-                      destinationOffset:data_offsets[i] - min_data
+                      destinationOffset:(uintptr_t) data[i] - min_data
                                    size:sizes[i]];
             }
 
@@ -2614,14 +2619,15 @@ bool ggml_metal_buffer_cpy_tensor(ggml_metal_buffer_t buf_dst, const struct ggml
     return true;
 }
 
-bool ggml_metal_buffer_cpy_tensor_n(ggml_metal_buffer_t buf_dst, const struct ggml_tensor ** srcs, struct ggml_tensor ** dsts, size_t n_tensors) {
+bool ggml_metal_buffer_cpy_tensor_n(ggml_metal_buffer_t buf_dst, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
     if (n_tensors == 0) {
         return true;
     }
 
     bool all_shared = true;
     for (size_t i = 0; i < n_tensors; ++i) {
-        ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t)srcs[i]->buffer->context;
+        ggml_backend_buffer_t src_buf = srcs[i]->view_src ? srcs[i]->view_src->buffer : srcs[i]->buffer;
+        ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t) src_buf->context;
         if (!buf_dst->is_shared || !buf_src->is_shared) {
             all_shared = false;
             break;
@@ -2641,9 +2647,12 @@ bool ggml_metal_buffer_cpy_tensor_n(ggml_metal_buffer_t buf_dst, const struct gg
         struct ggml_metal_buffer_id * bid_dsts = malloc(n_tensors * sizeof(struct ggml_metal_buffer_id));
 
         for (size_t i = 0; i < n_tensors; ++i) {
-            ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t)srcs[i]->buffer->context;
+            ggml_backend_buffer_t src_buf = srcs[i]->view_src ? srcs[i]->view_src->buffer : srcs[i]->buffer;
+            ggml_backend_buffer_t dst_buf = dsts[i]->view_src ? dsts[i]->view_src->buffer : dsts[i]->buffer;
+            ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t) src_buf->context;
+            ggml_metal_buffer_t buf_dst_i = (ggml_metal_buffer_t) dst_buf->context;
             bid_srcs[i] = ggml_metal_buffer_get_id(buf_src, srcs[i]);
-            bid_dsts[i] = ggml_metal_buffer_get_id(buf_dst, dsts[i]);
+            bid_dsts[i] = ggml_metal_buffer_get_id(buf_dst_i, dsts[i]);
 
             if (bid_srcs[i].metal == nil || bid_dsts[i].metal == nil) {
                 free(bid_srcs);
