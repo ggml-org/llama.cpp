@@ -873,9 +873,9 @@ static void test_fp8_requantize(const size_t seed, const float stdev) {
     const auto output = (files.dir / "output.gguf").string();
     const auto reference_output = (files.dir / "reference-output.gguf").string();
     const auto tokens = get_tokens(8, 128, seed);
-    auto load_logits = [&](const std::string & path) {
-        std::unique_ptr<FILE, int (*)(FILE *)> file(fopen(path.c_str(), "rb"), fclose);
-        if (!file) {
+    auto load_logits = [&](const std::string & path, bool split = false) {
+        std::unique_ptr<FILE, int (*)(FILE *)> file(split ? nullptr : fopen(path.c_str(), "rb"), fclose);
+        if (!split && !file) {
             throw std::runtime_error("failed to open FP8 test model");
         }
         // Use the same CPU kernels for scaled weights and the folded reference.
@@ -883,8 +883,25 @@ static void test_fp8_requantize(const size_t seed, const float stdev) {
             {".*", ggml_backend_cpu_buffer_type()},
             {nullptr, nullptr},
         };
-        auto model_and_ctx = get_model_and_ctx(nullptr, file.get(), seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, false, overrides);
-        return get_logits(model_and_ctx.first.get(), model_and_ctx.second.get(), tokens);
+        ggml_backend_dev_t devices[] = {nullptr};
+        auto model_params = llama_model_default_params();
+        model_params.devices = devices;
+        model_params.tensor_buft_overrides = overrides;
+        model_params.progress_callback = silent_model_load_progress;
+        llama_model_ptr model(split ? llama_model_load_from_file(path.c_str(), model_params) :
+                                     llama_model_load_from_file_ptr(file.get(), model_params));
+        if (!model) {
+            throw std::runtime_error("failed to load FP8 test model");
+        }
+        auto ctx_params = llama_context_default_params();
+        ctx_params.n_ctx = 0;
+        ctx_params.n_ubatch = 64;
+        ctx_params.n_threads = ctx_params.n_threads_batch = 4;
+        llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+        if (!lctx) {
+            throw std::runtime_error("failed to create FP8 test context");
+        }
+        return get_logits(model.get(), lctx.get(), tokens);
     };
 
     for (bool moe : {false, true}) {
@@ -921,6 +938,39 @@ static void test_fp8_requantize(const size_t seed, const float stdev) {
         LOG("FP8 sidecar scales: moe=%d nmse=%.2e\n", moe, source_error);
         if (!(source_error < 1e-5)) {
             throw std::runtime_error("FP8 sidecar scales differ from folded weights");
+        }
+        for (const auto & path : {reference, input}) {
+            ggml_context * ctx_raw = nullptr;
+            gguf_context_ptr metadata(gguf_init_from_file(path.c_str(), {false, &ctx_raw}));
+            ggml_context_ptr ctx(ctx_raw);
+            if (!metadata || !ctx) {
+                throw std::runtime_error("failed to read FP8 test model for splitting");
+            }
+            const auto split_first = (files.dir / "split-00001-of-00002.gguf").string();
+            const auto split_second = (files.dir / "split-00002-of-00002.gguf").string();
+            for (int split = 0; split < 2; ++split) {
+                gguf_context_ptr shard(gguf_init_empty());
+                gguf_set_kv(shard.get(), metadata.get());
+                gguf_set_val_u16(shard.get(), "split.no", split);
+                gguf_set_val_u16(shard.get(), "split.count", 2);
+                gguf_set_val_i32(shard.get(), "split.tensors.count", gguf_get_n_tensors(metadata.get()));
+                for (int64_t i = 0; i < gguf_get_n_tensors(metadata.get()); ++i) {
+                    auto * tensor = ggml_get_tensor(ctx.get(), gguf_get_tensor_name(metadata.get(), i));
+                    // Put output scales in the second shard to test lookup across splits.
+                    const bool output_scale = strcmp(tensor->name, "output.scale") == 0 || strcmp(tensor->name, "output.input_scale") == 0;
+                    if (output_scale == (split == 1)) {
+                        gguf_add_tensor(shard.get(), tensor);
+                    }
+                }
+                if (!gguf_write_to_file(shard.get(), (split == 0 ? split_first : split_second).c_str(), false)) {
+                    throw std::runtime_error("failed to write split FP8 test model");
+                }
+            }
+            const double split_error = nmse(load_logits(path), load_logits(split_first, true));
+            LOG("FP8 split model: moe=%d nmse=%.2e\n", moe, split_error);
+            if (!(split_error < 1e-10)) {
+                throw std::runtime_error("split FP8 model differs from unsplit model");
+            }
         }
         for (llama_ftype ftype : {LLAMA_FTYPE_ALL_F32, LLAMA_FTYPE_MOSTLY_F16, LLAMA_FTYPE_MOSTLY_BF16, LLAMA_FTYPE_MOSTLY_Q4_K_M}) {
             for (int nthread : {1, 3}) {
