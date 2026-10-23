@@ -719,7 +719,7 @@ struct vk_device_struct {
     bool shader_64b_indexing;
 
     bool integer_dot_product;
-    // Only the mixed signedness integer dot product is accelerated. MMQ uses the _sudot shaders.
+    // Only the mixed signedness integer dot product is accelerated. MMQ sets its MMQ_SUDOT spec constant.
     bool integer_dot_sudot {};
     // 0: default, 1: force mmvq, -1: disable mmvq
     int32_t mmvq_mode;
