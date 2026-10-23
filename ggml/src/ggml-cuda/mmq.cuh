@@ -435,6 +435,7 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1) / warp_size;
     constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, prec_src1);
+    static_assert(I % warp_size == 0, "DP4A MMQ tile height must be a multiple of the physical warp size");
 
     const bool y_scale_used = y_scale != nullptr;
 
