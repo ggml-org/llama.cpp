@@ -526,42 +526,63 @@ static inline float ggml_ue4m3_to_fp32(uint8_t x) {
     return raw * 0.5f;
 }
 
+// Encode raw UE4M3 (bias=7); round-to-nearest-even.
+// Finite codes use exp field 0..15 with max 0x7E (=448); 0x7F is reserved (decode as 0).
 static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     if (!(x > 0.0f)) {
         return 0;
     }
-    if (x > 448.0f) {
-        x = 448.0f;
+    // Max finite UE4M3 value is 448 (0x7E)
+    if (x >= 448.0f) {
+        return 0x7E;
     }
+
     uint32_t bits;
-    memcpy(&bits, &x, 4);
-    int fp32_exp  = ((bits >> 23) & 0xFF) - 127;
-    int fp32_man  = (bits >> 20) & 0x7;
-    int ue4m3_exp = fp32_exp + 7;
-    if (ue4m3_exp <= 0) {
-        // subnormal: value = man * 2^-9, man = round(x * 2^9)
-        int man = (int) (x * 512.0f + 0.5f);
+    memcpy(&bits, &x, sizeof(bits));
+    const int      exp_unbiased = (int) ((bits >> 23) & 0xFF) - 127;
+    const uint32_t man23        = bits & 0x7FFFFFu;
+    int            ue_exp       = exp_unbiased + 7;
+
+    if (ue_exp <= 0) {
+        // Subnormal: value = man * 2^-9, man = round_ties_to_even(x * 512)
+        const float scaled = x * 512.0f;
+        const float fl     = floorf(scaled);
+        const float diff   = scaled - fl;
+        int man;
+        if (diff > 0.5f) {
+            man = (int) fl + 1;
+        } else if (diff < 0.5f) {
+            man = (int) fl;
+        } else {
+            // tie: round to even
+            const int lo = (int) fl;
+            man = (lo & 1) ? lo + 1 : lo;
+        }
         if (man > 7) {
-            man = 7;
+            return 0x08; // overflow into smallest normal (2^-6)
         }
         if (man < 1) {
             return 0;
         }
         return (uint8_t) man;
     }
-    if (ue4m3_exp >= 15) {
-        return 0x7E;
-    }
-    int round_bit = (bits >> 19) & 1;
-    int ue4m3_man = fp32_man + round_bit;
-    if (ue4m3_man > 7) {
-        ue4m3_man = 0;
-        ue4m3_exp++;
-        if (ue4m3_exp >= 15) {
-            return 0x7E;
+
+    // Normal: keep top 3 mantissa bits; RNE on the remaining 20 bits
+    int            man  = (int) ((man23 >> 20) & 7u);
+    const uint32_t rest = man23 & 0xFFFFFu;
+    if (rest > 0x80000u || (rest == 0x80000u && (man & 1))) {
+        man++;
+        if (man > 7) {
+            man = 0;
+            ue_exp++;
         }
     }
-    return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);
+
+    // exp==15 with man 0..6 is finite; saturate rather than emit reserved 0x7F
+    if (ue_exp > 15 || (ue_exp == 15 && man > 6)) {
+        return 0x7E;
+    }
+    return (uint8_t) ((ue_exp << 3) | man);
 }
 
 /**
