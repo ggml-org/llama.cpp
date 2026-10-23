@@ -9,10 +9,10 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/properties.hpp>
-#include <mutex>
 #include <optional>
 
 ov::Core & ov_singleton_core() {
@@ -56,7 +56,8 @@ std::string ggml_openvino_get_device_description(const std::string & device_name
 
     if (has_prefix(device_name, "NPU")) {
         try {
-            const std::string arch = ov_singleton_core().get_property(device_name, "DEVICE_ARCHITECTURE").as<std::string>();
+            const std::string arch =
+                ov_singleton_core().get_property(device_name, "DEVICE_ARCHITECTURE").as<std::string>();
             if (!arch.empty()) {
                 description += " (NPU " + arch + ")";
             }
@@ -83,9 +84,10 @@ static std::string resolve_openvino_device_name(const std::vector<std::string> &
         for (const std::string & name : available_devices) {
             list += "\n  " + name + ": " + ggml_openvino_get_device_description(name);
         }
-        GGML_ABORT("GGML OpenVINO Backend: GGML_OPENVINO_DEVICE=%s is not available. "
-                   "Set it to one of the available OpenVINO devices:%s",
-                   requested, list.c_str());
+        GGML_ABORT(
+            "GGML OpenVINO Backend: GGML_OPENVINO_DEVICE=%s is not available. "
+            "Set it to one of the available OpenVINO devices:%s",
+            requested, list.c_str());
     }
     return requested;
 }
@@ -155,6 +157,8 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_LOG_UNSUPPORTED_OPS",
         "GGML_OPENVINO_LOG_SWA_LAYERS",
         "GGML_OPENVINO_NATIVE_SOFTPLUS",
+        "GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT",
+        "GGML_OPENVINO_GATHER_BEFORE_DEQUANT",
         "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",
         "GGML_OPENVINO_REQUANT_KQUANT",
         "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
@@ -441,6 +445,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         }
         return ExtraQuantType::Q8_0_C;
     }
+
     if (strncmp(tensor->name, "output.weight", 13) == 0) {
         return ExtraQuantType::Q8_0_C;
     }
