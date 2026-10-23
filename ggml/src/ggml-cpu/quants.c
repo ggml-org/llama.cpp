@@ -379,7 +379,7 @@ void ggml_vec_dot_f8_e4m3_f32(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     float sumf = 0.0f;
     int pos = 0;
-#if defined(GGML_SIMD) && !defined(__ARM_FEATURE_SVE)
+#if defined(GGML_SIMD) && !defined(__ARM_FEATURE_SVE) && !defined(__riscv_v_intrinsic)
     GGML_F32_VEC sum[GGML_F32_ARR] = { GGML_F32_VEC_ZERO };
     const int np = n - n % GGML_F32_STEP;
     for (; pos < np; pos += GGML_F32_STEP) {
