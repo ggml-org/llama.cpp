@@ -26,6 +26,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <random>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -917,9 +918,13 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
 }
 
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
+    // a random suffix gives every writer its own temporary file, across processes and containers
+    std::random_device rd;
+    const uint64_t id = ((uint64_t) rd() << 32) | rd();
+
     std::error_code ec;
     std::filesystem::path path_tmp = path;
-    path_tmp += ".tmp";
+    path_tmp += "." + std::to_string(id) + ".tmp";
 
     if (path.has_parent_path()) {
         std::filesystem::create_directories(path.parent_path(), ec);
