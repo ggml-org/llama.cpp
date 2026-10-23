@@ -1385,10 +1385,10 @@ void GgmlOvDecoder::add_extra_inputs() {
             GGML_ASSERT(n_heads_kv > 0 && combined_dim % n_heads_kv == 0);
             const auto head_size = combined_dim / n_heads_kv;
             m_model_extra_inputs["ggml_hfa_past_" + kv_name] = {
-                get_ov_type(kv_tensor), ov::Shape{1, n_heads_kv, past_capacity, head_size}, 0, true};
+                get_ov_type(kv_tensor), ov::Shape{1, n_heads_kv, past_capacity, head_size}, 0, true, {}, -1};
         }
         m_model_extra_inputs["ggml_hfa_mask"] = {
-            ov::element::f16, ov::Shape{1, 1, chunk_size, past_capacity + chunk_size}, 0, true};
+            ov::element::f16, ov::Shape{1, 1, chunk_size, past_capacity + chunk_size}, 0, true, {}, -1};
     }
     // create_1d_input("token_len", m_compute_params.token_len_per_seq * m_compute_params.n_seq_active);
 
