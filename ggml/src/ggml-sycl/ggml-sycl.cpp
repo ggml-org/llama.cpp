@@ -6868,7 +6868,7 @@ static bool ggml_sycl_graph_update_required(ggml_sycl_graph * graph, ggml_cgraph
 
 // Reports if ggml_sycl_mul_mat() gives this node to oneDNN. oneDNN chains the submission on events
 // made before recording started, which SYCL graphs do not allow.
-static bool mul_mat_uses_onednn(ggml_tensor * dst) {
+static bool mul_mat_uses_onednn(int device, ggml_tensor * dst) {
 #if GGML_SYCL_DNNL
     if (!g_ggml_sycl_enable_dnn) {
         return false;
@@ -6894,7 +6894,7 @@ static bool mul_mat_uses_onednn(ggml_tensor * dst) {
     // ggml_sycl_op_mul_mat_sycl() is the last resort of the dispatch and the only user of oneDNN.
     // The reorder decision that ggml_sycl_mul_mat() makes between DMMV and MMVQ is left out here:
     // neither uses a library.
-    if (can_use_dequantize_mul_mat_vec(src0, src1, dst) || can_use_mul_mat_vec_q(src0, src1, dst) ||
+    if (can_use_dequantize_mul_mat_vec(src0, src1, dst) || can_use_mul_mat_vec_q(device, src0, src1, dst) ||
         can_use_mul_mat_q(src0, src1, dst)) {
         return false;
     }
@@ -6916,6 +6916,7 @@ static bool mul_mat_uses_onednn(ggml_tensor * dst) {
     const int64_t gemm_flops = src0->ne[1] * src1->ne[1] * src0->ne[0];
     return gemm_flops >= SYCL_F32_DNNL_MIN_GEMM_FLOPS;
 #else
+    GGML_UNUSED(device);
     GGML_UNUSED(dst);
     return false;
 #endif
@@ -6978,7 +6979,7 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                     return false;
                 }
 #ifndef GGML_SYCL_GRAPH_DNNL_SUPPORTED
-                if (mul_mat_uses_onednn(node)) {
+                if (mul_mat_uses_onednn(ctx->device, node)) {
                     GGML_LOG_DEBUG("%s: disabling SYCL graphs due to %s using oneDNN\n", __func__,
                                    ggml_op_name(node_op));
                     return false;
