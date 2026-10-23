@@ -1113,6 +1113,7 @@ struct llm_graph_context {
 
     // scale tensor of a weight, nullptr if it has none
     ggml_tensor * get_weight_scale(const ggml_tensor * w) const;
+    ggml_tensor * get_input_scale(const ggml_tensor * w) const;
 
     // do mat_mul, while optionally apply lora and the weight scale
     ggml_tensor * build_lora_mm(

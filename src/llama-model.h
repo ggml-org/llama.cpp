@@ -676,6 +676,11 @@ struct llama_weight_scales {
         const auto it = scale.find(w);
         return it == scale.end() ? nullptr : it->second;
     }
+
+    ggml_tensor * get_input(const ggml_tensor * w) const {
+        const auto it = input_scale.find(w);
+        return it == input_scale.end() ? nullptr : it->second;
+    }
 };
 
 struct llama_hadamard {

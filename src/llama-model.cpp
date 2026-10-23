@@ -2319,6 +2319,10 @@ ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM
             if (s->type != GGML_TYPE_F32) {
                 throw std::runtime_error(format("scale tensor %s must be F32", s->name));
             }
+            if (strcmp(suffix, "input_scale") == 0 && !ggml_is_scalar(s) &&
+                    !(op == GGML_OP_MUL_MAT_ID && ggml_is_vector(s) && s->ne[0] == t->ne[2])) {
+                throw std::runtime_error(format("input scale tensor %s must be scalar or have one value per expert", s->name));
+            }
             (*map)[t] = s;
         }
     }
