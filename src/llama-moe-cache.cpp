@@ -6,6 +6,8 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -231,9 +233,16 @@ struct llama_moe_cache::impl {
 
     int32_t n_expert_used;
 
-    stats stats_small; // up to 8 tokens per ubatch
+    stats stats_small;  // up to 8 tokens per ubatch
     stats stats_large;
-    stats stats_copy;  // experts copied from the cache for large batches
+    stats stats_copy;   // experts copied from the cache for large batches
+    stats stats_upload; // uncached experts uploaded from host memory for large batches
+
+    // telemetry: LLAMA_MOE_CACHE_LOG=N logs the stats every N slot-map copies (0 = teardown only),
+    // LLAMA_MOE_CACHE_TRACE=path writes a CSV of the expert ids selected at each slot-map copy
+    size_t n_copy_calls = 0;
+    int    log_every    = 0;
+    FILE * trace_file   = nullptr;
 
     std::vector<device> devices;
     std::vector<group> groups;
@@ -254,6 +263,17 @@ struct llama_moe_cache::impl {
 
     impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size) :
             n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
+        if (const char * env = getenv("LLAMA_MOE_CACHE_LOG")) {
+            log_every = atoi(env);
+        }
+        if (const char * env = getenv("LLAMA_MOE_CACHE_TRACE")) {
+            trace_file = fopen(env, "w");
+            if (trace_file != nullptr) {
+                fprintf(trace_file, "call,layer,n_ids,n_hit,n_miss,ids\n");
+            } else {
+                LLAMA_LOG_WARN("%s: failed to open the MoE cache trace file '%s'\n", __func__, env);
+            }
+        }
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
@@ -491,6 +511,9 @@ struct llama_moe_cache::impl {
 
     ~impl() {
         log_stats();
+        if (trace_file != nullptr) {
+            fclose(trace_file);
+        }
     }
 
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const {
@@ -610,6 +633,19 @@ struct llama_moe_cache::impl {
         st.misses += fills.size();
         st.bytes  += bytes;
 
+        n_copy_calls++;
+        if (trace_file != nullptr) {
+            fprintf(trace_file, "%zu,%d,%zu,%zu,%zu,", n_copy_calls, il, ids.size(), n_hit, fills.size());
+            for (size_t i = 0; i < ids.size(); ++i) {
+                fprintf(trace_file, i == 0 ? "%d" : " %d", ids[i]);
+            }
+            fputc('\n', trace_file);
+        }
+        if (log_every > 0 && n_copy_calls % (size_t) log_every == 0) {
+            LLAMA_LOG_INFO("llama_moe_cache: stats after %zu slot-map copies:\n", n_copy_calls);
+            log_stats();
+        }
+
         // the next copy synchronizes the backend before it changes the slot map again
         ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
 
@@ -629,6 +665,9 @@ struct llama_moe_cache::impl {
         log("ubatch  > 8", stats_large);
         if (stats_copy.hits > 0) {
             LLAMA_LOG_INFO("llama_moe_cache: large batches: %zu experts copied from the cache, %.2f MiB\n", stats_copy.hits, stats_copy.bytes/1024.0/1024.0);
+        }
+        if (stats_upload.misses > 0) {
+            LLAMA_LOG_INFO("llama_moe_cache: large batches: %zu uploads of uncached experts, %.2f MiB\n", stats_upload.misses, stats_upload.bytes/1024.0/1024.0);
         }
     }
 };
@@ -657,6 +696,11 @@ bool llama_moe_cache::copy(ggml_backend_t backend, const ggml_tensor * src, ggml
 
 int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last) {
     return pimpl->copy_experts(backend, w, dst, e, last);
+}
+
+void llama_moe_cache::count_upload(size_t bytes) {
+    pimpl->stats_upload.misses++;
+    pimpl->stats_upload.bytes += bytes;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown() const {
