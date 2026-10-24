@@ -11291,12 +11291,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 6, 4096, 5120, {1, 1}, {1, 1}));
 
-    // Q5_K MMQ: full tiles, row/token tails, and repeated K blocks.
-    for (int m : {128, 129}) {
-        for (int n : {128, 129, 512}) {
-            for (int k : {256, 768, 4096}) {
-                test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q5_K, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+    // Affine MMQ: full tiles, row/token tails, and repeated K blocks.
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1, GGML_TYPE_IQ1_S, GGML_TYPE_Q2_K}) {
+        for (int m : {128, 129}) {
+            for (int n : {128, 129, 512}) {
+                for (int k : {256, 768, 4096}) {
+                    test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+                }
             }
+        }
+    }
+
+    // K32 formats can leave the affine metadata tile partially filled.
+    for (ggml_type type : {GGML_TYPE_Q4_1, GGML_TYPE_Q5_1}) {
+        for (int k : {32, 96, 160, 288, 544}) {
+            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 129, 129, k, {1, 1}, {1, 1}));
         }
     }
 
@@ -11414,11 +11423,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // All experts receive n tokens; also cover uneven routing and broadcast input.
-    for (int n : {128, 129, 512}) {
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q5_K, GGML_TYPE_F32, 4, 4, false, 129, n, 768));
-    }
-    for (bool b : {false, true}) {
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q5_K, GGML_TYPE_F32, 4, 2, b, 256, 512, 4096));
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1, GGML_TYPE_IQ1_S, GGML_TYPE_Q2_K}) {
+        for (int n : {128, 129, 512}) {
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 4, false, 129, n, 768));
+        }
+        for (bool b : {false, true}) {
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 2, b, 256, 512, 4096));
+        }
     }
 
     // Test IQP panel path for all grid IQ types
