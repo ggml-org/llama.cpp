@@ -1336,10 +1336,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
 
     // V4.1 cross-layer KV sharing: a compressed layer reads the storage of its kv source or, when the source is on
     // another device (layer split), of a per-device mirror fed with the source's new rows, so the whole cache never
-    // crosses devices. no mirrors without offload or with LLAMA_DSV41_KV_MIRROR=0
-    const char * env_mirror = getenv("LLAMA_DSV41_KV_MIRROR");
-    const bool mirror = offload && !(env_mirror && atoi(env_mirror) == 0);
-
+    // crosses devices. no mirrors without offload
     const uint32_t n_layer = model.hparams.n_layer();
     comp_read.assign(n_layer, -1);
     comp_kv_src.resize(n_layer);
@@ -1350,7 +1347,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
             continue;
         }
         comp_read[il] = src;
-        if (src == (int32_t) il || !mirror || model.dev_layer(src) == model.dev_layer(il)) {
+        if (src == (int32_t) il || !offload || model.dev_layer(src) == model.dev_layer(il)) {
             continue;
         }
         // the first layer of this source on this device holds the mirror
