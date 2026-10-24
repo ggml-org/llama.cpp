@@ -283,7 +283,23 @@ struct llama_moe_cache::impl {
                 continue;
             }
             const int32_t id = (int32_t) (it_dev - devices.begin());
-            auto it = std::find_if(groups.begin(), groups.end(), [&](const group & g) { return g.id == id && llama_moe_cache_same_layout(g.ref, experts); });
+            const size_t max_buf_size = ggml_backend_buft_get_max_size(bufts[id]);
+            size_t max_layer_bytes = 0;
+            for (const ggml_tensor * t : experts) {
+                max_layer_bytes = std::max(max_layer_bytes, (size_t)t->nb[2]);
+            }
+            const size_t max_bank_slots = max_buf_size > 0 && max_layer_bytes > 0
+                                          ? (max_buf_size / max_layer_bytes) : SIZE_MAX;
+
+            auto it = std::find_if(groups.begin(), groups.end(), [&](const group & g) {
+                if (g.id != id || !llama_moe_cache_same_layout(g.ref, experts)) {
+                    return false;
+                }
+                if ((g.layers.size() + 1) * experts[0]->ne[2] > max_bank_slots) {
+                    return false;
+                }
+                return true;
+            });
             if (it == groups.end()) {
                 groups.emplace_back();
                 it = groups.end() - 1;
