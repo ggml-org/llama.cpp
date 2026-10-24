@@ -784,6 +784,10 @@ struct llama_model {
     struct ggml_tensor * fc_in_s = nullptr;
     struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
 
+    // MTP draft head restricted to the first mtp_head_trim->ne[1] token ids (optional, see LLAMA_MTP_DRAFT_VOCAB)
+    struct ggml_tensor * mtp_head_trim      = nullptr;
+    struct ggml_tensor * mtp_head_trim_mask = nullptr;  // [n_vocab], 0 for kept ids and -inf otherwise
+
     // dspark
     struct ggml_tensor * dspark_markov_w1   = nullptr;
     struct ggml_tensor * dspark_markov_w2   = nullptr;
