@@ -1842,31 +1842,15 @@ static void test_array_methods(testing & t) {
         "1"
     );
 
-    if (!g_python_mode) {
-        const char * unknown_test_templates[] = {
-            // select with one argument used to be an attribute lookup that silently returned []
-            "{{ items|select('nosuchtest') }}",
-            // selectattr used to report the attribute name ('x') as the unknown test
-            "{{ items|selectattr('x', 'nosuchtest') }}",
-        };
-        for (const auto * tmpl : unknown_test_templates) {
-            t.test("raise " + json(tmpl).dump(), [&](testing & t) {
-                std::string error;
-                try {
-                    jinja::lexer lexer;
-                    jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
-                    jinja::context ctx(tmpl);
-                    jinja::global_from_json(ctx, json{{"items", json::array({1, 2})}}, true);
-                    jinja::runtime runtime(ctx);
-                    runtime.execute(ast);
-                } catch (const std::exception & e) {
-                    error = e.what();
-                }
-                t.assert_true("unknown test must raise and name the test",
-                    error.find("unknown test 'nosuchtest'") != std::string::npos);
-            });
-        }
-    }
+    test_template(t, "array|selectattr with attr named like a test",
+        "{% for p in items|selectattr('odd', 'even') %}{{ p.odd }} {% endfor %}",
+        {{"items", json::array({
+            {{"odd", 1}},
+            {{"odd", 2}},
+            {{"odd", 4}}
+        })}},
+        "2 4 "
+    );
 
     test_template(t, "array|tojson",
         "{{ arr|tojson }}",
