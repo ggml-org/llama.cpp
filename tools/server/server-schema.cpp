@@ -246,6 +246,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (ctx.params.sampling.dry_sequence_breakers.empty()) {
                 throw std::runtime_error("Error: dry_sequence_breakers must be a non-empty array of strings");
             }
+            if (ctx.params.sampling.dry_sequence_breakers.size() > 128) {
+                // each breaker is expanded with a full-vocab scan at sampler init
+                throw std::runtime_error("Error: dry_sequence_breakers must contain at most 128 entries");
+            }
         }));
 
     // handle both "json_schema" and "grammar"
