@@ -48,10 +48,20 @@ void main() {
     FLOAT_TYPE sum = FLOAT_TYPE(0.0f); // partial sum for thread in warp
 
     uint32_t num_partials = p.param3;
-    for (uint32_t i = gl_SubgroupInvocationID; i < num_partials; i += gl_SubgroupSize) {
+    // Reduce through shared memory: subgroupAdd() returns wrong sums here on some Qualcomm drivers.
+    const uint ltid = gl_LocalInvocationID.x;
+    for (uint32_t i = ltid; i < num_partials; i += BLOCK_SIZE) {
         sum += partial_sums[i];
     }
-    sum = subgroupAdd(sum);
+    sumsh[ltid] = sum;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (ltid < s) {
+            sumsh[ltid] += sumsh[ltid + s];
+        }
+        barrier();
+    }
+    sum = sumsh[0];
 
     uint col = tid;
     if (col >= ncols) {
