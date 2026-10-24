@@ -230,6 +230,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
+| `--models-memory-margin N` | for router server, MiB of device memory to keep free when loading a model, models are measured<br/>on startup and unloaded (LRU) until the new one fits at its minimum context (default: 0, 0 = disabled)<br/>(env: LLAMA_ARG_MODELS_MEMORY_MARGIN) |
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
@@ -2113,6 +2114,40 @@ For the **WebSocket** endpoint (`/v1/realtime`) The router also uses the `model`
 
 By default, the model will be loaded automatically if it's not loaded. To disable this, add `--no-models-autoload` when starting the server. Additionally, you can include `?autoload=true|false` in the query param to control this behavior per-request.
 
+### Memory-based unloading
+
+By default, the router only limits the *number* of loaded models (`--models-max`, least recently used first). With `--models-memory-margin N`, it also keeps track of device memory and unloads models (LRU) until the model being loaded fits, while leaving `N` MiB free on each device.
+
+How it works:
+- On startup, and whenever a model is added or its preset changes, the router spawns one short-lived `llama-server` child per model (one at a time, in the background) that reads the model metadata without allocating memory and reports two measurements:
+  - `min`: the memory the model needs at the smallest context that `--fit` may pick, i.e. `--fit-ctx` (default 4096) times the number of sequences, with the device placement from its preset. If the preset pins the context with `-c`, or sets `--fit off`, this is the memory at that context.
+  - `max`: the memory it needs at the largest context that `--fit` picks given the device memory free at that moment. This is a snapshot: it changes as other models load and unload.
+- When an instance is loaded, it reports the memory it actually allocated (`effective`). With `--fit` on (the default) an instance takes the largest context that fits at load time, so it typically ends up close to `max`. Pin the context with `-c` in the preset of a model if you want it to leave room for other models.
+- Before spawning an instance, the router unloads idle models (LRU) until the `min` of the new model fits in the free memory of every device minus the margin. A model that is serving requests is never unloaded. If nothing is left to unload and the model still does not fit, it is loaded anyway and `--fit` in the instance decides.
+- A load request for a model whose measurement has not finished yet waits for it (the model is moved to the front of the measurement queue).
+
+Notes:
+- The router itself never touches a GPU, all device memory figures come from the child processes.
+- Host (CPU) memory is assumed to be unlimited, as with `--fit`. On a build without GPU devices the memory limit has no effect.
+- A model whose measurement fails (for example a broken GGUF, or an `-hf` model that is not downloaded yet) is loaded without memory checks; the measurement is retried once the model has been loaded successfully.
+- Multimodal projectors (`mmproj`) are not included in the measurements yet, such a model needs more than its `min` reports.
+- The measurements are exposed in the `memory` field of each model in `GET /models` (sizes in bytes), and a `model_memory` event is sent on `/models/sse` when a measurement completes:
+
+```js
+"memory": {
+  "status": "measured", // unmeasured | measuring | measured | failed
+  "min": {
+    "n_ctx": 4096,
+    "devices": [
+      { "kind": "device", "name": "CUDA0", "total": 25757220864, "free": 24387584000, "model": 4986635264, "context": 536870912, "compute": 301989888 },
+      { "kind": "host",   "name": "Host", "model": 263454720, "context": 0, "compute": 16793600 }
+    ]
+  },
+  "max":       { "n_ctx": 131072, "devices": [ /* ... */ ] },
+  "effective": { "n_ctx": 131072, "devices": [ /* ... */ ] } // null unless the model is loaded
+}
+```
+
 ### GET `/models`: List available models
 
 Listing all models in cache. The model metadata will also include a field to indicate the status of the model:
@@ -2361,6 +2396,18 @@ Example events:
 {
   "model": "...",
   "event": "model_remove"
+}
+
+// only with --models-memory-margin, when the measurement of a model completes (see "Memory-based unloading")
+{
+  "model": "...",
+  "event": "model_memory",
+  "data": {
+    "status": "measured",
+    "min": { /* ... */ },
+    "max": { /* ... */ },
+    "effective": null
+  }
 }
 
 // special event: reload of the list of all models

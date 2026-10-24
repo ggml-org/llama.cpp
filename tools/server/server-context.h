@@ -60,6 +60,7 @@ struct server_context_meta {
 
 enum server_state {
     SERVER_STATE_DOWNLOADING,
+    SERVER_STATE_MEASURING, // a measure child reporting the memory the model needs, see server_child::run_measure
     SERVER_STATE_LOADING,
     SERVER_STATE_READY,
     SERVER_STATE_SLEEPING,
@@ -68,6 +69,7 @@ enum server_state {
 static std::string server_state_to_str(server_state state) {
     switch (state) {
         case SERVER_STATE_DOWNLOADING: return "downloading";
+        case SERVER_STATE_MEASURING:   return "measuring";
         case SERVER_STATE_LOADING:     return "loading";
         case SERVER_STATE_READY:       return "ready";
         case SERVER_STATE_SLEEPING:    return "sleeping";
@@ -77,6 +79,7 @@ static std::string server_state_to_str(server_state state) {
 
 static server_state server_state_from_str(const std::string & str) {
     if (str == "downloading") return SERVER_STATE_DOWNLOADING;
+    if (str == "measuring")   return SERVER_STATE_MEASURING;
     if (str == "loading")     return SERVER_STATE_LOADING;
     if (str == "ready")       return SERVER_STATE_READY;
     if (str == "sleeping")    return SERVER_STATE_SLEEPING;

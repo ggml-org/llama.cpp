@@ -318,6 +318,72 @@ def test_router_queue_two_waiters_share_one_eviction():
     assert _get_model_status(MODEL_A) == "unloaded"
 
 
+# --models-memory-margin tests
+
+def _get_model_memory(model_id: str) -> dict:
+    res = server.make_request("GET", "/models")
+    assert res.status_code == 200
+    for item in res.body.get("data", []):
+        if item.get("id") == model_id:
+            return item["memory"]
+    raise AssertionError(f"Model {model_id} not found in /models response")
+
+
+def _wait_for_memory_status(model_id: str, desired: set[str], timeout: int = 120) -> dict:
+    deadline = time.time() + timeout
+    mem = None
+    while time.time() < deadline:
+        mem = _get_model_memory(model_id)
+        if mem["status"] in desired:
+            return mem
+        time.sleep(0.5)
+    raise AssertionError(f"memory status of {model_id} is {mem and mem['status']}, expected one of {desired}")
+
+
+def test_router_memory_margin_measures_models():
+    """every model is measured in the background on startup, a loaded instance reports what it allocated"""
+    global server
+    server.models_memory_margin = 1
+    server.start()
+
+    mem = _wait_for_memory_status(MODEL_B, {"measured", "failed"})
+    assert mem["status"] == "measured"
+    assert mem["effective"] is None
+    assert mem["min"]["n_ctx"] > 0
+    assert mem["max"]["n_ctx"] >= mem["min"]["n_ctx"]
+    kinds = {d["kind"] for d in mem["min"]["devices"]}
+    assert "host" in kinds
+    for d in mem["min"]["devices"]:
+        assert d["model"] + d["context"] + d["compute"] > 0 or d["kind"] != "host"
+
+    _load_model_and_wait(MODEL_B, timeout=120)
+    eff = _get_model_memory(MODEL_B)["effective"]
+    assert eff is not None
+    assert eff["n_ctx"] == mem["min"]["n_ctx"]  # the test preset pins -c, so min == max == effective
+
+    server.make_request("POST", "/models/unload", data={"model": MODEL_B})
+    _wait_for_model_status(MODEL_B, {"unloaded"})
+    assert _get_model_memory(MODEL_B)["effective"] is None
+
+
+def test_router_memory_margin_evicts_lru():
+    """with a margin larger than any device, two models never fit together: the idle one is unloaded"""
+    global server
+    server.models_max = 4
+    server.models_memory_margin = 1 << 30  # MiB
+    server.start()
+
+    # nothing else is loaded, so the model is loaded although it does not fit the margin
+    _load_model_and_wait(MODEL_B, timeout=120)
+    eff = _get_model_memory(MODEL_B)["effective"]
+    if not any(d["kind"] == "device" for d in eff["devices"]):
+        pytest.skip("no GPU device, the memory limit does not apply")
+
+    _load_model_and_wait(MODEL_C, timeout=120)
+    assert _get_model_status(MODEL_C) == "loaded"
+    assert _get_model_status(MODEL_B) == "unloaded"
+
+
 def test_router_no_models_autoload():
     global server
     server.no_models_autoload = True

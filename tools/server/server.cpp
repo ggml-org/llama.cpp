@@ -424,6 +424,15 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
 
     if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
         return child.run_download(params);
+    } else if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_MEASURE) {
+        // the router passes --offline, so this only resolves the path of an already downloaded model
+        try {
+            common_models_handler_apply(models_handler, params);
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to resolve model: %s\n", e.what());
+            return 1;
+        }
+        return child.run_measure(params);
     } else if (!is_router_server && !is_run_by_cli) {
         // single-model mode (NOT spawned by router)
         // if this is invoked by CLI, model downloading should be already handled
@@ -573,7 +582,12 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
         std::thread monitor_thread;
         if (child.is_child()) {
             monitor_thread = child.setup(shutdown_handler);
-            child.notify_to_router(server_state_to_str(SERVER_STATE_READY), routes.get_model_info());
+            json info = routes.get_model_info();
+            // the router keeps track of device memory from what its instances report
+            if (const auto * ll_ctx = ctx_server.get_llama_context()) {
+                info["memory"] = server_model_memory(llama_n_ctx(ll_ctx), common_memory_breakdown_rows(ll_ctx)).to_json();
+            }
+            child.notify_to_router(server_state_to_str(SERVER_STATE_READY), info);
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called

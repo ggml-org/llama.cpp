@@ -45,6 +45,50 @@ void common_fit_print(
 
 void common_memory_breakdown_print(const llama_context * ctx);
 
+// one row of the memory breakdown of a context: a device, the host, or a buffer type not tied to a device
+struct common_memory_breakdown_row {
+    enum kind_t { DEVICE, HOST, BUFFER_TYPE };
+
+    kind_t      kind = DEVICE;
+    std::string name;        // device or buffer type name, "Host" for the host row
+    std::string description; // device description, empty otherwise
+    int64_t     total = 0;   // device memory in bytes, 0 unless kind == DEVICE
+    int64_t     free  = 0;   // free device memory in bytes, 0 unless kind == DEVICE
+    size_t      model   = 0; // bytes held by this context, by kind of buffer
+    size_t      context = 0;
+    size_t      compute = 0;
+};
+
+// memory that a model needs at the two ends of what --fit may pick, see tools/server/README.md
+struct common_memory_reports {
+    uint32_t n_ctx_train = 0;
+    uint32_t n_ctx_max   = 0; // the largest context that fits the free device memory right now
+    uint32_t n_ctx_min   = 0; // --fit-ctx (the smallest context --fit may pick), with the placement set in params
+    std::vector<common_memory_breakdown_row> info_max; // breakdown at n_ctx_max
+    std::vector<common_memory_breakdown_row> info_min; // breakdown at n_ctx_min
+};
+
+// same numbers as common_memory_breakdown_print, the devices of the model first, then the host
+std::vector<common_memory_breakdown_row> common_memory_breakdown_rows(const llama_context * ctx);
+
+// load the model and create a context with no_alloc, return their memory breakdown
+//   - the parameters are used as they are, use common_fit_params first to fit them to free memory
+//   - n_ctx_train and n_ctx are optional outputs
+//   - throws std::runtime_error if the model or the context cannot be created
+std::vector<common_memory_breakdown_row> common_fit_measure(
+                         const char * path_model,
+           const llama_model_params * mparams,
+         const llama_context_params * cparams,
+                           uint32_t * n_ctx_train,
+                           uint32_t * n_ctx,
+                     ggml_log_level   log_level);
+
+struct common_params;
+
+// measure without allocating; params may be modified the same way common_init_result does with --fit
+// throws std::runtime_error on failure
+common_memory_reports common_measure_memory(common_params & params);
+
 struct common_device_memory_data {
     int64_t total;
     int64_t free;

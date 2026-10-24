@@ -7,6 +7,8 @@
 #include "server-http.h"
 #include "server-queue.h"
 
+#include <atomic>
+#include <deque>
 #include <mutex>
 #include <condition_variable>
 #include <thread>
@@ -49,6 +51,7 @@ enum server_model_source {
 enum server_child_mode {
     SERVER_CHILD_MODE_NORMAL,   // load the model and run normally
     SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
+    SERVER_CHILD_MODE_MEASURE,  // report the memory the model needs without loading it, then exit
 };
 
 static std::string server_model_status_to_string(server_model_status status) {
@@ -73,6 +76,50 @@ static std::string server_model_source_to_string(server_model_source source) {
     }
 }
 
+// memory of a model instance per device, measured by a child process (see server_child::run_measure)
+// or reported by the running instance; sizes are in bytes
+struct server_model_memory {
+    struct device_t {
+        std::string kind;    // "device", "host" or "buffer_type", as in the --log-jsonl memory breakdown
+        std::string name;    // ggml device name, "Host" for host memory
+        size_t total   = 0;  // device memory, 0 unless kind == "device"
+        size_t free    = 0;  // free device memory when this was measured, 0 unless kind == "device"
+        size_t model   = 0;  // held by the instance, by kind of buffer
+        size_t context = 0;
+        size_t compute = 0;
+
+        bool   is_device() const { return kind == "device"; }
+        size_t self()      const { return model + context + compute; }
+    };
+
+    uint32_t n_ctx = 0; // context size this was measured at
+    std::vector<device_t> devices;
+
+    server_model_memory() = default;
+    server_model_memory(uint32_t n_ctx, const std::vector<struct common_memory_breakdown_row> & rows);
+
+    json to_json() const;
+    static server_model_memory from_json(const json & j); // throws on a malformed input
+};
+
+// where a model stands in the memory measurement done on startup, only used with --models-memory-margin
+enum server_model_memory_status {
+    SERVER_MODEL_MEMORY_UNMEASURED, // queued for a measure child
+    SERVER_MODEL_MEMORY_MEASURING,  // its measure child is running
+    SERVER_MODEL_MEMORY_MEASURED,
+    SERVER_MODEL_MEMORY_FAILED,     // the measure child failed or crashed, memory limits do not apply to this model
+};
+
+static std::string server_model_memory_status_to_string(server_model_memory_status status) {
+    switch (status) {
+        case SERVER_MODEL_MEMORY_UNMEASURED: return "unmeasured";
+        case SERVER_MODEL_MEMORY_MEASURING:  return "measuring";
+        case SERVER_MODEL_MEMORY_MEASURED:   return "measured";
+        case SERVER_MODEL_MEMORY_FAILED:     return "failed";
+        default:                             return "unknown";
+    }
+}
+
 struct server_model_meta {
     server_model_source source = SERVER_MODEL_SOURCE_CACHE;
     common_preset preset;
@@ -90,6 +137,15 @@ struct server_model_meta {
     bool hidden = false; // hidden from GET /models, but still accept if requested
     json architecture = server_model_architecture_json(false, false, false, {"text"});
     uint32_t n_ctx_train = 0; // trained context, read from the GGUF metadata; 0 when unknown
+
+    // memory accounting, only populated with --models-memory-margin, see "Memory-based unloading" in the README
+    server_model_memory_status memory_status = SERVER_MODEL_MEMORY_UNMEASURED;
+    int memory_measure_attempts = 0; // measure children spawned for this model, bounds the retries
+    std::optional<server_model_memory> memory_min       = std::nullopt; // at the smallest context --fit may pick
+    std::optional<server_model_memory> memory_max       = std::nullopt; // at the largest context that fit the free memory when measured
+    std::optional<server_model_memory> memory_effective = std::nullopt; // what the running instance allocated, reset when it exits
+
+    json memory_to_json() const;
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -170,6 +226,9 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared with the monitor thread
         server_model_meta meta;
         int req_count = 0; // number of active proxy requests
+
+        // bytes per device currently counted against device_memory for this instance, see reserve_memory()
+        std::map<std::string, size_t> memory_held = {};
 
         // ask the child to exit (it handles the command on its stdin, see server_child::setup)
         void request_exit() const;
@@ -263,10 +322,47 @@ private:
     // if true, add some delay to simulate works (useful for testing)
     bool debug_fake_timing = false;
 
+    //
+    // memory accounting (--models-memory-margin), the router itself never touches a GPU:
+    // the instances are tracked here by what they hold (memory_held), a report from a child only calibrates what
+    // else is on the device. this works whether a backend reports free memory system-wide (CUDA) or only net of
+    // the reporting process (Metal)
+    //
+
+    // models waiting for a measure child, one runs at a time (see measure_next)
+    std::deque<std::string> measure_queue;
+    std::string measuring; // model whose measure child is running, empty when idle
+    std::shared_ptr<server_subproc> measure_proc;
+
+    struct device_memory_t {
+        int64_t total    = 0; // bytes
+        int64_t external = 0; // bytes used by anything the router does not track: other processes, backend contexts
+    };
+    std::map<std::string, device_memory_t> device_memory; // by device name, empty until the first child reports
+
+    bool memory_limits_enabled() const { return base_params.models_memory_margin > 0; }
+
+    // all not thread-safe, caller must hold mutex
+    void enqueue_measure(const std::string & name, bool front = false);
+    void measure_next();
+    // a child reported what it sees: free memory and what it holds. reporter is the instance that sent it, empty for a measure child
+    void calibrate_device_memory(const server_model_memory & mem, const std::string & reporter);
+    void reserve_memory(const std::string & name); // count the instance's memory (effective, else min) until it sleeps or exits
+    void release_memory(const std::string & name);
+    int64_t device_memory_available(const std::string & dev) const; // total - external - what the instances hold
+    // bytes missing per device for name to start at its minimum context, empty when it fits (or is not measured)
+    std::map<std::string, size_t> memory_deficit(const std::string & name) const;
+    // true when loading name now would exceed models_max or the memory margin; verbose logs the shortfall
+    bool limits_exceeded(std::unique_lock<std::mutex> & lk, const std::string & name, bool verbose = true);
+
+    // called from the monitor thread
+    void on_measure_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, int exit_code);
+    void handle_measured(const std::string & name, const json & payload);
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
-    // unload least recently used models if the limit is reached
-    void unload_lru();
+    // unload least recently used models until name fits within models_max and the memory margin
+    void unload_lru(const std::string & name);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
@@ -341,6 +437,7 @@ public:
         int exit_code = 0; // only valid if status == UNLOADED
         json loaded_info = nullptr;
         json progress = nullptr;
+        std::optional<server_model_memory> memory = std::nullopt; // what the instance allocated, sent with READY
     };
     // update the status of a model instance (thread-safe)
     // also send SSE notification to /models/sse endpoint
@@ -374,8 +471,9 @@ public:
     // called from the monitor thread
     // payload per state:
     //     state = loading     -> payload = {} (TODO: add progress info)
-    //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
+    //     state = ready       -> payload = model_info (json) with a "memory" field, or {} if wakeup from sleeping
     //     state = sleeping    -> payload = {}
+    //     state = measuring   -> payload = {result: "measured", min, max} or {result: "failed", error}
     void handle_child_state(const std::string & name, const std::string & raw_input);
 
 private:
@@ -397,6 +495,7 @@ struct server_child {
     bool is_child();
     server_child_mode get_mode();
     int run_download(common_params & params);
+    int run_measure(common_params & params);
 
     // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)
