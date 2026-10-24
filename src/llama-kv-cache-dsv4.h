@@ -16,6 +16,7 @@ public:
 
     llama_dsv4_comp_state(
             const llama_model & model,
+            bool            no_alloc,
             bool            offload,
             bool            unified,
             uint32_t        n_seq_max,
@@ -61,15 +62,13 @@ private:
         std::vector<ggml_tensor *> score_stream;
     };
 
-    const llama_hparams & hparams;
-
     const uint32_t ratio;
     const uint32_t state_size;
     const uint32_t n_embd_state;
     const uint32_t n_stream;
     const uint32_t n_rs_seq;
 
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    llama_memory_bufs ctxs_bufs;
 
     std::vector<layer> layers;
 
@@ -92,6 +91,7 @@ class llama_kv_cache_dsv4 : public llama_memory_i {
 public:
     llama_kv_cache_dsv4(
             const llama_model & model,
+                    bool   no_alloc,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,

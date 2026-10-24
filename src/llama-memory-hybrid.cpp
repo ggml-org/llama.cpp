@@ -10,6 +10,7 @@
 
 llama_memory_hybrid::llama_memory_hybrid(
         const llama_model & model,
+                      bool   no_alloc,
                             /* attn */
                 ggml_type   type_k,
                 ggml_type   type_v,
@@ -33,6 +34,7 @@ llama_memory_hybrid::llama_memory_hybrid(
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
+        no_alloc,
         model.hparams,
         type_k,
         type_v,
@@ -53,6 +55,7 @@ llama_memory_hybrid::llama_memory_hybrid(
     )),
     mem_recr(new llama_memory_recurrent(
         model,
+        no_alloc,
         type_r,
         type_s,
         offload,

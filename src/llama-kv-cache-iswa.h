@@ -15,6 +15,7 @@ class llama_kv_cache_iswa : public llama_memory_i {
 public:
     llama_kv_cache_iswa(
             const llama_model & model,
+                         bool   no_alloc,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,
@@ -32,6 +33,7 @@ public:
 
     llama_kv_cache_iswa(
             const llama_model & model,
+                         bool   no_alloc,
             const llama_hparams & hparams,
                     ggml_type   type_k,
                     ggml_type   type_v,
