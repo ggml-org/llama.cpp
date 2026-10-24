@@ -1060,6 +1060,10 @@ private:
 
     common_params params_base;
 
+    std::vector<float>                            fit_tensor_split;
+    std::vector<llama_model_tensor_buft_override> fit_tensor_buft_overrides;
+    std::vector<size_t>                           fit_params_target;
+
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
 
@@ -1191,6 +1195,16 @@ private:
         load_progress_data load_progress_spec  (this, "spec_model");
 
         const bool is_resume = sleeping;
+
+        if (is_resume) {
+            std::copy(fit_tensor_split.begin(), fit_tensor_split.end(), params.tensor_split);
+            params.tensor_buft_overrides = fit_tensor_buft_overrides;
+            params.fit_params_target     = fit_params_target;
+        } else {
+            fit_tensor_split.assign(std::begin(params.tensor_split), std::end(params.tensor_split));
+            fit_tensor_buft_overrides = params.tensor_buft_overrides;
+            fit_params_target         = params.fit_params_target;
+        }
 
         params_base = params;
         const auto output_limits = server_output_limits(params_base);
