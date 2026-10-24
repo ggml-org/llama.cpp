@@ -558,17 +558,28 @@
 		{#if uiStore.isSidebarExpanded && !isOnMobile}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
-				class={[
-					'absolute inset-y-3 -right-1 z-20 hidden w-2 cursor-ew-resize touch-none select-none rounded-full md:block',
-					'after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 after:rounded-full after:transition-colors',
-					'hover:after:bg-foreground/15',
-					uiStore.isSidebarResizing && 'after:bg-foreground/25'
-				]}
+				class="peer absolute inset-y-3 -right-1 z-20 hidden w-2 cursor-ew-resize touch-none select-none md:block"
 				data-slot="sidebar-resize-handle"
 				ondblclick={() => uiStore.setSidebarWidth(null)}
 				onpointerdown={handleResizePointerDown}
 				title="Drag to resize or hide, double-click to reset"
 			></div>
+
+			<!-- the edge strip is clipped to the sidebar's rounded corners without
+			     clipping the sidebar itself; faint on hover, solid while dragging -->
+			<div
+				class={[
+					'pointer-events-none absolute inset-0 hidden overflow-hidden rounded-[inherit] transition-opacity duration-150 md:block',
+					uiStore.isSidebarResizing ? 'opacity-100' : 'opacity-0 peer-hover:opacity-100'
+				]}
+			>
+				<div
+					class={[
+						'absolute inset-y-0 right-0 w-1.5',
+						uiStore.isSidebarResizing ? 'bg-foreground/15' : 'bg-foreground/6'
+					]}
+				></div>
+			</div>
 		{/if}
 	</aside>
 {/if}
