@@ -1454,6 +1454,100 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseek4v::preprocess(const clip
     return out;
 }
 
+//
+// DeepSeek-V4.1-Flash (deepseek41v)
+//
+// port of plan_image_grid / load_image from inference/image_processor.py (V4.1)
+// differs from deepseek4v: block = h * (w + 1) + 2 tokens, no even-row rounding, a single solve, no stretch path
+//
+
+void mtmd_image_preprocessor_deepseek41v::plan_grid(int width, int height, int p, int r, int max_n_token, int min_pixels,
+                                                    int & best_width, int & best_height) {
+    auto n_tokens = [&](int bh, int bw) {
+        const int n_llm_h = ((bh / p) + r - 1) / r;
+        const int n_llm_w = ((bw / p) + r - 1) / r;
+        return n_llm_h * (n_llm_w + 1) + 2;
+    };
+    if (min_pixels > 0 && (int64_t) width * height > 0 && (int64_t) width * height < min_pixels) {
+        // python: ratio = (min_pixels / (w * h)) ** 0.5; int(w * ratio)
+        const double ratio = std::sqrt((double) min_pixels / ((double) width * (double) height));
+        width  = (int) (width  * ratio);
+        height = (int) (height * ratio);
+    }
+    best_width  = CLIP_ALIGN(width,  p);
+    best_height = CLIP_ALIGN(height, p);
+    if (n_tokens(best_height, best_width) > max_n_token) {
+        // solve_resize_ratio: largest aspect-preserving size whose token block fits
+        const double ratio   = (double) height / width;
+        const double max_w_f = std::sqrt((max_n_token - 2) / ratio + 0.25) - 0.5;
+        const double max_h_f = max_w_f * ratio;
+        const int cell = p * r;
+        if (max_w_f < 1.0) {
+            best_height = (max_n_token - 2) / 2 * cell;
+            best_width  = cell;
+        } else if (max_h_f < 1.0) {
+            best_height = cell;
+            best_width  = (max_n_token - 3) * cell;
+        } else {
+            const double beta = std::min(std::floor(max_w_f) * cell / width, std::floor(max_h_f) * cell / height);
+            best_height = (int) std::floor(height * beta / p) * p;
+            best_width  = (int) std::floor(width  * beta / p) * p;
+        }
+        GGML_ASSERT(n_tokens(best_height, best_width) <= max_n_token);
+    }
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_deepseek41v::preprocess(const clip_image_u8 & img) const {
+    mtmd_image_preproc_out out;
+
+    const int p = hparams.patch_size;
+    const clip_image_size orig = img.get_size();
+    int best_width = 0, best_height = 0;
+    plan_grid(orig.width, orig.height, p, hparams.n_merge, hparams.dsv4_max_n_token, hparams.image_min_pixels,
+              best_width, best_height);
+
+    // PIL ImageOps.pad(color=127): ImageOps.contain then a centered paste; python round is half to even
+    auto round_half_even = [](double x) { return (int) std::nearbyint(x); };
+    int new_w = best_width;
+    int new_h = best_height;
+    const double im_ratio   = (double) orig.width / orig.height;
+    const double dest_ratio = (double) best_width / best_height;
+    if (im_ratio != dest_ratio) {
+        if (im_ratio > dest_ratio) {
+            new_h = round_half_even((double) orig.height / orig.width * best_width);
+        } else {
+            new_w = round_half_even((double) orig.width / orig.height * best_height);
+        }
+    }
+    clip_image_u8 resized;
+    img_tool::resize(img, resized, {new_w, new_h}, hparams.image_resize_algo, PAD_NONE);
+
+    clip_image_u8 padded;
+    if (new_w == best_width && new_h == best_height) {
+        padded = std::move(resized);
+    } else {
+        padded.set_size({best_width, best_height}, img.is_placeholder());
+        if (!img.is_placeholder()) {
+            img_tool::fill(padded, hparams.image_pad_color);
+            const int off_x = round_half_even((best_width  - new_w) * 0.5);
+            const int off_y = round_half_even((best_height - new_h) * 0.5);
+            img_tool::composite(padded, resized, off_x, off_y);
+        }
+    }
+
+    out.append(hparams, padded);
+
+    // load_image rounds the normalized input to bf16 (round to nearest even)
+    for (auto & e : out.entries) {
+        std::vector<float> buf = e.get_ro_buf();
+        for (float & v : buf) {
+            v = ggml_bf16_to_fp32(ggml_fp32_to_bf16(v));
+        }
+        e.cpy_buf(buf);
+    }
+    return out;
+}
+
 mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img) const {
     mtmd_image_preproc_out output;
     int grid_w = 0;
