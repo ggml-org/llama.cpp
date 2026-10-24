@@ -31,6 +31,7 @@ struct mtmd_image_preprocessor {
     const clip_hparams & hparams;
 
     mtmd_image_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
+    mtmd_image_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
 
     virtual ~mtmd_image_preprocessor() = default;
     virtual mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const = 0;
@@ -59,6 +60,7 @@ struct mtmd_image_preprocessor {
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_llava_uhd(const clip_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 
     struct slice_coordinates {
@@ -131,6 +133,7 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
 // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    static clip_image_size get_target_size(const clip_hparams & hparams, const clip_image_size & original_size);
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 };
 
@@ -140,9 +143,10 @@ struct mtmd_image_preprocessor_glm5v : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 };
 
-// similar to mtmd_image_preprocessor_dyn_size, but resize the image to have longest edge equal to hparams.image_longest_edge, while preserving aspect ratio
+// similar to mtmd_image_preprocessor_dyn_size, but cap the longest edge at hparams.image_longest_edge, while preserving aspect ratio
 struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     mtmd_image_preprocessor_longest_edge(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    static clip_image_size get_target_size(const clip_hparams & hparams, const clip_image_size & original_size);
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 };
 
@@ -188,28 +192,36 @@ protected:
     }
 };
 
+// MiniCPM-OCR 1.0: find_best_resize aligns to patch_size * n_merge (28 in 4x).
+struct mtmd_image_preprocessor_minicpm_ocr_1_0 : mtmd_image_preprocessor_minicpmv {
+    using mtmd_image_preprocessor_minicpmv::mtmd_image_preprocessor_minicpmv;
+
+protected:
+    int get_slice_align() const override {
+        const int merge = hparams.n_merge > 0 ? hparams.n_merge : 2;
+        return hparams.patch_size * merge;
+    }
+};
+
 // custom llava-uhd slicing logic for LFM2
+// tiling params (min/max tiles, tile size, pixels tolerance) come from hparams
 // ref: https://github.com/huggingface/transformers/blob/v5.1.0/src/transformers/models/lfm2_vl/image_processing_lfm2_vl_fast.py
 struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
-    // ref: https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B/blob/main/processor_config.json
-    static constexpr int   min_tiles            = 2;
-    static constexpr int   max_tiles            = 10;
-    static constexpr float max_pixels_tolerance = 2.0f;
-    static constexpr int   tile_size            = 512;
-
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
     slice_instructions get_slice_instructions(const clip_image_size & original_size) const override;
 
     static bool should_tile(const clip_hparams & hparams, const clip_image_size & original_size);
+    static clip_image_size smart_resize(const clip_hparams & hparams, const clip_image_size & original_size);
+    static clip_image_size get_grid_layout(const clip_hparams & hparams, int height, int width);
 
 private:
-    clip_image_size find_closest_aspect_ratio(
-            float aspect_ratio,
+    static clip_image_size find_closest_aspect_ratio(
+            const clip_hparams & hparams,
+            double aspect_ratio,
             const std::vector<clip_image_size> & target_ratios,
-            int width, int height) const;
-    std::vector<clip_image_size> get_target_ratios() const;
-    clip_image_size get_grid_layout(int height, int width) const;
+            int width, int height);
+    static std::vector<clip_image_size> get_target_ratios(const clip_hparams & hparams);
 };
 
 struct mtmd_image_preprocessor_idefics3 : mtmd_image_preprocessor_llava_uhd {

@@ -28,18 +28,13 @@
 #include <deque>
 #include <queue>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <sstream>
 #include <cstring>
 
 #ifndef _WIN32
 extern char **environ;
-#endif
-
-#if defined(__APPLE__) && defined(__MACH__)
-// macOS: use _NSGetExecutablePath to get the executable path
-#include <mach-o/dyld.h>
-#include <limits.h>
 #endif
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
@@ -442,47 +437,6 @@ struct server_lru_sched {
 // delete). distinct from params.timeout_read/write which only applies to the generation proxy
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
-static std::filesystem::path get_server_exec_path() {
-#if defined(_WIN32)
-    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
-    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
-    if (len == 0 || len >= _countof(buf)) {
-        throw std::runtime_error("GetModuleFileNameW failed or path too long");
-    }
-    return std::filesystem::path(buf);
-#elif defined(__APPLE__) && defined(__MACH__)
-    char small_path[PATH_MAX];
-    uint32_t size = sizeof(small_path);
-
-    if (_NSGetExecutablePath(small_path, &size) == 0) {
-        // resolve any symlinks to get absolute path
-        try {
-            return std::filesystem::canonical(std::filesystem::path(small_path));
-        } catch (...) {
-            return std::filesystem::path(small_path);
-        }
-    } else {
-        // buffer was too small, allocate required size and call again
-        std::vector<char> buf(size);
-        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
-            try {
-                return std::filesystem::canonical(std::filesystem::path(buf.data()));
-            } catch (...) {
-                return std::filesystem::path(buf.data());
-            }
-        }
-        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
-    }
-#else
-    char path[FILENAME_MAX];
-    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
-    if (count <= 0) {
-        throw std::runtime_error("failed to resolve /proc/self/exe");
-    }
-    return std::filesystem::path(std::string(path, count));
-#endif
-}
-
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
@@ -493,6 +447,8 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_MEMORY_MARGIN");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    preset.unset_option("LLAMA_ARG_CONNECT");
+    preset.unset_option("LLAMA_ARG_CONNECT_CODE");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -573,25 +529,29 @@ void server_model_meta::update_caps(const common_params & base) {
         return;
     }
 
-    // read the output modalities and the trained context from the GGUF metadata
-    std::vector<std::string> output_modalities = {"text"};
-    if (!params.model.path.empty()) {
-        const common_gguf_info info = common_get_gguf_info(params.model.path);
-        output_modalities = server_model_output_modalities(info.decision_type);
-        n_ctx_train       = info.n_ctx_train;
-    }
-
     bool inp_image = false;
     bool inp_audio = false;
+    bool gen_audio = false;
     try {
         if (!params.no_mmproj && !params.mmproj.path.empty()) {
             mtmd_caps caps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
             inp_image = caps.inp_vision;
             inp_audio = caps.inp_audio;
+            gen_audio = caps.gen_audio;
         }
     } catch (const std::exception & e) {
         LOG_WRN("failed to read the multimodal capabilities of '%s': %s\n", name.c_str(), e.what());
         // keep the output modalities from the GGUF metadata
+    }
+
+    // read the output modalities and the trained context from the GGUF metadata
+    std::vector<std::string> output_modalities = {"text"};
+    if (!params.model.path.empty()) {
+        const common_gguf_info info = common_get_gguf_info(params.model.path);
+        // same rule as mtmd_helper_model_can_chat()
+        const bool can_chat = !gen_audio || info.has_chat_tmpl;
+        output_modalities = server_model_output_modalities(info.decision_type, can_chat, gen_audio);
+        n_ctx_train       = info.n_ctx_train;
     }
 
     // offline discovery cannot see video; a loaded model reports it
@@ -627,6 +587,7 @@ server_models::server_models(
         SRV_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
 
+    unfinished_downloads.load();
     load_models();
     debug_fake_timing = !common_get_env("LLAMA_SERVER_DEBUG_FAKE_TIMING").empty();
 }
@@ -694,6 +655,233 @@ void server_models::add_model(server_model_meta && meta) {
         /* meta    */ std::move(meta)
     };
     enqueue_measure(name);
+}
+
+static bool has_sidecar(const std::vector<std::string> & sidecars, const std::string & kind) {
+    return std::find(sidecars.begin(), sidecars.end(), kind) != sidecars.end();
+}
+
+// reject a sidecar kind no download can pull
+static void check_sidecar(const std::string & kind) {
+    std::vector<std::string> kinds;
+    for (const auto & s : common_download_sidecars()) {
+        kinds.emplace_back(s.name);
+    }
+    if (!has_sidecar(kinds, kind)) {
+        throw std::invalid_argument("unknown sidecar '" + kind + "', expected one of " + string_join(kinds, ", "));
+    }
+}
+
+// the sidecars a download asks for; by default the ones -hf pulls without a draft type
+static std::vector<std::string> parse_sidecars(const json & body) {
+    std::vector<std::string> defaults;
+    for (const auto & s : common_download_sidecars()) {
+        if (!s.draft) {
+            defaults.emplace_back(s.name);
+        }
+    }
+    std::vector<std::string> sidecars = json_value(body, "sidecars", defaults);
+    for (const auto & kind : sidecars) {
+        check_sidecar(kind);
+    }
+    return sidecars;
+}
+
+// the download options of a model with its sidecars, the plan a removal purges partials from
+static common_download_opts sidecar_download_opts(const common_params & params, const std::vector<std::string> & sidecars) {
+    common_download_opts opts;
+    opts.bearer_token = params.hf_token;
+    for (const auto & kind : sidecars) {
+        common_download_opts_add_sidecar(opts, kind);
+    }
+    return opts;
+}
+
+// the HF repo a model resolves from: a preset names its own, a cached model is
+// listed under it, and a local file or a models dir entry has none
+static std::string model_hf_repo(const server_model_meta & meta) {
+    std::string hf_repo;
+    if (meta.preset.get_option("LLAMA_ARG_HF_REPO", hf_repo) && !hf_repo.empty()) {
+        return hf_repo;
+    }
+    return meta.source == SERVER_MODEL_SOURCE_CACHE ? meta.name : "";
+}
+
+// the sidecar kinds of a HF repo present on disk, as the offline plan resolves them
+static json cached_sidecars(const std::string & hf_repo) {
+    common_params_model model;
+    model.hf_repo = hf_repo;
+
+    common_download_opts opts;
+    opts.offline = true;
+    for (const auto & s : common_download_sidecars()) {
+        opts.*s.opt = true;
+    }
+
+    return common_download_plan_sidecars(common_download_get_hf_plan(model, opts));
+}
+
+// replace any inherited value of `key` in a child environment
+static void set_child_env(std::vector<std::string> & env, const std::string & key, const std::string & value) {
+    env.erase(std::remove_if(env.begin(), env.end(), [&](const std::string & e) {
+        return e.rfind(key + "=", 0) == 0;
+    }), env.end());
+    env.push_back(key + "=" + value);
+}
+
+// where the unfinished downloads are remembered, inside the model cache
+static std::string unfinished_downloads_path() {
+    return hf_cache::get_cache_path() + "/unfinished-downloads.json";
+}
+
+void server_unfinished_downloads::load() {
+    std::ifstream in(unfinished_downloads_path());
+    if (!in) {
+        return;
+    }
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::lock_guard<std::mutex> lk(mutex);
+    try {
+        json data = json::parse(raw);
+        for (const auto & d : data.value("downloads", json::array())) {
+            server_unfinished_download download;
+            download.model    = json_value(d, "model", std::string());
+            download.sidecars = json_value(d, "sidecars", std::vector<std::string>());
+            for (const auto & p : d.value("partials", json::array())) {
+                download.partials.push_back({ json_value(p, "kind", std::string()), json_value(p, "path", std::string()) });
+            }
+            if (!download.model.empty()) {
+                downloads.push_back(std::move(download));
+            }
+        }
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to read unfinished downloads: %s\n", e.what());
+    }
+}
+
+void server_unfinished_downloads::save() {
+    json data;
+    data["downloads"] = json::array();
+    for (const auto & d : downloads) {
+        json partials = json::array();
+        for (const auto & p : d.partials) {
+            partials.push_back({ {"kind", p.kind}, {"path", p.path} });
+        }
+        data["downloads"].push_back({ {"model", d.model}, {"sidecars", d.sidecars}, {"partials", partials} });
+    }
+    try {
+        fs_write_atomic(std::filesystem::u8path(unfinished_downloads_path()), data.dump());
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to record unfinished downloads: %s\n", e.what());
+    }
+}
+
+void server_unfinished_downloads::delete_partials(const std::vector<common_download_partial> & parts) {
+    for (const auto & p : parts) {
+        const bool shared = std::any_of(downloads.begin(), downloads.end(), [&](const server_unfinished_download & d) {
+            return std::any_of(d.partials.begin(), d.partials.end(), [&](const common_download_partial & q) {
+                return q.path == p.path;
+            });
+        });
+        if (shared) {
+            continue;
+        }
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::u8path(p.path), ec);
+    }
+}
+
+void server_unfinished_downloads::add(const server_unfinished_download & download) {
+    std::lock_guard<std::mutex> lk(mutex);
+    std::vector<common_download_partial> stale;
+    auto it = std::find_if(downloads.begin(), downloads.end(), [&](const auto & d) { return d.model == download.model; });
+    if (it != downloads.end()) {
+        stale = std::move(it->partials);
+        *it = download;
+    } else {
+        downloads.push_back(download);
+    }
+    save();
+    delete_partials(stale);
+}
+
+void server_unfinished_downloads::forget(const std::string & model) {
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = std::find_if(downloads.begin(), downloads.end(), [&](const auto & d) { return d.model == model; });
+    if (it != downloads.end()) {
+        downloads.erase(it);
+        save();
+    }
+}
+
+bool server_unfinished_downloads::remove(const std::string & model) {
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = std::find_if(downloads.begin(), downloads.end(), [&](const auto & d) { return d.model == model; });
+    if (it == downloads.end()) {
+        return false;
+    }
+    auto partials = std::move(it->partials);
+    downloads.erase(it);
+    save();
+    delete_partials(partials);
+    return true;
+}
+
+bool server_unfinished_downloads::remove_sidecar(const std::string & model, const std::string & kind) {
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = std::find_if(downloads.begin(), downloads.end(), [&](const auto & d) { return d.model == model; });
+    if (it == downloads.end() || !has_sidecar(it->sidecars, kind)) {
+        return false;
+    }
+    it->sidecars.erase(std::remove(it->sidecars.begin(), it->sidecars.end(), kind), it->sidecars.end());
+
+    std::vector<common_download_partial> dropped;
+    auto & partials = it->partials;
+    auto pos = std::stable_partition(partials.begin(), partials.end(), [&](const common_download_partial & p) {
+        return p.kind != kind;
+    });
+    dropped.assign(pos, partials.end());
+    partials.erase(pos, partials.end());
+
+    save();
+    delete_partials(dropped);
+    return true;
+}
+
+std::vector<server_unfinished_download> server_unfinished_downloads::get_all() {
+    std::lock_guard<std::mutex> lk(mutex);
+    return downloads;
+}
+
+std::vector<server_unfinished_download> server_models::unfinished_downloads_get() {
+    return unfinished_downloads.get_all();
+}
+
+void server_models::unfinished_downloads_remove(const std::string & name) {
+    // under the lock, so a download of the same tag cannot start while its files go
+    std::lock_guard<std::mutex> lk(mutex);
+    if (mapping.find(name) != mapping.end()) {
+        throw std::invalid_argument("model '" + name + "' is downloading");
+    }
+    // a name with no record is no model: its files belong to the cached tags of the repo
+    if (!unfinished_downloads.remove(name)) {
+        throw std::runtime_error("model name=" + name + " is not found");
+    }
+    bool ok = common_download_remove(name);
+    SRV_INF("removing unfinished download name=%s (%s)\n", name.c_str(), ok ? "succeeded" : "nothing cached");
+}
+
+bool server_models::remove_sidecar(const std::string & name, const std::string & kind) {
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end() && (it->second.meta.is_running() || it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING)) {
+        throw std::invalid_argument("model '" + name + "' is in use, unload it first");
+    }
+    // a sidecar that only ever landed as a partial is still something removed
+    bool ok = unfinished_downloads.remove_sidecar(name, kind);
+    ok = common_download_remove_sidecars(name, sidecar_download_opts(base_params, { kind })) || ok;
+    SRV_INF("removing sidecar %s of model name=%s (%s)\n", kind.c_str(), name.c_str(), ok ? "succeeded" : "nothing cached");
+    return ok;
 }
 
 void server_models::notify_sse(const std::string & event, const std::string & model_id, const json & data) {
@@ -1471,7 +1659,8 @@ void server_models::load(const std::string & name) {
 }
 
 void server_models::load(const std::string & name, const load_options & opts) {
-    if (debug_fake_timing) {
+    // the fake load time of a model; a download worker loads none
+    if (debug_fake_timing && opts.mode == SERVER_CHILD_MODE_NORMAL) {
         // do not hold the mutex here, other requests must keep making progress
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
@@ -1502,6 +1691,43 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // edge case: block until any in-progress reload has finished so we always load
     // against the freshest preset and a consistent mapping state
     cv.wait(lk, [this]() { return !is_reloading; });
+
+    // a download over an existing entry is decided under the lock, so a load of the
+    // same model cannot start in between: a paused download or an idle cached model
+    // is downloaded again with its files kept, a download on its way and a running
+    // model are refused, and a preset or local model is not a download
+    if (opts.mode == SERVER_CHILD_MODE_DOWNLOAD) {
+        auto it = mapping.find(name);
+        if (it != mapping.end()) {
+            const auto & cur = it->second.meta;
+            if (cur.status == SERVER_MODEL_STATUS_DOWNLOADING) {
+                throw std::invalid_argument("model '" + name + "' is already downloading");
+            }
+            if (cur.is_running()) {
+                throw std::invalid_argument("model '" + name + "' is running, unload it first");
+            }
+            if (cur.source != SERVER_MODEL_SOURCE_CACHE) {
+                throw std::invalid_argument("model '" + name + "' already exists");
+            }
+            SRV_INF("resuming download for model '%s'\n", name.c_str());
+        }
+
+        // two downloads writing the same partial would interleave their bytes
+        for (const auto & d : unfinished_downloads.get_all()) {
+            auto other = mapping.find(d.model);
+            if (d.model == name || other == mapping.end() || other->second.meta.status != SERVER_MODEL_STATUS_DOWNLOADING) {
+                continue;
+            }
+            for (const auto & p : d.partials) {
+                const bool shared = std::any_of(opts.partials.begin(), opts.partials.end(), [&](const common_download_partial & q) {
+                    return q.path == p.path;
+                });
+                if (shared) {
+                    throw std::invalid_argument("model '" + name + "' shares files with the download of '" + d.model + "' on its way, retry once it is done");
+                }
+            }
+        }
+    }
 
     auto meta = opts.custom_meta.has_value() ? *opts.custom_meta : mapping[name].meta;
     if (meta.status != SERVER_MODEL_STATUS_UNLOADED) {
@@ -1544,6 +1770,23 @@ void server_models::load(const std::string & name, const load_options & opts) {
             inst.meta.status = SERVER_MODEL_STATUS_DOWNLOADING;
             child_env.push_back("LLAMA_SERVER_CHILD_MODE=download");
             child_env.push_back("LLAMA_ARG_HF_REPO=" + name);
+
+            // the sidecars as -hf would pull them: the draft types, and the mmproj switch
+            // for the one that is not a draft
+            bool        mmproj = false;
+            std::string spec_types;
+            for (const auto & s : common_download_sidecars()) {
+                if (!has_sidecar(opts.sidecars, s.name)) {
+                    continue;
+                }
+                if (s.draft) {
+                    spec_types += (spec_types.empty() ? "" : ",") + std::string("draft-") + s.name;
+                } else {
+                    mmproj = true;
+                }
+            }
+            set_child_env(child_env, "LLAMA_ARG_MMPROJ_AUTO", mmproj ? "1" : "0");
+            set_child_env(child_env, "LLAMA_ARG_SPEC_TYPE", spec_types.empty() ? "none" : spec_types);
         }
 
         SRV_INF("%s", "spawning server instance with args:\n");
@@ -1557,6 +1800,11 @@ void server_models::load(const std::string & name, const load_options & opts) {
         if (!inst.subproc->sproc.create(child_args, options, child_env)) {
             throw std::runtime_error("failed to spawn server instance");
         }
+    }
+
+    // remember the download: the partial files carry a content hash, not the name
+    if (opts.mode == SERVER_CHILD_MODE_DOWNLOAD) {
+        unfinished_downloads.add({ name, opts.sidecars, opts.partials });
     }
 
     // old process should have exited already, but just in case, we clean it up here
@@ -1781,6 +2029,12 @@ void server_models::update_download_progress(const std::string & name, const com
                 // mark the instance to be erased on next load_models() call
                 it->second.meta.status = SERVER_MODEL_STATUS_DOWNLOADED;
                 need_reload = true;
+
+                // a download that failed keeps its tag: its partial files are still
+                // there and re-posting the tag resumes them
+                if (ok) {
+                    unfinished_downloads.forget(name);
+                }
             } else {
                 json & info = it->second.meta.loaded_info;
                 if (!info.contains("progress")) {
@@ -1836,24 +2090,14 @@ bool server_models::remove(const std::string & name) {
             || meta.status == SERVER_MODEL_STATUS_DOWNLOADED;
     });
 
-    // re-find after wait - load_models() may have erased the entry during the wait
-    it = mapping.find(name);
-    if (it == mapping.end()) {
-        // load_models() already erased the entry; we just need to clean up the cached files on disk
-        lk.unlock();
-        bool ok = common_download_remove(name);
-        SRV_INF("removing model name=%s from cache (%s)\n", name.c_str(), ok ? "succeeded" : "partial");
-        notify_sse("model_remove", name, {});
-        return true;
-    }
-
-    // remove from disk (best-effort: cancelled downloads may have no cached files)
-    bool ok = common_download_remove(name);
+    // load_models() may have erased the entry during the wait; the files go under the
+    // lock, so a download of the same tag cannot start meanwhile
     mapping.erase(name);
-    if (!ok) {
-        SRV_WRN("removing model name=%s from disk returned false (no cached files?)\n", name.c_str());
-    }
-    SRV_INF("removing model name=%s from cache (%s)\n", name.c_str(), ok ? "succeeded" : "partial");
+    unfinished_downloads.remove(name);
+
+    // best-effort: a cancelled download may have no cached files
+    bool ok = common_download_remove(name);
+    SRV_INF("removing model name=%s from cache (%s)\n", name.c_str(), ok ? "succeeded" : "nothing cached");
     notify_sse("model_remove", name, {});
     return true;
 }
@@ -2048,6 +2292,81 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     };
 
     return proxy;
+}
+
+void server_models::proxy_ws(const server_http_req & req, server_http_context::ws_conn & conn, const std::string & name) {
+    auto send_error = [&conn](const std::string & message) {
+        conn.send(safe_json_to_str(json {
+            {"type", "error"},
+            {"error", {{"type", "server_error"}, {"code", nullptr}, {"message", message}, {"param", nullptr}}},
+        }));
+        conn.close();
+    };
+
+    auto meta = get_meta(name);
+    if (!meta.has_value() || !meta->is_running()) {
+        send_error("model name=" + name + " is not running");
+        return;
+    }
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        mapping[name].meta.last_used = ggml_time_ms();
+        mapping[name].req_count++;
+    }
+    SRV_INF("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
+
+    std::string url = std::string("ws://") + CHILD_ADDR + ":" + std::to_string(meta->port) + req.path;
+    if (!req.query_string.empty()) {
+        url += '?' + req.query_string;
+    }
+    // the client library adds its own upgrade headers
+    httplib::Headers headers;
+    for (const auto & [key, value] : req.headers) {
+        std::string lower = key;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0) {
+            continue;
+        }
+        headers.emplace(key, value);
+    }
+
+    {
+        httplib::ws::WebSocketClient upstream(url, headers);
+        if (!upstream.connect()) {
+            send_error("failed to connect to model name=" + name);
+        } else {
+            // client to child
+            std::thread pump([&]() {
+                std::string msg;
+                while (true) {
+                    const int res = conn.read(msg);
+                    if (res == 0 || !(res == 1 ? upstream.send(msg) : upstream.send(msg.data(), msg.size()))) {
+                        break;
+                    }
+                }
+                upstream.close();
+            });
+            // child to client
+            std::string msg;
+            while (true) {
+                const auto res = upstream.read(msg);
+                if (res == httplib::ws::Fail || !(res == httplib::ws::Text ? conn.send(msg) : conn.send_binary(msg))) {
+                    break;
+                }
+            }
+            conn.close();
+            pump.join();
+        }
+    }
+
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end() && it->second.req_count > 0) {
+        it->second.req_count--;
+        if (it->second.req_count == 0) {
+            sched->tick(lk);
+        }
+    }
 }
 
 void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
@@ -2432,7 +2751,7 @@ void server_models_routes::init_routes() {
         if (name.empty()) {
             // main instance
             auto res = std::make_unique<server_http_res>();
-            res_ok(res, {
+            json props = {
                 // TODO: add support for this on web UI
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
@@ -2448,7 +2767,11 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
-            });
+            };
+            if (!params.server_connect_code.empty()) {
+                props["connect_code"] = params.server_connect_code;
+            }
+            res_ok(res, props);
             return res;
         }
         return proxy_get(req);
@@ -2466,6 +2789,24 @@ void server_models_routes::init_routes() {
             models.ensure_model_ready(name, req.should_stop);
         }
         return models.proxy_request(req, method, name, false);
+    };
+
+    this->proxy_ws = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        std::string name = req.get_param("model");
+        bool autoload = is_autoload(params, req);
+        auto error_res = std::make_unique<server_http_res>();
+        if (!router_validate_model(name, models, autoload, error_res)) {
+            // error_res holds {"error": {...}}, send it as a websocket error event
+            json err = json::parse(error_res->data);
+            err["type"] = "error";
+            conn.send(safe_json_to_str(err));
+            conn.close();
+            return;
+        }
+        if (autoload) {
+            models.ensure_model_ready(name, req.should_stop);
+        }
+        models.proxy_ws(req, conn, name);
     };
 
     this->proxy_post = [this](const server_http_req & req) {
@@ -2526,6 +2867,9 @@ void server_models_routes::init_routes() {
         json models_json = json::array();
         auto all_models = models.get_all_meta();
         std::time_t t = std::time(0);
+        // a download on its way has no files to resolve yet, only the kinds it pulls
+        const auto unfinished = models.unfinished_downloads_get();
+
         for (const auto & meta : all_models) {
             if (meta.hidden) {
                 continue; // cache model deduplicated by a preset
@@ -2571,6 +2915,35 @@ void server_models_routes::init_routes() {
                 model_info["memory"] = meta.memory_to_json();
             }
 
+            // the sidecars a model has on disk, resolved as -hf would load them, for a
+            // model that resolves from a HF repo. A download on its way reports the
+            // kinds it pulls, as an unfinished one does
+            const auto it_unfinished = std::find_if(unfinished.begin(), unfinished.end(),
+                [&](const server_unfinished_download & d) { return d.model == meta.name; });
+            const std::string hf_repo = model_hf_repo(meta);
+
+            if (it_unfinished != unfinished.end() && meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
+                model_info["sidecars"] = it_unfinished->sidecars;
+            } else if (!hf_repo.empty()) {
+                const json cached = cached_sidecars(hf_repo);
+                model_info["sidecars"] = cached;
+
+                // the sidecars of an unfinished download of this model that are not on
+                // disk yet: a POST with the kind resumes one, a DELETE with it drops it
+                if (it_unfinished != unfinished.end()) {
+                    std::vector<std::string> incomplete;
+                    for (const auto & p : it_unfinished->partials) {
+                        if (!p.kind.empty() && !has_sidecar(incomplete, p.kind) &&
+                            std::find(cached.begin(), cached.end(), p.kind) == cached.end()) {
+                            incomplete.push_back(p.kind);
+                        }
+                    }
+                    if (!incomplete.empty()) {
+                        model_info["incomplete_sidecars"] = incomplete;
+                    }
+                }
+            }
+
             // merge with loaded_info from the child process if available
             if (meta.is_running()) {
                 for (auto it = meta.loaded_info.begin(); it != meta.loaded_info.end(); ++it) {
@@ -2581,6 +2954,33 @@ void server_models_routes::init_routes() {
             }
             models_json.push_back(model_info);
         }
+
+        const json architecture_default = json {
+            {"input_modalities",  json::array({"text"})},
+            {"output_modalities", json::array({"text"})},
+        };
+
+        // a download that never finished has no instance: report it as incomplete so
+        // the UI can offer to resume it, without starting anything
+        for (const auto & d : unfinished) {
+            if (models.has_model(d.model)) {
+                continue; // complete, or downloading right now
+            }
+            models_json.push_back(json {
+                {"id",           d.model},
+                {"aliases",      json::array()},
+                {"tags",         json::array()},
+                {"object",       "model"},
+                {"owned_by",     "llamacpp"},
+                {"created",      t},
+                {"status",       json { {"value", server_model_status_to_string(SERVER_MODEL_STATUS_INCOMPLETE)}, {"args", json::array()} }},
+                {"architecture", architecture_default},
+                {"source",       server_model_source_to_string(SERVER_MODEL_SOURCE_CACHE)},
+                {"can_remove",   true},
+                {"sidecars",     d.sidecars},
+            });
+        }
+
         res_ok(res, {
             {"data", models_json},
             {"object", "list"},
@@ -2632,32 +3032,27 @@ void server_models_routes::init_routes() {
         if (name.empty()) {
             throw std::invalid_argument("model must be a non-empty string");
         }
+        const auto sidecars = parse_sidecars(body);
 
-        common_params p;
-        p.model.hf_repo  = name;
-        p.hf_token       = params.hf_token;
+        common_params_model model;
+        model.hf_repo = name;
 
-        // validate by fetching metadata
-        bool ok = false;
+        // validate by fetching metadata, through the plan the download follows
+        common_download_hf_plan plan;
         try {
-            common_models_handler_init(p, LLAMA_EXAMPLE_SERVER);
-            ok = true;
+            plan = common_download_get_hf_plan(model, sidecar_download_opts(params, sidecars));
         } catch (...) {
             SRV_ERR("unknown error while validating model '%s'\n", name.c_str());
             // other exceptions will be handled by the outer ex_wrapper()
             throw;
         }
 
-        if (!ok) {
-            throw std::invalid_argument("model validation failed, unable to download");
+        // a tag that resolves no file has nothing to download
+        if (plan.preset.path.empty() && plan.primary.path.empty() && common_download_plan_sidecars(plan).empty()) {
+            throw std::invalid_argument("model '" + name + "' resolves no file to download");
         }
 
-        // reject if model already exists
-        if (models.has_model(name)) {
-            throw std::invalid_argument("model '" + name + "' already exists");
-        }
-
-        // then, proceed with the actual download
+        // then, proceed with the actual download; load() decides over an existing entry
         SRV_INF("starting download for model '%s'\n", name.c_str());
         {
             server_models::load_options load_opts;
@@ -2665,6 +3060,8 @@ void server_models_routes::init_routes() {
             load_opts.custom_meta = server_model_meta{};
             load_opts.custom_meta->source = SERVER_MODEL_SOURCE_CACHE;
             load_opts.custom_meta->name   = name;
+            load_opts.sidecars            = sidecars;
+            load_opts.partials            = common_download_plan_partials(plan);
             models.load(name, load_opts);
         }
 
@@ -2678,6 +3075,22 @@ void server_models_routes::init_routes() {
         std::string name = req.get_param("model");
         if (name.empty()) {
             throw std::invalid_argument("model must be a non-empty string");
+        }
+
+        // a sidecar alone goes, the model keeps its files
+        std::string sidecar = req.get_param("sidecar");
+        if (!sidecar.empty()) {
+            check_sidecar(sidecar);
+            res_ok(res, {{"success", models.remove_sidecar(name, sidecar)}});
+            return res;
+        }
+
+        // a download listed from an earlier run has no instance, only its tag and
+        // its partial files
+        if (!models.has_model(name)) {
+            models.unfinished_downloads_remove(name);
+            res_ok(res, {{"success", true}});
+            return res;
         }
 
         models.remove(name); // throws on error
@@ -2959,9 +3372,10 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup_pipes = [pipe]() {
+    this->cleanup_pipes = [pipe, cli]() {
         pipe->close_read();
         pipe->close_write();
+        cli->stop();
     };
 
     // wire up the receive end of the pipe

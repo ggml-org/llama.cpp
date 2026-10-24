@@ -69,7 +69,13 @@ export {
 	JsonSchemaType
 } from './mcp.enums';
 
-export { ModelAuxSidecar, ModelCapability, ModelDraftSidecar, ModelModality } from './model.enums';
+export {
+	ModelAuxSidecar,
+	ModelCapability,
+	ModelDraftSidecar,
+	ModelModality,
+	ModelSelectableFileKind
+} from './model.enums';
 
 export {
 	ModelDownloadConfirmAction,
@@ -89,6 +95,7 @@ export {
 	ColorMode,
 	HtmlInputType,
 	McpPromptVariant,
+	ModelsDialogView,
 	ScrollCarouselVariant,
 	SidebarAction,
 	TooltipSide,

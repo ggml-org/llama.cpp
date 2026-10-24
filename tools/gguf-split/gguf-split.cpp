@@ -362,6 +362,10 @@ struct split_strategy {
         }
         f_in.seekg(in_offset);
         f_in.read((char *)read_buf.data(), len);
+        if (!f_in) {
+            fprintf(stderr, "%s: failed to read %zu bytes at offset %zu, input file may be truncated\n", __func__, len, in_offset);
+            exit(EXIT_FAILURE);
+        }
         f_out.write((const char *)read_buf.data(), len);
     }
 };

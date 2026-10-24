@@ -37,14 +37,14 @@ env:
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
   # TODO: fix failing tests on OpenVINO backend
-  CTEST_EXCLUDE: "test-llama-archs|^test-recurrent-state-|test-save-load-state"
+  CTEST_EXCLUDE: "test-llama-archs|test-llama-context"
 
 jobs:
   ubuntu-24-openvino:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
@@ -104,7 +104,7 @@ jobs:
       contents: read
 
     env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 

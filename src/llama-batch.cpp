@@ -1147,6 +1147,10 @@ size_t llama_batch_ext_select_n_embd_state(llama_context_type ctx_type, const ll
     if (ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
         return hparams.n_embd_out();
     }
+    // TODO: this probably should become a function of `llm_arch`
+    if (hparams.lilicorr_candidate_topk > 0) {
+        return hparams.n_embd_inp();
+    }
     return 0;
 }
 

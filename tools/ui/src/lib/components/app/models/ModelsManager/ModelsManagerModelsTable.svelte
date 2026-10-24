@@ -88,6 +88,7 @@
 		[GroupedListUnit.GROUPS]: 'families'
 	};
 	let pendingDelete = $state('');
+	let pendingAction = $state(ModelDownloadConfirmAction.DELETE);
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
@@ -129,6 +130,10 @@
 	// cancel is confirmed once for the whole list, so one dialog serves every row
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
+		// an in-flight row cancels (and drops the partials), a paused one deletes
+		pendingAction = modelsStore.status.isDownloadInProgress(option.model)
+			? ModelDownloadConfirmAction.CANCEL
+			: ModelDownloadConfirmAction.DELETE;
 		deleteOpen = true;
 	}
 
@@ -248,6 +253,7 @@
 			{onSelect}
 			option={entry.base}
 			selected={selectedId === entry.base.id}
+			sidecarBadges={entry.sidecarBadges}
 		/>
 	{/if}
 {/snippet}
@@ -328,7 +334,7 @@
 {/snippet}
 
 <DialogConfirmDownload
-	action={ModelDownloadConfirmAction.DELETE}
+	action={pendingAction}
 	onClose={() => (deleteOpen = false)}
 	open={deleteOpen}
 	repoWithTag={pendingDelete}

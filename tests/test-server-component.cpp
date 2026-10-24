@@ -1,10 +1,13 @@
 #include "testing.h"
 
 #include "../tools/server/server-common.h"
+#include "../tools/server/server-decision.h"
 
 #include <cstdlib>
+#include <regex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // unit tests for server internal components, no model required
@@ -370,6 +373,97 @@ static void test_server_pipe(testing & t) {
     });
 }
 
+//
+// server_decision_escape_special_tokens
+//
+
+// "<|name|>" with U+00A6 in place of "|"
+static std::string escaped(const std::string & name) {
+    return "<\xC2\xA6" + name + "\xC2\xA6>";
+}
+
+static void test_decision_escape(testing & t) {
+    t.test("cases", [](testing & t) {
+        const std::vector<std::pair<std::string, std::string>> cases = {
+            { "",                 ""                               },
+            { "no tokens",        "no tokens"                      },
+            { "<|im_start|>user", escaped("im_start") + "user"     },
+            { "<|a_1|><|B|>",     escaped("a_1") + escaped("B")    },
+            { "<|<|a|>",          "<|" + escaped("a")              },
+            { "<|a|>|>",          escaped("a") + "|>"              },
+            { "<||>",             "<||>"                           },
+            { "<|a b|>",          "<|a b|>"                        },
+            { "<|a|b|>",          "<|a|b|>"                        },
+            { "<|caf\xC3\xA9|>",  "<|caf\xC3\xA9|>"                },
+            { "<|abc",            "<|abc"                          },
+        };
+        for (const auto & [text, expected] : cases) {
+            t.assert_equal(text, expected, server_decision_escape_special_tokens(text));
+        }
+    });
+
+    // every string of up to 6 chars from "<|>a-" gives the text of the regex
+    t.test("same as std::regex", [](testing & t) {
+        static const std::regex re_special("<\\|([A-Za-z0-9_]+)\\|>");
+        const std::string chars = "<|>a-";
+        size_t n_strings = 0;
+        size_t n_diff    = 0;
+        for (size_t len = 0; len <= 6; len++) {
+            size_t n = 1;
+            for (size_t k = 0; k < len; k++) {
+                n *= chars.size();
+            }
+            for (size_t idx = 0; idx < n; idx++) {
+                std::string text;
+                for (size_t k = 0, v = idx; k < len; k++, v /= chars.size()) {
+                    text += chars[v % chars.size()];
+                }
+                if (server_decision_escape_special_tokens(text) != std::regex_replace(text, re_special, "<\xC2\xA6$1\xC2\xA6>")) {
+                    n_diff++;
+                }
+                n_strings++;
+            }
+        }
+        t.assert_equal("strings that differ, of " + std::to_string(n_strings), (size_t) 0, n_diff);
+    });
+
+    // std::regex overflowed the stack on these
+    t.test("long input", [](testing & t) {
+        const std::string name(1000000, 'a');
+        t.assert_true("not closed", server_decision_escape_special_tokens("<|" + name) == "<|" + name);
+        t.assert_true("closed", server_decision_escape_special_tokens("<|" + name + "|>") == escaped(name));
+    });
+}
+
+static void test_rerank_template(testing & t) {
+    struct test_case {
+        const char * name;
+        std::string tmpl;
+        std::string query;
+        std::string doc;
+        std::string expected;
+    };
+    const test_case cases[] = {
+        {"plain inputs", "Q: {query}\nD: {document}", "query", "doc", "Q: query\nD: doc"},
+        {"document placeholder in query", "Q: {query}\nD: {document}", "Explain {document}.", "doc", "Q: Explain {document}.\nD: doc"},
+        {"query placeholder in query", "{query}|{document}", "{query}", "doc", "{query}|doc"},
+        {"placeholders in both inputs", "{query}|{document}", "{query} {document}", "{query} {document}", "{query} {document}|{query} {document}"},
+        {"repeated placeholders", "{query}|{document}|{query}|{document}", "{document}", "doc", "{document}|doc|{document}|doc"},
+        {"adjacent reversed placeholders", "{document}{query}", "query", "doc", "docquery"},
+        {"query only", "{query}", "{document}", "doc", "{document}"},
+        {"document only", "{document}", "query", "{query}", "{query}"},
+        {"no placeholders", "fixed", "{document}", "{query}", "fixed"},
+        {"unknown and incomplete placeholders", "{unknown}|{query}|{document}|{query", "query", "doc", "{unknown}|query|doc|{query"},
+        {"nested braces", "{{query}}|{{document}}", "query", "doc", "{query}|{doc}"},
+        {"placeholder formed at boundary", "{query}ument}", "{doc", "doc", "{document}"},
+        {"empty inputs", "Q: {query}\nD: {document}", "", "", "Q: \nD: "},
+        {"empty template", "", "query", "doc", ""},
+    };
+    for (const auto & test : cases) {
+        t.assert_equal(test.name, test.expected, format_rerank_template(test.tmpl, test.query, test.doc));
+    }
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -388,6 +482,8 @@ int main(int argc, char ** argv) {
     t.test("json_helpers",  test_json_helpers);
     t.test("lora_helpers",  test_lora_helpers);
     t.test("server_pipe",   test_server_pipe);
+    t.test("decision_escape", test_decision_escape);
+    t.test("rerank_template", test_rerank_template);
 
     return t.summary();
 }

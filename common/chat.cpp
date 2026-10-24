@@ -647,7 +647,7 @@ std::string common_chat_format_single(const struct common_chat_templates * tmpls
     if (!past_msg.empty()) {
         inputs.messages              = past_msg;
         inputs.add_generation_prompt = false;
-        fmt_past_msg                 = common_chat_templates_apply(tmpls, inputs).prompt;
+        fmt_past_msg                 = common_chat_templates_apply(tmpls, inputs).prompt.str();
     }
     std::ostringstream ss;
     // if the past_msg ends with a newline, we must preserve it in the formatted version
@@ -657,7 +657,7 @@ std::string common_chat_format_single(const struct common_chat_templates * tmpls
     // format chat with new_msg
     inputs.messages.push_back(new_msg);
     inputs.add_generation_prompt = add_ass;
-    auto fmt_new_msg             = common_chat_templates_apply(tmpls, inputs).prompt;
+    auto fmt_new_msg             = common_chat_templates_apply(tmpls, inputs).prompt.str();
     // get the diff part
     ss << fmt_new_msg.substr(fmt_past_msg.size(), fmt_new_msg.size() - fmt_past_msg.size());
     return ss.str();
@@ -681,7 +681,7 @@ std::string common_chat_format_example(const struct common_chat_templates *     
     add_simple_msg("user", "Hello");
     add_simple_msg("assistant", "Hi there");
     add_simple_msg("user", "How are you?");
-    return common_chat_templates_apply(tmpls, inputs).prompt;
+    return common_chat_templates_apply(tmpls, inputs).prompt.str();
 }
 
 #define CHATML_TEMPLATE_SRC                                                               \
@@ -874,7 +874,7 @@ common_reasoning_format common_reasoning_format_from_name(const std::string & fo
     throw std::runtime_error("Unknown reasoning format: " + format);
 }
 
-std::string common_chat_template_direct_apply_impl(
+common_chat_prompt common_chat_template_direct_apply_impl(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs,
     const std::optional<json> & messages_override,
@@ -920,24 +920,37 @@ std::string common_chat_template_direct_apply_impl(
 
     jinja::global_from_json(ctx, inp, inputs.mark_input);
 
+    // bos/eos come from the model, not from the user
+    ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
+    ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
+
     // render
     jinja::runtime runtime(ctx);
     const jinja::value results = runtime.execute(tmpl.prog);
     auto parts = jinja::runtime::gather_string_parts(results);
 
-    std::string result = parts->as_string().str();
+    common_chat_prompt result;
+    for (auto & part : parts->val_str.parts) {
+        result.parts.push_back({std::move(part.val), part.is_input});
+    }
 
     // TODO: improve this later
-    if (inputs.add_bos && string_starts_with(result, tmpl.bos_token())) {
-        result = result.substr(tmpl.bos_token().size());
+    if (inputs.add_bos && !result.parts.empty()) {
+        auto & first = result.parts.front();
+        if (!first.is_input && string_starts_with(first.text, tmpl.bos_token())) {
+            first.text.erase(0, tmpl.bos_token().size());
+        }
     }
-    if (inputs.add_eos && string_ends_with(result, tmpl.eos_token())) {
-        result = result.substr(0, result.size() - tmpl.eos_token().size());
+    if (inputs.add_eos && !result.parts.empty()) {
+        auto & last = result.parts.back();
+        if (!last.is_input && string_ends_with(last.text, tmpl.eos_token())) {
+            last.text.resize(last.text.size() - tmpl.eos_token().size());
+        }
     }
     return result;
 }
 
-std::string common_chat_template_direct_apply(
+common_chat_prompt common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs) {
     return common_chat_template_direct_apply_impl(tmpl, inputs, std::nullopt, std::nullopt, std::nullopt);
@@ -953,9 +966,9 @@ std::string common_chat_template_generation_prompt_impl(
     autoparser::generation_params params = inputs;
     params.add_generation_prompt = false;
     params.continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
-    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params, messages_override, tools_override, additional_context);
+    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params, messages_override, tools_override, additional_context).str();
     params.add_generation_prompt = true;
-    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params, messages_override, tools_override, additional_context);
+    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params, messages_override, tools_override, additional_context).str();
 
     size_t prefix_len = 0;
     size_t min_size = std::min(no_gen_prompt.size(), gen_prompt.size());
@@ -1091,10 +1104,23 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_llm_jp_harmony;
     }
 
+    // Harmony XML tool calls, checked before the GPT-OSS JSON calls
+    if (src.find("<|channel|>") != std::string::npos && src.find("<|constrain|>xml") != std::string::npos &&
+        src.find("rfl:parameter") != std::string::npos) {
+        LOG_DBG("Using specialized template: Harmony XML\n");
+        return common_chat_params_init_harmony_xml;
+    }
+
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
     if (src.find("<|channel|>") != std::string::npos) {
         LOG_DBG("Using specialized template: GPT-OSS\n");
         return common_chat_params_init_gpt_oss;
+    }
+
+    // Muse Spark shares the Muse recipient protocol and adds a commentary recipient.
+    if (src.find("to=commentary") != std::string::npos && src.find("<|eom|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Muse Spark\n");
+        return common_chat_params_init_muse_spark;
     }
 
     // Muse Glimmer format using " to=<recipient>" recipients and <|eom|>/<|eot|> message terminators.
@@ -1471,7 +1497,7 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
     }
 
     common_chat_params params;
-    params.prompt = std::string(buf.data(), res);
+    params.prompt = common_chat_prompt(std::string(buf.data(), res));
     if (!inputs.json_schema.empty()) {
         params.grammar = json_schema_to_grammar(json::parse(inputs.json_schema));
     } else {
@@ -1485,6 +1511,46 @@ common_chat_params common_chat_templates_apply(const struct common_chat_template
     GGML_ASSERT(tmpls != nullptr);
     return inputs.use_jinja ? common_chat_templates_apply_jinja(tmpls, inputs) :
                               common_chat_templates_apply_legacy(tmpls, inputs);
+}
+
+std::string common_chat_prompt::str() const {
+    if (parts.size() == 1) {
+        return parts[0].text;
+    }
+    size_t len = 0;
+    for (const auto & part : parts) {
+        len += part.text.size();
+    }
+    std::string out;
+    out.reserve(len);
+    for (const auto & part : parts) {
+        out += part.text;
+    }
+    return out;
+}
+
+void common_chat_prompt::append(const std::string & text, bool is_input) {
+    if (text.empty()) {
+        return;
+    }
+    if (!parts.empty() && parts.back().is_input == is_input) {
+        parts.back().text += text;
+    } else {
+        parts.push_back({text, is_input});
+    }
+}
+
+void common_chat_prompt::replace_last(const std::string & from, const std::string & to) {
+    for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        if (it->is_input) {
+            continue;
+        }
+        size_t pos = it->text.rfind(from);
+        if (pos != std::string::npos) {
+            it->text.replace(pos, from.size(), to);
+            return;
+        }
+    }
 }
 
 void common_chat_input::append(const std::string & piece, llama_token token) {
@@ -1633,9 +1699,9 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
                                          const common_chat_session_params &   params) {
     auto applied = common_chat_templates_apply(tmpls, inputs);
 
-    templated   = true;
-    prompt_text = std::move(applied.prompt);
-    result.role = "assistant";
+    templated    = true;
+    prompt_parts = std::move(applied.prompt);
+    result.role  = "assistant";
 
     grammar_text           = std::move(applied.grammar);
     grammar_lazy           = applied.grammar_lazy;

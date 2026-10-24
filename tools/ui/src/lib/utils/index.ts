@@ -119,7 +119,14 @@ export {
 export { isValidModelName, normalizeModelName, orgOf, repoOf } from './model-names';
 
 // Sidecar token utilities
-export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken, sidecarFromTag } from './sidecars';
+export {
+	directoryOf,
+	isAuxSidecar,
+	isDraftSidecar,
+	isServerSidecarFile,
+	sidecarFromFileToken,
+	sidecarFromTag
+} from './sidecars';
 
 // Portal utilities
 export { portalToBody } from './portal-to-body';
@@ -275,6 +282,7 @@ export {
 	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
+	isSectionExpandedByDefault,
 	classifyToolResult,
 	classifyContinueIntent
 } from './agentic';

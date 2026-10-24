@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import { JOKES_TABLE_MD, WIDE_CELL_TABLE_MD } from './fixtures/mobile-tables.js';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
 	import type { ChatMessageActions } from '$lib/types';
@@ -42,6 +43,18 @@
 			'The answer to the ultimate question of life, the universe, and everything is **42**.\n\nThis comes from Douglas Adams\' "The Hitchhiker\'s Guide to the Galaxy," where a supercomputer named Deep Thought calculated this answer over 7.5 million years. However, the question itself was never properly formulated, which is why the answer seems meaningless without context.',
 		convId: 'conv-1',
 		id: '2',
+		parent: '1',
+		role: 'assistant',
+		thinking: '',
+		timestamp: Date.now() - 1000 * 60 * 3,
+		type: 'message'
+	};
+
+	const assistantWithTable: DatabaseMessage = {
+		children: [],
+		content: `${JOKES_TABLE_MD}\n\n${WIDE_CELL_TABLE_MD}`,
+		convId: 'conv-1',
+		id: '7',
 		parent: '1',
 		role: 'assistant',
 		thinking: '',
@@ -117,6 +130,19 @@
 		message: assistantMessage
 	}}
 	name="Assistant"
+	play={async () => {
+		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+
+		settingsStore.updateConfig('showRawOutputSwitch', false);
+	}}
+/>
+
+<Story
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		message: assistantWithTable
+	}}
+	name="AssistantWithTable"
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 

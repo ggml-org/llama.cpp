@@ -273,9 +273,31 @@ struct common_chat_templates_inputs {
     bool                                  force_pure_content = false;
 };
 
+struct common_chat_prompt_part {
+    std::string text;
+    bool        is_input = false; // from user input, special tokens inside must not be parsed
+};
+
+// rendered chat template, split into template parts and user input parts
+struct common_chat_prompt {
+    std::vector<common_chat_prompt_part> parts;
+
+    common_chat_prompt() = default;
+
+    // single part of template text
+    explicit common_chat_prompt(std::string text) { parts.push_back({std::move(text), false}); }
+
+    std::string str() const;
+
+    void append(const std::string & text, bool is_input = false);
+
+    // replace the last occurrence of `from`, user input parts are skipped
+    void replace_last(const std::string & from, const std::string & to);
+};
+
 struct common_chat_params {
     common_chat_format                  format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-    std::string                         prompt;
+    common_chat_prompt                  prompt;
     std::string                         grammar;
     bool                                grammar_lazy         = false;
     std::string                         generation_prompt;
@@ -380,7 +402,7 @@ class common_chat_session {
                         const common_chat_templates_inputs & inputs,
                         const common_chat_session_params &   params = {});
 
-    const std::string &      prompt()   const { return prompt_text; }
+    const common_chat_prompt & prompt() const { return prompt_parts; }
     common_chat_format       format()   const { return parser_params.format; }
     const common_chat_msg &  msg()      const { return result; }
     const common_peg_arena & parser()   const { return parser_params.parser; }
@@ -402,7 +424,7 @@ class common_chat_session {
     const common_chat_msg & finish(const common_chat_input & chunk = {});
 
   private:
-    std::string                         prompt_text;
+    common_chat_prompt                  prompt_parts;
     std::string                         grammar_text;
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers;
@@ -446,7 +468,7 @@ common_json common_chat_tool_parameters(const common_json & function);
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
 
-std::string common_chat_template_direct_apply(
+common_chat_prompt common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs);
 

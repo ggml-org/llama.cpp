@@ -39,11 +39,14 @@ struct server_decision_context {
     bool can_share_prompt() const {
         switch (type) {
             case COMMON_DECISION_TYPE_OPENJEV:
+            case COMMON_DECISION_TYPE_GRANITE_SWITCH:
             case COMMON_DECISION_TYPE_LEV:
             case COMMON_DECISION_TYPE_KEV:
             case COMMON_DECISION_TYPE_NIMBLE:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
+            case COMMON_DECISION_TYPE_VLLM_DECISION2:
             case COMMON_DECISION_TYPE_LFM2_D1:
+            case COMMON_DECISION_TYPE_H2O_LIGHTNING:
                 return true;
             default:
                 return false;
@@ -61,8 +64,10 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_OPENJEV:
             case COMMON_DECISION_TYPE_CLEF:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
+            case COMMON_DECISION_TYPE_VLLM_D3:
             case COMMON_DECISION_TYPE_LFM2_D1:
             case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
+            case COMMON_DECISION_TYPE_H2O_LIGHTNING:
                 return true;
             default:
                 return false;
@@ -71,6 +76,9 @@ struct server_decision_context {
 
     // throw std::invalid_argument on bad input
     std::vector<server_decision_question> parse_questions(const json & body) const;
+
+    // the state as the model reads it, done once per request; returns the state for most models
+    json prepare_state(const json & state) const;
 
     // returns the state without its images, they are appended to files in order
     // images come from "files" (alias "images") and from the image_url and input_audio parts of a state made of chat messages
@@ -110,11 +118,15 @@ private:
     std::shared_ptr<const common_chat_template> tmpl; // the "systemone" template
 
     std::map<std::string, float> temperatures; // "<type>" or "<type>.<n_options bucket>"
+    std::map<size_t, std::vector<float>> score_bias; // added to the scores of a score question, by number of levels
     size_t n_options_max   = 0;
     bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
+    bool   noul_criteria_order = false; // noul options are in the order of the criteria keys, if given
     bool   choice_sorted   = false; // choice options are in the order of their keys
+    bool   strict_payload  = false; // state, instructions and descriptions must be text, an object or an array
+    bool   canonical_legend = false; // non-string score descriptions are returned as canonical JSON text
 
-    // OPENJEV, LEV, NIMBLE, PPLX_DECIDER
+    // OPENJEV, LEV, NIMBLE, PPLX_DECIDER, VLLM_D3, H2O_LIGHTNING
     std::vector<llama_token> labels;
     std::vector<std::string> label_texts; // only if the label of an option is given to the template
 
@@ -124,6 +136,10 @@ private:
     std::string text_marker;
     size_t      max_head_tokens   = 0; // question + options
     size_t      max_option_tokens = 48;
+
+    // H2O_LIGHTNING
+    std::vector<std::string> quoted_spellings; // texts of the special tokens, quoted in the input, longest first
+    std::string              quoted_first;     // the first bytes of these texts
 
     std::string render(
             const json & state,
@@ -136,6 +152,10 @@ private:
     size_t n_outputs(const server_decision_question & question) const;
     // LFM2_D1: label text and tokens of each option
     void d1_labels(const server_decision_question & question, std::vector<std::string> & texts, std::vector<llama_tokens> & groups) const;
+    // H2O_LIGHTNING: the input of the template, its texts are rendered as the reference shim does
+    json render_h2o(const json & state, const server_decision_question & question) const;
+    std::string h2o_cut_state(const std::string & text) const;
+    std::string h2o_quote(const std::string & text) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
     void fill_task_d1omni(
             const json & state,
@@ -148,9 +168,13 @@ private:
             server_task & task) const;
 
     float get_temperature(const server_decision_question & question) const;
+    double get_decision_confidence(server_decision_question_type type, const std::vector<double> & probs) const;
 };
 
 // group the tasks so that the common prefix of their prompts is evaluated only once
 // each group is one parent and its children, it takes at most n_slots slots
 // note: the order of the tasks is preserved
 std::vector<server_task> server_decision_group_tasks(std::vector<server_task> && tasks, size_t n_slots);
+
+// write "<|name|>" with U+00A6 in place of "|", so text from the request is not parsed as special tokens
+std::string server_decision_escape_special_tokens(const std::string & text);

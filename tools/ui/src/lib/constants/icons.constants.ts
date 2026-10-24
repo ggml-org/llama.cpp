@@ -5,6 +5,7 @@
 
 import {
 	CircleAlert as LoadFailedIcon,
+	Compass as DiscoverIcon,
 	Eject as UnloadIcon,
 	Eye as VisionIcon,
 	File as FileIcon,
@@ -44,6 +45,9 @@ export const DEFAULT_FILE_ICON = FileIcon;
 
 /** The mark for a model, wherever one is listed. */
 export const MODEL_ICON = ModelIcon;
+
+/** The mark for the Discover Models surface and its entry points. */
+export const DISCOVER_ICON = DiscoverIcon;
 
 export const MODALITY_ICONS = {
 	[ModelModality.AUDIO]: AudioIcon,

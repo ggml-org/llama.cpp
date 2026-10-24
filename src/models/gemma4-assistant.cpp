@@ -201,6 +201,5 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     cb(h_next, "h_nextn", -1);
     res->t_h_nextn = h_next;
 
-    ggml_build_forward_expand(gf, logits);
     ggml_build_forward_expand(gf, h_next);
 }

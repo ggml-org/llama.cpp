@@ -157,8 +157,6 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_iswa::memory_breakdo
 }
 
 llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
-    GGML_UNUSED(embd_all);
-
     // first try simple split
     do {
         if (!unified) {
@@ -206,7 +204,7 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
 
         std::vector<llama_ubatch> ubatches;
         while (true) {
-            auto ubatch = balloc.split_equal(n_ubatch, !unified, 0);
+            auto ubatch = embd_all ? balloc.split_seq(n_ubatch) : balloc.split_equal(n_ubatch, !unified, 0);
 
             if (ubatch.n_tokens == 0) {
                 break;
@@ -257,19 +255,13 @@ bool llama_kv_cache_iswa::get_can_shift() const {
 }
 
 void llama_kv_cache_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
-    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        kv_base->state_write(io, seq_id, flags);
-    }
-
-    kv_swa->state_write(io, seq_id, flags);
+    kv_base->state_write(io, seq_id, flags);
+    kv_swa ->state_write(io, seq_id, flags);
 }
 
 void llama_kv_cache_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        kv_base->state_read(io, seq_id, flags);
-    }
-
-    kv_swa->state_read(io, seq_id, flags);
+    kv_base->state_read(io, seq_id, flags);
+    kv_swa ->state_read(io, seq_id, flags);
 }
 
 llama_kv_cache * llama_kv_cache_iswa::get_base() const {

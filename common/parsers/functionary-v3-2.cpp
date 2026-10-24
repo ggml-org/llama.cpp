@@ -18,7 +18,7 @@ common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_te
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
         data.generation_prompt = "<|start_header_id|>assistant<|end_header_id|>\n\n>>>all\n" + msg.render_content();
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {

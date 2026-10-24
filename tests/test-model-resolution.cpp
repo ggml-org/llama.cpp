@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <thread>
 #include <string>
@@ -339,6 +340,124 @@ static void test_plan_resolution() {
     g_repos.clear();
 }
 
+// put a file in the cache the way a finished download leaves it, refs/main included
+static void cache_put(const std::string & repo_id, const std::string & path) {
+    namespace fs = std::filesystem;
+
+    const fs::path local = cached(repo_id, path);
+    fs::create_directories(local.parent_path());
+    { std::ofstream(local) << "gguf"; }
+
+    const fs::path ref = local.parent_path().parent_path().parent_path() / "refs" / "main";
+    fs::create_directories(ref.parent_path());
+    if (!fs::exists(ref)) {
+        std::ofstream(ref) << COMMIT << "\n";
+    }
+}
+
+//
+// partials of a download: the files of its plan not in the cache yet, next to
+// the blobs, named after the oids the listing serves
+//
+
+static void test_plan_partials() {
+    namespace fs = std::filesystem;
+
+    printf("test-model-resolution: plan partials\n");
+
+    g_context = "plan partials";
+    g_repos.clear();
+    g_repos["test/partial"] = { "model-Q4_0.gguf", "mmproj-model-F16.gguf", "mtp-model-Q4_0.gguf" };
+
+    // the mmproj is complete, the model and its mtp are still to download
+    cache_put("test/partial", "mmproj-model-F16.gguf");
+
+    common_download_opts opts;
+    opts.download_mmproj = true;
+    opts.download_mtp    = true;
+
+    const auto parts = common_download_plan_partials(common_download_get_hf_plan(model_ref("test/partial:Q4_0"), opts));
+
+    const fs::path blobs = cache_dir / "models--test--partial" / "blobs";
+    REQUIRE(parts.size() == 2);
+    REQUIRE(parts[0].kind.empty());
+    REQUIRE(fs::path(parts[0].path).lexically_normal() == (blobs / "0000000000000000000000000000000000000001.downloadInProgress").lexically_normal());
+    REQUIRE_EQ(parts[1].kind, "mtp");
+    REQUIRE(fs::path(parts[1].path).lexically_normal() == (blobs / "0000000000000000000000000000000000000003.downloadInProgress").lexically_normal());
+
+    fs::remove_all(cache_dir / "models--test--partial");
+    g_repos.clear();
+}
+
+//
+// removal of a sidecar alone: its snapshot entry goes, the model keeps its files
+//
+
+static void test_sidecar_removal() {
+    namespace fs = std::filesystem;
+
+    printf("test-model-resolution: sidecar removal\n");
+
+    g_context = "sidecar removal";
+    g_repos.clear();
+
+    cache_put("test/sidecar", "model-Q4_0.gguf");
+    cache_put("test/sidecar", "dflash-model-Q4_0.gguf");
+    cache_put("test/sidecar", "mtp-model-Q4_0.gguf");
+
+    common_download_opts opts;
+    opts.download_dflash = true;
+
+    // the selected sidecar goes, the other one and the model stay
+    REQUIRE(common_download_remove_sidecars("test/sidecar:Q4_0", opts));
+    REQUIRE(!fs::exists(cached("test/sidecar", "dflash-model-Q4_0.gguf")));
+    REQUIRE(fs::exists(cached("test/sidecar", "mtp-model-Q4_0.gguf")));
+    REQUIRE(fs::exists(cached("test/sidecar", "model-Q4_0.gguf")));
+    REQUIRE(!common_download_remove_sidecars("test/sidecar:Q4_0", opts));
+
+    fs::remove_all(cache_dir / "models--test--sidecar");
+}
+
+//
+// removal of a tag keeps the files another cached tag still loads: a sidecar
+// named after the removed tag that another quant resolves stays on disk
+//
+
+static void test_shared_removal() {
+    namespace fs = std::filesystem;
+
+    printf("test-model-resolution: shared removal\n");
+
+    g_context = "shared removal";
+    g_repos.clear();
+
+    for (const char * f : { "model-Q8_0.gguf", "model-BF16.gguf", "mmproj-model-BF16.gguf", "mtp-model-BF16.gguf" }) {
+        cache_put("test/shared", f);
+    }
+
+    // the BF16 model goes, the mmproj and the mtp Q8_0 resolves stay
+    REQUIRE(common_download_remove("test/shared:BF16"));
+    REQUIRE(!fs::exists(cached("test/shared", "model-BF16.gguf")));
+    REQUIRE(fs::exists(cached("test/shared", "mmproj-model-BF16.gguf")));
+    REQUIRE(fs::exists(cached("test/shared", "mtp-model-BF16.gguf")));
+    REQUIRE(fs::exists(cached("test/shared", "model-Q8_0.gguf")));
+
+    fs::remove_all(cache_dir / "models--test--shared");
+
+    // with no other tag, the files of the removed tag all go, sidecars included
+    for (const char * f : { "model-BF16.gguf", "mmproj-model-BF16.gguf", "mtp-model-BF16.gguf" }) {
+        cache_put("test/alone", f);
+    }
+
+    REQUIRE(common_download_remove("test/alone:BF16"));
+    REQUIRE(!fs::exists(cached("test/alone", "model-BF16.gguf")));
+    REQUIRE(!fs::exists(cached("test/alone", "mmproj-model-BF16.gguf")));
+    REQUIRE(!fs::exists(cached("test/alone", "mtp-model-BF16.gguf")));
+    REQUIRE(!common_download_remove("test/alone:BF16"));
+
+    fs::remove_all(cache_dir / "models--test--alone");
+}
+
 //
 // end-to-end assembly: real CLI parsing, real handler init resolving over the
 // loopback, downloads skipped by flipping offline before apply
@@ -509,6 +628,9 @@ int main(void) {
     common_set_env("MODEL_ENDPOINT", "http://127.0.0.1:" + std::to_string(port) + "/");
 
     test_plan_resolution();
+    test_plan_partials();
+    test_sidecar_removal();
+    test_shared_removal();
     test_task_assembly();
 
     server.stop();

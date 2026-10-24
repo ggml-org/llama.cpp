@@ -26,6 +26,7 @@ export const SETTINGS_KEYS = {
 	DYNATEMP_EXPONENT: 'dynatemp_exponent',
 	DYNATEMP_RANGE: 'dynatemp_range',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
+	ENABLE_DISCOVER_MODELS: 'enableDiscoverModels',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
@@ -64,6 +65,7 @@ export const SETTINGS_KEYS = {
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
+	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	SYSTEM_MESSAGE: 'systemMessage',
 	// Sampling
