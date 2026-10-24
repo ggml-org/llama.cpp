@@ -377,14 +377,28 @@ static constexpr __device__ int ggml_cuda_mmq_get_rows_per_warp(ggml_type type, 
 }
 
 static constexpr __host__ __device__ bool ggml_cuda_mmq_min_mma_layout(const ggml_cuda_mmq_config & config) {
-    return config.type == GGML_TYPE_Q5_K && config.J == 128 && config.I == 128 && config.nthreads == 256 &&
-        config.K_vram == QK_K && config.sram_layout == GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_1;
+    const bool affine = config.type == GGML_TYPE_Q4_K || config.type == GGML_TYPE_Q5_K ||
+                        config.type == GGML_TYPE_Q4_1 || config.type == GGML_TYPE_Q5_1 || config.type == GGML_TYPE_IQ1_S;
+    const bool layout = config.sram_layout == GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_1 ||
+                        (config.type == GGML_TYPE_IQ1_S && config.sram_layout == GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_0);
+    return affine && layout && config.J == 128 && config.I == 128 && config.nthreads == 256 && config.K_vram == QK_K;
 }
 
 template <ggml_type type, int J, bool fallback>
 static constexpr __device__ bool ggml_cuda_mmq_use_min_mma() {
 #ifdef TURING_MMA_AVAILABLE
     return ggml_cuda_mmq_min_mma_layout(ggml_cuda_mmq_get_config(type, J, fallback, GGML_PREC_Q8));
+#else
+    return false;
+#endif // TURING_MMA_AVAILABLE
+}
+
+template <ggml_type type, int J, bool fallback>
+static constexpr __device__ bool ggml_cuda_mmq_use_q2_min_mma() {
+#ifdef TURING_MMA_AVAILABLE
+    constexpr auto config = ggml_cuda_mmq_get_config(type, J, fallback, GGML_PREC_Q8);
+    return type == GGML_TYPE_Q2_K && J == 128 && config.I == 128 && config.nthreads == 256 &&
+        config.K_vram == QK_K && config.sram_layout == GGML_CUDA_MMQ_SRAM_LAYOUT_Q2_K;
 #else
     return false;
 #endif // TURING_MMA_AVAILABLE
@@ -938,6 +952,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         __syncthreads();
 
         vec_dot(tile_x, tile_y, sum, 0);
+        if constexpr (ggml_cuda_mmq_use_q2_min_mma<type, J, fallback>()) {
+            ggml_cuda_mmq_vec_dot_q2_min_mma<type, J, fallback>(tile_x, tile_y, sum, 0);
+        }
 
         __syncthreads();
 
@@ -958,6 +975,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         __syncthreads();
 
         vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+        if constexpr (ggml_cuda_mmq_use_q2_min_mma<type, J, fallback>()) {
+            ggml_cuda_mmq_vec_dot_q2_min_mma<type, J, fallback>(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+        }
 
         if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
             constexpr int stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback, prec_src1);
