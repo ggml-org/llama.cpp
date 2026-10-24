@@ -82,5 +82,34 @@ int main() {
         success = false;
     }
 
+    // Laguna pre-tokenizer: \r\n must stay together, as in tokenizer.json (expected pieces from HF tokenizers)
+    const std::vector<std::string> laguna_regex_exprs = {
+        "(?:\\r?\\n)+(?:[^\\r\\n]|\\r(?!\\n))*|(?:[^\\r\\n]|\\r(?!\\n))+",
+        "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+    };
+    const struct {
+        std::string text;
+        std::vector<std::string> expected;
+    } laguna_tests[] = {
+        { "x\r\ny",                     { "x", "\r\n", "y" } },
+        { "a\r\n\r\nb",                 { "a", "\r\n\r\n", "b" } },
+        { "foo.\r\nbar",                { "foo", ".", "\r\n", "bar" } },
+        { "\n\rX",                      { "\n\r", "X" } },
+        { "a\rb",                       { "a", "\r", "b" } },
+        { "x \r\n  y",                  { "x", " ", "\r\n", " ", " y" } },
+        { "if x:\r\n    return 1\r\n",  { "if", " x", ":", "\r\n", "   ", " return", " ", "1", "\r\n" } },
+    };
+    for (const auto & test : laguna_tests) {
+        const auto pieces = unicode_regex_split(test.text, laguna_regex_exprs, false);
+        if (pieces != test.expected) {
+            fprintf(stderr, "unexpected Laguna split:");
+            for (const auto & piece : pieces) {
+                fprintf(stderr, " [%s]", piece.c_str());
+            }
+            fprintf(stderr, "\n");
+            success = false;
+        }
+    }
+
     return success ? 0 : 1;
 }
