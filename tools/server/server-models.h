@@ -46,11 +46,6 @@ enum server_model_source {
     SERVER_MODEL_SOURCE_CACHE,
 };
 
-enum server_child_mode {
-    SERVER_CHILD_MODE_NORMAL,   // load the model and run normally
-    SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
-};
-
 static std::string server_model_status_to_string(server_model_status status) {
     switch (status) {
         case SERVER_MODEL_STATUS_DOWNLOADING: return "downloading";
@@ -171,7 +166,7 @@ private:
         server_model_meta meta;
         int req_count = 0; // number of active proxy requests
 
-        // ask the child to exit (it handles the command on its stdin, see server_child::setup)
+        // ask the child to exit (it handles the command on its stdin, see server_role::setup)
         void request_exit() const;
     };
 
@@ -276,7 +271,7 @@ private:
     void request_stop(const std::string & name, bool send_exit = true);
 
     // called by the monitor once a child exited and was reaped
-    void on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_child_mode mode, int exit_code);
+    void on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_role_type role, int exit_code);
 
     // notify SSE clients
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
@@ -320,7 +315,7 @@ public:
     std::vector<server_model_meta> get_all_meta();
 
     struct load_options {
-        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        server_role_type role = SERVER_ROLE_INSTANCE;
         // used for spawning a downloading child process
         std::optional<server_model_meta> custom_meta = std::nullopt;
         // download mode: the sidecar kinds pulled with the model, as -hf would, and
@@ -369,7 +364,7 @@ public:
     // forward a websocket connection to the child, returns when either side closes
     void proxy_ws(const server_http_req & req, server_http_context::ws_conn & conn, const std::string & name);
 
-    // handle message sent from server_child::notify_to_router()
+    // handle message sent from server_role::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
     // called from the monitor thread
     // payload per state:
@@ -381,33 +376,6 @@ public:
 private:
     // one thread watching every child; keep last, the destructor joins the thread
     std::unique_ptr<server_monitor> monitor;
-};
-
-struct server_child {
-    // serializes the notify_to_router writes
-    std::mutex mtx_stdout;
-    std::atomic<bool> is_finished_downloading = false; // set by run_download
-
-    // in a child, keeps stdout for the commands to the router, so it is created before anything is written;
-    // everything else written to stdout goes to stderr with the logs
-    server_child();
-    ~server_child();
-
-    // return true if the current process is a child server instance
-    bool is_child();
-    server_child_mode get_mode();
-    int run_download(common_params & params);
-
-    // register the shutdown_handler to be called by the router
-    // return the monitoring thread (to be joined by the caller)
-    std::thread setup(const std::function<void(int)> & shutdown_handler);
-
-    // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
-    // message will be handled by server_models::handle_child_state() on the router side
-    void notify_to_router(const std::string & state_name, const json & payload);
-
-private:
-    FILE * cmd_out = nullptr; // the stdout the router reads the commands from
 };
 
 struct server_models_routes {
