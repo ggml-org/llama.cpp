@@ -15477,12 +15477,20 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         return true;
     };
     // reject any tensors larger than the max buffer size
+    // pre-allocated non-compute tensors (MoE expert cache banks, GGML_OP_NONE,
+    // and views over them, GGML_OP_VIEW) are never executed by the backend;
+    // their size is only bounded by the buffer type allocation limit. Applying
+    // the maxStorageBufferRange descriptor limit here makes the scheduler abort
+    // with "cannot run the operation (NONE/VIEW)" on devices without
+    // shader_64b_indexing when the bank exceeds the limit, even though the
+    // consuming ops only access small per-step views.
+    const bool non_compute = op->op == GGML_OP_NONE || op->op == GGML_OP_VIEW;
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (op->src[i] && !tensor_size_supported(ggml_nbytes(op->src[i]))) {
+        if (op->src[i] && !non_compute && !tensor_size_supported(ggml_nbytes(op->src[i]))) {
             return false;
         }
     }
-    if (!tensor_size_supported(ggml_nbytes(op))) {
+    if (!non_compute && !tensor_size_supported(ggml_nbytes(op))) {
         return false;
     }
 
