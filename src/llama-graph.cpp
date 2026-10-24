@@ -1164,7 +1164,10 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
     mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
     mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
 
-    mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    // leave the mask unallocated if all attention layers have their own (e.g. qwen4exp QSA)
+    if (inp_attn->self_kq_mask->buffer) {
+        mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    }
 
     if (inp_attn->self_k_rot) {
         mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
@@ -2523,6 +2526,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
         // TODO: this graph-level rescaling should only be applied when the corresponding backend does not support
         //       ggml_prec_set_src(experts, GGML_PREC_BF16, 1);
+        //       the amax op cannot be split across devices, so these architectures are denied -sm tensor [TAG_MOE_AMAX_SCALE]
         //       ref: https://github.com/ggml-org/llama.cpp/pull/30656#issuecomment-6269597922
         llm_graph_amax_src1 amax_src1 = { nullptr, nullptr };
 
@@ -3543,6 +3547,7 @@ ggml_tensor * llm_graph_context::build_fused_top_k_mask(
         ggml_tensor * score,
         ggml_tensor * blocks,
         ggml_tensor * extra,
+        ggml_tensor * mask,
                 int   il) const {
     const int64_t m1 = kq_mask->ne[1];
     const int64_t m2 = kq_mask->ne[2];
@@ -3552,7 +3557,7 @@ ggml_tensor * llm_graph_context::build_fused_top_k_mask(
         return t ? ggml_reshape_4d(ctx0, t, t->ne[0], m1, m2, m3) : nullptr;
     };
 
-    ggml_tensor * cur = ggml_top_k_mask(ctx0, kq_mask, rows(top_k), rows(score), blocks, rows(extra));
+    ggml_tensor * cur = ggml_top_k_mask(ctx0, mask ? mask : kq_mask, rows(top_k), rows(score), blocks, rows(extra));
     res->add_fused_node({LLM_FUSED_OP_TOP_K_MASK, cur, il});
 
     return cur;
@@ -3592,7 +3597,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     ggml_tensor * kq_mask_top_k = nullptr;
     if (cparams.fused_top_k_mask) {
-        kq_mask_top_k = build_fused_top_k_mask(kq_mask, top_k, nullptr, nullptr, nullptr, il);
+        kq_mask_top_k = build_fused_top_k_mask(kq_mask, top_k, nullptr, nullptr, nullptr, nullptr, il);
     } else {
         // prepare new kq mask - starts filled with -INFINITY
         ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);

@@ -945,6 +945,8 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_LOG:
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
+        case HTP_OP_UNARY_CEIL:
+        case HTP_OP_UNARY_SGN:
         case HTP_OP_L2_NORM:
         case HTP_OP_HADAMARD:
             return op_unary(octx);
@@ -955,7 +957,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GLU_GEGLU:
         case HTP_OP_GLU_GEGLU_QUICK:
         case HTP_OP_GLU_GEGLU_ERF:
-            return op_activations(octx);
+        case HTP_OP_GLU_REGLU:
+        case HTP_OP_GLU_SIGMOID:
+            return op_glu(octx);
 
         case HTP_OP_SOFTMAX:
             return op_softmax(octx);
@@ -1244,8 +1248,6 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
 
     octx->src0_spad.src = NULL;
     octx->src1_spad.src = NULL;
-    octx->src2_spad.src = NULL;
-    octx->src3_spad.src = NULL;
     octx->dst_spad.src  = NULL;
 
     return octx->status;
@@ -1306,10 +1308,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     prep_tensors(ctx, bufs, tens, n_tens);
 
     struct htp_ops_context *octx = &ctx->octx;
-    memset(octx, 0, sizeof(*octx));
-    octx->n_threads     = ctx->n_threads;
-    octx->n_threads_div = ctx->n_threads_div;
-    octx->ctx           = ctx;
+    htp_ops_context_reset(octx, ctx);
 
     mdev_group_init(ctx, req);
 

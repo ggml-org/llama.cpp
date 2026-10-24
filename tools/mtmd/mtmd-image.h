@@ -31,6 +31,7 @@ struct mtmd_image_preprocessor {
     const clip_hparams & hparams;
 
     mtmd_image_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
+    mtmd_image_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
 
     virtual ~mtmd_image_preprocessor() = default;
     virtual mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const = 0;
@@ -59,6 +60,7 @@ struct mtmd_image_preprocessor {
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_llava_uhd(const clip_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 
     struct slice_coordinates {
@@ -187,6 +189,17 @@ protected:
         }
         const int lo = static_cast<int>(fl);
         return (lo % 2 == 0) ? lo : lo + 1;
+    }
+};
+
+// MiniCPM-OCR 1.0: find_best_resize aligns to patch_size * n_merge (28 in 4x).
+struct mtmd_image_preprocessor_minicpm_ocr_1_0 : mtmd_image_preprocessor_minicpmv {
+    using mtmd_image_preprocessor_minicpmv::mtmd_image_preprocessor_minicpmv;
+
+protected:
+    int get_slice_align() const override {
+        const int merge = hparams.n_merge > 0 ? hparams.n_merge : 2;
+        return hparams.patch_size * merge;
     }
 };
 

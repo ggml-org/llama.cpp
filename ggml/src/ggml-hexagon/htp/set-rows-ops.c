@@ -79,8 +79,10 @@ static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsig
     const uint32_t ir1 = MIN(ir0 + dr, srctx->task_start + srctx->tasks);                                        \
     dma_queue * dma_q = octx->ctx->dma[ith];                                                                     \
     const struct htp_set_rows_vtcm_layout * vtcm_layout = &srctx->vtcm_layout;                                   \
-    uint8_t * vtcm_src0 = srctx->vtcm_base + vtcm_layout->off_src0 + ith * vtcm_layout->src0_bytes_per_thread;   \
-    uint8_t * vtcm_dst  = srctx->vtcm_base + vtcm_layout->off_dst  + ith * vtcm_layout->dst_bytes_per_thread;    \
+    uint8_t * vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_src0) +                    \
+                          ith * vtcm_layout->src0_bytes_per_thread;                                              \
+    uint8_t * vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_dst) +                     \
+                          ith * vtcm_layout->dst_bytes_per_thread;                                               \
     const uint32_t src0_row_size = ne00 * sizeof(float);                                                         \
     const uint32_t dst_row_size  = htp_tensor_get_row_size(octx->dst->type, ne00);                               \
     const uint32_t nrows_per_thread = ir1 - ir0;                                                                 \
@@ -187,14 +189,6 @@ SET_ROWS_THREAD_DMA_FN(q8_0, int64_t, { hvx_quantize_row_q8_0_f32(dst_spad, (con
 int op_set_rows(struct htp_ops_context * octx) {
     const struct htp_set_rows_kernel_params * kparams = (const struct htp_set_rows_kernel_params *)octx->kernel_params;
     set_rows_preamble;
-
-    if (octx->src[0]->type != HTP_TYPE_F32) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    if (octx->dst->type != HTP_TYPE_F32 && octx->dst->type != HTP_TYPE_F16 && octx->dst->type != HTP_TYPE_Q8_0) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
 
     if (htp_tensor_is_extended(octx->src[1])) {
         return HTP_STATUS_NO_SUPPORT;

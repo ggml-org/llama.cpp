@@ -29,11 +29,14 @@ enum patch_merge_type {
     PATCH_MERGE_SPATIAL_UNPAD,
 };
 
-// all algos are Pillow-compatible (matching PIL.Image.resize output)
+// the low bits select the algo, Pillow-compatible (matching PIL.Image.resize output)
+// RESIZE_ALGO_FLAG_TORCH matches torchvision's antialiased resize of uint8 images on the CPU (int16 weights), bilinear and bicubic only
 enum resize_algo {
     RESIZE_ALGO_BILINEAR,
     RESIZE_ALGO_BICUBIC,
     RESIZE_ALGO_LANCZOS,
+
+    RESIZE_ALGO_FLAG_TORCH = 1 << 8,
 };
 
 // Padding style for img_tool::resize
@@ -206,6 +209,11 @@ struct clip_hparams {
     // custom value provided by user, can be undefined if not set
     int32_t custom_image_min_tokens = -1;
     int32_t custom_image_max_tokens = -1;
+
+    void set_image_resize_algo(resize_algo algo, bool torch = false) {
+        GGML_ASSERT(!(torch && algo == RESIZE_ALGO_LANCZOS) && "torchvision has no lanczos");
+        image_resize_algo = static_cast<resize_algo>(torch ? algo | RESIZE_ALGO_FLAG_TORCH : algo);
+    }
 
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
         const int patch_area = patch_size * patch_size * n_merge * n_merge;
@@ -579,6 +587,18 @@ struct clip_code2wav {
     ggml_tensor * dac_post_conv_b      = nullptr;
 };
 
+struct clip_vocos {
+    ggml_tensor * input_w        = nullptr;
+    ggml_tensor * input_b        = nullptr;
+    ggml_tensor * norm_w         = nullptr;
+    ggml_tensor * norm_b         = nullptr;
+    ggml_tensor * output_norm_w  = nullptr;
+    ggml_tensor * output_norm_b  = nullptr;
+    ggml_tensor * output_w       = nullptr;
+    ggml_tensor * output_b       = nullptr;
+    std::vector<clip_code2wav::upsample_block> blocks;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -844,6 +864,9 @@ struct clip_model {
     ggml_tensor * gen_quant_out_w = nullptr; // latent -> decoder dim
     ggml_tensor * gen_upsample_w  = nullptr; // depthwise convtr, frame rate -> encoder frame rate
     std::vector<clip_layer> gen_tfm_layers; // mimi decoder_transformer
+
+    // soprano: Vocos decoder, hidden states -> STFT coefficients
+    clip_vocos vocos;
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;

@@ -28,7 +28,7 @@ add_library(${HTP_LIB} SHARED
     unary-ops.c
     sum-rows-ops.c
     softmax-ops.c
-    act-ops.c
+    glu-ops.c
     rope-ops.c
     set-rows-ops.c
     get-rows-ops.c

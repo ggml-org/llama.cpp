@@ -371,6 +371,7 @@ class Keys:
         DNA_AUTO_TAGS        = "tokenizer.ggml.dna_auto_tags"
         ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
         REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
+        CLEAN_SPACES         = "tokenizer.ggml.clean_spaces"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"
         SUPPRESS_TOKENS      = "tokenizer.ggml.suppress_tokens"
         HF_JSON              = "tokenizer.huggingface.json"
@@ -382,6 +383,8 @@ class Keys:
         NORMALIZER_NFC           = "tokenizer.ggml.normalizer.nfc"
         NORMALIZER_LOWERCASE     = "tokenizer.ggml.normalizer.lowercase"
         NORMALIZER_STRIP_ACCENTS = "tokenizer.ggml.normalizer.strip_accents"
+        # Metaspace constants
+        METASPACE_PREPEND_SCHEME = "tokenizer.ggml.metaspace.prepend_scheme"
         # FIM/Infill special tokens constants
         FIM_PRE_ID           = "tokenizer.ggml.fim_pre_token_id"
         FIM_SUF_ID           = "tokenizer.ggml.fim_suf_token_id"
@@ -1269,6 +1272,11 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_WAV_SEANET_RES_CONV1 = auto()
     A_GEN_WAV_SEANET_RES_CONV2 = auto()
     A_GEN_WAV_SEANET_SCALE_CONV = auto() # strided upsample convtr
+    # soprano: Vocos decoder, the ConvNeXt blocks reuse A_GEN_WAV_UP_*
+    A_GEN_WAV_INPUT                = auto()
+    A_GEN_WAV_NORM                 = auto()
+    A_GEN_WAV_OUTPUT_NORM          = auto()
+    A_GEN_WAV_OUTPUT               = auto()
     A_MMPROJ              = auto()
     A_MMPROJ_FC           = auto()
     A_MM_NORM_PRE         = auto()
@@ -2081,6 +2089,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV1: "a.gen.wav.seanet.blk.{bid}.res_conv1",
     MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV2: "a.gen.wav.seanet.blk.{bid}.res_conv2",
     MODEL_TENSOR.A_GEN_WAV_SEANET_SCALE_CONV: "a.gen.wav.seanet.blk.{bid}.scale_conv",
+    MODEL_TENSOR.A_GEN_WAV_INPUT:           "a.gen.wav.input",
+    MODEL_TENSOR.A_GEN_WAV_NORM:            "a.gen.wav.norm",
+    MODEL_TENSOR.A_GEN_WAV_OUTPUT_NORM:     "a.gen.wav.output_norm",
+    MODEL_TENSOR.A_GEN_WAV_OUTPUT:          "a.gen.wav.output",
     MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
     MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
     MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
@@ -2459,6 +2471,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV1,
         MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV2,
         MODEL_TENSOR.A_GEN_WAV_SEANET_SCALE_CONV,
+        MODEL_TENSOR.A_GEN_WAV_INPUT,
+        MODEL_TENSOR.A_GEN_WAV_NORM,
+        MODEL_TENSOR.A_GEN_WAV_OUTPUT_NORM,
+        MODEL_TENSOR.A_GEN_WAV_OUTPUT,
         MODEL_TENSOR.A_ENC_CONV_NORM_MEAN,
         MODEL_TENSOR.A_ENC_CONV_NORM_VAR,
         MODEL_TENSOR.A_ENC_MEL_FILTERS,
@@ -6444,11 +6460,13 @@ class VisionProjectorType:
     QWEN3TTS_GEN = "qwen3tts_gen" # audio generation: code_predictor
     POCKETTTS_SPKENC = "pockettts_spkenc" # audio: mimi encoder as voice-prompt encoder
     POCKETTTS_GEN = "pockettts_gen" # audio generation: flow-matching decoder + mimi decoder
+    SOPRANO = "soprano" # audio generation: Vocos decoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
     MINICPMV4_6    = "minicpmv4_6"
     MINICPMV4_7    = "minicpmv4_7"
+    MINICPM_OCR_1_0 = "minicpm_ocr_1_0"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
     MIMO_AUDIO     = "mimo_audio"

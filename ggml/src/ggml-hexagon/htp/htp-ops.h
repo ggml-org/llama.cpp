@@ -38,11 +38,6 @@ enum htp_data_type {
     HTP_TYPE_INVALID
 };
 
-// Constants for internal types
-#define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
-
-
-
 // Do not reorder first 4 (used as an index)
 enum htp_op_code {
     HTP_OP_MUL = 0,
@@ -115,6 +110,10 @@ enum htp_op_code {
     HTP_OP_UNARY_GELU_QUICK,
     HTP_OP_IM2COL_3D,
     HTP_OP_HADAMARD,
+    HTP_OP_GLU_REGLU,
+    HTP_OP_GLU_SIGMOID,
+    HTP_OP_UNARY_CEIL,
+    HTP_OP_UNARY_SGN,
 
     HTP_OP_INVALID
 };
@@ -125,8 +124,8 @@ enum htp_op_code {
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
 #define HTP_OP_MAX_KERN_PARAMS 32
 
-#define HTP_OP_MAX_BUFS    16
-#define HTP_OP_MAX_TENSORS 8192 // must stay under 64K (uint16)
+#define HTP_OP_MAX_BUFS    64
+#define HTP_OP_MAX_TENSORS 65534 // must stay under 64K (uint16)
 
 #define HTP_FENCE_TIMEOUT  (1000000000ULL)
 #define HTP_FENCE_SLOT_SIZE 128
@@ -136,9 +135,10 @@ enum htp_op_code {
 #define HTP_MMAP_MAX_VMEM  (2147483648u)
 
 enum htp_tensor_flags {
-    HTP_TENSOR_WEIGHT  = (1U << 0), // Tensor buffer model weight data (not compute)
-    HTP_TENSOR_TILED   = (1U << 1), // Tensor is in tiled format
-    HTP_TENSOR_FENCE   = (1U << 2)  // Tensor is synchronization fence (explicitly managed)
+    HTP_TENSOR_WEIGHT   = (1U << 0), // Tensor buffer model weight data (not compute)
+    HTP_TENSOR_TILED    = (1U << 1), // Tensor is in tiled format
+    HTP_TENSOR_FENCE    = (1U << 2), // Tensor is synchronization fence (explicitly managed)
+    HTP_TENSOR_FUSEABLE = (1U << 3), // Tensor can be fused (host-only)
 };
 
 enum htp_buf_flags {

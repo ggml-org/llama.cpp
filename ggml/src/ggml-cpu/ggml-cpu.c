@@ -1655,14 +1655,12 @@ static void ggml_compute_forward_mul_mat_id(
             for (int id = 0; id < n_ids; ++id) {
                 const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
 
-                // a negative id skips the row: no expert is read for it and its output is zero
-                // (llama.cpp's hybrid MoE cache: the experts the GPU computes are -1 on the CPU's side)
-                if (i02 < 0) {
+                assert(i02 == -1 || (i02 >= 0 && i02 < n_as));
+
+                if (i02 == -1) {
                     memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*sizeof(float));
                     continue;
                 }
-
-                assert(i02 < n_as);
 
                 MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
                 matrix_row_counts[i02] += 1;

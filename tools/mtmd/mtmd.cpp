@@ -624,7 +624,9 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         ctx_gen_a = res.ctx_gen_a;
-        if (!ctx_v && !ctx_a) {
+        // soprano has no speaker encoder, its mmproj only holds the decoder
+        const bool gen_only = ctx_gen_a && clip_get_projector_type(ctx_gen_a) == PROJECTOR_TYPE_SOPRANO;
+        if (!ctx_v && !ctx_a && !gen_only) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
 
@@ -641,7 +643,8 @@ struct mtmd_context {
 
         // since we already validate n_embd of vision and audio mmproj,
         // we can safely assume that they are the same
-        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
+        // a gen-only mmproj is validated below
+        int n_embd_clip = ctx_v || ctx_a ? clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a) : n_embd_text;
         if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
             throw std::runtime_error(string_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
@@ -722,6 +725,7 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
             case PROJECTOR_TYPE_MINICPMV4_7:
+            case PROJECTOR_TYPE_MINICPM_OCR_1_0:
                 {
                     slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
                     tok_ov_img_start  = {lookup_token("<image>")};
@@ -732,7 +736,11 @@ struct mtmd_context {
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
                     use_image_id      = true;
-                    image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
+                    if (clip_get_projector_type(ctx_v) == PROJECTOR_TYPE_MINICPM_OCR_1_0) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpm_ocr_1_0>(ctx_v);
+                    } else {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
+                    }
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
@@ -2077,6 +2085,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_POCKETTTS;
             info.sample_rate = 24000;
             break;
+        case PROJECTOR_TYPE_SOPRANO:
+            info.type = MTMD_GEN_AUDIO_TYPE_SOPRANO;
+            info.sample_rate = 32000;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -2103,6 +2115,9 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.top_k = 50;
             inp.top_p = 1.0f;
             inp.temp  = 0.7f;
+            break;
+        case PROJECTOR_TYPE_SOPRANO:
+            inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
             break;
         default:
             break;
@@ -2164,6 +2179,14 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     }
 
     *out = {};
+
+    if (clip_get_projector_type(ctx_clip) == PROJECTOR_TYPE_SOPRANO) {
+        const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
+        if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->feats || inp->n_feats < 2 * n_embd || inp->n_feats % n_embd != 0 || inp->codes) {
+            LOG_ERR("%s: soprano requires at least 2 frames of features, without codes\n", __func__);
+            return 1;
+        }
+    }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {
         const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
@@ -3041,6 +3064,9 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
         if (ctx->ctx_a) {
             merge(ctx->ctx_a);
         }
+        if (ctx->ctx_gen_a) {
+            merge(ctx->ctx_gen_a);
+        }
         mtmd_memory_usage res;
         res.backend_mem_usage = std::move(total_mem);
         res.image_max_tokens  = ctx->ctx_v ? clip_get_image_max_tokens(ctx->ctx_v) : -1;
@@ -3091,7 +3117,8 @@ struct mtmd_audio_stream {
     std::vector<float> out;     // rows of the last step
     std::vector<float> tok_embd;
 
-    int64_t n_rows = 0; // rows produced so far
+    int64_t n_rows = 0;         // rows produced so far
+    int64_t n_rows_flushed = 0; // rows produced once the audio up to the last flush is consumed
     bool pending_flush = false;
     bool ended = false;
 
@@ -3204,6 +3231,8 @@ int32_t mtmd_audio_stream_flush(mtmd_audio_stream * s, bool end) {
     // align to a whole row, then add the silence the model expects after the audio
     const int64_t n_align = (s->samples_per_tok - s->n_samples % s->samples_per_tok) % s->samples_per_tok;
     mtmd_audio_stream_add_silence(s, n_align + (int64_t) s->n_right_pad * s->samples_per_tok);
+    // one row per samples_per_tok, the left padding included
+    s->n_rows_flushed = s->n_samples / s->samples_per_tok;
     s->pending_flush = true;
     s->ended = end;
     return 0;
@@ -3352,4 +3381,12 @@ int32_t mtmd_audio_stream_step(mtmd_audio_stream * s, llama_token last_token) {
 
 const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream * s) {
     return s->out.data();
+}
+
+int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {
+    return s->n_rows;
+}
+
+int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * s) {
+    return s->n_rows_flushed;
 }

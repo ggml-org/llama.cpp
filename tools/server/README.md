@@ -771,36 +771,80 @@ This endpoint also supports multimodal embeddings. See the documentation for the
 
 ### POST `/reranking`: Rerank documents according to a given query
 
+> [!IMPORTANT]
+>
+> This endpoint is **not** OAI-compatible.
 Similar to https://jina.ai/reranker/ but might change in the future.
-Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` options.
+Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` or `--reranking` options.
 
-*Options:*
+`query` and each `documents`/`texts` element accept a plain string, or
+(for multimodal rerankers such as Qwen3-VL-Reranker) an object of the form
+`{"text": string | [strings], "image": url | data-uri | raw-base64 | [urls]}`.
+All keys are optional; a plain string is treated as `{"text": "..."}`.
 
-`query`: The query against which the documents will be ranked.
-
-`documents`: An array strings representing the documents to be ranked.
+Options: `top_n` (default: all), `model` (echoed in the Jina response), `return_text` (TEI only).
 
 *Aliases:*
   - `/rerank`
   - `/v1/rerank`
   - `/v1/reranking`
 
-*Examples:*
+The format is selected by which key carries the documents: `texts` (TEI, same input shape as Jina,
+set `return_text: true` to echo document text) or `documents` (Jina, multimodal supported).
+
+**Text only (TEI format)** - `query` + `texts`; set `return_text: true` to echo document text:
 
 ```shell
 curl http://127.0.0.1:8012/v1/rerank \
     -H "Content-Type: application/json" \
     -d '{
-        "model": "some-model",
-            "query": "What is panda?",
-            "top_n": 3,
-            "documents": [
-                "hi",
-            "it is a bear",
-            "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
-            ]
+        "query": "What is machine learning?",
+        "texts": [
+            "Machine learning is a subset of artificial intelligence.",
+            "A python is a large snake."
+        ],
+        "return_text": true
     }' | jq
 ```
+
+**Multimodal (Jina Format)** - mix text and images in `query` and/or `documents`:
+
+```shell
+curl http://127.0.0.1:8012/v1/rerank \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen3-VL-Reranker-2B",
+        "query": {
+            "text": "A city skyline with tall buildings and a river",
+            "image": "data:image/jpeg;base64,<base64>"
+        },
+        "documents": [
+            "a plain string document is also valid",
+            {
+                "text": "A photograph of the Boston skyline at dusk",
+                "image": "https://example.com/skyline.jpg"
+            },
+            {
+                "text": "caption for the two-figure spread",
+                "image": ["https://example.com/fig1.png", "data:image/jpeg;base64,<base64>"]
+            }
+        ],
+        "top_n": 2
+    }' | jq
+```
+
+Jina format returns a wrapped object with `model`, `object`, `usage` (`prompt_tokens` is the sum
+of `tokens_evaluated` across all scored pairs), and a `results` array of `{index, relevance_score}`.
+TEI format returns a bare array of `{index, score}` (+ `text` when `return_text: true`).
+Both are sorted descending by score and truncated to `top_n`; the score is the match probability in `[0, 1]`.
+
+Images never appear in any response shape.
+
+> **NOTE:** **Input size limit:** A bidirectional-encoder reranker (e.g. `bge-reranker-v2-m3`) must fit the whole prompt within
+`--ubatch-size`; if the input is too large to process, increase `--ubatch-size`.
+Causal decoder rerankers (e.g. `Qwen3-VL-Reranker`) have no such limitation.
+
+
 
 ### POST `/tts`: Generate speech audio from text
 
