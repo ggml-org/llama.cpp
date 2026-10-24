@@ -196,11 +196,11 @@ std::vector<common_memory_breakdown_row> common_fit_measure(
     return common_memory_breakdown_rows(ctx.get());
 }
 
-common_memory_measurements common_measure_memory(common_params & params) {
+common_memory_reports common_measure_memory(common_params & params) {
     const ggml_log_level log_level = params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR;
     const char * path_model = params.model.path.c_str();
 
-    common_memory_measurements res;
+    common_memory_reports res;
 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
@@ -210,7 +210,7 @@ common_memory_measurements common_measure_memory(common_params & params) {
         auto mparams_fit = mparams;
         auto cparams_fit = cparams;
         common_fit_apply(params, mparams_fit, cparams_fit);
-        res.max.rows = common_fit_measure(path_model, &mparams_fit, &cparams_fit, &res.n_ctx_train, &res.max.n_ctx, log_level);
+        res.info_max = common_fit_measure(path_model, &mparams_fit, &cparams_fit, &res.n_ctx_train, &res.n_ctx_max, log_level);
     }
 
     // min: the smallest context --fit may pick, with the placement from params
@@ -223,11 +223,13 @@ common_memory_measurements common_measure_memory(common_params & params) {
             uint64_t(params.fit_params_min_ctx) * n_streams,
             uint64_t(res.n_ctx_train) * n_streams);
     }
-    if (n_ctx_min == 0 || n_ctx_min >= res.max.n_ctx) {
-        res.min = res.max; // nothing to reduce, or -fit off with the trained context
+    if (n_ctx_min == 0 || n_ctx_min >= res.n_ctx_max) {
+        // nothing to reduce, or -fit off with the trained context
+        res.n_ctx_min = res.n_ctx_max;
+        res.info_min  = res.info_max;
     } else {
         cparams.n_ctx = n_ctx_min;
-        res.min.rows = common_fit_measure(path_model, &mparams, &cparams, nullptr, &res.min.n_ctx, log_level);
+        res.info_min  = common_fit_measure(path_model, &mparams, &cparams, nullptr, &res.n_ctx_min, log_level);
     }
 
     return res;

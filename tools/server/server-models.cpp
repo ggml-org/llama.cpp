@@ -2566,15 +2566,15 @@ int server_child::run_measure(common_params & params) {
     // TODO: mmproj buffers are not part of llama_get_memory_breakdown, a multimodal model is underestimated by its projector
     json payload;
     try {
-        common_memory_measurements m = common_measure_memory(params);
+        common_memory_reports m = common_measure_memory(params);
         payload = {
             {"result",      "measured"},
             {"n_ctx_train", m.n_ctx_train},
-            {"min",         server_model_memory(m.min.n_ctx, m.min.rows).to_json()},
-            {"max",         server_model_memory(m.max.n_ctx, m.max.rows).to_json()},
+            {"min",         server_model_memory(m.n_ctx_min, m.info_min).to_json()},
+            {"max",         server_model_memory(m.n_ctx_max, m.info_max).to_json()},
         };
         SRV_INF("memory measured for model name=%s at n_ctx=%u (min) and n_ctx=%u (max)\n",
-            model_name.c_str(), m.min.n_ctx, m.max.n_ctx);
+            model_name.c_str(), m.n_ctx_min, m.n_ctx_max);
     } catch (const std::exception & e) {
         SRV_ERR("failed to measure memory for model name=%s: %s\n", model_name.c_str(), e.what());
         payload = {

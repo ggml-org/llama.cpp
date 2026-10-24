@@ -59,6 +59,15 @@ struct common_memory_breakdown_row {
     size_t      compute = 0;
 };
 
+// memory that a model needs at the two ends of what --fit may pick, see tools/server/README.md
+struct common_memory_reports {
+    uint32_t n_ctx_train = 0;
+    uint32_t n_ctx_max   = 0; // the largest context that fits the free device memory right now
+    uint32_t n_ctx_min   = 0; // --fit-ctx (the smallest context --fit may pick), with the placement set in params
+    std::vector<common_memory_breakdown_row> info_max; // breakdown at n_ctx_max
+    std::vector<common_memory_breakdown_row> info_min; // breakdown at n_ctx_min
+};
+
 // same numbers as common_memory_breakdown_print, the devices of the model first, then the host
 std::vector<common_memory_breakdown_row> common_memory_breakdown_rows(const llama_context * ctx);
 
@@ -76,22 +85,9 @@ std::vector<common_memory_breakdown_row> common_fit_measure(
 
 struct common_params;
 
-// memory breakdown of a context measured at a given context size
-struct common_memory_measurement {
-    uint32_t n_ctx = 0;
-    std::vector<common_memory_breakdown_row> rows;
-};
-
-// memory that a model needs at the two ends of what --fit may pick, see tools/server/README.md
-struct common_memory_measurements {
-    uint32_t n_ctx_train = 0;
-    common_memory_measurement min; // at --fit-ctx (the smallest context --fit may pick), with the placement set in params
-    common_memory_measurement max; // at the largest context that fits the free device memory right now
-};
-
 // measure without allocating; params may be modified the same way common_init_result does with --fit
 // throws std::runtime_error on failure
-common_memory_measurements common_measure_memory(common_params & params);
+common_memory_reports common_measure_memory(common_params & params);
 
 struct common_device_memory_data {
     int64_t total;
