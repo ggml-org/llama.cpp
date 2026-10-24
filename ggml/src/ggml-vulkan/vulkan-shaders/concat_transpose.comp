@@ -1,0 +1,39 @@
+#version 450
+
+#include "types.glsl"
+#include "generic_binary_head.glsl"
+
+#define TILE_DIM 32
+layout(local_size_x = TILE_DIM, local_size_y = 8, local_size_z = 1) in;
+
+// 33 columns (not 32) pads away shared-memory bank conflicts.
+shared A_TYPE tile[TILE_DIM][TILE_DIM + 1];
+
+void main() {
+    const uint tid_x = gl_LocalInvocationID.x;
+    const uint tid_y = gl_LocalInvocationID.y;
+
+    // workgroup x walks rows (src1's contiguous dim1) so consecutive workgroups stream src1, y walks dst columns
+    const uint row0 = gl_WorkGroupID.x * TILE_DIM;
+    const uint col0 = gl_WorkGroupID.y * TILE_DIM;
+
+    const uint i1 = row0 + tid_x;
+    [[unroll]] for (uint j = 0; j < TILE_DIM; j += gl_WorkGroupSize.y) {
+        const uint i0 = col0 + tid_y + j;
+        if (i0 >= p.ne00 && i0 - p.ne00 < p.ne10 && i1 < p.ne11) {
+            tile[tid_y + j][tid_x] = A_TYPE(data_b[get_boffset() + (i0 - p.ne00)*p.nb10 + i1*p.nb11]);
+        }
+    }
+
+    barrier();
+
+    const uint d0 = col0 + tid_x;
+    [[unroll]] for (uint j = 0; j < TILE_DIM; j += gl_WorkGroupSize.y) {
+        const uint d1 = row0 + tid_y + j;
+        if (d0 < p.ne20 && d1 < p.ne21) {
+            data_d[get_doffset() + d1*p.nb21 + d0*p.nb20] = d0 < p.ne00
+                ? D_TYPE(data_a[get_aoffset() + d1*p.nb01 + d0*p.nb00])
+                : D_TYPE(tile[tid_x][tid_y + j]);
+        }
+    }
+}
