@@ -4193,6 +4193,334 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
+#ifdef __ARM_NEON
+static int8x16_t jqk_values_tbl(const int8_t * values, int n_values) {
+    int8_t tbl[16];
+    for (int i = 0; i < 16; ++i) { tbl[i] = values[i % n_values]; }
+    return vld1q_s8(tbl);
+}
+#endif
+
+void ggml_vec_dot_jq2_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_K == 0);
+
+    const block_jq2_k * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#ifdef __ARM_NEON
+    const int8x16_t  values = jqk_values_tbl(kvalues_jq2k, 4);
+    const uint8x16_t m2b = vdupq_n_u8(0x03);
+
+    float sumf = 0;
+
+    for (int ibl = 0; ibl < nb; ++ibl) {
+
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        const uint16_t extra = x[ibl].extra;
+
+        int32x4_t acc = vdupq_n_s32(0);
+        for (int g = 0; g < QK_K / 32; g += 4) {
+            const uint8x16_t l0 = vld1q_u8(qs);
+            const uint8x16_t l1 = vld1q_u8(qs + 16);
+            qs += 32;
+
+            for (int k = 0; k < 4; ++k) {
+                const int ib = 2 * (g + k);
+                const int8x16_t lsh = vdupq_n_s8(-2 * k);
+
+                const int ls1 = (x[ibl].scales[ib/2] & 0xf) - 8;
+                const int ls2 = (x[ibl].scales[ib/2] >> 4) - 8;
+
+                const int8x16_t v1 = vaddq_s8(ggml_vqtbl1q_s8(values, vandq_u8(vshlq_u8(l0, lsh), m2b)), vdupq_n_s8(JQ2K_PHASE * ((extra >> (ib + 0)) & 1)));
+                const int8x16_t v2 = vaddq_s8(ggml_vqtbl1q_s8(values, vandq_u8(vshlq_u8(l1, lsh), m2b)), vdupq_n_s8(JQ2K_PHASE * ((extra >> (ib + 1)) & 1)));
+
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v1, vld1q_s8(q8)), ls1);
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v2, vld1q_s8(q8 + 16)), ls2);
+                q8 += 32;
+            }
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d * vaddvq_s32(acc);
+    }
+
+    *s = sumf;
+
+#else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
+    ggml_vec_dot_jq2_k_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+void ggml_vec_dot_jq3_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_K == 0);
+
+    const block_jq3_k * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#ifdef __ARM_NEON
+    const int8x16_t  values = jqk_values_tbl(kvalues_jq3k, 8);
+    const uint8x16_t m2b = vdupq_n_u8(0x03);
+    const uint8x16_t mhb = vdupq_n_u8(0x04);
+    float sumf = 0;
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        const uint16_t extra = x[ibl].extra;
+        const uint16_t signs = x[ibl].scales_h;
+
+        const uint8x16_t h0 = vld1q_u8(x[ibl].qh);
+        const uint8x16_t h1 = vld1q_u8(x[ibl].qh + 16);
+
+        int32x4_t acc = vdupq_n_s32(0);
+        for (int g = 0; g < QK_K / 32; g += 4) {
+            const uint8x16_t l0 = vld1q_u8(qs);
+            const uint8x16_t l1 = vld1q_u8(qs + 16);
+            qs += 32;
+            for (int k = 0; k < 4; ++k) {
+                const int ib = 2 * (g + k);
+                const int8x16_t lsh = vdupq_n_s8(-2 * k);
+                const int8x16_t hsh = vdupq_n_s8(2 - (g + k));
+
+                const int ls1 = 2 * (x[ibl].scales_l[ib / 2] & 0xf) + 1;
+                const int ls2 = 2 * (x[ibl].scales_l[ib / 2] >> 4) + 1;
+
+                const uint8x16_t i1 = vorrq_u8(vandq_u8(vshlq_u8(l0, lsh), m2b), vandq_u8(vshlq_u8(h0, hsh), mhb));
+                const uint8x16_t i2 = vorrq_u8(vandq_u8(vshlq_u8(l1, lsh), m2b), vandq_u8(vshlq_u8(h1, hsh), mhb));
+
+                const int8x16_t v1 = vaddq_s8(ggml_vqtbl1q_s8(values, i1), vdupq_n_s8(JQ3K_PHASE * ((extra >> (ib + 0)) & 1)));
+                const int8x16_t v2 = vaddq_s8(ggml_vqtbl1q_s8(values, i2), vdupq_n_s8(JQ3K_PHASE * ((extra >> (ib + 1)) & 1)));
+
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v1, vld1q_s8(q8)),      (signs >> (ib + 0)) & 1 ? -ls1 : ls1);
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v2, vld1q_s8(q8 + 16)), (signs >> (ib + 1)) & 1 ? -ls2 : ls2);
+                q8 += 32;
+            }
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d * vaddvq_s32(acc);
+    }
+
+    *s = sumf;
+
+#else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
+    ggml_vec_dot_jq3_k_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+void ggml_vec_dot_jq4_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_K == 0);
+
+    const block_jq4_k * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#ifdef __ARM_NEON
+    const int8x16_t  values = vld1q_s8(kvalues_jq4k);
+    const uint8x16_t m4b = vdupq_n_u8(0x0f);
+
+    float sumf = 0;
+
+    for (int ibl = 0; ibl < nb; ++ibl) {
+
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        const uint16_t extra = x[ibl].extra;
+
+        int32x4_t acc = vdupq_n_s32(0);
+        for (int ib = 0; ib < QK_K / 16; ib += 2) {
+
+            const uint8x16_t bits = vld1q_u8(qs);
+            qs += 16;
+
+            const uint8_t hb = x[ibl].scales_h[ib / 4];
+            const int ls1 = ((x[ibl].scales_l[ib / 2] & 0xf) | (((hb >> (2 * (ib % 4))) & 3) << 4)) - 32;
+            const int ls2 = ((x[ibl].scales_l[ib / 2] >> 4) | (((hb >> (2 * (ib % 4) + 2)) & 3) << 4)) - 32;
+
+            const int8x16_t v1 = vaddq_s8(ggml_vqtbl1q_s8(values, vandq_u8  (bits, m4b)), vdupq_n_s8(JQ4K_PHASE * ((extra >> (ib + 0)) & 1)));
+            const int8x16_t v2 = vaddq_s8(ggml_vqtbl1q_s8(values, vshrq_n_u8(bits, 4)),   vdupq_n_s8(JQ4K_PHASE * ((extra >> (ib + 1)) & 1)));
+
+            acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v1, vld1q_s8(q8)), ls1);
+            acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v2, vld1q_s8(q8 + 16)), ls2);
+            q8 += 32;
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d * vaddvq_s32(acc);
+    }
+
+    *s = sumf;
+
+#else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
+    ggml_vec_dot_jq4_k_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+void ggml_vec_dot_jq5_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_K == 0);
+
+    const block_jq5_k * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#ifdef __ARM_NEON
+    const ggml_int8x16x2_t values = ggml_vld1q_s8_x2(kvalues_jq5k);
+    const uint8x16_t m4b = vdupq_n_u8(0x0f);
+    const uint8x16_t mhb = vdupq_n_u8(0x10);
+
+    float sumf = 0;
+
+    for (int ibl = 0; ibl < nb; ++ibl) {
+
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        const uint16_t extra = x[ibl].extra;
+
+        const uint8x16_t h0 = vld1q_u8(x[ibl].qh);
+        const uint8x16_t h1 = vld1q_u8(x[ibl].qh + 16);
+
+        int32x4_t acc = vdupq_n_s32(0);
+        for (int g = 0; g < QK_K / 32; g += 2) {
+
+            const uint8x16_t l0 = vld1q_u8(qs);
+            const uint8x16_t l1 = vld1q_u8(qs + 16);
+            qs += 32;
+
+            for (int k = 0; k < 2; ++k) {
+                const int ib = 2*(g + k);
+                const int8x16_t lsh = vdupq_n_s8(-4 * k);
+                const int8x16_t hsh = vdupq_n_s8(4 - (g + k));
+
+                const uint8_t hb = x[ibl].scales_h[ib / 4];
+                const int ls1 = ((x[ibl].scales_l[ib / 2] & 0xf) | (((hb >> (2 * (ib % 4)    )) & 3) << 4)) - 32;
+                const int ls2 = ((x[ibl].scales_l[ib / 2] >>  4) | (((hb >> (2 * (ib % 4) + 2)) & 3) << 4)) - 32;
+
+                const uint8x16_t i1 = vorrq_u8(vandq_u8(vshlq_u8(l0, lsh), m4b), vandq_u8(vshlq_u8(h0, hsh), mhb));
+                const uint8x16_t i2 = vorrq_u8(vandq_u8(vshlq_u8(l1, lsh), m4b), vandq_u8(vshlq_u8(h1, hsh), mhb));
+
+                const int8x16_t v1 = vaddq_s8(ggml_vqtbl2q_s8(values, i1), vdupq_n_s8(JQ5K_PHASE * ((extra >> (ib + 0)) & 1)));
+                const int8x16_t v2 = vaddq_s8(ggml_vqtbl2q_s8(values, i2), vdupq_n_s8(JQ5K_PHASE * ((extra >> (ib + 1)) & 1)));
+
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v1, vld1q_s8(q8)), ls1);
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v2, vld1q_s8(q8 + 16)), ls2);
+                q8 += 32;
+            }
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d * vaddvq_s32(acc);
+    }
+
+    *s = sumf;
+
+#else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
+    ggml_vec_dot_jq5_k_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+void ggml_vec_dot_jq6_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_K == 0);
+
+    const block_jq6_k * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#ifdef __ARM_NEON
+    const ggml_int8x16x4_t values = ggml_vld1q_s8_x4(kvalues_jq6k);
+    const uint8x16_t m4b = vdupq_n_u8(0x0f);
+    const uint8x16_t mhb = vdupq_n_u8(0x30);
+
+    float sumf = 0;
+
+    for (int ibl = 0; ibl < nb; ++ibl) {
+
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        const uint16_t extra = x[ibl].extra;
+
+        int32x4_t acc = vdupq_n_s32(0);
+        for (int g = 0; g < QK_K / 32; g += 2) {
+
+            const uint8x16_t l0 = vld1q_u8(qs);
+            const uint8x16_t l1 = vld1q_u8(qs + 16);
+            qs += 32;
+
+            const uint8x16_t h0 = vld1q_u8(x[ibl].qh + 32 * (g / 4));
+            const uint8x16_t h1 = vld1q_u8(x[ibl].qh + 32 * (g / 4) + 16);
+
+            for (int k = 0; k < 2; ++k) {
+                const int ib = 2 * (g + k);
+                const int8x16_t lsh = vdupq_n_s8(-4 * k);
+                const int8x16_t hsh = vdupq_n_s8(4 - 2 * ((g + k) % 4));
+
+                const int ls1 = x[ibl].scales[ib + 0];
+                const int ls2 = x[ibl].scales[ib + 1];
+
+                const uint8x16_t i1 = vorrq_u8(vandq_u8(vshlq_u8(l0, lsh), m4b), vandq_u8(vshlq_u8(h0, hsh), mhb));
+                const uint8x16_t i2 = vorrq_u8(vandq_u8(vshlq_u8(l1, lsh), m4b), vandq_u8(vshlq_u8(h1, hsh), mhb));
+
+                const int8x16_t v1 = vaddq_s8(ggml_vqtbl4q_s8(values, i1), vdupq_n_s8(JQ6K_PHASE * ((extra >> (ib + 0)) & 1)));
+                const int8x16_t v2 = vaddq_s8(ggml_vqtbl4q_s8(values, i2), vdupq_n_s8(JQ6K_PHASE * ((extra >> (ib + 1)) & 1)));
+
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v1, vld1q_s8(q8)), ls1);
+                acc = vmlaq_n_s32(acc, ggml_vdotq_s32(vdupq_n_s32(0), v2, vld1q_s8(q8 + 16)), ls2);
+                q8 += 32;
+            }
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d * vaddvq_s32(acc);
+    }
+
+    *s = sumf;
+
+#else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
+    ggml_vec_dot_jq6_k_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);

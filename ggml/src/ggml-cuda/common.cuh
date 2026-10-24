@@ -1165,6 +1165,46 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
     static constexpr int bs = sizeof(block_iq3_s);
 };
 
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_JQ2_K> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_JQ2_K;
+    static constexpr int qi = QI_JQ2_K;
+    static constexpr int bs = sizeof(block_jq2_k);
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_JQ3_K> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_JQ3_K;
+    static constexpr int qi = QI_JQ3_K;
+    static constexpr int bs = sizeof(block_jq3_k);
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_JQ4_K> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_JQ4_K;
+    static constexpr int qi = QI_JQ4_K;
+    static constexpr int bs = sizeof(block_jq4_k);
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_JQ5_K> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_JQ5_K;
+    static constexpr int qi = QI_JQ5_K;
+    static constexpr int bs = sizeof(block_jq5_k);
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_JQ6_K> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_JQ6_K;
+    static constexpr int qi = QI_JQ6_K;
+    static constexpr int bs = sizeof(block_jq6_k);
+};
+
 //////////////////////
 
 struct ggml_cuda_device_info {
