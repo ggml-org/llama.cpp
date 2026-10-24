@@ -1651,6 +1651,27 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
         return nullptr;
     }
 
+    // check ne[] against the overflow condition asserted in ggml_new_tensor_impl
+    // note: ne[i] == 0 is legal (empty tensor), it only makes the product and the data size zero
+    {
+        uint64_t nelems = tensor->ne[0];
+        for (uint32_t i = 0; i < GGML_MAX_DIMS; i++) {
+            if (i > 0 && tensor->ne[i] > 1 && (uint64_t)INT64_MAX / tensor->ne[i] <= nelems) {
+                LOG_ERROR("[%s] tensor '%.*s' has invalid ne[%u]=%" PRIu32 "\n", __func__, (int) sizeof(tensor->name), tensor->name, i, tensor->ne[i]);
+                return nullptr;
+            }
+            if (i > 0 && tensor->ne[i] > 1) {
+                nelems *= tensor->ne[i];
+            }
+        }
+    }
+    for (uint32_t i = 0; i < GGML_MAX_DIMS; i++) {
+        if (tensor->nb[i] > 0 && (uint64_t) tensor->ne[i] > INT64_MAX / tensor->nb[i]) {
+            LOG_ERROR("[%s] tensor '%.*s' has invalid nb[%u]=%" PRIu32 " (ne[%u]=%" PRIu32 ")\n",
+                           __func__, (int) sizeof(tensor->name), tensor->name, i, tensor->nb[i], i, tensor->ne[i]);
+            return nullptr;
+        }
+    }
     ggml_tensor * result = ggml_new_tensor_4d(ctx, (ggml_type) tensor->type,
         tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
 
@@ -1668,18 +1689,22 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
         result->buffer = nullptr;
     }
 
-    if (result->buffer && ggml_nelements(result) > 0) {
-        // require that the tensor data does not go beyond the buffer end
-        uint64_t tensor_size = (uint64_t) ggml_nbytes(result);
-        uint64_t buffer_start = (uint64_t) ggml_backend_buffer_get_base(result->buffer);
-        uint64_t buffer_size = (uint64_t) ggml_backend_buffer_get_size(result->buffer);
-        if (tensor->data + tensor_size < tensor->data ||
-            tensor->data < buffer_start || tensor->data + tensor_size > buffer_start + buffer_size) {
-            LOG_ERROR("[%s] tensor '%s' (op %s, type %s, ne [%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 "]) "
-                      "data [0x%" PRIx64 ", 0x%" PRIx64 ") out of buffer bounds [0x%" PRIx64 ", 0x%" PRIx64 ")\n",
-                      __func__, tensor->name, ggml_op_name((ggml_op) tensor->op), ggml_type_name(result->type),
+    if (result->buffer) {
+        const uint64_t tensor_size = (uint64_t) ggml_nbytes(result);
+        const uint64_t buffer_start = (uint64_t) ggml_backend_buffer_get_base(result->buffer);
+        const uint64_t buffer_size = (uint64_t) ggml_backend_buffer_get_size(result->buffer);
+        bool data_in_bounds = tensor->data >= buffer_start;
+        if (data_in_bounds) {
+            const uint64_t data_offset = tensor->data - buffer_start;
+            data_in_bounds = data_offset <= buffer_size && tensor_size <= buffer_size - data_offset;
+        }
+        if (!data_in_bounds) {
+            const char * op_name = tensor->op < GGML_OP_COUNT ? ggml_op_name((ggml_op) tensor->op) : "invalid";
+            LOG_ERROR("[%s] tensor '%.*s' (op %s, type %s, ne [%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 "]) "
+                      "data 0x%" PRIx64 " with size %" PRIu64 " out of buffer bounds (base 0x%" PRIx64 ", size %" PRIu64 ")\n",
+                      __func__, (int) sizeof(tensor->name), tensor->name, op_name, ggml_type_name(result->type),
                       result->ne[0], result->ne[1], result->ne[2], result->ne[3],
-                      tensor->data, tensor->data + tensor_size, buffer_start, buffer_start + buffer_size);
+                      tensor->data, tensor_size, buffer_start, buffer_size);
             return nullptr;
         }
     }
@@ -2065,9 +2090,17 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
     if (result == nullptr) {
         return nullptr;
     }
-    if (result->buffer == nullptr && result->data != nullptr) {
-        LOG_ERROR("[%s] invalid data ptr\n", __func__);
-        return nullptr;
+    if (result->buffer == nullptr) {
+        // no valid backing memory: GGML_OP_NONE is the exception, it is used for
+        // tensors whose buffer lives on a different server and is never dereferenced
+        if (result->data != nullptr) {
+            LOG_ERROR("[%s] invalid data ptr\n", __func__);
+            return nullptr;
+        }
+        if (tensor->view_src == 0 && tensor->op != GGML_OP_NONE) {
+            LOG_ERROR("[%s] tensor '%.*s' has no buffer and no view_src\n", __func__, (int) sizeof(tensor->name), tensor->name);
+            return nullptr;
+        }
     }
     tensor_map[id] = result;
     for (int i = 0; i < GGML_MAX_SRC; i++) {
@@ -2100,7 +2133,59 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
         }
     }
     result->view_offs = tensor->view_offs;
+    // the view must lie entirely within view_src's buffer
+    if (result->view_src != nullptr) {
+        uint64_t view_size = (uint64_t) ggml_nbytes(result);
+        uint64_t src_base  = 0;
+        uint64_t src_size  = 0;
+        if (result->view_src->buffer == nullptr) {
+            LOG_ERROR("[%s] view_src (id=%" PRIu64 ") of node id %" PRIu64 " has no buffer\n",
+                           __func__, tensor->view_src, id);
+            return nullptr;
+        }
+        src_base = (uint64_t) ggml_backend_buffer_get_base(result->view_src->buffer);
+        src_size = (uint64_t) ggml_backend_buffer_get_size(result->view_src->buffer);
+        uint64_t src_data = (uint64_t) result->view_src->data;
+        if (tensor->view_offs > src_size ||
+            view_size > src_size ||
+            src_data + tensor->view_offs < src_base ||
+            src_data + tensor->view_offs + view_size > src_base + src_size) {
+            LOG_ERROR("[%s] view (id=%" PRIu64 ") out of bounds: view_offs=%" PRIu64 ", view_size=%" PRIu64
+                           ", src data=0x%" PRIx64 ", src buffer [0x%" PRIx64 ", 0x%" PRIx64 ")\n",
+                           __func__, id, tensor->view_offs, view_size, src_data, src_base, src_base + src_size);
+            return nullptr;
+        }
+    }
     return result;
+}
+
+static bool validate_graph_node(const ggml_tensor * node) {
+    if (node->op != GGML_OP_GET_ROWS) {
+        return true;
+    }
+
+    const ggml_tensor * src0 = node->src[0];
+    const ggml_tensor * src1 = node->src[1];
+    if (src0 == nullptr || src1 == nullptr) {
+        LOG_ERROR("[%s] malformed GET_ROWS graph\n", __func__);
+        return false;
+    }
+
+    const ggml_type result_type = src0->type == GGML_TYPE_I32 ? GGML_TYPE_I32 : GGML_TYPE_F32;
+    if (src0->ne[2] != src1->ne[1] ||
+        src0->ne[3] != src1->ne[2] ||
+        src1->ne[3] != 1 ||
+        src1->type != GGML_TYPE_I32 ||
+        node->type != result_type ||
+        node->ne[0] != src0->ne[0] ||
+        node->ne[1] != src1->ne[0] ||
+        node->ne[2] != src1->ne[1] ||
+        node->ne[3] != src1->ne[2]) {
+        LOG_ERROR("[%s] malformed GET_ROWS graph\n", __func__);
+        return false;
+    }
+
+    return true;
 }
 
 bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
@@ -2181,6 +2266,9 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
             return false;
         }
         if (graph->nodes[i] != nullptr) {
+            if (!validate_graph_node(graph->nodes[i])) {
+                return false;
+            }
             LOG_DBG3("[%s] node %u: id=%" PRId64 ", %s\n", __func__, i, id, rpc_log_format_tensor(graph->nodes[i]).c_str());
             const size_t hash_pos = ggml_hash_insert(&graph->visited_hash_set, graph->nodes[i]);
             graph->use_counts[hash_pos] = tensor_ptrs.at(id)->use_count;
