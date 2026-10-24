@@ -528,19 +528,21 @@ static void silu_f32(const void * restrict src,
     }
 }
 
-// GELU uses the tanh approximation.
+// GELU uses the tanh approximation. 0.5*x*(1 + tanh(z)) == x * sigmoid(2*z),
+// so call the sigmoid kernel directly instead of rebuilding it inside tanh.
 static __attribute__((noinline)) HVX_Vector hvx_vec_gelu_f32(HVX_Vector x) {
-    const HVX_Vector half = hvx_vec_splat_f32(0.5f);
-    const HVX_Vector one  = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
+    const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
 
     HVX_Vector inner = hvx_vec_mul_f32_f32(x, x);
     inner = hvx_vec_mul_f32_f32(inner, hvx_vec_splat_f32(0.044715f));
     inner = hvx_vec_add_f32_f32(inner, one);
     inner = hvx_vec_mul_f32_f32(inner, x);
-    inner = hvx_vec_mul_f32_f32(inner, hvx_vec_splat_f32(0.7978845608028654f));
+    inner = hvx_vec_mul_f32_f32(inner, hvx_vec_splat_f32(1.5957691216057308f));
+    const HVX_Vector sigmoid = hvx_vec_fast_sigmoid_f32_guard(inner, one, max_exp, min_exp);
 
-    return hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(half, x),
-                               hvx_vec_add_f32_f32(one, hvx_vec_tanh_f32(inner)));
+    return hvx_vec_mul_f32_f32(x, sigmoid);
 }
 
 static inline void hvx_gelu_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
