@@ -96,6 +96,7 @@ enum htp_op_code {
     HTP_OP_CLAMP,
     HTP_OP_LEAKY_RELU,
     HTP_OP_IM2COL,
+    HTP_OP_CONV_2D,
     HTP_OP_FENCE,
     HTP_OP_ALLREDUCE,
     HTP_OP_ALLREDUCE_ADD,

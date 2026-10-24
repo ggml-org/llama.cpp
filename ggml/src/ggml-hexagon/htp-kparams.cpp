@@ -56,6 +56,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_PAD:             return HTP_OP_PAD;
         case GGML_OP_IM2COL:          return HTP_OP_IM2COL;
         case GGML_OP_IM2COL_3D:       return HTP_OP_IM2COL_3D;
+        case GGML_OP_CONV_2D:         return HTP_OP_CONV_2D;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
 
         case GGML_OP_UNARY:
@@ -3224,6 +3225,375 @@ static bool htp_kparams_solve_solve_tri(
     return true;
 }
 
+// Implicit GEMM over sliding windows of fp16 input croutons (HMX activation:single), no im2col
+static bool htp_kparams_conv2d_win(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * dst,
+    struct htp_conv2d_kernel_params * kp
+) {
+    if (htp_session_n_hmx(sess) == 0) {
+        return false;
+    }
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
+    const int32_t s1 = ggml_get_op_params_i32(dst, 1);
+    const int32_t p0 = ggml_get_op_params_i32(dst, 2);
+    const int32_t p1 = ggml_get_op_params_i32(dst, 3);
+    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
+    const int32_t d1 = ggml_get_op_params_i32(dst, 5);
+
+    const uint32_t KW   = src0->ne[0];
+    const uint32_t KH   = src0->ne[1];
+    const uint32_t Cin  = src0->ne[2];
+    const uint32_t Cout = src0->ne[3];
+    const uint32_t IW   = src1->ne[0];
+    const uint32_t IH   = src1->ne[1];
+    const uint32_t OW   = dst->ne[0];
+    const uint32_t OH   = dst->ne[1];
+    const uint32_t N    = dst->ne[3];
+    const size_t   es   = ggml_type_size(src0->type);
+
+    if (s0 != 1 || s1 != 1 || p0 < 0 || p1 < 0 || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (dst->nb[1] < OW * sizeof(float) || (Cout > 1 && dst->nb[2] < OW * sizeof(float))) {
+        return false;
+    }
+
+    const bool whcn = src1->nb[0] == sizeof(float) && src1->nb[1] >= IW * sizeof(float) && (Cin == 1 || src1->nb[2] >= IH * src1->nb[1]);
+    const bool cwhn = !whcn && src1->nb[2] == sizeof(float) && src1->nb[0] == Cin * sizeof(float) && src1->nb[1] >= IW * src1->nb[0];
+    if (!whcn && !cwhn) {
+        return false;
+    }
+
+    const bool w_rows = src0->nb[0] == es && (KH == 1 || src0->nb[1] == KW * es) && (Cin == 1 || src0->nb[2] == KW * KH * es);
+    const bool co_c   = (Cout == 1 || src0->nb[3] == es) && (Cin == 1 || src0->nb[2] >= (std::min)(Cout, 32u) * es);
+    if (!w_rows && !co_c) {
+        return false;
+    }
+
+    // short output rows: fold the kw taps into channels so the virtual row is OW wide and output rows are contiguous
+    const bool fold = (whcn || (cwhn && d0 == 1)) && KW > 1 && KW * Cin <= 32 && OW < 64 && KW * KH <= 16 && Cout >= 16;
+
+    const uint32_t T     = KW * KH;
+    const uint32_t n_ch  = fold ? KW * Cin : Cin;
+    const uint32_t n_cc  = (n_ch + 31) / 32;
+    const uint32_t rem   = n_ch - (n_cc - 1) * 32;
+    const uint32_t stop  = (rem + 7) / 8 * 8 - 1;
+    const uint32_t SR    = fold ? OW : IW + 2 * p0;
+    const uint32_t IHS   = IH + 2 * p1;
+    const uint32_t n_wt  = fold ? KH : T;
+    const uint32_t moff  = (KH - 1) * d1 * SR + (fold ? 0 : (KW - 1) * d0);
+    const uint32_t halo  = moff / 32 + 1;
+    const uint32_t n_rt  = (Cout + 31) / 32;
+    const uint64_t n_q   = (uint64_t) (N * IHS - (IHS - OH) - 1) * SR + OW;
+    const uint32_t nth   = kp->n_threads;
+    const size_t   tile  = 2048;
+
+    if ((uint64_t) N * IHS * SR + moff + 64 >= (1ull << 31)) {
+        return false;
+    }
+    const uint32_t n_tiles = (uint32_t) ((n_q + 31) / 32);
+
+    // weight packing scratch
+    uint32_t w_cs  = 0;
+    size_t   wraw  = 0;
+    size_t   wscr  = 0;
+    if (w_rows) {
+        const uint32_t kpw = es == 2 ? 64 : 32;
+        for (uint32_t cs = 32; cs >= 2; cs /= 2) {
+            w_cs = cs;
+            wraw = (size_t) 32 * ((cs * T + kpw - 1) / kpw) * 128;
+            if (3 * wraw + 64 * 128 <= 256 * 1024 || (fold && cs == 32)) {
+                break;
+            }
+        }
+        // enough packing units for all threads
+        const uint32_t kpw2 = es == 2 ? 64 : 32;
+        while (!fold && w_cs > 2 && n_rt * ((Cin + 31) / 32) * (32 / w_cs) < kp->n_threads) {
+            w_cs /= 2;
+        }
+        wraw = (std::min)(wraw, (size_t) 32 * ((w_cs * T + kpw2 - 1) / kpw2) * 128);
+        wscr = 3 * wraw + 64 * 128 + 128;
+    } else {
+        w_cs = fold ? KW : (std::min)(T, 16u);
+        while (!fold && w_cs > 1 && n_rt * ((Cin + 31) / 32) * ((T + w_cs - 1) / w_cs) < kp->n_threads) {
+            w_cs = (w_cs + 1) / 2;
+        }
+        wscr = (size_t) w_cs * 32 * 128;
+    }
+
+    uint32_t rt_block = n_rt;
+    uint32_t ct       = (std::max)(4 * halo, (n_tiles + 3) / 4);
+    ct = (std::min)((std::max)(ct, 8u), 512u);
+    ct = (std::min)(ct, n_tiles);
+    uint32_t seg_b = 8;
+    // longer output rows make the output DMA more efficient
+    uint32_t seg_t = (std::min)(32u, (std::max)(8u, (OW + 31) / 32));
+
+    while (rt_block > 1 && (size_t) rt_block * n_wt * n_cc * tile > htp_session_vtcm_size(sess) / 2) {
+        rt_block = (rt_block + 1) / 2;
+    }
+
+    size_t stage = 0, thr = 0, sc = 0, act = 0, out = 0, w_size = 0, total = 0;
+    uint32_t n_bc = 0;
+    while (true) {
+        n_bc   = ct + halo;
+        stage  = cwhn ? (size_t) seg_b * 32 * Cin * sizeof(float) + 256 : (size_t) n_ch * seg_b * 32 * sizeof(float);
+        if (fold) {
+            // raw input rows of the staged pixels with 128 bytes of read slack on both sides
+            stage = (size_t) Cin * ((seg_b * 32 + OW - 1) / OW + 1) * IW * sizeof(float) + 256;
+        }
+        stage  = hex_round_up(stage, 128);
+        thr    = hex_round_up((std::max)(2 * stage + (size_t) HTP_CONV2D_WIN_OBUF * 32 * seg_t * 32 * sizeof(float), wscr), tile);
+        sc     = hex_round_up((size_t) rt_block * HTP_CONV2D_HMX_SCALES_SIZE, tile);
+        w_size = (size_t) rt_block * n_wt * n_cc * tile;
+        act    = (size_t) n_cc * n_bc * tile;
+        out    = (size_t) rt_block * ct * tile;
+        total  = sc + w_size + 2 * act + 2 * out + nth * thr;
+        if (total <= htp_session_vtcm_size(sess)) {
+            break;
+        }
+        if (ct > 64) {
+            ct /= 2;
+        } else if (rt_block > 1) {
+            rt_block = (rt_block + 1) / 2;
+        } else if (seg_b > 1 || seg_t > 1) {
+            seg_b = (std::max)(seg_b / 2, 1u);
+            seg_t = (std::max)(seg_t / 2, 1u);
+        } else if (ct > 1) {
+            ct /= 2;
+        } else {
+            return false;
+        }
+    }
+
+    kp->kernel_type = HTP_CONV2D_KERNEL_HMX_WINDOW;
+    kp->cwhn        = cwhn;
+    kp->window.fold        = fold;
+    kp->w_kmajor           = !w_rows;
+    kp->window.n_cc        = n_cc;
+    kp->window.act_rt_last = 0x780 | 0x2 | (stop << 2);
+    kp->window.sr          = SR;
+    kp->window.ihs         = IHS;
+    kp->window.max_off     = moff;
+    kp->n_row_tiles        = n_rt;
+    kp->rt_block           = rt_block;
+    kp->ct_chunk           = ct;
+    kp->window.n_bc        = n_bc;
+    kp->window.seg_b       = seg_b;
+    kp->window.seg_t       = seg_t;
+    kp->window.w_cs        = w_cs;
+    kp->stage_size         = stage;
+    kp->off_w              = sc;
+    kp->off_act            = kp->off_w + w_size;
+    kp->act_size           = act;
+    kp->off_out            = kp->off_act + 2 * act;
+    kp->out_size           = out;
+    kp->off_thr            = kp->off_out + 2 * out;
+    kp->thr_size           = thr;
+    kp->vtcm_size          = total;
+    kp->window.div_sr      = init_fastdiv_values(SR);
+    kp->window.div_ihs     = init_fastdiv_values(IHS);
+    return true;
+}
+
+// Tiled implicit GEMM, MMA on HMX if available, else HVX
+static bool htp_kparams_conv2d_tiled(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * dst,
+    struct htp_conv2d_kernel_params * kp
+) {
+    if (htp_session_n_hmx(sess) == 0) {
+        return false;
+    }
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
+    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
+
+    const uint32_t KW   = src0->ne[0];
+    const uint32_t KH   = src0->ne[1];
+    const uint32_t Cin  = src0->ne[2];
+    const uint32_t Cout = src0->ne[3];
+    const uint32_t OW   = dst->ne[0];
+    const uint32_t OH   = dst->ne[1];
+    const uint32_t N    = dst->ne[3];
+    const size_t   es   = ggml_type_size(src0->type);
+
+    if (s0 != 1 || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+
+    // kernel k order must match the staged input: (cin, kh, kw) for WHCN input, (kh, kw, cin) for CWHN input.
+    // Kernel is either k-contiguous rows per cout (WHCN only) or cout-contiguous with a uniform k stride.
+    const bool   whcn   = src1->nb[0] == sizeof(float);
+    const bool   cwhn   = !whcn && src1->nb[2] == sizeof(float) && src1->nb[0] == Cin * sizeof(float);
+    const bool   co_c   = Cout == 1 || src0->nb[3] == es;
+    const bool   w_rows = whcn && src0->nb[0] == es && (KH == 1 || src0->nb[1] == KW * es) && (Cin == 1 || src0->nb[2] == KW * KH * es);
+    const size_t ks     = whcn ? src0->nb[0] : src0->nb[2];
+    bool         kmajor = false;
+    if (whcn) {
+        kmajor = co_c && ks >= Cout * es && (KH == 1 || src0->nb[1] == KW * ks) && (Cin == 1 || src0->nb[2] == KW * KH * ks);
+    } else if (cwhn) {
+        kmajor = co_c && ks >= Cout * es && src0->nb[0] == Cin * ks && (KH == 1 || src0->nb[1] == KW * Cin * ks);
+    }
+    if (!w_rows && !kmajor) {
+        return false;
+    }
+    kmajor = kmajor && !w_rows;
+
+    const uint32_t K     = KW * KH * Cin;
+    const uint32_t kg    = !cwhn ? K : d0 == 1 ? KW * Cin : Cin;
+    const uint32_t n_grp = K / kg;
+    const uint32_t kg_p  = hex_round_up(kg, 32);
+    const uint32_t k_pad = hex_round_up(n_grp * kg_p, 64);
+    const uint32_t n_kt  = k_pad / 32;
+    const uint32_t n_rt  = (Cout + 31) / 32;
+    const uint32_t n_owt = (OW + 31) / 32;
+    const uint32_t n_ct  = N * OH * n_owt;
+    const uint32_t wk    = (std::min)(k_pad, 512u);
+    const uint32_t nth   = htp_session_n_threads(sess);
+    const size_t   tile  = 2048;
+
+    uint32_t rt_block = n_rt;
+    uint32_t ct       = (std::min)(n_ct, 64u);
+    uint32_t seg      = (std::min)(8u, n_owt);
+    uint32_t n_stage  = 1;
+    uint32_t sr       = 0;
+    size_t   stage = 0, ostage = 0, prow = 0, wpack = 0;
+    size_t   sc = 0, w_size = 0, act_size = 0, out_size = 0, thr_size = 0, total = 0;
+
+    while (true) {
+        const uint32_t wb = 32 * seg + (KW - 1) * d0;
+        sr     = cwhn ? hex_round_up(wb * Cin, 64) : hex_round_up(wb, 32);
+        stage  = cwhn ? (size_t) KH * sr * sizeof(float) : (size_t) Cin * KH * sr * sizeof(float);
+        ostage = 2 * 32 * (size_t) seg * 32 * sizeof(float);
+        prow   = cwhn ? stage / 2 + 256 + 64 * 128 : 0;
+        wpack  = kmajor ? (size_t) wk * 64 * sizeof(float) + 96 * 128 : (size_t) 32 * wk * (sizeof(float) + sizeof(uint16_t));
+        thr_size = hex_round_up((std::max)(stage + ostage + prow, wpack), tile);
+        sc       = hex_round_up((size_t) rt_block * HTP_CONV2D_HMX_SCALES_SIZE, tile);
+        w_size   = (size_t) rt_block * n_kt * tile;
+        act_size = (size_t) ct * n_kt * tile;
+        out_size = (size_t) rt_block * ct * tile;
+        total    = sc + w_size + 2 * act_size + 2 * out_size + nth * thr_size;
+        if (total <= htp_session_vtcm_size(sess)) {
+            break;
+        }
+        if (ct > 8) {
+            ct /= 2;
+        } else if (seg > 1) {
+            seg--;
+        } else if (rt_block > 1) {
+            rt_block = (rt_block + 1) / 2;
+        } else if (ct > 1) {
+            ct /= 2;
+        } else {
+            return false;
+        }
+    }
+
+    // Second stage buffer: DMA of the next segment overlaps HVX pack of this one.
+    // Skip large stages. They already fill VTCM, and the extra DMA slows HMX.
+    {
+        const size_t thr2   = hex_round_up((std::max)(2 * stage + ostage + prow, wpack), tile);
+        const size_t total2 = sc + w_size + 2 * act_size + 2 * out_size + nth * thr2;
+        if (stage <= 128 * 1024 && total2 <= htp_session_vtcm_size(sess)) {
+            n_stage  = 2;
+            thr_size = thr2;
+            total    = total2;
+        }
+    }
+
+    kp->n_threads    = nth;
+    kp->cwhn         = cwhn;
+    kp->w_kmajor     = kmajor;
+    kp->tiled.w_kstride    = ks;
+    kp->tiled.k_size       = K;
+    kp->tiled.k_group      = kg;
+    kp->tiled.k_group_pad  = kg_p;
+    kp->tiled.n_groups     = n_grp;
+    kp->tiled.n_k_tiles    = n_kt;
+    kp->n_row_tiles  = n_rt;
+    kp->tiled.n_ow_tiles   = n_owt;
+    kp->ct_chunk     = ct;
+    kp->rt_block     = rt_block;
+    kp->tiled.seg_tiles    = seg;
+    kp->tiled.stage_row    = sr;
+    kp->stage_size   = stage;
+    kp->tiled.n_stage      = n_stage;
+    kp->tiled.wk_chunk     = wk;
+    kp->off_w        = sc;
+    kp->off_act      = kp->off_w + w_size;
+    kp->act_size     = act_size;
+    kp->off_out      = kp->off_act + 2 * act_size;
+    kp->out_size     = out_size;
+    kp->off_thr      = kp->off_out + 2 * out_size;
+    kp->thr_size     = thr_size;
+    kp->vtcm_size    = total;
+    kp->tiled.div_ow_tiles = init_fastdiv_values(n_owt);
+    kp->tiled.div_oh       = init_fastdiv_values(OH);
+    kp->kernel_type  = HTP_CONV2D_KERNEL_HMX_TILED;
+    return true;
+}
+
+static bool htp_kparams_solve_conv2d_unchecked(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * dst,
+    struct htp_conv2d_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const uint32_t total_rows = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
+    kparams->total_rows = total_rows;
+    kparams->n_threads  = total_rows == 0 ? 1 : (std::min)((uint32_t) htp_session_n_threads(sess), total_rows);
+
+    if (htp_kparams_conv2d_win(sess, dst, kparams)) {
+        return true;
+    }
+
+    return htp_kparams_conv2d_tiled(sess, dst, kparams);
+}
+
+static bool htp_kparams_solve_conv2d(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_conv2d_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) ||
+        src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src0->ne[2] != src1->ne[2]) {
+        return false;
+    }
+
+    const int32_t s0 = ggml_get_op_params_i32(op, 0);
+    const int32_t s1 = ggml_get_op_params_i32(op, 1);
+    const int32_t p0 = ggml_get_op_params_i32(op, 2);
+    const int32_t p1 = ggml_get_op_params_i32(op, 3);
+    const int32_t d0 = ggml_get_op_params_i32(op, 4);
+    const int32_t d1 = ggml_get_op_params_i32(op, 5);
+
+    const int64_t ow = (src1->ne[0] + 2 * p0 - d0 * (src0->ne[0] - 1) - 1) / s0 + 1;
+    const int64_t oh = (src1->ne[1] + 2 * p1 - d1 * (src0->ne[1] - 1) - 1) / s1 + 1;
+    if (ow != dst->ne[0] || oh != dst->ne[1] || src0->ne[3] != dst->ne[2] || src1->ne[3] != dst->ne[3]) {
+        return false;
+    }
+
+    return htp_kparams_solve_conv2d_unchecked(sess, op, kparams);
+}
+
 template <auto SolveFn>
 static inline bool htp_kparams_invoke(
     const struct ggml_hexagon_session * sess,
@@ -3294,6 +3664,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_IM2COL_3D:
             return htp_kparams_invoke<htp_kparams_solve_im2col_3d>(sess, op, kparams);
+
+        case HTP_OP_CONV_2D:
+            return htp_kparams_invoke<htp_kparams_solve_conv2d>(sess, op, kparams);
 
         case HTP_OP_SUM_ROWS:
         case HTP_OP_SUM:
