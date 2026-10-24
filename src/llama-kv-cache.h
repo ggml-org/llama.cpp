@@ -250,6 +250,9 @@ public:
     // note: used by n-gram input embeddings
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
+    // token of seq_id at the largest cached position <= p, LLAMA_TOKEN_NULL if none or no cell ext
+    llama_token seq_pos_tok_le(llama_seq_id seq_id, llama_pos p) const;
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;

@@ -8,6 +8,11 @@
 #include <unordered_map>
 #include <vector>
 
+// DeepSeek-V4.1 cross-layer KV sharing: the layer whose compressed-KV storage `il` reads: its kv source or, when the
+// source is on another device (layer split), a per-device mirror fed with the source's new rows so the whole cache
+// never crosses devices. -1 = no compressed KV. no mirrors when offload == false
+int32_t llama_dsv41_kv_read_layer(const llama_model & model, int32_t il, bool offload);
+
 class llama_dsv4_comp_state {
 public:
     using stream_copy_info = llama_kv_cache::stream_copy_info;
@@ -31,6 +36,7 @@ public:
     void apply_copies(const stream_copy_info & sc_info) const;
 
     uint32_t get_ratio()      const;
+    bool     is_overlap()     const; // V4 CSA: state holds 2*ratio rows of 2x width
     uint32_t get_state_size() const;
     uint32_t get_n_stream()   const;
     uint32_t get_n_rs_seq()   const;
@@ -163,6 +169,9 @@ private:
 
     std::vector<uint32_t> rs_idx;
 
+    // [n_layer] storage layer -> layer whose rows it holds (itself, or the source of a mirror)
+    std::vector<int32_t> comp_kv_src;
+
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;
     std::unique_ptr<llama_kv_cache>      kv_hca;
@@ -213,6 +222,9 @@ public:
     void set_input_k_idxs(ggml_tensor * dst) const;
     void set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_rot(ggml_tensor * dst) const;
+
+    // token history of the raw (window) cells, for host-side n-gram hashing (deepseek41 Engram)
+    void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
 private:
     size_t i_next = 0;

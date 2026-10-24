@@ -326,11 +326,21 @@ struct llama_hparams {
     uint32_t dsv4_o_group_count        = 0;
     uint32_t dsv4_o_lora_rank          = 0;
     uint32_t dsv4_hc_mult              = 0;
+    bool     dsv4_hc_single_pass       = false; // DeepSeek-V4.1 DSpark draft: lagged pre-mix, no hc_head
     uint32_t dsv4_hc_sinkhorn_iters    = 0;
     uint32_t dsv4_hash_layer_count     = 0;
     float    dsv4_compress_rope_base   = 0.0f;
     float    dsv4_hc_eps               = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
+
+    // deepseek41
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_kv_src;   // layer whose compressed KV this layer reads, -1 = none
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_topk_src; // layer whose top-k this layer uses, -1 = none
+    int32_t  dsv41_cand_src         = -1;    // -1 = no candidate block selection
+    uint32_t dsv41_cand_topk_blocks = 0;
+    uint32_t dsv41_cand_block_size  = 0;
+    bool     dsv41_tok_hist         = false; // KV cells keep token ids for the Engram n-gram history
+    uint32_t dsv41_hist_len         = 0;     // Engram: predecessor tokens an n-gram hash reads (max_ngram - 1)
 
     // 0 = full rank (DeepSeek-V4)
     uint32_t hc_low_rank = 0;

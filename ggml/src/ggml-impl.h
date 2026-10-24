@@ -564,6 +564,50 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);
 }
 
+// E4M3 (fn): signed, 4 exp bits (bias=7), 3 mantissa bits, no inf, 0x7F/0xFF = NaN (used by MXFP8)
+static inline float ggml_e4m3_to_fp32(uint8_t x) {
+    const int sign = x & 0x80;
+    const int exp  = (x >> 3) & 0xF;
+    const int man  = x & 0x7;
+    float v;
+    if (exp == 0xF && man == 0x7) {
+        v = NAN;
+    } else if (exp == 0) {
+        v = ldexpf((float) man, -9);
+    } else {
+        v = ldexpf((float) (8 + man), exp - 10);
+    }
+    return sign ? -v : v;
+}
+
+// fp32 -> E4M3 (fn), round to nearest even, saturating to +-448, NaN -> 0x7F
+static inline uint8_t ggml_fp32_to_e4m3(float x) {
+    if (x != x) {
+        return 0x7F;
+    }
+    const uint8_t sign = signbit(x) ? 0x80 : 0x00;
+    float a = fabsf(x);
+    if (a >= 448.0f) {
+        return sign | 0x7E;
+    }
+    if (a < 0.015625f) { // subnormal grid 2^-9
+        const int m = (int) nearbyintf(a * 512.0f);
+        return sign | (uint8_t) m;
+    }
+    int e;
+    const float f = frexpf(a, &e);
+    int m = (int) nearbyintf((f * 2.0f - 1.0f) * 8.0f);
+    int E = e - 1 + 7;
+    if (m == 8) {
+        m = 0;
+        E++;
+    }
+    if (E > 15 || (E == 15 && m == 7)) {
+        return sign | 0x7E;
+    }
+    return sign | (uint8_t) ((E << 3) | m);
+}
+
 /**
  * Converts brain16 to float32.
  *

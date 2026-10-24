@@ -17,11 +17,13 @@
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
 #include <numeric>
 #include <sstream>
+#include <thread>
 #include <string>
 #include <unordered_set>
 
@@ -67,14 +69,68 @@ static bool can_reuse_kq_mask(
 
 // impl
 
+bool llm_graph_host_rows_supported(const ggml_tensor * tab) {
+    if (!tab || !tab->buffer || !tab->data || !ggml_backend_buffer_is_host(tab->buffer) || tab->view_src) {
+        return false;
+    }
+    if (tab->nb[0] != ggml_type_size(tab->type) || tab->ne[2] != 1 || tab->ne[3] != 1) {
+        return false;
+    }
+    return tab->type == GGML_TYPE_F32 || ggml_get_type_traits(tab->type)->to_float != nullptr;
+}
+
+void llm_graph_host_get_rows(const ggml_tensor * tab, const int32_t * ids, int64_t n_ids, float * dst) {
+    const int64_t nc = tab->ne[0];
+    const ggml_to_float_t to_float = tab->type == GGML_TYPE_F32 ? nullptr : ggml_get_type_traits(tab->type)->to_float;
+
+    auto run = [&](int64_t i0, int64_t i1) {
+        for (int64_t i = i0; i < i1; ++i) {
+            const int64_t r = ids[i];
+            GGML_ASSERT(r >= 0 && r < tab->ne[1]);
+            const char * src = (const char *) tab->data + r*tab->nb[1];
+            if (to_float) {
+                to_float(src, dst + i*nc, nc);
+            } else {
+                memcpy(dst + i*nc, src, nc*sizeof(float));
+            }
+        }
+    };
+
+    // split prompt-sized gathers over a few threads (the CPU GET_ROWS they replace is multi-threaded)
+    const int64_t n_elem = n_ids*nc;
+    const int     n_thr  = (int) std::min<int64_t>(8, std::max<int64_t>(1, n_elem >> 18));
+    if (n_thr <= 1) {
+        run(0, n_ids);
+        return;
+    }
+    std::vector<std::thread> workers;
+    const int64_t per = (n_ids + n_thr - 1)/n_thr;
+    for (int t = 1; t < n_thr; ++t) {
+        const int64_t i0 = std::min<int64_t>(n_ids, t*per);
+        const int64_t i1 = std::min<int64_t>(n_ids, i0 + per);
+        workers.emplace_back(run, i0, i1);
+    }
+    run(0, std::min<int64_t>(n_ids, per));
+    for (auto & w : workers) {
+        w.join();
+    }
+}
+
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
-    if (ubatch->token) {
+    if (ubatch->token && tok_host) {
+        GGML_ASSERT(!ubatch->is_mixed());
+        const int64_t n_tokens = ubatch->n_tokens;
+
+        tok_rows.resize(n_tokens*n_embd);
+        llm_graph_host_get_rows(tok_host, ubatch->token, n_tokens, tok_rows.data());
+        ggml_backend_tensor_set(embd, tok_rows.data(), 0, tok_rows.size()*sizeof(float));
+    } else if (ubatch->token) {
         const int64_t n_tokens = ubatch->n_tokens;
 
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
     }
 
-    if (ubatch->embd && embd && !ubatch->is_mixed()) {
+    if (ubatch->embd && embd && !ubatch->is_mixed() && !(tok_host && ubatch->token)) {
         GGML_ASSERT(n_embd == embd->ne[0]);
 
         const int64_t n_tokens = ubatch->n_tokens;
@@ -2010,7 +2066,7 @@ ggml_tensor * llm_graph_context::build_ffn(
                     const float limit = hparams.swiglu_clamp_shexp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
-                        if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0)) {
+                        if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0)) {
                             cur = ggml_swiglu_clamp(ctx0, cur, tmp, limit);
                         } else {
                             tmp = ggml_clamp(ctx0, tmp, -limit, limit);
@@ -2340,8 +2396,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
 
-        // Avoid division by zero, clamp to smallest number representable by F16
-        weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
+        if (arch == LLM_ARCH_DEEPSEEK41) {
+            // model.py Gate.forward: weights / (sum + 1e-20); the sum can fall below the F16 clamp below
+            weights_sum = ggml_scale_bias(ctx0, weights_sum, 1.0f, 1e-20f);
+        } else {
+            // Avoid division by zero, clamp to smallest number representable by F16
+            weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
+        }
         cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
 
         weights = ggml_div(ctx0, weights, weights_sum); // [n_expert_used, n_tokens]
@@ -2431,7 +2492,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                     const float limit = hparams.swiglu_clamp_exp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
-                        if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
+                        if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
                             cur = ggml_swiglu_clamp(ctx0, cur, up, limit);
                         } else {
                             up = ggml_clamp(ctx0, up, -limit, limit);
@@ -2628,7 +2689,7 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
 }
 
 // input embeddings with optional lora
-ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float tok_scale) const {
+ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float tok_scale, bool host_gather) const {
     const int64_t n_embd_inp = hparams.n_embd_inp();
     const int64_t n_embd     = hparams.n_embd;
 
@@ -2641,6 +2702,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     const bool has_mixed = llm_arch_supports_mixed_batch(arch) && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT;
 
     const int64_t n_tok_rows = has_mixed ? llm_graph_n_tok_rows(ubatch) : 0;
+
+    bool tok_host = host_gather && !has_mixed && n_embd_inp == n_embd && llm_graph_host_rows_supported(tok_embd) &&
+        tok_embd->ne[0] == n_embd && !(hdmd && hdmd->inv.count(tok_embd));
+    for (const auto & lora : *loras) {
+        tok_host = tok_host && lora.first->get_weight(tok_embd) == nullptr;
+    }
 
     // we have 3 standard paths to produce the input embeddings for the first layer:
     // - embd0: extract from the token embeddings weight (`tok_embd`) using the input token ids
@@ -2671,9 +2738,14 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     // the embeddings placeholders for the 3 paths
     // we use ggml_build_forward_order to make the GET_ROWS ops stick at the beginning of the compute graph
     // this way the embeddings remain in the host buffer, and the GET_ROWS run before any other computations
-    {
+    if (tok_host) {
+        inp->tok_host = tok_embd;
+        embd0 = inp->embd;
+    } else {
         embd0 = ggml_get_rows(ctx0, tok_embd, inp->tokens);
         ggml_build_forward_order(gf, embd0);
+    }
+    {
 
         embd1 = inp->embd;
 
@@ -2727,7 +2799,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     std::array<ggml_tensor *, 3> inps = {};
 
     // token embeddings path (ubatch.token != nullptr)
-    inps[0] = build_tok(embd0, inp->tokens);
+    inps[0] = tok_host ? embd0 : build_tok(embd0, inp->tokens);
 
     // vector embeddings path (ubatch.embd != nullptr)
     inps[1] = embd1;

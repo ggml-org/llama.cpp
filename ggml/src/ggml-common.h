@@ -218,6 +218,14 @@ typedef struct {
 } block_mxfp4;
 static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4/2, "wrong mxfp4 block size/padding");
 
+// MXFP8 (OCP MX): 32 E4M3 (fn) values sharing one E8M0 scale, value = e4m3(q[j]) * 2^(e - 127)
+#define QK_MXFP8 32
+typedef struct {
+    uint8_t e;          // E8M0
+    uint8_t qs[QK_MXFP8]; // E4M3 (fn) codes
+} block_mxfp8;
+static_assert(sizeof(block_mxfp8) == sizeof(uint8_t) + QK_MXFP8, "wrong mxfp8 block size/padding");
+
 #define QK_NVFP4 64
 #define QK_NVFP4_SUB 16  // sub-block size for per-group scales
 typedef struct {
