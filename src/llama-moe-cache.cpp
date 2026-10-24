@@ -199,21 +199,15 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
         ggml_backend_buffer_is_host(t->buffer);
 }
 
-static size_t llama_moe_cache_total_ram() {
+static size_t llama_moe_cache_page_size() {
 #if defined(_WIN32)
-    MEMORYSTATUSEX status;
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status)) {
-        return (size_t) status.ullTotalPhys;
-    }
-#elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGE_SIZE)
-    const long pages = sysconf(_SC_PHYS_PAGES);
-    const long page  = sysconf(_SC_PAGE_SIZE);
-    if (pages > 0 && page > 0) {
-        return (size_t) pages * (size_t) page;
-    }
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (size_t) si.dwPageSize;
+#else
+    const long page = sysconf(_SC_PAGESIZE);
+    return page > 0 ? (size_t) page : 4096;
 #endif
-    return 0;
 }
 
 }
@@ -569,25 +563,53 @@ struct llama_moe_cache::impl {
     // register the host expert pages of the cached layers with the device driver, so the
     // cache fills and the large-batch uploads DMA at full bus bandwidth instead of going
     // through pageable staging copies. mmap keeps the pages file-backed; registration just
-    // locks them. opt-in via GGML_CUDA_REGISTER_HOST (checked inside the backend), and any
-    // range the driver refuses simply stays pageable.
+    // locks them. opt-in via GGML_CUDA_REGISTER_HOST (also checked inside the backend), and
+    // any range the driver refuses simply stays pageable.
     void pin_host_experts() {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(devices[0].backend));
-        auto * reg_host = (bool (*)(void *, size_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_register_host_buffer");
-        unreg_host      = (void (*)(void *))         ggml_backend_reg_get_proc_address(reg, "ggml_backend_unregister_host_buffer");
+        // the backend gates on the same env; checking it here too keeps the default
+        // configuration free of the range bookkeeping and of misleading logs
+        const char * opt_in = getenv("GGML_CUDA_REGISTER_HOST");
+        if (opt_in == nullptr || atoi(opt_in) == 0) {
+            return;
+        }
+
+        // the first backend registry that exports the proc serves all its devices
+        // (registration is portable); mixed-backend device sets are not handled
+        bool (*reg_host)(void *, size_t) = nullptr;
+        for (const device & d : devices) {
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(d.backend));
+            reg_host   = (bool (*)(void *, size_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_register_host_buffer");
+            unreg_host = (void (*)(void *))         ggml_backend_reg_get_proc_address(reg, "ggml_backend_unregister_host_buffer");
+            if (reg_host != nullptr) {
+                break;
+            }
+        }
         if (reg_host == nullptr) {
             return;
         }
 
+        // experts already in a pinned host buffer (e.g. --load-mode none) must not be
+        // registered again
+        std::vector<ggml_backend_buffer_type_t> host_bufts;
+        for (const device & d : devices) {
+            ggml_backend_buffer_type_t buft = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(d.backend));
+            if (buft != nullptr) {
+                host_bufts.push_back(buft);
+            }
+        }
+
         // page-align the ranges and merge the overlapping ones: the expert tensors of a layer
         // are adjacent in the mapping, and registering the same page twice fails
-        constexpr uintptr_t page = 4096;
+        const uintptr_t page = llama_moe_cache_page_size();
         std::vector<std::pair<uintptr_t, uintptr_t>> ranges;
         for (const layer & l : layers) {
             if (l.ig < 0) {
                 continue;
             }
             for (const ggml_tensor * t : l.experts) {
+                if (std::find(host_bufts.begin(), host_bufts.end(), ggml_backend_buffer_get_type(t->buffer)) != host_bufts.end()) {
+                    continue;
+                }
                 const uintptr_t base = (uintptr_t) t->data & ~(page - 1);
                 const uintptr_t end  = ((uintptr_t) t->data + ggml_nbytes(t) + page - 1) & ~(page - 1);
                 ranges.push_back({ base, end });
@@ -606,14 +628,21 @@ struct llama_moe_cache::impl {
         // pinned pages are charged to a shared budget of about half the system RAM on
         // Windows and compete with the OS everywhere; registering everything can starve
         // later device allocations, so by default pin at most a quarter of the physical
-        // RAM. LLAMA_MOE_PIN_MIB overrides the cap, 0 disables pinning entirely.
-        const size_t total_ram = llama_moe_cache_total_ram();
-        size_t cap = total_ram > 0 ? total_ram/4 : (size_t) 8192*1024*1024;
+        // RAM (8 GiB when it cannot be determined). LLAMA_MOE_PIN_MIB overrides the cap,
+        // and a value <= 0 disables pinning entirely.
+        size_t free_ram  = 0;
+        size_t total_ram = 0;
+        ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (cpu_dev != nullptr) {
+            ggml_backend_dev_memory(cpu_dev, &free_ram, &total_ram);
+        }
+        size_t cap = total_ram > 0 ? total_ram/4 : (size_t) std::min<uint64_t>(8192ull*1024*1024, SIZE_MAX);
         if (const char * env = getenv("LLAMA_MOE_PIN_MIB")) {
-            cap = (size_t) atoll(env)*1024*1024;
-            if (cap == 0) {
+            const long long mib = atoll(env);
+            if (mib <= 0) {
                 return;
             }
+            cap = (size_t) std::min<uint64_t>((uint64_t) mib*1024*1024, SIZE_MAX);
         }
 
         size_t pinned  = 0;
