@@ -275,6 +275,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "RWForCausalLM": "falcon",
     "RWKV6Qwen2ForCausalLM": "rwkv",
     "RWKV7ForCausalLM": "rwkv",
+    "Raon1MiniForCausalLM": "raon",
     "RobertaForSequenceClassification": "bert",
     "RobertaModel": "bert",
     "RuGPT3XLForCausalLM": "gpt2",

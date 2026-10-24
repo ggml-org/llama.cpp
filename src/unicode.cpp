@@ -1216,7 +1216,74 @@ static std::vector<size_t> unicode_regex_split_custom_newlines(const std::string
     return bpe_offsets;
 }
 
+static std::vector<size_t> unicode_regex_split_custom_raon(const std::string & text, const std::vector<size_t> & offsets) {
+    const auto cpts = unicode_cpts_from_utf8(text);
+    std::vector<size_t> result;
+    size_t begin = 0;
+    for (size_t offset : offsets) {
+        const size_t end = begin + offset;
+        auto flags = [&](size_t p) { return p < end ? unicode_cpt_flags_from_cpt(cpts[p]) : unicode_cpt_flags{}; };
+        auto cjk = [&](size_t p) {
+            return p < end && ((cpts[p] >= 0x4e00 && cpts[p] <= 0x9fa5) || (cpts[p] >= 0x3040 && cpts[p] <= 0x30ff));
+        };
+        auto letter = [&](size_t p) { return flags(p).is_letter && !cjk(p); };
+        for (size_t pos = begin; pos < end;) {
+            const size_t start = pos;
+            size_t p = pos + (cpts[pos] == ' ');
+            if (cjk(p)) {
+                do { ++p; } while (cjk(p));
+                pos = p;
+            } else if (letter(p)) {
+                do {
+                    ++p;
+                    while (flags(p).is_accent_mark) { ++p; }
+                    if (letter(p)) { continue; }
+                    if (p < end && cpts[p] == ' ' && letter(p + 1)) { ++p; continue; }
+                    break;
+                } while (true);
+                pos = p;
+            } else if (flags(pos).is_number) {
+                p = pos;
+                while (flags(p).is_number) { ++p; }
+                const size_t first = (p - pos) % 3;
+                pos += first ? first : 3;
+            } else {
+                auto punct = [&](size_t q) {
+                    const auto f = flags(q);
+                    return q < end && !f.is_whitespace && !f.is_letter && !f.is_number;
+                };
+                if (punct(p)) {
+                    do { ++p; } while (punct(p));
+                    while (p < end && (cpts[p] == '\r' || cpts[p] == '\n' || cpts[p] == '/')) { ++p; }
+                    pos = p;
+                } else {
+                    p = pos;
+                    size_t last_newline = pos;
+                    while (flags(p).is_whitespace) {
+                        if (cpts[p] == '\r' || cpts[p] == '\n') { last_newline = p + 1; }
+                        ++p;
+                    }
+                    if (last_newline > pos) {
+                        pos = last_newline;
+                    } else if (p > pos) {
+                        pos = p < end && p - pos > 1 ? p - 1 : p;
+                    } else {
+                        ++pos;
+                    }
+                }
+            }
+            result.push_back(pos - start);
+        }
+        begin = end;
+    }
+    return result;
+}
+
 static std::vector<size_t> unicode_regex_split_custom(const std::string & text, const std::string & regex_expr, const std::vector<size_t> & offsets) {
+    if (regex_expr == " ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+)*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
+        return unicode_regex_split_custom_raon(text, offsets);
+    }
+
     std::vector<size_t> bpe_offsets;
 
     if (regex_expr == "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)") {

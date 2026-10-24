@@ -207,6 +207,8 @@ pre_computed_hashes = [
     {"name": "spark2_5", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/XHToken/Spark-X2.5-1.7B", "chkhsh": "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed"},
     # k2-horizon variants
     {"name": "k2-horizon", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-0.9B", "chkhsh": "1f9825a388f700a6b591722f17d470cbbcf10973ece35d2fd14239a14110ae1a"},
+    # raon: NFC normalizer + CJK-aware split regex
+    {"name": "raon", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/KRAFTON/Raon-1-mini-preview", "chkhsh": "ffdae2f611dc6903980be2fbb108467cb97376d7d03cd332bb7e2602f87fa1f1"},
 ]
 
 

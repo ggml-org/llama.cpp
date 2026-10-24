@@ -925,7 +925,9 @@ const struct ggml_tensor * llama_model_loader::check_tensor_dims(
 }
 
 // checks if the weight tensor can be used with the specified buffer type and device
-static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
+// src1_noncont: probe MUL_MAT with a non-contiguous src1, as the graph uses the weight (llm_tensor_info::src1_noncont)
+static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w, ggml_op op, bool src1_noncont,
+        ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
     GGML_ASSERT(w != nullptr);
 
     if (op == GGML_OP_NONE) {
@@ -960,7 +962,15 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_MUL_MAT:
             {
-                ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], 512, w->ne[2], w->ne[3]);
+                ggml_tensor * b;
+                if (src1_noncont) {
+                    // shaped like the MLA graph's strided src1: a head-major view of wider rows (q_nope out of q) permuted to [n_embd_head_qk_nope, n_tokens, n_head]
+                    ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 2*w->ne[0], w->ne[2], 512, w->ne[3]);
+                    b = ggml_view_4d(ctx, q, w->ne[0], w->ne[2], 512, w->ne[3], q->nb[1], q->nb[2], q->nb[3], 0);
+                    b = ggml_permute(ctx, b, 0, 2, 1, 3);
+                } else {
+                    b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], 512, w->ne[2], w->ne[3]);
+                }
                 op_tensor = ggml_mul_mat(ctx, w, b);
             } break;
         case GGML_OP_MUL_MAT_ID:
@@ -1072,12 +1082,12 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
 }
 
 // find the first buffer type in the list that can use the tensor
-static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list) {
+static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, bool src1_noncont, const buft_list_t * buft_list) {
     GGML_ASSERT(!buft_list->empty());
     for (const auto & cur : *buft_list) {
         ggml_backend_dev_t cur_dev = cur.first;
         ggml_backend_buffer_type_t cur_buft = cur.second;
-        if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
+        if (weight_buft_supported(hparams, tensor, op, src1_noncont, cur_buft, cur_dev)) {
             return cur_buft;
         }
     }
@@ -1247,7 +1257,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 if (std::regex_search(tensor_name, pattern)) {
                     if (overrides->buft == ggml_backend_cpu_buffer_type()) {
                         // when overriding to a CPU buffer, consider the extra buffer types
-                        buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
+                        buft = select_weight_buft(hparams, t_meta, op, info.src1_noncont, buft_list_cpu);
                         if (use_mmap) {
                             static std::once_flag once;
                             std::call_once(once, [] {
@@ -1268,7 +1278,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         if (!buft) {
-            buft = select_weight_buft(hparams, t_meta, op, buft_list);
+            buft = select_weight_buft(hparams, t_meta, op, info.src1_noncont, buft_list);
             if (!buft) {
                 throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
             }

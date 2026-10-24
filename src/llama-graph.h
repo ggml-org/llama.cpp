@@ -1157,6 +1157,12 @@ struct llm_graph_context {
                       int   il,
                      bool   reshape = true) const;
 
+    // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * linear_beta*tanh(up/linear_beta)
+    // linear_beta <= 0 disables the transform on the up branch
+    ggml_tensor * build_situ(
+             ggml_tensor * gate,
+             ggml_tensor * up) const;
+
     ggml_tensor * build_ffn(
              ggml_tensor * cur,
              ggml_tensor * up,

@@ -131,8 +131,8 @@ llama_memory_context_ptr llama_memory_hybrid::init_update(llama_context * lctx, 
 }
 
 bool llama_memory_hybrid::get_can_shift() const {
-    // Shifting is trivially supported for recurrent
-    return mem_attn->get_can_shift();
+    // a shift drops a middle range: the attention cache forgets it, the recurrent state cannot (seq_rm keeps the state)
+    return false;
 }
 
 void llama_memory_hybrid::clear(bool data) {

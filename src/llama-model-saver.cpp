@@ -281,6 +281,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     add_kv(LLM_KV_POST_NORM_EPS,                     hparams.f_post_norm_eps);
+    add_kv(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,     hparams.f_norm_rms_eps_latent);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
     add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert);

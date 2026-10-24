@@ -396,6 +396,9 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_RAON:
+                regex_exprs = {" ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+)*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"};
+                break;
             case LLAMA_VOCAB_PRE_TYPE_QWEN35:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -644,17 +647,25 @@ struct llm_tokenizer_bpe_session {
     virtual void tokenize(const std::string & text, std::vector<llama_token> & output) {
         auto tok_pre = vocab.get_pre_type();
 
+        std::string normalized_text;
+        if (vocab.get_normalizer_opts().nfc) {
+            for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
+                normalized_text += unicode_cpt_to_utf8(cpt);
+            }
+        }
+        const std::string & text_in = vocab.get_normalizer_opts().nfc ? normalized_text : text;
+
         std::vector<std::string> word_collection;
         if (tok_pre == LLAMA_VOCAB_PRE_TYPE_NEMOTRON_3_5_EMBD) {
             static const std::string zwnj = "\xe2\x80\x8c";
-            std::string normalized_text = text;
+            std::string normalized_text = text_in;
             replace_all(normalized_text, "[" + zwnj, "[");
             replace_all(normalized_text, "<" + zwnj, "<");
             word_collection = unicode_regex_split(normalized_text, tokenizer.regex_exprs, tokenizer.byte_encode);
         } else if (tok_pre == LLAMA_VOCAB_PRE_TYPE_SOPRANO) {
             std::string normalized_text;
             bool space = false;
-            for (uint32_t cpt : unicode_cpts_from_utf8(text)) {
+            for (uint32_t cpt : unicode_cpts_from_utf8(text_in)) {
                 if (unicode_cpt_flags_from_cpt(cpt).is_whitespace) {
                     if (!space) {
                         normalized_text += ' ';
@@ -668,7 +679,7 @@ struct llm_tokenizer_bpe_session {
             }
             word_collection = unicode_regex_split(normalized_text, tokenizer.regex_exprs, tokenizer.byte_encode);
         } else {
-            word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+            word_collection = unicode_regex_split(text_in, tokenizer.regex_exprs, tokenizer.byte_encode);
         }
 
         int final_prev_index = -1;
@@ -2570,6 +2581,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "kormo" ||
                     tokenizer_pre == "f2llmv2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
+                clean_spaces = false;
+            } else if (tokenizer_pre == "raon") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_RAON;
                 clean_spaces = false;
             } else if (
                     tokenizer_pre == "qwen35") {

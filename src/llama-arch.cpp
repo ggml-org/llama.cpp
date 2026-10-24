@@ -160,6 +160,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MAION_CODER,      "maion-coder"      },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
     { LLM_ARCH_KIMI_K3,          "kimi-k3"          },
+    { LLM_ARCH_RAON1,            "raon1"            },
     { LLM_ARCH_GLM5_NEXT,        "glm5-next"        },
     { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MELLUM,           "mellum"           },
@@ -274,6 +275,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_VALUE_LENGTH,                 "%s.attention.value_length"                 },
     { LLM_KV_ATTENTION_LAYERNORM_EPS,                "%s.attention.layer_norm_epsilon"           },
     { LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,            "%s.attention.layer_norm_rms_epsilon"       },
+    { LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,          "%s.attention.latent_norm_rms_epsilon"      },
     { LLM_KV_ATTENTION_GROUPNORM_EPS,                "%s.attention.group_norm_epsilon"           },
     { LLM_KV_ATTENTION_GROUPNORM_GROUPS,             "%s.attention.group_norm_groups"            },
     { LLM_KV_ATTENTION_CAUSAL,                       "%s.attention.causal"                       },
@@ -585,6 +587,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_SSM_F_A,                                "blk.%d.ssm_f_a" },
     { LLM_TENSOR_SSM_F_B,                                "blk.%d.ssm_f_b" },
     { LLM_TENSOR_SSM_BETA,                               "blk.%d.ssm_beta" },
+    { LLM_TENSOR_SSM_RDA,                                "blk.%d.ssm_rda" },
     { LLM_TENSOR_SSM_G_A,                                "blk.%d.ssm_g_a" },
     { LLM_TENSOR_SSM_G,                                  "blk.%d.ssm_g" },
     { LLM_TENSOR_ATTN_RES_SCORE,                         "blk.%d.attn_res_score" },
@@ -905,8 +908,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_ATTN_COMPRESSOR_WGATE,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ATTN_COMPRESSOR_APE,        {LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS}},
     {LLM_TENSOR_ATTN_COMPRESSOR_NORM,       {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-    {LLM_TENSOR_ATTN_K_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_ATTN_V_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_ATTN_K_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT, true}},
+    {LLM_TENSOR_ATTN_V_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT, true}},
     {LLM_TENSOR_ATTN_SINKS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SCALE}},
     {LLM_TENSOR_DEC_ATTN_Q,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_DEC_ATTN_K,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -968,6 +971,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_SSM_F_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_F_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_BETA,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_SSM_RDA,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_G_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_G,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ATTN_RES_SCORE,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1234,6 +1238,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_BAILINGMOE3:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_RAON1:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
@@ -1261,6 +1266,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
 bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_RAON1:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN4EXP:
@@ -1324,6 +1330,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_BAILINGMOE3:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_RAON1:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_QWEN3TTS:
             return false;

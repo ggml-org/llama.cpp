@@ -1020,6 +1020,9 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
             "model.layers.{bid}.attention.b_proj",       # bailingmoe3
         ),
+        MODEL_TENSOR.SSM_RDA: (
+            "model.layers.{bid}.self_attn.rda_w_proj",
+        ),
         # Kimi K3 latent MoE: routed experts operate in a down-projected space
         MODEL_TENSOR.FFN_ROUTED_DOWN: (
             "model.layers.{bid}.block_sparse_moe.routed_expert_down_proj",

@@ -129,6 +129,7 @@ enum llm_type {
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_24B_A2B, // lfm2moe
     LLM_TYPE_26B_A4B, // Gemma4
+    LLM_TYPE_29B_A4B, // Raon-1
     LLM_TYPE_30B_A3B,
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_32B_A9B, // Granite4 Hybrid
@@ -582,6 +583,7 @@ struct llama_layer {
     struct ggml_tensor * ssm_f_a    = nullptr;
     struct ggml_tensor * ssm_f_b    = nullptr;
     struct ggml_tensor * ssm_beta   = nullptr;
+    struct ggml_tensor * ssm_rda    = nullptr;
     struct ggml_tensor * ssm_g_a    = nullptr;
     struct ggml_tensor * ssm_g_b    = nullptr;
     struct ggml_tensor * ssm_o_norm = nullptr;

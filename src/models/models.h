@@ -2873,6 +2873,38 @@ struct llama_model_kimi_k3 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct llama_model_raon1 : public llama_model_base {
+    llama_model_raon1(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        ggml_tensor * helmert    = nullptr;
+        ggml_tensor * identity   = nullptr;
+        ggml_tensor * chart_base = nullptr;
+
+        ggml_tensor * build_hc_pre(ggml_tensor * x, ggml_tensor * fn, ggml_tensor * scale,
+                                   ggml_tensor * base, ggml_tensor ** post, ggml_tensor ** comb, int il);
+
+        ggml_tensor * build_hc_post(ggml_tensor * x, ggml_tensor * branch,
+                                    ggml_tensor * post, ggml_tensor * comb, int il);
+
+        ggml_tensor * build_rda_conv(llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_seq,
+                                     ggml_tensor * x_proj, ggml_tensor * conv_w, int64_t qkv, int il);
+
+        ggml_tensor * build_rda_gate(ggml_tensor * x, ggml_tensor * ssm_a);
+
+        ggml_tensor * build_rda_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_rs * inp_rs, int il);
+
+        ggml_tensor * build_mla_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_attn_k * inp_attn_k, int il);
+    };
+};
+
 struct llama_model_glm5_next : public llama_model_base {
     llama_model_glm5_next(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
