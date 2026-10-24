@@ -743,12 +743,17 @@ static void ggml_compute_forward_add_id_f32(
         // src1 indices
         const int i11 = *(int32_t *) ((char *) src2->data + i1*nb20 + i2*nb21);
 
-        GGML_ASSERT(i11 >= 0 && i11 < ne11);
+        GGML_ASSERT(i11 == -1 || (i11 >= 0 && i11 < ne11));
 
-        ggml_vec_add_f32(ne0,
-                (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 ),
-                (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01),
-                (float *) ((char *) src1->data + i11*nb11));
+        float       * dst_row  = (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 );
+        const float * src0_row = (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
+
+        if (i11 == -1) {
+            memcpy(dst_row, src0_row, ne0*sizeof(float));
+            continue;
+        }
+
+        ggml_vec_add_f32(ne0, dst_row, src0_row, (float *) ((char *) src1->data + i11*nb11));
     }
 }
 
@@ -1292,24 +1297,37 @@ static void ggml_compute_forward_sum_f32(
     }
 
     assert(ggml_is_scalar(dst));
-    assert(src0->nb[0] == sizeof(float));
 
     GGML_TENSOR_LOCALS(int64_t, ne0, src0, ne)
     GGML_TENSOR_LOCALS(size_t,  nb0, src0, nb)
 
-    ggml_float sum     = 0;
-    ggml_float row_sum = 0;
+    ggml_float sum = 0;
 
-    for (int64_t i03 = 0; i03 < ne03; i03++) {
-        for (int64_t i02 = 0; i02 < ne02; i02++) {
-            for (int64_t i01 = 0; i01 < ne01; i01++) {
-                ggml_vec_sum_f32_ggf(ne00,
-                        &row_sum,
-                        (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03));
-                sum += row_sum;
+    if (nb00 == sizeof(float)) {
+        ggml_float row_sum = 0;
+        for (int64_t i03 = 0; i03 < ne03; i03++) {
+            for (int64_t i02 = 0; i02 < ne02; i02++) {
+                for (int64_t i01 = 0; i01 < ne01; i01++) {
+                    ggml_vec_sum_f32_ggf(ne00,
+                            &row_sum,
+                            (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03));
+                    sum += row_sum;
+                }
+            }
+        }
+    } else {
+        for (int64_t i03 = 0; i03 < ne03; i03++) {
+            for (int64_t i02 = 0; i02 < ne02; i02++) {
+                for (int64_t i01 = 0; i01 < ne01; i01++) {
+                    const char * row = (const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                        sum += (ggml_float) *(const float *) (row + i00*nb00);
+                    }
+                }
             }
         }
     }
+
     ((float *) dst->data)[0] = sum;
 }
 
@@ -11745,6 +11763,92 @@ void ggml_compute_forward_dsv4_hc_post(
             {
                 GGML_ABORT("fatal error");
             }
+    }
+}
+
+// ggml_compute_forward_top_k_mask
+
+void ggml_compute_forward_top_k_mask(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * mask   = dst->src[0];
+    const ggml_tensor * top_k  = dst->src[1];
+    const ggml_tensor * score  = dst->src[2];
+    const ggml_tensor * blocks = dst->src[3];
+    const ggml_tensor * extra  = dst->src[4];
+
+    GGML_ASSERT(dst->type == mask->type);
+    GGML_ASSERT(dst->nb[0] == ggml_type_size(dst->type));
+
+    const int64_t n_kv    = mask->ne[0];
+    const int64_t ne1     = dst->ne[1];
+    const int64_t ne2     = dst->ne[2];
+    const int64_t n_rows  = ggml_nrows(dst);
+    const int64_t n_top   = top_k->ne[0];
+    const int64_t n_blk   = blocks ? blocks->ne[0] : 1;
+    const int64_t n_pick  = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+    const int64_t n_extra = extra ? extra->ne[0] : 0;
+
+    const size_t ts = ggml_type_size(dst->type);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    for (int64_t ir = ith; ir < n_rows; ir += nth) {
+        const int64_t i1 = ir % ne1;
+        const int64_t i2 = (ir / ne1) % ne2;
+        const int64_t i3 = ir / (ne1*ne2);
+
+        const char * mask_row = (const char *) mask->data
+            + (i1 % mask->ne[1])*mask->nb[1] + (i2 % mask->ne[2])*mask->nb[2] + (i3 % mask->ne[3])*mask->nb[3];
+        char * dst_row = (char *) dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+
+        if (dst->type == GGML_TYPE_F16) {
+            const ggml_fp16_t ninf = GGML_CPU_FP32_TO_FP16(-INFINITY);
+            for (int64_t c = 0; c < n_kv; ++c) {
+                ((ggml_fp16_t *) dst_row)[c] = ninf;
+            }
+        } else {
+            for (int64_t c = 0; c < n_kv; ++c) {
+                ((float *) dst_row)[c] = -INFINITY;
+            }
+        }
+
+        auto keep = [&](int32_t c) {
+            if (c >= 0 && c < n_kv) {
+                memcpy(dst_row + c*ts, mask_row + c*ts, ts);
+            }
+        };
+
+        const char * top_k_row = (const char *) top_k->data + i1*top_k->nb[1] + i2*top_k->nb[2] + i3*top_k->nb[3];
+
+        for (int64_t j = 0; j < n_top; ++j) {
+            const int32_t p = *(const int32_t *) (top_k_row + j*top_k->nb[0]);
+            if (p < 0 || p >= n_pick) {
+                continue;
+            }
+            if (score) {
+                const float s = *(const float *) ((const char *) score->data
+                    + p*score->nb[0] + i1*score->nb[1] + i2*score->nb[2] + i3*score->nb[3]);
+                if (!(s > -INFINITY)) {
+                    continue;
+                }
+            }
+            if (!blocks) {
+                keep(p);
+                continue;
+            }
+            for (int64_t k = 0; k < n_blk; ++k) {
+                keep(*(const int32_t *) ((const char *) blocks->data + k*blocks->nb[0] + p*blocks->nb[1]));
+            }
+        }
+
+        if (extra) {
+            const char * extra_row = (const char *) extra->data + i1*extra->nb[1] + i2*extra->nb[2] + i3*extra->nb[3];
+            for (int64_t j = 0; j < n_extra; ++j) {
+                keep(*(const int32_t *) (extra_row + j*extra->nb[0]));
+            }
+        }
     }
 }
 

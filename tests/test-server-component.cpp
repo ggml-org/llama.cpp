@@ -435,6 +435,35 @@ static void test_decision_escape(testing & t) {
     });
 }
 
+static void test_rerank_template(testing & t) {
+    struct test_case {
+        const char * name;
+        std::string tmpl;
+        std::string query;
+        std::string doc;
+        std::string expected;
+    };
+    const test_case cases[] = {
+        {"plain inputs", "Q: {query}\nD: {document}", "query", "doc", "Q: query\nD: doc"},
+        {"document placeholder in query", "Q: {query}\nD: {document}", "Explain {document}.", "doc", "Q: Explain {document}.\nD: doc"},
+        {"query placeholder in query", "{query}|{document}", "{query}", "doc", "{query}|doc"},
+        {"placeholders in both inputs", "{query}|{document}", "{query} {document}", "{query} {document}", "{query} {document}|{query} {document}"},
+        {"repeated placeholders", "{query}|{document}|{query}|{document}", "{document}", "doc", "{document}|doc|{document}|doc"},
+        {"adjacent reversed placeholders", "{document}{query}", "query", "doc", "docquery"},
+        {"query only", "{query}", "{document}", "doc", "{document}"},
+        {"document only", "{document}", "query", "{query}", "{query}"},
+        {"no placeholders", "fixed", "{document}", "{query}", "fixed"},
+        {"unknown and incomplete placeholders", "{unknown}|{query}|{document}|{query", "query", "doc", "{unknown}|query|doc|{query"},
+        {"nested braces", "{{query}}|{{document}}", "query", "doc", "{query}|{doc}"},
+        {"placeholder formed at boundary", "{query}ument}", "{doc", "doc", "{document}"},
+        {"empty inputs", "Q: {query}\nD: {document}", "", "", "Q: \nD: "},
+        {"empty template", "", "query", "doc", ""},
+    };
+    for (const auto & test : cases) {
+        t.assert_equal(test.name, test.expected, format_rerank_template(test.tmpl, test.query, test.doc));
+    }
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -454,6 +483,7 @@ int main(int argc, char ** argv) {
     t.test("lora_helpers",  test_lora_helpers);
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
+    t.test("rerank_template", test_rerank_template);
 
     return t.summary();
 }

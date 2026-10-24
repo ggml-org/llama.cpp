@@ -42,11 +42,15 @@ struct clip_graph_deepseek4v : clip_graph {
 struct clip_graph_qwen2vl : clip_graph {
     clip_graph_qwen2vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
-    ggml_tensor * build_inp_with_temporal_merge();
 };
 
 struct clip_graph_qwen3vl : clip_graph_qwen2vl {
     clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen2vl(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_sensenova_u1 : clip_graph {
+    clip_graph_sensenova_u1(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
@@ -414,6 +418,15 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, c
 
 // same, for the streaming mimi decoder (pocket-tts GEN_WAV)
 std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hparams, const clip_model & model);
+
+struct clip_graph_soprano : clip_graph {
+    clip_graph_soprano(clip_ctx * ctx, const clip_image_f32 & img, int n_frames) : clip_graph(ctx, img), n_frames(n_frames) {}
+    ggml_cgraph * build() override;
+    static void decode_spectrum(const clip_model & model, const std::vector<float> & spectrum, std::vector<float> & pcm);
+    // SopranoDecoder default
+    static constexpr int upscale = 4;
+    int n_frames;
+};
 
 struct clip_graph_kimik25 : clip_graph {
     clip_graph_kimik25(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}

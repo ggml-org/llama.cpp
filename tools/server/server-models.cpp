@@ -35,12 +35,6 @@
 extern char **environ;
 #endif
 
-#if defined(__APPLE__) && defined(__MACH__)
-// macOS: use _NSGetExecutablePath to get the executable path
-#include <mach-o/dyld.h>
-#include <limits.h>
-#endif
-
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
@@ -436,47 +430,6 @@ struct server_lru_sched {
 // delete). distinct from params.timeout_read/write which only applies to the generation proxy
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
-static std::filesystem::path get_server_exec_path() {
-#if defined(_WIN32)
-    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
-    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
-    if (len == 0 || len >= _countof(buf)) {
-        throw std::runtime_error("GetModuleFileNameW failed or path too long");
-    }
-    return std::filesystem::path(buf);
-#elif defined(__APPLE__) && defined(__MACH__)
-    char small_path[PATH_MAX];
-    uint32_t size = sizeof(small_path);
-
-    if (_NSGetExecutablePath(small_path, &size) == 0) {
-        // resolve any symlinks to get absolute path
-        try {
-            return std::filesystem::canonical(std::filesystem::path(small_path));
-        } catch (...) {
-            return std::filesystem::path(small_path);
-        }
-    } else {
-        // buffer was too small, allocate required size and call again
-        std::vector<char> buf(size);
-        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
-            try {
-                return std::filesystem::canonical(std::filesystem::path(buf.data()));
-            } catch (...) {
-                return std::filesystem::path(buf.data());
-            }
-        }
-        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
-    }
-#else
-    char path[FILENAME_MAX];
-    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
-    if (count <= 0) {
-        throw std::runtime_error("failed to resolve /proc/self/exe");
-    }
-    return std::filesystem::path(std::string(path, count));
-#endif
-}
-
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
@@ -486,6 +439,8 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    preset.unset_option("LLAMA_ARG_CONNECT");
+    preset.unset_option("LLAMA_ARG_CONNECT_CODE");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -566,25 +521,29 @@ void server_model_meta::update_caps(const common_params & base) {
         return;
     }
 
-    // read the output modalities and the trained context from the GGUF metadata
-    std::vector<std::string> output_modalities = {"text"};
-    if (!params.model.path.empty()) {
-        const common_gguf_info info = common_get_gguf_info(params.model.path);
-        output_modalities = server_model_output_modalities(info.decision_type);
-        n_ctx_train       = info.n_ctx_train;
-    }
-
     bool inp_image = false;
     bool inp_audio = false;
+    bool gen_audio = false;
     try {
         if (!params.no_mmproj && !params.mmproj.path.empty()) {
             mtmd_caps caps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
             inp_image = caps.inp_vision;
             inp_audio = caps.inp_audio;
+            gen_audio = caps.gen_audio;
         }
     } catch (const std::exception & e) {
         LOG_WRN("failed to read the multimodal capabilities of '%s': %s\n", name.c_str(), e.what());
         // keep the output modalities from the GGUF metadata
+    }
+
+    // read the output modalities and the trained context from the GGUF metadata
+    std::vector<std::string> output_modalities = {"text"};
+    if (!params.model.path.empty()) {
+        const common_gguf_info info = common_get_gguf_info(params.model.path);
+        // same rule as mtmd_helper_model_can_chat()
+        const bool can_chat = !gen_audio || info.has_chat_tmpl;
+        output_modalities = server_model_output_modalities(info.decision_type, can_chat, gen_audio);
+        n_ctx_train       = info.n_ctx_train;
     }
 
     // offline discovery cannot see video; a loaded model reports it
@@ -1944,6 +1903,81 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     return proxy;
 }
 
+void server_models::proxy_ws(const server_http_req & req, server_http_context::ws_conn & conn, const std::string & name) {
+    auto send_error = [&conn](const std::string & message) {
+        conn.send(safe_json_to_str(json {
+            {"type", "error"},
+            {"error", {{"type", "server_error"}, {"code", nullptr}, {"message", message}, {"param", nullptr}}},
+        }));
+        conn.close();
+    };
+
+    auto meta = get_meta(name);
+    if (!meta.has_value() || !meta->is_running()) {
+        send_error("model name=" + name + " is not running");
+        return;
+    }
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        mapping[name].meta.last_used = ggml_time_ms();
+        mapping[name].req_count++;
+    }
+    SRV_INF("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
+
+    std::string url = std::string("ws://") + CHILD_ADDR + ":" + std::to_string(meta->port) + req.path;
+    if (!req.query_string.empty()) {
+        url += '?' + req.query_string;
+    }
+    // the client library adds its own upgrade headers
+    httplib::Headers headers;
+    for (const auto & [key, value] : req.headers) {
+        std::string lower = key;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0) {
+            continue;
+        }
+        headers.emplace(key, value);
+    }
+
+    {
+        httplib::ws::WebSocketClient upstream(url, headers);
+        if (!upstream.connect()) {
+            send_error("failed to connect to model name=" + name);
+        } else {
+            // client to child
+            std::thread pump([&]() {
+                std::string msg;
+                while (true) {
+                    const int res = conn.read(msg);
+                    if (res == 0 || !(res == 1 ? upstream.send(msg) : upstream.send(msg.data(), msg.size()))) {
+                        break;
+                    }
+                }
+                upstream.close();
+            });
+            // child to client
+            std::string msg;
+            while (true) {
+                const auto res = upstream.read(msg);
+                if (res == httplib::ws::Fail || !(res == httplib::ws::Text ? conn.send(msg) : conn.send_binary(msg))) {
+                    break;
+                }
+            }
+            conn.close();
+            pump.join();
+        }
+    }
+
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end() && it->second.req_count > 0) {
+        it->second.req_count--;
+        if (it->second.req_count == 0) {
+            sched->tick(lk);
+        }
+    }
+}
+
 void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
     server_state state;
     json payload;
@@ -2282,7 +2316,7 @@ void server_models_routes::init_routes() {
         if (name.empty()) {
             // main instance
             auto res = std::make_unique<server_http_res>();
-            res_ok(res, {
+            json props = {
                 // TODO: add support for this on web UI
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
@@ -2298,7 +2332,11 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
-            });
+            };
+            if (!params.server_connect_code.empty()) {
+                props["connect_code"] = params.server_connect_code;
+            }
+            res_ok(res, props);
             return res;
         }
         return proxy_get(req);
@@ -2316,6 +2354,24 @@ void server_models_routes::init_routes() {
             models.ensure_model_ready(name, req.should_stop);
         }
         return models.proxy_request(req, method, name, false);
+    };
+
+    this->proxy_ws = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        std::string name = req.get_param("model");
+        bool autoload = is_autoload(params, req);
+        auto error_res = std::make_unique<server_http_res>();
+        if (!router_validate_model(name, models, autoload, error_res)) {
+            // error_res holds {"error": {...}}, send it as a websocket error event
+            json err = json::parse(error_res->data);
+            err["type"] = "error";
+            conn.send(safe_json_to_str(err));
+            conn.close();
+            return;
+        }
+        if (autoload) {
+            models.ensure_model_ready(name, req.should_stop);
+        }
+        models.proxy_ws(req, conn, name);
     };
 
     this->proxy_post = [this](const server_http_req & req) {
@@ -2877,9 +2933,10 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup_pipes = [pipe]() {
+    this->cleanup_pipes = [pipe, cli]() {
         pipe->close_read();
         pipe->close_write();
+        cli->stop();
     };
 
     // wire up the receive end of the pipe

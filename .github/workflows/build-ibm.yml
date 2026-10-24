@@ -20,7 +20,11 @@ on:
     paths: [
       '.github/workflows/build-ibm.yml',
       'ggml/src/ggml-cpu/**',
-      'ggml/src/ggml-zdnn/**'
+      'ggml/src/ggml-zdnn/**',
+      'ggml/src/ggml-quants.c',
+      'src/llama-quant.cpp',
+      'gguf-py/gguf/scripts/gguf_convert_endian.py',
+      'tests/test-quantize-be.sh'
     ]
 
 cache-mode: none
@@ -104,6 +108,11 @@ jobs:
           echo "Fetch llama2c big-endian model"
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+      - name: Test quantize (s390x)
+        id: quantize_test_s390x
+        run: |
+          ./tests/test-quantize-be.sh ./build/bin/llama-quantize ./build/bin/llama-perplexity 2>&1
 
   ubuntu-26-zdnn-s390x:
     name: ubuntu-26-zdnn-s390x

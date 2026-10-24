@@ -25,6 +25,7 @@ static void test_expressions(testing & t);
 static void test_set_statement(testing & t);
 static void test_filters(testing & t);
 static void test_literals(testing & t);
+static void test_hexadecimal_escapes(testing & t);
 static void test_comments(testing & t);
 static void test_macros(testing & t);
 static void test_namespace(testing & t);
@@ -65,6 +66,7 @@ int main(int argc, char *argv[]) {
     t.test("set statement", test_set_statement);
     t.test("filters", test_filters);
     t.test("literals", test_literals);
+    t.test("hexadecimal escapes", test_hexadecimal_escapes);
     t.test("comments", test_comments);
     t.test("macros", test_macros);
     t.test("namespace", test_namespace);
@@ -747,6 +749,62 @@ static void test_filters(testing & t) {
         "321"
     );
 
+    test_template(t, "unique",
+        "{{ items|unique|join(',') }}",
+        {{"items", json::array({3, 1, 3, 2, 1})}},
+        "3,1,2"
+    );
+
+    test_template(t, "unique case sensitive",
+        "{{ items|unique(case_sensitive=true)|join(',') }}",
+        {{"items", json::array({"a", "A", "b", "B", "a"})}},
+        "a,A,b,B"
+    );
+
+    test_template(t, "unique case sensitive positional",
+        "{{ items|unique(true)|list|length }}",
+        {{"items", json::array({"a", "A", "a"})}},
+        "2"
+    );
+
+    test_template(t, "unique with attribute",
+        "{{ items|unique(attribute='id')|join(attribute='v') }}",
+        {{"items", json::array({
+            json({{"id", "x"}, {"v", 1}}),
+            json({{"id", "y"}, {"v", 2}}),
+            json({{"id", "x"}, {"v", 3}}),
+        })}},
+        "12"
+    );
+
+    test_template(t, "unique with attribute case sensitive",
+        "{{ items|unique(case_sensitive=true, attribute='id')|join(attribute='v') }}",
+        {{"items", json::array({
+            json({{"id", "x"}, {"v", 1}}),
+            json({{"id", "X"}, {"v", 2}}),
+            json({{"id", "x"}, {"v", 3}}),
+        })}},
+        "12"
+    );
+
+    test_template(t, "unique mixed types",
+        "{{ items|unique|list|length }}",
+        {{"items", json::array({1, 1.0, 2, "a", "a"})}},
+        "3"
+    );
+
+    test_template(t, "unique empty",
+        "{{ items|unique|list|length }}",
+        {{"items", json::array()}},
+        "0"
+    );
+
+    test_template(t, "unique length comparison",
+        "{{ (items|unique(case_sensitive=true)|list|length) != (items|length) }}",
+        {{"items", json::array({"call_1", "call_2", "call_1"})}},
+        "True"
+    );
+
     test_template(t, "sort",
         "{% for i in items|sort %}{{ i }}{% endfor %}",
         {{"items", json::array({3, 1, 2})}},
@@ -1115,6 +1173,54 @@ static void test_literals(testing & t) {
     );
 }
 
+static void test_hexadecimal_escapes(testing & t) {
+    test_template(t, "remove NUL from message content",
+        R"({{ message.content | replace("\x00", "") }})",
+        {{"message", {{"content", std::string("\0a\0b\0", 5)}}}},
+        "ab"
+    );
+
+    test_template(t, "non-ASCII hex escape produces UTF-8",
+        R"({{ '\xE9' }})",
+        json::object(),
+        "\xc3\xa9"
+    );
+
+    test_template(t, "consume exactly two hex digits",
+        R"({{ '\x414' }})",
+        json::object(),
+        "A4"
+    );
+
+    test_template(t, "escaped backslashes remain literal",
+        R"({{ '\\xE9' }})",
+        json::object(),
+        R"(\xE9)"
+    );
+
+    if (!g_python_mode) {
+        const char * invalid_templates[] = {
+            R"({{ '\x' }})",
+            R"({{ '\x0' }})",
+            R"({{ '\xG1' }})",
+            R"({{ '\x1G' }})",
+            R"({{ '\x)",
+            R"({{ '\x0)",
+        };
+        for (const auto * tmpl : invalid_templates) {
+            t.test("reject " + json(tmpl).dump(), [&](testing & t) {
+                bool rejected = false;
+                try {
+                    jinja::lexer().tokenize(tmpl);
+                } catch (const jinja::lexer_exception &) {
+                    rejected = true;
+                }
+                t.assert_true("malformed hex escape must raise a lexer error", rejected);
+            });
+        }
+    }
+}
+
 static void test_comments(testing & t) {
     test_template(t, "inline comment",
         "before{# comment #}after",
@@ -1192,6 +1298,18 @@ static void test_namespace(testing & t) {
         "{% set ns = namespace(count=0) %}{% for i in range(3) %}{% set ns.count = ns.count + 1 %}{% endfor %}{{ ns.count }}",
         json::object(),
         "3"
+    );
+
+    test_template(t, "namespace attribute named like a dict method",
+        "{% set ns = namespace(items=[]) %}{{ 'yes' if ns.items else 'no' }}{% set ns.items = ns.items + [1] %}{{ ns.items | length }}{{ 'yes' if ns.items else 'no' }}",
+        json::object(),
+        "no1yes"
+    );
+
+    test_template(t, "dict keeps its methods",
+        "{% set d = dict(items=1) %}{% for k, v in d.items() %}{{ k }}={{ v }}{% endfor %}",
+        json::object(),
+        "items=1"
     );
 }
 

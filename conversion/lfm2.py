@@ -374,6 +374,16 @@ class LFM2VLModel(MmprojModel):
             if resize_algo is None:
                 raise ValueError(f"unsupported resample: {resample}")
             self.gguf_writer.add_vision_image_resize_algo(resize_algo)
+        # tiling params from processor_config.json (do_image_splitting=False -> single tile, i.e. no tiling)
+        preproc = self.preprocessor_config
+        if preproc.get("do_image_splitting", True):
+            self.gguf_writer.add_vision_preproc_min_tiles(preproc.get("min_tiles", 2))
+            self.gguf_writer.add_vision_preproc_max_tiles(preproc.get("max_tiles", 10))
+        else:
+            self.gguf_writer.add_vision_preproc_min_tiles(1)
+            self.gguf_writer.add_vision_preproc_max_tiles(1)
+        self.gguf_writer.add_vision_preproc_tile_size(preproc.get("tile_size", 512))
+        self.gguf_writer.add_vision_preproc_max_pixels_tolerance(preproc.get("max_pixels_tolerance", 2.0))
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

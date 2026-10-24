@@ -16,7 +16,10 @@
 #include <cstddef>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 
 #include "base.hpp"
 #include "dpct/helper.hpp"
@@ -35,6 +38,10 @@ namespace syclexp = sycl::ext::oneapi::experimental;
     #ifndef GGML_SYCL_HAS_BF16
         #define GGML_SYCL_HAS_BF16
     #endif
+#endif
+
+#if defined(__INTEL_LLVM_COMPILER)
+    #define GGML_SYCL_DMMV_HAS_ESIMD
 #endif
 
 #if GGML_SYCL_DNNL
@@ -64,6 +71,9 @@ extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
 extern int g_ggml_sycl_mmvq_wide;
+extern int g_ggml_sycl_enable_xmx_esimd;
+extern int g_ggml_sycl_xmx_max_cols;
+extern int g_ggml_sycl_xmx_glu_max_cols;
 extern int g_ggml_sycl_prioritize_dmmv;
 
 // Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
@@ -127,6 +137,7 @@ extern int g_ggml_sycl_fa_onednn_max_kv;
 extern int g_ggml_sycl_enable_mkl_fa;
 extern int g_ggml_sycl_memtrace;
 extern int g_ggml_sycl_memtrace_step;
+extern int g_ggml_sycl_graph_eviction_timeout;
 
 
 #define CHECK_TRY_ERROR(expr)                                            \
@@ -223,6 +234,41 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
+#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
+#    define GGML_SYCL_MMVQ_HAS_XMX
+#endif // __INTEL_LLVM_COMPILER
+
+// default of the most columns the XMX mul_mat_vec_q handles (GGML_SYCL_XMX_MAX_COLS), wider batches use other kernels
+#define GGML_SYCL_XMX_MAX_COLS_DEFAULT 80
+
+// most columns the fused gate and up XMX kernel is built for, GGML_SYCL_XMX_GLU_MAX_COLS can only lower this limit
+#define GGML_SYCL_XMX_GLU_MAX_COLS 16
+
+static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// the DPAS shapes and 2D block loads used by the XMX kernel are those of Xe2
+static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31 ||
+           arch == gpu_arch::intel_gpu_lnl_m;
+}
+
+// fewest columns for which the XMX kernel is faster than the other kernels
+static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
+    return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K ? 1 : 2;
+}
+
 static int g_all_sycl_device_count = -1;
 static bool g_ggml_backend_sycl_buffer_type_initialized = false;
 
@@ -273,6 +319,7 @@ struct optimize_feature {
 };
 
 struct sycl_device_info {
+    bool active; //the device is activated/used in application.
     int cc;  // compute capability
     int nsm; // number of streaming multiprocessors (CUDA) maps to the maximum
              // number of compute units on a SYCL device.
@@ -289,10 +336,15 @@ struct sycl_device_info {
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
     bool    usm_system_support; // support for USM system allocations
+#ifdef GGML_SYCL_GRAPH
+    bool    graph_support;        // command graphs can be recorded and replayed
+    bool    graph_update_support; // a finalized command graph can be updated
+#endif
 };
 
 
 struct ggml_sycl_device_info {
+    int active_device_count; //the number of active devices in the application
     int device_count;
 
     sycl_device_info devices[GGML_SYCL_MAX_DEVICES] = {};
@@ -304,7 +356,11 @@ struct ggml_sycl_device_info {
     bool ext_oneapi_level_zero = true; // sycl::backend::ext_oneapi_level_zero used by all enumerated GPU devices
 };
 
-const ggml_sycl_device_info & ggml_sycl_info();
+ggml_sycl_device_info & ggml_sycl_info();
+
+static inline bool ggml_sycl_xmx_enabled(int device) {
+    return g_ggml_sycl_enable_xmx_esimd && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
+}
 
 static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 
@@ -395,6 +451,32 @@ struct ggml_sycl_gg_tile {
 };
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+#ifdef GGML_SYCL_GRAPH
+struct ggml_sycl_graph {
+    // src data/ne/nb are kept next to the node copy: the scheduler can hand back the same src
+    // pointer with different contents or shape, see https://github.com/ggml-org/llama.cpp/pull/21736
+    struct node_properties {
+        ggml_tensor node;
+        void *      node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t     node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t      node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    };
+
+    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    std::vector<node_properties> node_props;
+    bool     warmup_complete = false;
+    uint64_t uid             = 0;
+    int64_t  last_used_time  = 0;
+
+    // result of check_graph_compatibility() and the uid it was made for
+    bool     compatible     = false;
+    uint64_t compatible_uid = 0;
+};
+
+static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
+#endif
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
@@ -489,7 +571,36 @@ struct ggml_backend_sycl_context {
     }
 
 #ifdef GGML_SYCL_GRAPH
-    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    // Map from first node pointer to graph - allows multiple graphs per context when the
+    // computation is split across CPU/GPU (e.g. with --n-cpu-moe)
+    std::unordered_map<const void *, std::unique_ptr<ggml_sycl_graph>> sycl_graphs;
+
+    int64_t last_graph_eviction_sweep = 0;
+    std::optional<bool> graph_compatible;
+
+    ggml_sycl_graph * sycl_graph(const void * first_node_ptr) {
+        const int64_t time_now = ggml_time_us();
+        const int64_t eviction_timeout_us = g_ggml_sycl_graph_eviction_timeout * 1'000'000LL;
+
+        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout
+        if (time_now - last_graph_eviction_sweep >= eviction_timeout_us / 2) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
+                if (time_now - it->second->last_used_time >= eviction_timeout_us) {
+                    it = sycl_graphs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        auto it = sycl_graphs.find(first_node_ptr);
+        if (it == sycl_graphs.end()) {
+            it = sycl_graphs.emplace(first_node_ptr, std::make_unique<ggml_sycl_graph>()).first;
+        }
+        it->second->last_used_time = time_now;
+        return it->second.get();
+    }
 #endif
 
     ggml_sycl_pool & host_pool(int device) {

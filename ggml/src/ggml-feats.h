@@ -22,6 +22,10 @@
 #define HWCAP2_I8MM (1ULL << 13)
 #endif
 
+#if !defined(HWCAP2_SVEI8MM)
+#define HWCAP2_SVEI8MM (1ULL << 9)
+#endif
+
 #if !defined(HWCAP_ASIMDDP)
 #define HWCAP_ASIMDDP (1 << 20)
 #endif
@@ -63,6 +67,10 @@
 #define PF_ARM_SVE2_INSTRUCTIONS_AVAILABLE 47
 #endif
 
+#if !defined(PF_ARM_SVE_I8MM_INSTRUCTIONS_AVAILABLE)
+#define PF_ARM_SVE_I8MM_INSTRUCTIONS_AVAILABLE 57
+#endif
+
 #if !defined(PF_ARM_V82_I8MM_INSTRUCTIONS_AVAILABLE)
 #define PF_ARM_V82_I8MM_INSTRUCTIONS_AVAILABLE 66
 #endif
@@ -87,6 +95,7 @@ typedef struct ggml_feats_arch64_runtime {
     bool has_sve;
     bool has_sve2;
     bool has_i8mm;
+    bool has_svei8mm;
     bool has_sme;
     bool has_sme2;
     int sve_cnt;
@@ -104,6 +113,7 @@ static inline ggml_feats_arch64_runtime_t ggml_feats_get_arch64_runtime(void) {
     runtime_feat.has_sve     = !!(hwcap & HWCAP_SVE);
     runtime_feat.has_sve2    = !!(hwcap2 & HWCAP2_SVE2);
     runtime_feat.has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
+    runtime_feat.has_svei8mm = !!(hwcap2 & HWCAP2_SVEI8MM);
     runtime_feat.has_sme     = !!(hwcap2 & HWCAP2_SME);
     runtime_feat.has_sme2    = !!(hwcap2 & HWCAP2_SME2);
 
@@ -153,6 +163,7 @@ static inline ggml_feats_arch64_runtime_t ggml_feats_get_arch64_runtime(void) {
     runtime_feat.has_sve     = IsProcessorFeaturePresent(PF_ARM_SVE_INSTRUCTIONS_AVAILABLE) != 0;
     runtime_feat.has_sve2    = IsProcessorFeaturePresent(PF_ARM_SVE2_INSTRUCTIONS_AVAILABLE) != 0;
     runtime_feat.has_i8mm    = IsProcessorFeaturePresent(PF_ARM_V82_I8MM_INSTRUCTIONS_AVAILABLE) != 0;
+    runtime_feat.has_svei8mm = IsProcessorFeaturePresent(PF_ARM_SVE_I8MM_INSTRUCTIONS_AVAILABLE) != 0;
     runtime_feat.has_sme     = IsProcessorFeaturePresent(PF_ARM_SME_INSTRUCTIONS_AVAILABLE) != 0;
     runtime_feat.has_sme2    = IsProcessorFeaturePresent(PF_ARM_SME2_INSTRUCTIONS_AVAILABLE) != 0;
 

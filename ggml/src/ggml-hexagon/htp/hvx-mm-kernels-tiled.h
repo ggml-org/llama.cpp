@@ -29,29 +29,27 @@ static inline void quantize_block_f32_q8_1_tiled_impl(float * restrict x, uint8_
 
     HVX_Vector vx0_qf = Q6_Vqf32_vsub_VsfVsf(vx[0], zero);
     HVX_Vector vx1_qf = Q6_Vqf32_vsub_VsfVsf(vx[1], zero);
-    HVX_Vector vx2_qf = Q6_Vqf32_vsub_VsfVsf(vx[2], zero);
-    HVX_Vector vx3_qf = Q6_Vqf32_vsub_VsfVsf(vx[3], zero);
-
     HVX_Vector vmax0_qf = Q6_Vqf32_vsub_VsfVsf(vmax0_sf, zero);
     HVX_Vector vmax1_qf = Q6_Vqf32_vsub_VsfVsf(vmax1_sf, zero);
+
+    HVX_Vector vmax01_hf   = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vmax1_qf, vmax0_qf)));
+    HVX_Vector vx01_hf     = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vx1_qf, vx0_qf)));
+    HVX_Vector vd01_qf16   = Q6_Vqf16_vmpy_VhfVhf(vmax01_hf, Q6_Vh_vsplat_R(0x2008));  // 1.0 / 127.0
+    HVX_Vector vd01_hf     = Q6_Vhf_equals_Vqf16(vd01_qf16);
+    HVX_Vector vd01_inv_hf = hvx_vec_inverse_f16(vd01_hf);
+    vx01_hf                = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(vx01_hf, vd01_inv_hf));
+
+    HVX_Vector vx2_qf = Q6_Vqf32_vsub_VsfVsf(vx[2], zero);
+    HVX_Vector vx3_qf = Q6_Vqf32_vsub_VsfVsf(vx[3], zero);
     HVX_Vector vmax2_qf = Q6_Vqf32_vsub_VsfVsf(vmax2_sf, zero);
     HVX_Vector vmax3_qf = Q6_Vqf32_vsub_VsfVsf(vmax3_sf, zero);
 
-    HVX_Vector vmax01_hf = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vmax1_qf, vmax0_qf)));
-    HVX_Vector vmax23_hf = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vmax3_qf, vmax2_qf)));
-
-    HVX_Vector vx01_hf = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vx1_qf, vx0_qf)));
-    HVX_Vector vx23_hf = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vx3_qf, vx2_qf)));
-
-    HVX_Vector vd01_qf16 = Q6_Vqf16_vmpy_VhfVhf(vmax01_hf, Q6_Vh_vsplat_R(0x2008));  // 1.0 / 127.0
-    HVX_Vector vd23_qf16 = Q6_Vqf16_vmpy_VhfVhf(vmax23_hf, Q6_Vh_vsplat_R(0x2008));  // 1.0 / 127.0
-    HVX_Vector vd01_hf   = Q6_Vhf_equals_Vqf16(vd01_qf16);
-    HVX_Vector vd23_hf   = Q6_Vhf_equals_Vqf16(vd23_qf16);
-
-    HVX_Vector vd01_inv_hf = hvx_vec_inverse_f16(vd01_hf);
+    HVX_Vector vmax23_hf   = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vmax3_qf, vmax2_qf)));
+    HVX_Vector vx23_hf     = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(vx3_qf, vx2_qf)));
+    HVX_Vector vd23_qf16   = Q6_Vqf16_vmpy_VhfVhf(vmax23_hf, Q6_Vh_vsplat_R(0x2008));  // 1.0 / 127.0
+    HVX_Vector vd23_hf     = Q6_Vhf_equals_Vqf16(vd23_qf16);
     HVX_Vector vd23_inv_hf = hvx_vec_inverse_f16(vd23_hf);
-    vx01_hf              = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(vx01_hf, vd01_inv_hf));
-    vx23_hf              = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(vx23_hf, vd23_inv_hf));
+    vx23_hf                = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(vx23_hf, vd23_inv_hf));
 
     HVX_Vector vx01_i16 = hvx_vec_i16_from_hf_rnd_sat(vx01_hf);
     HVX_Vector vx23_i16 = hvx_vec_i16_from_hf_rnd_sat(vx23_hf);
@@ -81,25 +79,10 @@ static inline void quantize_block_f32_q8_1_tiled_impl(float * restrict x, uint8_
     HVX_Vector voff01_hf = hvx_vec_f32_to_f16(voff0_sf, voff1_sf);
     HVX_Vector voff23_hf = hvx_vec_f32_to_f16(voff2_sf, voff3_sf);
 
-    HVX_Vector r_scale[4] = {
-        hvx_vec_repl_f16(vd01_hf),
-        hvx_vec_repl_f16(Q6_V_vror_VR(vd01_hf, 64)),
-        hvx_vec_repl_f16(vd23_hf),
-        hvx_vec_repl_f16(Q6_V_vror_VR(vd23_hf, 64)),
-    };
-    HVX_Vector r_offset[4] = {
-        hvx_vec_repl_f16(voff01_hf),
-        hvx_vec_repl_f16(Q6_V_vror_VR(voff01_hf, 64)),
-        hvx_vec_repl_f16(voff23_hf),
-        hvx_vec_repl_f16(Q6_V_vror_VR(voff23_hf, 64)),
-    };
+    int32_t __attribute__((aligned(128))) ws[32];
     if (sums16) {
         // |sum of 16 int8| <= 2032 fits a halfword
-        int32_t __attribute__((aligned(128))) ws[32];
         *(HVX_Vector *) ws = v_sums;
-        for (int b = 0; b < 4; b++) {
-            r_offset[b] = Q6_V_vsplat_R(((uint32_t) ws[8 * b + 4] << 16) | ((uint32_t) ws[8 * b] & 0xFFFF));
-        }
     }
 
     static const uint8_t __attribute__((aligned(128))) repl[128] = {
@@ -114,8 +97,15 @@ static inline void quantize_block_f32_q8_1_tiled_impl(float * restrict x, uint8_
     };
     HVX_Vector v_repl_ctrl = * (const HVX_Vector *) repl;
 
+    #pragma unroll
     for (int b = 0; b < 4; b++) {
         HVX_Vector v_act = Q6_V_vror_VR(vx_i8, b * 32);
+        HVX_Vector vd_b   = (b < 2) ? vd01_hf   : vd23_hf;
+        HVX_Vector voff_b = (b < 2) ? voff01_hf : voff23_hf;
+        HVX_Vector r_scale  = hvx_vec_repl_f16((b & 1) ? Q6_V_vror_VR(vd_b, 64)   : vd_b);
+        HVX_Vector r_offset = sums16
+            ? Q6_V_vsplat_R(((uint32_t) ws[8 * b + 4] << 16) | ((uint32_t) ws[8 * b] & 0xFFFF))
+            : hvx_vec_repl_f16((b & 1) ? Q6_V_vror_VR(voff_b, 64) : voff_b);
 
         HVX_Vector r0 = Q6_V_vdelta_VV(v_act, v_repl_ctrl);
         HVX_Vector r1 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 4),  v_repl_ctrl);
@@ -135,8 +125,8 @@ static inline void quantize_block_f32_q8_1_tiled_impl(float * restrict x, uint8_
         dst[5] = r5;
         dst[6] = r6;
         dst[7] = r7;
-        dst[8] = r_scale[b];
-        dst[9] = r_offset[b];
+        dst[8] = r_scale;
+        dst[9] = r_offset;
     }
 }
 
@@ -243,7 +233,7 @@ static inline void quantize_block_f32_q8_0_tiled(float * restrict x, uint8_t * r
 
 static void quantize_row_f32_q8_0_tiled(float * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
@@ -254,7 +244,7 @@ static void quantize_row_f32_q8_0_tiled(float * restrict x, uint8_t * restrict y
 
 static void quantize_row_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
@@ -265,7 +255,7 @@ static void quantize_row_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y
 
 static void quantize_row_f32_q8_1_s16_tiled(float * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
@@ -320,7 +310,7 @@ static inline void quantize_block_f16_f16_tiled(const __fp16 * restrict x, uint8
 
 static void quantize_row_f32_f16_tiled(const float * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
@@ -331,7 +321,7 @@ static void quantize_row_f32_f16_tiled(const float * restrict x, uint8_t * restr
 
 static void quantize_row_f16_f16_tiled(const __fp16 * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
@@ -932,7 +922,7 @@ static void tiled_vec_dot_q1_0_32x1(const uint32_t n, float * restrict s, const 
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
-    HVX_Vector v_sum_float = Q6_V_vzero();
+    HVX_Vector v_sum_qf  = Q6_V_vzero();
     HVX_Vector v_neg_one = Q6_Vb_vsplat_R(-1);
     HVX_Vector v_pos_one = Q6_Vb_vsplat_R(1);
 
@@ -951,9 +941,10 @@ static void tiled_vec_dot_q1_0_32x1(const uint32_t n, float * restrict s, const 
         }
 
         HVX_Vector v_dw_sf = Q6_V_lo_W(hvx_vec_f16_to_f32(vptr[4]));
-        v_sum_float = hvx_vec_add_f32_f32(v_sum_float, hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vqf32(v_tile_qf), v_dw_sf));
+        v_sum_qf = Q6_Vqf32_vadd_Vqf32Vqf32(v_sum_qf, Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v_tile_qf), v_dw_sf));
     }
 
+    HVX_Vector v_sum_float = Q6_Vsf_equals_Vqf32(v_sum_qf);
     if (sz) {
         hvx_vec_store_u(s, valid_rows * sizeof(float), hvx_vec_add_f32_f32(v_sum_float, hvx_vmemu(sz)));
     } else {
@@ -966,16 +957,16 @@ static void tiled_vec_dot_q1_0_32x2(const uint32_t n, float * restrict s0, float
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
 
-    HVX_Vector v_sum_float_c0 = Q6_V_vzero();
-    HVX_Vector v_sum_float_c1 = Q6_V_vzero();
-    HVX_Vector v_neg_one = Q6_Vb_vsplat_R(-1);
-    HVX_Vector v_pos_one = Q6_Vb_vsplat_R(1);
+    HVX_Vector v_sum_qf_c0 = Q6_V_vzero();
+    HVX_Vector v_sum_qf_c1 = Q6_V_vzero();
+    HVX_Vector v_neg_one   = Q6_Vb_vsplat_R(-1);
+    HVX_Vector v_pos_one   = Q6_Vb_vsplat_R(1);
 
     const uint32_t n_k_tiles = n / HTP_TENSOR_TILE_K_Q1_0;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
         const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * htp_tensor_get_tile_padded_size(HTP_TYPE_Q1_0));
-        HVX_Vector v_tile_c0 = Q6_V_vzero();
-        HVX_Vector v_tile_c1 = Q6_V_vzero();
+        HVX_Vector v_tile_qf_c0 = Q6_V_vzero();
+        HVX_Vector v_tile_qf_c1 = Q6_V_vzero();
 
         for (int quarter = 0; quarter < 4; quarter++) {
             const uint32_t act_tile = 4 * kt + quarter;
@@ -987,15 +978,17 @@ static void tiled_vec_dot_q1_0_32x2(const uint32_t n, float * restrict s0, float
             HVX_Vector v_da_sf_c0  = Q6_V_lo_W(hvx_vec_f16_to_f32_shuff(v_act0[8]));
             HVX_Vector v_da_sf_c1  = Q6_V_lo_W(hvx_vec_f16_to_f32_shuff(v_act1[8]));
 
-            v_tile_c0 = hvx_vec_add_f32_f32(v_tile_c0, hvx_vec_mul_f32_f32(v_sum_sf_c0, v_da_sf_c0));
-            v_tile_c1 = hvx_vec_add_f32_f32(v_tile_c1, hvx_vec_mul_f32_f32(v_sum_sf_c1, v_da_sf_c1));
+            v_tile_qf_c0 = Q6_Vqf32_vadd_Vqf32Vqf32(v_tile_qf_c0, Q6_Vqf32_vmpy_VsfVsf(v_sum_sf_c0, v_da_sf_c0));
+            v_tile_qf_c1 = Q6_Vqf32_vadd_Vqf32Vqf32(v_tile_qf_c1, Q6_Vqf32_vmpy_VsfVsf(v_sum_sf_c1, v_da_sf_c1));
         }
 
         HVX_Vector v_dw_sf = Q6_V_lo_W(hvx_vec_f16_to_f32(vptr[4]));
-        v_sum_float_c0 = hvx_vec_add_f32_f32(v_sum_float_c0, hvx_vec_mul_f32_f32(v_tile_c0, v_dw_sf));
-        v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, hvx_vec_mul_f32_f32(v_tile_c1, v_dw_sf));
+        v_sum_qf_c0 = Q6_Vqf32_vadd_Vqf32Vqf32(v_sum_qf_c0, Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v_tile_qf_c0), v_dw_sf));
+        v_sum_qf_c1 = Q6_Vqf32_vadd_Vqf32Vqf32(v_sum_qf_c1, Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v_tile_qf_c1), v_dw_sf));
     }
 
+    HVX_Vector v_sum_float_c0 = Q6_Vsf_equals_Vqf32(v_sum_qf_c0);
+    HVX_Vector v_sum_float_c1 = Q6_Vsf_equals_Vqf32(v_sum_qf_c1);
     if (sz0) {
         hvx_vec_store_u(s0, valid_rows * sizeof(float), hvx_vec_add_f32_f32(v_sum_float_c0, hvx_vmemu(sz0)));
     } else {
@@ -1970,7 +1963,7 @@ static inline void quantize_f32_q8_0_tiled_block_kernel(
     uint32_t c
 ) {
     (void) tmp_data;
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (ne0 + qk - 1) / qk;
 
     for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
@@ -2000,7 +1993,7 @@ static inline void quantize_f32_q8_1_tiled_block_kernel(
     uint32_t c
 ) {
     (void) tmp_data;
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (ne0 + qk - 1) / qk;
 
     for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
@@ -2030,7 +2023,7 @@ static inline void quantize_f32_q8_1_s16_tiled_block_kernel(
     uint32_t c
 ) {
     (void) tmp_data;
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (ne0 + qk - 1) / qk;
 
     for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
@@ -2060,7 +2053,7 @@ static inline void quantize_f32_f16_tiled_block_kernel(
     uint32_t c
 ) {
     (void) tmp_data;
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (ne0 + qk - 1) / qk;
 
     for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
@@ -2090,7 +2083,7 @@ static inline void quantize_f16_f16_tiled_block_kernel(
     uint32_t c
 ) {
     (void) tmp_data;
-    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t qk = HTP_MM_ACT_BLOCK_K;
     const uint32_t nb = (ne0 + qk - 1) / qk;
 
     for (uint32_t ib = ib_first; ib < ib_last; ++ib) {

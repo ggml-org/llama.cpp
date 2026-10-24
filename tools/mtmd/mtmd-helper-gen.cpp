@@ -50,29 +50,38 @@ static llama_token find_special_token(const llama_vocab * vocab, const std::stri
     return LLAMA_TOKEN_NULL;
 }
 
+static void put_bytes(std::vector<char> & buf, const void * p, size_t n) {
+    const char * c = (const char *) p;
+    buf.insert(buf.end(), c, c + n);
+}
+
+// data_sz == UINT32_MAX writes the "unknown length" sentinel (streaming), same as ffmpeg does on a pipe
+static void write_wav16_header(std::vector<char> & buf, uint32_t data_sz, int32_t rate) {
+    const uint32_t riff_sz   = data_sz == UINT32_MAX ? UINT32_MAX : 36 + data_sz;
+    const uint32_t fmt_sz    = 16, byte_rate = (uint32_t) rate * 2;
+    const uint16_t fmt = 1, ch = 1, align = 2, bits = 16;
+    const uint32_t rate32    = (uint32_t) rate;
+    put_bytes(buf, "RIFF", 4); put_bytes(buf, &riff_sz, 4); put_bytes(buf, "WAVE", 4);
+    put_bytes(buf, "fmt ", 4); put_bytes(buf, &fmt_sz, 4);
+    put_bytes(buf, &fmt, 2); put_bytes(buf, &ch, 2); put_bytes(buf, &rate32, 4);
+    put_bytes(buf, &byte_rate, 4); put_bytes(buf, &align, 2); put_bytes(buf, &bits, 2);
+    put_bytes(buf, "data", 4); put_bytes(buf, &data_sz, 4);
+}
+
+static void append_wav16_pcm(std::vector<char> & buf, const float * pcm, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        int16_t s = (int16_t) (std::max(-1.0f, std::min(1.0f, pcm[i])) * 32767.0f);
+        put_bytes(buf, &s, 2);
+    }
+}
+
 static bool write_wav16(std::vector<char> & buf, const std::vector<float> & pcm, int32_t rate) {
     // RIFF chunk sizes are 32-bit; refuse to emit a file with a truncated header
     if (pcm.size() > ((size_t) UINT32_MAX - 36) / 2) {
         return false;
     }
-    const uint32_t data_sz   = (uint32_t) (pcm.size() * 2);
-    const uint32_t riff_sz   = 36 + data_sz;
-    const uint32_t fmt_sz    = 16, byte_rate = (uint32_t) rate * 2;
-    const uint16_t fmt = 1, ch = 1, align = 2, bits = 16;
-    const uint32_t rate32    = (uint32_t) rate;
-    auto put = [&](const void * p, size_t n) {
-        const char * c = (const char *) p;
-        buf.insert(buf.end(), c, c + n);
-    };
-    put("RIFF", 4); put(&riff_sz, 4); put("WAVE", 4);
-    put("fmt ", 4); put(&fmt_sz, 4);
-    put(&fmt, 2); put(&ch, 2); put(&rate32, 4);
-    put(&byte_rate, 4); put(&align, 2); put(&bits, 2);
-    put("data", 4); put(&data_sz, 4);
-    for (float v : pcm) {
-        int16_t s = (int16_t) (std::max(-1.0f, std::min(1.0f, v)) * 32767.0f);
-        put(&s, 2);
-    }
+    write_wav16_header(buf, (uint32_t) (pcm.size() * 2), rate);
+    append_wav16_pcm(buf, pcm.data(), pcm.size());
     return true;
 }
 
@@ -92,14 +101,29 @@ public:
     // set out_stop on end-of-speech, h_state_out must be null if no frame is generated
     virtual int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) = 0;
     virtual int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) = 0;
+    // forces any buffered codes through code2wav now, regardless of window_frames
+    virtual int32_t flush() = 0;
 
 protected:
+    // one state per generation, so a fixed seed always gives the same output
+    bool init_gen_state(uint32_t seed) {
+        mtmd_gen_state_params params = mtmd_gen_state_params_default();
+        params.seed = seed;
+        gen_state.reset(mtmd_gen_state_init(mctx, params));
+        if (!gen_state) {
+            LOG_ERR("mtmd_helper_gen_audio: failed to create the gen state\n");
+            return false;
+        }
+        return true;
+    }
+
     llama_context * lctx;
     mtmd_context  * mctx;
     const llama_model * model;
     const llama_vocab  * vocab;
     int n_embd;
     mtmd_gen_audio_info info;
+    mtmd::gen_state_ptr gen_state;
 };
 
 // Qwen3-TTS: backbone samples codec_0, code_predictor gives the other 15 codebooks,
@@ -112,7 +136,7 @@ public:
         seq_id = 0;
         pos = 0;
         codes_buf.clear();
-        c2w_state.clear();
+        gen_state.reset();
         audio_pcm.clear();
         overlay.clear();
         h_state_buf.clear();
@@ -121,6 +145,9 @@ public:
         prompt_batch.reset();
         n_prompt = 0;
         prompt_pos = 0;
+        stream = false;
+        pcm_sent = 0;
+        wav_header_sent = false;
     }
 
     int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
@@ -206,8 +233,11 @@ public:
         const mtmd_gen_inp def = mtmd_gen_inp_default(mctx);
         top_k = inp->top_k > 0 ? inp->top_k : def.top_k;
         top_p = inp->top_p > 0 ? inp->top_p : def.top_p;
-        seed  = inp->seed;
         out_type = inp->out_type;
+        stream = inp->stream;
+        if (!init_gen_state(inp->seed)) {
+            return 1;
+        }
 
         // the prompt above holds the whole text stream up to tts_eos, so every generated
         // frame adds tts_pad on top of the codes embedding
@@ -264,9 +294,8 @@ public:
         inp.embd  = const_cast<float *>(h_state_in);
         inp.top_k = top_k;
         inp.top_p = top_p;
-        inp.seed  = seed;
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: gen_code process failed\n");
             return 1;
         }
@@ -301,29 +330,58 @@ public:
     }
 
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
-        if (!flush_gen_wav()) {
-            return 1;
+        *out_sample_rate = info.sample_rate;
+
+        if (!stream) {
+            // one-shot call: force out whatever's left, regardless of window_frames
+            if (!flush_gen_wav()) {
+                return 1;
+            }
+            if (out_n_samples) {
+                *out_n_samples = (int64_t) audio_pcm.size();
+            }
+            if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+                *out_data     = (const char *) audio_pcm.data();
+                *out_data_len = audio_pcm.size() * sizeof(float);
+                return 0;
+            }
+            out_buf.clear();
+            if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
+                LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
+                return 1;
+            }
+            *out_data     = out_buf.data();
+            *out_data_len = out_buf.size();
+            return 0;
         }
 
-        *out_sample_rate = info.sample_rate;
+        // streaming: only return audio produced since the previous call
+        const size_t n_new = audio_pcm.size() - pcm_sent;
         if (out_n_samples) {
-            *out_n_samples = (int64_t) audio_pcm.size();
+            *out_n_samples = (int64_t) n_new;
         }
 
         if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
-            *out_data     = (const char *) audio_pcm.data();
-            *out_data_len = audio_pcm.size() * sizeof(float);
+            *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
+            *out_data_len = n_new * sizeof(float);
+            pcm_sent = audio_pcm.size();
             return 0;
         }
 
         out_buf.clear();
-        if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
-            LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
-            return 1;
+        if (!wav_header_sent) {
+            write_wav16_header(out_buf, UINT32_MAX, info.sample_rate);
+            wav_header_sent = true;
         }
+        append_wav16_pcm(out_buf, audio_pcm.data() + pcm_sent, n_new);
+        pcm_sent = audio_pcm.size();
         *out_data     = out_buf.data();
         *out_data_len = out_buf.size();
         return 0;
+    }
+
+    int32_t flush() override {
+        return flush_gen_wav() ? 0 : 1;
     }
 
 private:
@@ -369,7 +427,7 @@ private:
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no speaker/audio encoder\n");
             return false;
         }
-        const std::string  marker = mtmd_default_marker();
+        const std::string  marker = mtmd_get_marker(mctx);
         mtmd_input_text     text{ marker.c_str(), marker.size(), false, true };
         mtmd_input_chunks * chunks = mtmd_input_chunks_init();
         const mtmd_bitmap * bptr = bitmap;
@@ -405,16 +463,12 @@ private:
         inp.type       = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
         inp.codes      = codes_buf.data();
         inp.n_codes    = codes_buf.size();
-        inp.seed       = seed; // same seed as gen_code, else clip reseeds mid-generation
-        inp.state_data = c2w_state.empty() ? nullptr : (const char *) c2w_state.data();
-        inp.state_size = c2w_state.size();
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: gen_wav process failed\n");
             return false;
         }
         audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
-        c2w_state.assign(out.state_data, out.state_data + out.state_size);
         codes_buf.clear();
         return true;
     }
@@ -447,14 +501,15 @@ private:
     int prompt_pos = 0;
     int32_t  top_k = 50;
     float    top_p = 1.0f;
-    uint32_t seed  = UINT32_MAX;
     std::vector<int32_t> codes_buf;
-    std::vector<uint8_t> c2w_state;
     std::vector<float>   audio_pcm;
     std::vector<float> overlay;
     std::vector<float> h_state_buf;
     mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     std::vector<char> out_buf;
+    bool   stream          = false;
+    size_t pcm_sent        = 0; // samples already returned by get_output()
+    bool   wav_header_sent = false;
 };
 
 // settings that only live in the reference's per-pack yaml, not in the checkpoint
@@ -492,7 +547,7 @@ public:
         seq_id = 0;
         pos = 0;
         feats_buf.clear();
-        dec_state.clear();
+        gen_state.reset();
         audio_pcm.clear();
         h_state_buf.clear();
         out_buf.clear();
@@ -506,6 +561,9 @@ public:
         chunk_idx = 0;
         n_voice_pos = 0;
         chunk_budget = 0;
+        stream = false;
+        pcm_sent = 0;
+        wav_header_sent = false;
     }
 
     int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
@@ -573,8 +631,11 @@ public:
         prompt_batch->set_position_normal(0, seq_id);
         prompt_pos = 0;
 
-        seed     = inp->seed;
         out_type = inp->out_type;
+        stream   = inp->stream;
+        if (!init_gen_state(inp->seed)) {
+            return 1;
+        }
 
         return 0;
     }
@@ -612,13 +673,11 @@ public:
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
         inp.embd = const_cast<float *>(h_state_in);
-        // clip only reseeds when the seed changes, so pass the same one on every step
-        inp.seed = seed;
         if (pack.temp > 0.0f) {
             inp.temp = pack.temp;
         }
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: flow decode failed\n");
             return 1;
         }
@@ -662,29 +721,58 @@ public:
     }
 
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
-        if (!flush_gen_wav()) {
-            return 1;
+        *out_sample_rate = info.sample_rate;
+
+        if (!stream) {
+            // one-shot call: force out whatever's left, regardless of window_frames
+            if (!flush_gen_wav()) {
+                return 1;
+            }
+            if (out_n_samples) {
+                *out_n_samples = (int64_t) audio_pcm.size();
+            }
+            if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+                *out_data     = (const char *) audio_pcm.data();
+                *out_data_len = audio_pcm.size() * sizeof(float);
+                return 0;
+            }
+            out_buf.clear();
+            if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
+                LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
+                return 1;
+            }
+            *out_data     = out_buf.data();
+            *out_data_len = out_buf.size();
+            return 0;
         }
 
-        *out_sample_rate = info.sample_rate;
+        // streaming: only return audio produced since the previous call
+        const size_t n_new = audio_pcm.size() - pcm_sent;
         if (out_n_samples) {
-            *out_n_samples = (int64_t) audio_pcm.size();
+            *out_n_samples = (int64_t) n_new;
         }
 
         if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
-            *out_data     = (const char *) audio_pcm.data();
-            *out_data_len = audio_pcm.size() * sizeof(float);
+            *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
+            *out_data_len = n_new * sizeof(float);
+            pcm_sent = audio_pcm.size();
             return 0;
         }
 
         out_buf.clear();
-        if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
-            LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
-            return 1;
+        if (!wav_header_sent) {
+            write_wav16_header(out_buf, UINT32_MAX, info.sample_rate);
+            wav_header_sent = true;
         }
+        append_wav16_pcm(out_buf, audio_pcm.data() + pcm_sent, n_new);
+        pcm_sent = audio_pcm.size();
         *out_data     = out_buf.data();
         *out_data_len = out_buf.size();
         return 0;
+    }
+
+    int32_t flush() override {
+        return flush_gen_wav() ? 0 : 1;
     }
 
 private:
@@ -815,7 +903,7 @@ private:
             return 1;
         }
         // the decoder restarts too, the next chunk's audio is not continuous with this one
-        dec_state.clear();
+        mtmd_gen_state_reset(gen_state.get());
 
         if (chunk_idx + 1 >= chunks.size()) {
             *out_stop    = true;
@@ -907,7 +995,7 @@ private:
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no voice encoder\n");
             return false;
         }
-        const std::string  marker = mtmd_default_marker();
+        const std::string  marker = mtmd_get_marker(mctx);
         mtmd_input_text     text{ marker.c_str(), marker.size(), false, true };
         mtmd_input_chunks * chunks = mtmd_input_chunks_init();
         const mtmd_bitmap * bptr = bitmap;
@@ -943,16 +1031,12 @@ private:
         inp.type       = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
         inp.feats      = feats_buf.data();
         inp.n_feats    = feats_buf.size();
-        inp.seed       = seed;
-        inp.state_data = dec_state.empty() ? nullptr : (const char *) dec_state.data();
-        inp.state_size = dec_state.size();
         mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: mimi decode failed\n");
             return false;
         }
         audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
-        dec_state.assign(out.state_data, out.state_data + out.state_size);
         feats_buf.clear();
         return true;
     }
@@ -969,7 +1053,6 @@ private:
     std::unique_ptr<decode_embd_batch> prompt_batch;
     int n_prompt = 0;
     int prompt_pos = 0;
-    uint32_t seed = UINT32_MAX;
     // end-of-speech is latched, then a few more frames are generated as tail padding
     int step_idx = 0;
     int eos_step = -1;
@@ -984,11 +1067,198 @@ private:
     // latents are decoded a window at a time, the decoder state bridges the windows
     size_t window_frames = 8;
     std::vector<float>   feats_buf;
-    std::vector<uint8_t> dec_state;
     std::vector<float>   audio_pcm;
     std::vector<float>   h_state_buf;
     mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     std::vector<char> out_buf;
+    bool   stream          = false;
+    size_t pcm_sent        = 0; // samples already returned by get_output()
+    bool   wav_header_sent = false;
+};
+
+// Soprano uses the hidden state that predicts each non-EOS token, including the prompt's last state.
+class soprano_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
+public:
+    using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+
+    void reset() override {
+        prompt.clear();
+        features.clear();
+        h_next.clear();
+        audio.clear();
+        wav.clear();
+        pos = 0;
+        prompt_pos = 0;
+        decoded = false;
+        sent = false;
+    }
+
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        reset();
+        if (inp->speaker_ref || !inp->prompt || inp->prompt_len == 0 || inp->prompt_len > INT32_MAX ||
+            inp->seq_id < 0 || (uint32_t) inp->seq_id >= llama_n_seq_max(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano requires text, without a speaker reference\n");
+            return 1;
+        }
+        seq_id = inp->seq_id;
+        out_type = inp->out_type;
+        stream = inp->stream;
+        const llama_token text = find_special_token(vocab, "[TEXT]");
+        const llama_token start = find_special_token(vocab, "[START]");
+        const llama_token stop = find_special_token(vocab, "[STOP]");
+        if (text == LLAMA_TOKEN_NULL || start == LLAMA_TOKEN_NULL || stop == LLAMA_TOKEN_NULL) {
+            LOG_ERR("mtmd_helper_gen_audio: incompatible soprano vocabulary\n");
+            return 1;
+        }
+        const int required = llama_tokenize(vocab, inp->prompt, inp->prompt_len, nullptr, 0, false, false);
+        if (required >= 0 || (uint32_t) (-required + 3) >= llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano prompt does not fit in the context\n");
+            return 1;
+        }
+        const int n = -required;
+        prompt.resize(n + 3);
+        prompt[0] = stop;
+        prompt[1] = text;
+        if (llama_tokenize(vocab, inp->prompt, inp->prompt_len, prompt.data() + 2, n, false, false) != n) {
+            return 1;
+        }
+        prompt.back() = start;
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, 0, -1)) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset soprano sequence\n");
+            return 1;
+        }
+        if (!init_gen_state(inp->seed)) {
+            return 1;
+        }
+        return 0;
+    }
+
+    int32_t step_prompt(int32_t n_batch) override {
+        if (n_batch <= 0 || prompt.empty()) {
+            return -1;
+        }
+        const int n = std::min(n_batch, (int) prompt.size() - prompt_pos);
+        if (n == 0) {
+            return 0;
+        }
+        if (!decode(prompt.data() + prompt_pos, n)) {
+            return -1;
+        }
+        prompt_pos += n;
+        return (int) prompt.size() - prompt_pos;
+    }
+
+    int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
+        *h_state_out = nullptr;
+        *out_stop = false;
+        if (sampled < 0 || sampled >= llama_vocab_n_tokens(vocab) || !h_state_in || prompt_pos != (int) prompt.size() || prompt.empty()) {
+            return 1;
+        }
+        if (llama_vocab_is_eog(vocab, sampled) || (uint32_t) pos >= llama_n_ctx_seq(lctx)) {
+            *out_stop = true;
+            return 0;
+        }
+        features.insert(features.end(), h_state_in, h_state_in + n_embd);
+        if (!decode(&sampled, 1)) {
+            features.resize(features.size() - n_embd);
+            return 1;
+        }
+        const float * h = llama_get_embeddings_ith(lctx, -1);
+        if (!h) {
+            return 1;
+        }
+        h_next.assign(h, h + n_embd);
+        *h_state_out = h_next.data();
+        return 0;
+    }
+
+    int32_t get_output(int32_t * sample_rate, const char ** data, size_t * data_len, int64_t * n_samples) override {
+        *sample_rate = info.sample_rate;
+        *data_len = 0;
+        if (n_samples) { *n_samples = 0; }
+        if (stream) {
+            // the decoder needs the whole utterance, so the audio comes out in one chunk after flush()
+            if (!decoded || sent) {
+                return 0;
+            }
+            sent = true;
+        } else if (!decode_audio()) {
+            return 1;
+        }
+        if (n_samples) { *n_samples = audio.size(); }
+        if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+            *data = (const char *) audio.data();
+            *data_len = audio.size() * sizeof(float);
+        } else {
+            wav.clear();
+            if (!write_wav16(wav, audio, info.sample_rate)) {
+                return 1;
+            }
+            *data = wav.data();
+            *data_len = wav.size();
+        }
+        return 0;
+    }
+
+    // the whole utterance is decoded at once
+    int32_t flush() override {
+        return decode_audio() ? 0 : 1;
+    }
+
+private:
+    bool decode_audio() {
+        if (decoded) {
+            return true;
+        }
+        if (features.size() < 2 * (size_t) n_embd) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano needs at least two generated frames\n");
+            return false;
+        }
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+        inp.feats = features.data();
+        inp.n_feats = features.size();
+        mtmd_gen_out out{};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+            return false;
+        }
+        audio.assign(out.audio, out.audio + out.n_samples);
+        decoded = true;
+        return true;
+    }
+
+    bool decode(llama_token * tokens, int n) {
+        llama_batch batch = llama_batch_init(n, 0, 1);
+        batch.n_tokens = n;
+        for (int i = 0; i < n; ++i) {
+            batch.token[i] = tokens[i];
+            batch.pos[i] = pos + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = seq_id;
+            batch.logits[i] = i == n - 1;
+        }
+        const int ret = llama_decode(lctx, batch);
+        llama_batch_free(batch);
+        if (ret != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano backbone decode failed\n");
+            return false;
+        }
+        pos += n;
+        return true;
+    }
+
+    llama_seq_id seq_id = 0;
+    llama_pos pos = 0;
+    int prompt_pos = 0;
+    std::vector<llama_token> prompt;
+    std::vector<float> features;
+    std::vector<float> h_next;
+    std::vector<float> audio;
+    std::vector<char> wav;
+    mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    bool stream  = false;
+    bool decoded = false;
+    bool sent    = false;
 };
 
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
@@ -997,6 +1267,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new qwen3tts_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_POCKETTTS:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new pockettts_gen_audio_pipeline(lctx, mctx));
+        case MTMD_GEN_AUDIO_TYPE_SOPRANO:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new soprano_gen_audio_pipeline(lctx, mctx));
         default:
             return nullptr;
     }
@@ -1017,9 +1289,18 @@ void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx) {
 }
 
 void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx) {
-    if (ctx->pipeline) {
+    if (ctx && ctx->pipeline) {
         ctx->pipeline->reset();
     }
+}
+
+struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
+    mtmd_helper_gen_audio_inp inp{};
+    inp.top_k    = 50;
+    inp.top_p    = 1.0f;
+    inp.seed     = UINT32_MAX; // random
+    inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    return inp;
 }
 
 int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_helper_gen_audio_inp * inp) {
@@ -1057,4 +1338,11 @@ int32_t mtmd_helper_gen_audio_get_output(mtmd_helper_gen_audio * ctx, int32_t * 
         return 1;
     }
     return ctx->pipeline->get_output(out_sample_rate, out_data, out_data_len, out_n_samples);
+}
+
+int32_t mtmd_helper_gen_audio_flush(mtmd_helper_gen_audio * ctx) {
+    if (!ctx->pipeline) {
+        return 1;
+    }
+    return ctx->pipeline->flush();
 }

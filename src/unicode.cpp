@@ -202,6 +202,19 @@ static std::unordered_map<std::string, uint8_t> unicode_utf8_to_byte_map() {
     return map;
 }
 
+static std::vector<int> unicode_cpt_to_byte_map() {
+    std::vector<int> map;
+    for (int ch = 0; ch < 256; ++ch) {
+        size_t offset = 0;
+        const uint32_t cpt = unicode_cpt_from_utf8(unicode_byte_to_utf8(ch), offset);
+        if (cpt >= map.size()) {
+            map.resize(cpt + 1, -1);
+        }
+        map[cpt] = ch;
+    }
+    return map;
+}
+
 static std::vector<std::string> unicode_byte_encoding_process(const std::vector<std::string> & bpe_words) {
     std::vector<std::string> bpe_encoded_words;
     for (const auto & word : bpe_words) {
@@ -1414,6 +1427,14 @@ std::string unicode_byte_to_utf8(uint8_t byte) {
 uint8_t unicode_utf8_to_byte(const std::string & utf8) {
     static std::unordered_map<std::string, uint8_t> map = unicode_utf8_to_byte_map();
     return map.at(utf8);
+}
+
+uint8_t unicode_cpt_to_byte(uint32_t cpt) {
+    static const std::vector<int> map = unicode_cpt_to_byte_map();
+    if (cpt >= map.size() || map[cpt] < 0) {
+        throw std::out_of_range("unicode_cpt_to_byte: not a byte token code point");
+    }
+    return map[cpt];
 }
 
 uint32_t unicode_tolower(uint32_t cpt) {
