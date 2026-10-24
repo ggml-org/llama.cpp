@@ -4,6 +4,9 @@
 
 #include "build-info.h"
 #include "common.h"
+#include "json.h"
+
+#include "hash/hash.h"
 
 #include "../src/llama-ext.h"
 
@@ -1150,13 +1153,213 @@ static void common_init_sampler_from_model(
     get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA),    sparams.mirostat_eta,    common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA);
 }
 
+//
+// MoE cache audit (--moe-cache-audit)
+//
+
+// what every record has: the event, the time (UTC, ms), the process (several may append to one file) and the MoE
+// cache's counters since the load
+static common_json moe_cache_audit_record(llama_context * ctx, const std::string & event) {
+    llama_moe_cache_stats st = {};
+    llama_moe_cache_get_stats(ctx, &st);
+
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t secs = std::chrono::system_clock::to_time_t(now);
+    const int ms = (int) (std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
+    char time[32] = "";
+    std::strftime(time, sizeof(time), "%Y-%m-%dT%H:%M:%S", std::gmtime(&secs));
+#ifdef _WIN32
+    const int64_t pid = GetCurrentProcessId();
+#else
+    const int64_t pid = getpid();
+#endif
+
+    common_json rec = {
+        { "event",         event },
+        { "time",          string_format("%s.%03dZ", time, ms) },
+        { "pid",           pid },
+        { "hybrid",        st.hybrid },
+        { "hits",          st.n_hit },
+        { "hits_profile",  st.n_hit_profile },
+        { "misses",        st.n_miss },
+        { "bytes_upload",  st.n_bytes_upload },
+        { "bytes_cpu",     st.n_bytes_cpu },
+        { "copies",        st.n_copy },
+        { "bytes_copy",    st.n_bytes_copy },
+        { "swaps",         st.n_swap },
+    };
+    return rec;
+}
+
+// each layer's counters and the experts the cache holds in it now (load and exit records, last: it is the long part)
+static common_json moe_cache_audit_layers(llama_context * ctx) {
+    std::vector<llama_moe_cache_layer_stats> ls(llama_moe_cache_get_layer_stats(ctx, nullptr, 0));
+    llama_moe_cache_get_layer_stats(ctx, ls.data(), (int32_t) ls.size());
+    common_json layers = common_json::array();
+    for (const llama_moe_cache_layer_stats & l : ls) {
+        std::vector<int32_t> held(llama_moe_cache_get_resident(ctx, l.il, nullptr, 0));
+        llama_moe_cache_get_resident(ctx, l.il, held.data(), (int32_t) held.size());
+        common_json experts = common_json::array();
+        for (int32_t e : held) {
+            experts.push_back(e);
+        }
+        layers.push_back({
+            { "il",           l.il },
+            { "slots",        l.n_slots },
+            { "hits",         l.n_hit },
+            { "hits_profile", l.n_hit_profile },
+            { "misses",       l.n_miss },
+            { "resident",     experts },
+        });
+    }
+    return layers;
+}
+
+// one open-append-close per record: the server's request records go to the same file as the load and exit records
+static void moe_cache_audit_write(const std::string & path, const common_json & rec) {
+    FILE * f = ggml_fopen(path.c_str(), "ab");
+    if (f == nullptr) {
+        COM_WRN("--moe-cache-audit: cannot append to %s\n", path.c_str());
+        return;
+    }
+    const std::string line = rec.dump_safe() + "\n";
+    fwrite(line.data(), 1, line.size(), f);
+    fclose(f);
+}
+
+void common_moe_cache_audit(const std::string & path, llama_context * ctx, const std::string & event,
+        const std::vector<std::pair<std::string, double>> & fields) {
+    llama_moe_cache_stats st;
+    if (path.empty() || ctx == nullptr || !llama_moe_cache_get_stats(ctx, &st)) {
+        return;
+    }
+    common_json rec = moe_cache_audit_record(ctx, event);
+    for (const auto & [key, val] : fields) {
+        // counts stay integers in the record, times keep their fraction
+        if (std::trunc(val) == val && std::fabs(val) < 9e15) {
+            rec[key] = (int64_t) val;
+        } else {
+            rec[key] = val;
+        }
+    }
+    moe_cache_audit_write(path, rec);
+}
+
+// the load record: what a run's numbers can be checked and reproduced against - the model, the flags, the profile's
+// SHA-256 and the experts the cache holds in each layer; false without a MoE cache
+static bool moe_cache_audit_load(const common_params & params, const llama_model * model, llama_context * ctx) {
+    llama_moe_cache_stats st;
+    if (!llama_moe_cache_get_stats(ctx, &st)) {
+        COM_WRN("%s", "--moe-cache-audit: the context has no MoE cache, there is nothing to audit\n");
+        return false;
+    }
+    common_json rec = moe_cache_audit_record(ctx, "load");
+
+    char name[256] = "";
+    llama_model_meta_val_str(model, "general.name", name, sizeof(name));
+    std::error_code ec;
+    const uintmax_t model_bytes = std::filesystem::file_size(std::filesystem::u8path(params.model.path), ec);
+    rec["model"] = {
+        { "path",    params.model.path },
+        { "bytes",   (uint64_t) (ec ? 0 : model_bytes) },
+        { "name",    std::string(name) },
+        { "n_layer", llama_model_n_layer(model) },
+    };
+
+    common_json overrides = common_json::array(); // --cpu-moe / --n-cpu-moe / -ot
+    for (const llama_model_tensor_buft_override & o : params.tensor_buft_overrides) {
+        if (o.pattern != nullptr) {
+            overrides.push_back(std::string(o.pattern));
+        }
+    }
+    rec["params"] = {
+        { "build",            std::string(llama_build_info()) },
+        { "moe_cache_mib",    (uint64_t) (params.moe_cache_size/(1024*1024)) },
+        { "moe_cache_hybrid", params.moe_cache_hybrid },
+        { "moe_cache_adaptive", params.moe_cache_adaptive },
+        { "n_gpu_layers",     params.n_gpu_layers },
+        { "n_threads",        llama_n_threads(ctx) },
+        { "n_threads_batch",  llama_n_threads_batch(ctx) },
+        { "n_ctx",            llama_n_ctx(ctx) },
+        { "n_batch",          llama_n_batch(ctx) },
+        { "n_ubatch",         llama_n_ubatch(ctx) },
+        { "tensor_overrides", overrides },
+    };
+
+    rec["cache"] = {
+        { "slots",     st.n_slots },
+        { "prefilled", st.n_prefilled },
+        { "bytes",     st.n_bytes_cache },
+    };
+    rec["load_ms"] = llama_perf_context(ctx).t_load_ms;
+
+    common_json devices = common_json::array(); // the GPUs the run had, and their free memory once the model is in
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+            continue;
+        }
+        size_t free = 0, total = 0;
+        ggml_backend_dev_memory(dev, &free, &total);
+        devices.push_back({
+            { "name",        std::string(ggml_backend_dev_name(dev)) },
+            { "description", std::string(ggml_backend_dev_description(dev)) },
+            { "mib_free",    (uint64_t) (free/(1024*1024)) },
+            { "mib_total",   (uint64_t) (total/(1024*1024)) },
+        });
+    }
+    rec["devices"] = devices;
+
+    if (params.moe_cache_profile.empty()) {
+        rec["profile"] = nullptr;
+    } else {
+        common_json prof = { { "path", params.moe_cache_profile } };
+        if (FILE * f = ggml_fopen(params.moe_cache_profile.c_str(), "rb")) {
+            std::vector<uint8_t> bytes;
+            uint8_t buf[1 << 16];
+            for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0; ) {
+                bytes.insert(bytes.end(), buf, buf + n);
+            }
+            fclose(f);
+            prof["bytes"]  = (uint64_t) bytes.size();
+            prof["sha256"] = hash_sha256_hex(bytes.data(), bytes.size());
+        } else {
+            prof["error"] = "cannot read the file";
+        }
+        rec["profile"] = prof;
+    }
+    rec["layers"] = moe_cache_audit_layers(ctx);
+
+    moe_cache_audit_write(params.moe_cache_audit, rec);
+    return true;
+}
+
 struct common_init_result::impl {
     impl() = default;
-    ~impl() = default;
+
+    ~impl() {
+        // the exit record, while the context still exists: with the run's throughput, so every tool's runs are audited
+        if (!moe_cache_audit.empty() && context) {
+            common_json rec = moe_cache_audit_record(context.get(), "exit");
+            const llama_perf_context_data perf = llama_perf_context(context.get());
+            rec["perf"] = {
+                { "n_prompt",    perf.n_p_eval },
+                { "n_gen",       perf.n_eval },
+                { "t_prompt_ms", perf.t_p_eval_ms },
+                { "t_gen_ms",    perf.t_eval_ms },
+                { "prompt_tps",  perf.t_p_eval_ms > 0 ? 1e3*perf.n_p_eval/perf.t_p_eval_ms : 0.0 },
+                { "gen_tps",     perf.t_eval_ms   > 0 ? 1e3*perf.n_eval  /perf.t_eval_ms   : 0.0 },
+            };
+            rec["layers"] = moe_cache_audit_layers(context.get());
+            moe_cache_audit_write(moe_cache_audit, rec);
+        }
+    }
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
 
     common_threadpools threadpools;
+
+    std::string moe_cache_audit; // set once the load record is written
 
     llama_model_ptr   model;
     llama_context_ptr context;
@@ -1385,6 +1588,11 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     pimpl->context.reset(lctx);
+
+    // before the warmup, so the counters of the load record are the cache's at the start
+    if (!params.moe_cache_audit.empty() && moe_cache_audit_load(params, model, lctx)) {
+        pimpl->moe_cache_audit = params.moe_cache_audit;
+    }
 
     set_process_priority(params.cpuparams.priority);
 
@@ -1754,6 +1962,9 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_v = params.cache_type_v;
 
     cparams.moe_cache_size = params.moe_cache_size;
+    cparams.moe_cache_profile = params.moe_cache_profile.empty() ? nullptr : params.moe_cache_profile.c_str();
+    cparams.moe_cache_hybrid  = params.moe_cache_hybrid;
+    cparams.moe_cache_adaptive = params.moe_cache_adaptive;
 
     return cparams;
 }

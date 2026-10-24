@@ -532,6 +532,11 @@ struct server_metrics {
     uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
 
+    // the MoE cache's counters, read from the context when a metrics task runs
+    bool                  has_moe_cache = false;
+    llama_moe_cache_stats moe_cache     = {};
+    std::vector<llama_moe_cache_layer_stats> moe_cache_layers;
+
     void init() {
         t_start = ggml_time_us();
     }

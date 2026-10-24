@@ -907,6 +907,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
+    // without a cache size there is no MoE cache, and its other options would be dropped without a word
+    if (params.moe_cache_size == 0 && (params.moe_cache_hybrid || params.moe_cache_adaptive || !params.moe_cache_profile.empty() || !params.moe_cache_audit.empty())) {
+        LOG_WRN("--moe-cache-profile, --moe-cache-hybrid, --moe-cache-adaptive and --moe-cache-audit need --moe-cache-mib N: there is no MoE cache without it\n");
+    }
+    if (params.moe_cache_adaptive && !params.moe_cache_hybrid) {
+        LOG_WRN("--moe-cache-adaptive needs --moe-cache-hybrid: the upload cache is already adaptive (it is an LRU)\n");
+    }
+
     const bool skip_model_download =
         // server will call common_params_handle_models() later, so we skip it here
         ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
@@ -2795,6 +2803,39 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_cache_size = (size_t) value*1024*1024;
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
+    add_opt(common_arg(
+        {"--moe-cache-profile"}, "FNAME",
+        "expert profile (Strata STRP, e.g. from extended-strata-moe's tools/moe_plan.py) to fill the MoE cache from at load, hottest experts first (default: start empty)",
+        [](common_params & params, const std::string & value) {
+            params.moe_cache_profile = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_PROFILE"));
+    add_opt(common_arg(
+        {"--moe-cache-hybrid"},
+        "with --moe-cache-profile: the MoE cache keeps the profile's experts for good and the CPU computes the experts it "
+        "does not hold, in place of uploading them (generation only; prompts keep their path)",
+        [](common_params & params) {
+            params.moe_cache_hybrid = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_HYBRID"));
+    add_opt(common_arg(
+        {"--moe-cache-adaptive"},
+        "with --moe-cache-hybrid: count the experts the router picks and, every few dozen generated tokens, swap the "
+        "hottest ones the cache lacks in for the coldest it holds, so it follows the conversation. The profile only "
+        "decides the start, and may be left out (the cache then fills itself)",
+        [](common_params & params) {
+            params.moe_cache_adaptive = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_ADAPTIVE"));
+    add_opt(common_arg(
+        {"--moe-cache-audit"}, "FNAME",
+        "append the MoE cache's audit records to FNAME, one JSON object a line: at load the model, the flags, the GPUs, "
+        "the profile's SHA-256 and the experts held per layer; llama-server and llama-cli: once ready, and one per "
+        "request; at exit (every tool) the counters and the run's throughput (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.moe_cache_audit = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_AUDIT"));
     add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"

@@ -9,6 +9,7 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
+#include "../src/llama-model.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -17,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <filesystem>
 #include <random>
 #include <regex>
 #include <stdexcept>
@@ -121,6 +123,10 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
             tmp16[i] = ggml_fp32_to_fp16(tmp[i]);
         }
         ggml_backend_tensor_set(tensor, tmp16.data(), 0, ggml_nbytes(tensor));
+    } else if (ggml_is_quantized(tensor->type)) {
+        std::vector<uint8_t> q(ggml_nbytes(tensor));
+        ggml_quantize_chunk(tensor->type, tmp.data(), q.data(), 0, tmp.size()/tensor->ne[0], tensor->ne[0], nullptr);
+        ggml_backend_tensor_set(tensor, q.data(), 0, q.size());
     } else {
         GGML_ABORT("fatal error");
     }
@@ -135,6 +141,8 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --all-host-experts       Test every MoE arch with the experts in host memory and the MoE cache (default: deepseek2 only)\n");
+    LOG("  --quant-experts          Make the routed experts Q8_0 (the hybrid MoE cache's one-token GPU path needs quantized experts)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -154,14 +162,113 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
+// --all-host-experts: every MoE arch is also tested with the experts in host memory
+static bool g_all_host_experts = false;
+
+// --quant-experts: the routed experts are Q8_0, so the hybrid's one-token path runs too (CUDA's one-token mul_mat_id
+// skips -1 rows only for quantized experts; with F16/F32 experts the hybrid always takes its stand-in path)
+static bool g_quant_experts = false;
+
+// "MoE cache filled with N experts" lines with N > 0 seen in the log, to check that a profile was used
+static int g_moe_cache_prefills = 0;
+
+// the output of the first MoE layer, all ubatches: its input is the same in every config, so the experts' work can be
+// compared tightly - the logits of these tiny models hide a wrong expert inside the 1e-4 NMSE (see the hybrid configs)
+static bool               g_moe_capture       = false;
+static int                g_moe_capture_layer = -1;
+static std::vector<float> g_moe_capture_data;
+
+static bool moe_capture_cb(struct ggml_tensor * t, bool ask, void * /*user_data*/) {
+    int il = -1;
+    if (!g_moe_capture || sscanf(t->name, "ffn_moe_out-%d", &il) != 1) {
+        return !ask;
+    }
+    if (ask) {
+        return true;
+    }
+    if (g_moe_capture_layer < 0) {
+        g_moe_capture_layer = il;
+    }
+    if (il == g_moe_capture_layer && t->type == GGML_TYPE_F32 && ggml_is_contiguous(t)) {
+        const size_t off = g_moe_capture_data.size();
+        g_moe_capture_data.resize(off + ggml_nelements(t));
+        ggml_backend_tensor_get(t, g_moe_capture_data.data() + off, 0, ggml_nbytes(t));
+    }
+    return true;
+}
+
 // MoE archs that are also tested with the experts in host memory
 static bool host_experts_test(const llm_arch arch) {
+    if (g_all_host_experts) {
+        return true;
+    }
     switch (arch) {
         case LLM_ARCH_DEEPSEEK2:
             return true;
         default:
             return false;
     }
+}
+
+// a moe_cache_size that asks for a cache holding every expert of the model, or about half of them
+static constexpr size_t MOE_CACHE_ALL  = SIZE_MAX;
+static constexpr size_t MOE_CACHE_HALF = SIZE_MAX - 1;
+
+// the MoE cache size for a model: MOE_CACHE_ALL holds every expert (plus the spare slot and padding of each bank),
+// any other size is raised to hold n_expert_used + 2 experts per group, so that every arch gets a working cache
+// that still evicts (the 1536 KiB of the deepseek2 fixture is kept: 4 slots of 288 KiB)
+static size_t moe_cache_size_for(const llama_model * model, size_t size) {
+    size_t expert_bytes = 0; // one expert of every layer
+    size_t all_bytes    = 0;
+    for (const llama_layer & layer : model->layers) {
+        for (const ggml_tensor * t : { layer.ffn_gate_up_exps, layer.ffn_gate_exps, layer.ffn_up_exps, layer.ffn_down_exps }) {
+            if (t != nullptr) {
+                expert_bytes += t->nb[2];
+                all_bytes    += ggml_nbytes(t);
+            }
+        }
+    }
+    if (expert_bytes == 0) {
+        return 0; // a dense fixture of an arch that also has MoE variants: nothing to cache
+    }
+    if (size == MOE_CACHE_ALL) {
+        return all_bytes + 2*expert_bytes + 1024*1024;
+    }
+    if (size == MOE_CACHE_HALF) {
+        return all_bytes/2 + expert_bytes; // about half of each layer's experts, plus the spare slot of each bank
+    }
+    return std::max(size, (size_t) (model->hparams.n_expert_used_max() + 3)*expert_bytes);
+}
+
+// a Strata STRP expert profile ranking every (layer, expert) pair, highest expert ids first, round-robin over the layers
+static std::string write_moe_cache_profile(const llama_model * model) {
+    char arch[64] = {0};
+    char n_expert_str[32] = {0};
+    llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch));
+    if (llama_model_meta_val_str(model, (std::string(arch) + ".expert_count").c_str(), n_expert_str, sizeof(n_expert_str)) < 0) {
+        throw std::runtime_error("MoE cache profile: the model has no expert_count");
+    }
+    const uint32_t n_layer  = (uint32_t) llama_model_n_layer(model);
+    const uint32_t n_expert = (uint32_t) std::stoul(n_expert_str);
+
+    std::vector<uint16_t> pairs;
+    for (int64_t e = n_expert - 1; e >= 0; e--) {
+        for (uint32_t il = 0; il < n_layer; il++) {
+            pairs.push_back((uint16_t) il);
+            pairs.push_back((uint16_t) e);
+        }
+    }
+    const uint32_t hdr[5] = { 1, n_layer, n_expert, (uint32_t) (pairs.size()/2), (uint32_t) (pairs.size()/2) };
+    const std::string path = (std::filesystem::temp_directory_path() / "test-llama-archs-moe-cache.strp").string();
+    FILE * f = fopen(path.c_str(), "wb");
+    if (f == nullptr) {
+        throw std::runtime_error("MoE cache profile: cannot write " + path);
+    }
+    fwrite("STRP", 1, 4, f);
+    fwrite(hdr, sizeof(hdr), 1, f);
+    fwrite(pairs.data(), sizeof(uint16_t), pairs.size(), f);
+    fclose(f);
+    return path;
 }
 
 static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
@@ -591,6 +698,18 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
         gguf_add_tensor(ms.gguf_ctx, &t);
     }
+    if (moe && g_quant_experts) {
+        // the loader takes a tensor's type from here when the tensor is listed (its shape still comes from the arch)
+        for (uint32_t il = 0; il < n_layer; il++) {
+            for (const char * name : { "ffn_up_exps", "ffn_gate_exps", "ffn_down_exps", "ffn_gate_up_exps" }) {
+                ggml_tensor t;
+                memset(&t, 0, sizeof(ggml_tensor));
+                t.type = GGML_TYPE_Q8_0;
+                ggml_format_name(&t, "blk.%" PRIu32 ".%s.weight", il, name);
+                gguf_add_tensor(ms.gguf_ctx, &t);
+            }
+        }
+    }
     return ret;
 }
 
@@ -602,7 +721,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0,
+        const bool moe_cache_profile = false, const bool moe_cache_hybrid = false, const bool moe_one_token = false,
+        const bool moe_adaptive = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -619,10 +740,14 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     if (!encode) {
         ctx_params.n_ubatch = 64;
     }
-    if (moe_cache_size > 0) {
-        // the MoE cache is only used for small ubatches
-        ctx_params.moe_cache_size = moe_cache_size;
-        ctx_params.n_ubatch = 2;
+    if (moe_cache_size > 0 && !encode) {
+        // the MoE cache is only used for small ubatches; an encoder needs the whole batch in one, so it exercises
+        // the large-batch path, which copies the cached experts instead of uploading them
+        // (one token per ubatch: the hybrid's one-token path, as in generation)
+        ctx_params.n_ubatch = moe_one_token ? 1 : 2;
+        if (moe_adaptive) {
+            ctx_params.n_ubatch = 64; // get_logits decodes one token at a time, and then a prompt batch over the cache's 32 tokens
+        }
     }
 
     tensor_data_params tensor_params = { seed, stdev };
@@ -632,20 +757,67 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     if (!model) {
         throw std::runtime_error("failed to create llama model");
     }
+    if (moe_cache_size > 0) {
+        ctx_params.moe_cache_size   = moe_cache_size_for(model.get(), moe_cache_size);
+        ctx_params.moe_cache_hybrid = moe_cache_hybrid;
+        ctx_params.moe_cache_adaptive = moe_adaptive;
+        ctx_params.cb_eval          = moe_capture_cb; // inert unless g_moe_capture
+    }
+    const bool prefill = moe_cache_profile && ctx_params.moe_cache_size > 0;
+    std::string profile;
+    if (prefill) {
+        profile = write_moe_cache_profile(model.get());
+        ctx_params.moe_cache_profile = profile.c_str();
+    }
+    const int prefills = g_moe_cache_prefills;
     llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+    if (prefill && lctx && g_moe_cache_prefills == prefills) {
+        throw std::runtime_error("the MoE cache was not filled from the profile");
+    }
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
     }
     return std::make_pair(std::move(model), std::move(lctx));
 }
 
+// the experts the MoE cache holds now, all layers
+static int64_t moe_resident(const llama_model * model, const llama_context * lctx) {
+    int64_t n = 0;
+    for (int32_t il = 0; il < llama_model_n_layer(model); il++) {
+        n += llama_moe_cache_get_resident(lctx, il, nullptr, 0);
+    }
+    return n;
+}
+
 static std::vector<float> get_logits(
-        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false,
+        uint32_t rebalance_chunk = 0) {
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_ctx    = llama_n_ctx(lctx);
     const uint32_t n_tokens = tokens.size();
-    common_batch batch(lctx);
     GGML_ASSERT(n_tokens <= n_ctx);
+    if (rebalance_chunk > 0) {
+        // the adaptive MoE cache: decode a token at a time, as in generation, and after every chunk of them swap in the experts
+        // they selected for the ones the cache holds (eagerly, whatever the heat); the logits must still be the CPU's
+        std::vector<float> ret;
+        ret.reserve(n_tokens*n_vocab);
+        for (uint32_t pos = 0; pos < n_tokens; pos++) {
+            common_batch batch(lctx);
+            batch.add(tokens[pos], pos, 0, true);
+            if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+                throw std::runtime_error("failed to decode batch");
+            }
+            const float * logits_0 = llama_get_logits_ith(lctx, 0);
+            ret.insert(ret.end(), logits_0, logits_0 + n_vocab);
+            if ((pos + 1) % rebalance_chunk == 0 || pos + 1 == n_tokens) {
+                if (llama_moe_cache_rebalance(lctx, INT32_MAX) < 0) {
+                    throw std::runtime_error("the context has no adaptive MoE cache");
+                }
+            }
+        }
+        return ret;
+    }
+    common_batch batch(lctx);
     for (uint32_t pos = 0; pos < n_tokens; pos++) {
         batch.add(tokens[pos], pos, 0, true);
     }
@@ -727,7 +899,7 @@ static bool check_causal_attn_toggle(
 
     bool ok = true;
     uint32_t pos = n_past;
-    for (const uint32_t n_tokens : { n_ubatch/2, n_ubatch }) {
+    for (const uint32_t n_tokens : { std::max(1u, n_ubatch/2), n_ubatch }) {
         batch.clear();
         for (uint32_t i = 0; i < n_tokens; i++) {
             batch.add(tokens[i], pos++, 0, true);
@@ -981,6 +1153,11 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
     llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
         const user_data_t * ud = (const user_data_t *) user_data;
+        const char * filled = strstr(text, "MoE cache filled with ");
+        size_t n_filled = 0;
+        if (filled != nullptr && sscanf(filled, "MoE cache filled with %zu", &n_filled) == 1 && n_filled > 0) {
+            g_moe_cache_prefills++;
+        }
         int verbosity = common_log_get_verbosity(level);
         if (verbosity <= ud->verbosity) {
             ud->log_old.callback(level, text, ud->log_old.user_data);
@@ -995,9 +1172,15 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         llama_split_mode                split_mode;
         bool                            host_experts; // keep the experts in host memory, see host_experts_test
         size_t                          moe_cache_size;
+        bool                            moe_cache_profile; // fill the cache from a profile at load
+        bool                            moe_cache_hybrid;  // the CPU computes the experts the cache does not hold
+        bool                            moe_one_token;     // ubatches of one token
+        bool                            moe_adaptive;      // swap experts in between chunks of tokens
 
-        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode, bool host_experts = false, size_t moe_cache_size = 0)
-            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode), host_experts(host_experts), moe_cache_size(moe_cache_size) {}
+        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode, bool host_experts = false, size_t moe_cache_size = 0,
+                bool moe_cache_profile = false, bool moe_cache_hybrid = false, bool moe_one_token = false, bool moe_adaptive = false)
+            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode), host_experts(host_experts), moe_cache_size(moe_cache_size),
+              moe_cache_profile(moe_cache_profile), moe_cache_hybrid(moe_cache_hybrid), moe_one_token(moe_one_token), moe_adaptive(moe_adaptive) {}
     };
 
     const llama_model_tensor_buft_override host_experts_overrides[] = {
@@ -1042,6 +1225,29 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             const enum ggml_backend_dev_type type = ggml_backend_dev_type(devices_meta[0]);
             if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
                 dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // the same small cache filled from a profile: prefilled experts are evicted like uploaded ones
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, profile", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024, true);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // a cache that holds every expert, filled from a profile that ranks them all: nothing is uploaded after
+                // the load, so every expert the GPU reads is one the prefill put in its slot
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, full profile", LLAMA_SPLIT_MODE_LAYER, true, MOE_CACHE_ALL, true);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // hybrid: the cache holds about half of each layer's experts from the profile and the CPU computes the
+                // rest, so a token's experts run on both; then a hybrid cache that holds them all
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE hybrid, half", LLAMA_SPLIT_MODE_LAYER, true, MOE_CACHE_HALF, true, true);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE hybrid, full", LLAMA_SPLIT_MODE_LAYER, true, MOE_CACHE_ALL, true, true);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // generation's path: one token per ubatch, where CUDA skips the CPU's rows (with --quant-experts);
+                // first the reference for its first-MoE-layer check, at the same ubatch size
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, full, 1 token", LLAMA_SPLIT_MODE_LAYER, true, MOE_CACHE_ALL, true, false, true);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE hybrid, 1 token", LLAMA_SPLIT_MODE_LAYER, true, MOE_CACHE_HALF, true, true, true);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // the adaptive cache: between chunks of tokens it swaps in the experts the tokens selected for the ones it
+                // holds, and the logits must stay right (and the swaps must really happen)
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE hybrid, adaptive", LLAMA_SPLIT_MODE_LAYER, true, MOE_CACHE_HALF, true, true, true, true);
                 max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
                 // each GPU caches the layers assigned to it
                 if (devices_meta.size() > 1) {
@@ -1104,6 +1310,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             }
             std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_cpu;
             std::vector<float> logits_cpu;
+            std::vector<float> logits_cache; // the single-GPU MoE cache without a profile
+            std::vector<float> moe_out_ref[2]; // the first MoE layer's output with every expert in the cache, [one token]
             for (device_config & dc : dev_configs) {
                 if (dc.host_experts && (!moe || !host_experts_test(arch))) {
                     continue;
@@ -1122,6 +1330,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 char nmse_str[12] = {0};
                 char mixed_str[12] = {0};
 
+                // the adaptive cache swaps between chunks of tokens: an encoder (a diffusion model) takes its whole batch at
+                // once, so it only gets the flag
+                const uint32_t rebalance_chunk = dc.moe_adaptive && !encode ? 8 : 0;
                 bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 bool test_executed = false;
                 bool test_ok = true;
@@ -1132,14 +1343,80 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
-                        logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size, dc.moe_cache_profile, dc.moe_cache_hybrid, dc.moe_one_token, dc.moe_adaptive);
+                        g_moe_capture       = dc.moe_cache_size > 0;
+                        g_moe_capture_layer = -1;
+                        g_moe_capture_data.clear();
+                        const int64_t n_resident_before = rebalance_chunk > 0 ? moe_resident(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get()) : 0;
+                        logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode, rebalance_chunk);
+                        g_moe_capture = false;
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
                         if (nmse_val > 1e-4) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
+                        }
+                        if (rebalance_chunk > 0) {
+                            // a prompt after the swaps: a batch over the cache's 32 tokens takes llama.cpp's own path, which copies
+                            // the cached experts out of the banks the swaps rewrote. Judged like the other configs, against the
+                            // CPU's logits for the same tokens in one batch
+                            llama_context * lctx_big = model_and_ctx_dev.second.get();
+                            if (llama_memory_t mem_big = llama_get_memory(lctx_big)) {
+                                llama_memory_clear(mem_big, true);
+                                const std::vector<float> logits_big = get_logits(model_and_ctx_dev.first.get(), lctx_big, tokens, encode);
+                                const double nmse_big = nmse(logits_cpu, logits_big);
+                                if (nmse_big > nmse_val) {
+                                    snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_big);
+                                }
+                                if (nmse_big > 1e-4) {
+                                    test_ok = false;
+                                    status_nmse = "\033[1;31mFAIL\033[0m";
+                                }
+                            }
+                        }
+                        if (rebalance_chunk > 0) {
+                            // a miss is what the cache learns from: a fixture that never misses (its routing stays in the cache,
+                            // or the cache holds every layer whole) has nothing to swap in. A swap replaces an expert with
+                            // another and a fill adds one, so the cache never ends up holding fewer experts than it began with
+                            llama_moe_cache_stats st = {};
+                            const int64_t n_resident_after = moe_resident(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get());
+                            if (!llama_moe_cache_get_stats(model_and_ctx_dev.second.get(), &st) || (st.n_miss > 0 && st.n_swap == 0) ||
+                                    n_resident_after < n_resident_before) {
+                                fprintf(stderr, "adaptive MoE cache: %llu hits, %llu misses, %llu swaps, %lld experts held before and %lld after, %llu of %llu slots prefilled\n",
+                                        (unsigned long long) st.n_hit, (unsigned long long) st.n_miss, (unsigned long long) st.n_swap,
+                                        (long long) n_resident_before, (long long) n_resident_after,
+                                        (unsigned long long) st.n_prefilled, (unsigned long long) st.n_slots);
+                                test_ok = false; // misses but nothing swapped, or experts lost: the swapping is broken
+                                status_nmse = "\033[1;31mFAIL\033[0m";
+                                snprintf(nmse_str, sizeof(nmse_str), "(%.1e s)", nmse_val);
+                            }
+                        }
+
+                        // a profile only decides which slot holds which expert, the kernels and the banks are those of
+                        // the cache without one: the logits must be the same bits, a far tighter check than the CPU's
+                        // 1e-4 (with two experts of near-equal weight, swapped expert bytes move the NMSE by ~1e-7)
+                        if (dc.moe_cache_size > 0 && !dc.moe_cache_profile && dc.devs.size() == 1) {
+                            logits_cache = logits_dev;
+                        } else if (dc.moe_cache_profile && !dc.moe_cache_hybrid && !dc.moe_one_token && !logits_cache.empty() && logits_dev != logits_cache) {
+                            test_ok = false;
+                            status_nmse = "\033[1;31mFAIL\033[0m";
+                            snprintf(nmse_str, sizeof(nmse_str), "(%.1e c)", nmse(logits_cache, logits_dev));
+                        }
+
+                        // the hybrid's first MoE layer against the cache holding every expert, at the same ubatch size
+                        // (another size changes the GPU kernels before the layer, and so its input): only the CPU's and
+                        // the GPU's rounding may differ (measured 1.2e-6 .. 3.4e-6), a wrong expert in a row gives 2e-2 .. 1.5
+                        std::vector<float> & ref = moe_out_ref[dc.moe_one_token];
+                        if (dc.moe_cache_size == MOE_CACHE_ALL && dc.moe_cache_profile && !dc.moe_cache_hybrid) {
+                            ref = g_moe_capture_data;
+                        } else if (dc.moe_cache_hybrid && !ref.empty()) {
+                            const double d = ref.size() == g_moe_capture_data.size() ? nmse(ref, g_moe_capture_data) : INFINITY;
+                            if (!(d <= 1e-4)) {
+                                test_ok = false;
+                                status_nmse = "\033[1;31mFAIL\033[0m";
+                                snprintf(nmse_str, sizeof(nmse_str), "(%.1e m)", d);
+                            }
                         }
 
                         // chunked decode matches a single batch only with causal attention over a memory
@@ -1198,9 +1475,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         ms.save(file);
                         rewind(file);
 
-                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size, dc.moe_cache_profile, dc.moe_cache_hybrid, dc.moe_one_token, dc.moe_adaptive);
                         const std::vector<float> logits_roundtrip = get_logits(
-                            model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
+                            model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode, rebalance_chunk);
                         status_roundtrip = "\033[1;32mOK\033[0m";
                         GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
                         for (size_t i = 0; i < logits_roundtrip.size(); i++) {
@@ -1278,6 +1555,10 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--all-host-experts") == 0) {
+            g_all_host_experts = true;
+        } else if (strcmp(argv[i], "--quant-experts") == 0) {
+            g_quant_experts = true;
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
                 seed = std::stoull(argv[++i]);

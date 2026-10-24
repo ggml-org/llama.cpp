@@ -369,6 +369,9 @@ llama_context::llama_context(
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
+    cparams.moe_cache_profile = params.moe_cache_profile ? params.moe_cache_profile : "";
+    cparams.moe_cache_hybrid  = params.moe_cache_hybrid;
+    cparams.moe_cache_adaptive = params.moe_cache_adaptive && params.moe_cache_hybrid;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -559,7 +562,8 @@ llama_context::llama_context(
         }
 
         if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
+            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_profile,
+                cparams.moe_cache_hybrid, cparams.moe_cache_adaptive);
         }
 
         sched_reserve();
@@ -2553,6 +2557,11 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         }
     }
 
+    // the hybrid MoE cache builds each MoE layer's experts twice, plus its id split and masks: ~40 more nodes a layer
+    if (cparams.moe_cache_size > 0 && cparams.moe_cache_hybrid) {
+        res += 64u*model.hparams.n_layer();
+    }
+
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
     for (const auto & [seq_id, sampler] : sampling.samplers) {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
@@ -2765,9 +2774,19 @@ ggml_status llama_context::graph_compute(
 
     copy_experts.reset();
 
+    // the MoE cache's GPU->CPU hand-overs are stamped with the step they belong to
+    if (moe_cache) {
+        moe_cache->begin_step();
+    }
+
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
+    }
+
+    // the CPU splits have run by now, the MoE cache's mailbox ops among them
+    if (moe_cache && moe_cache->take_mailbox_error() && status == GGML_STATUS_SUCCESS) {
+        status = GGML_STATUS_FAILED;
     }
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
@@ -4018,6 +4037,9 @@ llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.moe_cache_profile           =*/ nullptr,
+        /*.moe_cache_hybrid            =*/ false,
+        /*.moe_cache_adaptive          =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
@@ -4662,6 +4684,30 @@ llama_perf_context_data llama_perf_context(const llama_context * ctx) {
     data = ctx->perf_get_data();
 
     return data;
+}
+
+bool llama_moe_cache_get_stats(const llama_context * ctx, llama_moe_cache_stats * stats) {
+    const llama_moe_cache * cache = ctx->get_moe_cache();
+    if (cache == nullptr) {
+        return false;
+    }
+    *stats = cache->get_stats();
+    return true;
+}
+
+int32_t llama_moe_cache_get_layer_stats(const llama_context * ctx, llama_moe_cache_layer_stats * stats, int32_t n_max) {
+    const llama_moe_cache * cache = ctx->get_moe_cache();
+    return cache == nullptr ? 0 : cache->get_layer_stats(stats, n_max);
+}
+
+int32_t llama_moe_cache_get_resident(const llama_context * ctx, int32_t il, int32_t * experts, int32_t n_max) {
+    const llama_moe_cache * cache = ctx->get_moe_cache();
+    return cache == nullptr ? 0 : cache->get_resident(il, experts, n_max);
+}
+
+int32_t llama_moe_cache_rebalance(llama_context * ctx, int32_t max_swaps) {
+    llama_moe_cache * cache = ctx->get_moe_cache_mut();
+    return cache == nullptr ? -1 : cache->rebalance(max_swaps);
 }
 
 void llama_perf_context_print(const llama_context * ctx) {

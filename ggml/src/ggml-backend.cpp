@@ -1875,7 +1875,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
-        if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
+        // - except for a split that reads only shared memory kept in order by flags (a mailbox): it starts at once and
+        //   polls them, while the previous split still runs (see GGML_TENSOR_FLAG_NO_SYNC)
+        bool no_sync = false;
+        for (int i = 0; i < split->graph.n_nodes && split->n_inputs == 0; i++) {
+            no_sync = no_sync || (split->graph.nodes[i]->flags & GGML_TENSOR_FLAG_NO_SYNC);
+        }
+        if (split->n_inputs == 0 && !no_sync && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
             if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
             } else {

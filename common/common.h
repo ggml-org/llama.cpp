@@ -596,6 +596,10 @@ struct common_params {
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
     size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    std::string moe_cache_profile; // Strata STRP expert profile the MoE cache starts from
+    bool        moe_cache_hybrid = false; // the cache holds the profile's experts for good, the CPU computes the others
+    bool        moe_cache_adaptive = false; // ... and swaps in the experts the router picks most, for the coldest it holds
+    std::string moe_cache_audit; // JSONL file the MoE cache's placement and counters are appended to
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
@@ -1011,6 +1015,12 @@ private:
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
+
+// --moe-cache-audit: appends one JSON line to path - the event, the time, the MoE cache's counters since the load, and
+// fields (the load and exit records, with the placement, are written by common_init_from_params and its result)
+// does nothing when path is empty or the context has no MoE cache
+void common_moe_cache_audit(const std::string & path, llama_context * ctx, const std::string & event,
+        const std::vector<std::pair<std::string, double>> & fields = {});
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);

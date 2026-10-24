@@ -397,6 +397,9 @@ extern "C" {
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
+        const char * moe_cache_profile; // expert profile (Strata STRP) the MoE cache is filled from at load, hottest first, nullptr = start empty [EXPERIMENTAL]
+        bool moe_cache_hybrid; // the cache holds the profile's experts for good and the CPU computes the others: nothing is uploaded [EXPERIMENTAL]
+        bool moe_cache_adaptive; // with the hybrid: count the experts the router picks and, every few dozen tokens, swap the hottest ones in for the coldest the cache holds; works without a profile [EXPERIMENTAL]
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -1700,6 +1703,46 @@ extern "C" {
     LLAMA_API struct llama_perf_context_data llama_perf_context      (const struct llama_context * ctx);
     LLAMA_API void                           llama_perf_context_print(const struct llama_context * ctx);
     LLAMA_API void                           llama_perf_context_reset(      struct llama_context * ctx);
+
+    // MoE cache (moe_cache_size > 0): counters since the context was created [EXPERIMENTAL]
+    struct llama_moe_cache_stats {
+        uint64_t n_hit;          // selected experts the cache held (ubatches of up to 32 tokens)
+        uint64_t n_hit_profile;  // of them, experts the profile put there that were never evicted since
+        uint64_t n_miss;         // selected experts the cache did not hold: uploaded to it, or computed on the CPU (hybrid)
+        uint64_t n_bytes_upload; // bytes of those uploads
+        uint64_t n_bytes_cpu;    // hybrid: bytes of the experts the CPU computed
+        bool     hybrid;         // moe_cache_hybrid
+        uint64_t n_copy;         // experts large batches copied from the cache instead of from host memory
+        uint64_t n_bytes_copy;
+        uint64_t n_slots;        // expert slots, all devices
+        uint64_t n_prefilled;    // slots the profile filled at load
+        uint64_t n_bytes_cache;  // device memory of the cache
+        uint64_t n_swap;         // adaptive: experts swapped into the cache since the context was created
+    };
+
+    // false (and stats untouched) when the context has no MoE cache
+    LLAMA_API bool llama_moe_cache_get_stats(const struct llama_context * ctx, struct llama_moe_cache_stats * stats);
+
+    struct llama_moe_cache_layer_stats {
+        int32_t  il;            // layer
+        int32_t  n_slots;       // slots of the group the layer shares
+        uint64_t n_hit;
+        uint64_t n_hit_profile;
+        uint64_t n_miss;
+    };
+
+    // the layers the cache serves, in order: fills at most n_max of them and returns how many there are
+    // (0 without a MoE cache; call with n_max = 0 to size the array)
+    LLAMA_API int32_t llama_moe_cache_get_layer_stats(const struct llama_context * ctx, struct llama_moe_cache_layer_stats * stats, int32_t n_max);
+
+    // the experts the cache holds in layer il now: fills at most n_max of their ids and returns how many it holds
+    // (0 for a layer it does not serve; call with n_max = 0 to size the array)
+    LLAMA_API int32_t llama_moe_cache_get_resident(const struct llama_context * ctx, int32_t il, int32_t * experts, int32_t n_max);
+
+    // adaptive hybrid cache: swap in the experts the router has picked most for the coldest ones the cache holds, at most
+    // max_swaps of them, now (llama_decode does it by itself every few dozen tokens). Waits for the device to be idle, so
+    // call it between decodes. Returns the number of swaps, or -1 without an adaptive MoE cache.
+    LLAMA_API int32_t llama_moe_cache_rebalance(struct llama_context * ctx, int32_t max_swaps);
 
     // NOTE: the following work only with samplers constructed via llama_sampler_chain_init
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);

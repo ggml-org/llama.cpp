@@ -1114,12 +1114,14 @@ struct llm_graph_context {
 
     // do mat_mul_id, while optionally apply lora and per-expert scale
     // if slots is set, the experts are read from the MoE cache at these slots (see build_moe_cache_slots)
+    // host_ids: slots are ids into w itself, -1 to skip a row, and the product stays on the CPU (the hybrid MoE cache)
     ggml_tensor * build_lora_mm_id(
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
               ggml_tensor * w_s   = nullptr,
-              ggml_tensor * slots = nullptr) const;
+              ggml_tensor * slots = nullptr,
+              bool      host_ids  = false) const;
 
     // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
     // keep both individual values and Q8 activation block sums within F16 range
@@ -1227,6 +1229,16 @@ struct llm_graph_context {
 
     // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
     ggml_tensor * build_moe_cache_slots(
+             ggml_tensor * selected_experts,
+             ggml_tensor * up_exps,
+             ggml_tensor * gate_exps,
+             ggml_tensor * down_exps,
+             ggml_tensor * gate_up_exps,
+                     int   il) const;
+
+    // hybrid MoE cache: the selected experts split into GPU slots, CPU experts and a hit mask (llama_moe_cache::build_hybrid_ids),
+    // nullptr if the layer is not served this way
+    ggml_tensor * build_moe_cache_hybrid(
              ggml_tensor * selected_experts,
              ggml_tensor * up_exps,
              ggml_tensor * gate_exps,

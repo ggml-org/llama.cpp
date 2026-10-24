@@ -664,6 +664,16 @@ static __global__ void mul_mat_vec_q(
     channel_y  = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
     sample_dst = blockIdx.z;
 
+    // a negative id skips the row: its output is zero and no weight is read
+    // (llama.cpp's hybrid MoE cache: the experts the CPU computes are -1 on the GPU's side)
+    if (ncols_dst == 1 && ids && !shared_expert && (int32_t) channel_x < 0) {
+        if (threadIdx.y == 0 && threadIdx.x < rows_per_cuda_block &&
+            (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
+            dst[sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0 + threadIdx.x] = 0.0f;
+        }
+        return;
+    }
+
     const uint32_t sample_x    = fastdiv(sample_dst, sample_ratio);
     const uint32_t sample_y    = sample_dst;
 

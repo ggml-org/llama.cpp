@@ -666,6 +666,12 @@ extern "C" {
         GGML_TENSOR_FLAG_PARAM   =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS    =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
         GGML_TENSOR_FLAG_COMPUTE = 16, // ...must be computed
+        GGML_TENSOR_FLAG_NO_SYNC = 32, // ...is computed by a backend that reads only shared memory kept in order by flags (a
+                                       // mailbox, see ggml-mailbox.h): its split starts without waiting for the previous one.
+                                       // Contract: a split holding such a tensor must have no inputs and must not read any
+                                       // tensor the previous split produces, other than through that flag-ordered shared
+                                       // memory - the scheduler does not check this, and a read of an allocator-assigned
+                                       // tensor of the previous split races with it
     };
 
     enum ggml_tri_type {

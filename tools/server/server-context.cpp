@@ -415,6 +415,12 @@ struct server_slot {
     int64_t t_print_last = 0;
     int32_t n_gen_last = 0;
 
+    // the MoE cache's counters when the task started (the counters are the context's, so with several slots busy
+    // the difference includes their lookups too)
+    bool                  has_moe_cache   = false;
+    llama_moe_cache_stats moe_cache_start = {};
+    std::string           moe_cache_audit; // --moe-cache-audit: print_timings appends a record per request
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -765,6 +771,39 @@ struct server_slot {
         SLT_INF(*this,
                 "  graph reallocs = %10d    / %5d        (same size) / (changed size)\n",
                 llama_perf_context(ctx_tgt).n_reallocs_same, llama_perf_context(ctx_tgt).n_reallocs_diff);
+
+        llama_moe_cache_stats mc;
+        if (has_moe_cache && llama_moe_cache_get_stats(ctx_tgt, &mc)) {
+            const uint64_t hit  = mc.n_hit         - moe_cache_start.n_hit;
+            const uint64_t prof = mc.n_hit_profile - moe_cache_start.n_hit_profile;
+            const uint64_t miss = mc.n_miss        - moe_cache_start.n_miss;
+            const double   up   = (mc.n_bytes_upload - moe_cache_start.n_bytes_upload) / 1024.0 / 1024.0;
+            const double   cpu  = (mc.n_bytes_cpu    - moe_cache_start.n_bytes_cpu)    / 1024.0 / 1024.0;
+            const double   t_s  = (t_prompt_total + t_gen_total) / 1e3;
+            if (mc.hybrid) {
+                SLT_INF(*this,
+                        "  MoE cache hits = %8.2f %% (hybrid: %llu on the GPU, %llu on the CPU, which read %.1f MiB)\n",
+                        hit + miss > 0 ? 100.0*hit/(hit + miss) : 0.0, (unsigned long long) hit, (unsigned long long) miss, cpu);
+            } else {
+                SLT_INF(*this,
+                        "  MoE cache hits = %8.2f %% (%llu hit, %llu from the profile, %llu uploaded: %.1f MiB, %.2f GiB/s)\n",
+                        hit + miss > 0 ? 100.0*hit/(hit + miss) : 0.0, (unsigned long long) hit, (unsigned long long) prof,
+                        (unsigned long long) miss, up, t_s > 0 ? up/1024.0/t_s : 0.0);
+            }
+            common_moe_cache_audit(moe_cache_audit, ctx_tgt, "request", {
+                { "slot",               id },
+                { "task",               task ? task->id : -1 },
+                { "n_prompt",           stats.n_prompt_processed },
+                { "n_gen",              stats.n_gen },
+                { "t_prompt_ms",        t_prompt_total },
+                { "t_gen_ms",           t_gen_total },
+                { "req_hits",           (double) hit },
+                { "req_hits_profile",   (double) prof },
+                { "req_misses",         (double) miss },
+                { "req_bytes_upload",   (double) (mc.n_bytes_upload - moe_cache_start.n_bytes_upload) },
+                { "req_bytes_cpu",      (double) (mc.n_bytes_cpu    - moe_cache_start.n_bytes_cpu) },
+            });
+        }
 
         const int32_t n_draft_total       = stats.n_draft_tokens;
         const int32_t n_draft_accepted    = stats.n_draft_accepted;
@@ -1504,6 +1543,7 @@ private:
 
             slot.id      = i;
             slot.ctx_tgt = ctx_tgt;
+            slot.moe_cache_audit = params_base.moe_cache_audit;
             slot.ctx_dft = ctx_dft;
             slot.mem.init(ctx_tgt, ctx_dft);
             slot.spec    = spec.get();
@@ -1611,6 +1651,10 @@ private:
 
         // propagate new defaults back to caller
         params = params_base;
+
+        // --moe-cache-audit: the counters once loaded - the server's own decodes at load (the warmup, the context
+        // probe of common_context_can_seq_rm) fall between the load record and this one, the requests' after it
+        common_moe_cache_audit(params_base.moe_cache_audit, ctx_tgt, "ready");
 
         if (!is_resume) {
             return init();
@@ -1925,6 +1969,9 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        // the MoE cache's counters at the start, print_timings logs what this request added
+        slot.has_moe_cache = ctx_tgt != nullptr && llama_moe_cache_get_stats(ctx_tgt, &slot.moe_cache_start);
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -3110,6 +3157,12 @@ private:
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
+                    res->metrics.has_moe_cache = ctx_tgt != nullptr && llama_moe_cache_get_stats(ctx_tgt, &res->metrics.moe_cache);
+                    if (res->metrics.has_moe_cache) {
+                        auto & layers = res->metrics.moe_cache_layers;
+                        layers.resize(llama_moe_cache_get_layer_stats(ctx_tgt, nullptr, 0));
+                        llama_moe_cache_get_layer_stats(ctx_tgt, layers.data(), (int32_t) layers.size());
+                    }
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();

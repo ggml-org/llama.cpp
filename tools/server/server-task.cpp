@@ -1637,6 +1637,42 @@ std::string server_task_result_metrics::to_metrics() {
     add_items("counter", counters);
     add_items("gauge",   gauges);
 
+    if (metrics.has_moe_cache) {
+        const llama_moe_cache_stats & mc = metrics.moe_cache;
+        const double n_lookup = (double) (mc.n_hit + mc.n_miss);
+        add_items("counter", {
+            { "moe_cache_hits_total",          "MoE cache: selected experts found in the cache",                       (double) mc.n_hit },
+            { "moe_cache_hits_profile_total",  "MoE cache: hits on experts the profile put there, never evicted since", (double) mc.n_hit_profile },
+            { "moe_cache_misses_total",        "MoE cache: selected experts not in the cache (uploaded, or computed on the CPU in the hybrid)", (double) mc.n_miss },
+            { "moe_cache_upload_bytes_total",  "MoE cache: bytes uploaded for misses",                                 (double) mc.n_bytes_upload },
+            { "moe_cache_cpu_bytes_total",     "MoE cache (hybrid): bytes of the experts the CPU computed",            (double) mc.n_bytes_cpu },
+            { "moe_cache_copies_total",        "MoE cache: experts large batches copied from the cache",               (double) mc.n_copy },
+            { "moe_cache_swaps_total",         "MoE cache (adaptive): experts swapped into the cache",                 (double) mc.n_swap },
+        });
+        add_items("gauge", {
+            { "moe_cache_hit_ratio", "MoE cache: hits / (hits + misses) since the start", n_lookup > 0 ? mc.n_hit / n_lookup : 0.0 },
+            { "moe_cache_slots",     "MoE cache: expert slots",                          (double) mc.n_slots },
+            { "moe_cache_prefilled", "MoE cache: slots filled from the profile at load", (double) mc.n_prefilled },
+            { "moe_cache_bytes",     "MoE cache: device memory",                         (double) mc.n_bytes_cache },
+            { "moe_cache_hybrid",    "MoE cache: 1 when the CPU computes the misses (--moe-cache-hybrid)", mc.hybrid ? 1.0 : 0.0 },
+        });
+
+        // labeled counters: one time series per layer, which layers the cache serves and which it does not
+        const std::pair<const char *, const char *> per_layer[] = {
+            { "moe_cache_layer_hits_total",         "MoE cache: hits per layer" },
+            { "moe_cache_layer_hits_profile_total", "MoE cache: hits on profile experts per layer" },
+            { "moe_cache_layer_misses_total",       "MoE cache: misses per layer" },
+        };
+        for (size_t k = 0; k < 3; k++) {
+            prometheus << "# HELP llamacpp:" << per_layer[k].first << " " << per_layer[k].second << "\n"
+                       << "# TYPE llamacpp:" << per_layer[k].first << " counter\n";
+            for (const auto & l : metrics.moe_cache_layers) {
+                const uint64_t v = k == 0 ? l.n_hit : k == 1 ? l.n_hit_profile : l.n_miss;
+                prometheus << "llamacpp:" << per_layer[k].first << "{layer=\"" << l.il << "\"} " << v << "\n";
+            }
+        }
+    }
+
     // labeled counter: one time series per draft position
     if (!metrics.n_accepted_per_pos.empty()) {
         prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"

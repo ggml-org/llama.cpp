@@ -194,6 +194,7 @@ add_library(ggml-base
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
             ../include/ggml-cpp.h
+            ../include/ggml-mailbox.h
             ../include/ggml-opt.h
             ../include/gguf.h
             ggml.c

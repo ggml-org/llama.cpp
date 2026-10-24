@@ -196,6 +196,10 @@ struct llama_context {
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
 
+    // null without a MoE cache
+    const llama_moe_cache * get_moe_cache() const { return moe_cache.get(); }
+    llama_moe_cache *       get_moe_cache_mut()   { return moe_cache.get(); }
+
     llama_memory_breakdown memory_breakdown() const;
 
     //

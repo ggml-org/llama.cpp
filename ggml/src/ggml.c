@@ -6,6 +6,7 @@
 #include "ggml-impl.h"
 #include "ggml-threading.h"
 #include "ggml-cpu.h"
+#include "ggml-mailbox.h"
 #include "ggml.h"
 
 // FIXME: required here for quantization functions
@@ -6292,6 +6293,16 @@ struct ggml_tensor * ggml_custom_inplace(
 
     return result;
 }
+
+// the function of the mailbox ops (ggml-mailbox.h): a GPU backend runs them, so reaching the CPU is a bug
+void ggml_mailbox_cpu_stub(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
+    GGML_UNUSED(dst);
+    GGML_UNUSED(ith);
+    GGML_UNUSED(nth);
+    GGML_UNUSED(userdata);
+    GGML_ABORT("a mailbox op was scheduled on a backend that cannot run it");
+}
+
 // ggml_cross_entropy_loss
 
 struct ggml_tensor * ggml_cross_entropy_loss(
