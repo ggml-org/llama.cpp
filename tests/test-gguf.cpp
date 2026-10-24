@@ -577,6 +577,10 @@ static bool handcrafted_check_kv(const gguf_context * gguf_ctx, const unsigned i
                 ok = false;
                 continue;
             }
+            if (gguf_get_arr_str_len(gguf_ctx, id, 0) != n) { // a string KV pair has a single element
+                ok = false;
+                continue;
+            }
             if (!std::equal(str, str + n, data8)) {
                 ok = false;
             }
@@ -599,6 +603,10 @@ static bool handcrafted_check_kv(const gguf_context * gguf_ctx, const unsigned i
                     const uint64_t n_expected = rng() % (sizeof(uint32_t) + 1);
 
                     if (n != n_expected) {
+                        ok = false;
+                        continue;
+                    }
+                    if (gguf_get_arr_str_len(gguf_ctx, id, istr) != n) {
                         ok = false;
                         continue;
                     }
