@@ -1534,9 +1534,10 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
 
         // sparse path (LLAMA_DSV41_SPARSE=0 disables): fused indexer, FA bounded to window + top-k, decode gather
         bool sparse = true;
-        // gather path, shared by layers with the same top-k: selected K rows per (storage layer, top-k source) and
-        // the mask per top-k source (one input copy per split)
+        // gather path, shared by layers with the same top-k: selected K rows per (storage layer, top-k source),
+        // the sorted top-k and the mask per top-k source (one input copy per split)
         std::map<std::pair<int32_t, int32_t>, ggml_tensor *> gather_k_of;
+        std::map<int32_t, ggml_tensor *> gather_sel_of;
         std::map<int32_t, ggml_tensor *> gather_mask_of;
     };
 

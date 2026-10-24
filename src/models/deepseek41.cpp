@@ -662,15 +662,26 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 ((n_stream == 1 && nt <= 32) || nt == n_stream);
 
         if (gather) {
+            // ggml_top_k returns the rows in no particular order (CUB DeviceTopK can vary between runs) and FA sums the
+            // gathered keys in that order: sort the rows once per top-k source so the result is deterministic
+            ggml_tensor *& sel = gather_sel_of[topk_src];
+            if (!sel) {
+                GGML_ASSERT(n_comp <= (INT64_C(1) << 24)); // row ids are exact in F32
+                ggml_tensor * ids = ggml_reshape_2d(ctx0, top_k, k_sel, nt);
+                ggml_tensor * ord = ggml_argsort(ctx0, ggml_cast(ctx0, ids, GGML_TYPE_F32), GGML_SORT_ORDER_ASC);
+                sel = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, ids, 1, k_sel, nt), ord), k_sel, nt);
+                cb(sel, "comp_top_k_sorted", il);
+            }
+
             // built once per (storage, top-k) pair
             ggml_tensor *& comp_k = gather_k_of[{rd, topk_src}];
             if (!comp_k) {
                 if (n_stream == 1) {
                     ggml_tensor * src_rows = ggml_view_3d(ctx0, comp_all, n_embd_head, n_comp, 1, comp_all->nb[2], comp_all->nb[3], 0);
-                    comp_k = ggml_get_rows(ctx0, src_rows, ggml_reshape_1d(ctx0, top_k, k_sel*nt));
+                    comp_k = ggml_get_rows(ctx0, src_rows, ggml_reshape_1d(ctx0, sel, k_sel*nt));
                 } else {
                     ggml_tensor * src_rows = ggml_view_3d(ctx0, comp_all, n_embd_head, n_comp, n_stream, comp_all->nb[2], comp_all->nb[3], 0);
-                    comp_k = ggml_get_rows(ctx0, src_rows, ggml_reshape_2d(ctx0, top_k, k_sel, n_stream));
+                    comp_k = ggml_get_rows(ctx0, src_rows, sel);
                 }
                 comp_k = ggml_reshape_4d(ctx0, comp_k, n_embd_head, 1, k_sel, nt); // F32 (get_rows dequantizes)
                 if (k_rot) {
@@ -707,8 +718,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             // one per top-k source, shared by its layers
             ggml_tensor *& kq_mask = gather_mask_of[topk_src];
             if (!kq_mask) {
-                ggml_tensor * sel_mask = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, ci.kq_mask, 1, n_comp, nt),
-                        ggml_reshape_2d(ctx0, top_k, k_sel, nt));
+                ggml_tensor * sel_mask = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, ci.kq_mask, 1, n_comp, nt), sel);
                 sel_mask = ggml_cast(ctx0, ggml_reshape_4d(ctx0, sel_mask, k_sel, 1, 1, nt), GGML_TYPE_F16);
                 kq_mask = ggml_concat(ctx0, ggml_reshape_4d(ctx0, raw_mask, raw_mask->ne[0], 1, 1, nt), sel_mask, 0);
                 cb(kq_mask, "comp_kq_mask_sel", il);
