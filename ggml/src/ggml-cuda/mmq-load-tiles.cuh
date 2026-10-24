@@ -60,10 +60,10 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             const uint32_t q2_indices = (q2_bits & 0x01) | ((q2_bits & 0x02) << 7) | ((q2_bits & 0x04) << 14) | ((q2_bits & 0x08) << 21);
             const uint32_t q3_indices = (q3_bits & 0x01) | ((q3_bits & 0x02) << 7) | ((q3_bits & 0x04) << 14) | ((q3_bits & 0x08) << 21);
 
-            const int v0 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q0_indices);
-            const int v1 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q1_indices);
-            const int v2 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q2_indices);
-            const int v3 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q3_indices);
+            const int v0 = ggml_hip_perm(0x000001FF, 0x000001FF, q0_indices);
+            const int v1 = ggml_hip_perm(0x000001FF, 0x000001FF, q1_indices);
+            const int v2 = ggml_hip_perm(0x000001FF, 0x000001FF, q2_indices);
+            const int v3 = ggml_hip_perm(0x000001FF, 0x000001FF, q3_indices);
 #else
             // unpack crumbs into nibble indices
             const int n0 = __byte_perm(0x11100100, 0x11100100, q >> 0); // [0, 1, 4, 5] [ 8,  9, 12, 13]
@@ -162,8 +162,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             const uint32_t qx_indices = (q & 0x03) | ((q & 0x0C) << 6) | ((q & 0x30) << 12) | ((q & 0xC0) << 18);
             const uint32_t qy_bits    = q >> 8;
             const uint32_t qy_indices = (qy_bits & 0x03) | ((qy_bits & 0x0C) << 6) | ((qy_bits & 0x30) << 12) | ((qy_bits & 0xC0) << 18);
-            const int qx = __builtin_amdgcn_perm(0x020100FF, 0x020100FF, qx_indices);
-            const int qy = __builtin_amdgcn_perm(0x020100FF, 0x020100FF, qy_indices);
+            const int      qx         = ggml_hip_perm(0x020100FF, 0x020100FF, qx_indices);
+            const int      qy         = ggml_hip_perm(0x020100FF, 0x020100FF, qy_indices);
 #else
             // unpack even and odd crumbs into byte values
             const int qe = __byte_perm(0x020100FF, 0x020100FF, q >> 0);
