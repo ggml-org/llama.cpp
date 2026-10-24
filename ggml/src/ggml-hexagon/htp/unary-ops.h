@@ -24,11 +24,6 @@ struct htp_unary_kernel_params {
     struct fastdiv_values div_ne02;
     struct fastdiv_values div_ne012;
     struct fastdiv_values div_tpr;
-
-    // collapsed shape of elementwise ops
-    uint32_t  ne[HTP_OP_MAX_DIMS];
-    uint32_t  src0_nb[HTP_OP_MAX_DIMS];
-    uint32_t  dst_nb[HTP_OP_MAX_DIMS];
 };
 
 #if defined(__cplusplus)
@@ -72,6 +67,9 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
 }
 
 static inline bool htp_unary_is_elementwise(uint32_t opcode) {
+    if (!htp_op_is_unary(opcode)) {
+        return false;
+    }
     switch (opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
