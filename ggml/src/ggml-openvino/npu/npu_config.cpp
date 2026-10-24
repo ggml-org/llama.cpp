@@ -48,6 +48,7 @@ ov::AnyMap ggml_openvino_npu_build_compile_config(const char * cache_dir) {
     // working set, so large graphs can exhaust host RAM. Capping the workers trades
     // compile time for peak memory.
     set_compile_option_from_env("GGML_OPENVINO_COMPILATION_NUM_THREADS", "COMPILATION_NUM_THREADS");
+    // NPUW profiling dumps; need an OpenVINO build with NPU_PLUGIN_DEVELOPER_BUILD.
     set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_SUBS", "NPUW_DUMP_SUBS");
     set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_SUBS_DIR", "NPUW_DUMP_SUBS_DIR");
     set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL", "NPUW_DUMP_SUBS_ON_FAIL");
@@ -102,7 +103,8 @@ ov::AnyMap ggml_openvino_npu_prefill_config(const ov::AnyMap & base, const GgmlO
 
 ov::AnyMap ggml_openvino_npu_decode_config(const ov::AnyMap & base, const std::string & device) {
     ov::AnyMap decode_config = base;
-    if (device == "NPU" && decode_config.find("NPUW_UNFOLD_IREQS") == decode_config.end()) {
+    if (device == "NPU" && ggml_openvino_npu_decode_unfold_enabled() &&
+        decode_config.find("NPUW_UNFOLD_IREQS") == decode_config.end()) {
         decode_config["NPUW_UNFOLD_IREQS"] = "YES";
     }
     return decode_config;
