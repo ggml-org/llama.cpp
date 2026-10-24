@@ -23,6 +23,9 @@ layout (push_constant) uniform parameter
     uint32_t ne00L;
     uint32_t row_tile_size;
     uint32_t row_ids_offset;
+    uint32_t ne0_dst;
+    uint32_t stride_dst;
+    uint32_t batch_stride_dst;
 } p;
 
 #define BLOCK_SIZE 256
@@ -32,6 +35,7 @@ layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {uint data_a[];};
 layout (binding = 1) writeonly buffer D {uint data_d[];};
+layout (binding = 2) writeonly buffer DST {float data_dst[];};
 
 shared uint vals[EXPERTS_PER_CHUNK];
 shared uint offsets[EXPERTS_PER_CHUNK];
@@ -44,6 +48,26 @@ void write_tiles(uint expert, uint count, uint tile_begin, uint n_tiles) {
         const uint descriptor = 1 + 2 * (tile_begin + t);
         data_d[descriptor] = expert;
         data_d[descriptor + 1] = min(p.row_tile_size, count - t * p.row_tile_size);
+    }
+}
+
+// the matmul writes only the rows that an expert owns, so zero the rows of the skipped slots
+void zero_skipped_rows() {
+    const uint num_elements = p.ne00 * p.ne01;
+    const uint tid = gl_LocalInvocationID.x;
+
+    for (uint idx = 0; idx < num_elements; idx++) {
+        const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+        const uint i00 = idx - i01 * p.ne00;
+
+        if (int(data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00]) != -1) {
+            continue;
+        }
+
+        const uint d_off = i00 * p.stride_dst + i01 * p.batch_stride_dst;
+        for (uint i = tid; i < p.ne0_dst; i += BLOCK_SIZE) {
+            data_dst[d_off + i] = 0.0f;
+        }
     }
 }
 
@@ -123,4 +147,6 @@ void main() {
     if (tid == 0) {
         data_d[0] = total_tiles;
     }
+
+    zero_skipped_rows();
 }
