@@ -388,7 +388,8 @@ void llama_kv_cache::init_device_rotation(bool no_alloc) {
         return;
     }
 
-    // Keep the host path for split or partially offloaded caches.
+    // TODO: cache rotation matrices per device and select them per layer for partial offload and cross-GPU caches.
+    // Keep the host path when KV layers use different buffer types.
     for (const auto & layer : layers) {
         if (ggml_backend_buffer_get_type(layer.k->buffer) != buft ||
                 (layer.v && ggml_backend_buffer_get_type(layer.v->buffer) != buft)) {
