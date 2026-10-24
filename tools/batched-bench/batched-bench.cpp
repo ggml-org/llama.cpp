@@ -65,6 +65,20 @@ int llama_batched_bench(int argc, char ** argv) {
         return 1;
     }
 
+    // the model frees the adapters
+    for (auto & la : params.lora_adapters) {
+        la.ptr = llama_adapter_lora_init(model, la.path.c_str());
+        if (la.ptr == nullptr) {
+            fprintf(stderr, "%s: error: failed to load lora adapter '%s'\n", __func__, la.path.c_str());
+            llama_free(ctx);
+            llama_model_free(model);
+            return 1;
+        }
+    }
+    if (!params.lora_adapters.empty()) {
+        common_set_adapter_lora(ctx, params.lora_adapters);
+    }
+
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
