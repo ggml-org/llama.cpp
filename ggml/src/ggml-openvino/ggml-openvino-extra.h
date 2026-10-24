@@ -131,6 +131,8 @@ bool ggml_openvino_static_kv_slice_enabled();
 bool ggml_openvino_npu_fast_mask_enabled();
 bool ggml_openvino_npu_l0_host_tensors_enabled();
 bool ggml_openvino_npu_hfa_prefill_enabled();
+bool ggml_openvino_npu_decode_unfold_enabled();
+bool ggml_openvino_npu_parallel_compile_enabled();
 
 // Check if running on a GPU (GPU, GPU.0, GPU.1, ...)
 bool ggml_openvino_is_gpu();
@@ -160,7 +162,6 @@ bool ggml_openvino_weight_buffers_released();
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);
-ExtraQuantType ggml_openvino_get_npu_requant_type();
 
 // =====================================================
 // OpenVINO Tensor Extra Types

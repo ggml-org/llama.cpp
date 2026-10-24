@@ -94,56 +94,53 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 
 **Legend & Test Configuration:**
 - **Status:** ✓ = Passed | ~ = Accuracy issues | ✗ = Failed or Unsupported
-- **Execution Modes:**
-  - **SL** = Stateless (`GGML_OPENVINO_STATEFUL_EXECUTION=0`)
-  - **SF** = Stateful (`GGML_OPENVINO_STATEFUL_EXECUTION=1`)
-  - Note: The NPU operates in stateless mode only.
-- **Validation system:** Intel® Core™ Ultra 5 238V (Lunar Lake) | 32 GB RAM | Ubuntu 24.04 | Intel Graphics Compiler 2.41.5 | Intel OpenCL GPU Driver 26.35.39758.10-0 | Intel NPU Driver 1.38.0.
+- **Execution mode:** stateless (`GGML_OPENVINO_STATEFUL_EXECUTION=0`) on every device.
+- **Validation system:** Intel® Core™ Ultra 7 258V (Lunar Lake) | 32 GB RAM | Ubuntu 26.04.1 | Intel Graphics Compiler 2.41.5 | Intel OpenCL GPU Driver 26.35.39758.10-0 | Intel NPU Driver 1.38.0.
 - See [Known Limitations](#known-limitations) for context on observed failures.
 
-| Model | CPU (SL / SF) | GPU (SL / SF) | NPU (SL) |
+| Model | CPU | GPU | NPU |
 | :--- | :---: | :---: | :---: |
-| [bartowski/Llama-3.2-1B-Instruct-Q4_K_M](https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Llama-3.2-3B-Instruct-Q4_K_M](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Meta-Llama-3.1-8B-Instruct-Q4_K_M](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
+| [bartowski/Llama-3.2-1B-Instruct-Q4_K_M](https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Llama-3.2-3B-Instruct-Q4_K_M](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Meta-Llama-3.1-8B-Instruct-Q4_K_M](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
-| [Qwen/qwen2.5-1.5b-instruct-q4_k_m](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [Qwen/qwen2.5-coder-7b-instruct-q4_k_m](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Qwen_Qwen3-0.6B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Qwen_Qwen3-1.7B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [Qwen/Qwen3-4B-Q4_K_M](https://huggingface.co/Qwen/Qwen3-4B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [lm-kit/Qwen3-8B-Q4_K_M](https://huggingface.co/lm-kit/qwen-3-8b-instruct-gguf) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
-| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
-| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
-| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
+| [Qwen/qwen2.5-1.5b-instruct-q4_k_m](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF) | ✓ | ✓ | ✓ |
+| [Qwen/qwen2.5-coder-7b-instruct-q4_k_m](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Qwen_Qwen3-0.6B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Qwen_Qwen3-1.7B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF) | ✓ | ✓ | ✓ |
+| [Qwen/Qwen3-4B-Q4_K_M](https://huggingface.co/Qwen/Qwen3-4B-GGUF) | ✓ | ✓ | ✓ |
+| [lm-kit/Qwen3-8B-Q4_K_M](https://huggingface.co/lm-kit/qwen-3-8b-instruct-gguf) | ✓ | ✓ | ✓ |
+| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ | ✓ | ✗ |
+| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ | ✓ | ✗ |
+| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ | ✓ | ✗ |
+| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ | ✓ | ✗ |
 |  |  |  |  |
-| [unsloth/gemma-3-4b-it-Q4_K_M](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ~ |
-| [bartowski/google_gemma-4-E4B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) | ✓ / ✓ | ✗ / ✗ | ✓ |
-| [bartowski/gemma-4-12B-it-Q4_K_M](https://huggingface.co/bartowski/gemma-4-12B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
+| [unsloth/gemma-3-4b-it-Q4_K_M](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ | ✓ | ~ |
+| [bartowski/google_gemma-4-E4B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/gemma-4-12B-it-Q4_K_M](https://huggingface.co/bartowski/gemma-4-12B-it-GGUF) | ✓ | ✓ | ✗ |
 |  |  |  |  |
-| [bartowski/Phi-3-mini-4k-instruct-Q4_K_M](https://huggingface.co/bartowski/Phi-3-mini-4k-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Phi-3.5-mini-instruct-Q4_K_M](https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/microsoft_Phi-4-mini-instruct-Q4_K_M](https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
+| [bartowski/Phi-3-mini-4k-instruct-Q4_K_M](https://huggingface.co/bartowski/Phi-3-mini-4k-instruct-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Phi-3.5-mini-instruct-Q4_K_M](https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/microsoft_Phi-4-mini-instruct-Q4_K_M](https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
-| [bartowski/Mistral-7B-Instruct-v0.3-Q4_K_M](https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [QuantFactory/Ministral-3b-instruct.Q4_K_M](https://huggingface.co/QuantFactory/Ministral-3b-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Ministral-8B-Instruct-2410-Q4_K_M](https://huggingface.co/bartowski/Ministral-8B-Instruct-2410-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
+| [bartowski/Mistral-7B-Instruct-v0.3-Q4_K_M](https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF) | ✓ | ✓ | ✓ |
+| [QuantFactory/Ministral-3b-instruct.Q4_K_M](https://huggingface.co/QuantFactory/Ministral-3b-instruct-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Ministral-8B-Instruct-2410-Q4_K_M](https://huggingface.co/bartowski/Ministral-8B-Instruct-2410-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
-| [bartowski/DeepSeek-R1-Distill-Llama-8B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
+| [bartowski/DeepSeek-R1-Distill-Llama-8B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
-| [ibm-granite/granite-4.0-350m-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-350m-GGUF) | ✓ / ✓ | ~ / ~ | ✓ |
-| [ibm-granite/granite-4.0-micro-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-micro-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [ibm-granite/granite-4.0-1b-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-1b-GGUF) | ✓ / ✓ | ~ / ~ | ~ |
-| [ibm-research/granite-3.2-8b-instruct-Q4_K_M](https://huggingface.co/ibm-research/granite-3.2-8b-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
+| [ibm-granite/granite-4.0-350m-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-350m-GGUF) | ✓ | ~ | ✓ |
+| [ibm-granite/granite-4.0-micro-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-micro-GGUF) | ✓ | ✓ | ✓ |
+| [ibm-granite/granite-4.0-1b-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-1b-GGUF) | ✓ | ~ | ~ |
+| [ibm-research/granite-3.2-8b-instruct-Q4_K_M](https://huggingface.co/ibm-research/granite-3.2-8b-instruct-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
-| [HuggingFaceTB/smollm2-1.7b-instruct-q4_k_m](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [openbmb/MiniCPM-V-2_6-Q4_K_M](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/tencent_Hunyuan-7B-Instruct-Q4_K_M](https://huggingface.co/bartowski/tencent_Hunyuan-7B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-Q4_K_M](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/prism-ml_Bonsai-8B-unpacked-Q4_K_M](https://huggingface.co/bartowski/prism-ml_Bonsai-8B-unpacked-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
+| [HuggingFaceTB/smollm2-1.7b-instruct-q4_k_m](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF) | ✓ | ✓ | ✓ |
+| [openbmb/MiniCPM-V-2_6-Q4_K_M](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf) | ✓ | ✓ | ✓ |
+| [bartowski/tencent_Hunyuan-7B-Instruct-Q4_K_M](https://huggingface.co/bartowski/tencent_Hunyuan-7B-Instruct-GGUF) | ✓ | ✓ | ✓ |
+| [LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-Q4_K_M](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/prism-ml_Bonsai-8B-unpacked-Q4_K_M](https://huggingface.co/bartowski/prism-ml_Bonsai-8B-unpacked-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
 | [gpustack/bge-m3-Q4_K_M.gguf](https://huggingface.co/gpustack/bge-m3-GGUF) | ✓ | ✗ | ✗ |
 
@@ -589,14 +586,12 @@ When using the OpenVINO backend, the first inference token may have slightly hig
 
 # Linux
 export GGML_OPENVINO_DEVICE=GPU
-# Optional: enable stateful execution for improved GPU performance (recommended).
-export GGML_OPENVINO_STATEFUL_EXECUTION=1
 # To run llama-simple:
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -n 50 "The story of AI is "
 # To run in chat mode:
 ./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 1024
 # To run llama-bench, -fa 1 is needed
-GGML_OPENVINO_STATEFUL_EXECUTION=1 GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-bench -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -fa 1
+GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-bench -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -fa 1
 
 # NPU: keep context small to avoid failures from very large model context windows.
 export GGML_OPENVINO_DEVICE=NPU
@@ -604,11 +599,8 @@ export GGML_OPENVINO_DEVICE=NPU
 
 # Windows Command Line
 set GGML_OPENVINO_DEVICE=GPU
-# Optional: enable stateful execution for improved GPU performance (recommended).
-set GGML_OPENVINO_STATEFUL_EXECUTION=1
 # Windows PowerShell
 $env:GGML_OPENVINO_DEVICE = "GPU"
-$env:GGML_OPENVINO_STATEFUL_EXECUTION = "1"
 
 # To run llama-simple
 build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf" -n 50 "The story of AI is "
@@ -659,7 +651,7 @@ docker run --rm -it -v ~/models:/models llama-openvino:light --no-warmup -c 1024
 # With Intel GPU access (iGPU or dGPU)
 docker run --rm -it -v ~/models:/models \
 --device=/dev/dri --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
---env=GGML_OPENVINO_DEVICE=GPU --env=GGML_OPENVINO_STATEFUL_EXECUTION=1 \
+--env=GGML_OPENVINO_DEVICE=GPU \
 llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 
 # With Intel NPU access
@@ -723,6 +715,8 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_NPU_COMPILER_TYPE` | String | `DRIVER` | Named alias for the `NPU_COMPILER_TYPE` property. Values include `PLUGIN`, `DRIVER`, and `PREFER_PLUGIN`; `GGML_OPENVINO_NPU_CONFIG` can override it. |
 | `GGML_OPENVINO_NPUW_FUNCALL_FOR_ALL` | String | OpenVINO default | Named alias for the `NPUW_FUNCALL_FOR_ALL` property. Useful for disabling funcall-for-all on driver/compiler combinations where it hurts stability or long-context performance; `GGML_OPENVINO_NPU_CONFIG` can override it. |
 | `GGML_OPENVINO_NPUW_UNFOLD_IREQS` | String | OpenVINO default | Named alias for the `NPUW_UNFOLD_IREQS` property. Unfolding can reduce repeated funcall dispatch overhead at the cost of higher memory use; `GGML_OPENVINO_NPU_CONFIG` can override it. |
+| `GGML_OPENVINO_NPU_DECODE_UNFOLD` | Boolean | `0` | NPU-only. Set `NPUW_UNFOLD_IREQS=YES` on the static decode graph only. Speeds up decode on many models and slows it on others. An explicit `GGML_OPENVINO_NPUW_UNFOLD_IREQS` or `GGML_OPENVINO_NPU_CONFIG` value takes precedence. |
+| `GGML_OPENVINO_NPU_PARALLEL_COMPILE` | Boolean | `0` | NPU-only. Compile the static prefill and decode graphs in parallel. Shortens model load, but raises the host memory peak during compilation. |
 | `GGML_OPENVINO_COMPILATION_NUM_THREADS` | String | OpenVINO default | Named alias for the `COMPILATION_NUM_THREADS` property. Caps compiler worker parallelism to reduce peak host memory during large NPU graph compilation; `GGML_OPENVINO_NPU_CONFIG` can override it. |
 | `GGML_OPENVINO_NPUW_DUMP_SUBS` | String | `not set` | NPU-only. Dump NPUW subgraphs for profiling. Requires an OpenVINO developer build with `NPU_PLUGIN_DEVELOPER_BUILD`. Accepts `YES` (all), `MIN` (unique function bodies), `last`, or comma-separated indices such as `0,2`. |
 | `GGML_OPENVINO_NPUW_DUMP_SUBS_DIR` | String | `not set` | NPU-only. Directory for NPUW subgraph dumps. Requires an OpenVINO developer build with `NPU_PLUGIN_DEVELOPER_BUILD`. |
@@ -734,7 +728,7 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_NPU_L0_HOST_TENSORS`| Boolean  | `0`        | NPU-only. Back the KV-cache / compute buffers with Level Zero host memory so the plugin imports them without an extra host-to-device copy each infer, cutting prefill KV I/O time. Falls back to plain host memory if the L0 allocation is unavailable. |
 | `GGML_OPENVINO_KV_SLICE`          | Boolean   | per mode   | Bind the KV cache, and size the KQ masks, at the attended length instead of the full context. Dynamic graphs (CPU/GPU): a view over the cache, no recompilation; on by default. Static graphs (NPU, or `GGML_OPENVINO_FORCE_STATIC`): the prefill graph is compiled at the aligned attended length and recompiled when it changes, decode keeps its full-context graph; off by default. Unset = each mode's default, `0` = off in both, `1` = on in both. |
 | `GGML_OPENVINO_NPU_KV_SLICE`      | Boolean   | `0`        | Deprecated alias: `1` turns static KV slicing on (`GGML_OPENVINO_KV_SLICE` wins when set). Not NPU-specific; applies to any static graph. |
-| `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Keep KV and supported recurrent caches inside the model. Single-slot CPU/GPU execution only.               |
+| `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | **Deprecated**, to be removed; use stateless execution (`0`). Keep KV and supported recurrent caches inside the model. Single-slot CPU/GPU execution only. |
 | `GGML_OPENVINO_DISABLE_CACHE`     | Boolean   | `0`        | Disable the in-process compiled-model / decoder cache (cache is on by default). Set to `1` to disable.      |
 | `GGML_OPENVINO_DISABLE_KV_SLICE`  | Boolean   | `0`        | Deprecated alias: `1` turns dynamic KV slicing off (`GGML_OPENVINO_KV_SLICE` wins when set). |
 | `GGML_OPENVINO_ENABLE_KV_4D`      | Boolean   | `0`        | GPU, stateless: bind the KV cache as `[1, ctx, n_heads_kv, head_size]` instead of `[1, 1, ctx, n_heads_kv * head_size]`, so the GPU plugin's `StatelessKVFusion` can update and read the cache in place. **Off by default**: it needs an OpenVINO build with openvino#37569 (2026.5 or a recent nightly) and is much slower on older releases (e.g. 2026.4.1). Set to a positive integer to enable. |
@@ -761,7 +755,7 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_LOG_UNSUPPORTED_OPS`| Boolean   | `0`        | Log warning messages with tensor details and rejection reasons for any ops not supported by the OpenVINO backend. Emits at `WARN` level (requires `--log-verbosity >= 2`, enabled by default). |
 
 > [!NOTE]
-> - `GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature for managing caches internally inside the OpenVINO model on CPUs and GPUs. Use a single slot (`-np 1`). KV caches retain the append-based state layout and sequence-axis optimization. Qwen3.5 adds recurrent cache states in their GGML layouts. Qwen3.5 requires an unsplit graph with model caching enabled and no recurrent rollback. A prompt starting at position 0 resets all states. State save/restore, sequence rewind, context shift, and mid-sequence graph replacement are unsupported. Stateful execution is not effective on NPUs.
+> - `GGML_OPENVINO_STATEFUL_EXECUTION` is **deprecated** and will be removed; stateless execution (the default) is the supported mode. It manages caches internally inside the OpenVINO model on CPUs and GPUs. Use a single slot (`-np 1`). KV caches retain the append-based state layout and sequence-axis optimization. Qwen3.5 adds recurrent cache states in their GGML layouts. Qwen3.5 requires an unsplit graph with model caching enabled and no recurrent rollback. A prompt starting at position 0 resets all states. State save/restore, sequence rewind, context shift, and mid-sequence graph replacement are unsupported. Stateful execution is not effective on NPUs.
 > - `GGML_OPENVINO_GDN_Q_SCALE` is for eligible GDN graphs on the NPU static path. Set it to a positive integer such as `64` to enable q pre-scaling; the factor is clamped to at least `64`. Leave it unset or set it to `0` to disable the optimization.
 > - `GGML_OPENVINO_LOG_UNSUPPORTED_OPS` emits logs at `WARN` level (`GGML_LOG_WARN`), which requires application log verbosity `--log-verbosity >= 2` (or `-lv 2`).
 > - With `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1`, use the same compilation settings as the export run. One directory can hold blobs for different models and settings; `GGML_OPENVINO_SPILL_DIR` does not affect the cache key and is ignored in cache-only mode. See [Compiled model cache](../../ggml/src/ggml-openvino/README.md) for the workflow and restrictions.
@@ -778,7 +772,6 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
 export GGML_OPENVINO_PROFILING=1
 export GGML_OPENVINO_DEVICE=GPU
-export GGML_OPENVINO_STATEFUL_EXECUTION=1
 
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -n 50 "The story of AI is "
 
@@ -786,13 +779,11 @@ export GGML_OPENVINO_STATEFUL_EXECUTION=1
 set GGML_OPENVINO_CACHE_DIR=C:\tmp\ov_cache
 set GGML_OPENVINO_PROFILING=1
 set GGML_OPENVINO_DEVICE=GPU
-set GGML_OPENVINO_STATEFUL_EXECUTION=1
 
 # Windows PowerShell
 $env:GGML_OPENVINO_CACHE_DIR = "C:\tmp\ov_cache"
 $env:GGML_OPENVINO_PROFILING = "1"
 $env:GGML_OPENVINO_DEVICE = "GPU"
-$env:GGML_OPENVINO_STATEFUL_EXECUTION = "1"
 
 build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf" -n 50 "The story of AI is "
 

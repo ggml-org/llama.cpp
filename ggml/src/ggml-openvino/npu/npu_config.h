@@ -20,5 +20,6 @@ ov::AnyMap ggml_openvino_npu_without_npuw(const ov::AnyMap & config);
 // Static prefill graph. With GGML_OPENVINO_NPU_HFA_PREFILL, switches NPUW to the HFA attention pipeline.
 ov::AnyMap ggml_openvino_npu_prefill_config(const ov::AnyMap & base, const GgmlOvDecoder & decoder);
 
-// Static decode graph: unfold NPUW function calls into separate infer requests unless the user chose.
+// Static decode graph. With GGML_OPENVINO_NPU_DECODE_UNFOLD, unfolds NPUW function calls into separate infer
+// requests, unless NPUW_UNFOLD_IREQS is already set.
 ov::AnyMap ggml_openvino_npu_decode_config(const ov::AnyMap & base, const std::string & device);
