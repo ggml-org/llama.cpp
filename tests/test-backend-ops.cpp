@@ -12261,6 +12261,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256,  4, {4, 1}, 1024, 75, true, false, 0, 10.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256,  4, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16));
 
+    // FLASH_ATTN_EXT: q4_0 / q8_0 K/V, decode and small batches
+    for (ggml_type kvt : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0 }) {
+        for (int hs : { 64, 96, 128, 192, 256, 512 }) {
+            for (int nr2 : { 1, 4, 6, 32 }) {
+                const int nh = nr2 == 32 ? 1 : 4;
+                for (int nb : { 1, 2, 5, 8, 31 }) {
+                    for (int kv : { 113, 4100 }) {
+                        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, nh, {nr2, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, kvt, kvt));
+                    }
+                }
+            }
+            test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {4, 2}, 512, 3, true,  false, 0, 0, GGML_PREC_F32, kvt, kvt));
+            test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {4, 1}, 512, 3, false, false, 0, 0, GGML_PREC_F32, kvt, kvt));
+            test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {4, 1}, 512, 3, true,  false, 0, 0, GGML_PREC_F32, kvt, kvt, {0, 2, 1, 3}));
+            test_cases.emplace_back(new test_flash_attn_ext_large_logits(hs, hs, 4, {6, 1}, 1024, 5, true, false, 0, 0, GGML_PREC_F32, kvt, kvt));
+            for (int nb : { 1, 3 }) { // attention sinks (gpt-oss: head size 64, 8 query heads per KV head), several key slices
+                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {8, 1}, 4100, nb, true, true, 0, 0, GGML_PREC_F32, kvt, kvt));
+                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {8, 1}, 113,  nb, true, true, 0, 0, GGML_PREC_F32, kvt, kvt));
+            }
+        }
+    }
+
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {   10, 5, 4, 3}));
@@ -12770,6 +12792,45 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+
+    // q8_0 / f16 K/V decode, same shapes as the q4_0 block below
+    for (ggml_type kvt : { GGML_TYPE_Q8_0, GGML_TYPE_F16 }) {
+        for (int kv : { 4096, 16384, 65536 }) {
+            for (int hs : { 128, 256 }) {
+                for (int nb : { 1, 4 }) {
+                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, hs == 128 ? 8 : 4, {hs == 128 ? 4 : 6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, kvt, kvt));
+                }
+            }
+        }
+    }
+
+    // q4_0 / q8_0 K/V decode: head size 64 with sinks and 8 query heads per KV head (gpt-oss), 96 with 1 (Phi-3 mini)
+    for (ggml_type kvt : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0 }) {
+        for (int kv : { 4096, 16384, 65536 }) {
+            for (int nb : { 1, 4 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, kv, nb, true, true, 0, 0, GGML_PREC_F32, kvt, kvt));
+                test_cases.emplace_back(new test_flash_attn_ext(96, 96, 32, {1, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, kvt, kvt));
+            }
+        }
+    }
+
+    // q4_0 / q8_0 K/V decode at head size 512 with 16 query heads per KV head (Gemma 4 global-attention layers)
+    for (ggml_type kvt : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_F16 }) {
+        for (int kv : { 4096, 16384, 65536 }) {
+            for (int nb : { 1, 4 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {16, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, kvt, kvt));
+            }
+        }
+    }
+
+    // q4_0 K/V decode: 32 heads / 8 KV heads at head size 128, 24 / 4 at 256
+    for (int kv : { 512, 4096, 16384, 65536, 131072 }) {
+        for (int hs : { 128, 256 }) {
+            for (int nb : { 1, 4, 8, 16 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, hs == 128 ? 8 : 4, {hs == 128 ? 4 : 6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+            }
+        }
+    }
 
     // sparse decode at long context
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,    0));
