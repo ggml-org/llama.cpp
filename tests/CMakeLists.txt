@@ -240,6 +240,26 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_SETUP generate-models
     )
 
+    # Target model for test-speculative-rejection-sampling
+    set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
+    file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}")
+    llama_test(
+        test-llama-archs
+        NAME test-generate-speculative-target
+        LABEL main
+        ARGS -a llama -s 999 -o "${SPEC_TARGET_DIR}"
+    )
+    set_tests_properties(
+        test-generate-speculative-target
+        PROPERTIES FIXTURES_SETUP speculative-model
+    )
+
+    # To avoid recreating the model use the fixture exclude any option:
+    # -FA "^speculative-model$"
+    llama_build_and_test(test-speculative-rejection-sampling.cpp ARGS
+        -m "${SPEC_TARGET_DIR}/llama-dense.gguf")
+    set_tests_properties(test-speculative-rejection-sampling PROPERTIES FIXTURES_REQUIRED speculative-model)
+
     # Test context state handling across all architectures, using the generated dummy models
     llama_test(
         test-llama-context
