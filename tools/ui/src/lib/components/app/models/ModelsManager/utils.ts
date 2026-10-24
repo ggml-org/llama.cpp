@@ -81,6 +81,14 @@ export interface ModelsTableGroup {
 	label: string;
 }
 
+/** Controls in a model row that act on their own, so a row click passes them by. */
+const ROW_CONTROL_SELECTOR = 'button, a, input, [role="menuitem"]';
+
+/** Whether a click on a model row landed on one of its own controls. */
+export function isRowControlClick(event: MouseEvent): boolean {
+	return event.target instanceof Element && event.target.closest(ROW_CONTROL_SELECTOR) !== null;
+}
+
 /** Context the model runs with: what a loaded model reports. */
 export function configuredContext(option: ModelOption): number | null {
 	return modelsStore.isModelRunning(option.model)

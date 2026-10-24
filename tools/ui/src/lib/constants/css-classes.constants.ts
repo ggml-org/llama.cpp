@@ -54,9 +54,17 @@ export const FILTER_TRIGGER_CLASS = `
     ${INPUT_CLASSES}
 `;
 
-/** One filter toggle of the models manager toolbar. */
+/** The filter toggles' shared box: the same fill, border and shadow as a filter trigger. */
+export const FILTER_TOGGLE_GROUP_CLASS = `
+    h-8
+    overflow-hidden
+    divide-x divide-border/30 dark:divide-border/20
+    ${INPUT_CLASSES}
+`;
+
+/** One filter toggle of the models manager toolbar; its group draws the box. */
 export const FILTER_TOGGLE_ITEM_CLASS =
-	'bg-muted! border-border/30! shadow-none! dark:border-border/20! data-[state=on]:bg-muted-foreground/15! data-[state=on]:text-foreground! dark:data-[state=on]:bg-muted-foreground/25!';
+	'h-full rounded-none hover:bg-muted/80 dark:hover:bg-muted data-[state=on]:bg-muted-foreground/15 data-[state=on]:text-foreground dark:data-[state=on]:bg-muted-foreground/25';
 
 /** Column grid shared by every row of the models manager table. Below md the context,
  *  status and actions columns are dropped, so a phone gives the whole width to the

@@ -13,8 +13,13 @@ export const ROUTES = {
 	CHAT: '#/chat',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
+	/** Models manager. */
+	MODELS: '#/models',
 	/** Search — mobile-only full-page conversation search. */
 	SEARCH: '#/search',
 	/** Root — start of the app. */
 	START: '#/'
 } as const;
+
+/** SvelteKit route id of the models manager, as `page.route.id` reports it. */
+export const MODELS_ROUTE_ID = '/models';

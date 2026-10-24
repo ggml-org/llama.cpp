@@ -91,7 +91,7 @@
 	function handleManageModels() {
 		open = false;
 
-		// let the menu finish closing before the dialog takes focus
+		// let the menu finish closing before the models page takes focus
 		setTimeout(() => (onManageModels ? onManageModels() : uiStore.openModelsManager()), 0);
 	}
 </script>

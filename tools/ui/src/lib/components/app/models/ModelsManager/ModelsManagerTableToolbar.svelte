@@ -6,7 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { type ModalityKey } from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
-	import { deviceStore, uiStore } from '$lib/stores';
+	import { deviceStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -32,12 +32,10 @@
 	let hasFilters = $derived(hasActiveFilters(contextLimit, modalities, capabilities));
 	let filterInput = $state<HTMLInputElement | null>(null);
 
-	// The search takes the focus the dialog would give its first control: the input
-	// mounts a frame or two after the dialog opens (the toolbar renders below the
-	// table in the DOM), so the poll retries until the ref lands or gives up.
+	// The search takes the focus when the models page opens: the input mounts a frame
+	// or two after the page (the toolbar renders below the table in the DOM), so the
+	// poll retries until the ref lands or gives up.
 	$effect(() => {
-		if (!uiStore.manageModelsOpen) return;
-
 		let frames = 0;
 		let handle = requestAnimationFrame(function focusFilter() {
 			if (filterInput) {
