@@ -10,6 +10,7 @@
 #include "../../src/llama-ext.h" // llama_model_set_attn_rot
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -515,7 +516,7 @@ struct case_state_rotation : ctx_test {
     const char * name() const override { return "rot"; }
 
     const char * description() const override {
-        return "rotation constants survive a cache clear and state restores only into a matching context";
+        return "a state saved with attention rotation restores only into a matching context";
     }
 
     case_result run(model_run & mr) const override {
@@ -573,18 +574,6 @@ struct case_state_rotation : ctx_test {
                 break;
             }
 
-            const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
-            const float * logits = llama_get_logits(src.get());
-            CTX_REQUIRE(logits, "missing logits before clearing the rotated cache");
-            const std::vector<float> expected_logits(logits, logits + n_vocab);
-
-            llama_memory_clear(llama_get_memory(src.get()), true);
-            CTX_REQUIRE(llama_decode(src.get(), llama_batch_get_one(&token, 1)) == 0, "failed to decode after clearing the rotated cache");
-            logits = llama_get_logits(src.get());
-            CTX_REQUIRE(logits, "missing logits after clearing the rotated cache");
-            CTX_REQUIRE(compare_logits(expected_logits.data(), logits, n_vocab).nmse() <= NMSE_THRESHOLD,
-                    "clearing the cache changed the rotation constants");
-
             auto matching = make_context(types.first, types.second, false);
             if (!matching || !set_seq_state(matching.get(), 0, LLAMA_STATE_SEQ_FLAGS_NONE, state)) {
                 TLOG_ERR("%s: failed to restore a matching rotation\n", __func__);
@@ -610,6 +599,74 @@ struct case_state_rotation : ctx_test {
             return case_result::fail();
         }
 
+        return case_result::pass();
+    }
+};
+
+struct case_rotation_buffers : ctx_test {
+    const char * name() const override { return "rot_buf"; }
+
+    const char * description() const override {
+        return "resident GPU rotation matrices keep their values across a cache clear and graph rebuild";
+    }
+
+    case_result run(model_run & mr) const override {
+        ctx_opts opts;
+        opts.n_ctx = 32;
+        opts.n_batch = opts.n_ubatch = opts.n_seq_max = 1;
+        opts.type_k = opts.type_v = GGML_TYPE_Q8_0;
+        opts.fa = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        opts.quiet = true;
+        auto ctx = mr.ctx(opts);
+        if (!ctx) {
+            return case_result::skip("quantized KV cache is not supported");
+        }
+
+        auto * graph = llama_graph_reserve(ctx.get(), 1, 1, 1);
+        CTX_REQUIRE(graph, "failed to reserve the rotation graph");
+        std::vector<std::pair<std::string, ggml_tensor *>> rotations;
+        for (const char * name : { "attn_inp_k_rot", "attn_inp_v_rot" }) {
+            auto * t = ggml_graph_get_tensor(graph, name);
+            if (t && t->buffer && !ggml_backend_buffer_is_host(t->buffer)) {
+                rotations.emplace_back(name, t);
+            }
+        }
+        if (rotations.empty()) {
+            return case_result::skip("no resident GPU rotation matrices");
+        }
+
+        // Read the buffers directly: FWHT kernels do not read the matrix contents.
+        for (bool clear : { false, true }) {
+            if (clear) {
+                llama_memory_clear(llama_get_memory(ctx.get()), true);
+            }
+            for (const auto & rotation : rotations) {
+                auto * t = rotation.second;
+                CTX_REQUIRE(t->type == GGML_TYPE_F32 && ggml_is_matrix(t) &&
+                        t->ne[0] == t->ne[1] && ggml_is_contiguous(t), "invalid rotation matrix layout");
+                std::vector<float> values(ggml_nelements(t));
+                ggml_backend_tensor_get(t, values.data(), 0, ggml_nbytes(t));
+                const int64_t n = t->ne[0];
+                const float scale = 1.0f / std::sqrt((float) n);
+                for (int64_t row = 0; row < n; ++row) {
+                    for (int64_t col = 0; col < n; ++col) {
+                        float expected = scale;
+                        for (int64_t bits = row & col; bits; bits &= bits - 1) {
+                            expected = -expected;
+                        }
+                        CTX_REQUIRE(std::fabs(values[row*n + col] - expected) <= 1e-6f,
+                                clear ? "rotation matrix changed after clearing the cache" : "invalid uploaded rotation matrix");
+                    }
+                }
+            }
+        }
+
+        graph = llama_graph_reserve(ctx.get(), 1, 1, 1);
+        CTX_REQUIRE(graph, "failed to rebuild the rotation graph");
+        for (const auto & rotation : rotations) {
+            CTX_REQUIRE(ggml_graph_get_tensor(graph, rotation.first.c_str()) == rotation.second,
+                    "rotation matrix was not reused across graphs");
+        }
         return case_result::pass();
     }
 };
@@ -845,6 +902,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_partial_size>());
     cases.push_back(std::make_unique<case_state_restore_failure>());
     cases.push_back(std::make_unique<case_state_rotation>());
+    cases.push_back(std::make_unique<case_rotation_buffers>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
     cases.push_back(std::make_unique<case_noalloc>());
     cases.push_back(std::make_unique<case_comp_padding>());
