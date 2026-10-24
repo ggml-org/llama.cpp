@@ -806,10 +806,8 @@ struct server_role {
     ~server_role();
 
     // true if the current process was spawned by a router
-    bool is_child();
+    bool is_managed_by_router();
     server_role_type get_role();
-
-    int run_download(common_params & params);
 
     // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)

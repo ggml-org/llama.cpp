@@ -101,7 +101,7 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 //
 
 static server_role_type server_role_detect(const common_params & params, server_role & role) {
-    if (role.is_child()) {
+    if (role.is_managed_by_router()) {
         return role.get_role();
     }
     // a server given no model is a router
@@ -346,6 +346,85 @@ static bool server_on_listening(server_http_context & ctx_http, const common_par
 }
 
 //
+// download worker: a child of the router that pulls a model into the cache and reports the progress
+//
+
+struct server_download_state : public common_download_callback {
+    server_role * role;
+    std::function<bool()> should_stop;
+    std::atomic<int64_t> last_progress_time{0}; // multiple files downloading in different threads
+    bool is_ok = false;
+
+    server_download_state(server_role * r) : role(r) {}
+
+    bool run(common_params & params) {
+        try {
+            common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+            common_models_handler_apply(handler, params, this);
+            is_ok = true;
+        } catch (const std::exception & e) {
+            auto model_name = params.model.get_name();
+            SRV_ERR("download failed for model name=%s: %s\n", model_name.c_str(), e.what());
+            is_ok = false;
+        }
+        return is_ok;
+    }
+    void on_progress(const common_download_progress & p) {
+        json data = {
+            {"url", p.url},
+            {"downloaded", p.downloaded},
+            {"total", p.total},
+        };
+        role->notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), data);
+    }
+    void on_start(const common_download_progress & p) override {
+        on_progress(p);
+    }
+    void on_update(const common_download_progress & p) override {
+        int64_t now = ggml_time_ms();
+        // throttle progress updates to avoid flooding logs
+        if (now - last_progress_time.load(std::memory_order_relaxed) >= 100) {
+            on_progress(p);
+            last_progress_time.store(now, std::memory_order_relaxed);
+        }
+    }
+    void on_done(const common_download_progress & p, bool) override {
+        on_progress(p);
+    }
+    bool is_cancelled() const override {
+        return should_stop ? should_stop() : false;
+    }
+};
+
+static int server_run_download(common_params & params, server_role & role) {
+    auto cancelled = std::make_shared<std::atomic<bool>>(false);
+
+    // monitor stdin for cancellation command from the router
+    std::thread signal_thread = role.setup([cancelled](int) {
+        cancelled->store(true, std::memory_order_relaxed);
+    });
+
+    server_download_state dl(&role);
+    dl.should_stop = [cancelled]() {
+        return cancelled->load(std::memory_order_relaxed);
+    };
+
+    bool ok = dl.run(params);
+
+    role.notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), {
+        {"result", ok ? "download_finished" : "download_failed"},
+    });
+
+    // router should send CMD_ROUTER_TO_CHILD_EXIT after receiving the result
+    if (signal_thread.joinable()) {
+        signal_thread.join();
+    }
+
+    SRV_INF("download completed %s\n", ok ? "successfully" : "with errors");
+    return 0;
+}
+
+//
 // router
 //
 
@@ -545,7 +624,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
     }
 
     // setup communication child --> router if necessary
-    if (role.is_child()) {
+    if (role.is_managed_by_router()) {
         ctx_server.set_state_callback([&](server_state state, json payload) {
             role.notify_to_router(server_state_to_str(state), payload);
         });
@@ -583,7 +662,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
 
     // optionally, notify router server that this instance is ready
     std::thread monitor_thread;
-    if (role.is_child()) {
+    if (role.is_managed_by_router()) {
         monitor_thread = role.setup(shutdown_handler);
         role.notify_to_router(server_state_to_str(SERVER_STATE_READY), routes.get_model_info());
     }
@@ -637,7 +716,7 @@ static int server_run(common_params & params, int argc, char ** argv, server_rol
     }
 
     switch (role_type) {
-        case SERVER_ROLE_DOWNLOAD: return role.run_download(params);
+        case SERVER_ROLE_DOWNLOAD: return server_run_download(params, role);
         case SERVER_ROLE_ROUTER:   return server_run_router(params, argc, argv, opts);
         case SERVER_ROLE_INSTANCE: return server_run_instance(params, role, models_handler, opts);
     }
