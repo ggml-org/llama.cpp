@@ -13,13 +13,13 @@
 		SidebarNavigationActions,
 		SidebarNavigationConversationList
 	} from '$lib/components/app';
-	import { ROUTES } from '$lib/constants';
+	import { ROUTES, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '$lib/constants';
 	import { TooltipSide } from '$lib/enums';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
-	import { buildConversationTree } from '$lib/utils';
+	import { buildConversationTree, remToPx } from '$lib/utils';
 	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
@@ -311,6 +311,50 @@
 		}
 	}
 
+	let asideEl = $state<HTMLElement | null>(null);
+
+	// the tab bar sits outside the sidebar, so the width lives on the root
+	$effect(() => {
+		const width = uiStore.sidebarWidth;
+
+		if (width === null) {
+			document.documentElement.style.removeProperty('--sidebar-width');
+		} else {
+			document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
+		}
+	});
+
+	function handleResizePointerDown(event: PointerEvent) {
+		if (!asideEl || isOnMobile) return;
+
+		event.preventDefault();
+
+		const handle = event.currentTarget as HTMLElement;
+		const left = asideEl.getBoundingClientRect().left;
+		const minPx = remToPx(SIDEBAR_MIN_WIDTH);
+		const maxPx = remToPx(SIDEBAR_MAX_WIDTH);
+
+		handle.setPointerCapture(event.pointerId);
+		uiStore.isSidebarResizing = true;
+
+		function onPointerMove(moveEvent: PointerEvent) {
+			const width = Math.min(maxPx, Math.max(minPx, moveEvent.clientX - left));
+
+			uiStore.setSidebarWidth(Math.round(width));
+		}
+
+		function onPointerUp() {
+			uiStore.isSidebarResizing = false;
+			handle.removeEventListener('pointermove', onPointerMove);
+			handle.removeEventListener('pointerup', onPointerUp);
+			handle.removeEventListener('pointercancel', onPointerUp);
+		}
+
+		handle.addEventListener('pointermove', onPointerMove);
+		handle.addEventListener('pointerup', onPointerUp);
+		handle.addEventListener('pointercancel', onPointerUp);
+	}
+
 	/** A dialog owns the screen on a phone, so the expanded list steps aside for it. */
 	function openDialog(open: () => void): void {
 		if (deviceStore.isMobile) {
@@ -325,6 +369,7 @@
 
 {#if innerWidth > 768 || !page.url.hash.includes(ROUTES.SEARCH)}
 	<aside
+		bind:this={asideEl}
 		class={[
 			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
 			'md:h-[calc(100dvh-1.125rem)]',
@@ -337,7 +382,8 @@
 			'rounded-3xl md:rounded-2xl',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding] duration-200 ease-out',
-			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl shadow-md',
+			uiStore.isSidebarResizing && 'md:duration-0',
+			isStripExpanded && 'md:w-(--sidebar-width) md:bg-muted/60 md:backdrop-blur-xl shadow-md',
 			!isStripExpanded && 'md:w-12',
 			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
@@ -454,6 +500,22 @@
 				</div>
 			{/if}
 		</div>
+
+		{#if uiStore.isSidebarExpanded && !isOnMobile}
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div
+				class={[
+					'absolute inset-y-3 -right-1 z-20 hidden w-2 cursor-ew-resize touch-none select-none rounded-full md:block',
+					'after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 after:rounded-full after:transition-colors',
+					'hover:after:bg-foreground/15',
+					uiStore.isSidebarResizing && 'after:bg-foreground/25'
+				]}
+				data-slot="sidebar-resize-handle"
+				ondblclick={() => uiStore.setSidebarWidth(null)}
+				onpointerdown={handleResizePointerDown}
+				title="Drag to resize, double-click to reset"
+			></div>
+		{/if}
 	</aside>
 {/if}
 

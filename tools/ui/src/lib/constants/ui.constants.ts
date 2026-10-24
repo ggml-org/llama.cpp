@@ -68,6 +68,10 @@ export const RECENT_MODEL_LIMIT = 20;
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 
+/** Bounds the expanded desktop sidebar can be dragged between. */
+export const SIDEBAR_MIN_WIDTH = '18rem';
+export const SIDEBAR_MAX_WIDTH = '32rem';
+
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
 

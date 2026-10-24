@@ -6,9 +6,15 @@
  * controls and the chat tab bar reacts to).
  */
 
+import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
-import { MODELS_ROUTE_ID, ROUTES, SETTINGS_KEYS } from '$lib/constants';
+import {
+	MODELS_ROUTE_ID,
+	ROUTES,
+	SETTINGS_KEYS,
+	SIDEBAR_WIDTH_LOCALSTORAGE_KEY
+} from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ModelOption } from '$lib/types/models';
 
@@ -23,12 +29,16 @@ class UiStore {
 
 	/** Whether the desktop sidebar is expanded (open). */
 	isSidebarExpanded = $state(false);
+	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
+	isSidebarResizing = $state(false);
 	/** Model the manager reveals when it opens, a qualified id or a raw model name. */
 	manageModelFocus = $state<string | null>(null);
 	/** Model the information dialog shows; a phone opens it instead of the manager. */
 	modelInformation = $state<ModelOption | null>(null);
 	/** Route the models page returns to: the last page visited before it. */
 	modelsReturnRoute: string = ROUTES.START;
+	/** Expanded desktop sidebar width in px; null keeps the stylesheet default. */
+	sidebarWidth = $state<number | null>(this.loadSidebarWidth());
 
 	/** Whether Discover is turned on; every Discover entry point hides without it. */
 	get isDiscoverEnabled(): boolean {
@@ -79,6 +89,27 @@ class UiStore {
 	/** Ask the composer to take focus, e.g. after a dialog closes onto the chat. */
 	requestComposerFocus(): void {
 		this.composerFocusRequested = true;
+	}
+
+	/** Set the expanded sidebar width in px, or null to go back to the default. */
+	setSidebarWidth(width: number | null): void {
+		this.sidebarWidth = width;
+
+		if (!browser) return;
+
+		if (width === null) {
+			localStorage.removeItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY);
+		} else {
+			localStorage.setItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY, String(width));
+		}
+	}
+
+	private loadSidebarWidth(): number | null {
+		if (!browser) return null;
+
+		const width = Number(localStorage.getItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY));
+
+		return Number.isFinite(width) && width > 0 ? width : null;
 	}
 }
 
