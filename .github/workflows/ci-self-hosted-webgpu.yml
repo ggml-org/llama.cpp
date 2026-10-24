@@ -131,4 +131,4 @@ jobs:
         id: ggml-ci
         run: |
           GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
-            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+            bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp
