@@ -7908,43 +7908,51 @@ struct ggml_backend_sycl_comm_context {
 
     // pinned host staging per device context, reused across calls (queues are in-order)
     uint8_t * host_out[2] = { nullptr, nullptr };
-    uint8_t * host_in[2]  = { nullptr, nullptr };
     size_t    host_bytes  = 0;
 
     void free_host() {
         for (int i = 0; i < 2; ++i) {
             const sycl::context sctx = ((ggml_backend_sycl_context *) backends[i]->context)->stream()->get_context();
             if (host_out[i]) { sycl::free(host_out[i], sctx); host_out[i] = nullptr; }
-            if (host_in[i])  { sycl::free(host_in[i],  sctx); host_in[i]  = nullptr; }
         }
         host_bytes = 0;
     }
 };
 
-// dst0 <- src1 and dst1 <- src0 through pinned host memory, with a single host wait
+// dst0 <- src1 and dst1 <- src0 through pinned host memory
 static void ggml_sycl_comm_exchange(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
                                     void * dst0, const void * src1, void * dst1, const void * src0,
                                     size_t nbytes) {
+    // Reallocate host buffers if they are too small
     if (comm->host_bytes < nbytes) {
         q0->wait();
         q1->wait();
         comm->free_host();
+
+        // OPTIMIZATION: Only 2 host buffers are required now instead of 4
         comm->host_out[0] = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
-        comm->host_in[0]  = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
         comm->host_out[1] = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
-        comm->host_in[1]  = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
-        GGML_ASSERT(comm->host_out[0] && comm->host_in[0] && comm->host_out[1] && comm->host_in[1]);
+
+        GGML_ASSERT(comm->host_out[0] && comm->host_out[1]);
         comm->host_bytes = nbytes;
     }
 
-    sycl::event e0 = q0->memcpy(comm->host_out[0], src0, nbytes);
-    sycl::event e1 = q1->memcpy(comm->host_out[1], src1, nbytes);
-    e0.wait();
-    e1.wait();
-    std::memcpy(comm->host_in[0], comm->host_out[1], nbytes);
-    std::memcpy(comm->host_in[1], comm->host_out[0], nbytes);
-    q0->memcpy(dst0, comm->host_in[0], nbytes);
-    q1->memcpy(dst1, comm->host_in[1], nbytes);
+    // Step 1: Concurrently copy from GPUs into their respective host buffers (Asynchronous)
+    sycl::event e_d2h_0 = q0->memcpy(comm->host_out[0], src0, nbytes);
+    sycl::event e_d2h_1 = q1->memcpy(comm->host_out[1], src1, nbytes);
+
+    // Step 2: Asynchronous Barrier Interlocking (NO HOST BLOCKING, wait() causes MTP degredation)
+    q0->ext_oneapi_submit_barrier({e_d2h_1}); // q0 waits for q1's device-to-host copy
+    q1->ext_oneapi_submit_barrier({e_d2h_0}); // q1 waits for q0's device-to-host copy
+
+    // Step 3: Cross-upload directly from the opposing host buffer.
+    // CPU std::memcpy is eliminated. Both queues pull from host memory in parallel.
+    sycl::event e_h2d_0 = q0->memcpy(dst0, comm->host_out[1], nbytes); // q0 pulls from host_out[1]
+    sycl::event e_h2d_1 = q1->memcpy(dst1, comm->host_out[0], nbytes); // q1 pulls from host_out[0]
+
+    // Step 4: Finalize the exchange before returning
+    e_h2d_0.wait();
+    e_h2d_1.wait();
 }
 
 void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends) try {
