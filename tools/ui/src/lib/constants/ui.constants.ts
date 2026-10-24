@@ -71,6 +71,12 @@ export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 /** Bounds the expanded desktop sidebar can be dragged between. */
 export const SIDEBAR_MIN_WIDTH = '18rem';
 export const SIDEBAR_MAX_WIDTH = '32rem';
+/** Dragging the sidebar edge narrower than this snaps it to the pointer; letting go hides it. */
+export const SIDEBAR_COLLAPSE_WIDTH = '9rem';
+/** How far past its min or max width a drag can stretch the sidebar before it resists fully. */
+export const SIDEBAR_OVERSTRETCH_PX = 80;
+/** Spring-back duration when a drag ends outside the width bounds. */
+export const SIDEBAR_SETTLE_MS = 300;
 
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';

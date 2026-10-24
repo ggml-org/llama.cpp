@@ -13,7 +13,14 @@
 		SidebarNavigationActions,
 		SidebarNavigationConversationList
 	} from '$lib/components/app';
-	import { ROUTES, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '$lib/constants';
+	import {
+		ROUTES,
+		SIDEBAR_COLLAPSE_WIDTH,
+		SIDEBAR_MAX_WIDTH,
+		SIDEBAR_MIN_WIDTH,
+		SIDEBAR_OVERSTRETCH_PX,
+		SIDEBAR_SETTLE_MS
+	} from '$lib/constants';
 	import { TooltipSide } from '$lib/enums';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
@@ -312,6 +319,8 @@
 	}
 
 	let asideEl = $state<HTMLElement | null>(null);
+	/** Set briefly after a drag ends past a bound, while the width springs back to it. */
+	let isSettling = $state(false);
 
 	// the tab bar sits outside the sidebar, so the width lives on the root
 	$effect(() => {
@@ -333,26 +342,70 @@
 		const left = asideEl.getBoundingClientRect().left;
 		const minPx = remToPx(SIDEBAR_MIN_WIDTH);
 		const maxPx = remToPx(SIDEBAR_MAX_WIDTH);
+		const collapsePx = remToPx(SIDEBAR_COLLAPSE_WIDTH);
+		const startWidth = uiStore.sidebarWidth;
+
+		let willCollapse = false;
 
 		handle.setPointerCapture(event.pointerId);
 		uiStore.isSidebarResizing = true;
 
+		/** Rubber-band offset: grows with the distance, ever slower, never past the overstretch. */
+		function stretch(distance: number): number {
+			return SIDEBAR_OVERSTRETCH_PX * (1 - 1 / (distance / SIDEBAR_OVERSTRETCH_PX + 1));
+		}
+
 		function onPointerMove(moveEvent: PointerEvent) {
-			const width = Math.min(maxPx, Math.max(minPx, moveEvent.clientX - left));
+			const pointerWidth = moveEvent.clientX - left;
+
+			// past either bound the edge resists harder the further it is pulled,
+			// until a pull below the collapse width snaps it to the pointer
+			willCollapse = pointerWidth < collapsePx;
+
+			const width = willCollapse
+				? Math.max(0, pointerWidth)
+				: pointerWidth < minPx
+					? minPx - stretch(minPx - pointerWidth)
+					: pointerWidth > maxPx
+						? maxPx + stretch(pointerWidth - maxPx)
+						: pointerWidth;
 
 			uiStore.setSidebarWidth(Math.round(width));
 		}
 
 		function onPointerUp() {
-			uiStore.isSidebarResizing = false;
 			handle.removeEventListener('pointermove', onPointerMove);
 			handle.removeEventListener('pointerup', onPointerUp);
-			handle.removeEventListener('pointercancel', onPointerUp);
+			handle.removeEventListener('pointercancel', onPointerCancel);
+
+			uiStore.isSidebarResizing = false;
+
+			// it reopens at its width from before the drag, without springing on the way out
+			if (willCollapse) {
+				uiStore.setSidebarWidth(startWidth);
+				toggleExpandedMode();
+
+				return;
+			}
+
+			const width = uiStore.sidebarWidth ?? minPx;
+			const clamped = Math.min(maxPx, Math.max(minPx, width));
+
+			if (clamped !== width) {
+				isSettling = true;
+				uiStore.setSidebarWidth(Math.round(clamped));
+				setTimeout(() => (isSettling = false), SIDEBAR_SETTLE_MS);
+			}
+		}
+
+		function onPointerCancel() {
+			willCollapse = false;
+			onPointerUp();
 		}
 
 		handle.addEventListener('pointermove', onPointerMove);
 		handle.addEventListener('pointerup', onPointerUp);
-		handle.addEventListener('pointercancel', onPointerUp);
+		handle.addEventListener('pointercancel', onPointerCancel);
 	}
 
 	/** A dialog owns the screen on a phone, so the expanded list steps aside for it. */
@@ -383,6 +436,7 @@
 			'flex flex-col justify-between',
 			'md:transition-[width,padding] duration-200 ease-out',
 			uiStore.isSidebarResizing && 'md:duration-0',
+			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
 			isStripExpanded && 'md:w-(--sidebar-width) md:bg-muted/60 md:backdrop-blur-xl shadow-md',
 			!isStripExpanded && 'md:w-12',
 			uiStore.isSidebarExpanded && 'is-expanded'
@@ -513,7 +567,7 @@
 				data-slot="sidebar-resize-handle"
 				ondblclick={() => uiStore.setSidebarWidth(null)}
 				onpointerdown={handleResizePointerDown}
-				title="Drag to resize, double-click to reset"
+				title="Drag to resize or hide, double-click to reset"
 			></div>
 		{/if}
 	</aside>
