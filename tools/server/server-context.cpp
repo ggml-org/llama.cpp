@@ -1770,6 +1770,28 @@ private:
         return nullptr;
     }
 
+    void cache_idle_slots(int32_t id_slot_keep = -1) {
+        if (!params_base.cache_idle_slots) {
+            return;
+        }
+
+        for (auto & slot : slots) {
+            if (slot.id != id_slot_keep && !slot.is_processing()) {
+                SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
+
+                if (slot.prompt_save(*prompt_cache)) {
+                    SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
+                    prompt_cache->update();
+                }
+
+                if (params_base.kv_unified) {
+                    // [TAG_IDLE_SLOT_CLEAR]
+                    slot.prompt_clear();
+                }
+            }
+        }
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
@@ -1868,6 +1890,16 @@ private:
 
                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
                     ret->prompt_clear();
+
+                    if (params_base.kv_unified && params_base.cache_idle_slots) {
+                        cache_idle_slots(ret->id);
+
+                        SLT_INF(*ret, "%s", "retrying prompt restore after clearing idle slots\n");
+
+                        if (!ret->prompt_load(*prompt_cache, task.tokens)) {
+                            ret->prompt_clear();
+                        }
+                    }
                 }
 
                 prompt_cache->update();
@@ -3009,23 +3041,7 @@ private:
                         break; // drop the task
                     }
 
-                    if (params_base.cache_idle_slots) {
-                        for (auto & slot : slots) {
-                            if (!slot.is_processing()) {
-                                SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
-
-                                if (slot.prompt_save(*prompt_cache)) {
-                                    SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
-                                    prompt_cache->update();
-                                }
-
-                                if (params_base.kv_unified) {
-                                    // [TAG_IDLE_SLOT_CLEAR]
-                                    slot.prompt_clear();
-                                }
-                            }
-                        }
-                    }
+                    cache_idle_slots();
                 } break;
             case SERVER_TASK_TYPE_CANCEL:
                 {
