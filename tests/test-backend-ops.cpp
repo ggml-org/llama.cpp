@@ -13097,25 +13097,20 @@ static bool op_names_filter_selects(const char * op_names_filter, const char * o
 
 // Covers padded rows, sinks, kvpad, multi-SIMDgroup reduction, quantized K/V, and MLA views.
 // The override is backend-global, so this runs after all parallel workers have joined.
-static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter) {
+static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter, const char * params_filter, const char * test_file_path) {
     const char * LLAMA_TEST_FA_VEC_DISABLE = getenv("LLAMA_TEST_FA_VEC_DISABLE");
-    if (LLAMA_TEST_FA_VEC_DISABLE) {
-        return true;
-    }
-
-    if (!op_names_filter_selects(op_names_filter, "FLASH_ATTN_EXT")) {
-        return true;
-    }
+    if (LLAMA_TEST_FA_VEC_DISABLE) { return true; }
+    if (test_file_path != nullptr || !op_names_filter_selects(op_names_filter, "FLASH_ATTN_EXT")) { return true; }
 
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-
     auto set_ov   = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_vec_override");
     auto clear_ov = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_fa_vec_override");
     if (!set_ov || !clear_ov) {
         return true;  // not the Metal backend: nothing to force
     }
 
-    printf("Running FA vec slice tests (env LLAMA_TEST_FA_VEC_DISABLE=1 to skip)\n");
+    std::regex params_filter_regex;
+    if (params_filter != nullptr) { params_filter_regex = std::regex(params_filter); }
 
     struct shape_t { int dk, dv; };
     const shape_t   shapes[] = { { 128, 128 }, { 576, 512 } };  // mainstream head size + MLA shared K/V view
@@ -13132,10 +13127,13 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
                     for (bool sinks : { false, true }) {
                         for (int ne01 : ne01_pts) {
                             for (int ne11 : ne11_pts) {
-                                set_ov(Q, ne);
                                 test_flash_attn_ext tc(s.dk, s.dv, /*nh=*/4, { 1, 1 }, /*kv=*/ne11, /*nb=*/ne01,
                                                        /*mask=*/true, sinks, 0.0f, 0.0f, GGML_PREC_F32,
                                                        type_kv, type_kv);
+                                if (params_filter != nullptr && !std::regex_search(tc.vars(), params_filter_regex)) { continue; }
+                                if (n_run == 0) { printf("Running FA vec slice tests (env LLAMA_TEST_FA_VEC_DISABLE=1 to skip)\n"); }
+
+                                set_ov(Q, ne);
                                 auto st = tc.eval(backend, backend_cpu, "FLASH_ATTN_EXT", nullptr);
                                 clear_ov();
 
@@ -13153,30 +13151,12 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
         }
     }
 
-    printf("  fa_vec (Q,NE) slice: %d cases run, %d failed\n", n_run, n_fail);
+    if (n_run > 0) { printf("  fa_vec (Q,NE) slice: %d cases run, %d failed\n", n_run, n_fail); }
 
     return n_fail == 0;
 }
 
-static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer, const char * test_file_path, int parallel_workers) {
-    auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
-        if (params_filter == nullptr) {
-            return;
-        }
-
-        std::regex params_filter_regex(params_filter);
-
-        for (auto it = test_cases.begin(); it != test_cases.end();) {
-            if (!std::regex_search((*it)->vars(), params_filter_regex)) {
-                it = test_cases.erase(it);
-                continue;
-            }
-
-            it++;
-        }
-    };
-
+static std::vector<std::unique_ptr<test_case>> make_test_cases(test_mode mode, const char * params_filter, const char * test_file_path) {
     std::vector<std::unique_ptr<test_case>> test_cases;
 
     if (test_file_path == nullptr) {
@@ -13194,7 +13174,45 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         test_cases = make_test_cases_from_file(test_file_path);
     }
 
-    filter_test_cases(test_cases, params_filter);
+    if (params_filter != nullptr) {
+        std::regex params_filter_regex(params_filter);
+        test_cases.erase( std::remove_if(test_cases.begin(), test_cases.end(),
+            [&](const std::unique_ptr<test_case> & tc) { return !std::regex_search(tc->vars(), params_filter_regex); }),
+            test_cases.end());
+    }
+
+    if (mode == MODE_GRAD || mode == MODE_SUPPORT) {
+        test_cases.erase(std::remove_if(test_cases.begin(), test_cases.end(),
+            [](const std::unique_ptr<test_case> & tc) { return tc->run_whole_graph(); }),
+            test_cases.end());
+    }
+
+    return test_cases;
+}
+
+static bool test_case_selected(const test_mode mode, const char * op_names_filter, const char * params_filter, const char * test_file_path) {
+    ggml_init_params params = {
+        /* .mem_size = */ ggml_tensor_overhead()*128 + ggml_graph_overhead(),
+        /* .mem_base = */ NULL,
+        /* .no_alloc = */ true,
+    };
+
+    for (auto & tc : make_test_cases(mode, params_filter, test_file_path)) {
+        ggml_context_ptr ctx(ggml_init(params));
+        GGML_ASSERT(ctx);
+        ggml_context_ptr ctx_weights(tc->use_weight_context() ? ggml_init(params) : nullptr);
+
+        tc->mode = mode;
+        tc->gf   = ggml_new_graph(ctx.get());
+        if (tc->matches_filter(tc->build_graph(ctx.get(), ctx_weights.get()), op_names_filter)) { return true; }
+    }
+
+    return false;
+}
+
+static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
+                         printer * output_printer, const char * test_file_path, int parallel_workers, const bool must_run) {
+    std::vector<std::unique_ptr<test_case>> test_cases = make_test_cases(mode, params_filter, test_file_path);
 
     if (mode == MODE_TEST) {
         ggml_backend_ptr backend_cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL));
@@ -13238,9 +13256,7 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
                 for (size_t i = my_begin; i < my_end; ++i) {
                     auto & test = test_cases[i];
                     test_status_t status = test->eval(b, b_cpu, op_names_filter, output_printer);
-                    if (status == test_status_t::SKIPPED || status == test_status_t::NOT_SUPPORTED) {
-                        continue;
-                    }
+                    if (status == test_status_t::SKIPPED || status == test_status_t::NOT_SUPPORTED) { continue; }
                     tests_run++;
                     if (status == test_status_t::OK) {
                         n_ok++;
@@ -13295,24 +13311,21 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        bool ran_any = true;
+        if (tests_run == 0 && must_run) {
+            printf("  no test case ran: the selected test cases are not supported\n");
+            ran_any = false;
+        }
 
-        return n_ok == tests_run && slice_ok;
+        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter, params_filter, test_file_path);
+
+        return n_ok == tests_run && slice_ok && ran_any;
     }
 
     if (mode == MODE_GRAD) {
-        test_cases.erase(
-            std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
-                return tc->run_whole_graph();
-            }),
-            test_cases.end()
-        );
-
         size_t n_ok = 0;
         for (auto & test : test_cases) {
-            if (test->eval_grad(backend, op_names_filter, output_printer)) {
-                n_ok++;
-            }
+            if (test->eval_grad(backend, op_names_filter, output_printer)) { n_ok++; }
         }
         output_printer->print_summary(test_summary_info(n_ok, test_cases.size(), false));
 
@@ -13327,14 +13340,6 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
     }
 
     if (mode == MODE_SUPPORT) {
-        // Filter out fusion cases
-        test_cases.erase(
-            std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
-                return tc->run_whole_graph();
-            }),
-            test_cases.end()
-        );
-
         for (auto & test : test_cases) {
             test->eval_support(backend, op_names_filter, output_printer);
         }
@@ -13551,6 +13556,27 @@ int main(int argc, char ** argv) {
     // load and enumerate backends
     ggml_backend_load_all();
 
+    if (backend_filter != NULL) {
+        bool found = false;
+        std::string names;
+        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+            const char * name = ggml_backend_dev_name(ggml_backend_dev_get(i));
+            found = found || strcmp(backend_filter, name) == 0;
+            if (!names.empty()) { names += ", "; }
+            names += name;
+        }
+
+        if (!found) {
+            fprintf(stderr, "error: no device named '%s' (devices: %s)\n", backend_filter, names.c_str());
+            return 1;
+        }
+    }
+
+    if (!test_case_selected(mode, op_names_filter, params_filter, test_file_path)) {
+        fprintf(stderr, "error: no test case matches the filters\n");
+        return 1;
+    }
+
     // Create printer for output format
     std::unique_ptr<printer> output_printer = create_printer(output_format);
     if (output_printer) {
@@ -13593,13 +13619,10 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend.get(), dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers);
+        bool ok = test_backend(backend.get(), dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers, backend_filter != NULL);
 
-        if (ok) {
-            n_ok++;
-        }
-        output_printer->print_backend_status(
-            backend_status_info(ggml_backend_name(backend.get()), ok ? test_status_t::OK : test_status_t::FAIL));
+        if (ok) { n_ok++; }
+        output_printer->print_backend_status(backend_status_info(ggml_backend_name(backend.get()), ok ? test_status_t::OK : test_status_t::FAIL));
     }
 
     ggml_quantize_free();
