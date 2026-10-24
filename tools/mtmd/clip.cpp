@@ -584,6 +584,36 @@ ggml_tensor * clip_graph::build_inp_raw(int channels) {
     return inp_raw;
 }
 
+// qwen-vl style temporal merge: Conv3D(kt=2) split into 2 Conv2D
+ggml_tensor * clip_graph::build_inp_temporal_merge() {
+    ggml_tensor * inp_raw = build_inp_raw();
+
+    GGML_ASSERT(img.nx() % (patch_size * 2) == 0);
+    GGML_ASSERT(img.ny() % (patch_size * 2) == 0);
+
+    const size_t nb1 = ggml_row_size(inp_raw->type, img.nx());
+    const size_t nb2 = ggml_row_size(inp_raw->type, img.nx() * img.ny());
+
+    if (n_batch == 1) {
+        // still image input
+        return ggml_add(ctx0,
+            ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1),
+            ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1));
+    } else if (n_batch == 2) {
+        // 2 frames input (video input)
+        ggml_tensor * inp_0 = ggml_view_3d(ctx0, inp_raw,
+                                    img.nx(), img.ny(), 3, nb1, nb2, 0);
+        ggml_tensor * inp_1 = ggml_view_3d(ctx0, inp_raw,
+                                    img.nx(), img.ny(), 3, nb1, nb2,
+                                    nb2 * 3); // move to the second frame
+        return ggml_add(ctx0,
+            ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_0, patch_size, patch_size, 0, 0, 1, 1),
+            ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_1, patch_size, patch_size, 0, 0, 1, 1));
+    } else {
+        GGML_ASSERT(false && "n_batch > 2 is not supported");
+    }
+}
+
 static std::string get_attn_mask_name(int idx) {
     return idx == 0 ? "attn_mask" : "attn_mask_" + std::to_string(idx);
 }
