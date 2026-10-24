@@ -1290,7 +1290,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
         const int32_t * __restrict__ ids_dst, const int32_t * __restrict__ expert_bounds, float * __restrict__ dst,
         float * __restrict__ tmp_last_tile, const uint3 blocks_per_ne00, const int nrows_x, const int ncols_dst,
         const int stride_col_dst, const uint3 nchannels_y, const int stride_channel_dst, const uint3 nsamples_y,
-        const int stride_sample_dst, const uint3 ntx, const uint64_t fixup_reciprocal, const uint3 partition) {
+        const int stride_sample_dst, const uint3 ntx) {
     constexpr int warp_size       = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps          = (ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1) / 2) / warp_size;
     constexpr int I               = ggml_cuda_mmq_get_I(type, J, fallback, prec_src1);
@@ -1301,19 +1301,13 @@ static __global__ void mul_mat_q_stream_k_fixup(
     float sum[J / nwarps] = {0.0f};
     const int i = blockIdx.y*warp_size + threadIdx.x;
 
-    // partition = {total_work / producers, total_work % producers, producers}.
-    // Map each fixup to the last producer of its tile. The reciprocal underestimates
-    // the quotient by at most one; the integer remainder makes the result exact.
-    const uint64_t numerator = uint64_t(blockIdx.x + 1)*partition.z - 1;
-    const uint32_t estimate = __umul64hi(numerator, fixup_reciprocal);
-    const uint32_t bidx0 = estimate + (numerator - uint64_t(estimate)*gridDim.x >= gridDim.x);
+    const int nty = (nrows_x + I - 1) / I;
+
+    const int bidx0 = blockIdx.x;
 
     // kbc == k block continuous, current index in continuous ijk space.
-    const uint64_t work_start = uint64_t(bidx0)*(partition.x*partition.z + partition.y);
-    int kbc_raw   = work_start / partition.z;
-    int remainder = work_start - uint64_t(kbc_raw)*partition.z;
-    int kbc0      = kbc_raw;
-    int kbc0_stop = kbc_raw + partition.x + (remainder + partition.y >= partition.z);
+    int kbc0      = int64_t(blockIdx.x)    *(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
+    int kbc0_stop = int64_t(blockIdx.x + 1)*(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
 
     kbc0      -= fastmodulo(kbc0,      blocks_per_ne00) % blocks_per_iter;
     kbc0_stop -= fastmodulo(kbc0_stop, blocks_per_ne00) % blocks_per_iter;
@@ -1325,25 +1319,24 @@ static __global__ void mul_mat_q_stream_k_fixup(
         return;
     }
 
+    bool any_fixup = false;
+
     // Iterate over previous blocks and sum up partial sums written to fixup buffer.
     // All CUDA blocks that get here must have a previous block that needs a fixup.
     int bidx = bidx0 - 1;
     int kbc_stop = kbc0;
     while(true) {
-        // Step the exact quotient/remainder back one producer, before K-tile alignment.
-        remainder -= partition.y;
-        const bool borrow = remainder < 0;
-        remainder += borrow ? partition.z : 0;
-        kbc_raw -= partition.x + borrow;
-        int kbc = kbc_raw;
+        int kbc = int64_t(bidx)*(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
         kbc -= fastmodulo(kbc, blocks_per_ne00) % blocks_per_iter;
 
-        const bool has_data = kbc != kbc_stop;
-        kbc_stop = kbc;
-        if (!has_data) { // Did not have any data.
+        if (kbc == kbc_stop) { // Did not have any data.
             bidx--;
+            kbc_stop = kbc;
             continue;
         }
+
+        any_fixup = true;
+
 
 #pragma unroll
         for (int j0 = 0; j0 < J; j0 += nwarps) {
@@ -1357,6 +1350,11 @@ static __global__ void mul_mat_q_stream_k_fixup(
             break;
         }
         bidx--;
+        kbc_stop = kbc;
+    }
+
+    if (!any_fixup) {
+        return;
     }
 
     int tmp = fastdiv(kbc0, blocks_per_ne00);
@@ -1506,6 +1504,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
         tmp_fixup.alloc(block_nums_stream_k.x * config.J*config.I);
     }
 
+    const dim3 block_nums_fixup(block_nums_stream_k.x, config.I/warp_size, 1);
     const dim3 block_dims_fixup(block_dims.x, block_dims.y/2, block_dims.z);
 
     mul_mat_q<type, J, fallback, prec_src1><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
@@ -1520,16 +1519,10 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     }
 
     CUDA_CHECK(cudaGetLastError());
-    // With more producers than tiles, only each tile's final producer needs a fixup.
-    const uint32_t nblocks_fixup = std::min(block_nums_stream_k.x, uint32_t(ntiles_dst));
-    const uint64_t fixup_reciprocal = UINT64_MAX/nblocks_fixup;
-    const uint32_t work = ntiles_dst * blocks_per_ne00_fd.z;
-    const uint3 partition = make_uint3(work/block_nums_stream_k.x, work%block_nums_stream_k.x, block_nums_stream_k.x);
-    const dim3 block_nums_fixup(nblocks_fixup, config.I/warp_size, 1);
     mul_mat_q_stream_k_fixup<type, J, fallback, prec_src1><<<block_nums_fixup, block_dims_fixup, 0, stream>>>
         (args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr, blocks_per_ne00_fd, args.nrows_x, args.ncols_dst,
          args.nrows_dst, nchannels_y_fd, args.stride_channel_dst, nsamples_y_fd, args.stride_sample_dst,
-         ntx_fd, fixup_reciprocal, partition);
+         ntx_fd);
 }
 
 template <ggml_type type, bool fallback, ggml_prec prec_src1>

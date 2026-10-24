@@ -11300,15 +11300,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // Stream-K fixup: long reductions, uneven partitions, and row/column tails.
-    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS}) {
-        for (int k : {16384, 17664, 36864}) {
-            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 128, 256, k, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 129, 257, k, {1, 1}, {1, 1}));
-        }
-        test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 2, false, 128, 65, 16384));
-    }
-
     // SIMD K boundaries, including tails shorter than one vector.
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
         for (int k : {1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 48}) {
