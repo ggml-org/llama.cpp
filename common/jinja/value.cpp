@@ -1460,7 +1460,15 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const common_json & j, bool mark_input) {
+static value from_json(const common_json & j, bool mark_input, size_t depth) {
+    constexpr size_t MAX_DEPTH = 1000;
+
+    if (depth > MAX_DEPTH) {
+        // also update assert in test_deep_nested_chat_template_kwargs
+        // when updating this exception message
+        throw std::runtime_error("from_json: max recursion depth limit reached");
+    }
+
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1478,13 +1486,13 @@ static value from_json(const common_json & j, bool mark_input) {
     } else if (j.is_array()) {
         auto arr = mk_val<value_array>();
         for (const auto & item : j) {
-            arr->push_back(from_json(item, mark_input));
+            arr->push_back(from_json(item, mark_input, depth + 1));
         }
         return arr;
     } else if (j.is_object()) {
         auto obj = mk_val<value_object>();
         for (auto it = j.begin(); it != j.end(); ++it) {
-            obj->insert(it.key(), from_json(it.value(), mark_input));
+            obj->insert(it.key(), from_json(it.value(), mark_input, depth + 1));
         }
         return obj;
     } else {
@@ -1564,7 +1572,7 @@ void global_from_json(context & ctx, const common_json & json_obj, bool mark_inp
     }
     for (auto it = json_obj.begin(); it != json_obj.end(); ++it) {
         JJ_DEBUG("global_from_json: setting key '%s'", it.key().c_str());
-        ctx.set_val(it.key(), from_json(it.value(), mark_input));
+        ctx.set_val(it.key(), from_json(it.value(), mark_input, 0));
     }
 }
 
