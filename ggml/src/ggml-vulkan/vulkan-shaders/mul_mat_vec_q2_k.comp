@@ -36,10 +36,10 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
         }
 
         const uint32_t qs_u32 = uint32_t(data_a_packed16[ib0 + i].qs[q_offset / 2]) | (uint32_t(data_a_packed16[ib0 + i].qs[q_offset / 2 + 8]) << 16);
-        const vec4 qs_u32_0 = vec4(unpack8(qs_u32 & 0x03030303));
-        const vec4 qs_u32_2 = vec4(unpack8((qs_u32 >> 2) & 0x03030303));
-        const vec4 qs_u32_4 = vec4(unpack8((qs_u32 >> 4) & 0x03030303));
-        const vec4 qs_u32_6 = vec4(unpack8((qs_u32 >> 6) & 0x03030303));
+        const vec4 qs_u32_0 = vec4(unpack_u8x4(qs_u32 & 0x03030303));
+        const vec4 qs_u32_2 = vec4(unpack_u8x4((qs_u32 >> 2) & 0x03030303));
+        const vec4 qs_u32_4 = vec4(unpack_u8x4((qs_u32 >> 4) & 0x03030303));
+        const vec4 qs_u32_6 = vec4(unpack_u8x4((qs_u32 >> 6) & 0x03030303));
 
         const FLOAT_TYPEV2 dm = vec2(data_a[ib0 + i].dm);
 

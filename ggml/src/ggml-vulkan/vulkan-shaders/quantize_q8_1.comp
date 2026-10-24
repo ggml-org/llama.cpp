@@ -82,9 +82,9 @@ void quantize(const uint wgid) {
     vals = round(vals * d_inv);
 
 #ifndef QBLOCK_X4
-    data_b[ib].qs[iqs] = pack32(i8vec4(round(vals)));
+    data_b[ib].qs[iqs] = pack_i8x4(ivec4(vals));
 #else
-    data_b[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack32(i8vec4(round(vals)));
+    data_b[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack_i8x4(ivec4(vals));
 #endif
 
 #ifndef USE_SUBGROUPS

@@ -22,7 +22,7 @@ void main() {
     const uint b_idx = 256 * ib + 32 * is;
 
     const float d = float(data_a[ib].d);
-    uint signscale = pack32(u8vec4(
+    uint signscale = pack_u8x4(uvec4(
         data_a[ib].qs[8*is + 4],
         data_a[ib].qs[8*is + 5],
         data_a[ib].qs[8*is + 6],
@@ -35,8 +35,8 @@ void main() {
         const uint sign8 = sign7 | (bitCount(sign7) << 7); // parity bit
         const uint qs = data_a[ib].qs[8 * is + l];
         const uvec2 grid = iq2xxs_grid[qs];
-        const u8vec4 grid0 = unpack8(grid.x);
-        const u8vec4 grid1 = unpack8(grid.y);
+        const uvec4 grid0 = unpack_u8x4(grid.x);
+        const uvec4 grid1 = unpack_u8x4(grid.y);
         data_b[b_idx + 8 * l + 0] = D_TYPE(db * grid0.x * ((sign8 & 1) != 0 ? -1.0 : 1.0));
         data_b[b_idx + 8 * l + 1] = D_TYPE(db * grid0.y * ((sign8 & 2) != 0 ? -1.0 : 1.0));
         data_b[b_idx + 8 * l + 2] = D_TYPE(db * grid0.z * ((sign8 & 4) != 0 ? -1.0 : 1.0));
