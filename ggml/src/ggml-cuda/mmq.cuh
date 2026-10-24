@@ -118,6 +118,10 @@ struct tile_x_sizes {
 #define MMQ_TILE_Y_K     (MMQ_TILE_NE_K + MMQ_TILE_NE_K / QI8_1)
 #define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K
 
+// the activation y-tile is copied with vectorized (int4/int2) stores: exact groups, aligned blocks
+static_assert(MMQ_TILE_Y_K % 4 == 0, "activation y-tile is copied in groups of 2 or 4 ints");
+static_assert(sizeof(block_q8_1_mmq) % 16 == 0, "activation staging rows must stay 16-byte aligned");
+
 enum ggml_cuda_mmq_sram_layout {
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_0,
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_1,
@@ -910,11 +914,17 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
         {
             const int * by0 = y + ncols_y * (kb0 * qk / ne_block) * sz;
+            if constexpr ((J * MMQ_TILE_Y_K / 2) % (nwarps * warp_size) == 0) {
 #pragma unroll
-            for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
-
-                tile_y[l] = by0[l];
+                for (int l0 = 0; l0 < J * MMQ_TILE_Y_K / 2; l0 += nwarps * warp_size) {
+                    const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                    ((int2 *) tile_y)[l] = ((const int2 *) by0)[l];
+                }
+            } else {
+#pragma unroll
+                for (int l = threadIdx.y*warp_size + threadIdx.x; l < J * MMQ_TILE_Y_K / 2; l += nwarps * warp_size) {
+                    ((int2 *) tile_y)[l] = ((const int2 *) by0)[l];
+                }
             }
         }
 
@@ -926,11 +936,17 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
         {
             const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
+            if constexpr ((J * MMQ_TILE_Y_K / 2) % (nwarps * warp_size) == 0) {
 #pragma unroll
-            for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
-
-                tile_y[l] = by0[l];
+                for (int l0 = 0; l0 < J * MMQ_TILE_Y_K / 2; l0 += nwarps * warp_size) {
+                    const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                    ((int2 *) tile_y)[l] = ((const int2 *) by0)[l];
+                }
+            } else {
+#pragma unroll
+                for (int l = threadIdx.y*warp_size + threadIdx.x; l < J * MMQ_TILE_Y_K / 2; l += nwarps * warp_size) {
+                    ((int2 *) tile_y)[l] = ((const int2 *) by0)[l];
+                }
             }
         }
 
