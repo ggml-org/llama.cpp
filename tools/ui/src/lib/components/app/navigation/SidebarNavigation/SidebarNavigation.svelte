@@ -16,6 +16,7 @@
 	import {
 		ROUTES,
 		SIDEBAR_COLLAPSE_WIDTH,
+		SIDEBAR_COLLAPSED_WIDTH,
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		SIDEBAR_OVERSTRETCH_PX,
@@ -333,6 +334,26 @@
 		}
 	});
 
+	// labels and the conversation list fade with the live width, so they follow
+	// both the toggle's width transition and a drag below the minimum width
+	$effect(() => {
+		const el = asideEl;
+
+		if (!el) return;
+
+		const collapsedPx = remToPx(SIDEBAR_COLLAPSED_WIDTH);
+		const minPx = remToPx(SIDEBAR_MIN_WIDTH);
+		const observer = new ResizeObserver(([entry]) => {
+			const fade = (entry.contentRect.width - collapsedPx) / (minPx - collapsedPx);
+
+			el.style.setProperty('--sidebar-fade', String(Math.min(1, Math.max(0, fade))));
+		});
+
+		observer.observe(el);
+
+		return () => observer.disconnect();
+	});
+
 	function handleResizePointerDown(event: PointerEvent) {
 		if (!asideEl || isOnMobile) return;
 
@@ -521,7 +542,7 @@
 			/>
 
 			{#if uiStore.isSidebarExpanded || isOnMobile}
-				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade)">
 					<SidebarNavigationConversationList
 						{allSelectedArePinned}
 						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
