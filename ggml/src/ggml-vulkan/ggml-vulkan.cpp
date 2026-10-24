@@ -1485,6 +1485,11 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
     return supported;
 }
 
+// MMQ uses the mixed signedness dot product (MMQ_SUDOT) when the signed one is not accelerated
+static bool ggml_vk_mmq_use_sudot(const vk_device& device) {
+    return device->integer_dot_mixed && !device->integer_dot_signed;
+}
+
 static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
     // FLOAT_TYPE in the shader is float16_t with fp16 support, otherwise float.
@@ -1544,7 +1549,7 @@ static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std:
     // Signed quants declare buf_b_qsum: 2 int32_t per B block with MMQ_SUDOT, a single int32_t without
     const bool b_sums = src0_type == GGML_TYPE_Q8_0 || src0_type == GGML_TYPE_MXFP4 || src0_type == GGML_TYPE_IQ4_XS ||
                         src0_type == GGML_TYPE_IQ3_S || src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q6_K;
-    const uint32_t qsum_size = !b_sums ? 0u : device->integer_dot_sudot ? BN * BK_STEP * 2u * 4u : 4u;
+    const uint32_t qsum_size = !b_sums ? 0u : ggml_vk_mmq_use_sudot(device) ? BN * BK_STEP * 2u * 4u : 4u;
 
     const uint32_t total_size = buf_a_size + buf_b_size + mmid_row_ids + lut_size + qsum_size;
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
@@ -1670,7 +1675,7 @@ static bool ggml_vk_fa_type_needs_shmem(ggml_type type) {
 
 static bool ggml_vk_fa_scalar_uses_mmq(const vk_device& device, ggml_type k_type, ggml_type v_type) {
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
-    return device->integer_dot_product && !device->integer_dot_sudot && device->subgroup_clustered &&
+    return device->integer_dot_product && device->integer_dot_signed && device->subgroup_clustered &&
            !ggml_vk_fa_type_needs_shmem(v_type) &&
            (k_type == GGML_TYPE_Q4_0 || k_type == GGML_TYPE_Q4_1 ||
             k_type == GGML_TYPE_Q5_0 || k_type == GGML_TYPE_Q5_1 ||
@@ -2608,7 +2613,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 // constant_id 11 is MMQ_SUDOT
                 spec_fn_t mmq_spec = [&](const std::vector<uint32_t>& wt, bool) {
                     std::vector<uint32_t> spec = wt;
-                    spec.push_back(device->integer_dot_sudot ? 1u : 0u);
+                    spec.push_back(ggml_vk_mmq_use_sudot(device) ? 1u : 0u);
                     return spec;
                 };
                 create_mm_pipelines(key, tc, name, len, data, pc_size, pc, mmq_spec, false, rsgs > 0, rsgs, false);
@@ -4318,10 +4323,10 @@ vk_device ggml_vk_get_device(size_t idx) {
             device->coopmat_support = false;
         }
 
-        const bool integer_dot_signed = shader_integer_dot_product_props.integerDotProduct4x8BitPackedSignedAccelerated;
-        const bool integer_dot_mixed = shader_integer_dot_product_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated;
-        device->integer_dot_product = device->integer_dot_product && (integer_dot_signed || integer_dot_mixed);
-        device->integer_dot_sudot = device->integer_dot_product && !integer_dot_signed;
+        device->integer_dot_signed = shader_integer_dot_product_props.integerDotProduct4x8BitPackedSignedAccelerated;
+        device->integer_dot_mixed = shader_integer_dot_product_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated;
+        device->integer_dot_unsigned = shader_integer_dot_product_props.integerDotProduct4x8BitPackedUnsignedAccelerated;
+        device->integer_dot_product = device->integer_dot_product && (device->integer_dot_signed || device->integer_dot_mixed);
 
         device->min_imported_host_pointer_alignment = external_memory_host_props.minImportedHostPointerAlignment;
 
@@ -6693,7 +6698,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
 
 static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_t n, uint32_t k, ggml_type src0_type) {
     // The MMVQ shaders use the signed integer dot product
-    if (device->integer_dot_sudot) {
+    if (!device->integer_dot_signed) {
         return false;
     }
 
