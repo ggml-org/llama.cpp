@@ -1589,12 +1589,13 @@ struct clip_model_loader {
                         // default for older GGUFs
                         std::string resize_algo = "bilinear";
                         get_string(KEY_IMAGE_RESIZE_ALGO, resize_algo, false);
+                        // Lfm2VlImageProcessor and d1-omni vision.py resize bilinear and bicubic with torchvision
                         if (resize_algo == "bilinear") {
-                            hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
+                            hparams.set_image_resize_algo(RESIZE_ALGO_BILINEAR, true);
                         } else if (resize_algo == "bicubic") {
-                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                            hparams.set_image_resize_algo(RESIZE_ALGO_BICUBIC, true);
                         } else if (resize_algo == "lanczos") {
-                            hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
+                            hparams.set_image_resize_algo(RESIZE_ALGO_LANCZOS);
                         } else {
                             throw std::runtime_error(string_format("%s: unsupported image resize algo: %s\n", __func__, resize_algo.c_str()));
                         }

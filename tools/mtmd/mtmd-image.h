@@ -31,6 +31,7 @@ struct mtmd_image_preprocessor {
     const clip_hparams & hparams;
 
     mtmd_image_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
+    mtmd_image_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
 
     virtual ~mtmd_image_preprocessor() = default;
     virtual mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const = 0;
@@ -59,6 +60,7 @@ struct mtmd_image_preprocessor {
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_llava_uhd(const clip_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 
     struct slice_coordinates {

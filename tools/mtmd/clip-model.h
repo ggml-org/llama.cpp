@@ -29,11 +29,14 @@ enum patch_merge_type {
     PATCH_MERGE_SPATIAL_UNPAD,
 };
 
-// all algos are Pillow-compatible (matching PIL.Image.resize output)
+// the low bits select the algo, Pillow-compatible (matching PIL.Image.resize output)
+// RESIZE_ALGO_FLAG_TORCH matches torchvision's antialiased resize of uint8 images on the CPU (int16 weights), bilinear and bicubic only
 enum resize_algo {
     RESIZE_ALGO_BILINEAR,
     RESIZE_ALGO_BICUBIC,
     RESIZE_ALGO_LANCZOS,
+
+    RESIZE_ALGO_FLAG_TORCH = 1 << 8,
 };
 
 // Padding style for img_tool::resize
@@ -206,6 +209,11 @@ struct clip_hparams {
     // custom value provided by user, can be undefined if not set
     int32_t custom_image_min_tokens = -1;
     int32_t custom_image_max_tokens = -1;
+
+    void set_image_resize_algo(resize_algo algo, bool torch = false) {
+        GGML_ASSERT(!(torch && algo == RESIZE_ALGO_LANCZOS) && "torchvision has no lanczos");
+        image_resize_algo = static_cast<resize_algo>(torch ? algo | RESIZE_ALGO_FLAG_TORCH : algo);
+    }
 
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
         const int patch_area = patch_size * patch_size * n_merge * n_merge;

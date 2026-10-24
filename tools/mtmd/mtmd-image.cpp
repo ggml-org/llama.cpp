@@ -205,6 +205,8 @@ private:
     // 1. Separable filtering: horizontal pass followed by vertical pass
     // 2. Pre-computes normalized filter coefficients for each output pixel
     // 3. Fixed-point integer arithmetic (22 fractional bits) for speed and determinism
+    //
+    // RESIZE_ALGO_FLAG_TORCH is the same, except for the int16 weights of torchvision (aten/src/ATen/native/cpu/UpSampleKernel.cpp)
     static bool resize_pillow(
             const clip_image_u8 & img,
             clip_image_u8 & dst,
@@ -215,6 +217,13 @@ private:
         // This allows encoding fractional weights as integers: weight * 2^22
         const int PRECISION_BITS = 32 - 8 - 2;
 
+        const bool int16_weights = algo & RESIZE_ALGO_FLAG_TORCH;
+        algo = static_cast<resize_algo>(algo & ~RESIZE_ALGO_FLAG_TORCH);
+
+        if (int16_weights && algo == RESIZE_ALGO_LANCZOS) {
+            GGML_ABORT("unsupported resize algo: torchvision has no lanczos");
+        }
+
         // Filter support radius
         double filter_support;
         switch (algo) {
@@ -222,11 +231,11 @@ private:
             case RESIZE_ALGO_BICUBIC:  filter_support = 2.0; break;
             case RESIZE_ALGO_LANCZOS:  filter_support = 3.0; break;
             default:
-                throw std::runtime_error("Unsupported resize algorithm");
+                GGML_ABORT("unsupported resize algo: %d", (int) algo);
         }
 
         // Returns filter weight for distance x from pixel center
-        // Note: for bicubic, Pillow uses a = -0.5 while GGML/PyTorch use a = -0.75
+        // Note: for bicubic, Pillow (and PyTorch with antialias) uses a = -0.5 while GGML (and PyTorch without antialias) uses a = -0.75
         auto resample_filter = [algo](double x) -> double {
             if (algo == RESIZE_ALGO_LANCZOS) {
                 if (-3.0 <= x && x < 3.0) {
@@ -351,12 +360,24 @@ private:
             // Formula: int32 = round(float * 2^PRECISION_BITS)
             weights.resize((size_t) outSize * ksize);
 
-            const double fxp_scale = std::ldexp(1.0, PRECISION_BITS); // 1.0 * 2^PRECISION_BITS
+            // torchvision rounds the weights to int16, with as many fractional bits as the largest weight allows;
+            // scaled back to PRECISION_BITS, they give the same output in the passes below
+            int precision = PRECISION_BITS;
+            if (int16_weights) {
+                const double weight_max = *std::max_element(pre_weights.begin(), pre_weights.end());
+                for (precision = 0; precision < PRECISION_BITS; precision++) {
+                    if (static_cast<int>(0.5 + weight_max * (1 << (precision + 1))) >= (1 << 15)) {
+                        break;
+                    }
+                }
+            }
+
+            const double fxp_scale = std::ldexp(1.0, precision); // 1.0 * 2^precision
 
             for (size_t i = 0; i < (size_t) outSize * ksize; i++) {
                 // Pillow adds +/- 0.5 then truncates toward zero; std::round would round twice
                 const double rounded = pre_weights[i] * fxp_scale + (pre_weights[i] < 0 ? -0.5 : 0.5);
-                weights[i] = static_cast<int32_t>(rounded);
+                weights[i] = static_cast<int32_t>(rounded) * (1 << (PRECISION_BITS - precision));
             }
 
             return ksize;
