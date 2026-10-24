@@ -164,7 +164,7 @@ static bool host_experts_test(const llm_arch arch) {
     }
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const bool nextn) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -235,6 +235,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head_kv = 2;
         n_layer   = 4;
     }
+    uint32_t n_layer_nextn = 0;
+    if (nextn && (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_GLM_DSA)) {
+        n_layer_nextn = 1; // MTP coverage, the per-layer arrays must include the nextn layer
+    }
     const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llm_arch_name(arch));
@@ -242,7 +246,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,            n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
-    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
+    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer + n_layer_nextn);
+    ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,      n_layer_nextn);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
 
     if (arch == LLM_ARCH_K2_HORIZON) {
@@ -318,6 +323,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA_SWA, uint32_t(128));
             ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,             10000.0f);
             // indexer on the full-attention layers (inverse of the swa pattern)
+            std::vector<uint32_t> indexer_types;
+            indexer_types.reserve(n_layer);
+            for (uint32_t il = 0; il < n_layer; il++) {
+                indexer_types.push_back(il % 2 ? 0 : 1);
+            }
+            ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+        }
+        if (arch == LLM_ARCH_GLM_DSA && n_layer_nextn > 0) {
+            // mixed types, so that the saver writes an array: one value per trunk layer
             std::vector<uint32_t> indexer_types;
             indexer_types.reserve(n_layer);
             for (uint32_t il = 0; il < n_layer; il++) {
@@ -611,6 +625,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.load_mtp = true; // llama_model_init_from_user cannot skip the nextn layers
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -941,7 +956,8 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            // no nextn layers: test-llama-context loads these without MTP, and the loader then fails on the scale tensors of the skipped nextn layer
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, false);
             auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
@@ -1098,7 +1114,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 continue;
             }
             const std::string config_name = moe ? "MoE" : "Dense";
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, true);
             if (arch == LLM_ARCH_BAILINGMOE3) {
                 GGML_ASSERT(gguf_remove_key(gguf_ctx.get(), "bailingmoe3.kda.safe_gate") >= 0);
             }
