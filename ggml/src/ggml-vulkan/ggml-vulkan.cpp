@@ -12875,6 +12875,16 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
 #endif
 
     if (submit || last_node) {
+        if (last_node) {
+            // fence wait alone does not make device writes available to the host
+            compute_ctx->s->buffer->buf.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eHost,
+                {},
+                { { vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite,
+                    vk::AccessFlagBits::eHostRead | vk::AccessFlagBits::eHostWrite } },
+                {}, {});
+        }
         ggml_vk_ctx_end(compute_ctx);
 
         // TODO probably it'd be better to pass a exit_node flag to ggml_vk_compute_forward
