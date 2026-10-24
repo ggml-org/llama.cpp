@@ -3348,6 +3348,36 @@ bool ggml_prec_set_src(
     return true;
 }
 
+enum ggml_prec ggml_prec_get_acc(
+        const struct ggml_tensor * a) {
+    switch (a->op) {
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+            return (enum ggml_prec) ggml_get_op_params_i32(a, 0);
+        case GGML_OP_FLASH_ATTN_EXT:
+            return (enum ggml_prec) ggml_get_op_params_i32(a, 3);
+        default:
+            return GGML_PREC_UNDEFINED;
+    };
+}
+
+enum ggml_prec ggml_prec_get_src(
+        const struct ggml_tensor * a,
+        int                        idx) {
+    GGML_ASSERT(idx >= 0 && idx < GGML_MAX_SRC);
+
+    switch (a->op) {
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+            if (idx != 1) {
+                return GGML_PREC_UNDEFINED;
+            }
+            return (enum ggml_prec) ggml_get_op_params_i32(a, 2 + idx);
+        default:
+            return GGML_PREC_UNDEFINED;
+    };
+}
+
 // ggml_mul_mat
 
 static inline bool ggml_can_mul_mat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
