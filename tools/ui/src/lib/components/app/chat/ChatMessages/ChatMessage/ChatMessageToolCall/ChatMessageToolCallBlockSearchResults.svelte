@@ -111,13 +111,8 @@
 			{#if showHoverCard}
 				{@const publishDate = formatPublishDate(result.published)}
 				{@const host = hostFor(safeUrl)}
-				<HoverCard.Content
-					align="start"
-					class="bg-popover text-popover-foreground z-50 w-80 max-w-[90vw] rounded-lg border p-0 shadow-lg"
-					side="top"
-					sideOffset={6}
-				>
-					<div class="flex flex-col gap-2 p-3">
+				<HoverCard.Content align="start" class="w-80 max-w-[90vw]" side="top" sideOffset={6}>
+					<div class="flex flex-col gap-2 px-2 py-1.5">
 						<a
 							class="line-clamp-3 text-sm font-medium leading-snug hover:underline"
 							href={safeUrl}
