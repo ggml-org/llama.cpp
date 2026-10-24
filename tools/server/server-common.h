@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <thread>
 #include <queue>
 #include <string>
 #include <vector>
@@ -724,4 +725,100 @@ struct server_subproc {
 private:
     intptr_t out_handles[SERVER_SUBPROC_STREAMS] = { -1, -1 }; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
     bool     out_closed [SERVER_SUBPROC_STREAMS] = { false, false };
+};
+
+//
+// router <-> child protocol
+//
+
+// what this llama-server process does. a router spawns the other roles as child processes
+// and talks to them over their stdin/stdout
+enum server_role_type {
+    SERVER_ROLE_ROUTER,   // no model: lists the models, spawns instances on demand and proxies requests to them
+    SERVER_ROLE_INSTANCE, // serves one model, standalone or as a child of a router
+    SERVER_ROLE_DOWNLOAD, // child of a router: download a model, report the progress, exit
+};
+
+static inline const char * server_role_type_to_str(server_role_type role) {
+    switch (role) {
+        case SERVER_ROLE_ROUTER:   return "router";
+        case SERVER_ROLE_INSTANCE: return "instance";
+        case SERVER_ROLE_DOWNLOAD: return "download";
+        default: GGML_ASSERT(false && "invalid server_role_type");
+    }
+}
+
+// the role a router asks of a child; anything it does not name is an instance
+static inline server_role_type server_role_type_from_str(const std::string & str) {
+    if (str == "download") {
+        return SERVER_ROLE_DOWNLOAD;
+    }
+    return SERVER_ROLE_INSTANCE;
+}
+
+// set by the router in the environment of every child
+#define SERVER_ENV_ROUTER_PORT "LLAMA_SERVER_ROUTER_PORT" // its presence makes the process a child
+#define SERVER_ENV_CHILD_ROLE  "LLAMA_SERVER_CHILD_ROLE"  // server_role_type_to_str(), an instance when unset
+
+// lines on the child's stdin (router -> child) and stdout (child -> router),
+// see server_role::setup() and server_role::notify_to_router()
+#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
+
+// address a child binds to: the router may listen on 0.0.0.0, but reaches its children locally
+// ref: https://github.com/ggml-org/llama.cpp/issues/17862
+#define CHILD_ADDR "127.0.0.1"
+
+// the states a child reports to the router
+enum server_state {
+    SERVER_STATE_DOWNLOADING,
+    SERVER_STATE_LOADING,
+    SERVER_STATE_READY,
+    SERVER_STATE_SLEEPING,
+};
+
+static inline std::string server_state_to_str(server_state state) {
+    switch (state) {
+        case SERVER_STATE_DOWNLOADING: return "downloading";
+        case SERVER_STATE_LOADING:     return "loading";
+        case SERVER_STATE_READY:       return "ready";
+        case SERVER_STATE_SLEEPING:    return "sleeping";
+        default: GGML_ASSERT(false && "invalid server_state");
+    }
+}
+
+static inline server_state server_state_from_str(const std::string & str) {
+    if (str == "downloading") return SERVER_STATE_DOWNLOADING;
+    if (str == "loading")     return SERVER_STATE_LOADING;
+    if (str == "ready")       return SERVER_STATE_READY;
+    if (str == "sleeping")    return SERVER_STATE_SLEEPING;
+    GGML_ASSERT(false && "invalid server_state string");
+}
+
+// the role of this process and, when it is a child of a router, its side of the protocol
+struct server_role {
+    // serializes the notify_to_router writes
+    std::mutex mtx_stdout;
+
+    // in a child, keeps stdout for the commands to the router, so it is created before anything is written;
+    // everything else written to stdout goes to stderr with the logs
+    server_role();
+    ~server_role();
+
+    // true if the current process was spawned by a router
+    bool is_child();
+    server_role_type get_role();
+
+    int run_download(common_params & params);
+
+    // register the shutdown_handler to be called by the router
+    // return the monitoring thread (to be joined by the caller)
+    std::thread setup(const std::function<void(int)> & shutdown_handler);
+
+    // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
+    // message will be handled by server_models::handle_child_state() on the router side
+    void notify_to_router(const std::string & state_name, const json & payload);
+
+private:
+    FILE * cmd_out = nullptr; // the stdout the router reads the commands from
 };
