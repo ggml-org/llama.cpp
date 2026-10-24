@@ -367,9 +367,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         const auto & func = tool.at("function");
         std::string  name = func.at("name");
 
-        // Build parser for each argument, separating required and optional
+        // Build parser for each argument, tracking required mask for exact subset permutation
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
+        std::vector<common_peg_parser> all_parsers;
+        uint32_t                       required_mask = 0;
         foreach_parameter(func, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
@@ -383,29 +385,65 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
             auto named_arg = p.rule("tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index), arg);
+            size_t idx = all_parsers.size();
+            all_parsers.push_back(named_arg);
             if (param.required) {
                 required_parsers.push_back(named_arg);
+                if (idx < 32) {
+                    required_mask |= (1u << idx);
+                }
             } else {
                 optional_parsers.push_back(named_arg);
             }
         });
 
-        // Build required arg sequence in definition order
+        // Exact memoized bitmask permutation: every required argument must appear exactly once,
+        // optional arguments may appear at most once in any position, and no argument can repeat.
         common_peg_parser args_seq = p.eps();
-        for (size_t i = 0; i < required_parsers.size(); i++) {
-            if (i > 0) {
-                args_seq = args_seq + p.space();
-            }
-            args_seq = args_seq + required_parsers[i];
-        }
+        size_t total_params = all_parsers.size();
+        if (total_params > 0 && total_params <= 8) {
+            std::map<uint32_t, common_peg_parser>      rules;
+            std::function<common_peg_parser(uint32_t)> remaining_of;
+            const uint32_t                             full_mask = (1u << total_params) - 1;
 
-        // Build optional args with flexible ordering
-        if (!optional_parsers.empty()) {
-            common_peg_parser any_opt = p.choice();
-            for (const auto & opt : optional_parsers) {
-                any_opt |= opt;
+            remaining_of = [&](uint32_t remaining) -> common_peg_parser {
+                if (remaining == 0) {
+                    return p.eps();
+                }
+                auto cached = rules.find(remaining);
+                if (cached != rules.end()) {
+                    return cached->second;
+                }
+                auto alternatives = p.choice();
+                for (size_t i = 0; i < total_params; i++) {
+                    const uint32_t bit = 1u << i;
+                    if (remaining & bit) {
+                        const uint32_t next_rem = remaining & ~bit;
+                        auto           step     = (remaining == full_mask) ? all_parsers[i] : (p.space() + all_parsers[i]);
+                        auto           next     = remaining_of(next_rem);
+                        if (next_rem != 0 && (next_rem & required_mask) == 0) {
+                            next = p.optional(next);
+                        }
+                        alternatives |= step + next;
+                    }
+                }
+                return rules.emplace(
+                    remaining,
+                    p.rule("tool-" + std::to_string(tool_index) + "-args-" + std::to_string(remaining), alternatives)
+                ).first->second;
+            };
+
+            args_seq = remaining_of(full_mask);
+            if (required_mask == 0) {
+                args_seq = p.optional(args_seq);
             }
-            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
+        } else if (total_params > 8) {
+            common_peg_parser any_arg = p.choice();
+            for (const auto & arg_p : all_parsers) {
+                any_arg |= arg_p;
+            }
+            int min_args = (int)required_parsers.size();
+            args_seq = p.repeat(p.space() + any_arg, min_args, (int)total_params);
         }
 
         if (!arguments.start.empty()) {
