@@ -13,6 +13,18 @@
 #include <unordered_map>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 
 // SLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
@@ -185,6 +197,23 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
     return t->buffer != nullptr &&
         ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
         ggml_backend_buffer_is_host(t->buffer);
+}
+
+static size_t llama_moe_cache_total_ram() {
+#if defined(_WIN32)
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        return (size_t) status.ullTotalPhys;
+    }
+#elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGE_SIZE)
+    const long pages = sysconf(_SC_PHYS_PAGES);
+    const long page  = sysconf(_SC_PAGE_SIZE);
+    if (pages > 0 && page > 0) {
+        return (size_t) pages * (size_t) page;
+    }
+#endif
+    return 0;
 }
 
 }
@@ -574,15 +603,37 @@ struct llama_moe_cache::impl {
             }
         }
 
-        size_t pinned = 0;
-        for (const auto & r : merged) {
-            if (reg_host((void *) r.first, r.second - r.first)) {
-                pinned_spans.push_back((void *) r.first);
-                pinned += r.second - r.first;
+        // pinned pages are charged to a shared budget of about half the system RAM on
+        // Windows and compete with the OS everywhere; registering everything can starve
+        // later device allocations, so by default pin at most a quarter of the physical
+        // RAM. LLAMA_MOE_PIN_MIB overrides the cap, 0 disables pinning entirely.
+        const size_t total_ram = llama_moe_cache_total_ram();
+        size_t cap = total_ram > 0 ? total_ram/4 : (size_t) 8192*1024*1024;
+        if (const char * env = getenv("LLAMA_MOE_PIN_MIB")) {
+            cap = (size_t) atoll(env)*1024*1024;
+            if (cap == 0) {
+                return;
             }
         }
-        if (pinned > 0) {
-            LLAMA_LOG_INFO("%s: registered %.2f MiB of host experts as pinned memory\n", __func__, pinned/1024.0/1024.0);
+
+        size_t pinned  = 0;
+        size_t skipped = 0;
+        for (const auto & r : merged) {
+            const size_t n = r.second - r.first;
+            if (pinned + n > cap) {
+                skipped += n;
+                continue;
+            }
+            if (reg_host((void *) r.first, n)) {
+                pinned_spans.push_back((void *) r.first);
+                pinned += n;
+            } else {
+                skipped += n;
+            }
+        }
+        if (pinned > 0 || skipped > 0) {
+            LLAMA_LOG_INFO("%s: registered %.2f MiB of host experts as pinned memory (%.2f MiB left pageable)\n",
+                __func__, pinned/1024.0/1024.0, skipped/1024.0/1024.0);
         }
     }
 
