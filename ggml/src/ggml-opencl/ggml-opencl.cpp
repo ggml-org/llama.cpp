@@ -10555,14 +10555,35 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
     // buffers for quantized bits and scales, which are then populated by the
     // conversion kernel.
     if (tensor->type == GGML_TYPE_Q4_0) {
-        // Views can't SoA-ify here — parent owns the layout (see q8_0 guard).
-        if (tensor->view_src != nullptr || !ggml_is_contiguous(tensor)) {
-            return;
-        }
         // Tensors should have been preallocated, therefore they should
         // already have ggml_tensor_extra_cl as extra.
         ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
         GGML_ASSERT(extra_orig && "Tesnors in OpenCL backend should have been allocated and initialized");
+
+        const bool is_view = tensor->view_src != nullptr;
+        const bool contig  = ggml_is_contiguous(tensor);
+
+        // Only whole contiguous tensors are converted to SoA below.
+        if (is_view || !contig) {
+            // A view of a SoA tensor cannot be written: the parent owns the SoA layout.
+            if (ggml_cl_is_q4_0_soa(tensor)) {
+                GGML_LOG_WARN("ggml_opencl: drop write to %s view '%s' (offset %zu, size %zu); views of SOA tensors are not writable.\n",
+                              ggml_type_name(tensor->type), tensor->name, offset, size);
+                return;
+            }
+
+            // KV cache stays AoS. extra->offset does not include view_offs.
+            if (contig) {
+                CL_CHECK(clEnqueueWriteBuffer(queue, extra_orig->data_device, CL_TRUE,
+                                              extra_orig->offset + tensor->view_offs + offset,
+                                              size, data, 0, NULL, NULL));
+                return;
+            }
+
+            GGML_LOG_WARN("ggml_opencl: drop write to non-contiguous %s tensor '%s' (offset %zu, size %zu).\n",
+                          ggml_type_name(tensor->type), tensor->name, offset, size);
+            return;
+        }
 
         // Allocate the new extra and create aliases from the original.
         ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
@@ -11259,13 +11280,33 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         return;
     }
     if (tensor->type == GGML_TYPE_Q8_0) {
-        // Views share the parent's buffer; parent owns SoA conversion.
-        if (tensor->view_src != nullptr || !ggml_is_contiguous(tensor)) {
-            return;
-        }
-
         ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
         GGML_ASSERT(extra_orig && "Tesnors in OpenCL backend should have been allocated and initialized");
+
+        const bool is_view = tensor->view_src != nullptr;
+        const bool contig  = ggml_is_contiguous(tensor);
+
+        // Only whole contiguous tensors are converted to SoA below.
+        if (is_view || !contig) {
+            // A view of a SoA tensor cannot be written: the parent owns the SoA layout.
+            if (ggml_cl_is_q8_0_soa(tensor)) {
+                GGML_LOG_WARN("ggml_opencl: drop write to %s view '%s' (offset %zu, size %zu); views of SOA tensors are not writable.\n",
+                              ggml_type_name(tensor->type), tensor->name, offset, size);
+                return;
+            }
+
+            // KV cache stays AoS. extra->offset does not include view_offs.
+            if (contig) {
+                CL_CHECK(clEnqueueWriteBuffer(queue, extra_orig->data_device, CL_TRUE,
+                                              extra_orig->offset + tensor->view_offs + offset,
+                                              size, data, 0, NULL, NULL));
+                return;
+            }
+
+            GGML_LOG_WARN("ggml_opencl: drop write to non-contiguous %s tensor '%s' (offset %zu, size %zu).\n",
+                          ggml_type_name(tensor->type), tensor->name, offset, size);
+            return;
+        }
 
         // Allocate the new extra and create aliases from the original.
         ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
