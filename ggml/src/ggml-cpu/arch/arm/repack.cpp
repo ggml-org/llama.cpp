@@ -465,7 +465,7 @@ void ggml_gemv_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
     const int8x16_t kvalues = vld1q_s8(kvalues_iq4nl);
     const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
     float * res_ptr = s;
@@ -492,16 +492,71 @@ void ggml_gemv_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
             int8x16_t a_0 = vld1q_s8(a_ptr[l].qs + 0);
             int8x16_t a_1 = vld1q_s8(a_ptr[l].qs + 16);
 
+
             int32x4_t sumi = vdupq_n_s32(0);
+
+		# if defined(__ARM_FEATURE_DOTPROD)
             sumi = vdotq_laneq_s32(sumi, b_0_lo, a_0, 0);
             sumi = vdotq_laneq_s32(sumi, b_0_hi, a_1, 0);
+
             sumi = vdotq_laneq_s32(sumi, b_1_lo, a_0, 1);
             sumi = vdotq_laneq_s32(sumi, b_1_hi, a_1, 1);
+
             sumi = vdotq_laneq_s32(sumi, b_2_lo, a_0, 2);
             sumi = vdotq_laneq_s32(sumi, b_2_hi, a_1, 2);
+
             sumi = vdotq_laneq_s32(sumi, b_3_lo, a_0, 3);
             sumi = vdotq_laneq_s32(sumi, b_3_hi, a_1, 3);
+		# else
+            // vdotq emulation
+            // lane 0
+            int8x16_t a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 0));
+            int8x16_t a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 0));
 
+            int16x8_t p = vmull_s8 (vget_low_s8(b_0_lo), vget_low_s8(a0r));
+            p           = vmlal_s8 (p, vget_low_s8(b_0_hi), vget_low_s8(a1r));
+            int32x4_t sumi_0_lo   = vpaddlq_s16(p); //vpaddlq avoids initial vdupq_n_s32(0)
+
+            int16x8_t q = vmull_high_s8 (b_0_lo, a0r);
+            q           = vmlal_high_s8 (q, b_0_hi, a1r);
+            int32x4_t sumi_0_hi   = vpaddlq_s16(q);
+            // lane 1
+            a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 1));
+            a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 1));
+
+            p = vmull_s8 (vget_low_s8(b_1_lo), vget_low_s8(a0r));
+            p           = vmlal_s8 (p, vget_low_s8(b_1_hi), vget_low_s8(a1r));
+            int32x4_t sumi_1_lo   = vpaddlq_s16(p);
+
+            q = vmull_high_s8 (b_1_lo, a0r);
+            q           = vmlal_high_s8 (q, b_1_hi, a1r);
+            int32x4_t sumi_1_hi   = vpaddlq_s16(q);
+            // lane 2
+            a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 2));
+            a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 2));
+
+            p = vmull_s8 (vget_low_s8(b_2_lo), vget_low_s8(a0r));
+            p           = vmlal_s8 (p, vget_low_s8(b_2_hi), vget_low_s8(a1r));
+            sumi_0_lo   = vpadalq_s16(sumi_0_lo, p);
+
+            q = vmull_high_s8 (b_2_lo, a0r);
+            q           = vmlal_high_s8 (q, b_2_hi, a1r);
+            sumi_0_hi   = vpadalq_s16(sumi_0_hi, q);
+            // lane 3
+            a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 3));
+            a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 3));
+
+            p = vmull_s8 (vget_low_s8(b_3_lo), vget_low_s8(a0r));
+            p           = vmlal_s8 (p, vget_low_s8(b_3_hi), vget_low_s8(a1r));
+            sumi_1_lo   = vpadalq_s16(sumi_0_lo, p);
+
+            q = vmull_high_s8 (b_3_lo, a0r);
+            q           = vmlal_high_s8 (q, b_3_hi, a1r);
+            sumi_1_hi   = vpadalq_s16(sumi_1_hi, q);
+
+            // combine
+            sumi = vpaddq_s32(vpaddq_s32(sumi_0_lo, sumi_1_lo), vpaddq_s32(sumi_0_hi, sumi_0_hi));
+		# endif
             float32x4_t a_d = vcvt_f32_f16(vld1_dup_f16((const float16_t *)&a_ptr[l].d));
             float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *)b_ptr[l].d));
             float32x4_t d = a_d * b_d;
@@ -3327,45 +3382,115 @@ void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-    const int8x16_t kvalues = vld1q_s8(kvalues_iq4nl);
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
+    if (ggml_cpu_has_neon()) {
+        const int8x16_t kvalues = vld1q_s8(kvalues_iq4nl);
 
-    for (int y = 0; y < nr / 4; y++) {
-        const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
-        for (int x = 0; x < nc / ncols_interleaved; x++) {
-            const block_iq4_nlx4 * b_ptr = (const block_iq4_nlx4 *) vx + (x * nb);
+        for (int y = 0; y < nr / 4; y++) {
+            const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
+            for (int x = 0; x < nc / ncols_interleaved; x++) {
+                const block_iq4_nlx4 * b_ptr = (const block_iq4_nlx4 *) vx + (x * nb);
 
-            float32x4_t sumf[4];
-            for (int m = 0; m < 4; m++) {
-                sumf[m] = vdupq_n_f32(0);
-            }
-
-            for (int l = 0; l < nb; l++) {
-                float32x4_t a_d = vcvt_f32_f16(vld1_f16((const float16_t *)a_ptr[l].d));
-                float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *)b_ptr[l].d));
-
-                int32x4_t sumi_0 = vdupq_n_s32(0);
-                int32x4_t sumi_1 = vdupq_n_s32(0);
-                int32x4_t sumi_2 = vdupq_n_s32(0);
-                int32x4_t sumi_3 = vdupq_n_s32(0);
-
-                for (int k = 0; k < 4; k++) {
-                    int8x16_t a_0 = vld1q_s8(a_ptr[l].qs + 16 * k + 0);
-                    int8x16_t a_1 = vld1q_s8(a_ptr[l].qs + 16 * k + 64);
-
-                    uint8x16_t b = vld1q_u8(b_ptr[l].qs + 16 * k);
-                    int8x16_t b_hi = vqtbl1q_s8(kvalues, b >> 4);
-                    int8x16_t b_lo = vqtbl1q_s8(kvalues, b & 0xF);
-
-                    sumi_0 = vdotq_laneq_s32(sumi_0, b_lo, a_0, 0);
-                    sumi_1 = vdotq_laneq_s32(sumi_1, b_lo, a_0, 1);
-                    sumi_2 = vdotq_laneq_s32(sumi_2, b_lo, a_0, 2);
-                    sumi_3 = vdotq_laneq_s32(sumi_3, b_lo, a_0, 3);
-                    sumi_0 = vdotq_laneq_s32(sumi_0, b_hi, a_1, 0);
-                    sumi_1 = vdotq_laneq_s32(sumi_1, b_hi, a_1, 1);
-                    sumi_2 = vdotq_laneq_s32(sumi_2, b_hi, a_1, 2);
-                    sumi_3 = vdotq_laneq_s32(sumi_3, b_hi, a_1, 3);
+                float32x4_t sumf[4];
+                for (int m = 0; m < 4; m++) {
+                    sumf[m] = vdupq_n_f32(0);
                 }
+
+                for (int l = 0; l < nb; l++) {
+                    float32x4_t a_d = vcvt_f32_f16(vld1_f16((const float16_t *)a_ptr[l].d));
+                    float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *)b_ptr[l].d));
+
+                    int32x4_t sumi_0 = vdupq_n_s32(0);
+                    int32x4_t sumi_1 = vdupq_n_s32(0);
+                    int32x4_t sumi_2 = vdupq_n_s32(0);
+                    int32x4_t sumi_3 = vdupq_n_s32(0);
+
+                    #if ! defined(__ARM_FEATURE_DOTPROD)
+                        int32x4_t sumi_0_lo = vdupq_n_s32(0);
+                        int32x4_t sumi_1_lo = vdupq_n_s32(0);
+                        int32x4_t sumi_2_lo = vdupq_n_s32(0);
+                        int32x4_t sumi_3_lo = vdupq_n_s32(0);
+
+                        int32x4_t sumi_0_hi = vdupq_n_s32(0);
+                        int32x4_t sumi_1_hi = vdupq_n_s32(0);
+                        int32x4_t sumi_2_hi = vdupq_n_s32(0);
+                        int32x4_t sumi_3_hi = vdupq_n_s32(0);
+                    #endif
+
+                    for (int k = 0; k < 4; k++) {
+                        int8x16_t a_0 = vld1q_s8(a_ptr[l].qs + 16 * k + 0);
+                        int8x16_t a_1 = vld1q_s8(a_ptr[l].qs + 16 * k + 64);
+
+                        uint8x16_t b = vld1q_u8(b_ptr[l].qs + 16 * k);
+                        int8x16_t b_hi = vqtbl1q_s8(kvalues, b >> 4);
+                        int8x16_t b_lo = vqtbl1q_s8(kvalues, b & 0xF);
+
+                        #if defined(__ARM_FEATURE_DOTPROD)
+
+                            sumi_0 = vdotq_laneq_s32(sumi_0, b_lo, a_0, 0);
+                            sumi_1 = vdotq_laneq_s32(sumi_1, b_lo, a_0, 1);
+                            sumi_2 = vdotq_laneq_s32(sumi_2, b_lo, a_0, 2);
+                            sumi_3 = vdotq_laneq_s32(sumi_3, b_lo, a_0, 3);
+                            sumi_0 = vdotq_laneq_s32(sumi_0, b_hi, a_1, 0);
+                            sumi_1 = vdotq_laneq_s32(sumi_1, b_hi, a_1, 1);
+                            sumi_2 = vdotq_laneq_s32(sumi_2, b_hi, a_1, 2);
+                            sumi_3 = vdotq_laneq_s32(sumi_3, b_hi, a_1, 3);
+                    } // end loop, nothing after this for dotprod
+                    #else
+                        // sumi_0
+                        int8x16_t a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 0));
+                        int8x16_t a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 0));
+
+                        int16x8_t p = vmull_s8 (vget_low_s8(b_lo), vget_low_s8(a0r));
+                        p           = vmlal_s8 (p, vget_low_s8(b_hi), vget_low_s8(a1r));
+                        sumi_0_lo   = vpadalq_s16(sumi_0_lo, p);
+
+                        int16x8_t q = vmull_high_s8 (b_lo, a0r);
+                        q           = vmlal_high_s8 (q, b_hi, a1r);
+                        sumi_0_hi   = vpadalq_s16(sumi_0_hi, q);
+
+                        // sumi_1
+                        a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 1));
+                        a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 1));
+
+                        p = vmull_s8 (vget_low_s8(b_lo), vget_low_s8(a0r));
+                        p = vmlal_s8 (p, vget_low_s8(b_hi), vget_low_s8(a1r));
+                        sumi_1_lo = vpadalq_s16(sumi_1_lo, p);
+
+                        q = vmull_high_s8 (b_lo, a0r);
+                        q = vmlal_high_s8 (q, b_hi, a1r);
+                        sumi_1_hi = vpadalq_s16(sumi_1_hi, q);
+
+                        // sumi_2
+                        a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 2));
+                        a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 2));
+
+                        p = vmull_s8 (vget_low_s8(b_lo), vget_low_s8(a0r));
+                        p = vmlal_s8 (p, vget_low_s8(b_hi), vget_low_s8(a1r));
+                        sumi_2_lo = vpadalq_s16(sumi_2_lo, p);
+
+                        q = vmull_high_s8 (b_lo, a0r);
+                        q = vmlal_high_s8 (q, b_hi, a1r);
+                        sumi_2_hi = vpadalq_s16(sumi_2_hi, q);
+
+                        // sumi_3
+                        a0r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_0), 3));
+                        a1r = vreinterpretq_s8_s32(vdupq_laneq_s32(vreinterpretq_s32_s8(a_1), 3));
+
+                        p = vmull_s8 (vget_low_s8(b_lo), vget_low_s8(a0r));
+                        p = vmlal_s8 (p, vget_low_s8(b_hi), vget_low_s8(a1r));
+                        sumi_3_lo = vpadalq_s16(sumi_3_lo, p);
+
+                        q = vmull_high_s8 (b_lo, a0r);
+                        q = vmlal_high_s8 (q, b_hi, a1r);
+                        sumi_3_hi = vpadalq_s16(sumi_3_hi, q);
+                    }
+
+                    sumi_0 = vpaddq_s32(sumi_0_lo, sumi_0_hi);
+                    sumi_1 = vpaddq_s32(sumi_1_lo, sumi_1_hi);
+                    sumi_2 = vpaddq_s32(sumi_2_lo, sumi_2_hi);
+                    sumi_3 = vpaddq_s32(sumi_3_lo, sumi_3_hi);
+                #endif // non-dotprod-capable arm branch
 
                 sumf[0] = vmlaq_f32(sumf[0], vmulq_laneq_f32(b_d, a_d, 0), vcvtq_f32_s32(sumi_0));
                 sumf[1] = vmlaq_f32(sumf[1], vmulq_laneq_f32(b_d, a_d, 1), vcvtq_f32_s32(sumi_1));
@@ -3373,12 +3498,13 @@ void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
                 sumf[3] = vmlaq_f32(sumf[3], vmulq_laneq_f32(b_d, a_d, 3), vcvtq_f32_s32(sumi_3));
             }
 
-            for (int m = 0; m < 4; m++) {
-                vst1q_f32(s + (y * 4 + m) * bs + x * 4, sumf[m]);
+                for (int m = 0; m < 4; m++) {
+                    vst1q_f32(s + (y * 4 + m) * bs + x * 4, sumf[m]);
+                }
             }
         }
-    }
-    return;
+        return;
+    } // all above needs indented
 #endif // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
     ggml_gemm_iq4_nl_4x4_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
