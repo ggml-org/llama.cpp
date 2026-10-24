@@ -522,6 +522,12 @@ struct server_metrics {
     // tokens reused from the cache need no decode, so they only have a count
     uint64_t n_prompt_cached = 0;
 
+    // --slot-attach: prompts started from the KV cells of another slot, the tokens attached,
+    // and the checkpoints created where a prompt diverges from a known prompt (recurrent/hybrid memory)
+    uint64_t n_slot_attach        = 0;
+    uint64_t n_slot_attach_tokens = 0;
+    uint64_t n_slot_attach_ckpt   = 0;
+
     uint64_t n_tokens_max = 0;
 
     uint64_t n_decode     = 0;
