@@ -286,6 +286,14 @@ private:
     // pre-computed hadamard martrices
     std::unordered_map<int64_t, std::vector<float>> attn_rot_hadamard;
 
+    // Separate from mutable KV buffers so clearing the cache preserves the constants.
+    ggml_context_ptr attn_rot_ctx;
+    ggml_backend_buffer_ptr attn_rot_buf;
+    ggml_tensor * attn_rot_k_device = nullptr;
+    ggml_tensor * attn_rot_v_device = nullptr;
+
+    void init_device_rotation(bool no_alloc);
+
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
 

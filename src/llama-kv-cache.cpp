@@ -350,7 +350,6 @@ llama_kv_cache::llama_kv_cache(
     LLAMA_LOG_INFO("%s: n_rot_v = %u, n_embd_head_k_all = %d\n", __func__, n_rot_v, n_embd_head_v_all);
 
     // pre-compute the haramard matrices and keep them in host memory
-    // TODO: in the future, we can make copies in the backend buffers to avoid host -> device transfers
     if (n_rot_k || n_rot_v) {
         for (int64_t n = 64; n <= std::max(n_embd_head_k_all, n_embd_head_v_all); n *= 2) {
             attn_rot_hadamard[n] = std::vector<float>(n*n);
@@ -370,8 +369,77 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
+    init_device_rotation(no_alloc);
+
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
+}
+
+void llama_kv_cache::init_device_rotation(bool no_alloc) {
+    if (!(n_rot_k || n_rot_v) || layers.empty()) {
+        return;
+    }
+
+    const auto buft = ggml_backend_buffer_get_type(layers.front().k->buffer);
+    const auto dev  = ggml_backend_buft_get_device(buft);
+    if (!dev || ggml_backend_buft_is_host(buft) ||
+            (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU &&
+             ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_IGPU)) {
+        return;
+    }
+
+    // Keep the host path for split or partially offloaded caches.
+    for (const auto & layer : layers) {
+        if (ggml_backend_buffer_get_type(layer.k->buffer) != buft ||
+                (layer.v && ggml_backend_buffer_get_type(layer.v->buffer) != buft)) {
+            return;
+        }
+    }
+
+    ggml_init_params params = { 2*ggml_tensor_overhead(), nullptr, true };
+    ggml_context_ptr ctx { ggml_init(params) };
+    if (!ctx) {
+        return;
+    }
+
+    ggml_tensor * k = n_rot_k ? ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_rot_k, n_rot_k) : nullptr;
+    ggml_tensor * v = n_rot_v ? ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_rot_v, n_rot_v) : nullptr;
+    if (k) {
+        ggml_set_name(k, "attn_inp_k_rot");
+    }
+    if (v) {
+        ggml_set_name(v, "attn_inp_v_rot");
+    }
+
+    ggml_backend_buffer_ptr buf;
+    if (no_alloc) {
+        buf.reset(ggml_backend_buft_alloc_buffer(buft, 0));
+        for (ggml_tensor * t : { k, v }) {
+            if (t) {
+                t->buffer = buf.get();
+            }
+        }
+    } else {
+        buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft));
+    }
+    if (!buf) {
+        LLAMA_LOG_WARN("%s: failed to allocate rotation constants; using host inputs\n", __func__);
+        return;
+    }
+
+    ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    for (ggml_tensor * t : { k, v }) {
+        if (t && !no_alloc) {
+            ggml_backend_tensor_set(t, attn_rot_hadamard.at(t->ne[0]).data(), 0, ggml_nbytes(t));
+        }
+    }
+
+    LLAMA_LOG_INFO("%s: %s rotation buffer size = %.3f MiB\n", __func__,
+            ggml_backend_buffer_name(buf.get()), ggml_backend_buffer_get_size(buf.get())/1024.0/1024.0);
+    attn_rot_k_device = k;
+    attn_rot_v_device = v;
+    attn_rot_ctx = std::move(ctx);
+    attn_rot_buf = std::move(buf);
 }
 
 void llama_kv_cache::clear(bool data) {
@@ -691,7 +759,15 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
-    return ctxs_bufs.memory_breakdown();
+    auto ret = ctxs_bufs.memory_breakdown();
+
+    if (attn_rot_buf) {
+        const auto buft = ggml_backend_buffer_get_type(attn_rot_buf.get());
+        ret[buft] += ctxs_bufs.no_alloc ? ggml_backend_alloc_ctx_tensors_from_buft_size(attn_rot_ctx.get(), buft)
+                                     : ggml_backend_buffer_get_size(attn_rot_buf.get());
+    }
+
+    return ret;
 }
 
 llama_memory_context_ptr llama_kv_cache::init_batch(
@@ -1441,6 +1517,10 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
 }
 
 ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
+    if (attn_rot_k_device) {
+        return attn_rot_k_device;
+    }
+
     ggml_tensor * res = nullptr;
 
     if (n_rot_k) {
@@ -1453,6 +1533,10 @@ ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
 }
 
 ggml_tensor * llama_kv_cache::build_input_v_rot(ggml_context * ctx) const {
+    if (attn_rot_v_device) {
+        return attn_rot_v_device;
+    }
+
     ggml_tensor * res = nullptr;
 
     if (n_rot_v) {
@@ -1805,6 +1889,10 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
 }
 
 void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
+    if (attn_rot_k_device && dst == attn_rot_k_device) {
+        return;
+    }
+
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
     const auto n_rot = dst->ne[0];
@@ -1814,6 +1902,10 @@ void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
 }
 
 void llama_kv_cache::set_input_v_rot(ggml_tensor * dst) const {
+    if (attn_rot_v_device && dst == attn_rot_v_device) {
+        return;
+    }
+
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
     const auto n_rot = dst->ne[0];
