@@ -6,6 +6,7 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -29,14 +30,16 @@ struct moe_cache_slru {
     int32_t tail[2] = { -1, -1 };
     std::vector<bool> is_protected;
     int32_t n_protected = 0;
+    int32_t max_protected = 0; // zero for plain LRU
 
     std::vector<uint32_t> seen; // [n_expert]
     uint32_t seen_gen = 0;
     std::vector<int32_t> uniq;
 
-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
+    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, int32_t max_protected) {
         this->n_expert = n_expert;
         this->n_slots  = n_slots;
+        this->max_protected = max_protected;
         slot_map.assign(n_layer, nullptr);
         key_of.assign(n_slots, -1);
         prev.resize(n_slots);
@@ -81,8 +84,8 @@ struct moe_cache_slru {
     }
 
     void touch(int32_t s) {
-        move(s, true);
-        if (n_protected > n_slots/2) {
+        move(s, max_protected > 0);
+        if (n_protected > max_protected) {
             move(head[1], false);
         }
     }
@@ -244,6 +247,10 @@ struct llama_moe_cache::impl {
     int    log_every    = 0;
     FILE * trace_file   = nullptr;
 
+    // host expert ranges registered with the device driver (pinned), released in the dtor
+    std::vector<void *> pinned_spans;
+    void (*unreg_host)(void *) = nullptr;
+
     std::vector<device> devices;
     std::vector<group> groups;
     std::vector<layer> layers;
@@ -377,7 +384,28 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
-            g.slru.init(model.layers.size(), n_expert, g.n_slots);
+            int64_t n_expert_token = 0;
+            for (int32_t il : g.layers) {
+                n_expert_token += model.hparams.n_expert_used(il);
+            }
+            if (n_expert_token == 0) {
+                g.n_slots = 0;
+                continue;
+            }
+            if (g.n_slots < n_expert_token) {
+                LLAMA_LOG_WARN("%s: MoE cache is too small to hold the experts of one token for %zu layers, performance may suffer\n", __func__, g.layers.size());
+            }
+            // grow the protected fraction from zero at 1x to one half at 1.8x the experts used by one token
+            const double cache_ratio = (double) g.n_slots/n_expert_token;
+            const double ramp_progress = std::clamp((cache_ratio - 1.0)/0.8, 0.0, 1.0);
+            int32_t max_protected = (int32_t) (g.n_slots*ramp_progress*0.5);
+            // LLAMA_MOE_CACHE_SLRU_RAMP=0 restores the previous fixed 50/50 SLRU split
+            if (const char * env = getenv("LLAMA_MOE_CACHE_SLRU_RAMP")) {
+                if (atoi(env) == 0) {
+                    max_protected = g.n_slots/2;
+                }
+            }
+            g.slru.init(model.layers.size(), n_expert, g.n_slots, max_protected);
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
             n_tensors_host  += g.layers.size();
         }
@@ -503,6 +531,59 @@ struct llama_moe_cache::impl {
                 }
             }
         }
+
+        if (!model.hparams.no_alloc) {
+            pin_host_experts();
+        }
+    }
+
+    // register the host expert pages of the cached layers with the device driver, so the
+    // cache fills and the large-batch uploads DMA at full bus bandwidth instead of going
+    // through pageable staging copies. mmap keeps the pages file-backed; registration just
+    // locks them. opt-in via GGML_CUDA_REGISTER_HOST (checked inside the backend), and any
+    // range the driver refuses simply stays pageable.
+    void pin_host_experts() {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(devices[0].backend));
+        auto * reg_host = (bool (*)(void *, size_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_register_host_buffer");
+        unreg_host      = (void (*)(void *))         ggml_backend_reg_get_proc_address(reg, "ggml_backend_unregister_host_buffer");
+        if (reg_host == nullptr) {
+            return;
+        }
+
+        // page-align the ranges and merge the overlapping ones: the expert tensors of a layer
+        // are adjacent in the mapping, and registering the same page twice fails
+        constexpr uintptr_t page = 4096;
+        std::vector<std::pair<uintptr_t, uintptr_t>> ranges;
+        for (const layer & l : layers) {
+            if (l.ig < 0) {
+                continue;
+            }
+            for (const ggml_tensor * t : l.experts) {
+                const uintptr_t base = (uintptr_t) t->data & ~(page - 1);
+                const uintptr_t end  = ((uintptr_t) t->data + ggml_nbytes(t) + page - 1) & ~(page - 1);
+                ranges.push_back({ base, end });
+            }
+        }
+        std::sort(ranges.begin(), ranges.end());
+        std::vector<std::pair<uintptr_t, uintptr_t>> merged;
+        for (const auto & r : ranges) {
+            if (!merged.empty() && r.first <= merged.back().second) {
+                merged.back().second = std::max(merged.back().second, r.second);
+            } else {
+                merged.push_back(r);
+            }
+        }
+
+        size_t pinned = 0;
+        for (const auto & r : merged) {
+            if (reg_host((void *) r.first, r.second - r.first)) {
+                pinned_spans.push_back((void *) r.first);
+                pinned += r.second - r.first;
+            }
+        }
+        if (pinned > 0) {
+            LLAMA_LOG_INFO("%s: registered %.2f MiB of host experts as pinned memory\n", __func__, pinned/1024.0/1024.0);
+        }
     }
 
     ggml_backend_t backend(int32_t il) const {
@@ -513,6 +594,11 @@ struct llama_moe_cache::impl {
         log_stats();
         if (trace_file != nullptr) {
             fclose(trace_file);
+        }
+        if (unreg_host != nullptr) {
+            for (void * p : pinned_spans) {
+                unreg_host(p);
+            }
         }
     }
 
