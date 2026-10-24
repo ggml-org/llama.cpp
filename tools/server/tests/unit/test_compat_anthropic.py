@@ -803,6 +803,57 @@ def test_anthropic_thinking():
     assert res.body["type"] == "message"
 
 
+def test_anthropic_thinking_disabled():
+    """Test that thinking type disabled turns thinking off in the template"""
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    messages = [{"role": "user", "content": "What is 2+2?"}]
+    res_default = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages,
+    })
+    assert res_default.status_code == 200, f"Expected 200: {res_default.body}"
+
+    res_disabled = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "thinking": {"type": "disabled"},
+        "messages": messages,
+    })
+    assert res_disabled.status_code == 200, f"Expected 200: {res_disabled.body}"
+
+    # With thinking off, the Qwen3 template opens the reply with an empty think block
+    assert res_disabled.body["input_tokens"] > res_default.body["input_tokens"], \
+        f"Expected more tokens with thinking disabled ({res_disabled.body['input_tokens']}) than by default ({res_default.body['input_tokens']})"
+
+
+def test_anthropic_output_config_effort():
+    """Test that output_config.effort reaches the template as reasoning_effort"""
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja'
+    server.start()
+
+    messages = [{"role": "user", "content": "What is 2+2?"}]
+    res_default = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages,
+    })
+    assert res_default.status_code == 200, f"Expected 200: {res_default.body}"
+
+    res_high = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+        "messages": messages,
+    })
+    assert res_high.status_code == 200, f"Expected 200: {res_high.body}"
+
+    # The template adds a reasoning effort paragraph for "high"
+    assert res_high.body["input_tokens"] > res_default.body["input_tokens"], \
+        f"Expected more tokens with effort high ({res_high.body['input_tokens']}) than by default ({res_default.body['input_tokens']})"
+
+
 def test_anthropic_metadata():
     """Test metadata parameter"""
     server.start()
