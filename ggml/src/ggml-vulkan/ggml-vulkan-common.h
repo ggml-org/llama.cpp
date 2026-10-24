@@ -92,6 +92,19 @@ size_t ggml_vk_align_size(size_t width, size_t align);
 void deferred_memcpy(void * dst, const void * src, size_t size, std::vector<vk_staging_memcpy>* memcpys = nullptr);
 void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<vk_staging_memset>* memsets = nullptr);
 
+// scratch
+struct vk_fa_dequant_kv {
+    bool   use         = false;
+    bool   raw_strided = false;
+    size_t scratch_ts  = 0;
+};
+vk_fa_dequant_kv ggml_vk_fa_dequant_kv(const vk_device & device, const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * v);
+size_t ggml_vk_scratch_offset(const vk_device & device, size_t nbytes);
+size_t ggml_vk_op_scratch_size(const vk_device & device, const ggml_tensor * dst);
+size_t ggml_vk_tensor_alloc_size(const vk_device & device, const ggml_tensor * dst);
+bool ggml_vk_scratch_available(const ggml_backend_vk_context * ctx, const ggml_tensor * dst);
+vk_subbuffer ggml_vk_scratch_subbuffer(const ggml_backend_vk_context * ctx, const ggml_tensor * dst, size_t offset, size_t size);
+
 // matmul
 vk_pipeline ggml_vk_get_to_fp16(ggml_backend_vk_context * ctx, ggml_type type);
 void ggml_vk_matmul(ggml_backend_vk_context * ctx, vk_context& subctx, vk_pipeline& pipeline, vk_subbuffer&& a, vk_subbuffer&& b, vk_subbuffer&& d, vk_subbuffer&& split_k_buffer, uint32_t m, uint32_t n, uint32_t k, uint32_t stride_a, uint32_t stride_b, uint32_t stride_d, uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d, uint32_t split_k, uint32_t batch, uint32_t ne02, uint32_t ne12, uint32_t broadcast2, uint32_t broadcast3, uint32_t padded_n, uint64_t b_col_bytes, uint64_t d_col_bytes);
