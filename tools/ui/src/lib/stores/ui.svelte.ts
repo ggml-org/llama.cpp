@@ -13,8 +13,10 @@ import {
 	MODELS_ROUTE_ID,
 	ROUTES,
 	SETTINGS_KEYS,
+	SIDEBAR_EXPANDED_LOCALSTORAGE_KEY,
 	SIDEBAR_WIDTH_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { deviceStore } from '$lib/stores/device.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ModelOption } from '$lib/types/models';
 
@@ -27,10 +29,9 @@ class UiStore {
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
 
-	/** Whether the desktop sidebar is expanded (open). */
-	isSidebarExpanded = $state(false);
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);
+
 	/** Model the manager reveals when it opens, a qualified id or a raw model name. */
 	manageModelFocus = $state<string | null>(null);
 	/** Model the information dialog shows; a phone opens it instead of the manager. */
@@ -40,6 +41,8 @@ class UiStore {
 	/** Expanded desktop sidebar width in px; null keeps the stylesheet default. */
 	sidebarWidth = $state<number | null>(this.loadSidebarWidth());
 
+	#isSidebarExpanded = $state(this.loadSidebarExpanded());
+
 	/** Whether Discover is turned on; every Discover entry point hides without it. */
 	get isDiscoverEnabled(): boolean {
 		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_DISCOVER_MODELS));
@@ -48,6 +51,20 @@ class UiStore {
 	/** Whether the models manager route is the current page. */
 	get isModelsPageOpen(): boolean {
 		return page.route.id === MODELS_ROUTE_ID;
+	}
+
+	/** Whether the desktop sidebar is expanded (open); remembered across reloads on desktop. */
+	get isSidebarExpanded(): boolean {
+		return this.#isSidebarExpanded;
+	}
+
+	set isSidebarExpanded(expanded: boolean) {
+		this.#isSidebarExpanded = expanded;
+
+		// a phone opens the sidebar as an overlay, which is no layout to restore
+		if (!browser || deviceStore.isMobile) return;
+
+		localStorage.setItem(SIDEBAR_EXPANDED_LOCALSTORAGE_KEY, String(expanded));
 	}
 
 	/** Leave the models page for the route it was opened from. */
@@ -102,6 +119,12 @@ class UiStore {
 		} else {
 			localStorage.setItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY, String(width));
 		}
+	}
+
+	private loadSidebarExpanded(): boolean {
+		if (!browser || deviceStore.isMobile) return false;
+
+		return localStorage.getItem(SIDEBAR_EXPANDED_LOCALSTORAGE_KEY) === 'true';
 	}
 
 	private loadSidebarWidth(): number | null {
