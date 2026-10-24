@@ -1460,7 +1460,14 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const common_json & j, bool mark_input) {
+// request-derived JSON is untrusted; cap conversion depth so deeply nested
+// payloads throw instead of overflowing the stack
+static constexpr size_t k_from_json_max_depth = 128;
+
+static value from_json(const common_json & j, bool mark_input, size_t depth = 0) {
+    if (depth > k_from_json_max_depth) {
+        throw std::runtime_error("JSON nesting depth exceeds " + std::to_string(k_from_json_max_depth));
+    }
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1478,13 +1485,13 @@ static value from_json(const common_json & j, bool mark_input) {
     } else if (j.is_array()) {
         auto arr = mk_val<value_array>();
         for (const auto & item : j) {
-            arr->push_back(from_json(item, mark_input));
+            arr->push_back(from_json(item, mark_input, depth + 1));
         }
         return arr;
     } else if (j.is_object()) {
         auto obj = mk_val<value_object>();
         for (auto it = j.begin(); it != j.end(); ++it) {
-            obj->insert(it.key(), from_json(it.value(), mark_input));
+            obj->insert(it.key(), from_json(it.value(), mark_input, depth + 1));
         }
         return obj;
     } else {
