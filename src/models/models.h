@@ -1376,8 +1376,8 @@ struct llama_model_deepseek4 : public llama_model_base {
                 ggml_tensor * hc_base,
                 ggml_tensor ** post,
                 ggml_tensor ** comb,
-                int il,
-                bool f32_src = false) const;
+                bool f32_src,
+                int il) const;
 
         ggml_tensor * build_hc_post(
                 ggml_tensor * x,

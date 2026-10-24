@@ -852,7 +852,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
         ggml_tensor * post = nullptr;
         ggml_tensor * comb = nullptr;
 
-        ggml_tensor * attn_pre = build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, il, true);
+        ggml_tensor * attn_pre = build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, true, il);
 
         // the first layer's attention collapses with the identity pre-mix: copy 0
         cur = pre_prev ? build_hc_pre(inpL, pre_prev, il) : ggml_cont(ctx0, ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[2], 0));
@@ -867,7 +867,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
         cb(inpL, "hc_attn_post", il);
 
         residual = inpL;
-        pre_prev = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, il, true);
+        pre_prev = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, true, il);
 
         cur = build_hc_pre(inpL, attn_pre, il);
         cb(cur, "hc_ffn_pre", il);
