@@ -269,6 +269,7 @@ qwen4exp            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen4exp            ,0   ,any     ,MUL+ADD                     ,      4
 qwen4exp            ,0   ,any     ,RMS_NORM+MUL                ,     13
 qwen4exp            ,0   ,any     ,RMS_NORM+SCALE              ,      2
+qwen4exp            ,0   ,any     ,SCALE+UNARY+SCALE+DSV4_HC_POST,      4
 qwen4exp            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen4exp            ,0   ,any     ,SSM_CONV+UNARY              ,      1
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
