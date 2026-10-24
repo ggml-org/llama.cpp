@@ -519,7 +519,7 @@ struct case_state_rotation : ctx_test {
     const char * name() const override { return "rot"; }
 
     const char * description() const override {
-        return "a state saved with attention rotation restores only into a matching context";
+        return "rotation constants survive a cache clear and state restores only into a matching context";
     }
 
     case_result run(model_run & mr) const override {
@@ -576,6 +576,18 @@ struct case_state_rotation : ctx_test {
                 success = false;
                 break;
             }
+
+            const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+            const float * logits = llama_get_logits(src.get());
+            CTX_REQUIRE(logits, "missing logits before clearing the rotated cache");
+            const std::vector<float> expected_logits(logits, logits + n_vocab);
+
+            llama_memory_clear(llama_get_memory(src.get()), true);
+            CTX_REQUIRE(llama_decode(src.get(), llama_batch_get_one(&token, 1)) == 0, "failed to decode after clearing the rotated cache");
+            logits = llama_get_logits(src.get());
+            CTX_REQUIRE(logits, "missing logits after clearing the rotated cache");
+            CTX_REQUIRE(compare_logits(expected_logits.data(), logits, n_vocab).nmse() <= NMSE_THRESHOLD,
+                    "clearing the cache changed the rotation constants");
 
             auto matching = make_context(types.first, types.second, false);
             if (!matching || !set_seq_state(matching.get(), 0, LLAMA_STATE_SEQ_FLAGS_NONE, state)) {
