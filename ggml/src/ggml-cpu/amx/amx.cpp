@@ -236,6 +236,7 @@ ggml_backend_buffer_type_t ggml_backend_amx_buffer_type() {
                         /* .get_alloc_size      = */ ggml_backend_amx_buffer_type_get_alloc_size,
                         /* .get_alloc_size_n    = */ NULL,
                         /* .is_host             = */ nullptr,
+                        /* .get_max_alloc_size  = */ nullptr,
                         },
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ new ggml::cpu::amx::extra_buffer_type(),

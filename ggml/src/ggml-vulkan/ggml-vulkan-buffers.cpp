@@ -34,6 +34,7 @@ ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
     /* .get_alloc_size      = */ ggml_backend_vk_buffer_type_get_alloc_size,
     /* .get_alloc_size_n    = */ NULL,
     /* .is_host             = */ NULL,
+    /* .get_max_alloc_size  = */ ggml_backend_vk_buffer_type_get_max_alloc_size,
 };
 
 static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags) {
