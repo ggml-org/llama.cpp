@@ -11,7 +11,6 @@
 #include <stdexcept>
 
 #define MAX_REPETITION_THRESHOLD 2000
-#define MAX_GRAMMAR_RECURSION_DEPTH 256
 //
 // helpers
 //
@@ -598,8 +597,8 @@ const char * llama_grammar_parser::parse_sequence(
             n_prev_rules = 1;
             rule.push_back({LLAMA_GRETYPE_RULE_REF, ref_rule_id});
         } else if (*pos == '(') { // grouping
-            if (depth >= MAX_GRAMMAR_RECURSION_DEPTH) {
-                throw std::runtime_error("grammar recursion depth limit exceeded (max " + std::to_string(MAX_GRAMMAR_RECURSION_DEPTH) + "), please reduce nesting depth");
+            if (depth >= GRAMMAR_RECURSIVE_LIMIT) {
+                throw std::runtime_error("grammar recursion depth limit exceeded (max " + std::to_string(GRAMMAR_RECURSIVE_LIMIT) + "), please reduce nesting depth");
             }
             // parse nested alternates into synthesized rule
             pos = parse_space(pos + 1, true);
@@ -971,9 +970,13 @@ static bool llama_grammar_detect_left_recursion(
         size_t rule_index,
         std::vector<bool> * rules_visited,
         std::vector<bool> * rules_in_progress,
-        std::vector<bool> * rules_may_be_empty) {
+        std::vector<bool> * rules_may_be_empty,
+        uint32_t depth = 0) {
     if ((*rules_in_progress)[rule_index]) {
         return true;
+    }
+    if (depth > GRAMMAR_RECURSIVE_LIMIT) {
+        throw std::runtime_error("grammar rules are chained more than " + std::to_string(GRAMMAR_RECURSIVE_LIMIT) + " levels deep");
     }
 
     (*rules_in_progress)[rule_index] = true;
@@ -1000,7 +1003,7 @@ static bool llama_grammar_detect_left_recursion(
     bool recurse_into_nonterminal = true;
     for (size_t i = 0; i < rule.size(); i++) {
         if (rule[i].type == LLAMA_GRETYPE_RULE_REF && recurse_into_nonterminal) {
-            if (llama_grammar_detect_left_recursion(rules, (size_t)rule[i].value, rules_visited, rules_in_progress, rules_may_be_empty)) {
+            if (llama_grammar_detect_left_recursion(rules, (size_t)rule[i].value, rules_visited, rules_in_progress, rules_may_be_empty, depth + 1)) {
                 return true;
             }
             if (!((*rules_may_be_empty)[(size_t)rule[i].value])) {
@@ -1169,14 +1172,19 @@ struct llama_grammar * llama_grammar_init_impl(
     std::vector<bool> rules_visited(n_rules);
     std::vector<bool> rules_in_progress(n_rules);
     std::vector<bool> rules_may_be_empty(n_rules);
-    for (size_t i = 0; i < n_rules; i++) {
-        if (rules_visited[i]) {
-            continue;
+    try {
+        for (size_t i = 0; i < n_rules; i++) {
+            if (rules_visited[i]) {
+                continue;
+            }
+            if (llama_grammar_detect_left_recursion(vec_rules, i, &rules_visited, &rules_in_progress, &rules_may_be_empty)) {
+                LLAMA_LOG_ERROR("unsupported grammar, left recursion detected for nonterminal at index %zu", i);
+                return nullptr;
+            }
         }
-        if (llama_grammar_detect_left_recursion(vec_rules, i, &rules_visited, &rules_in_progress, &rules_may_be_empty)) {
-            LLAMA_LOG_ERROR("unsupported grammar, left recursion detected for nonterminal at index %zu", i);
-            return nullptr;
-        }
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("unsupported grammar: %s\n", err.what());
+        return nullptr;
     }
 
     // loop over alternates of start rule to build initial stacks
@@ -1262,14 +1270,19 @@ struct llama_grammar * llama_grammar_init_impl(
     std::vector<bool> rules_visited(n_rules);
     std::vector<bool> rules_in_progress(n_rules);
     std::vector<bool> rules_may_be_empty(n_rules);
-    for (size_t i = 0; i < n_rules; i++) {
-        if (rules_visited[i]) {
-            continue;
+    try {
+        for (size_t i = 0; i < n_rules; i++) {
+            if (rules_visited[i]) {
+                continue;
+            }
+            if (llama_grammar_detect_left_recursion(vec_rules, i, &rules_visited, &rules_in_progress, &rules_may_be_empty)) {
+                LLAMA_LOG_ERROR("unsupported grammar, left recursion detected for nonterminal at index %zu\n", i);
+                return nullptr;
+            }
         }
-        if (llama_grammar_detect_left_recursion(vec_rules, i, &rules_visited, &rules_in_progress, &rules_may_be_empty)) {
-            LLAMA_LOG_ERROR("unsupported grammar, left recursion detected for nonterminal at index %zu\n", i);
-            return nullptr;
-        }
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("unsupported grammar: %s\n", err.what());
+        return nullptr;
     }
 
     // loop over alternates of start rule to build initial stacks

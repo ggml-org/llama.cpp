@@ -10,7 +10,6 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
-#include <regex>
 #include <set>
 #include <stdexcept>
 
@@ -736,8 +735,18 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
+        // only rules recurse, a recursive rule is entered once per input level
+        if (ctx.rule_depth.size() <= p.child) {
+            ctx.rule_depth.resize(p.child + 1, 0);
+        }
+        if (ctx.rule_depth[p.child] >= COMMON_RECURSIVE_LIMIT) {
+            throw common_peg_recursion_error("input is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+        }
+
         // Parse the child
+        ctx.rule_depth[p.child]++;
         auto result = arena.parse(p.child, ctx, start_pos);
+        ctx.rule_depth[p.child]--;
 
         if (!result.fail()) {
             std::string_view text;
@@ -1069,9 +1078,20 @@ common_peg_parser operator|(const std::string & str, const common_peg_parser & p
     return operator|(str.c_str(), p);
 }
 
+// same as std::regex_replace with [^a-zA-Z0-9-]+ -> "-", no std::regex: libstdc++ recurses per char
 static std::string rule_name(const std::string & name) {
-    static const std::regex invalid_rule_chars_re("[^a-zA-Z0-9-]+");
-    return std::regex_replace(name, invalid_rule_chars_re, "-");
+    std::string out;
+    bool in_invalid = false;
+    for (char c : name) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+            out += c;
+            in_invalid = false;
+        } else if (!in_invalid) {
+            out += '-';
+            in_invalid = true;
+        }
+    }
+    return out;
 }
 
 common_peg_parser_builder::common_peg_parser_builder() {}

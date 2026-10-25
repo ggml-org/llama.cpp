@@ -747,7 +747,11 @@ value macro_statement::execute_impl(context & ctx) const {
     std::string name = cast_stmt<identifier>(this->name)->val;
 
     const func_handler func = [this, name](const func_args & args) -> value {
+        if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
+            throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+        }
         context macro_ctx(args.ctx); // new scope for macro execution
+        macro_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters(name, this->args, args, macro_ctx);
 
@@ -778,7 +782,11 @@ value call_statement::execute_impl(context & ctx) const {
     context caller_ctx(ctx); // new scope for caller execution
 
     const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+        if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
+            throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+        }
         context block_ctx(caller_ctx); // new scope for block execution
+        block_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters("caller", this->caller_args, args, block_ctx);
 

@@ -527,6 +527,32 @@ static void test_dry_sequence_breakers(testing & t) {
     }
 }
 
+//
+// glob_match
+//
+
+static void test_glob_match(testing & t) {
+    t.test("patterns", [](testing & t) {
+        t.assert_true("literal", glob_match("src/main.cpp", "src/main.cpp"));
+        t.assert_true("star", glob_match("src/*.cpp", "src/main.cpp"));
+        t.assert_true("star stops at /", !glob_match("*.cpp", "src/main.cpp"));
+        t.assert_true("double star", glob_match("**/*.cpp", "a/b/c/main.cpp"));
+        t.assert_true("double star at end", glob_match("src/**", "src/a/b"));
+        t.assert_true("question mark", glob_match("ma?n.cpp", "main.cpp"));
+        t.assert_true("question mark not /", !glob_match("a?b", "a/b"));
+        t.assert_true("class", glob_match("[a-c]x", "bx"));
+        t.assert_true("negated class", !glob_match("[!a-c]x", "bx"));
+        t.assert_true("unclosed class", glob_match("[ab", "[ab"));
+        t.assert_true("mismatch", !glob_match("main.cpp", "main.c"));
+    });
+    t.test("long input", [](testing & t) {
+        const std::string path(100000, 'a');
+        t.assert_true("long literal", glob_match(path, path));
+        t.assert_true("long path", glob_match("**", path));
+        t.assert_true("too many wildcards", !glob_match(std::string(1000, '*'), "a"));
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -548,6 +574,7 @@ int main(int argc, char ** argv) {
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
     t.test("decision_depth",  test_decision_depth);
+    t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
 
     return t.summary();

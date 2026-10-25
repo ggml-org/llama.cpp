@@ -58,6 +58,8 @@ struct context {
 
     bool is_get_stats = false; // whether to collect stats
 
+    int macro_depth = 0;
+
     visitor_fn visitor;
 
     // src is optional, used for error reporting
@@ -78,6 +80,7 @@ struct context {
         src(parent.src),
         current_time(parent.current_time),
         is_get_stats(parent.is_get_stats),
+        macro_depth(parent.macro_depth),
         // inherit variables (for example, when entering a new scope)
         env(mk_val<value_object>(*parent.env)) {}
 

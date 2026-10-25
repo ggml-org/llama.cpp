@@ -224,13 +224,11 @@ class common_chat_schema_builder {
         return node;
     }
 
-    // the builder and the code that walks the built schema recurse once per level, a deeper schema overflows the stack
-    static constexpr int max_depth = 128;
-    int                  depth_    = 0;
+    int depth_ = 0;
 
     common_chat_schema_ptr build_node(const common_json & schema, const std::string & path) {
-        if (depth_ >= max_depth) {
-            throw std::invalid_argument("JSON schema is nested more than " + std::to_string(max_depth) + " levels deep");
+        if (depth_ >= COMMON_RECURSIVE_LIMIT) {
+            throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
         }
         depth_++;
         auto node = build_node_impl(schema, path);

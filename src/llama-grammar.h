@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#define GRAMMAR_RECURSIVE_LIMIT 256
+
 struct llama_vocab;
 
 // grammar element type

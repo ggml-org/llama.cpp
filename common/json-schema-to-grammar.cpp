@@ -279,8 +279,6 @@ static std::unordered_map<char, std::string> GRAMMAR_LITERAL_ESCAPES = {
     {'\r', "\\r"}, {'\n', "\\n"}, {'"', "\\\""}, {'-', "\\-"}, {']', "\\]"}, {'\\', "\\\\"}
 };
 
-static const int MAX_PATTERN_DEPTH = 100;
-
 static std::unordered_set<char> NON_LITERAL_SET = {'|', '.', '(', ')', '[', ']', '{', '}', '*', '+', '?', '^', '$'};
 static std::unordered_set<char> ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = {'^', '$', '.', '[', ']', '(', ')', '|', '{', '}', '*', '+', '?'};
 
@@ -482,7 +480,7 @@ private:
                         }
                     }
                     paren_depth++;
-                    if (paren_depth > MAX_PATTERN_DEPTH) {
+                    if (paren_depth > COMMON_RECURSIVE_LIMIT) {
                         throw unsupported_pattern("pattern nesting too deep");
                     }
                     seq.emplace_back("(" + to_rule(transform()) + ")", false);

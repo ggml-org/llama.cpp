@@ -1291,6 +1291,27 @@ static void test_macros(testing & t) {
         json::object(),
         "Dict {\n    root1: 1\n    root2: {\n        nest1: 1\n        nest2: {\n            nest3: 2\n        }\n    }\n}"
     );
+
+    test_template(t, "macro recursion",
+        "{% macro f(n) %}{% if n < 100 %}{{ f(n + 1) }}{% else %}{{ n }}{% endif %}{% endmacro %}{{ f(0) }}",
+        json::object(),
+        "100"
+    );
+
+    t.test("endless macro recursion", [](testing & t) {
+        const std::string tmpl = "{% macro f(n) %}{{ f(n + 1) }}{% endmacro %}{{ f(0) }}";
+        jinja::lexer lexer;
+        jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
+        jinja::context ctx(tmpl);
+        jinja::runtime runtime(ctx);
+        std::string error;
+        try {
+            runtime.execute(ast);
+        } catch (const std::exception & e) {
+            error = e.what();
+        }
+        t.assert_true("rejected: " + error, error.find("macro calls are nested more than 128 levels deep") != std::string::npos);
+    });
 }
 
 static void test_namespace(testing & t) {

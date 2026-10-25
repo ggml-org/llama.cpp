@@ -1441,8 +1441,6 @@ const func_builtins & value_undefined_t::get_builtins() const {
 
 
 // the runtime walks values with recursion, a deeper input overflows the stack
-static constexpr int FROM_JSON_MAX_DEPTH = 128;
-
 static value from_json(const common_json & j, bool mark_input, int depth = 0) {
     if (j.is_null()) {
         return mk_val<value_none>();
@@ -1458,8 +1456,8 @@ static value from_json(const common_json & j, bool mark_input, int depth = 0) {
             str->mark_input();
         }
         return str;
-    } else if ((j.is_array() || j.is_object()) && depth >= FROM_JSON_MAX_DEPTH) {
-        throw std::invalid_argument("JSON is nested more than " + std::to_string(FROM_JSON_MAX_DEPTH) + " levels deep");
+    } else if ((j.is_array() || j.is_object()) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (j.is_array()) {
         auto arr = mk_val<value_array>();
         for (const auto & item : j) {
