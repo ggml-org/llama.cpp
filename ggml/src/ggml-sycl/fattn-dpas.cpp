@@ -70,7 +70,11 @@ bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst
         return false;
     }
 
-    if (mask && (mask->type != GGML_TYPE_F16 || mask->ne[2] != 1 || mask->nb[0] != sizeof(sycl::half))) {
+    if (mask && (mask->type != GGML_TYPE_F16 || mask->ne[2] != 1 || mask->nb[0] != sizeof(sycl::half) ||
+                 mask->ne[0] < K->ne[1] || mask->ne[1] < Q->ne[1])) {
+        return false;
+    }
+    if (sinks && (sinks->nb[0] != sizeof(float) || sinks->ne[0] < Q->ne[2])) {
         return false;
     }
     if (Q->nb[0] != sizeof(float)) {
