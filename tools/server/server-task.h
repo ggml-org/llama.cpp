@@ -217,6 +217,14 @@ struct server_task {
         // if set, the outputs are the pooled embeddings of the sequence, one score per class
         bool                     pooled = false;
 
+        // The HTTP request owns these buffers; completed tasks must not retain them.
+        std::map<size_t, std::weak_ptr<std::vector<float>>> image_embd;
+
+        std::shared_ptr<std::vector<float>> get_image_embd(size_t idx) const {
+            const auto it = image_embd.find(idx);
+            return it == image_embd.end() ? nullptr : it->second.lock();
+        }
+
         // first prompt position that is read, -1 if none
         int32_t pos_first() const {
             int32_t pos = pointer;

@@ -194,5 +194,8 @@ private:
 // note: the order of the tasks is preserved
 std::vector<server_task> server_decision_group_tasks(std::vector<server_task> && tasks, size_t n_slots);
 
+// Keep the returned buffers alive until the request finishes.
+std::vector<std::shared_ptr<std::vector<float>>> server_decision_share_images(std::vector<server_task> & tasks);
+
 // write "<|name|>" with U+00A6 in place of "|", so text from the request is not parsed as special tokens
 std::string server_decision_escape_special_tokens(const std::string & text);
