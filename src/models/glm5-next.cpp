@@ -196,7 +196,7 @@ static ggml_tensor * glm5_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
                                  int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
                                  int64_t d_conv, int64_t head_dim, int64_t n_head,
                                  int64_t n_seq_tokens, int64_t n_seqs, int64_t n_tokens, int64_t kv_head,
-                                 int64_t mem_size, int64_t K_rs) {
+                                 int64_t mem_size, int64_t K_rs, ggml_tensor * rs_slot_rev) {
     const int64_t d_inner         = head_dim * n_head;
     const int64_t conv_state_size = (d_conv - 1) * d_inner;
     const int64_t n_embd_r_total  = 3 * conv_state_size;
@@ -210,18 +210,29 @@ static ggml_tensor * glm5_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
     ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
 
-    // group s holds the conv window s tokens back.
-    // [TAG_RECURRENT_ROLLBACK_SPLITS]: the last K_rs tokens must share one ubatch.
-    for (int64_t s = 0; s < K_rs; ++s) {
-        const int64_t s_idx = std::max<int64_t>(0, n_seq_tokens - s);
-        ggml_tensor * conv_x_s = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
-            conv_x->nb[1], conv_x->nb[2], s_idx * conv_x->nb[0]);
+    const size_t row_size = n_embd_r_total * ggml_element_size(conv_states_all);
+    const size_t offs     = (kv_head * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all);
+
+    if (K_rs == 1) {
+        ggml_tensor * conv_x_last = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
+            conv_x->nb[1], conv_x->nb[2], n_seq_tokens * conv_x->nb[0]);
         ggml_build_forward_expand(gf,
-            ggml_cpy(ctx0, conv_x_s,
+            ggml_cpy(ctx0, conv_x_last,
                 ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
-                    (d_conv - 1)   * ggml_element_size(conv_states_all),
-                    n_embd_r_total * ggml_element_size(conv_states_all),
-                    ((s * mem_size + kv_head) * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all))));
+                    (d_conv - 1) * ggml_element_size(conv_states_all), row_size, offs)));
+    } else {
+        // [TAG_RECURRENT_ROLLBACK_SPLITS]: the last K_rs tokens must share one ubatch.
+        // window w starts at column n_seq_tokens - (Kw - 1) + w and is rollback slot Kw - 1 - w, see build_conv_state
+        const int64_t Kw = rs_slot_rev->ne[0];
+        ggml_tensor * windows = ggml_view_4d(ctx0, conv_x, d_conv - 1, 1, d_inner, n_seqs,
+            conv_x->nb[0], conv_x->nb[1], conv_x->nb[2], (n_seq_tokens - (Kw - 1)) * conv_x->nb[0]);
+        windows->ne[1] = Kw;
+
+        // [d_conv - 1, slot, channel, seq] view of this part of the cells of this ubatch
+        ggml_tensor * slots = ggml_view_4d(ctx0, conv_states_all, d_conv - 1, K_rs, d_inner, n_seqs,
+            mem_size * row_size, (d_conv - 1) * ggml_element_size(conv_states_all), row_size, offs);
+
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, rs_slot_rev));
     }
 
     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
@@ -819,9 +830,16 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
     const int64_t mem_size = mctx_cur->get_size();
     const int64_t K_rs     = (int64_t) cparams.n_rs_seq + 1;
 
-    ggml_tensor * Qcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
-    ggml_tensor * Kcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
-    ggml_tensor * Vcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
+    // {Kw-1, ..., 0} for the rollback windows that exist in this ubatch, shared by every layer
+    if (K_rs > 1 && rs_slot_rev == nullptr) {
+        const int64_t Kw = std::min(n_seq_tokens + 1, K_rs);
+        rs_slot_rev = ggml_argsort(ctx0, ggml_arange(ctx0, 0.0f, (float) Kw, 1.0f), GGML_SORT_ORDER_DESC);
+        cb(rs_slot_rev, "rs_slot_rev", -1);
+    }
+
+    ggml_tensor * Qcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs, rs_slot_rev);
+    ggml_tensor * Kcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs, rs_slot_rev);
+    ggml_tensor * Vcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs, rs_slot_rev);
     cb(Qcur, "kda_q_conv", il);
     cb(Kcur, "kda_k_conv", il);
     cb(Vcur, "kda_v_conv", il);

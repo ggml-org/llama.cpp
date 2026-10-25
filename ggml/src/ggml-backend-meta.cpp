@@ -704,8 +704,12 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         if (ggml_is_permuted(tensor) && !ggml_is_permuted(tensor->src[0]) && axis >= 0 && axis < GGML_MAX_DIMS-1) {
             const size_t nb_axis = tensor->src[0]->nb[axis];
             const size_t nb_next = tensor->src[0]->nb[axis+1];
+            // the span can also be one repetition of a repeated segment, e.g. the q, k or v part of a fused conv state
+            const size_t nb_rep  = src_ss[0].n_segments == 1 && nb_next % src_ss[0].nr[0] == 0 ? nb_next/src_ss[0].nr[0] : nb_next;
             for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
-                if (tensor->ne[dim] == 1 || tensor->nb[dim] < nb_axis || tensor->nb[dim]*tensor->ne[dim] != nb_next) {
+                const size_t span = tensor->nb[dim]*tensor->ne[dim];
+                if (tensor->ne[dim] == 1 || tensor->nb[dim] < nb_axis ||
+                        (span != nb_next && (span != nb_rep || tensor->view_offs % nb_next % nb_rep != 0))) {
                     continue;
                 }
                 bool others_ok = true;

@@ -509,6 +509,7 @@ public:
     void busy_spin_acquire();
     void busy_spin_release();
     void graph_compute(uint32_t device, const ggml_cgraph * cgraph);
+    void graph_cache_clear();
 
     void start(const std::string & endpoint);
     void work();
@@ -729,6 +730,7 @@ static void ggml_backend_rpc_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     request->remote_ptr = ctx->remote_ptr;
     LOG_DBG2("[%s] remote_ptr: 0x%" PRIx64 "\n", __func__, request->remote_ptr);
     ctx->dispatcher->send(RPC_CMD_FREE_BUFFER, request, sizeof(*request));
+    ctx->dispatcher->graph_cache_clear();
     delete ctx;
 }
 
@@ -1265,6 +1267,12 @@ void rpc_dispatcher::graph_compute(uint32_t device, const ggml_cgraph * cgraph) 
         std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
         send_async(RPC_CMD_GRAPH_COMPUTE, input_ptr, input_size);
     }
+}
+
+// the server drops all of its cached graphs when a buffer is freed, see rpc_server::free_buffer
+void rpc_dispatcher::graph_cache_clear() {
+    std::lock_guard<std::mutex> lock(graph_mutex);
+    graph_uids.clear();
 }
 
 static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
