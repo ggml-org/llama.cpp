@@ -60,10 +60,12 @@ static llama_tokens prepare_tokens(llama_model * model, const common_params & pa
     llama_tokens tokens;
 
     if (params.prompt.empty()) {
-        const int n_prompt = params.n_batch;
+        // the prompt must not exceed n_batch and n_ctx of cases
+        constexpr int n_prompt_max = 100;
+        const int n_prompt = std::min(params.n_batch, n_prompt_max);
 
         // this path is useful for model files that do not have a tokenizer
-        TLOG_INF("%s: no prompt provided, generating %d (n_batch) random tokens\n", __func__, n_prompt);
+        TLOG_INF("%s: no prompt provided, generating %d random tokens\n", __func__, n_prompt);
 
         const auto * vocab = llama_model_get_vocab(model);
         const auto   n_vocab = llama_vocab_n_tokens(vocab);
@@ -205,7 +207,6 @@ int main(int argc, char ** argv) {
 
     common_params params;
     params.prompt = "";
-    params.n_batch = 100;
     params.out_file = "dump_state.bin";
     params.sampling.seed = 1234;
 

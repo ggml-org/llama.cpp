@@ -5617,14 +5617,9 @@ static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats, bool skip = fals
     }
 }
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = false, float amax = 1.0f) {
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = false) {
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        if (t->type == GGML_TYPE_I32) {
-            continue;
-        }
-        if (amax != 1.0f && t->type == GGML_TYPE_F32) {
-            init_tensor_uniform(t, -amax, amax);
-        } else {
+        if (t->type != GGML_TYPE_I32) {
             init_tensor_uniform(t);
         }
     }
@@ -5641,13 +5636,12 @@ struct test_mul_mat_id : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
-    const float amax; // magnitude of src1
     const int64_t m_v; // rows of as in memory, the experts of as are strided for m_v > m, no view for m_v == 0
     const bool ids_offset;
     const bool skip; // set some ids to a negative value
 
     std::string vars() override {
-        return VARS_TO_STR12(type_a, type_b, n_mats, n_used, b, m, n, k, amax, m_v, ids_offset, skip);
+        return VARS_TO_STR11(type_a, type_b, n_mats, n_used, b, m, n, k, m_v, ids_offset, skip);
     }
 
     double max_nmse_err() override {
@@ -5672,9 +5666,9 @@ struct test_mul_mat_id : public test_case {
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 32,
-            float amax = 1.0f, int64_t m_v = 0, bool ids_offset = false, bool skip = false)
+            int64_t m_v = 0, bool ids_offset = false, bool skip = false)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k), amax(amax), m_v(m_v), ids_offset(ids_offset), skip(skip) {
+            m(m), n(n), k(k), m_v(m_v), ids_offset(ids_offset), skip(skip) {
             GGML_ASSERT(n_used <= n_mats);
             GGML_ASSERT(m_v == 0 || m_v > m);
         }
@@ -5700,16 +5694,11 @@ struct test_mul_mat_id : public test_case {
         ggml_tensor * out = ggml_mul_mat_id(ctx, as, b, ids);
         ggml_set_name(out, "out");
 
-        if (amax > 65504.0f) {
-            // src1 exceeds F16 range
-            ggml_prec_set_src(out, GGML_PREC_F32, 1);
-        }
-
         return out;
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats, skip, amax);
+        init_mul_mat_id_tensors(ctx, n_mats, skip);
     }
 
     void reinit_perf_iter(ggml_context * ctx) override {
@@ -11337,8 +11326,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 8, 1, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 16, 16));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 8, 16, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 16, 16));
     // as is a view whose experts are strided by more rows than it uses
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 4, 2, false, 8,  1, 64, 1.0f, 64));
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 2, false, 8, 16, 64, 1.0f, 64));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 4, 2, false, 8,  1, 64, 64));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 2, false, 8, 16, 64, 64));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
@@ -11452,7 +11441,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     for (ggml_type ta : {GGML_TYPE_F16, GGML_TYPE_Q4_0}) {
-        test_cases.emplace_back(new test_mul_mat_id_dup(ta, GGML_TYPE_F32, 1025, 10, false, 64, 33, 256, 1.0f, 0, true));
+        test_cases.emplace_back(new test_mul_mat_id_dup(ta, GGML_TYPE_F32, 1025, 10, false, 64, 33, 256, 0, true));
         test_cases.emplace_back(new test_mul_mat_id_dup(ta, GGML_TYPE_F32, 2050, 10, true, 64, 33, 256));
     }
 #endif
@@ -11465,12 +11454,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type_a : {GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS,
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 4, false, 16, 10, 256));
-    }
-
-    // test src1 f16 overflow
-    for (int n : {16, 32, 64}) {
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 4, false, 4096, n, 2048, 1e5f));
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8,   2, false, 512,  n, 256,  1e5f));
     }
 
     for (ggml_type type_a : base_types) {
@@ -11510,14 +11493,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (int n_used : {1, 2, 4}) {
             for (bool b : {false, true}) {
                 for (int n : {1, 4, 33, 129}) {
-                    test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, n_used, b, 512, n, 256, 1.0f, 0, false, true));
+                    test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, n_used, b, 512, n, 256, 0, false, true));
                 }
             }
         }
     }
     // n_used == n_mats, so every expert can be skipped
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 4, false, 512, 64, 256, 1.0f, 0, false, true));
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 1, 1, false, 8, 16, 1, 1.0f, 0, false, true));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 4, false, 512, 64, 256, 0, false, true));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 1, 1, false, 8, 16, 1, 0, false, true));
     test_cases.emplace_back(new test_mul_mat_id_fusion(GGML_TYPE_F16, GGML_TYPE_F32, 16, 16, false, 32, 32, 32, 3, false, true));
 
     for (int bs : {1, 4, 512}) {
@@ -12063,6 +12046,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             for (int nb : { 32, 64, }) {
                 for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, }) {
                     test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, {4, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
+                }
+            }
+        }
+    }
+
+    // KV-head counts that do not divide the device count
+    for (int hs : { 128, 256, 512, }) {
+        for (int nh : { 1, 2, 6, }) {
+            for (int nr2 : { 4, 8, }) {
+                for (int nb : { 75, 1024, }) {
+                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, nh, {nr2, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
                 }
             }
         }
