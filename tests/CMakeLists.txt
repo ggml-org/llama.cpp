@@ -277,7 +277,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         test-llama-archs
         NAME test-llama-archs-qsa-chunk
         LABEL main
-        ARGS -a "qwen4exp|glm5-next|deepseek32|glm-dsa|dots3note|hy_v4"
+        ARGS -a "qwen4exp"
     )
     set_tests_properties(test-llama-archs-qsa-chunk PROPERTIES
         ENVIRONMENT "LLAMA_QSA_CHUNK=24"
@@ -290,28 +290,6 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         ARGS -m "${MODEL_DIR}/qwen4exp-moe.gguf"
     )
     set_tests_properties(test-llama-context-qsa-chunk PROPERTIES
-        FIXTURES_REQUIRED generate-models
-        ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_QSA_CHUNK=24"
-    )
-
-    llama_test(
-        test-llama-context
-        NAME test-llama-context-qsa-chunk-glm5-next
-        LABEL main
-        ARGS -m "${MODEL_DIR}/glm5-next-moe.gguf"
-    )
-    set_tests_properties(test-llama-context-qsa-chunk-glm5-next PROPERTIES
-        FIXTURES_REQUIRED generate-models
-        ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_QSA_CHUNK=24"
-    )
-
-    llama_test(
-        test-llama-context
-        NAME test-llama-context-qsa-chunk-deepseek32
-        LABEL main
-        ARGS -m "${MODEL_DIR}/deepseek32-moe.gguf"
-    )
-    set_tests_properties(test-llama-context-qsa-chunk-deepseek32 PROPERTIES
         FIXTURES_REQUIRED generate-models
         ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_QSA_CHUNK=24"
     )

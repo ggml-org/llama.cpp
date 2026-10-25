@@ -449,15 +449,6 @@ public:
 
     ggml_tensor * self_k_rot_lid = nullptr;
 
-    // a range of query tokens; the layers share the views, as each view of a host input is a separate upload
-    struct chunk {
-        int64_t       t0;
-        int64_t       n;
-        ggml_tensor * kq_mask_mla; // [n_kv, n], the full mask with one chunk
-        ggml_tensor * kq_mask_lid; // [n_kv, n], the full mask with one chunk
-    };
-    std::vector<chunk> chunks;
-
     const llama_hparams hparams;
     const llama_cparams cparams;
 
@@ -672,7 +663,7 @@ public:
     const llama_kv_cache_dsv4_context * mctx;
 };
 
-// k-pool sparse attention inputs (glm5-next, qwen4exp), shared by the layers: pools of kpool cells in sequence order, see llama_memory_hybrid_idx
+// k-pool sparse attention inputs (qwen4exp), shared by the layers: pools of kpool cells in sequence order, see llama_memory_hybrid_idx
 class llm_graph_input_kpool : public llm_graph_input_i {
 public:
     llm_graph_input_kpool(const llama_memory_hybrid_idx_context * mctx, uint32_t kpool) : mctx(mctx), kpool(kpool) {}
@@ -1054,8 +1045,7 @@ using llm_graph_result_ptr = std::unique_ptr<llm_graph_result>;
 // used in build_rs to properly order writes and avoid unnecessary copies
 using llm_graph_get_rows_fn = std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
 
-// sparse attention picks of query chunk ic, see llm_graph_input_attn_k_dsa::chunk and llm_graph_input_kpool::chunk
-using llm_top_k_fn      = std::function<ggml_tensor * (size_t ic)>; // [n_top, n]
+// sparse attention picks of query chunk ic, see llm_graph_input_kpool::chunk
 using llm_kpool_pick_fn = std::function<std::pair<ggml_tensor *, ggml_tensor *> (size_t ic)>; // top_k and score, see build_kpool_sel
 
 struct llm_graph_qkv {
@@ -1383,7 +1373,7 @@ struct llm_graph_context {
             ggml_tensor * kq_b,
             ggml_tensor * sinks, // [n_head_q]
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
-     const llm_top_k_fn & top_k, // [n_top, n] of query chunk ic, see llm_graph_input_attn_k_dsa::chunk
+            ggml_tensor * top_k, // [n_indexer_top_k, n_tokens]
                   float   kq_scale,
                     int   il) const;
 

@@ -730,7 +730,7 @@ uint32_t llama_memory_hybrid_idx_context::get_n_kpool_new() const {
 }
 
 void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
-        ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
+        ggml_tensor * sel_mask, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
         const llama_ubatch * ubatch, ggml_tensor * new_pool_pos) const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
     GGML_ASSERT(ggml_backend_buffer_is_host(pool_cells->buffer));
@@ -759,7 +759,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
     GGML_ASSERT(pool_idxs->ne[0] == (int64_t) kpool && pool_idxs->ne[1] == (int64_t) n_pool);
     GGML_ASSERT(ggml_backend_buffer_is_host(new_pool_idxs->buffer));
     GGML_ASSERT(ggml_nelements(new_pool_idxs) == (int64_t) kpool*n_new_g);
-    // the graph always scatters the fresh pooled keys back into the cache, see build_qsa_idx
+    // the graph always scatters the fresh pooled keys back into the cache, see build_qsa_sel
     GGML_ASSERT(new_pool_rep != nullptr && ggml_backend_buffer_is_host(new_pool_rep->buffer));
     GGML_ASSERT(new_pool_rep->ne[0] == (int64_t) n_new_g);
     if (new_pool_pos != nullptr) {
@@ -807,6 +807,20 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
     // padding and absent cells point at the n_kv sentinel row, one past the live cells
     const int32_t sentinel = (int32_t) n_kv;
+
+    float *  gm    = nullptr;
+    uint32_t n_sel = 0;
+    uint32_t n_top = 0; // Pools per token in the selection.
+    if (sel_mask != nullptr) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(sel_mask->buffer));
+        GGML_ASSERT(sel_mask->type == GGML_TYPE_F32);
+        GGML_ASSERT(sel_mask->ne[3] == (int64_t) n_tokens && sel_mask->ne[1] == 1 && sel_mask->ne[2] == 1);
+        n_sel = (uint32_t) sel_mask->ne[0];
+        // The tail slots, when selected, are the n_sel % kpool != 0 remainder.
+        n_top = n_sel / kpool;
+        GGML_ASSERT(n_sel % kpool == 0 || n_sel % kpool == kpool - 1);
+        gm = (float *) sel_mask->data;
+    }
 
     // pools are laid out per sequence
     std::vector<uint32_t>  seq_pool_start(LLAMA_MAX_SEQ, 0);
@@ -911,6 +925,14 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
             const uint32_t nv = by_order ? std::min(p1 - p0, (uint32_t) ((rank[i] + 1)/kpool)) :
                 (uint32_t) (std::upper_bound(pool_end.begin() + p0, pool_end.begin() + p1, p) - (pool_end.begin() + p0));
             std::fill(row + p0, row + p0 + nv, keep);
+
+            // Finite visible pools occupy the first min(nv, n_top) ranked slots.
+            if (gm != nullptr) {
+                const uint32_t nvc = std::min(nv, n_top);
+                float * grow = gm + (size_t) i*n_sel;
+                std::fill(grow,                        grow + (size_t) nvc*kpool,  0.0f);
+                std::fill(grow + (size_t) nvc*kpool,   grow + (size_t) n_top*kpool, -INFINITY);
+            }
         }
     };
     if (pool_mask->type == GGML_TYPE_F16) {
@@ -931,16 +953,24 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
         for (uint32_t k = 0; k < kpool - 1; ++k) {
             int32_t cell = sentinel;
+            bool    real = false;
             if (k < n_tail && by_order) {
-                cell = (int32_t) sq.cells[rank[i] - k].second;
+                const uint32_t c = sq.cells[rank[i] - k].second;
+                cell = (int32_t) c;
+                real = true;
             } else if (k < n_tail) {
                 const llama_pos pt = p - (llama_pos) k;
                 auto it = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(pt, 0u));
                 if (it != sq.cells.end() && it->first == pt) {
                     cell = (int32_t) it->second;
+                    real = true;
                 }
             }
             tidx[(size_t) i*(kpool - 1) + k] = cell;
+
+            if (gm != nullptr && n_sel % kpool != 0) {
+                gm[(size_t) i*n_sel + (size_t) n_top*kpool + k] = real ? 0.0f : -INFINITY;
+            }
         }
     }
 }

@@ -339,13 +339,12 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention(
     return out;
 }
 
-llm_top_k_fn llama_model_hy_v4::graph::build_indexer_top_k(
+ggml_tensor * llama_model_hy_v4::graph::build_indexer_top_k(
         const llama_model & model,
         llm_graph_input_attn_k_dsa * inp_attn_dsa,
         ggml_tensor * cur,
         ggml_tensor * qr,
         ggml_tensor * inp_pos,
-        std::vector<ggml_tensor *> * top_k,
         int il) const {
     const auto & layer = model.layers[il];
 
@@ -386,50 +385,37 @@ llm_top_k_fn llama_model_hy_v4::graph::build_indexer_top_k(
 
     ik = mctx_lid->get_k(ctx0, il);
 
+    const auto n_stream = ik->ne[3];
+    iq = ggml_view_4d(ctx0, iq, iq->ne[0], iq->ne[1], iq->ne[2]/n_stream, n_stream,
+            iq->nb[1], iq->nb[2], iq->nb[3]/n_stream, 0);
+    iw = ggml_view_4d(ctx0, iw, iw->ne[0], iw->ne[1]/n_stream, iw->ne[2], n_stream,
+            iw->nb[1], iw->nb[2]/n_stream, iw->nb[3]/n_stream, 0);
+
     // fold both reference scale factors into the weights before the big score tensor
     iw = ggml_scale(ctx0, iw, 1.0f / sqrtf(float(n_embd_indexer * n_indexer_head)));
 
-    // the indexer scores one query chunk at a time, so only the scores of one chunk are live
-    top_k->assign(inp_attn_dsa->chunks.size(), nullptr);
-    return [=](size_t ic) {
-        const auto & chunk = inp_attn_dsa->chunks[ic];
+    ggml_tensor * score = nullptr;
+    if (cparams.fused_lid) {
+        score = ggml_lightning_indexer(ctx0, iq, ik, iw, inp_attn_dsa->get_kq_mask_lid());
+        cb(score, "indexer_score", il);
+        res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
+    } else {
+        iq = ggml_permute(ctx0, iq, 0, 2, 1, 3);
+        ik = ggml_permute(ctx0, ik, 0, 2, 1, 3);
 
-        ggml_tensor * cq = ggml_view_3d(ctx0, iq, iq->ne[0], iq->ne[1], chunk.n, iq->nb[1], iq->nb[2], chunk.t0*iq->nb[2]);
-        ggml_tensor * cw = ggml_view_2d(ctx0, iw, iw->ne[0], chunk.n, iw->nb[1], chunk.t0*iw->nb[1]);
-        ggml_tensor * ck = ik;
+        score = ggml_mul_mat(ctx0, ik, iq);
+        score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
+        score = ggml_relu(ctx0, score);
+        score = ggml_mul(ctx0, score, iw);
+        score = ggml_sum_rows(ctx0, score);
+        score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
+        score = ggml_add(ctx0, score, inp_attn_dsa->get_kq_mask_lid());
+        cb(score, "indexer_score", il);
+    }
 
-        const auto n_stream = ck->ne[3];
-        cq = ggml_view_4d(ctx0, cq, cq->ne[0], cq->ne[1], cq->ne[2]/n_stream, n_stream,
-                cq->nb[1], cq->nb[2], cq->nb[3]/n_stream, 0);
-        cw = ggml_view_4d(ctx0, cw, cw->ne[0], cw->ne[1]/n_stream, cw->ne[2], n_stream,
-                cw->nb[1], cw->nb[2]/n_stream, cw->nb[3]/n_stream, 0);
+    const uint32_t n_top_k = score->ne[0] < (int64_t) hparams.indexer_top_k ? score->ne[0] : hparams.indexer_top_k;
 
-        ggml_tensor * score = nullptr;
-        if (cparams.fused_lid) {
-            score = ggml_lightning_indexer(ctx0, cq, ck, cw, chunk.kq_mask_lid);
-            cb(score, "indexer_score", il);
-            res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
-        } else {
-            cq = ggml_permute(ctx0, cq, 0, 2, 1, 3);
-            ck = ggml_permute(ctx0, ck, 0, 2, 1, 3);
-
-            score = ggml_mul_mat(ctx0, ck, cq);
-            score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
-            score = ggml_relu(ctx0, score);
-            score = ggml_mul(ctx0, score, cw);
-            score = ggml_sum_rows(ctx0, score);
-            score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
-            score = ggml_add(ctx0, score, chunk.kq_mask_lid);
-            cb(score, "indexer_score", il);
-        }
-
-        const uint32_t n_top_k = score->ne[0] < (int64_t) hparams.indexer_top_k ? score->ne[0] : hparams.indexer_top_k;
-
-        (*top_k)[ic] = ggml_cont(ctx0, ggml_top_k(ctx0, score, n_top_k));
-        cb((*top_k)[ic], "top_k", il);
-
-        return (*top_k)[ic];
-    };
+    return ggml_cont(ctx0, ggml_top_k(ctx0, score, n_top_k));
 }
 
 ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
@@ -437,7 +423,7 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
         llm_graph_input_attn_k_dsa * inp_attn_dsa,
         ggml_tensor * cur,
         ggml_tensor * inp_pos,
-        std::vector<ggml_tensor *> * last_top_k,
+        ggml_tensor ** last_top_k,
         float kq_scale,
         int il) const {
     const auto & layer = model.layers[il];
@@ -450,13 +436,11 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
     ggml_tensor * qr = ggml_mul_mat(ctx0, layer.wq_a, cur);
     qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
 
-    llm_top_k_fn top_k;
     if (hparams.is_indexer_full(il)) {
-        top_k = build_indexer_top_k(model, inp_attn_dsa, cur, qr, inp_pos, last_top_k, il);
-    } else {
-        GGML_ASSERT(!last_top_k->empty());
-        top_k = [last_top_k](size_t ic) { return (*last_top_k)[ic]; };
+        *last_top_k = build_indexer_top_k(model, inp_attn_dsa, cur, qr, inp_pos, il);
+        cb(*last_top_k, "top_k", il);
     }
+    GGML_ASSERT(*last_top_k != nullptr);
 
     ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, qr);
 
@@ -496,7 +480,7 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
 
     ggml_tensor * attn = build_attn(inp_attn_dsa,
             nullptr, nullptr, nullptr,
-            Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, layer.wv_b, top_k, kq_scale, il);
+            Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, layer.wv_b, *last_top_k, kq_scale, il);
     cb(attn, "attn_kqv", il);
 
     ggml_tensor * gate = ggml_mul_mat(ctx0, layer.wqkv_gate, cur);
@@ -526,8 +510,8 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
     llm_graph_input_attn_k_dsa * inp_attn_dsa = is_dsa ? build_attn_inp_k_dsa() : nullptr;
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // top-k of the last "full" indexer layer per query chunk, reused by the following "shared" layers
-    std::vector<ggml_tensor *> last_top_k;
+    // top-k of the last "full" indexer layer, reused by the following "shared" layers
+    ggml_tensor * last_top_k = nullptr;
 
     // expand the single embedding into hc parallel residual streams
     ggml_tensor * inpL = ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens);

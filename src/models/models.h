@@ -2296,15 +2296,14 @@ struct llama_model_hy_v4 : public llama_model_base {
                 float kq_scale,
                 int il) const;
 
-        // DSA lightning indexer: top-k KV positions for this layer, one query chunk at a time, written to top_k.
-        // Only "full" layers compute it, "shared" layers reuse the last preceding full layer result through last_top_k.
-        llm_top_k_fn build_indexer_top_k(
+        // DSA lightning indexer: top-k KV positions for this layer. Only "full" layers compute
+        // it, "shared" layers reuse the last preceding full layer result through last_top_k.
+        ggml_tensor * build_indexer_top_k(
                 const llama_model & model,
                 llm_graph_input_attn_k_dsa * inp_attn_dsa,
                 ggml_tensor * cur,
                 ggml_tensor * qr,
                 ggml_tensor * inp_pos,
-                std::vector<ggml_tensor *> * top_k,
                 int il) const;
 
         ggml_tensor * build_attention_dsa(
@@ -2312,7 +2311,7 @@ struct llama_model_hy_v4 : public llama_model_base {
                 llm_graph_input_attn_k_dsa * inp_attn_dsa,
                 ggml_tensor * cur,
                 ggml_tensor * inp_pos,
-                std::vector<ggml_tensor *> * last_top_k,
+                ggml_tensor ** last_top_k,
                 float kq_scale,
                 int il) const;
     };
@@ -2959,6 +2958,9 @@ struct llama_model_glm5_next : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    // k-pool indexer inputs on top of the generic hybrid input
+    class llm_graph_input_kpool;
+
     struct graph : public llm_build_delta_net_base {
         graph(const llama_model & model, const llm_graph_params & params);
 
@@ -2998,18 +3000,19 @@ struct llama_model_glm5_next : public llama_model_base {
 
         const llama_model & model;
 
+        llm_graph_input_kpool * build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb);
+
         ggml_tensor * build_kda_layer(ggml_tensor * cur, const llama_layer & layer,
                                       llm_graph_input_rs * inp_rs,
                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
                                       int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
 
-        // the top pools and the pool scores of all tokens, see build_kpool_sel
-        std::pair<ggml_tensor *, ggml_tensor *> build_kpool_pick(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
+        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, ggml_tensor * kq_mask, const llama_layer & layer,
                                          const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
 
         ggml_tensor * build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                       const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_attn_k * inp_attn,
-                                      llm_graph_input_kpool * inp_kpool, std::pair<ggml_tensor *, ggml_tensor *> * prev_pick, int il);
+                                      llm_graph_input_kpool * inp_kpool, ggml_tensor ** prev_sel, int il);
 
     };
 
