@@ -2,6 +2,7 @@
 #include "common.h"
 #include "imatrix-loader.h"
 
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -154,10 +155,10 @@ static void usage(const char * executable) {
     printf("                                      max amount of tensor rows kept in memory while quantizing one tensor (default: 8192)\n");
     printf("                                      lower it to quantize models with very large tensors on a machine with little RAM\n\n");
     printf("  --target-bpw n\n");
-    printf("                                      target a bits per weight (bpw); must be a positive number between 0.0 and 16.0\n");
+    printf("                                      target a bits per weight (bpw); must be a number between 0.0 and 16.0, 0 means the smallest possible model\n");
     printf("                                      advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n\n");
     printf("  --target-size n\n");
-    printf("                                      target a file size; must be a positive number\n");
+    printf("                                      target a file size; must be 0 or more, 0 means the smallest possible model\n");
     printf("                                      advanced option to automatically select quantization types to achieve a total file size\n");
     printf("                                      allowed units: b, k|kib, m|mib, g|gib, t|tib; defaults to b (bytes) if none is provided\n\n");
     printf("  --state-file [filename]\n");
@@ -460,13 +461,13 @@ static bool parse_target_bpw(const char * data, float & target_bpw) {
 
     try {
         target_bpw = std::stof(data);
-        if (target_bpw < 0.0f || target_bpw > 16.0f) {
-            printf("\n%s: target bits per weight (bpw) must be a positive number between 0.0 and 16.0\n\n", __func__);
+        if (!std::isfinite(target_bpw) || target_bpw < 0.0f || target_bpw > 16.0f) {
+            printf("\n%s: target bits per weight (bpw) must be a number between 0.0 and 16.0\n\n", __func__);
             return false;
         }
     }
     catch (const std::exception & e) {
-        printf("\n%s: '%s' is not valid. Target bits per weight (bpw) must be a positive number between 0.0 and 16.0\n\n", __func__, data);
+        printf("\n%s: '%s' is not valid. Target bits per weight (bpw) must be a number between 0.0 and 16.0\n\n", __func__, data);
         return false;
     }
 
@@ -481,7 +482,7 @@ static bool parse_target_size(const char * data, int64_t & target_size) {
 
     char * end = nullptr;
     const double val = std::strtod(data, &end);
-    if (end == data || val < 0) {
+    if (end == data || !std::isfinite(val) || val < 0) {
         printf("\n%s: invalid target file size '%s'\n\n", __func__, data);
         return false;
     }
@@ -502,6 +503,11 @@ static bool parse_target_size(const char * data, int64_t & target_size) {
         mul = 1024LL * 1024 * 1024 * 1024;
     } else {
         printf("\n%s: invalid unit '%s' in '%s'. Allowed: b, k or kib, m or mib, g or gib, t or tib\n\n", __func__, suffix.c_str(), data);
+        return false;
+    }
+
+    if (val * mul >= (double)INT64_MAX) {
+        printf("\n%s: invalid target file size '%s'\n\n", __func__, data);
         return false;
     }
 
