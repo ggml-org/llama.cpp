@@ -6,6 +6,7 @@
 #include "json.h"
 
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <cctype>
 #include <cfloat>
@@ -1439,7 +1440,10 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const common_json & j, bool mark_input) {
+// the runtime walks values with recursion, a deeper input overflows the stack
+static constexpr int FROM_JSON_MAX_DEPTH = 128;
+
+static value from_json(const common_json & j, bool mark_input, int depth = 0) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1454,16 +1458,18 @@ static value from_json(const common_json & j, bool mark_input) {
             str->mark_input();
         }
         return str;
+    } else if ((j.is_array() || j.is_object()) && depth >= FROM_JSON_MAX_DEPTH) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(FROM_JSON_MAX_DEPTH) + " levels deep");
     } else if (j.is_array()) {
         auto arr = mk_val<value_array>();
         for (const auto & item : j) {
-            arr->push_back(from_json(item, mark_input));
+            arr->push_back(from_json(item, mark_input, depth + 1));
         }
         return arr;
     } else if (j.is_object()) {
         auto obj = mk_val<value_object>();
         for (auto it = j.begin(); it != j.end(); ++it) {
-            obj->insert(it.key(), from_json(it.value(), mark_input));
+            obj->insert(it.key(), from_json(it.value(), mark_input, depth + 1));
         }
         return obj;
     } else {
