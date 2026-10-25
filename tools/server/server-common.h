@@ -43,7 +43,8 @@ using raw_buffer = std::vector<uint8_t>;
 bool server_uses_vision_arena(const common_params & params);
 const char * server_vision_arena_config_error(const common_params & params);
 struct server_task;
-const char * server_vision_arena_request_error(const server_task & task, bool embedded_mtp = false);
+const char * server_vision_arena_request_error(const server_task & task, bool streamed_mtp = false,
+    const common_params_speculative * configured = nullptr);
 
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {

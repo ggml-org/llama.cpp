@@ -284,6 +284,7 @@ public:
 
     void set_input_k_shift(ggml_tensor * dst) const;
 
+    bool mask_is_causal(bool causal_attn) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 

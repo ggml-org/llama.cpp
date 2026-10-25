@@ -315,6 +315,14 @@ int32_t mtmd_batch_encode_arena(mtmd_context * ctx,mtmd_batch * batch,llama_cont
         returned.armed = true;
         mtmd_vision_phase_requirements plan;
         if (!mtmd_batch_measure_vision_phase(batch,parent,plan)) return -1;
+        llama_context_memory_create_result admission;
+        if (!owner->quote_suspended_loans({plan.weight_bytes,plan.device_compute_bytes},admission)) {
+            if (admission.status==llama_context_memory_create_status::insufficient_budget) {
+                LOG_ERR("vision shared arena quota insufficient: requested=%zu required=%zu additional=%zu weights=%zu compute=%zu\n",
+                    admission.available_bytes,admission.required_bytes,admission.additional_bytes,plan.weight_bytes,plan.device_compute_bytes);
+            }
+            return -1;
+        }
         const auto measured_us = ggml_time_us();
         if (!llama_context_suspend_kv_device(target)) return -1;
         returned.suspended = true;

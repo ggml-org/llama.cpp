@@ -4,6 +4,7 @@ import argparse
 import copy
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import signal
@@ -16,6 +17,25 @@ import test_adaptive_gemma as harness
 
 
 class Commands(unittest.TestCase):
+    def test_vision_command_uses_declared_projector_and_image_budget(self):
+        args=argparse.Namespace(server=Path("server"),model=Path("model"),assistant=Path("assistant"),
+            mmproj=Path("projector"),image_min_tokens=70,image_max_tokens=140,context=4096,
+            batch_size=256,ubatch_size=256,arena_mib=2048)
+        for streamed in (False,True):
+            command=harness.server_command(args,streamed,3,9999)
+            self.assertNotIn("--no-mmproj",command)
+            self.assertEqual(command[command.index("--mmproj")+1],str(args.mmproj.resolve()))
+            self.assertEqual(command[command.index("--image-min-tokens")+1],"70")
+            self.assertEqual(command[command.index("--image-max-tokens")+1],"140")
+            self.assertEqual("--spec-draft-type-k" in command,not streamed)
+
+    def test_cli_selects_vision_without_changing_text_default(self):
+        argv=["qualify","--server","server","--model","model","--assistant","assistant","--mmproj","projector",
+            "--output","output","--depths","0,3","--arena-mib","2048","--image-min-tokens","70","--image-max-tokens","70"]
+        with patch.object(harness.sys,"argv",argv),patch.object(harness,"run_vision") as run:
+            harness.main()
+        self.assertEqual(run.call_args.args[0].mmproj,Path("projector"))
+
     def test_all_cache_pairs_match_native_controls_and_streamed_inheritance(self):
         formats=("f32","f16","bf16","q8_0","q5_0","q5_1","q4_0","q4_1")
         for key in formats:
@@ -96,6 +116,43 @@ class Commands(unittest.TestCase):
 
 
 class Results(unittest.TestCase):
+    def test_vision_rejection_cases_preserve_valid_request_and_cover_media_bounds(self):
+        args=argparse.Namespace(predict=2)
+        valid=dict(harness.vision_cases(args,"prefix",("image-a","image-b","image-c")))["image_fresh"]
+        original=copy.deepcopy(valid)
+        cases=harness.vision_rejection_cases(valid)
+        self.assertEqual(valid,original)
+        self.assertEqual(len(cases),7)
+        self.assertEqual(len({name for name,_,_,_ in cases}),7)
+        self.assertIn("oversized-png-header",{name for name,_,_,_ in cases})
+        self.assertIn("overflow-pixel-product",{name for name,_,_,_ in cases})
+        self.assertIn("unsupported-audio",{name for name,_,_,_ in cases})
+        self.assertIn("file-url",{name for name,_,_,_ in cases})
+
+    def test_expected_input_rejection_never_accepts_oom_or_unrelated_failure(self):
+        expected="Failed to load image or audio file"
+        harness.check_vision_rejection(500,{"error":{"message":expected}},expected,"bad-image")
+        for status,message in ((200,expected),(500,"CUDA error: out of memory"),(400,"unrelated failure"),
+                (500,expected+": illegal memory access")):
+            with self.assertRaises(RuntimeError):
+                harness.check_vision_rejection(status,{"error":{"message":message}},expected,"bad-image")
+
+    def test_vision_prompt_accounting_uses_evaluated_rows_not_placeholder_length(self):
+        row={"timings":{"cache_n":100,"prompt_n":5},"tokens_evaluated":105}
+        self.assertEqual(harness.vision_prompt_counts(row,True,"image"),(100,5,105))
+        for change in ({"tokens_evaluated":104},{"tokens_evaluated":True},{"timings":{"cache_n":0,"prompt_n":105}}):
+            bad=copy.deepcopy(row);bad.update(change)
+            with self.assertRaises(RuntimeError):harness.vision_prompt_counts(bad,True,"image")
+
+    def test_vision_cases_keep_changed_and_adjacent_images_distinct(self):
+        args=argparse.Namespace(predict=2)
+        cases=harness.vision_cases(args,"prefix",("image-a","image-b","image-c"))
+        indexed={name:body for name,body in cases}
+        self.assertTrue(indexed["same_image_cached"]["cache_prompt"])
+        self.assertNotEqual(indexed["changed_image"]["prompt"],indexed["same_image_cached"]["prompt"])
+        self.assertIn("<__media__><__media__>",indexed["adjacent_images"]["prompt"]["prompt_string"])
+        self.assertEqual(indexed["adjacent_images"]["prompt"]["multimodal_data"],["image-a","image-b"])
+
     def execute(self,depth,results,require_cache_hit=False):
         with tempfile.TemporaryDirectory() as temporary:
             directory=Path(temporary)
@@ -162,6 +219,166 @@ class Results(unittest.TestCase):
         for generated,accepted in ((-1,0),(1,-1),(1,2),(True,0),(2,0.5)):
             with self.assertRaisesRegex(RuntimeError,"invalid Gemma draft/acceptance"):
                 harness.draft_counts({"timings":{"draft_n":generated,"draft_n_accepted":accepted}},3,"fresh")
+
+
+class VisionLifecycles(unittest.TestCase):
+    def test_long_vision_prefix_uses_the_full_pinned_corpus(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=Path(temporary);corpus=directory/'corpus.txt';text='word '*60000;corpus.write_text(text)
+            args=argparse.Namespace(output=directory,corpus=corpus,depths=[0],prefill=98304,predict=1,lifecycle=False)
+            def request(url,payload=None,**kwargs):
+                self.assertTrue(url.endswith('/tokenize'))
+                self.assertEqual(payload['content'],text)
+                raise RuntimeError('full corpus observed')
+            with patch.object(harness,'server',return_value=contextlib.nullcontext('http://unused')), \
+                    patch.object(harness,'request_json',side_effect=request),self.assertRaisesRegex(RuntimeError,'full corpus observed'):
+                harness.run_vision(args)
+
+    def test_aspect_profile_includes_portrait_and_narrow_images(self):
+        args=argparse.Namespace(predict=2,vision_aspects=True)
+        cases=dict(harness.vision_cases(args,'prefix',('first','changed','large')))
+        self.assertIn('portrait_image',cases)
+        self.assertIn('narrow_image',cases)
+        self.assertNotEqual(cases['portrait_image']['prompt']['multimodal_data'],cases['narrow_image']['prompt']['multimodal_data'])
+
+    def test_boundary_profile_covers_image_only_and_image_first(self):
+        args=argparse.Namespace(predict=2,vision_boundaries=True)
+        cases=dict(harness.vision_cases(args,'prefix',('first','changed','large')))
+        self.assertEqual(cases['image_only']['prompt']['prompt_string'],'<__media__>')
+        self.assertTrue(cases['image_first']['prompt']['prompt_string'].startswith('<__media__>'))
+
+    def test_context_overflow_probe_preserves_media_and_valid_request(self):
+        args=argparse.Namespace(predict=2,context=4096)
+        valid=dict(harness.vision_cases(args,'prefix',('first','changed','large')))['image_fresh']
+        before=copy.deepcopy(valid)
+        probe=harness.vision_context_overflow(args,valid)
+        self.assertEqual(valid,before)
+        self.assertEqual(probe['prompt']['multimodal_data'],valid['prompt']['multimodal_data'])
+        self.assertGreater(probe['prompt']['prompt_string'].count(' green'),args.context)
+
+    def test_cli_selects_boundary_profile(self):
+        argv=['qualify','--server','server','--model','model','--assistant','assistant','--mmproj','projector',
+            '--output','output','--vision-boundaries']
+        with patch.object(harness.sys,'argv',argv),patch.object(harness,'run_vision') as run:harness.main()
+        self.assertTrue(run.call_args.args[0].vision_boundaries)
+
+    def test_later_image_retains_generated_text_and_prior_media(self):
+        args=argparse.Namespace(predict=1024)
+        initial=dict(harness.vision_cases(args,'prefix',('first','changed','large')))['image_fresh']
+        before=copy.deepcopy(initial)
+        later=harness.vision_after_decode(initial,{'content':' generated continuation'},'changed')
+        self.assertEqual(initial,before)
+        self.assertTrue(later['cache_prompt'])
+        self.assertEqual(later['prompt']['multimodal_data'],['first','changed'])
+        self.assertIn(' generated continuation',later['prompt']['prompt_string'])
+        self.assertEqual(later['prompt']['prompt_string'].count('<__media__>'),2)
+        with self.assertRaises(RuntimeError):harness.vision_after_decode(initial,{'content':''},'changed')
+
+    def test_cli_selects_later_image_after_decode(self):
+        argv=['qualify','--server','server','--model','model','--assistant','assistant','--mmproj','projector',
+            '--output','output','--vision-followup-after-decode','--predict','1024']
+        with patch.object(harness.sys,'argv',argv),patch.object(harness,'run_vision') as run:
+            harness.main()
+        self.assertTrue(run.call_args.args[0].vision_followup_after_decode)
+
+    def execute(self,lifecycle=False,damage=None,streamed_only=False,later_image=False,boundaries=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=Path(temporary)
+            corpus=directory/"corpus.txt";corpus.write_text("A test corpus.")
+            args=argparse.Namespace(output=directory,corpus=corpus,depths=[3],prefill=16,predict=2,lifecycle=lifecycle,context=4096,
+                streamed_only=streamed_only,vision_followup_after_decode=later_image,vision_boundaries=boundaries)
+            calls=0
+            current={}
+            @contextlib.contextmanager
+            def server(args,streamed,depth,phase=None):
+                current.update(streamed=streamed,depth=depth,phase=phase)
+                harness.slot_directory(args,streamed,depth).mkdir(parents=True,exist_ok=True)
+                yield "http://127.0.0.1:12345"
+            def rejection(port,endpoint,body=None):
+                if endpoint=='/completion':
+                    return 400,{'error':{'message':'request exceeds the available context size','type':'exceed_context_size_error'}}
+                if endpoint=='/slots/0?action=restore':
+                    if damage=='state-copy-damage' and current['streamed']:
+                        (harness.slot_directory(args,True,3)/'vision-lifecycle.bin').write_bytes(b'changed')
+                    return 400,{'error':{'message':'Unable to restore slot: truncated file','type':'invalid_request_error'}}
+                if endpoint=='/health':return 200,{'status':'ok'}
+                raise AssertionError(endpoint)
+            def request(url,body=None,**kwargs):
+                if url.endswith("/tokenize"):return {"tokens":list(range(256))}
+                if url.endswith("/detokenize"):return {"content":"The prefix"}
+                path=harness.slot_directory(args,current["streamed"],current["depth"])/"vision-lifecycle.bin"
+                if "action=save" in url:
+                    path.write_bytes(b"state")
+                    return {"n_saved":105,"n_written":5}
+                if "action=restore" in url:
+                    return {"n_restored":105,"n_read":4 if damage=="restore" else 5}
+                return {"n_erased":105}
+            def stream(url,body,**kwargs):
+                nonlocal calls
+                calls+=1
+                row={"tokens":[1,2],"content":" generated text","tokens_evaluated":105,
+                     "timings":{"predicted_n":2,"draft_n":2,"draft_n_accepted":1,
+                                "cache_n":100 if body["cache_prompt"] else 0,
+                                "prompt_n":5 if body["cache_prompt"] else 105}}
+                if damage and current["streamed"]:
+                    if damage=="tokens":row["tokens"]=[2,1]
+                    if damage=="draft":row["timings"]["draft_n"]+=1
+                    if damage=="cache" and body["cache_prompt"]:row["timings"].update(cache_n=99,prompt_n=6)
+                    if damage=="extent":row["tokens_evaluated"]=106
+                    if damage=="restart-fresh" and current["phase"]=="restart" and not body["cache_prompt"]:row["tokens"]=[2,1]
+                return row
+            with patch.object(harness,"server",server),patch.object(harness,"request_json",side_effect=request), \
+                    patch('test_adaptive_vision.request',side_effect=rejection), \
+                    patch.object(harness,"stream_completion",side_effect=stream),patch.object(harness,"cancel_after_first_output"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                rows=harness.run_vision(args)
+            actions=json.loads((directory/"state-actions.json").read_text()) if lifecycle else []
+            return rows,actions,calls
+
+    def test_all_image_scenarios_compare_the_matching_native_case(self):
+        rows,actions,calls=self.execute()
+        self.assertEqual((len(rows),calls),(18,18))
+        self.assertEqual(actions,[])
+        self.assertIn("adjacent_images",{row["case"] for row in rows})
+
+    def test_later_image_runs_after_generation_in_both_native_and_arena(self):
+        rows,actions,calls=self.execute(later_image=True)
+        self.assertEqual((len(rows),calls),(20,20))
+        self.assertEqual(sum(row['case']=='image-after-decode' for row in rows),2)
+        self.assertEqual(actions,[])
+
+    def test_boundary_lifecycle_keeps_good_state_and_recovers_from_both_rejections(self):
+        rows,actions,calls=self.execute(lifecycle=True,boundaries=True)
+        self.assertEqual((len(rows),len(actions),calls),(40,8,40))
+        self.assertEqual(sum(row['case']=='invalid-state-recovery' for row in rows),2)
+        self.assertEqual(sum(row['case']=='context-limit-recovery' for row in rows),2)
+        with self.assertRaisesRegex(RuntimeError,'valid state file changed'):
+            self.execute(lifecycle=True,boundaries=True,damage='state-copy-damage')
+
+    def test_lifecycle_requires_complete_files_and_process_restart(self):
+        rows,actions,calls=self.execute(True)
+        self.assertEqual((len(rows),len(actions),calls),(32,8,32))
+        self.assertEqual(sum(action["phase"]=="restart" for action in actions),2)
+        with self.assertRaisesRegex(RuntimeError,"state restore"):
+            self.execute(True,"restore")
+
+    def test_tokens_counters_and_expanded_image_extent_cannot_be_relaxed(self):
+        for damage in ("tokens","draft","cache","extent"):
+            with self.subTest(damage=damage),self.assertRaises(RuntimeError):
+                self.execute(damage=damage)
+
+    def test_streamed_only_lifecycle_still_requires_uncached_restart_self_reference(self):
+        rows,actions,calls=self.execute(True,streamed_only=True)
+        self.assertEqual((len(rows),len(actions),calls),(16,4,16))
+        with self.assertRaisesRegex(RuntimeError,"self-reference"):
+            self.execute(True,"restart-fresh",True)
+
+    def test_whole_image_microbatch_and_budget_are_required(self):
+        base=["qualify","--server","server","--model","model","--assistant","assistant","--mmproj","projector",
+            "--output","output","--image-max-tokens","280"]
+        for extra in ([],["--ubatch-size","512","--batch-size","256"],["--image-min-tokens","71"]):
+            with patch.object(harness.sys,"argv",base+extra),contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
+                harness.main()
 
 
 class Lifecycles(unittest.TestCase):

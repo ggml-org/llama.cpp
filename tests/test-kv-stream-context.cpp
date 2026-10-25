@@ -53,6 +53,7 @@ static bool dflash_short_control = false;
 static bool test_cache_explicit = false;
 static ggml_type test_cache_k = GGML_TYPE_Q8_0, test_cache_v = GGML_TYPE_Q4_0;
 static size_t gemma_test_arena_size = size_t(1024)*1048576;
+static bool gemma_test_arena_explicit = false;
 
 // Keep instrumentation budgets explicit without changing ordinary model qualification.
 static size_t gemma_test_arena_bytes(const char * text) {
@@ -66,6 +67,16 @@ static size_t gemma_test_arena_bytes(const char * text) {
     }
     if (!mib) throw std::invalid_argument("Gemma test arena must be 1..4095 MiB");
     return mib*1048576;
+}
+
+static size_t gemma_image_test_arena_bytes(bool explicit_size, size_t bytes) {
+    return explicit_size ? bytes : size_t(2048)*1048576;
+}
+
+static void gemma_image_test_outputs(llama_context_params & params,bool verify) {
+    const auto limits=common_speculative_get_output_limits(int32_t(params.n_batch),1,verify ? 3 : 0);
+    params.n_outputs_max=uint32_t(limits.total);
+    params.n_outputs_max_per_seq=uint32_t(limits.per_seq);
 }
 
 // Qualify ordinary feature injection without a stream pool or a shared phase arena.
@@ -691,6 +702,44 @@ static void gemma_logits_file(FILE * file,bool writing,const std::array<uint64_t
     values=std::move(next);
 }
 
+static std::vector<float> gemma_image_reference(FILE * file,size_t width) {
+    if (!file || !width || width>SIZE_MAX/sizeof(float) || std::fseek(file,0,SEEK_END))
+        throw std::runtime_error("invalid Gemma image reference");
+    const long bytes=std::ftell(file);
+    const size_t row_bytes=width*sizeof(float);
+    if (bytes<=0 || bytes>32L*1048576 || size_t(bytes)%row_bytes || size_t(bytes)/row_bytes>1120 || std::fseek(file,0,SEEK_SET))
+        throw std::runtime_error("invalid Gemma image reference extent");
+    std::vector<float> values(size_t(bytes)/sizeof(float));
+    if (std::fread(values.data(),sizeof(float),values.size(),file)!=values.size() || std::fgetc(file)!=EOF || std::ferror(file) ||
+            !std::all_of(values.begin(),values.end(),[](float value){return std::isfinite(value);}))
+        throw std::runtime_error("invalid Gemma image reference values");
+    return values;
+}
+
+static void gemma_assistant_oracle(const std::array<FILE *,3> & files,bool writing,uint64_t capacity,uint64_t prefix,
+        const std::vector<float> & image,size_t width,size_t vocab,std::vector<std::vector<float>> & logits,
+        std::vector<std::vector<float>> & hidden) {
+    if (!width || !vocab || image.empty() || image.size()%width || image.size()/width>1120)
+        throw std::runtime_error("invalid image-conditioned assistant oracle profile");
+    for (auto * file : files) if (!file || std::fseek(file,0,SEEK_SET))
+        throw std::runtime_error("invalid image-conditioned assistant oracle file");
+    const auto profile=[&](size_t rows,size_t columns) {
+        return std::array<uint64_t,8>{0x474d344c4f474954ull,1,capacity,prefix,rows,columns,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0};
+    };
+    std::vector<std::vector<float>> input{image};
+    gemma_logits_file(files[0],writing,profile(1,image.size()),input);
+    if (!writing && !kv_stream_bytes_equal(image.data(),image.size()*sizeof(float),input[0].data(),input[0].size()*sizeof(float)))
+        throw std::runtime_error("assistant oracle image bytes differ");
+    auto next_logits=writing ? logits : std::vector<std::vector<float>>{};
+    auto next_hidden=writing ? hidden : std::vector<std::vector<float>>{};
+    gemma_logits_file(files[1],writing,profile(19,vocab),next_logits);
+    gemma_logits_file(files[2],writing,profile(18,width),next_hidden);
+    for (const auto * rows : {&next_logits,&next_hidden}) for (const auto & row : *rows)
+        if (!std::all_of(row.begin(),row.end(),[](float value){return std::isfinite(value);}))
+            throw std::runtime_error("assistant oracle contains nonfinite values");
+    if (!writing) { logits=std::move(next_logits);hidden=std::move(next_hidden); }
+}
+
 // Qualify the model graph, not just individual cache owners or attention operators.
 static void test_gemma_target_context(testing & t, llama_model * model,uint32_t capacity=8192,
         uint32_t prompt=1333,uint32_t outputs=8,bool native_control=true,bool expect_streaming=false,
@@ -768,6 +817,140 @@ static void test_gemma_target_context(testing & t, llama_model * model,uint32_t 
     if (export_native) {
         std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::fopen(export_native,"wbx"));
         gemma_logits_file(file.get(),true,profile,reference);
+    }
+}
+
+static void test_gemma_vision_suspension(testing & t, llama_model * model) {
+    if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4)) return;
+    const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(model));
+    std::vector<std::vector<float>> expected;
+    for (bool streaming : {false,true}) {
+        auto cp=llama_context_default_params();
+        cp.n_ctx=4096; cp.n_batch=cp.n_ubatch=256; cp.n_seq_max=1;
+        cp.n_threads=cp.n_threads_batch=8; cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
+        cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        if (streaming) cp.shared_device_memory_bytes=size_t(2048)*1048576;
+        context_ptr ctx(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true(bool(ctx))) return;
+        common_batch batch(ctx.get());
+        for (int32_t first=0;first<1333;) {
+            const int32_t rows=std::min(256,1333-first);
+            batch.clear();
+            for (int32_t row=0;row<rows;++row) batch.add(llama_token(10+(first+row)%64),first+row,0,row==rows-1);
+            if (!t.assert_equal(0,llama_process(ctx.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+            first+=rows;
+        }
+        const float * logits=llama_get_logits_ith(ctx.get(),-1);
+        if (!t.assert_true(logits && std::all_of(logits,logits+vocab,[](float value){return std::isfinite(value);}))) return;
+        if (!streaming) expected.emplace_back(logits,logits+vocab);
+        else {
+            if (!t.assert_true("native control is exact before suspension",std::memcmp(expected[0].data(),logits,vocab*sizeof(float))==0)) return;
+            auto * owner=llama_context_compute_memory(ctx.get());
+            if (!t.assert_true(owner && owner->has_bounded_cache() && owner->can_suspend_for_vision())) return;
+            auto snapshot=[&] {
+                std::vector<uint8_t> bytes(llama_state_get_size(ctx.get()));
+                const size_t written=llama_state_get_data(ctx.get(),bytes.data(),bytes.size());
+                bytes.resize(written);return bytes;
+            };
+            const auto saved=snapshot();
+            if (!t.assert_true(!saved.empty())) return;
+            auto * parent=owner->shared_parent();
+            if (!t.assert_true("Gemma vision suspension does not require recurrent state",llama_context_suspend_kv_device(ctx.get()))) return;
+            llama_context_memory_diagnostics usage;
+            if (!t.assert_true(owner->diagnostics(usage))) return;
+            t.assert_true(usage.kv_device_suspended && usage.kv_pool_bytes==0 && usage.workspace_bytes==0);
+            t.assert_equal(size_t(425984000),usage.persistent_cache_bytes);
+            t.assert_equal(size_t(0),usage.borrowed_phase_bytes);
+            std::vector<ggml_backend_memory_lease_t> grants;
+            struct return_grants {
+                std::vector<ggml_backend_memory_lease_t> & values;
+                ~return_grants() { for (auto * lease : values) ggml_backend_memory_lease_free(lease); }
+            } returned{grants};
+            const auto generation=owner->shared_arena_generation();
+            t.assert_true(!owner->lend_suspended({0},grants));
+            t.assert_equal(generation,owner->shared_arena_generation());
+            if (!t.assert_true("vision borrows around persistent SWA",owner->lend_suspended({65536,131072},grants))) return;
+            std::vector<ggml_backend_memory_lease_t> duplicate;
+            t.assert_true(!owner->lend_suspended({4096},duplicate) && duplicate.empty() && owner->valid());
+            t.assert_true(!owner->lend_suspended({4096},grants) && grants.size()==2);
+            for (auto * lease : grants) ggml_backend_buffer_clear(ggml_backend_memory_lease_buffer(lease),0x6d);
+            t.assert_true("vision writes preserve all serialized target state",snapshot()==saved);
+            t.assert_true(!llama_context_resume_kv_device(ctx.get(),llama_memory_text_phase::prefill));
+            for (auto * lease : grants) ggml_backend_memory_lease_free(lease);
+            grants.clear();
+            const size_t available=usage.parent_bytes-usage.persistent_cache_bytes;
+            const auto before_reject=owner->shared_arena_generation();
+            t.assert_true(!owner->lend_suspended({available+1},grants) && grants.empty() && owner->valid());
+            t.assert_equal(before_reject,owner->shared_arena_generation());
+            if (!t.assert_true(owner->lend_suspended({available},grants))) return;
+            llama_context_memory_diagnostics full_vision;
+            if (!t.assert_true("vision diagnostics count persistent bytes once",owner->diagnostics(full_vision) &&
+                    full_vision.borrowed_phase_bytes==available && full_vision.unused_bytes==0 &&
+                    full_vision.persistent_cache_bytes==usage.persistent_cache_bytes && full_vision.kv_device_suspended)) return;
+            ggml_backend_memory_region region;
+            t.assert_true(ggml_backend_memory_lease_get_region(grants.front(),&region) && region.offset==0 && region.size==available);
+            ggml_backend_buffer_clear(ggml_backend_memory_lease_buffer(grants.front()),0x3a);
+            t.assert_true("entire reusable prefix is disjoint from preserved state",snapshot()==saved);
+            for (auto * lease : grants) ggml_backend_memory_lease_free(lease);
+            grants.clear();
+            if (!t.assert_true("text resumes around persistent SWA",llama_context_resume_kv_device(ctx.get(),llama_memory_text_phase::prefill))) return;
+            t.assert_true(owner->shared_parent()==parent && snapshot()==saved);
+        }
+        for (int32_t step=0;step<8;++step) {
+            batch.clear();batch.add(llama_token(80+step),1333+step,0,true);
+            if (!t.assert_equal(0,llama_process(ctx.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+            logits=llama_get_logits_ith(ctx.get(),-1);
+            if (!t.assert_true(logits!=nullptr)) return;
+            if (!streaming) expected.emplace_back(logits,logits+vocab);
+            else t.assert_true("native continuation is exact after vision suspension",std::memcmp(expected[size_t(step)+1].data(),logits,vocab*sizeof(float))==0);
+        }
+    }
+}
+
+static void test_gemma_image_features(testing & t, llama_model * model,const char * path) {
+    const size_t width=llama_model_n_embd_inp(model);
+    if (!t.assert_true(model->arch==LLM_ARCH_GEMMA4)) return;
+    std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::fopen(path,"rb"));
+    const auto embeddings=gemma_image_reference(file.get(),width);
+    const size_t rows=embeddings.size()/width;
+    const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(model));
+    std::vector<std::vector<float>> expected;
+    for (bool streaming : {false,true}) {
+        auto cp=llama_context_default_params();
+        cp.n_ctx=4096;cp.n_batch=cp.n_ubatch=uint32_t((rows+255)/256*256);cp.n_seq_max=1;
+        gemma_image_test_outputs(cp,false);
+        cp.n_threads=cp.n_threads_batch=8;cp.swa_full=false;
+        cp.type_k=GGML_TYPE_Q8_0;cp.type_v=GGML_TYPE_Q4_0;cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        if (streaming) cp.shared_device_memory_bytes=gemma_image_test_arena_bytes(gemma_test_arena_explicit,gemma_test_arena_size);
+        context_ptr ctx(llama_init_from_model(model,cp),llama_free);
+        if (!t.assert_true(bool(ctx))) return;
+        common_batch batch(ctx.get());
+        for (int32_t first=0;first<1333;) {
+            const int32_t count=std::min(256,1333-first);batch.clear();
+            for (int32_t row=0;row<count;++row) batch.add(llama_token(10+(first+row)%64),first+row,0,row==count-1);
+            if (!t.assert_equal(0,llama_process(ctx.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+            first+=count;
+        }
+        batch.clear();
+        for (size_t row=0;row<rows;++row) {
+            llama_pos position[4]={llama_pos(1333+row),0,0,0};
+            batch.add_embd({embeddings.data()+row*width,1,width},position,0,row+1==rows);
+        }
+        llama_set_causal_attn(ctx.get(),false);
+        const int image_result=llama_process(ctx.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get());
+        llama_set_causal_attn(ctx.get(),true);
+        if (!t.assert_equal(0,image_result)) return;
+        for (size_t step=0;step<=8;++step) {
+            const auto * logits=llama_get_logits_ith(ctx.get(),-1);
+            if (!t.assert_true(logits && std::all_of(logits,logits+vocab,[](float value){return std::isfinite(value);}))) return;
+            if (!streaming) expected.emplace_back(logits,logits+vocab);
+            else if (!t.assert_true("image-conditioned native and streamed logits are bit-exact",
+                    std::memcmp(expected[step].data(),logits,vocab*sizeof(float))==0)) return;
+            if (step==8) break;
+            batch.clear();batch.add(llama_token(80+step),llama_pos(1333+rows+step),0,true);
+            if (!t.assert_equal(0,llama_process(ctx.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        }
     }
 }
 
@@ -1513,7 +1696,8 @@ static void test_gemma_stream_groups(testing & t, llama_model * model) {
 }
 
 static void test_gemma_assistant_source(testing & t, llama_model * model, const char * path,
-        bool forced=false, bool compact=false, bool verify=false, bool quotas=false) {
+        bool forced=false, bool compact=false, bool verify=false, bool quotas=false,bool vision=false,const char * image_path=nullptr,
+        const char * export_native=nullptr,const char * import_native=nullptr) {
     if (!t.assert_true(model && model->arch == LLM_ARCH_GEMMA4 && path)) return;
     auto mp=llama_model_default_params(); mp.n_gpu_layers=999;
     model_ptr assistant(llama_model_load_from_file(path,mp),llama_model_free);
@@ -1525,15 +1709,41 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
     std::vector<llama_token> proposals[2];
     llama_context_params quota_params{};
     size_t exact_budget=0;
-    const int prefix=forced ? 6143 : compact ? 2305 : 1333;
+    std::vector<float> image;
+    if (image_path) {
+        if (!t.assert_true(!forced && !compact && !quotas)) return;
+        std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::fopen(image_path,"rb"));
+        image=gemma_image_reference(file.get(),width);
+    }
+    const size_t image_rows=image.size()/width;
+    const int text_prefix=forced ? 6143 : compact ? 2305 : 1333;
+    const int prefix=text_prefix+int(image_rows)+(image_rows ? 1 : 0);
+    if ((export_native || import_native) && !t.assert_true(image_rows && verify && vision && !forced && !compact && !quotas &&
+            !(export_native && import_native))) return;
+    auto oracle_file=[&](const char * base,bool writing) {
+        std::array<std::unique_ptr<FILE,kv_stream_exact_file_free>,3> files;
+        std::array<FILE *,3> handles{};
+        const char * extensions[]={".input.bin",".logits.bin",".hidden.bin"};
+        for (size_t i=0;i<files.size();++i) {
+            const auto name=std::string(base)+extensions[i];
+            files[i].reset(std::fopen(name.c_str(),writing ? "wbx" : "rb"));handles[i]=files[i].get();
+        }
+        gemma_assistant_oracle(handles,writing,4096,uint64_t(prefix),image,width,vocab,logits[0],hidden_states[0]);
+    };
+    if (import_native) {
+        oracle_file(import_native,false);
+        for (size_t i=0;i<3;++i) proposals[0].push_back(llama_token(std::max_element(logits[0][i].begin(),logits[0][i].end())-logits[0][i].begin()));
+    }
     for (bool streamed : {false,true}) {
+        if ((!streamed && import_native) || (streamed && export_native)) continue;
         auto cp=llama_context_default_params();
         cp.n_ctx=forced ? 6144 : 4096;
-        cp.n_batch=cp.n_ubatch=forced ? 1 : compact ? 32 : 256; cp.n_seq_max=1;
+        cp.n_batch=cp.n_ubatch=image_rows ? uint32_t((image_rows+255)/256*256) : forced ? 1 : compact ? 32 : 256; cp.n_seq_max=1;
+        if (image_rows) gemma_image_test_outputs(cp,verify);
         cp.n_threads=cp.n_threads_batch=8; cp.swa_full=false;
         cp.type_k=GGML_TYPE_Q8_0; cp.type_v=GGML_TYPE_Q4_0;
         cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
-        cp.shared_device_memory_bytes=streamed ? size_t(forced ? 424 : compact ? 480 : 1024)*1048576 : 0;
+        cp.shared_device_memory_bytes=streamed ? (image_rows ? gemma_image_test_arena_bytes(gemma_test_arena_explicit,gemma_test_arena_size) : size_t(forced ? 424 : compact ? 480 : 1024)*1048576) : 0;
         cp.kv_stream_verify_max=streamed && verify ? 4 : 0;
         if (streamed && verify) for (int invalid=0;invalid<4;++invalid) {
             auto bad=cp;
@@ -1561,6 +1771,7 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         }
         auto dp=cp;
         dp.n_batch=dp.n_ubatch=1; dp.shared_device_memory_bytes=0;
+        if (image_rows) gemma_image_test_outputs(dp,false);
         dp.kv_stream_verify_max=0;
         dp.ctx_type=LLAMA_CONTEXT_TYPE_MTP; dp.ctx_other=target.get();
         if (streamed && !forced) {
@@ -1626,14 +1837,29 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         if (!t.assert_true(!words.empty())) return;
         common_batch prompt(target.get());
         int last_count=0;
-        for (int first=0;first<prefix;first+=int(cp.n_ubatch)) {
-            prompt.clear(); last_count=std::min(int(cp.n_ubatch),prefix-first);
+        for (int first=0;first<text_prefix;first+=int(cp.n_ubatch)) {
+            prompt.clear(); last_count=std::min(int(cp.n_ubatch),text_prefix-first);
             for (int i=0;i<last_count;++i) prompt.add(words[size_t(first+i)%words.size()],first+i,0,i == last_count-1);
             if (first < 4) std::fprintf(stderr,"Gemma assistant prefill submit: streamed=%d first=%d rows=%d\n",int(streamed),first,last_count);
             if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
             if (compact) llama_synchronize(target.get());
-            if (first < 4 || (compact && (first+last_count)%128 == 0) || (first+last_count)%512 == 0 || first+last_count == prefix)
-                std::fprintf(stderr,"Gemma assistant control prefill: streamed=%d progress=%d/%d\n",int(streamed),first+last_count,prefix);
+            if (first < 4 || (compact && (first+last_count)%128 == 0) || (first+last_count)%512 == 0 || first+last_count == text_prefix)
+                std::fprintf(stderr,"Gemma assistant control prefill: streamed=%d progress=%d/%d\n",int(streamed),first+last_count,text_prefix);
+        }
+        if (image_rows) {
+            prompt.clear();
+            for (size_t row=0;row<image_rows;++row) {
+                llama_pos position[4]={llama_pos(text_prefix+row),0,0,0};
+                prompt.add_embd({image.data()+row*width,1,width},position,0,row+1==image_rows);
+            }
+            llama_set_causal_attn(target.get(),false);
+            const int result=llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get());
+            llama_set_causal_attn(target.get(),true);
+            if (!t.assert_equal("image-conditioned assistant source prefill",0,result)) return;
+            prompt.clear();prompt.add(words.front(),prefix-1,0,true);
+            if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,prompt.get()))) return;
+            last_count=1;
+            std::fprintf(stderr,"Gemma assistant image source: streamed=%d image_rows=%zu frontier=%d arena_bytes=%zu\n",int(streamed),image_rows,prefix,cp.shared_device_memory_bytes);
         }
         llama_synchronize(target.get());
         const auto * h=llama_get_embeddings_nextn_ith(target.get(),last_count-1);
@@ -1659,6 +1885,21 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
         };
         const auto before=snapshot();
         const auto full_used=resources.full->get_cells(0).get_used(),local_used=resources.bounded->get_cells(0).get_used();
+        if (streamed && vision) {
+            auto * owner=llama_context_compute_memory(target.get());
+            if (!t.assert_true("shared read-only assistant permits vision suspension",owner->can_suspend_for_vision())) return;
+            if (!t.assert_true(llama_context_suspend_kv_device(target.get()))) return;
+            std::vector<ggml_backend_memory_lease_t> grants;
+            llama_context_memory_diagnostics usage;
+            if (!t.assert_true(owner->diagnostics(usage) && usage.persistent_cache_bytes<=usage.parent_bytes &&
+                    usage.publication_stage_bytes<=usage.parent_bytes-usage.persistent_cache_bytes)) return;
+            const size_t reusable=usage.parent_bytes-usage.persistent_cache_bytes-usage.publication_stage_bytes;
+            if (!t.assert_true(reusable && owner->lend_suspended({reusable},grants))) return;
+            ggml_backend_buffer_clear(ggml_backend_memory_lease_buffer(grants.front()),0x4e);
+            for (auto * lease : grants) ggml_backend_memory_lease_free(lease);
+            if (!t.assert_true(llama_context_resume_kv_device(target.get(),llama_memory_text_phase::prefill))) return;
+            t.assert_true("assistant vision handoff preserves both target KV groups",snapshot()==before);
+        }
         if (streamed && !forced) {
             common_batch valid(draft.get());
             const auto id=valid.add(token,prefix,0,true);
@@ -1873,6 +2114,7 @@ static void test_gemma_assistant_source(testing & t, llama_model * model, const 
             t.assert_equal("exact joint arena assistant handoff",0,llama_process(draft.get(),LLAMA_PROCESS_TYPE_DECODE,read.get()));
         }
     }
+    if (export_native) { oracle_file(export_native,true);return; }
     t.assert_true(proposals[0] == proposals[1]);
     if (!t.assert_equal(logits[0].size(),logits[1].size())) return;
     for (size_t row=0;row<logits[0].size();++row) t.assert_true("actual assistant/target logits match native bits",
@@ -2671,6 +2913,60 @@ int main(int argc,char ** argv) {
     if (baseline) return 77;
 #endif
     testing t;
+    t.test("Gemma_assistant_split_oracle_keeps_input_and_all_vectors_exact",[](testing & t) {
+        std::array<std::unique_ptr<FILE,kv_stream_exact_file_free>,3> files;
+        std::array<FILE *,3> handles{};
+        for (size_t i=0;i<files.size();++i) {
+            files[i].reset(std::tmpfile());handles[i]=files[i].get();
+            if (!t.assert_true(handles[i]!=nullptr)) return;
+        }
+        std::vector<float> image(8,0.125f);image[1]=-0.0f;
+        std::vector<std::vector<float>> logits(19,std::vector<float>(8,0.5f)),hidden(18,std::vector<float>(4,-0.0f));
+        gemma_assistant_oracle(handles,true,4096,1336,image,4,8,logits,hidden);
+        std::vector<std::vector<float>> actual_logits,actual_hidden;
+        gemma_assistant_oracle(handles,false,4096,1336,image,4,8,actual_logits,actual_hidden);
+        t.assert_true(actual_logits==logits && actual_hidden.size()==hidden.size() &&
+            !std::memcmp(actual_hidden[0].data(),hidden[0].data(),4*sizeof(float)));
+        image[0]=0.0f;
+        bool rejected=false;
+        try { gemma_assistant_oracle(handles,false,4096,1336,image,4,8,actual_logits,actual_hidden); }
+        catch (const std::runtime_error &) { rejected=true; }
+        t.assert_true("same-size wrong image cannot reuse an oracle",rejected);
+        image[0]=0.125f;
+        if (!t.assert_equal(0,std::fseek(handles[2],0,SEEK_END)) || !t.assert_true(std::fputc(0,handles[2])!=EOF)) return;
+        const auto unchanged_logits=actual_logits,unchanged_hidden=actual_hidden;
+        rejected=false;
+        try { gemma_assistant_oracle(handles,false,4096,1336,image,4,8,actual_logits,actual_hidden); }
+        catch (const std::runtime_error &) { rejected=true; }
+        t.assert_true("bad hidden frame cannot publish partially read logits",rejected && actual_logits==unchanged_logits && actual_hidden==unchanged_hidden);
+    });
+    t.test("Gemma_image_reference_validates_extent_and_preserves_float_bits",[](testing & t) {
+        std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::tmpfile());
+        if (!t.assert_true(bool(file))) return;
+        std::vector<float> expected(64,0.125f);expected[1]=-0.0f;
+        if (!t.assert_equal(expected.size(),std::fwrite(expected.data(),sizeof(float),expected.size(),file.get()))) return;
+        const auto values=gemma_image_reference(file.get(),32);
+        t.assert_true(values.size()==expected.size() && !std::memcmp(values.data(),expected.data(),values.size()*sizeof(float)));
+        auto reject=[&](FILE * source,size_t width) {
+            bool rejected=false;
+            try { gemma_image_reference(source,width); }
+            catch (const std::runtime_error &) { rejected=true; }
+            t.assert_true("invalid image fixture rejects before allocation",rejected);
+        };
+        reject(nullptr,32);reject(file.get(),0);reject(file.get(),SIZE_MAX);
+        for (long bytes : {0L,1L,127L,129L,1121L*32*4,32L*1048576+1}) {
+            std::unique_ptr<FILE,kv_stream_exact_file_free> bad(std::tmpfile());
+            if (!t.assert_true(bool(bad))) return;
+            if (bytes && (!t.assert_equal(0,std::fseek(bad.get(),bytes-1,SEEK_SET)) || !t.assert_true(std::fputc(0,bad.get())!=EOF))) return;
+            reject(bad.get(),32);
+        }
+        for (float bad_value : {std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+            std::unique_ptr<FILE,kv_stream_exact_file_free> bad(std::tmpfile());
+            expected[0]=bad_value;
+            if (!t.assert_true(bool(bad)) || !t.assert_equal(expected.size(),std::fwrite(expected.data(),sizeof(float),expected.size(),bad.get()))) return;
+            reject(bad.get(),32);
+        }
+    });
     t.test("memory_resources_resolve_cache_roles_without_hybrid_casts", [](testing & t) {
         std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_GEMMA4, llama_model_default_params()));
         auto & hp = model->hparams;
@@ -2793,6 +3089,22 @@ int main(int argc,char ** argv) {
             t.assert_true(rejected);
         }
     });
+    t.test("gemma_image_arena_override_preserves_the_normal_profile", [](testing & t) {
+        t.assert_equal(size_t(2048)*1048576,gemma_image_test_arena_bytes(false,gemma_test_arena_bytes(nullptr)));
+        t.assert_equal(size_t(2048)*1048576,gemma_image_test_arena_bytes(false,gemma_test_arena_bytes("1536")));
+        t.assert_equal(size_t(1536)*1048576,gemma_image_test_arena_bytes(true,gemma_test_arena_bytes("1536")));
+        t.assert_equal(size_t(1024)*1048576,gemma_image_test_arena_bytes(true,gemma_test_arena_bytes("1024")));
+    });
+    t.test("gemma_image_fixture_declares_every_requested_output_not_every_input", [](testing & t) {
+        for (uint32_t rows : {256u,1280u}) for (bool verify : {false,true}) {
+            auto cp=llama_context_default_params();cp.n_batch=cp.n_ubatch=rows;
+            gemma_image_test_outputs(cp,verify);
+            t.assert_equal(verify ? 4u : 1u,cp.n_outputs_max);
+            t.assert_equal(verify ? 4u : 1u,cp.n_outputs_max_per_seq);
+            t.assert_equal(rows,cp.n_batch);
+            t.assert_equal(rows,cp.n_ubatch);
+        }
+    });
     t.test("streaming_is_disabled_by_default", [&](testing & t) {
         const auto defaults = llama_context_default_params();
         t.assert_equal(size_t(0),defaults.kv_stream_pool_bytes);
@@ -2822,6 +3134,7 @@ int main(int argc,char ** argv) {
             if (++i == argc) { std::fprintf(stderr,"missing Gemma test arena MiB\n"); return 1; }
             try { gemma_test_arena_size=gemma_test_arena_bytes(argv[i]); }
             catch (const std::invalid_argument & error) { std::fprintf(stderr,"%s\n",error.what()); return 1; }
+            gemma_test_arena_explicit=true;
             continue;
         }
         if (!std::strcmp(argv[i], "--test-cache-k") || !std::strcmp(argv[i], "--test-cache-v")) {
@@ -2939,12 +3252,22 @@ int main(int argc,char ** argv) {
     }
     for (int i=3;i<argc;++i) if (!std::strcmp(argv[i],"--gemma-assistant-source")) {
         if (i+1 == argc) { std::fprintf(stderr,"missing Gemma assistant artifact\n"); return 1; }
+        const char * image_path=nullptr,* export_native=nullptr,* import_native=nullptr;
+        for (int j=3;j<argc;++j) {
+            const char ** destination=!std::strcmp(argv[j],"--gemma-assistant-image-features") ? &image_path :
+                !std::strcmp(argv[j],"--gemma-assistant-export-native") ? &export_native :
+                !std::strcmp(argv[j],"--gemma-assistant-import-native") ? &import_native : nullptr;
+            if (!destination) continue;
+            if (j+1==argc) { std::fprintf(stderr,"missing Gemma assistant reference path\n");return 1; }
+            *destination=argv[j+1];
+        }
         t.test("Gemma_actual_assistant_reads_target_sources_without_new_KV",[&](testing & t) {
             const bool forced=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-forced"); });
             const bool compact=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-memory"); });
             const bool verify=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-verify"); });
             const bool quotas=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-quotas"); });
-            test_gemma_assistant_source(t,model.get(),argv[i+1],forced,compact,verify,quotas);
+            const bool vision=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-assistant-vision-suspend"); });
+            test_gemma_assistant_source(t,model.get(),argv[i+1],forced,compact,verify,quotas,vision,image_path,export_native,import_native);
         });
         return t.summary();
     }
@@ -2970,6 +3293,17 @@ int main(int argc,char ** argv) {
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-target"); })) {
         t.test("Gemma_streamed_target_matches_native_model_execution",
             [&](testing & t) { test_gemma_target_context(t,model.get()); });
+        return t.summary();
+    }
+    if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-vision-suspend"); })) {
+        t.test("Gemma_vision_lending_preserves_local_and_host_KV_then_native_continuation",
+            [&](testing & t) { test_gemma_vision_suspension(t,model.get()); });
+        return t.summary();
+    }
+    for (int i=3;i+1<argc;++i) if (!std::strcmp(argv[i],"--gemma-image-features")) {
+        t.test("Gemma_image_SWA_and_causal_global_attention_match_native",[&](testing & t) {
+            test_gemma_image_features(t,model.get(),argv[i+1]);
+        });
         return t.summary();
     }
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-target-medium"); })) {

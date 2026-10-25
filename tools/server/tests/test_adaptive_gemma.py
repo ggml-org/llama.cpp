@@ -2,15 +2,21 @@
 """Offline native-versus-streamed Gemma target and assistant server qualification."""
 
 import argparse
+import base64
+import copy
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
+import struct
 import sys
 import urllib.request
+import zlib
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "benchmarks/server-ab"))
@@ -31,8 +37,13 @@ def server_command(args, streamed, depth, port):
                "--offline", "--fit", "off", "--parallel", "1", "--ctx-size", str(args.context),
                "--batch-size", str(args.batch_size), "--ubatch-size", str(args.ubatch_size),
                "--n-gpu-layers", "999", "--flash-attn", "on", "--cache-type-k", key, "--cache-type-v", value,
-               "--no-mmproj", "--no-context-shift",
+               "--no-context-shift",
                "--cache-ram", "2048", "--ctx-checkpoints", "4", "--no-webui", "--log-verbosity", "3"]
+    if getattr(args,"mmproj",None):
+        command += ["--mmproj",str(args.mmproj.resolve()),"--image-min-tokens",str(args.image_min_tokens),
+                    "--image-max-tokens",str(args.image_max_tokens)]
+    else:
+        command += ["--no-mmproj"]
     if depth:
         command += ["--model-draft", str(args.assistant.resolve()), "--spec-type", "draft-mtp",
                     "--spec-draft-n-max", str(depth), "--spec-draft-n-min", "0", "--spec-draft-p-min", "0", "--spec-draft-ngl", "999"]
@@ -68,6 +79,85 @@ def prompt_counts(result,length,cached,label):
     return reused,processed
 
 
+def vision_prompt_counts(result,cached,label):
+    # Image placeholders are not decoder positions. Validate the actual expanded extent.
+    total=result.get("tokens_evaluated")
+    if type(total) is not int or total<=0:
+        raise RuntimeError("invalid Gemma vision evaluated extent: "+label)
+    return (*prompt_counts(result,total,cached,label),total)
+
+
+def vision_cases(args,prefix,images):
+    first,changed,large=images
+    marker="<__media__>"
+    def body(prompt,media=(),cached=False):
+        return {"prompt":{"prompt_string":prompt,"multimodal_data":list(media)} if media else prompt,
+                "n_predict":args.predict,"temperature":0,"top_k":1,"seed":123,"ignore_eos":True,
+                "return_tokens":True,"cache_prompt":cached,"stream":True,"id_slot":0}
+    prompt=prefix+f" Describe this pattern: {marker} One sentence: "
+    cases=[("text",body("The capital of France is")),
+            ("image_fresh",body(prompt,[first])),
+            ("same_image_cached",body(prompt,[first],True)),
+            ("followup_cached",body(prompt+" Now focus on its colors: ",[first],True)),
+            ("changed_image",body(prompt,[changed],True)),
+            ("multiple_images",body(f"First: {marker} Then: {marker} Compare: ",[first,large])),
+            ("adjacent_images",body(f"Compare: {marker}{marker} One sentence: ",[first,changed])),
+            ("image_last",body("Describe: "+marker,[large]))]
+    if getattr(args,"vision_boundaries",False):
+        cases.extend([("image_only",body(marker,[first])),("image_first",body(marker+" Describe this pattern: ",[large]))])
+    if getattr(args,"vision_aspects",False):
+        from test_adaptive_vision import png
+        cases.extend([("portrait_image",body(prompt,[png(384,512,3)])),("narrow_image",body(prompt,[png(32,1024,4)]))])
+    return cases
+
+
+def vision_context_overflow(args,valid):
+    body=copy.deepcopy(valid)
+    body["prompt"]["prompt_string"]=" green"*(2*args.context)+"<__media__>"
+    body["cache_prompt"]=False;body["stream"]=False
+    return body
+
+
+def vision_after_decode(initial,result,image):
+    content=result.get("content")
+    if not isinstance(content,str) or not content:raise RuntimeError("missing generated text before later image")
+    body=copy.deepcopy(initial)
+    body["prompt"]["prompt_string"]+=content+" Compare this new image: <__media__> One sentence: "
+    body["prompt"]["multimodal_data"].append(image)
+    body["cache_prompt"]=True
+    return body
+
+
+def vision_rejection_cases(valid):
+    from test_adaptive_vision import png
+    image=base64.b64decode(png(256,256))
+    large=bytearray(image)
+    large[16:24]=struct.pack(">II",(1<<24)+1,1)
+    large[29:33]=struct.pack(">I",zlib.crc32(large[12:29]))
+    overflow=bytearray(image)
+    overflow[16:24]=struct.pack(">II",65536,65536)
+    overflow[29:33]=struct.pack(">I",zlib.crc32(overflow[12:29]))
+    audio=struct.pack("<4sI4s4sIHHIIHH4sI",b"RIFF",356,b"WAVE",b"fmt ",16,1,1,16000,32000,2,16,b"data",320)+bytes(320)
+    records=[]
+    for name,data in (("empty-image",b""),("truncated-png",image[:24]),("garbage-image",b"not an image"),
+            ("oversized-png-header",large),("overflow-pixel-product",overflow),("unsupported-audio",audio)):
+        body=copy.deepcopy(valid);body.update(stream=False,n_predict=8)
+        body["prompt"]["multimodal_data"]=[base64.b64encode(data).decode()]
+        records.append((name,"/completion",body,"Failed to load image or audio file"))
+    records.append(("file-url","/v1/chat/completions",{"messages":[{"role":"user","content":[
+        {"type":"image_url","image_url":{"url":"file:///not-a-real-vision-fixture.png"}}]}],"max_tokens":8},
+        "file:// URLs are not allowed"))
+    return records
+
+
+def check_vision_rejection(status,result,expected,label):
+    error=result.get("error",{})
+    message=error.get("message") if isinstance(error,dict) else error
+    if (not 400<=status<600 or not isinstance(message,str) or expected.lower() not in message.lower() or
+            re.search(r"out of memory|CUDA error|illegal memory|GGML_ASSERT",message,re.I)):
+        raise RuntimeError("unexpected Gemma vision rejection: "+label+" "+str((status,result)))
+
+
 @contextlib.contextmanager
 def server(args, streamed, depth, phase=None):
     with socket.socket() as available:
@@ -81,6 +171,8 @@ def server(args, streamed, depth, phase=None):
     log_path = args.output / (label + ".log")
     command = server_command(args, streamed, depth, port)
     env = {key: value for key, value in os.environ.items() if not key.startswith(("GGML_", "LLAMA_ARG_"))}
+    if getattr(args,"mmproj",None):
+        env["LLAMA_MEDIA_MARKER"]="<__media__>"
     (args.output / (label + "-command.json")).write_text(json.dumps({"command": command, "uvm": False}, indent=2))
     with log_path.open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=log, env=env, start_new_session=os.name == "posix")
@@ -264,11 +356,146 @@ def run_lifecycle(args):
     return results
 
 
+def run_vision(args):
+    """Compare each image scenario with its own native replay/layout, never another case."""
+    from test_adaptive_vision import png,request
+
+    args.output.mkdir(parents=True,exist_ok=True)
+    text=args.corpus.read_text(encoding="utf-8")
+    images=(png(256,256),png(256,256,1),png(512,384,2))
+    results=[]
+    actions=[]
+    rejections=[]
+    streamed_only=getattr(args,"streamed_only",False)
+    for depth in args.depths:
+        native={}
+        for streamed in ((True,) if streamed_only else (False,True)):
+            saved_tokens=saved_bytes=0
+            path=slot_directory(args,streamed,depth)/"vision-lifecycle.bin"
+            references={}
+
+            def completion(base,label,body,cached=False):
+                result=stream_completion(base+"/completion",body,timeout=600)
+                request_sha=hashlib.sha256(json.dumps(body,sort_keys=True).encode()).hexdigest()
+                row={"depth":depth,"streamed":streamed,"case":label,"result":result,
+                     "request_sha256":request_sha,"comparison":"streamed-self-reference" if streamed_only else "native-matched"}
+                (args.output/"last-response.json").write_text(json.dumps(row,indent=2))
+                tokens=result.get("tokens",[])
+                if (result.get("timings",{}).get("predicted_n")!=body["n_predict"] or len(tokens)!=body["n_predict"] or
+                        any(type(token) is not int or token<0 for token in tokens)):
+                    raise RuntimeError("incomplete Gemma vision completion: "+label)
+                counts=draft_counts(result,depth,label)
+                accounting=vision_prompt_counts(result,cached,label)
+                reference_case="image_fresh" if label in ("save-image","restarted-fresh-image","context-limit-recovery","invalid-state-recovery") else \
+                    "text" if label in ("low-after-image","cancel-recovery","restarted-text") else None
+                if reference_case and tokens!=references[reference_case]:
+                    raise RuntimeError("Gemma vision uncached self-reference mismatch: "+label)
+                if streamed and not streamed_only:
+                    reference=native[label]
+                    if tokens!=reference[0]:raise RuntimeError("native/streamed vision token mismatch: "+label)
+                    if (counts,accounting,request_sha)!=reference[1:]:
+                        raise RuntimeError("native/streamed vision accounting/request mismatch: "+label)
+                elif not streamed:
+                    native[label]=(tokens,counts,accounting,request_sha)
+                references[label]=tokens
+                results.append(row)
+                (args.output/"results.json").write_text(json.dumps(results,indent=2))
+                print(json.dumps({"depth":depth,"streamed":streamed,"case":label,"cache_n":accounting[0],
+                    "prompt_n":accounting[1],"evaluated":accounting[2],"outputs":len(tokens)}),flush=True)
+                return result
+
+            def rejection(base,label,endpoint,body,expected,error_type=None):
+                status,result=request(int(base.rsplit(":",1)[1]),endpoint,body)
+                rejections.append({"depth":depth,"streamed":streamed,"case":label,"status":status,"result":result,
+                    "endpoint":endpoint,"request_sha256":hashlib.sha256(json.dumps(body,sort_keys=True).encode()).hexdigest()})
+                (args.output/"rejections.json").write_text(json.dumps(rejections,indent=2))
+                check_vision_rejection(status,result,expected,label)
+                if error_type and result.get("error",{}).get("type")!=error_type:
+                    raise RuntimeError("wrong rejection type: "+label)
+
+            def state_action(base,action,phase):
+                nonlocal saved_tokens,saved_bytes
+                response=request_json(base+"/slots/0?action="+action,
+                    None if action=="erase" else {"filename":path.name},timeout=600,method="POST")
+                if action=="save":
+                    saved_tokens=response.get("n_saved");saved_bytes=response.get("n_written")
+                    if (type(saved_tokens) is not int or not 0<saved_tokens<=args.context or
+                            type(saved_bytes) is not int or saved_bytes<=0 or not path.is_file() or path.stat().st_size!=saved_bytes):
+                        raise RuntimeError("incomplete Gemma vision state save")
+                elif action=="restore":
+                    if response.get("n_restored")!=saved_tokens or response.get("n_read")!=saved_bytes or path.stat().st_size!=saved_bytes:
+                        raise RuntimeError("incomplete Gemma vision state restore")
+                elif type(response.get("n_erased")) is not int or response["n_erased"]<0:
+                    raise RuntimeError("invalid Gemma vision state erase")
+                with path.open("rb") as state:
+                    digest=hashlib.file_digest(state,"sha256").hexdigest()
+                actions.append({"depth":depth,"streamed":streamed,"phase":phase,"action":action,"path":str(path),
+                    "response":response,"file_sha256":digest})
+                (args.output/"state-actions.json").write_text(json.dumps(actions,indent=2))
+
+            with server(args,streamed,depth) as base:
+                tokens=request_json(base+"/tokenize",{"content":text,"add_special":True})["tokens"]
+                if len(tokens)<args.prefill:raise RuntimeError("qualification corpus is too short")
+                prefix=request_json(base+"/detokenize",{"tokens":tokens[:args.prefill]})["content"]
+                cases=vision_cases(args,prefix,images)
+                for label,body in cases:
+                    result=completion(base,label,body,cached=body["cache_prompt"])
+                    if label=="image_fresh" and getattr(args,"vision_followup_after_decode",False):
+                        completion(base,"image-after-decode",vision_after_decode(body,result,images[1]),True)
+                high=dict(cases[1][1],cache_prompt=True)
+                low=cases[0][1]
+                if getattr(args,"vision_boundaries",False):
+                    rejection(base,"context-limit","/completion",vision_context_overflow(args,high),"context size","exceed_context_size_error")
+                    completion(base,"context-limit-recovery",dict(high,cache_prompt=False))
+                if getattr(args,"vision_rejections",False):
+                    completion(base,"before-rejections",dict(high,cache_prompt=False))
+                    port=int(base.rsplit(":",1)[1])
+                    for label,path_suffix,body,expected in vision_rejection_cases(high):
+                        rejection(base,label,path_suffix,body,expected)
+                        if request(port,"/health")!=(200,{"status":"ok"}):raise RuntimeError("server unhealthy after rejection")
+                        completion(base,"after-rejection-"+label,high,True)
+                if args.lifecycle:
+                    completion(base,"save-image",dict(high,cache_prompt=False))
+                    completion(base,"save-image-cached",high,True)
+                    state_action(base,"save","initial")
+                    completion(base,"low-after-image",low)
+                    state_action(base,"erase","initial")
+                    state_action(base,"restore","initial")
+                    completion(base,"restored-image",high,True)
+                    if getattr(args,"vision_boundaries",False):
+                        with path.open("rb") as complete:
+                            original=hashlib.file_digest(complete,"sha256").hexdigest()
+                            complete.seek(0);truncated_bytes=complete.read(min(4096,max(1,saved_bytes//2)))
+                        truncated=path.with_name("vision-truncated.bin")
+                        with truncated.open("xb") as output:output.write(truncated_bytes)
+                        rejection(base,"truncated-state","/slots/0?action=restore",{"filename":truncated.name},"Unable to restore slot")
+                        with path.open("rb") as complete:
+                            if path.stat().st_size!=saved_bytes or hashlib.file_digest(complete,"sha256").hexdigest()!=original:
+                                raise RuntimeError("valid state file changed during truncated restore")
+                        completion(base,"invalid-state-recovery",dict(high,cache_prompt=False))
+                cancel_after_first_output(base,dict(high,cache_prompt=False))
+                completion(base,"cancel-recovery",low)
+            if args.lifecycle:
+                with server(args,streamed,depth,"restart") as base:
+                    state_action(base,"restore","restart")
+                    completion(base,"restarted-restored-image",high,True)
+                    completion(base,"restarted-fresh-image",dict(high,cache_prompt=False))
+                    completion(base,"restarted-text",low)
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--assistant", type=Path, required=True)
+    parser.add_argument("--mmproj",type=Path,help="enable paired Gemma image/projector qualification")
+    parser.add_argument("--image-min-tokens",type=int,default=70)
+    parser.add_argument("--image-max-tokens",type=int,default=70)
+    parser.add_argument("--vision-rejections",action="store_true",help="check malformed/oversized/unsupported media and cached recovery")
+    parser.add_argument("--vision-followup-after-decode",action="store_true",help="append another image after retaining the generated continuation")
+    parser.add_argument("--vision-boundaries",action="store_true",help="qualify image-only/first prompts, context rejection and optional truncated-state recovery")
+    parser.add_argument("--vision-aspects",action="store_true",help="include portrait and narrow/tall image requests")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--corpus", type=Path, default=ROOT / "benchmarks/data/online-articles-262144-words.txt")
     parser.add_argument("--context", type=int, default=4096)
@@ -295,7 +522,20 @@ def main():
         parser.error("--streamed-only requires --lifecycle and is not a native-equivalence test")
     if args.lifecycle and 64+min(64,args.predict)+4>=args.context:
         parser.error("lifecycle context must also fit the 64-token low request")
-    if args.lifecycle:
+    if args.mmproj and (args.image_min_tokens not in (70,140,280,560,1120) or
+            args.image_max_tokens not in (70,140,280,560,1120) or args.image_min_tokens>args.image_max_tokens or
+            args.ubatch_size<args.image_max_tokens or args.batch_size<args.ubatch_size or
+            args.prefill+2*args.image_max_tokens+args.predict+128>=args.context):
+        parser.error("vision requires supported 70/140/280/560/1120 budgets, a whole image microbatch and sufficient context")
+    if args.vision_rejections and not args.mmproj:
+        parser.error("--vision-rejections requires --mmproj")
+    if args.vision_boundaries and not args.mmproj:parser.error("--vision-boundaries requires --mmproj")
+    if args.vision_aspects and not args.mmproj:parser.error("--vision-aspects requires --mmproj")
+    if args.vision_followup_after_decode and (not args.mmproj or args.prefill+2*args.image_max_tokens+2*args.predict+128>=args.context):
+        parser.error("later image requires --mmproj and context for both generated continuations")
+    if args.mmproj:
+        run_vision(args)
+    elif args.lifecycle:
         run_lifecycle(args)
     else:
         run(args)

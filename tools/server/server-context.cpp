@@ -1352,7 +1352,7 @@ private:
                         (streamed_mtp && (!ctx_dft || !llama_context_compute_memory(ctx_dft) ||
                             !llama_context_compute_memory(ctx_dft)->valid() ||
                             !llama_context_compute_memory(ctx_dft)->borrows_serial_parent())) ||
-                        !mtmd_support_vision(mctx) || mtmd_support_audio(mctx) || !mtmd_decode_use_mrope(mctx)) {
+                        !mtmd_vision_phase_compatible(mctx,model_tgt)) {
                     SRV_ERR("%s", "unsupported vision arena model/projector capabilities\n");
                     return false;
                 }
@@ -1904,7 +1904,7 @@ private:
                 send_error(task,"Prompt contains invalid tokens",ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
-            if (const auto * error = server_vision_arena_request_error(task,common_params_uses_streamed_mtp(params_base))) {
+            if (const auto * error = server_vision_arena_request_error(task,common_params_uses_streamed_mtp(params_base),&params_base.speculative)) {
                 send_error(task,error,ERROR_TYPE_NOT_SUPPORTED);
                 return false;
             }

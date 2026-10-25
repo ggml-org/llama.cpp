@@ -14,6 +14,14 @@ import test_adaptive_vision as harness
 
 
 class Launch(unittest.TestCase):
+    def test_startup_negative_profiles_do_not_reject_supported_cache_formats(self):
+        cases=harness.vision_startup_rejections()
+        self.assertEqual(len(cases),6)
+        self.assertIn(('kv-offload',('--no-kv-offload',)),cases)
+        for _,flags in cases:
+            self.assertNotIn('-ctk',flags)
+            self.assertNotIn('--cache-type-k',flags)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -55,9 +63,17 @@ class Launch(unittest.TestCase):
                 pass
         command, kwargs = self.commands[0]
         self.assertEqual(command[command.index('--spec-draft-n-max')+1], '3')
-        self.assertEqual(command[command.index('--spec-draft-type-k')+1], 'q8_0')
-        self.assertEqual(command[command.index('--spec-draft-type-v')+1], 'q4_0')
+        self.assertNotIn('--spec-draft-type-k',command)
+        self.assertNotIn('--spec-draft-type-v',command)
         self.assertNotIn('GGML_CUDA_ENABLE_UNIFIED_MEMORY', kwargs['env'])
+
+    def test_native_mtp_control_still_selects_matching_independent_cache_types(self):
+        with self.launch('vision arena rejects this configuration'), patch.object(harness.os,'killpg',create=True):
+            with harness.server(self.args,'stock',reject=True):
+                pass
+        command,_=self.commands[0]
+        self.assertEqual(command[command.index('--spec-draft-type-k')+1],'q8_0')
+        self.assertEqual(command[command.index('--spec-draft-type-v')+1],'q4_0')
 
     def test_stock_uvm_is_explicit_and_does_not_enable_arena_uvm(self):
         self.args.stock_uvm = True

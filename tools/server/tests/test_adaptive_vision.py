@@ -57,8 +57,9 @@ def server(args, mode, extra=(), reject=False, env_extra=None):
     if mode.startswith("arena"):
         command += ["--shared-device-memory-mib", str(args.arena_mib)]
     if getattr(args,"mtp_length",0):
-        command += ["--spec-type","draft-mtp","--spec-draft-n-max",str(args.mtp_length),
-                    "--spec-draft-type-k","q8_0","--spec-draft-type-v","q4_0"]
+        command += ["--spec-type","draft-mtp","--spec-draft-n-max",str(args.mtp_length)]
+        if not mode.startswith("arena"):
+            command += ["--spec-draft-type-k","q8_0","--spec-draft-type-v","q4_0"]
     command += list(extra)
     env = dict(os.environ, LLAMA_MEDIA_MARKER="<__media__>")
     env.update(env_extra or {})
@@ -183,6 +184,12 @@ def run(args, mode):
     return results
 
 
+def vision_startup_rejections():
+    return [("parallel",("--parallel","2")),("mtp-length",("--spec-type","draft-mtp","--spec-draft-n-max","4")),
+            ("cpu-projector",("--no-mmproj-offload",)),("kv-offload",("--no-kv-offload",)),
+            ("fit",("--fit","on")),("embedding",("--embedding",))]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", type=Path, required=True)
@@ -218,11 +225,7 @@ def main():
             assert results["stock"][name]["tokens"] == results["arena"][name]["tokens"], name
         print("Stock and arena token IDs match for every request.")
     if args.check_rejections:
-        cases = [("parallel", ("--parallel", "2")), ("mtp", ("--spec-type", "draft-mtp")),
-                 ("cpu-projector", ("--no-mmproj-offload",)), ("kv-quant", ("-ctk", "f16")),
-                 ("fit", ("--fit", "on")), ("embedding", ("--embedding",))]
-        cases[1] = ("mtp-length",("--spec-type","draft-mtp","--spec-draft-n-max","4"))
-        for name, extra in cases:
+        for name, extra in vision_startup_rejections():
             with server(args, f"arena-reject-{name}", extra, reject=True):
                 print("startup rejected:", name)
 
