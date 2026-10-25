@@ -125,7 +125,8 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         {"kurtosis", 5}, {"gain", 6}, {"h_norm", 7}, {"l2_dist", 8}, {"cossim", 9}, {"pearson", 10}, {"covariance", 11}
     };
     std::vector<int> stats_indices;
-    if (schema_idx >= 0) {
+    if (schema_idx != -1 && gguf_get_kv_type(ctx_gguf, schema_idx) == GGUF_TYPE_ARRAY &&
+        gguf_get_arr_type(ctx_gguf, schema_idx) == GGUF_TYPE_STRING) {
         const int64_t n_schema = gguf_get_arr_n(ctx_gguf, schema_idx);
         for (int64_t i = 0; i < n_schema; ++i) {
             const std::string key = gguf_get_arr_str(ctx_gguf, schema_idx, i);
@@ -133,6 +134,9 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
             stats_indices.push_back(it != default_schema_map.end() ? it->second : -1);
         }
     } else {
+        if (schema_idx != -1) {
+            LOG_WRN("%s: %s in %s is not an array of strings, using the default order\n", __func__, LLM_KV_IMATRIX_STATS_SCHEMA, fname.c_str());
+        }
         for (size_t i = 0; i < default_schema_map.size(); ++i) {
             stats_indices.push_back((int) i);
         }
