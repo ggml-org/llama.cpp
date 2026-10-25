@@ -713,7 +713,7 @@ struct rethrown_exception : public std::exception {
 
 //////////////////////
 
-static void gather_string_parts_recursive(const value & val, value_string & parts) {
+static void gather_string_parts_recursive(const value & val, value_string & parts, int depth = 0) {
     // TODO: probably allow print value_none as "None" string? currently this breaks some templates
     if (is_val<value_string>(val)) {
         const auto & str_val = cast_val<value_string>(val)->val_str;
@@ -721,10 +721,12 @@ static void gather_string_parts_recursive(const value & val, value_string & part
     } else if (is_val<value_int>(val) || is_val<value_float>(val) || is_val<value_bool>(val)) {
         std::string str_val = val->as_string().str();
         parts->val_str.append(str_val);
+    } else if (is_val<value_array>(val) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (is_val<value_array>(val)) {
         auto items = cast_val<value_array>(val)->as_array();
         for (const auto & item : items) {
-            gather_string_parts_recursive(item, parts);
+            gather_string_parts_recursive(item, parts, depth + 1);
         }
     }
 }

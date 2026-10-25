@@ -17,6 +17,7 @@
 using json = common_json;
 
 static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect);
+static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect);
 
 static void test_whitespace_control(testing & t);
 static void test_conditionals(testing & t);
@@ -606,6 +607,17 @@ static void test_expressions(testing & t) {
         {{"cond", true}},
         "yes"
     );
+
+    test_template(t, "nested parentheses",
+        "{{ " + std::string(30, '(') + "1" + std::string(30, ')') + " }}",
+        json::object(),
+        "1"
+    );
+
+    test_template_error(t, "too deeply nested parentheses",
+        "{{ " + std::string(1000, '(') + "1" + std::string(1000, ')') + " }}",
+        "template is nested more than 128 levels deep"
+    );
 }
 
 static void test_set_statement(testing & t) {
@@ -1029,6 +1041,11 @@ static void test_filters(testing & t) {
         {{"x", nullptr}},
         "None"
     );
+
+    test_template_error(t, "tojson of a list that contains itself",
+        "{% set arr = [] %}{% set _ = arr.append(arr) %}{{ arr|tojson }}",
+        "value is nested more than 128 levels deep"
+    );
 }
 
 static void test_literals(testing & t) {
@@ -1298,20 +1315,10 @@ static void test_macros(testing & t) {
         "100"
     );
 
-    t.test("endless macro recursion", [](testing & t) {
-        const std::string tmpl = "{% macro f(n) %}{{ f(n + 1) }}{% endmacro %}{{ f(0) }}";
-        jinja::lexer lexer;
-        jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
-        jinja::context ctx(tmpl);
-        jinja::runtime runtime(ctx);
-        std::string error;
-        try {
-            runtime.execute(ast);
-        } catch (const std::exception & e) {
-            error = e.what();
-        }
-        t.assert_true("rejected: " + error, error.find("macro calls are nested more than 128 levels deep") != std::string::npos);
-    });
+    test_template_error(t, "endless macro recursion",
+        "{% macro f(n) %}{{ f(n + 1) }}{% endmacro %}{{ f(0) }}",
+        "macro calls are nested more than 128 levels deep"
+    );
 }
 
 static void test_namespace(testing & t) {
@@ -2573,6 +2580,22 @@ static void test_string_parts(testing & t) {
         }
     });
 
+}
+
+static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect) {
+    t.test(name, [&tmpl, &expect](testing & t) {
+        std::string error;
+        try {
+            jinja::lexer lexer;
+            jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
+            jinja::context ctx(tmpl);
+            jinja::runtime runtime(ctx);
+            runtime.gather_string_parts(runtime.execute(ast));
+        } catch (const std::exception & e) {
+            error = e.what();
+        }
+        t.assert_true("expected error: " + expect + ", got: " + error, error.find(expect) != std::string::npos);
+    });
 }
 
 static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {

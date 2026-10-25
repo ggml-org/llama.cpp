@@ -377,7 +377,11 @@ static common_chat_schema::value_type json_type(const common_json & value) {
     return common_chat_schema::TYPE_OBJECT;
 }
 
-static common_chat_schema::type_set value_types_impl(const common_chat_schema & s, std::unordered_set<const common_chat_schema *> & visited) {
+// depth counts the $ref, anyOf and allOf hops, a $ref chain is not bounded by the builder
+static common_chat_schema::type_set value_types_impl(const common_chat_schema & s, std::unordered_set<const common_chat_schema *> & visited, int depth = 0) {
+    if (depth >= COMMON_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+    }
     switch (s.kind()) {
         case common_chat_schema::KIND_ANY:
             return common_chat_schema::type_set::all();
@@ -411,21 +415,21 @@ static common_chat_schema::type_set value_types_impl(const common_chat_schema & 
                 // a cycle contributes no type, to be safe
                 return {};
             }
-            auto types = value_types_impl(*target, visited);
+            auto types = value_types_impl(*target, visited, depth + 1);
             visited.erase(target);
             return types;
         }
         case common_chat_schema::KIND_ANY_OF: {
             common_chat_schema::type_set types;
             for (const auto & child : static_cast<const common_chat_schema_any_of &>(s).children) {
-                types |= value_types_impl(*child, visited);
+                types |= value_types_impl(*child, visited, depth + 1);
             }
             return types;
         }
         case common_chat_schema::KIND_ALL_OF: {
             auto types = common_chat_schema::type_set::all();
             for (const auto & child : static_cast<const common_chat_schema_all_of &>(s).children) {
-                types &= value_types_impl(*child, visited);
+                types &= value_types_impl(*child, visited, depth + 1);
             }
             return types;
         }
@@ -438,7 +442,10 @@ common_chat_schema::type_set common_chat_schema::value_types() const {
     return value_types_impl(*this, visited);
 }
 
-static bool may_be_string_impl(const common_chat_schema & s, std::unordered_set<const common_chat_schema *> & visited) {
+static bool may_be_string_impl(const common_chat_schema & s, std::unordered_set<const common_chat_schema *> & visited, int depth = 0) {
+    if (depth >= COMMON_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+    }
     switch (s.kind()) {
         case common_chat_schema::KIND_STRING:
             return true;
@@ -457,13 +464,13 @@ static bool may_be_string_impl(const common_chat_schema & s, std::unordered_set<
             if (!target || !visited.insert(target).second) {
                 return false;
             }
-            bool result = may_be_string_impl(*target, visited);
+            bool result = may_be_string_impl(*target, visited, depth + 1);
             visited.erase(target);
             return result;
         }
         case common_chat_schema::KIND_ANY_OF:
             for (const auto & child : static_cast<const common_chat_schema_any_of &>(s).children) {
-                if (may_be_string_impl(*child, visited)) {
+                if (may_be_string_impl(*child, visited, depth + 1)) {
                     return true;
                 }
             }
@@ -475,7 +482,7 @@ static bool may_be_string_impl(const common_chat_schema & s, std::unordered_set<
                 if (child->kind() == common_chat_schema::KIND_ANY) {
                     continue;
                 }
-                if (!may_be_string_impl(*child, visited)) {
+                if (!may_be_string_impl(*child, visited, depth + 1)) {
                     return false;
                 }
                 any_string = true;

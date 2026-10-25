@@ -83,7 +83,8 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr);
 std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
         const llama_grammar_rules      & rules,
         const llama_grammar_stack      & stack,
-        const llama_grammar_candidates & candidates);
+        const llama_grammar_candidates & candidates,
+        uint32_t                         depth = 0);
 
 struct llama_grammar_parser {
     const llama_vocab * vocab;

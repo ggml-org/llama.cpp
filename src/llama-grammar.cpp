@@ -949,17 +949,18 @@ static void llama_grammar_advance_stack(
 static llama_grammar_candidates llama_grammar_reject_candidates(
         const llama_grammar_rules      & rules,
         const llama_grammar_stacks     & stacks,
-        const llama_grammar_candidates & candidates) {
+        const llama_grammar_candidates & candidates,
+        uint32_t                         depth) {
     GGML_ASSERT(!stacks.empty()); // REVIEW
 
     if (candidates.empty()) {
         return {};
     }
 
-    auto rejects = llama_grammar_reject_candidates_for_stack(rules, stacks.front(), candidates);
+    auto rejects = llama_grammar_reject_candidates_for_stack(rules, stacks.front(), candidates, depth);
 
     for (size_t i = 1, size = stacks.size(); i < size; ++i) {
-        rejects = llama_grammar_reject_candidates_for_stack(rules, stacks[i], rejects);
+        rejects = llama_grammar_reject_candidates_for_stack(rules, stacks[i], rejects, depth);
     }
 
     return rejects;
@@ -1070,7 +1071,12 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
 llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         const llama_grammar_rules      & rules,
         const llama_grammar_stack      & stack,
-        const llama_grammar_candidates & candidates) {
+        const llama_grammar_candidates & candidates,
+        uint32_t                         depth) {
+    // one level per code point of a token, a longer token is rejected
+    if (depth >= GRAMMAR_RECURSIVE_LIMIT) {
+        return candidates;
+    }
 
     llama_grammar_candidates rejects;
     rejects.reserve(candidates.size());
@@ -1130,7 +1136,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     llama_grammar_stacks next_stacks;
     llama_grammar_advance_stack(rules, stack_after, next_stacks);
 
-    auto next_rejects = llama_grammar_reject_candidates(rules, next_stacks, next_candidates);
+    auto next_rejects = llama_grammar_reject_candidates(rules, next_stacks, next_candidates, depth + 1);
     for (const auto & tok : next_rejects) {
         rejects.push_back({ tok.index, tok.code_points - 1, tok.partial_utf8, tok.id });
     }
@@ -1412,7 +1418,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
-    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
+    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar, 0);
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }

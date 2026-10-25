@@ -185,13 +185,17 @@ std::string common_peg_ast_node::sanitized_text() const {
 }
 
 void common_peg_ast_arena::visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const {
-    if (id == COMMON_PEG_INVALID_AST_ID) {
-        return;
-    }
-    const auto & node = get(id);
-    visitor(node);
-    for (const auto & child : node.children) {
-        visit(child, visitor);
+    // no recursion: the AST is several nodes deep per level of the input
+    std::vector<common_peg_ast_id> todo = { id };
+    while (!todo.empty()) {
+        const auto cur = todo.back();
+        todo.pop_back();
+        if (cur == COMMON_PEG_INVALID_AST_ID) {
+            continue;
+        }
+        const auto & node = get(cur);
+        visitor(node);
+        todo.insert(todo.end(), node.children.rbegin(), node.children.rend());
     }
 }
 
@@ -1078,22 +1082,6 @@ common_peg_parser operator|(const std::string & str, const common_peg_parser & p
     return operator|(str.c_str(), p);
 }
 
-// same as std::regex_replace with [^a-zA-Z0-9-]+ -> "-", no std::regex: libstdc++ recurses per char
-static std::string rule_name(const std::string & name) {
-    std::string out;
-    bool in_invalid = false;
-    for (char c : name) {
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
-            out += c;
-            in_invalid = false;
-        } else if (!in_invalid) {
-            out += '-';
-            in_invalid = true;
-        }
-    }
-    return out;
-}
-
 common_peg_parser_builder::common_peg_parser_builder() {}
 
 common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
@@ -1175,14 +1163,14 @@ common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p,
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const common_peg_parser & p, bool trigger) {
-    auto clean_name = rule_name(name);
+    auto clean_name = gbnf_format_rule_name(name);
     auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, p.id(), trigger});
     arena_.add_rule(clean_name, rule_id);
     return ref(clean_name);
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const std::function<common_peg_parser()> & builder_fn, bool trigger) {
-    auto clean_name = rule_name(name);
+    auto clean_name = gbnf_format_rule_name(name);
     if (arena_.has_rule(clean_name)) {
         return ref(clean_name);
     }
