@@ -218,6 +218,54 @@ class TensorNameMap:
         MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD: (
             "model.lilicorr.anchor_out_head",
         ),
+
+        # vibevoice
+        # note: tokenizer stage blocks have two indices (stage, block), they are mapped in conversion/vibevoice.py
+        MODEL_TENSOR.VV_ACOUSTIC_CONN_FC1: (
+            "model.acoustic_connector.fc1",
+        ),
+        MODEL_TENSOR.VV_ACOUSTIC_CONN_NORM: (
+            "model.acoustic_connector.norm",
+        ),
+        MODEL_TENSOR.VV_ACOUSTIC_CONN_FC2: (
+            "model.acoustic_connector.fc2",
+        ),
+        MODEL_TENSOR.VV_SEMANTIC_CONN_FC1: (
+            "model.semantic_connector.fc1",
+        ),
+        MODEL_TENSOR.VV_SEMANTIC_CONN_NORM: (
+            "model.semantic_connector.norm",
+        ),
+        MODEL_TENSOR.VV_SEMANTIC_CONN_FC2: (
+            "model.semantic_connector.fc2",
+        ),
+        MODEL_TENSOR.VV_DIFF_NOISY_PROJ: (
+            "model.prediction_head.noisy_images_proj",
+        ),
+        MODEL_TENSOR.VV_DIFF_COND_PROJ: (
+            "model.prediction_head.cond_proj",
+        ),
+        MODEL_TENSOR.VV_DIFF_T_EMBD_FC1: (
+            "model.prediction_head.t_embedder.mlp.0",
+        ),
+        MODEL_TENSOR.VV_DIFF_T_EMBD_FC2: (
+            "model.prediction_head.t_embedder.mlp.2",
+        ),
+        MODEL_TENSOR.VV_DIFF_FINAL_ADALN: (
+            "model.prediction_head.final_layer.adaLN_modulation.1",
+        ),
+        MODEL_TENSOR.VV_DIFF_FINAL_PROJ: (
+            "model.prediction_head.final_layer.linear",
+        ),
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_HEAD: (
+            "model.acoustic_tokenizer.encoder.head.conv.conv",
+        ),
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_HEAD: (
+            "model.acoustic_tokenizer.decoder.head.conv.conv",
+        ),
+        MODEL_TENSOR.VV_SEMANTIC_ENC_HEAD: (
+            "model.semantic_tokenizer.encoder.head.conv.conv",
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -2992,6 +3040,33 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_V_EXP: (
             "model.layers.{bid}.self_attn.v_experts",  # k2-horizon
+        ),
+
+        # vibevoice
+        MODEL_TENSOR.VV_DIFF_NORM: (
+            "model.prediction_head.layers.{bid}.norm",
+        ),
+        MODEL_TENSOR.VV_DIFF_ADALN: (
+            "model.prediction_head.layers.{bid}.adaLN_modulation.1",
+        ),
+        MODEL_TENSOR.VV_DIFF_FFN_GATE: (
+            "model.prediction_head.layers.{bid}.ffn.gate_proj",
+        ),
+        MODEL_TENSOR.VV_DIFF_FFN_UP: (
+            "model.prediction_head.layers.{bid}.ffn.up_proj",
+        ),
+        MODEL_TENSOR.VV_DIFF_FFN_DOWN: (
+            "model.prediction_head.layers.{bid}.ffn.down_proj",
+        ),
+        MODEL_TENSOR.VV_ACOUSTIC_ENC_CONV: (
+            "model.acoustic_tokenizer.encoder.downsample_layers.{bid}.0.conv.conv",
+        ),
+        MODEL_TENSOR.VV_ACOUSTIC_DEC_CONV: (
+            "model.acoustic_tokenizer.decoder.upsample_layers.{bid}.0.conv.conv",     # stem (bid 0)
+            "model.acoustic_tokenizer.decoder.upsample_layers.{bid}.0.convtr.convtr", # upsample convtr
+        ),
+        MODEL_TENSOR.VV_SEMANTIC_ENC_CONV: (
+            "model.semantic_tokenizer.encoder.downsample_layers.{bid}.0.conv.conv",
         ),
     }
 

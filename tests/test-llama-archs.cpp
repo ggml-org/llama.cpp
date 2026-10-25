@@ -251,6 +251,33 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
 
+    if (arch == LLM_ARCH_VIBEVOICE) {
+        ms.add_kv(LLM_KV_VIBEVOICE_SPEECH_SCALING_FACTOR, 0.1962890625f);
+        ms.add_kv(LLM_KV_VIBEVOICE_SPEECH_BIAS_FACTOR, -0.04931640625f);
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_VAE_DIM, uint32_t(8));
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_N_FILTERS, uint32_t(4));
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_FIX_STD, 0.5f);
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_LAYERNORM_EPS, 1e-5f);
+        ms.add_kv(LLM_KV_VIBEVOICE_SEMANTIC_VAE_DIM, uint32_t(16));
+        ms.add_kv(LLM_KV_VIBEVOICE_SEMANTIC_N_FILTERS, uint32_t(4));
+        ms.add_kv(LLM_KV_VIBEVOICE_SEMANTIC_LAYERNORM_EPS, 1e-5f);
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_BLOCK_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_FEED_FORWARD_LEN, 3*n_embd);
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_LATENT_SIZE, uint32_t(8));
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_LAYERNORM_EPS, 1e-5f);
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_TRAIN_STEPS, uint32_t(1000));
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_INFERENCE_STEPS, uint32_t(20));
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_ENCODER_RATIOS, std::vector<uint32_t>{2, 2});
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_ENCODER_DEPTHS, std::vector<uint32_t>{1, 1, 2});
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_DECODER_RATIOS, std::vector<uint32_t>{2, 2});
+        ms.add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_DECODER_DEPTHS, std::vector<uint32_t>{2, 1, 1});
+        ms.add_kv(LLM_KV_VIBEVOICE_SEMANTIC_ENCODER_RATIOS, std::vector<uint32_t>{2, 2});
+        ms.add_kv(LLM_KV_VIBEVOICE_SEMANTIC_ENCODER_DEPTHS, std::vector<uint32_t>{1, 1, 2});
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_TYPE, "ddpm");
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_PREDICTION_TYPE, "v_prediction");
+        ms.add_kv(LLM_KV_VIBEVOICE_DIFFUSION_BETA_SCHEDULE, "cosine");
+    }
+
     if (arch == LLM_ARCH_K2_HORIZON) {
         ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, 128.0f);
         ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   4.0f);

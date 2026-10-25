@@ -7,6 +7,7 @@
 #include "llama.h"
 #include "llama-hparams.h"
 #include "llama-model.h"
+#include "models/models.h"
 #include "llama-vocab.h"
 #include "models/models.h"
 
@@ -489,6 +490,34 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ACTIVATION_SITU_BETA,              hparams.situ_beta);
     add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       hparams.situ_linear_beta);
 
+    if (model->arch == LLM_ARCH_VIBEVOICE) {
+        const auto & vv = hparams.vibevoice;
+        add_kv(LLM_KV_VIBEVOICE_SPEECH_SCALING_FACTOR, vv.speech_scaling_factor);
+        add_kv(LLM_KV_VIBEVOICE_SPEECH_BIAS_FACTOR, vv.speech_bias_factor);
+        add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_VAE_DIM, vv.acoustic.vae_dim);
+        add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_N_FILTERS, vv.acoustic.n_filters);
+        add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_FIX_STD, vv.acoustic.fix_std);
+        add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_LAYERNORM_EPS, vv.acoustic.f_norm_rms_eps);
+        add_kv(LLM_KV_VIBEVOICE_SEMANTIC_VAE_DIM, vv.semantic.vae_dim);
+        add_kv(LLM_KV_VIBEVOICE_SEMANTIC_N_FILTERS, vv.semantic.n_filters);
+        add_kv(LLM_KV_VIBEVOICE_SEMANTIC_LAYERNORM_EPS, vv.semantic.f_norm_rms_eps);
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_BLOCK_COUNT, vv.diff_n_layer);
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_FEED_FORWARD_LEN, vv.diff_n_ff);
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_LATENT_SIZE, vv.diff_latent_size);
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_LAYERNORM_EPS, vv.diff_f_norm_rms_eps);
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_TRAIN_STEPS, vv.diff_train_steps);
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_INFERENCE_STEPS, vv.diff_inference_steps);
+        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_VIBEVOICE_ACOUSTIC_ENCODER_RATIOS).c_str(), GGUF_TYPE_UINT32, vv.acoustic.enc_ratios.data(), vv.acoustic.n_enc_stages - 1);
+        add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_ENCODER_DEPTHS, std::vector<uint32_t>(vv.acoustic.enc_depths.begin(), vv.acoustic.enc_depths.begin() + vv.acoustic.n_enc_stages));
+        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_VIBEVOICE_ACOUSTIC_DECODER_RATIOS).c_str(), GGUF_TYPE_UINT32, vv.acoustic.dec_ratios.data(), vv.acoustic.n_dec_stages - 1);
+        add_kv(LLM_KV_VIBEVOICE_ACOUSTIC_DECODER_DEPTHS, std::vector<uint32_t>(vv.acoustic.dec_depths.begin(), vv.acoustic.dec_depths.begin() + vv.acoustic.n_dec_stages));
+        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_VIBEVOICE_SEMANTIC_ENCODER_RATIOS).c_str(), GGUF_TYPE_UINT32, vv.semantic.enc_ratios.data(), vv.semantic.n_enc_stages - 1);
+        add_kv(LLM_KV_VIBEVOICE_SEMANTIC_ENCODER_DEPTHS, std::vector<uint32_t>(vv.semantic.enc_depths.begin(), vv.semantic.enc_depths.begin() + vv.semantic.n_enc_stages));
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_TYPE, "ddpm");
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_PREDICTION_TYPE, "v_prediction");
+        add_kv(LLM_KV_VIBEVOICE_DIFFUSION_BETA_SCHEDULE, "cosine");
+    }
+
     // deprecated
     // add_kv(LLM_KV_TOKENIZER_PREFIX_ID,               ???);
     // add_kv(LLM_KV_TOKENIZER_SUFFIX_ID,               ???);
@@ -532,6 +561,51 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);
+
+    if (const auto * vv = dynamic_cast<const llama_model_vibevoice *>(model)) {
+        for (const auto * conn : { &vv->acoustic_conn, &vv->semantic_conn }) {
+            add_tensor(conn->fc1);
+            add_tensor(conn->fc1_b);
+            add_tensor(conn->norm);
+            add_tensor(conn->fc2);
+            add_tensor(conn->fc2_b);
+        }
+
+        add_tensor(vv->diff.noisy_proj);
+        add_tensor(vv->diff.cond_proj);
+        add_tensor(vv->diff.t_embd_fc1);
+        add_tensor(vv->diff.t_embd_fc2);
+        add_tensor(vv->diff.final_adaln);
+        add_tensor(vv->diff.final_proj);
+        for (const auto & layer : vv->diff.layers) {
+            add_tensor(layer.norm);
+            add_tensor(layer.adaln);
+            add_tensor(layer.ffn_gate);
+            add_tensor(layer.ffn_up);
+            add_tensor(layer.ffn_down);
+        }
+
+        for (const auto * part : { &vv->acoustic_enc, &vv->acoustic_dec, &vv->semantic_enc }) {
+            add_tensor(part->head);
+            add_tensor(part->head_b);
+            for (const auto & stage : part->stages) {
+                add_tensor(stage.conv);
+                add_tensor(stage.conv_b);
+                for (const auto & blk : stage.blocks) {
+                    add_tensor(blk.norm);
+                    add_tensor(blk.dwconv);
+                    add_tensor(blk.dwconv_b);
+                    add_tensor(blk.gamma);
+                    add_tensor(blk.ffn_norm);
+                    add_tensor(blk.ffn_up);
+                    add_tensor(blk.ffn_up_b);
+                    add_tensor(blk.ffn_down);
+                    add_tensor(blk.ffn_down_b);
+                    add_tensor(blk.ffn_gamma);
+                }
+            }
+        }
+    }
 
     // looped architectures alias physical tensors across cache slots; save each
     // tensor once. a different tensor with an existing name still asserts below

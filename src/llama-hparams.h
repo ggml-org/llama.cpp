@@ -56,6 +56,43 @@ struct llama_hparams_convnext {
     uint32_t n_layer;
 };
 
+#define LLAMA_MAX_VV_STAGES 16
+
+// VibeVoice sigma-VAE tokenizer, n_dec_stages is 0 for the encoder-only semantic tokenizer
+struct llama_hparams_vv_tokenizer {
+    uint32_t vae_dim;
+    uint32_t n_filters;
+    uint32_t n_enc_stages;
+    uint32_t n_dec_stages;
+
+    // each stage has one conv in front (stem or resample) and depths[i] blocks; ratios/depths are in HF config order
+    // (TokenizerEncoder reverses ratios at runtime; decoder uses them as stored)
+    std::array<uint32_t, LLAMA_MAX_VV_STAGES> enc_ratios;
+    std::array<uint32_t, LLAMA_MAX_VV_STAGES> enc_depths;
+    std::array<uint32_t, LLAMA_MAX_VV_STAGES> dec_ratios;
+    std::array<uint32_t, LLAMA_MAX_VV_STAGES> dec_depths;
+
+    float fix_std;
+    float f_norm_rms_eps;
+};
+
+struct llama_hparams_vibevoice {
+    llama_hparams_vv_tokenizer acoustic;
+    llama_hparams_vv_tokenizer semantic;
+
+    // DDPM diffusion head
+    uint32_t diff_n_layer;
+    uint32_t diff_n_ff;
+    uint32_t diff_latent_size;
+    uint32_t diff_train_steps;
+    uint32_t diff_inference_steps;
+    float    diff_f_norm_rms_eps;
+
+    // acoustic latent normalization
+    float speech_scaling_factor;
+    float speech_bias_factor;
+};
+
 struct llama_hparams {
     // note: use the `_impl` suffix to avoid name conflict between members and getters
     //       for example: n_embd_out() vs n_embd_out_impl
@@ -102,6 +139,8 @@ struct llama_hparams {
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
     struct llama_hparams_convnext convnext;
+
+    struct llama_hparams_vibevoice vibevoice;
 
     uint32_t n_shortconv_l_cache  = 0;
 
