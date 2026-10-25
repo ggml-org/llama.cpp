@@ -571,6 +571,32 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_mask(
     }
 }
 
+// GeForce cards run FP32-accumulate MMA at half rate.
+// With GGML_CUDA_FA_KQ_F16_ACC, KQ uses FP16 accumulate for GGML_CUDA_FA_KQ_F16_CHUNK k-steps, then adds the sum to FP32.
+#if defined(GGML_CUDA_FA_KQ_F16_ACC) && defined(TURING_MMA_AVAILABLE) && !defined(GGML_USE_HIP)
+#define FATTN_KQ_F16_ACC
+#ifndef GGML_CUDA_FA_KQ_F16_CHUNK
+#define GGML_CUDA_FA_KQ_F16_CHUNK 8
+#endif // GGML_CUDA_FA_KQ_F16_CHUNK
+
+template <typename T_C> struct fattn_kq_f16_acc_tile;
+template <> struct fattn_kq_f16_acc_tile<tile<16,  8, float>> { using type = tile<16, 4, half2>; };
+template <> struct fattn_kq_f16_acc_tile<tile<16, 16, float>> { using type = tile<16, 8, half2>; };
+
+// Float element 2*l+h and half2 element l, part h, hold the same matrix value.
+template <typename T_C, typename T_H>
+static __device__ __forceinline__ void fattn_kq_f16_carry(T_C & C, T_H & H) {
+    static_assert(T_C::ne == 2*T_H::ne, "bad tile pair");
+#pragma unroll
+    for (int l = 0; l < T_H::ne; ++l) {
+        const float2 tmp = __half22float2(H.x[l]);
+        C.x[2*l + 0] += tmp.x;
+        C.x[2*l + 1] += tmp.y;
+        H.x[l] = make_half2(0.0f, 0.0f);
+    }
+}
+#endif // defined(GGML_CUDA_FA_KQ_F16_ACC) && defined(TURING_MMA_AVAILABLE) && !defined(GGML_USE_HIP)
+
 template<int DKQ, int DV, int ncols1, int ncols2, int nwarps,
     bool use_logit_softcap, bool V_is_K_view, bool use_sparse, bool needs_fixup, bool is_fixup, bool last_iter, bool oob_check,
     typename T_A_KQ, typename T_B_KQ, typename T_C_KQ, typename T_A_VKQ, typename T_B_VKQ, typename T_C_VKQ>
@@ -666,10 +692,24 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 #pragma unroll
             for (int i_KQ_00 = 0; i_KQ_00 < nbatch_fa; i_KQ_00 += np*T_A_KQ::I) {
                 const int i_KQ_0 = i_KQ_00 + (threadIdx.y % np)*T_A_KQ::I;
+#ifdef FATTN_KQ_F16_ACC
+                typename fattn_kq_f16_acc_tile<T_C_KQ>::type KQ_C_h;
+#endif // FATTN_KQ_F16_ACC
 #pragma unroll
                 for (int k_KQ_0 = k0_start; k_KQ_0 < k0_stop; k_KQ_0 += T_A_KQ::J) {
                     T_A_KQ K_A;
                     load_ldmatrix_swizzled<stride_tile_K>(K_A, tile_K, i_KQ_0*stride_tile_K + k_KQ_0-k0_start);
+#ifdef FATTN_KQ_F16_ACC
+                    if constexpr (cols_per_warp == 8) {
+                        mma(KQ_C_h, K_A, Q_B[k_KQ_0/T_A_KQ::J]);
+                    } else {
+                        mma(KQ_C_h, Q_B[k_KQ_0/T_A_KQ::J], K_A);
+                    }
+                    const int step = (k_KQ_0 - k0_start)/T_A_KQ::J;
+                    if (step % GGML_CUDA_FA_KQ_F16_CHUNK == GGML_CUDA_FA_KQ_F16_CHUNK - 1 || k_KQ_0 + T_A_KQ::J >= k0_stop) {
+                        fattn_kq_f16_carry(KQ_C[i_KQ_00/(np*T_A_KQ::I)], KQ_C_h);
+                    }
+#else
                     if constexpr (cols_per_warp == 8) {
                         mma(KQ_C[i_KQ_00/(np*T_A_KQ::I)], K_A, Q_B[k_KQ_0/T_A_KQ::J]);
                     } else {
@@ -682,6 +722,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                         mma(KQ_C[i_KQ_00/(np*T_A_KQ::I)], Q_B[k_KQ_0/T_A_KQ::J], K_A);
 #endif // defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
                     }
+#endif // FATTN_KQ_F16_ACC
                 }
             }
         } else {
