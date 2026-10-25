@@ -186,16 +186,16 @@ std::string common_peg_ast_node::sanitized_text() const {
 
 void common_peg_ast_arena::visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const {
     // no recursion: the AST is several nodes deep per level of the input
-    std::vector<common_peg_ast_id> todo = { id };
-    while (!todo.empty()) {
-        const auto cur = todo.back();
-        todo.pop_back();
+    std::vector<common_peg_ast_id> stack = { id };
+    while (!stack.empty()) {
+        const auto cur = stack.back();
+        stack.pop_back();
         if (cur == COMMON_PEG_INVALID_AST_ID) {
             continue;
         }
         const auto & node = get(cur);
         visitor(node);
-        todo.insert(todo.end(), node.children.rbegin(), node.children.rend());
+        stack.insert(stack.end(), node.children.rbegin(), node.children.rend());
     }
 }
 
@@ -740,9 +740,6 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
         // only rules recurse, a recursive rule is entered once per input level
-        if (ctx.rule_depth.size() <= p.child) {
-            ctx.rule_depth.resize(p.child + 1, 0);
-        }
         if (ctx.rule_depth[p.child] >= COMMON_RECURSIVE_LIMIT) {
             throw common_peg_recursion_error("input is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
         }
@@ -832,6 +829,10 @@ common_peg_parse_result common_peg_arena::parse(common_peg_parse_context & ctx, 
     if (root_ == COMMON_PEG_INVALID_PARSER_ID) {
         throw std::runtime_error("No root parser set");
     }
+
+    // Initialize rule depth for all parsers
+    ctx.rule_depth.assign(parsers_.size(), 0);
+
     return parse(root_, ctx, start);
 }
 
