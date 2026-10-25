@@ -1418,19 +1418,19 @@ int main(int argc, char ** argv) {
         ggml_backend_execution_set_external_workspace(&op,true);
         t.assert_true(!get()->direct(backend.get(),&op));
     });
-    if (consumer) t.test("consumer_rejects_unsupported_mma_geometry_and_nonpadded_workspace_probes",[&](testing & t) {
+    if (consumer) t.test("consumer_rejects_unsupported_cache_formats_and_invalid_workspace_geometry",[&](testing & t) {
         auto * dev=ggml_backend_dev_by_name("CUDA0");
         ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
         auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
         if (!t.assert_true(get && get() && get()->mma_workspace)) return;
         size_t untouched=77;
-        for (auto pair : {std::pair{GGML_TYPE_Q5_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q8_0}}) {
+        for (auto pair : {std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q8_0,GGML_TYPE_IQ4_NL}}) {
             t.assert_true(!get()->mma_workspace(backend.get(),pair.first,pair.second,12,2,768,3,untouched));
             t.assert_equal(size_t(77),untouched);
         }
-        t.assert_true(!get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,8,2,768,3,untouched));
-        t.assert_true(!get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,12,2,767,3,untouched));
+        t.assert_true(!get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,7,2,768,3,untouched));
+        t.assert_true(!get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,12,2,0,3,untouched));
         t.assert_equal(size_t(77),untouched);
     });
     if (consumer) t.test("consumer_tg1_tg4_stock_family_scratch_and_span_equivalence",[&](testing & t) {

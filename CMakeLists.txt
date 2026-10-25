@@ -211,6 +211,11 @@ add_compile_options(
 # 3rd-party
 #
 
+# Avoid mixing CMake's default static CUDA runtime with ggml's shared runtime.
+if (WIN32 AND GGML_CUDA AND NOT GGML_STATIC AND NOT DEFINED CMAKE_CUDA_RUNTIME_LIBRARY)
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
+endif()
+
 if (LLAMA_USE_SYSTEM_GGML)
     message(STATUS "Using system-provided libggml, skipping ggml build")
     find_package(ggml REQUIRED)

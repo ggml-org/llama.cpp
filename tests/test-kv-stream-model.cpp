@@ -224,6 +224,8 @@ struct streamed_admission_probe {
     ggml_backend_reg_t reg;
     decltype(ggml_backend_reg_i::get_proc_address) original;
     ggml_kv_stream_partial_ops ops;
+    ggml_kv_stream_geometry_ops geometry;
+    const ggml_kv_stream_geometry_ops * original_geometry = nullptr;
     ggml_log_callback previous_log = nullptr;
     void * previous_data = nullptr;
     std::string log;
@@ -236,6 +238,18 @@ struct streamed_admission_probe {
         if (deny_resume) ops.resume_plan=[](ggml_backend_t,int32_t,int32_t,uint32_t,uint32_t,uint32_t,size_t,
                 ggml_kv_stream_resume_plan &) { return false; };
         else ops.decode_workspace=[](ggml_backend_t,int32_t,int32_t,uint32_t,uint32_t,uint32_t,size_t,size_t &) { return false; };
+        if (ops.version >= 15 && ops.geometry) {
+            original_geometry=ops.geometry;
+            geometry=*original_geometry;
+            ops.geometry=&geometry;
+            if (deny_resume) geometry.resume_plan=[](ggml_backend_t,const ggml_kv_stream_attention_request &,
+                    ggml_kv_stream_resume_plan &) { return false; };
+            else if (geometry.workspace) geometry.workspace=[](ggml_backend_t backend,const ggml_kv_stream_attention_request & request,
+                    ggml_kv_stream_workspace_kind kind,size_t & bytes) {
+                return kind != ggml_kv_stream_workspace_kind::decode &&
+                    active->original_geometry->workspace(backend,request,kind,bytes);
+            };
+        }
         reg->iface.get_proc_address=[](ggml_backend_reg_t reg,const char * name) -> void * {
             if (!std::strcmp(name,"ggml_backend_kv_stream_partial_ops"))
                 return reinterpret_cast<void *>(+[]() -> const ggml_kv_stream_partial_ops * { return &active->ops; });
