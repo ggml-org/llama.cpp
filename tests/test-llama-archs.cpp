@@ -8,6 +8,7 @@
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
@@ -54,40 +55,34 @@ struct tensor_data_params {
 // fills the values of one tensor, the name carries whatever the property needs
 typedef void (*tensor_filler)(std::vector<float> & dst, const char * name, const tensor_data_params & params);
 
-// fast splitmix64 generator for the deterministic tensor draws
-static inline uint64_t splitmix64(uint64_t & x) {
-    uint64_t z = (x += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
+// a pool of normal draws, generated once and reused for every model
+static std::vector<float> g_normal_pool;
+static const size_t NORMAL_POOL_SIZE = 16 * 1024 * 1024;
 
-// a uniform draw in (0,1] from a splitmix64 state, never 0 so logf stays finite
-static inline float uniform01(uint64_t & state) {
-    state = splitmix64(state);
-    return (float)((state >> 40) + 1) / 16777217.0f;
+// fill the pool once; each tensor copies a slice of it
+static void init_normal_pool(const size_t seed, const float stdev) {
+    g_normal_pool.resize(NORMAL_POOL_SIZE);
+    std::mt19937 gen(seed);
+    std::normal_distribution<float> dist(0.0f, stdev);
+    for (float & v : g_normal_pool) {
+        v = dist(gen);
+    }
 }
 
 // a normal draw keyed on a name, so that tensors which share a draw ask for the same key
-static void fill_normal(std::vector<float> & dst, const char * key, const tensor_data_params & params) {
-    uint64_t state = params.seed ^ std::hash<std::string>{}(key);
-    const float scale = params.stdev;
-    const float tau = 2.0f*3.141592653589793f;
+static void fill_normal(std::vector<float> & dst, const char * key, const tensor_data_params &) {
+    const size_t n = dst.size();
+    const size_t pool_size = g_normal_pool.size();
+    const size_t start = std::hash<std::string>{}(key) % pool_size;
 
+    // copy a cyclic slice of the pool, so a tensor larger than the pool still fills
     size_t i = 0;
-    for (; i + 1 < dst.size(); i += 2) {
-        // box-muller: two uniforms produce two independent normals
-        const float u1 = uniform01(state);
-        const float u2 = uniform01(state);
-        const float r  = sqrtf(-2.0f*logf(u1)) * scale;
-        const float th = tau*u2;
-        dst[i]   = r*cosf(th);
-        dst[i+1] = r*sinf(th);
-    }
-    if (i < dst.size()) {
-        const float u1 = uniform01(state);
-        const float u2 = uniform01(state);
-        dst[i] = sqrtf(-2.0f*logf(u1)) * scale * cosf(tau*u2);
+    size_t pos = start;
+    while (i < n) {
+        const size_t chunk = std::min(pool_size - pos, n - i);
+        std::memcpy(dst.data() + i, g_normal_pool.data() + pos, chunk * sizeof(float));
+        i += chunk;
+        pos = 0;
     }
 }
 
@@ -1456,6 +1451,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
+
+    init_normal_pool(seed, stdev);
 
     try {
         if (!out.empty()) {
