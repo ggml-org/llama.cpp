@@ -193,10 +193,10 @@ public:
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
     // attention over the cells of each sequence of the ubatch instead of the whole cache (see ggml_flash_attn_ext_rows)
-    // the ubatch splits into n_slices groups of tokens with one sequence each, 0 if it does not
+    // the ubatch splits into n_slices groups of tokens with one sequence each, 1 if it cannot
     static uint32_t get_n_kv_slices(const llama_ubatch & ubatch);
 
-    // padded length of the cell list of each slice, 0 if the ubatch should attend to the whole cache
+    // padded length of the cell list of each slice; a single slice attends to the whole cache
     uint32_t get_n_kv_rows(const llama_ubatch & ubatch, uint32_t n_kv) const;
 
     // get views of the current state of the cache

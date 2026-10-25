@@ -1310,43 +1310,39 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
     if (ubatch.n_tokens == ubatch.n_seqs_unq) {
         for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
             if (ubatch.n_seq_id[i] != 1) {
-                return 0;
+                return 1;
             }
         }
 
         return ubatch.n_tokens;
     }
 
-    return 0;
+    // cannot split into per-sequence slices - attend to the whole cache as one slice
+    return 1;
 }
 
 uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch, uint32_t n_kv) const {
-    if (n_stream != 1 || get_n_kv_slices(ubatch) == 0) {
+    if (n_stream != 1) {
         return 0;
     }
 
     const auto & cells = v_cells[0];
 
+    const uint32_t n_pad_cur = std::max(n_pad, 256u);
+
+    // a single slice attends to the whole cache (one sequence, or a batch that cannot split)
+    if (get_n_kv_slices(ubatch) == 1) {
+        return std::min(n_kv, get_size());
+    }
+
     uint32_t n_max = 0;
-    uint32_t n_sum = 0;
 
     for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-        const uint32_t n_cells = cells.seq_n_cells(ubatch.seq_id_unq[s]);
-
-        n_max  = std::max(n_max, n_cells);
-        n_sum += n_cells;
+        n_max = std::max(n_max, cells.seq_n_cells(ubatch.seq_id_unq[s]));
     }
 
     // pad like n_kv so that the graph can be reused
-    const uint32_t n_pad_cur = std::max(n_pad, 256u);
-    const uint32_t n_rows    = GGML_PAD(n_max, n_pad_cur);
-
-    // cells shared by the sequences (f.ex. a common prompt) are cheaper to attend once over the whole cache
-    if (n_rows >= n_kv || n_sum > n_kv) {
-        return 0;
-    }
-
-    return n_rows;
+    return std::min(GGML_PAD(n_max, n_pad_cur), get_size());
 }
 
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
@@ -1884,6 +1880,18 @@ void llama_kv_cache::set_input_kv_rows(ggml_tensor * dst, const llama_ubatch * u
     const auto & cells = v_cells[0];
 
     int32_t * data = (int32_t *) dst->data;
+
+    // a batch that cannot split into per-sequence slices attends to the whole cache
+    if (n_slices == 1 && ubatch->n_seqs_unq > 1) {
+        int32_t n = 0;
+        for (uint32_t i = 0; i < cells.size() && n < n_rows; ++i) {
+            if (!cells.is_empty(i)) {
+                data[n++] = (int32_t) i;
+            }
+        }
+        std::fill(data + n, data + n_rows, -1);
+        return;
+    }
 
     for (int64_t s = 0; s < n_slices; ++s) {
         int32_t * rows = data + s*n_rows;
