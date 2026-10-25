@@ -166,6 +166,26 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
                 cb(Qcur, "Qcur_normed", il);
                 cb(Kcur, "Kcur_normed", il);
             }
+            if (model.layers[il].attn_ctrl_fc1 != nullptr) {
+                // kail: attention controller + per-head temperature, folded into Q
+                ggml_tensor * ctrl = ggml_mul_mat(ctx0, model.layers[il].attn_ctrl_fc1, cur);
+                ctrl = ggml_add(ctx0, ctrl, model.layers[il].attn_ctrl_fc1_b);
+                ctrl = ggml_silu(ctx0, ctrl);
+                ctrl = ggml_mul_mat(ctx0, model.layers[il].attn_ctrl_fc2, ctrl);
+                ctrl = ggml_add(ctx0, ctrl, model.layers[il].attn_ctrl_fc2_b);
+                ctrl = ggml_scale(ctx0, ggml_sigmoid(ctx0, ctrl), 2.0f);
+                cb(ctrl, "ctrl_scale", il);
+
+                ggml_tensor * temp = ggml_reshape_2d(ctx0, model.layers[il].attn_temp, model.layers[il].attn_temp->ne[0], 1);
+                temp = ggml_repeat(ctx0, temp, ctrl);
+
+                ggml_tensor * scale = ggml_mul(ctx0, ctrl, temp);
+                scale = ggml_reshape_3d(ctx0, scale, 1, scale->ne[0], scale->ne[1]);
+                cb(scale, "ctrl_scale_3d", il);
+
+                Qcur = ggml_mul(ctx0, Qcur, scale);
+                cb(Qcur, "Qcur_scaled", il);
+            }
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
@@ -186,12 +206,27 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
+            ggml_tensor * ffn_gate_scale = nullptr;
+            if (model.layers[il].ffn_router_fc1 != nullptr) {
+                // kail: feature router gating of the gated MLP; the router weight is
+                // passed to build_ffn and applied to the activated gate, so the FFN
+                // bias and LoRA tensors are handled by the shared helper
+                ggml_tensor * route = ggml_mul_mat(ctx0, model.layers[il].ffn_router_fc1, cur);
+                route = ggml_add(ctx0, route, model.layers[il].ffn_router_fc1_b);
+                route = ggml_silu(ctx0, route);
+                route = ggml_mul_mat(ctx0, model.layers[il].ffn_router_fc2, route);
+                route = ggml_add(ctx0, route, model.layers[il].ffn_router_fc2_b);
+                route = ggml_scale(ctx0, ggml_sigmoid(ctx0, route), 2.0f);
+                cb(route, "ffn_router", il);
+                ffn_gate_scale = route;
+            }
+
             cur = build_ffn(cur,
                     model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
                     model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
                     NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, il);
+                    LLM_FFN_SILU, LLM_FFN_PAR, il, ffn_gate_scale);
             cb(cur, "ffn_out", il);
         } else {
             // MoE branch

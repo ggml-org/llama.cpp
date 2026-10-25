@@ -663,6 +663,7 @@ class MODEL_ARCH(IntEnum):
     QWEN3TTS         = auto()
     POCKETTTS        = auto()
     K2HORIZON        = auto()
+    KAIL             = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1288,6 +1289,12 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # kail
+    ATTN_CTRL_FC1          = auto()
+    ATTN_CTRL_FC2          = auto()
+    ATTN_TEMP              = auto()
+    FFN_ROUTER_FC1         = auto()
+    FFN_ROUTER_FC2         = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1447,6 +1454,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
     MODEL_ARCH.POCKETTTS:        "pockettts",
     MODEL_ARCH.K2HORIZON:        "k2-horizon",
+    MODEL_ARCH.KAIL:             "kail",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1493,6 +1501,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_ROT_EMBD:             "blk.{bid}.attn_rot_embd",
     MODEL_TENSOR.ATTN_SINKS:                "blk.{bid}.attn_sinks",
     MODEL_TENSOR.ATTN_GATE:                 "blk.{bid}.attn_gate",
+    MODEL_TENSOR.ATTN_CTRL_FC1:             "blk.{bid}.attn_ctrl_fc1",
+    MODEL_TENSOR.ATTN_CTRL_FC2:             "blk.{bid}.attn_ctrl_fc2",
+    MODEL_TENSOR.ATTN_TEMP:                 "blk.{bid}.attn_temp",
+    MODEL_TENSOR.FFN_ROUTER_FC1:            "blk.{bid}.ffn_router_fc1",
+    MODEL_TENSOR.FFN_ROUTER_FC2:            "blk.{bid}.ffn_router_fc2",
     MODEL_TENSOR.ATTN_Q_NORM:               "blk.{bid}.attn_q_norm",
     MODEL_TENSOR.ATTN_K_NORM:               "blk.{bid}.attn_k_norm",
     MODEL_TENSOR.ATTN_OUT_NORM:             "blk.{bid}.attn_output_norm",
@@ -2396,6 +2409,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.KAIL: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_CTRL_FC1,
+        MODEL_TENSOR.ATTN_CTRL_FC2,
+        MODEL_TENSOR.ATTN_TEMP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_ROUTER_FC1,
+        MODEL_TENSOR.FFN_ROUTER_FC2,
     ],
     MODEL_ARCH.LLAMA4: [
         MODEL_TENSOR.TOKEN_EMBD,

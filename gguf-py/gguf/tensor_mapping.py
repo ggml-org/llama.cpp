@@ -277,6 +277,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_query",                        # talkie
+            "model.layers.{bid}.self_attn._base_attn.q_proj",            # kail
         ),
 
         # Attention key
@@ -299,6 +300,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
             "model.blocks.{bid}.attn.attn_key",                        # talkie
+            "model.layers.{bid}.self_attn._base_attn.k_proj",          # kail
         ),
 
         # Attention value
@@ -320,6 +322,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_value",                        # talkie
+            "model.layers.{bid}.self_attn._base_attn.v_proj",            # kail
         ),
 
         # Attention output
@@ -362,6 +365,30 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.language_expert_dense",           # cogvlm
             "model.blocks.{bid}.attn.attn_resid",                           # talkie
             "head.layers.{bid}.self_attn.out_proj",  # laya
+            "model.layers.{bid}.self_attn._base_attn.o_proj",  # kail
+        ),
+
+        # KailA attention controller (context-aware logit scaling)
+        MODEL_TENSOR.ATTN_CTRL_FC1: (
+            "model.layers.{bid}.self_attn.controller.gate.0",  # kail
+        ),
+
+        MODEL_TENSOR.ATTN_CTRL_FC2: (
+            "model.layers.{bid}.self_attn.controller.gate.2",  # kail
+        ),
+
+        # KailA per-head attention temperature
+        MODEL_TENSOR.ATTN_TEMP: (
+            "model.layers.{bid}.self_attn.attn_temperature",  # kail
+        ),
+
+        # KailA feature router (FFN gate modulation)
+        MODEL_TENSOR.FFN_ROUTER_FC1: (
+            "model.layers.{bid}.mlp.feature_router.router.0",  # kail
+        ),
+
+        MODEL_TENSOR.FFN_ROUTER_FC2: (
+            "model.layers.{bid}.mlp.feature_router.router.2",  # kail
         ),
 
         # Attention output norm

@@ -313,6 +313,13 @@ struct llama_layer {
     struct ggml_tensor * attn_v_gate_b = nullptr;
     struct ggml_tensor * attn_v_exps   = nullptr;
 
+    // KailA attention controller
+    struct ggml_tensor * attn_ctrl_fc1   = nullptr;
+    struct ggml_tensor * attn_ctrl_fc1_b = nullptr;
+    struct ggml_tensor * attn_ctrl_fc2   = nullptr;
+    struct ggml_tensor * attn_ctrl_fc2_b = nullptr;
+    struct ggml_tensor * attn_temp       = nullptr;
+
     // relative position bias
     struct ggml_tensor * attn_rel_b       = nullptr;
     struct ggml_tensor * attn_rel_b_enc   = nullptr;
@@ -337,6 +344,12 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc   = nullptr;
+
+    // KailA feature router
+    struct ggml_tensor * ffn_router_fc1   = nullptr;
+    struct ggml_tensor * ffn_router_fc1_b = nullptr;
+    struct ggml_tensor * ffn_router_fc2   = nullptr;
+    struct ggml_tensor * ffn_router_fc2_b = nullptr;
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp      = nullptr;
