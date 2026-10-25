@@ -663,6 +663,7 @@ struct ggml_backend_opencl_context {
     size_t max_workgroup_size;
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
+    bool has_khr_subgroup_shuffle = false;
     bool has_subgroup_shuffle = false;       // cl_khr_subgroup_shuffle or cl_qcom_subgroup_shuffle
     bool has_integer_dot      = false;       // cl_khr_integer_dot_product or cl_qcom_dot_product8
     bool has_qcom_subgroup_shuffle = false;  // specifically cl_qcom_subgroup_shuffle
@@ -755,6 +756,7 @@ struct ggml_backend_opencl_context {
     // prealloc buffers for src0 and src1
     ggml_cl_buffer prealloc_src0;
     ggml_cl_buffer prealloc_src1;
+    ggml_cl_buffer prealloc_top_k;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_buffer prealloc_adreno_xmem_const;
@@ -869,6 +871,8 @@ struct ggml_backend_opencl_context {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_adreno_xmem_attn_state adreno_xmem_attn;
 #endif
+    cl_kernel kernel_top_k_f32, kernel_top_k_merge_f32;
+    cl_kernel kernel_lightning_indexer;
     cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_i32, kernel_get_rows_q4_0;
     cl_kernel kernel_set_rows_f32_i64, kernel_set_rows_f32_i32, kernel_set_rows_f16_i64, kernel_set_rows_f16_i32;
     cl_kernel kernel_set_rows_q8_0_i64, kernel_set_rows_q8_0_i32;
@@ -2088,6 +2092,37 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_swiglu_clamp_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_clamp_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_erf_f16   = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_quick_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick_f16", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // lightning_indexer
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "lightning_indexer.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("lightning_indexer.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_lightning_indexer = clCreateKernel(prog, "kernel_lightning_indexer", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
+    // top_k
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "top_k.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("top_k.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_top_k_f32 = clCreateKernel(prog, "kernel_top_k_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_top_k_merge_f32 = clCreateKernel(prog, "kernel_top_k_merge_f32", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -7437,9 +7472,8 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
 
     // subgroup shuffle support (N_SPLIT>1 FA kernel)
     backend_ctx->has_qcom_subgroup_shuffle = strstr(ext_buffer.data(), "cl_qcom_subgroup_shuffle") != NULL;
-    backend_ctx->has_subgroup_shuffle =
-        strstr(ext_buffer.data(), "cl_khr_subgroup_shuffle") != NULL ||
-        backend_ctx->has_qcom_subgroup_shuffle;
+    backend_ctx->has_khr_subgroup_shuffle = strstr(ext_buffer.data(), "cl_khr_subgroup_shuffle") != NULL;
+    backend_ctx->has_subgroup_shuffle = backend_ctx->has_khr_subgroup_shuffle || backend_ctx->has_qcom_subgroup_shuffle;
 
     // check for cl_khr_integer_dot_product
     // cl_qcom_dot_product8 uses signed * unsigned
@@ -9943,6 +9977,14 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_I32 &&
                    ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
                    backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_argmax_f32_i32) >= 64;
+        case GGML_OP_LIGHTNING_INDEXER:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16 || op->src[1]->type == GGML_TYPE_BF16) &&
+                   op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F16 &&
+                   op->src[0]->nb[0] == sizeof(float) && op->src[1]->nb[0] == ggml_type_size(op->src[1]->type) &&
+                   op->src[2]->nb[0] == sizeof(float) && op->src[3]->nb[0] == sizeof(ggml_fp16_t);
+        case GGML_OP_TOP_K:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_I32;
         case GGML_OP_ARGSORT: {
             load_cl_kernels_argsort(backend_ctx);
 
@@ -30991,6 +31033,157 @@ static void ggml_cl_argmax(ggml_backend_t backend, const ggml_tensor * src0, con
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+static void ggml_cl_lightning_indexer(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+    cl_kernel kernel = backend_ctx->kernel_lightning_indexer;
+    const ggml_tensor * src2 = dst->src[2];
+    const ggml_tensor * src3 = dst->src[3];
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *) src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl * extra2 = (ggml_tensor_extra_cl *) src2->extra;
+    ggml_tensor_extra_cl * extra3 = (ggml_tensor_extra_cl *) src3->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    const cl_ulong offset0 = extra0->offset + src0->view_offs;
+    const cl_ulong offset1 = extra1->offset + src1->view_offs;
+    const cl_ulong offset2 = extra2->offset + src2->view_offs;
+    const cl_ulong offset3 = extra3->offset + src3->view_offs;
+    const cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    const int head_size = src0->ne[0];
+    const int n_heads   = src0->ne[1];
+    const int n_tokens  = src0->ne[2];
+    const int n_keys    = src1->ne[2];
+    const int n_masks   = src3->ne[3];
+    // Keep the local-memory reduction for small grids or few heads.
+    const int use_shuffle = head_size == 128 && backend_ctx->has_khr_subgroup_shuffle && n_heads >= 32 && ggml_nelements(dst) >= 1024;
+    // BF16 tensors are stored as F16 on the device.
+    const int type_k = src1->type == GGML_TYPE_F32 ? 0 : 1;
+
+    const cl_ulong nbq1 = src0->nb[1];
+    const cl_ulong nbq2 = src0->nb[2];
+    const cl_ulong nbq3 = src0->nb[3];
+    const cl_ulong nbk2 = src1->nb[2];
+    const cl_ulong nbk3 = src1->nb[3];
+    const cl_ulong nbw1 = src2->nb[1];
+    const cl_ulong nbw3 = src2->nb[3];
+    const cl_ulong nbm1 = src3->nb[1];
+    const cl_ulong nbm3 = src3->nb[3];
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra2->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset2));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extra3->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offset3));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &head_size));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &n_heads));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &n_tokens));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &n_keys));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &n_masks));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &type_k));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nbq1));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nbq2));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nbq3));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nbk2));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_ulong), &nbk3));
+    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong), &nbw1));
+    CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong), &nbw3));
+    CL_CHECK(clSetKernelArg(kernel, 23, sizeof(cl_ulong), &nbm1));
+    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(cl_ulong), &nbm3));
+    CL_CHECK(clSetKernelArg(kernel, 25, sizeof(int),      &use_shuffle));
+
+    const int keys_per_group = use_shuffle ? 16 : 4;
+    size_t global_work_size[] = {(size_t) ((src1->ne[2] + keys_per_group - 1)/keys_per_group)*64, (size_t) src0->ne[2], (size_t) src0->ne[3]};
+    size_t local_work_size[]  = {64, 1, 1};
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+}
+
+static void ggml_cl_top_k(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_UNUSED(src1);
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *) src0->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    const cl_ulong offset0 = extra0->offset + src0->view_offs;
+    const cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    GGML_TENSOR_LOCALS(int,      ne0, src0, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
+
+    const int k = dst->ne[0];
+    cl_kernel kernel = backend_ctx->kernel_top_k_f32;
+    const int max_wg = backend_ctx->get_kernel_workgroup_size(kernel);
+
+    int nth = 1;
+    const int target = MIN(512, MAX(32, ne00/4));
+    while (2*nth <= MIN(target, max_wg)) {
+        nth *= 2;
+    }
+
+    const size_t n_rows = ggml_nrows(src0);
+    const bool tiled = ne00 > 32768 && k > 0 && k <= 256 && n_rows <= 4;
+    const int tile_width = tiled ? 4096 : ne00;
+    const int n_tiles = tiled ? 1 + (ne00 - 1)/tile_width : 1;
+    const int n_candidates = (n_tiles - 1)*k + MIN(k, ne00 - (n_tiles - 1)*tile_width);
+    cl_mem candidates = nullptr;
+    if (tiled) {
+        GGML_ASSERT(n_rows <= SIZE_MAX/sizeof(cl_uint2)/(size_t) n_candidates);
+        backend_ctx->prealloc_top_k.allocate(backend_ctx->context, n_rows*(size_t) n_candidates*sizeof(cl_uint2));
+        candidates = backend_ctx->prealloc_top_k.buffer;
+    }
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb00));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &k));
+    CL_CHECK(clSetKernelArg(kernel, 12, MAX(259, 2*nth)*sizeof(cl_uint), nullptr));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_mem),   &candidates));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &tile_width));
+
+    size_t global_work_size[] = {(size_t) nth*n_tiles, n_rows, 1};
+    size_t local_work_size[]  = {(size_t) nth, 1, 1};
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+
+    if (tiled) {
+        // The global top-k is contained in the top-k of each tile.
+        kernel = backend_ctx->kernel_top_k_merge_f32;
+        const int max_wg_merge = backend_ctx->get_kernel_workgroup_size(kernel);
+
+        int nth_merge = 1;
+        const int target_merge = MIN(512, MAX(32, n_candidates/4));
+        while (2*nth_merge <= MIN(target_merge, max_wg_merge)) {
+            nth_merge *= 2;
+        }
+
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &candidates));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(int),      &n_candidates));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(int),      &k));
+        CL_CHECK(clSetKernelArg(kernel,  5, MAX(259, 2*nth_merge)*sizeof(cl_uint), nullptr));
+
+        global_work_size[0] = nth_merge;
+        local_work_size[0] = nth_merge;
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+    }
+}
+
 static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -31909,6 +32102,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_argmax;
+            break;
+        case GGML_OP_LIGHTNING_INDEXER:
+            func = ggml_cl_lightning_indexer;
+            break;
+        case GGML_OP_TOP_K:
+            func = ggml_cl_top_k;
             break;
         case GGML_OP_ARGSORT:
             if (!any_on_device) {

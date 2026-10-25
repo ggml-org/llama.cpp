@@ -66,6 +66,8 @@ set(GGML_OPENCL_KERNELS
     moe_add_id_glu
     argmax
     argsort
+    top_k
+    lightning_indexer
     tri
     fill
     clamp
