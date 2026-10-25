@@ -1064,6 +1064,8 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
             const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model.get(), path.c_str());
+            const std::uintmax_t size = std::filesystem::file_size(path);
+            LOG_INF("%s: Saved %s model (%s) to %s (%" PRIuMAX " bytes, %.2f MB)\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str(), size, (double) size / (1024.0 * 1024.0));
         }
     }
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
