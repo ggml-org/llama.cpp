@@ -253,6 +253,62 @@ struct llama_moe_cache::impl {
     // views used by copy_experts
     ggml_context_ptr ctx_views;
 
+    // splits the groups whose biggest bank does not fit in one allocation of the device into groups of
+    // contiguous layers with proportionally split slots, each with its own SLRU
+    static void split_groups(std::vector<group> & groups, const std::vector<device> & devices, int32_t n_expert_used) {
+        for (size_t ig = 0; ig < groups.size(); ++ig) {
+            group & g = groups[ig];
+            if (g.n_slots == 0) {
+                continue;
+            }
+            const size_t max_bank_bytes = ggml_backend_buft_get_max_alloc_size(devices[g.id].buft);
+            if (max_bank_bytes == SIZE_MAX) {
+                continue;
+            }
+            const char * dev_name = ggml_backend_dev_name(ggml_backend_buft_get_device(devices[g.id].buft));
+            // slots that fit in one allocation: the biggest bank, padded, plus the extra slot
+            const size_t alignment = ggml_backend_buft_get_alignment(devices[g.id].buft);
+            int32_t slots_max = g.n_slots;
+            for (const ggml_tensor * t : g.ref) {
+                const size_t ref_slots_max = max_bank_bytes > alignment ? (max_bank_bytes - alignment)/t->nb[2] : 0;
+                slots_max = (int32_t) std::min<size_t>(slots_max, ref_slots_max > 0 ? ref_slots_max - 1 : 0);
+            }
+            // groups needed so that every bank fits into one allocation
+            const int32_t k = slots_max > 0 ? (g.n_slots + slots_max - 1)/slots_max : 1;
+            if (k < 2) {
+                if (slots_max == 0) {
+                    throw std::runtime_error(std::string(dev_name) + ": MoE cache: the max allocation is smaller than one expert slot");
+                }
+                continue;
+            }
+            if (k > (int32_t) g.layers.size()) {
+                throw std::runtime_error(std::string(dev_name) + ": MoE cache: the max allocation requires more groups than layers");
+            }
+            if (k > g.n_slots/n_expert_used) {
+                throw std::runtime_error(std::string(dev_name) + ": MoE cache: the max allocation requires groups with less slots than the experts of one token");
+            }
+            LLAMA_LOG_INFO("%s: %s: splitting %zu layers into %d groups, max bank below %.2f MiB\n", __func__,
+                ggml_type_name(g.ref.back()->type), g.layers.size(), k, max_bank_bytes/1024.0/1024.0);
+            const int32_t n_layers = (int32_t) g.layers.size();
+            const int32_t n_slots  = g.n_slots;
+            std::vector<group> parts;
+            for (int32_t i = 0; i < k; ++i) {
+                group & p = parts.emplace_back();
+                p.id  = g.id;
+                p.ref = g.ref;
+                const int32_t l0 = (int32_t) ((int64_t) n_layers*i/k);
+                const int32_t l1 = (int32_t) ((int64_t) n_layers*(i + 1)/k);
+                const int32_t s0 = (int32_t) ((int64_t) n_slots*i/k);
+                const int32_t s1 = (int32_t) ((int64_t) n_slots*(i + 1)/k);
+                p.layers.assign(g.layers.begin() + l0, g.layers.begin() + l1);
+                p.n_slots = s1 - s0;
+            }
+            g = std::move(parts[0]);
+            groups.insert(groups.begin() + ig + 1, parts.begin() + 1, parts.end());
+            ig += (size_t) (k - 1);
+        }
+    }
+
     impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size) :
             n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
         for (size_t i = 0; i < backends.size(); ++i) {
@@ -358,7 +414,16 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
-            g.slru.init(model.layers.size(), n_expert, g.n_slots);
+        }
+
+        // banks bigger than a single allocation of the device can not be allocated (4 GiB on RADV)
+        split_groups(groups, devices, n_expert_used);
+
+        for (group & g : groups) {
+            if (g.n_slots == 0) {
+                continue;
+            }
+            g.slru.init(model.layers.size(), g.ref[0]->ne[2], g.n_slots);
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
             n_tensors_host  += g.layers.size();
         }
