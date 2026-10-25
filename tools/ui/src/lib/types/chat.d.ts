@@ -3,7 +3,6 @@ import type { DatabaseMessage, DatabaseMessageExtra } from './database';
 import type {
 	AttachmentAction,
 	AttachmentItemEnabledWhen,
-	AttachmentItemVisibleWhen,
 	AttachmentMenuItemId,
 	ChatFormCommandAction,
 	ErrorDialogType,
@@ -30,8 +29,6 @@ export interface AttachmentMenuItem {
 	disabledTooltip?: string;
 	/** Callback key on the Props interface to invoke when clicked */
 	action: AttachmentAction;
-	/** Whether the item is only shown when a specific capability is present */
-	visibleWhen?: AttachmentItemVisibleWhen;
 	/** Whether this item has a tooltip even when enabled (uses dynamic text) */
 	hasEnabledTooltip?: boolean;
 }
@@ -252,7 +249,7 @@ export interface ChatMessageDeletionInfo {
  * refresh + user-action notification), passed to each ChatMessage as a prop.
  */
 export interface ChatMessageActions {
-	copy: (message: DatabaseMessage) => void;
+	copy: (message: DatabaseMessage, contentOverride?: string) => void;
 	delete: (message: DatabaseMessage) => void;
 	navigateToSibling: (siblingId: string) => void;
 	editWithBranching: (
@@ -328,19 +325,14 @@ export type ChatMessageEditContext = ChatMessageEditState &
 
 /**
  * Actions and capability flags for the ChatForm add-menu. Set once in
- * ChatFormActions.svelte and consumed by its deep descendants (the add sheet,
- * dropdown and MCP servers submenu) to avoid relaying them through props.
+ * ChatFormActions.svelte and consumed by its deep descendants (the add sheet
+ * and dropdown) to avoid relaying them through props.
  */
 export interface ChatFormActionsContext {
 	readonly disabled: boolean;
 	readonly hasAudioModality: boolean;
 	readonly hasVideoModality: boolean;
 	readonly hasVisionModality: boolean;
-	readonly hasMcpPromptsSupport: boolean;
-	readonly hasMcpResourcesSupport: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpPromptClick?: () => void;
-	onMcpResourcesClick?: () => void;
-	onMcpSettingsClick?: () => void;
 }

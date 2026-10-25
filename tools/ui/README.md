@@ -54,10 +54,13 @@ Llama UI supports two server operation modes:
 
 ### Multi-Model Support (ROUTER mode)
 
+- **Models manager** - one table for every model the server can serve, split into loaded, downloading, favorites, local and hidden sections, with search, context/capability/modality filters, sorting, load/unload, delete from disk and hide. It opens from the sidebar, from a model row or from the selector.
 - **Model selector** with Loaded/Available groups
 - **Automatic loading** - Models load on selection
 - **Modality validation** - Prevents sending images to non-vision models
 - **LRU unloading** - Server auto-manages model cache
+- **Downloads** - In-flight downloads stay visible above the selector and can be paused, resumed or cancelled from the manager
+- **Hub metadata** - Avatars, context length and chat template come from the Hugging Face Hub only while the `Use Hugging Face Hub API for models metadata` setting is on. It is off by default, and the UI then shows what the server reports for `/v1/models`
 
 ### Keyboard Shortcuts
 
@@ -115,7 +118,7 @@ This starts:
 - **Vite dev server** at `http://localhost:5173` - The main UI frontend app
 - **Storybook** at `http://localhost:6006` - Component documentation
 
-The Vite dev server proxies API requests to `SERVER_ORIGIN` (with fallback to default llama-server `8080` port):
+The Vite dev server proxies API requests to `SERVER_ORIGIN` (with fallback to default llama-server `9931` port):
 
 ```typescript
 // vite.config.ts proxy configuration
@@ -144,6 +147,7 @@ proxy: {
 | ----------------- | ------------------------------- | -------------------------------------------------------- |
 | **Framework**     | SvelteKit + Svelte 5            | Reactive UI with runes (`$state`, `$derived`, `$effect`) |
 | **UI Components** | shadcn-svelte + bits-ui         | Accessible, customizable component library               |
+| **Drawers**       | vaul-svelte                     | Draggable drawer overlays (mobile pickers, model pane)   |
 | **Styling**       | TailwindCSS 4                   | Utility-first CSS with design tokens                     |
 | **Database**      | IndexedDB (Dexie)               | Client-side storage for conversations and messages       |
 | **Build**         | Vite                            | Fast bundling with static adapter                        |
@@ -239,31 +243,44 @@ Routes → Components → Hooks → Stores → Services → Storage/API
 
 ### High-Level Architecture
 
-See: [`docs/architecture/high-level-architecture-simplified.md`](docs/architecture/high-level-architecture-simplified.md)
-
 ```mermaid
 flowchart TB
     subgraph Routes["📍 Routes"]
         R1["/ (Welcome)"]
         R2["/chat/[id]"]
+        R3["/mcp-servers"]
+        R4["/search"]
+        R5["/settings"]
         RL["+layout.svelte"]
     end
 
     subgraph Components["🧩 Components"]
-        C_Sidebar["ChatSidebar"]
         C_Screen["ChatScreen"]
         C_Form["ChatForm"]
         C_Messages["ChatMessages"]
-        C_ModelsSelector["ModelsSelector"]
+        C_Sidebar["ChatSidebar"]
+        C_Models["ModelsSelector"]
         C_Settings["ChatSettings"]
+        C_Mcp["McpServers"]
+    end
+
+    subgraph Hooks["🔌 Hooks"]
+        H1["use-chat-screen-active-model"]
+        H2["use-processing-state"]
+        H3["use-context-gauge"]
+        H4["use-models-selector"]
+        H5["use-tools-panel"]
     end
 
     subgraph Stores["🗄️ Stores"]
         S1["chatStore"]
         S2["conversationsStore"]
         S3["modelsStore"]
-        S4["serverStore"]
-        S5["settingsStore"]
+        S4["mcpStore"]
+        S5["agenticStore"]
+        S6["serverStore"]
+        S7["settingsStore"]
+        S8["toolsStore"]
     end
 
     subgraph Services["⚙️ Services"]
@@ -271,6 +288,9 @@ flowchart TB
         SV2["ModelsService"]
         SV3["PropsService"]
         SV4["DatabaseService"]
+        SV5["MCPService"]
+        SV6["ToolsService"]
+        SV7["SandboxService"]
     end
 
     subgraph Storage["💾 Storage"]
@@ -282,19 +302,28 @@ flowchart TB
         API1["/v1/chat/completions"]
         API2["/props"]
         API3["/models/*"]
+        API4["/tools"]
     end
 
     R1 & R2 --> C_Screen
     RL --> C_Sidebar
     C_Screen --> C_Form & C_Messages & C_Settings
-    C_Screen --> S1 & S2
-    C_ModelsSelector --> S3 & S4
+    C_Screen --> H1 & H2 & H3
+    C_Models --> H4
+    C_Mcp --> S4
+    C_Screen --> S1 & S2 & S3
+    C_Models --> S3
+    H1 --> S3
     S1 --> SV1 & SV4
+    S2 --> SV4
     S3 --> SV2 & SV3
+    S4 --> SV5
+    S5 --> SV1 & SV5 & SV6 & SV7
     SV4 --> ST1
     SV1 --> API1
     SV2 --> API3
     SV3 --> API2
+    SV6 --> API4
 ```
 
 ### Layer Breakdown
@@ -303,6 +332,9 @@ flowchart TB
 
 - **`/`** - Welcome screen, creates new conversation
 - **`/chat/[id]`** - Active chat interface
+- **`/mcp-servers`** - MCP server management
+- **`/search`** - Conversation search
+- **`/settings`** - Settings (optional `[[section]]`)
 - **`+layout.svelte`** - Sidebar, navigation, global initialization
 
 #### Components (`src/lib/components/`)
@@ -322,62 +354,109 @@ Components are organized in `app/` (application-specific) and `ui/` (shadcn-svel
 
 **Dialog Components** (`app/dialogs/`):
 
-| Component                       | Responsibility                                           |
-| ------------------------------- | -------------------------------------------------------- |
-| `DialogChatSettings`            | Full-screen settings configuration                       |
-| `DialogModelInformation`        | Model details (context size, modalities, parallel slots) |
-| `DialogChatAttachmentPreview`   | Full preview for images, PDFs (text or page view), code  |
-| `DialogConfirmation`            | Generic confirmation for destructive actions             |
-| `DialogConversationTitleUpdate` | Edit conversation title                                  |
+| Component                      | Responsibility                                           |
+| ------------------------------ | -------------------------------------------------------- |
+| `DialogChatSettings`           | Full-screen settings configuration                       |
+| `DialogManageModels`           | Models manager: browse, load, download and delete models |
+| `DialogModelInformation`       | Model details (context size, modalities, parallel slots) |
+| `DialogChatAttachmentsPreview` | Full preview for images, PDFs (text or page view), code  |
+| `DialogConfirmation`           | Generic confirmation for destructive actions             |
+| `DialogConversationRename`     | Edit conversation title                                  |
 
 **Server/Model Components** (`app/server/`, `app/models/`):
 
-| Component           | Responsibility                                            |
-| ------------------- | --------------------------------------------------------- |
-| `ServerErrorSplash` | Error display when server is unreachable                  |
-| `ModelsSelector`    | Model dropdown with Loaded/Available groups (ROUTER mode) |
+| Component                           | Responsibility                                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `ServerErrorSplash`                 | Error display when server is unreachable                                                                      |
+| `ModelsSelector/`                   | Model dropdown and mobile sheet: favorites, loaded and local sections, rows windowed and folded into families |
+| `ModelsManager/`                    | Models manager table and model pane: sections, filters, sorting, quants folded per repo, downloads            |
+| `ModelAvatar`                       | Org avatar of a model, with the quantizer badge; follows the family grouping of the list                      |
+| `ModelId`, `ModelBadge`             | Model name, aliases, tags, quantization and draft sidecar badges                                              |
+| `ModelContext`, `ModelCapabilities` | Context window and capability icons, filled from the Hub when it is enabled                                   |
 
 **Shared UI Components** (`app/misc/`):
 
-| Component                        | Responsibility                                                   |
-| -------------------------------- | ---------------------------------------------------------------- |
-| `MarkdownContent`                | Markdown rendering with KaTeX, syntax highlighting, copy buttons |
-| `SyntaxHighlightedCode`          | Code blocks with language detection and highlighting             |
-| `ActionButton`, `ActionDropdown` | Reusable action buttons and menus                                |
-| `BadgeModality`, `BadgeInfo`     | Status and capability badges                                     |
+| Component                                 | Responsibility                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------- |
+| `MarkdownContent`                         | Markdown rendering with KaTeX, syntax highlighting, copy buttons        |
+| `SyntaxHighlightedCode`                   | Code blocks with language detection and highlighting                    |
+| `ActionIcon`, `DropdownMenuActions`       | Reusable action button and action menu                                  |
+| `BadgesModality`, `BadgeInfo`             | Status and capability badges                                            |
+| `CollapsibleSection`, `CollapsibleRegion` | Section header with a trigger that expands in place                     |
+| `GroupedList`                             | Grouped rows with foldable groups, per-group windows and show-more rows |
+| `ScrollCarousel`, `TruncatedText`         | Horizontal scroll strip and single-line truncation with tooltip         |
 
 #### Hooks (`src/lib/hooks/`)
 
-- **`useModelChangeValidation`** - Validates model switch against conversation modalities
-- **`useProcessingState`** - Tracks streaming progress and token generation
+Hooks are the thin view-layer between components and stores: they own UI concerns (scroll, drag-and-drop, keyboard shortcuts, pickers, selection) and translate store state into view state.
+
+| Hook                            | Responsibility                                                                                  |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `use-chat-screen-active-model`  | Active model resolution + modality capability detection                                         |
+| `use-processing-state`          | View over `chatStore.processing` for streaming progress/tokens                                  |
+| `use-context-gauge`             | View over `contextStatsStore` for the context usage gauge                                       |
+| `use-models-selector`           | Model selector state: hidden models, family grouping, windowed rows, selection and load on pick |
+| `use-tools-panel`               | Tools panel state                                                                               |
+| `use-reasoning-menu`            | Reasoning-effort menu state                                                                     |
+| `use-attachment-menu`           | Attachment menu + modality flags                                                                |
+| `use-draft-messages`            | Per-chat draft message/files persistence                                                        |
+| `use-chat-form-pickers`         | Chat form pickers (commands, mentions)                                                          |
+| `use-debounced-search`          | Shared debounced async search for pickers                                                       |
+| `use-picker-navigation`         | Picker keyboard navigation                                                                      |
+| `use-chat-message-edit-context` | Message edit context (content + extras)                                                         |
+| `use-chat-screen-drag-and-drop` | Drag-and-drop state machine                                                                     |
+| `use-chat-screen-file-upload`   | File upload queue + capability validation                                                       |
+| `use-chat-screen-scroll`        | Scroll container binding + navigation guard                                                     |
+| `use-auto-scroll`               | Auto-scroll controller for streaming                                                            |
+| `use-marquee-selection`         | Shift+click / marquee range selection                                                           |
+| `use-keyboard-shortcuts`        | Global keyboard shortcuts                                                                       |
+| `use-settings-navigation`       | Settings section navigation                                                                     |
+| `use-pwa`                       | PWA install/update + version mismatch detection                                                 |
 
 #### Stores (`src/lib/stores/`)
 
-| Store                | Responsibility                                            |
-| -------------------- | --------------------------------------------------------- |
-| `chatStore`          | Message sending, streaming, abort control, error handling |
-| `conversationsStore` | CRUD for conversations, message branching, navigation     |
-| `modelsStore`        | Model list, selection, loading/unloading (ROUTER)         |
-| `serverStore`        | Server properties, role detection, modalities             |
-| `settingsStore`      | User preferences, parameter sync with server defaults     |
+Stores own reactive application state as Svelte 5 runes. Larger stores are split into directories and compose focused sub-stores behind a narrow host interface (see Architectural Patterns).
+
+| Store                | Responsibility                                                                                                                            |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `chatStore`          | Chat lifecycle, streaming, abort control, error handling; composes `processing`, `activity`, `streams`, `flows`                           |
+| `conversationsStore` | Conversation CRUD, message branching, navigation, import/export; composes `preferences`                                                   |
+| `modelsStore`        | Model list, selection, loading/unloading (ROUTER), recent picks, favorites, hidden models and list open state; composes `props`, `status` |
+| `mcpStore`           | MCP host role: multi-server lifecycle, tool routing, server icons; composes `health`, `resources`                                         |
+| `agenticStore`       | Multi-turn agentic loop orchestration, tool execution; composes `gates`                                                                   |
+| `serverStore`        | Server connection state, `/props`, role detection, modalities                                                                             |
+| `settingsStore`      | User preferences, theme, parameter sync with server defaults                                                                              |
+| `toolsStore`         | Tool registry: server + MCP tools, enabled set for the LLM                                                                                |
+| `permissionsStore`   | Persisted tool permission grants                                                                                                          |
+| `contextStatsStore`  | Context window usage for the active conversation                                                                                          |
+| `draftMessagesStore` | Per-chat draft message/files                                                                                                              |
+| `deviceStore`        | Browser environment signals (mobile, OS, theme)                                                                                           |
+| `versionStore`       | Build version information                                                                                                                 |
 
 #### Services (`src/lib/services/`)
 
-| Service                | Responsibility                                  |
-| ---------------------- | ----------------------------------------------- |
-| `ChatService`          | API calls to`/v1/chat/completions`, SSE parsing |
-| `ModelsService`        | `/models`, `/models/load`, `/models/unload`     |
-| `PropsService`         | `/props`, `/props?model=`                       |
-| `DatabaseService`      | IndexedDB operations via Dexie                  |
-| `ParameterSyncService` | Syncs settings with server defaults             |
+Services are a stateless protocol layer: static methods, pure I/O, no reactive state. Stores consume them for all API and storage access.
+
+| Service                       | Responsibility                                                                                                                |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `ChatService`                 | `/v1/chat/completions` streaming + SSE parsing, message format conversion                                                     |
+| `ModelsService`               | `/models`, `/models/load`, `/models/unload`                                                                                   |
+| `PropsService`                | `/props`, `/props?model=`                                                                                                     |
+| `HuggingFaceService`          | Hugging Face Hub metadata: model details, avatars, README and file tree, cached per repo and off unless the Hub setting is on |
+| `DatabaseService`             | IndexedDB operations via Dexie                                                                                                |
+| `MCPService`                  | MCP protocol: transports, connect, list/execute tools, prompts, resources                                                     |
+| `ToolsService`                | Server tool list/execute/stream (`/tools`)                                                                                    |
+| `SandboxService`              | Browser JS execution in a sandboxed worker                                                                                    |
+| `ParameterSyncService`        | Syncs settings with server defaults                                                                                           |
+| `ConversationTransferService` | Conversation import/export JSONL + ZIP format                                                                                 |
+| `MigrationService`            | Non-destructive localStorage/IndexedDB migrations                                                                             |
+| `RouterService`               | Dynamic route URL construction                                                                                                |
 
 ---
 
 ## Data Flows
 
 ### MODEL Mode (Single Model)
-
-See: [`docs/flows/data-flow-simplified-model-mode.md`](docs/flows/data-flow-simplified-model-mode.md)
 
 ```mermaid
 sequenceDiagram
@@ -388,8 +467,9 @@ sequenceDiagram
     participant API as llama-server
 
     Note over User,API: Initialization
-    UI->>Stores: initialize()
-    Stores->>DB: load conversations
+    UI->>Stores: initStores() (awaited by route loads)
+    Stores->>Stores: run migrations
+    Stores->>DB: load conversations (background)
     Stores->>API: GET /props
     API-->>Stores: server config
     Stores->>API: GET /v1/models
@@ -407,8 +487,6 @@ sequenceDiagram
 ```
 
 ### ROUTER Mode (Multi-Model)
-
-See: [`docs/flows/data-flow-simplified-router-mode.md`](docs/flows/data-flow-simplified-router-mode.md)
 
 ```mermaid
 sequenceDiagram
@@ -440,17 +518,6 @@ sequenceDiagram
         API-->>Stores: SSE chunks + model info
     end
 ```
-
-### Detailed Flow Diagrams
-
-| Flow          | Description                                | File                                                        |
-| ------------- | ------------------------------------------ | ----------------------------------------------------------- |
-| Chat          | Message lifecycle, streaming, regeneration | [`chat-flow.md`](docs/flows/chat-flow.md)                   |
-| Models        | Loading, unloading, modality caching       | [`models-flow.md`](docs/flows/models-flow.md)               |
-| Server        | Props fetching, role detection             | [`server-flow.md`](docs/flows/server-flow.md)               |
-| Conversations | CRUD, branching, import/export             | [`conversations-flow.md`](docs/flows/conversations-flow.md) |
-| Database      | IndexedDB schema, operations               | [`database-flow.md`](docs/flows/database-flow.md)           |
-| Settings      | Parameter sync, user overrides             | [`settings-flow.md`](docs/flows/settings-flow.md)           |
 
 ---
 
@@ -505,13 +572,14 @@ Components dispatch actions to stores, stores coordinate with services for I/O, 
 
 ### 3. Per-Conversation State
 
-Enables concurrent streaming across multiple conversations:
+Enables concurrent streaming across multiple conversations. Loading is tracked
+per conversation by the activity ledger (`chatStore.activity`), while streaming
+state and abort controllers live in per-conversation maps:
 
 ```typescript
 class ChatStore {
-	chatLoadingStates = new Map<string, boolean>();
-	chatStreamingStates = new Map<string, { response: string; messageId: string }>();
-	abortControllers = new Map<string, AbortController>();
+	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
+	abortControllers = new SvelteMap<string, AbortController>();
 }
 ```
 
@@ -567,20 +635,14 @@ get isRouterMode() {
 
 ### 7. Modality Validation
 
-Prevents sending attachments to incompatible models:
+Prevents sending attachments to incompatible models. The
+`use-chat-screen-active-model` hook derives the active model's capabilities
+from `modelsStore.props`:
 
 ```typescript
-// useModelChangeValidation hook
-const validate = (modelId: string) => {
-	const modelModalities = modelsStore.getModelModalities(modelId);
-	const conversationModalities = conversationsStore.usedModalities;
-
-	// Check if model supports all used modalities
-	if (conversationModalities.hasImages && !modelModalities.vision) {
-		return { valid: false, reason: 'Model does not support images' };
-	}
-	// ...
-};
+// use-chat-screen-active-model hook
+const hasVisionModality = $derived.by(() => modelsStore.props.modelSupportsVision(activeModelId));
+const hasAudioModality = $derived.by(() => modelsStore.props.modelSupportsAudio(activeModelId));
 ```
 
 ### 8. Persistent Storage Strategy
@@ -611,8 +673,17 @@ flowchart TB
 ```
 
 - **IndexedDB**: Conversations and messages (large, structured data)
-- **LocalStorage**: Settings, user parameter overrides, theme (small key-value data)
-- **Memory only**: Server props, model list (fetched fresh on each session)
+- **LocalStorage**: Settings, user parameter overrides, theme, model favorites, recent picks, hidden models and model list open state (small key-value data)
+- **Memory only**: Server props, model list (fetched fresh on each session), Hugging Face Hub details (cached per repo for the session)
+
+### 9. Remote Assets Under Cross-Origin Isolation
+
+llama-server serves the UI with `Cross-Origin-Embedder-Policy: require-corp` and `Cross-Origin-Opener-Policy: same-origin`, so a cross-origin subresource has to be allowed by the target origin. The UI handles that per asset kind:
+
+- **Hub avatars** are requested in CORS mode (`crossorigin="anonymous"`), which the Hub allows
+- **Hub metadata** is fetched with `fetch()`, which is a CORS request by default, and only while the Hub setting is on
+- **MCP server icons and web-search result favicons** have no CORS guarantee, so they go through the server's `/cors-proxy` when the user started llama-server with `--ui-mcp-proxy`; without it they fall back to the bundled glyph
+- **Per-row Hub lookups** wait until the row is near the viewport (the `nearViewport` action), so a long model list does not fire one request per row on mount
 
 ---
 
@@ -673,9 +744,6 @@ tools/ui/
 │   └── styles/           # Global styles
 ├── static/               # Static assets
 ├── tests/                # Test files
-├── docs/                 # Architecture diagrams
-│   ├── architecture/     # High-level architecture
-│   └── flows/            # Feature-specific flows
 └── .storybook/           # Storybook configuration
 ```
 

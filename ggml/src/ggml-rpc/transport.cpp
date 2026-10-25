@@ -1,5 +1,5 @@
 #include "transport.h"
-#include "ggml-impl.h"
+#include "log.h"
 
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
@@ -18,14 +18,21 @@
 #  include <unistd.h>
 #endif
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <optional>
 
 #ifdef GGML_RPC_RDMA
 #  include <infiniband/verbs.h>
+#  include <array>
+#  include <cerrno>
+#  include <chrono>
 #  include <time.h>
 #  ifndef _WIN32
 #    include <poll.h>
+#  endif
+#  ifdef GGML_RPC_RDMA_APPLE
+#    include "transport-apple.h"
 #  endif
 #endif // GGML_RPC_RDMA
 
@@ -36,16 +43,16 @@ using ssize_t = __int64;
 typedef int sockfd_t;
 #endif
 
-static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
-
-#define LOG_DBG(...) \
-    do { if (RPC_DEBUG) GGML_LOG_DEBUG(__VA_ARGS__); } while (0)
-
 #ifdef GGML_RPC_RDMA
-static constexpr size_t RDMA_CHUNK    = 256 * 1024;   // 256 KiB per send/recv (fits default 8 MiB memlock)
-static constexpr int    RDMA_RX_DEPTH = 24;            // pre-posted recv ring: 24 × 256 KiB = 6 MiB
 static constexpr size_t RDMA_GID_SIZE = 16;            // RoCE GID / IB GID is always 16 bytes
 using rdma_gid_t = std::array<uint8_t, RDMA_GID_SIZE>;
+#endif // GGML_RPC_RDMA
+
+#if defined(GGML_RPC_RDMA) && !defined(GGML_RPC_RDMA_APPLE)
+static constexpr size_t RDMA_CHUNK    = 256 * 1024;   // 256 KiB per send/recv (fits default 8 MiB memlock)
+static constexpr int    RDMA_RX_DEPTH = 24;            // pre-posted recv ring: 24 × 256 KiB = 6 MiB
+// keep polling the CQ for this long after the last activity, then sleep until the next completion
+static constexpr auto   RDMA_SPIN_TIME = std::chrono::milliseconds(100);
 
 struct rdma_conn {
     struct ibv_context * ctx = nullptr;
@@ -53,6 +60,9 @@ struct rdma_conn {
     struct ibv_cq * scq = nullptr;   // send completions
     struct ibv_cq * rcq = nullptr;   // recv completions
     struct ibv_qp * qp  = nullptr;
+    struct ibv_comp_channel * ch = nullptr; // CQ events, so an idle connection can sleep instead of spinning
+
+    std::chrono::steady_clock::time_point last_active; // last completion or posted send
 
     void          * tx_buf = nullptr;
     struct ibv_mr * tx_mr  = nullptr;
@@ -87,6 +97,7 @@ struct rdma_conn {
         if (qp)  ibv_destroy_qp(qp);
         if (scq) ibv_destroy_cq(scq);
         if (rcq) ibv_destroy_cq(rcq);
+        if (ch)  ibv_destroy_comp_channel(ch);
         if (pd)  ibv_dealloc_pd(pd);
         if (ctx) ibv_close_device(ctx);
     }
@@ -111,27 +122,34 @@ struct rdma_caps {
 
 static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match conn_caps size");
 
-#endif // GGML_RPC_RDMA
+#endif // GGML_RPC_RDMA && !GGML_RPC_RDMA_APPLE
 
 struct socket_t::impl {
     impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
+    bool flush();
     void get_caps(uint8_t * local_caps);
     void update_caps(const uint8_t * remote_caps);
 
 #ifdef GGML_RPC_RDMA
-    bool tcp_peer_closed();
     std::optional<rdma_gid_t> rdma_build_target_gid();
+
+#  ifdef GGML_RPC_RDMA_APPLE
+    std::unique_ptr<apple_rdma> rdma;
+#  else
     bool rdma_probe();
-    bool rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, const uint8_t * remote_gid);
-    bool rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc);
     bool rdma_send(const void * data, size_t size);
     bool rdma_recv(void * data, size_t size);
+    bool tcp_peer_closed();
+    bool rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, const uint8_t * remote_gid);
+    bool rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc);
+    bool rdma_wait_event();
 
     std::unique_ptr<rdma_conn> rdma;
     rdma_local_info            rdma_local = {};
+#  endif
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
     sockfd_t fd;
@@ -150,17 +168,6 @@ socket_t::impl::~impl() {
 }
 
 #ifdef GGML_RPC_RDMA
-
-bool socket_t::impl::tcp_peer_closed() {
-    if (fd < 0) return false;
-#ifndef _WIN32
-    struct pollfd pfd = { fd, POLLIN | POLLRDHUP, 0 };
-    int r = poll(&pfd, 1, 0);
-    return r > 0 && (pfd.revents & (POLLHUP | POLLERR | POLLRDHUP));
-#else
-    return false;
-#endif
-}
 
 // Build a RoCE GID-shaped 16-byte target from a TCP socket's local address.
 // Used to match the socket's local IP against the kernel's GID table so that
@@ -189,6 +196,19 @@ std::optional<rdma_gid_t> socket_t::impl::rdma_build_target_gid() {
         return target;
     }
     return std::nullopt;
+}
+
+#ifndef GGML_RPC_RDMA_APPLE
+
+bool socket_t::impl::tcp_peer_closed() {
+    if (fd < 0) return false;
+#ifndef _WIN32
+    struct pollfd pfd = { fd, POLLIN | POLLRDHUP, 0 };
+    int r = poll(&pfd, 1, 0);
+    return r > 0 && (pfd.revents & (POLLHUP | POLLERR | POLLRDHUP));
+#else
+    return false;
+#endif
 }
 
 bool socket_t::impl::rdma_probe() {
@@ -275,8 +295,10 @@ bool socket_t::impl::rdma_probe() {
     rdma->pd = ibv_alloc_pd(ibctx);
     if (!rdma->pd) return false;
 
-    rdma->scq = ibv_create_cq(ibctx, 16, nullptr, nullptr, 0);
-    rdma->rcq = ibv_create_cq(ibctx, RDMA_RX_DEPTH + 4, nullptr, nullptr, 0);
+    // without a completion channel rdma_poll() spins all the time, as before
+    rdma->ch  = ibv_create_comp_channel(ibctx);
+    rdma->scq = ibv_create_cq(ibctx, 16, nullptr, rdma->ch, 0);
+    rdma->rcq = ibv_create_cq(ibctx, RDMA_RX_DEPTH + 4, nullptr, rdma->ch, 0);
     if (!rdma->scq || !rdma->rcq) return false;
 
     ibv_qp_init_attr qia = {};
@@ -315,7 +337,7 @@ bool socket_t::impl::rdma_probe() {
     } else if (gid_version == IBV_GID_TYPE_ROCE_V1) {
         ver_str = " RoCEv1";
     }
-    GGML_LOG_INFO("RDMA probed: dev=%s gid=%d%s qpn=%u inline=%u\n",
+    LOG_INFO("RDMA probed: dev=%s gid=%d%s qpn=%u inline=%u\n",
                   matched_dev, gid_idx, ver_str, rdma_local.qpn, rdma->max_inline);
     return true;
 }
@@ -378,23 +400,70 @@ bool socket_t::impl::rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, con
         }
     }
 
-    GGML_LOG_INFO("RDMA activated: qpn=%u->%u mtu=%d rx_depth=%d\n",
+    rdma->last_active = std::chrono::steady_clock::now();
+
+    LOG_INFO("RDMA activated: qpn=%u->%u mtu=%d rx_depth=%d\n",
                   rdma_local.qpn, remote_qpn, 128 << rdma_local.path_mtu, RDMA_RX_DEPTH);
     return true;
 }
 
+// Sleep until the completion channel has an event or the TCP peer closes.
+bool socket_t::impl::rdma_wait_event() {
+    rdma_conn * c = rdma.get();
+    // POLLHUP and POLLERR are always reported, the TCP socket carries no data after the RDMA upgrade
+    struct pollfd pfds[2] = {
+        { c->ch->fd, POLLIN,    0 },
+        { fd,        POLLRDHUP, 0 },
+    };
+    if (poll(pfds, 2, -1) < 0) {
+        return errno == EINTR;
+    }
+    if (pfds[1].revents & (POLLHUP | POLLERR | POLLRDHUP)) {
+        return false;
+    }
+    if (pfds[0].revents & POLLIN) {
+        struct ibv_cq * ev_cq  = nullptr;
+        void          * ev_ctx = nullptr;
+        if (ibv_get_cq_event(c->ch, &ev_cq, &ev_ctx) != 0) {
+            return false;
+        }
+        ibv_ack_cq_events(ev_cq, 1);
+    }
+    return true;
+}
+
 bool socket_t::impl::rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc) {
-    for (uint64_t s = 0; ; s++) {
+    rdma_conn * c = rdma.get();
+    bool armed = false;
+    for (uint64_t s = 1; ; s++) {
         int n = ibv_poll_cq(cq, 1, wc);
         if (n > 0) {
+            c->last_active = std::chrono::steady_clock::now();
             if (wc->status != IBV_WC_SUCCESS) {
-                GGML_LOG_ERROR("RDMA CQ wc error: status=%d (%s) vendor_err=0x%x\n",
+                LOG_ERROR("RDMA CQ wc error: status=%d (%s) vendor_err=0x%x\n",
                     wc->status, ibv_wc_status_str(wc->status), wc->vendor_err);
             }
             return wc->status == IBV_WC_SUCCESS;
         }
         if (n < 0) return false;
-        if ((s & 0xFFFFF) == 0 && s > 0) {
+        if (armed) {
+            // armed and still empty: sleep until the next completion
+            if (!rdma_wait_event()) {
+                return false;
+            }
+            armed = false;
+            continue;
+        }
+        // spin while the connection is busy, arm the CQ once it has been idle for RDMA_SPIN_TIME
+        // a completion that arrives before arming raises no event, so poll once more after arming
+        if (c->ch && (s & 0x3FF) == 0 && std::chrono::steady_clock::now() - c->last_active > RDMA_SPIN_TIME) {
+            if (ibv_req_notify_cq(cq, 0) != 0) {
+                return false;
+            }
+            armed = true;
+            continue;
+        }
+        if ((s & 0xFFFFF) == 0) {
             if (tcp_peer_closed()) {
                 return false;
             }
@@ -428,6 +497,7 @@ bool socket_t::impl::rdma_send(const void * data, size_t size) {
         }
 
         if (ibv_post_send(c->qp, &wr, &bad) != 0) return false;
+        c->last_active = std::chrono::steady_clock::now();
         struct ibv_wc wc;
         if (!rdma_poll(c->scq, &wc)) return false;
 
@@ -447,6 +517,11 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
 
         int slot = (int)wc.wr_id;
         size_t got = wc.byte_len;
+        if (got > rem) {
+            LOG_ERROR("RDMA recv overrun: got=%zu rem=%zu\n", got, rem);
+            c->post_rx(slot);
+            return false;
+        }
         memcpy(dst, c->rx_slot(slot), got);
 
         if (!c->post_rx(slot)) return false;
@@ -457,10 +532,17 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
     return true;
 }
 
+#endif // !GGML_RPC_RDMA_APPLE (Linux RC transport)
+
 #endif // GGML_RPC_RDMA
 
 bool socket_t::impl::send_data(const void * data, size_t size) {
-#ifdef GGML_RPC_RDMA
+    LOG_DBG3("[%s] transport: %s, size: %s\n", __func__, use_rdma ? "RDMA" : "TCP", rpc_log_format_size(size).c_str());
+#ifdef GGML_RPC_RDMA_APPLE
+    if (use_rdma) {
+        return rdma->send(data, size);
+    }
+#elif defined(GGML_RPC_RDMA)
     if (use_rdma) {
         return rdma_send(data, size);
     }
@@ -470,7 +552,7 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
         size_t size_to_send = std::min(size - bytes_sent, MAX_CHUNK_SIZE);
         ssize_t n = send(fd, (const char *)data + bytes_sent, size_to_send, 0);
         if (n < 0) {
-            GGML_LOG_ERROR("send failed (bytes_sent=%zu, size_to_send=%zu)\n",
+            LOG_ERROR("send failed (bytes_sent=%zu, size_to_send=%zu)\n",
                            bytes_sent, size_to_send);
             return false;
         }
@@ -480,7 +562,12 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
 }
 
 bool socket_t::impl::recv_data(void * data, size_t size) {
-#ifdef GGML_RPC_RDMA
+    LOG_DBG3("[%s] transport: %s, size: %s\n", __func__, use_rdma ? "RDMA" : "TCP", rpc_log_format_size(size).c_str());
+#ifdef GGML_RPC_RDMA_APPLE
+    if (use_rdma) {
+        return rdma->recv(data, size);
+    }
+#elif defined(GGML_RPC_RDMA)
     if (use_rdma) {
         return rdma_recv(data, size);
     }
@@ -490,12 +577,12 @@ bool socket_t::impl::recv_data(void * data, size_t size) {
         size_t size_to_recv = std::min(size - bytes_recv, MAX_CHUNK_SIZE);
         ssize_t n = recv(fd, (char *)data + bytes_recv, size_to_recv, 0);
         if (n < 0) {
-            GGML_LOG_ERROR("recv failed (bytes_recv=%zu, size_to_recv=%zu)\n",
+            LOG_ERROR("recv failed (bytes_recv=%zu, size_to_recv=%zu)\n",
                            bytes_recv, size_to_recv);
             return false;
         }
         if (n == 0) {
-            LOG_DBG("recv returned 0 (peer closed?)\n");
+            LOG_WARN("recv returned 0 (peer closed?)\n");
             return false;
         }
         bytes_recv += (size_t)n;
@@ -506,6 +593,18 @@ bool socket_t::impl::recv_data(void * data, size_t size) {
 void socket_t::impl::get_caps(uint8_t * local_caps) {
     memset(local_caps, 0, RPC_CONN_CAPS_SIZE);
 #ifdef GGML_RPC_RDMA
+    if (std::getenv("GGML_RPC_NO_RDMA")) {
+        return;
+    }
+#  ifdef GGML_RPC_RDMA_APPLE
+    auto target_gid = rdma_build_target_gid();
+    if (target_gid) {
+        rdma = apple_rdma::probe(fd, target_gid->data(), local_caps);
+    }
+    if (!rdma) {
+        LOG_DBG2("[%s] RDMA probe failed, continuing with TCP\n", __func__);
+    }
+#  else
     rdma_local = {};
     if (rdma_probe()) {
         rdma_caps rc = {};
@@ -515,25 +614,38 @@ void socket_t::impl::get_caps(uint8_t * local_caps) {
         memcpy(local_caps, &rc, sizeof(rc));
     } else {
         rdma.reset();
+        LOG_DBG2("[%s] RDMA probe failed, continuing with TCP\n", __func__);
     }
+#  endif
 #endif // GGML_RPC_RDMA
 }
 
 void socket_t::impl::update_caps(const uint8_t * remote_caps) {
 #ifdef GGML_RPC_RDMA
-    if (!rdma) {
-        return;
+    // a peer that has no RDMA advertises all-zero caps and takes no further part
+    // in the negotiation, so drop to TCP without reporting a failure
+    bool remote_rdma = false;
+    for (size_t i = 0; i < RPC_CONN_CAPS_SIZE; i++) {
+        remote_rdma |= remote_caps[i] != 0;
     }
-    rdma_caps rc = {};
-    memcpy(&rc, remote_caps, sizeof(rc));
-    if (rc.qpn == 0) {
+    if (!rdma || !remote_rdma) {
+        if (rdma && !remote_rdma) {
+            LOG_WARN("[%s] peer does not support RDMA, continuing with TCP\n", __func__);
+        }
         rdma.reset();
         return;
     }
-    if (rdma_activate(rc.qpn, rc.psn, rc.gid)) {
+#  ifdef GGML_RPC_RDMA_APPLE
+    bool activated = rdma->activate(remote_caps);
+#  else
+    rdma_caps rc = {};
+    memcpy(&rc, remote_caps, sizeof(rc));
+    bool activated = rdma_activate(rc.qpn, rc.psn, rc.gid);
+#  endif
+    if (activated) {
         use_rdma = true;
     } else {
-        GGML_LOG_ERROR("RDMA activate failed, staying on TCP\n");
+        LOG_WARN("RDMA activate failed, staying on TCP\n");
         rdma.reset();
     }
 #else
@@ -541,6 +653,14 @@ void socket_t::impl::update_caps(const uint8_t * remote_caps) {
 #endif // GGML_RPC_RDMA
 }
 
+bool socket_t::impl::flush() {
+#ifdef GGML_RPC_RDMA_APPLE
+    if (use_rdma) {
+        return rdma->flush();
+    }
+#endif
+    return true;
+}
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -556,12 +676,20 @@ bool socket_t::recv_data(void * data, size_t size) {
     return pimpl->recv_data(data, size);
 }
 
+bool socket_t::flush() {
+    return pimpl->flush();
+}
+
 void socket_t::get_caps(uint8_t * local_caps) {
     return pimpl->get_caps(local_caps);
 }
 
 void socket_t::update_caps(const uint8_t * remote_caps) {
     return pimpl->update_caps(remote_caps);
+}
+
+const char * socket_t::transport_name() const {
+    return pimpl->use_rdma ? "RDMA" : "TCP";
 }
 
 static bool is_valid_fd(sockfd_t sockfd) {
@@ -591,9 +719,10 @@ socket_ptr socket_t::accept() {
         return nullptr;
     }
     if (!set_no_delay(client_socket_fd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+        LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    LOG_DBG("[%s] accepted client connection\n", __func__);
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
 }
 
@@ -603,11 +732,11 @@ socket_ptr socket_t::create_server(const char * host, int port) {
         return nullptr;
     }
     if (!set_reuse_addr(sockfd)) {
-        GGML_LOG_ERROR("Failed to set SO_REUSEADDR\n");
+        LOG_ERROR("Failed to set SO_REUSEADDR\n");
         return nullptr;
     }
     if (inet_addr(host) == INADDR_NONE) {
-        GGML_LOG_ERROR("Invalid host address: %s\n", host);
+        LOG_ERROR("Invalid host address: %s\n", host);
         return nullptr;
     }
     struct sockaddr_in serv_addr;
@@ -621,6 +750,7 @@ socket_ptr socket_t::create_server(const char * host, int port) {
     if (listen(sockfd, 1) < 0) {
         return nullptr;
     }
+    LOG_DBG("[%s] listening on %s:%d\n", __func__, host, port);
     return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
 }
 
@@ -630,7 +760,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
         return nullptr;
     }
     if (!set_no_delay(sockfd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+        LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
     struct sockaddr_in addr;
@@ -638,13 +768,14 @@ socket_ptr socket_t::connect(const char * host, int port) {
     addr.sin_port = htons(port);
     struct hostent * server = gethostbyname(host);
     if (server == NULL) {
-        GGML_LOG_ERROR("Cannot resolve host '%s'\n", host);
+        LOG_ERROR("Cannot resolve host '%s'\n", host);
         return nullptr;
     }
     memcpy(&addr.sin_addr.s_addr, server->h_addr, server->h_length);
     if (::connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         return nullptr;
     }
+    LOG_DBG("[%s] connected to %s:%d\n", __func__, host, port);
     return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
 }
 

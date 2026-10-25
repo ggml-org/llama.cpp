@@ -10,7 +10,7 @@
 //   muse_glimmer_sp_perm  [n_tok] i32         : window grouping permutation (applied after ln_pre)
 //   muse_glimmer_inv_perm [n_tok] i32         : inverse of sp_perm (applied after blocks)
 //   muse_glimmer_ds_perm  [n_tok] i32         : pixel-shuffle gather (original order)
-//   muse_glimmer_sp_mask  [n_tok, n_tok] f32  : block-diagonal window mask (sparse layers)
+//   attn_mask             [n_tok, n_tok] f32 (f16 with flash attn) : block-diagonal window mask (sparse layers)
 ggml_cgraph * clip_graph_muse_glimmer::build() {
     const int ds = hparams.n_merge;              // downsample factor (2)
     const int sf = hparams.muse_glimmer_sparse_factor;   // 4
@@ -31,9 +31,7 @@ ggml_cgraph * clip_graph_muse_glimmer::build() {
     ggml_tensor * inv_perm = inp_i32("muse_glimmer_inv_perm", n_tok);
     ggml_tensor * ds_perm  = inp_i32("muse_glimmer_ds_perm",  n_tok);
 
-    ggml_tensor * sp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tok, n_tok);
-    ggml_set_name(sp_mask, "muse_glimmer_sp_mask");
-    ggml_set_input(sp_mask);
+    ggml_tensor * sp_mask = build_inp_attn_mask(n_tok, n_tok);
 
     // patchify via build_inp (conv2d over raw pixels) + bilinear-resized learned pos-emb
     ggml_tensor * x = build_inp();                                                     // [n_embd, n_tok, 1]

@@ -72,16 +72,16 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
-| `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
-| `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
-| `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
 | `-lm, --load-mode MODE` | model loading mode (default: auto)<br/>- auto: mmap, unless a device does not support it<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
+| `-lzm, --lazy-mode MODE` | on-demand reading of certain tensors, for example per-layer embeddings (default: auto)<br/>- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)<br/>- auto: on, but only for tensors larger than 4 GiB<br/>- off: always keep them resident<br/>(env: LLAMA_ARG_LAZY_MODE) |
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
 | `-ot, --override-tensor <tensor name pattern>=<buffer type>,...` | override tensor buffer type<br/>(env: LLAMA_ARG_OVERRIDE_TENSOR) |
 | `-cmoe, --cpu-moe` | keep all Mixture of Experts (MoE) weights in the CPU<br/>(env: LLAMA_ARG_CPU_MOE) |
 | `-ncmoe, --n-cpu-moe N` | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU<br/>(env: LLAMA_ARG_N_CPU_MOE) |
+| `--moe-cache-mib N` | GPU cache size in MiB for the MoE experts kept in the CPU. with multiple GPUs, it is split among them like the layers (--tensor-split) (default: 0, disabled)<br/>(env: LLAMA_ARG_MOE_CACHE_MIB) |
+| `-ncffn, --n-cpu-ffn N` | keep the dense FFN weights of the first N layers in the CPU<br/>(dense models; for MoE expert weights use --n-cpu-moe)<br/>(env: LLAMA_ARG_N_CPU_FFN) |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
 | `-sm, --split-mode {none,layer,row,tensor}` | how to split the model across multiple GPUs, one of:<br/>- none: use one GPU only<br/>- layer (default): split layers and KV across GPUs (pipelined)<br/>- row: split weight across GPUs by rows (parallelized)<br/>- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)<br/>(env: LLAMA_ARG_SPLIT_MODE) |
 | `-ts, --tensor-split N0,N1,N2,...` | fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1<br/>(env: LLAMA_ARG_TENSOR_SPLIT) |
@@ -105,6 +105,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-hft, --hf-token TOKEN` | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN) |
 | `--log-disable` | Log disable |
 | `--log-file FNAME` | Log to file<br/>(env: LLAMA_ARG_LOG_FILE) |
+| `--log-jsonl, --no-log-jsonl` | Log as JSONL (one JSON object per line) to stdout, this also disables colored logging (default: disabled)<br/>(env: LLAMA_ARG_LOG_JSONL) |
 | `--log-colors [on\|off\|auto]` | Set colored logging ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal<br/>(env: LLAMA_ARG_LOG_COLORS) |
 | `-v, --verbose, --log-verbose` | Set verbosity level to infinity (i.e. log all messages, useful for debugging) |
 | `--offline` | Offline mode: forces use of cache, prevents network access<br/>(env: LLAMA_ARG_OFFLINE) |
@@ -123,18 +124,18 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-s, --seed SEED` | RNG seed (default: -1, use random seed for -1) |
 | `--sampler-seq, --sampling-seq SEQUENCE` | simplified sequence for samplers that will be used (default: edskypmxt) |
 | `--ignore-eos` | ignore end of stream token and continue generating (implies --logit-bias EOS-inf) |
-| `--temp, --temperature N` | temperature (default: 0.80) |
+| `--temp, --temperature N` | temperature (default: 0.80)<br/>(env: LLAMA_ARG_TEMPERATURE) |
 | `--top-k N` | top-k sampling (default: 40, 0 = disabled)<br/>(env: LLAMA_ARG_TOP_K) |
-| `--top-p N` | top-p sampling (default: 0.95, 1.0 = disabled) |
-| `--min-p N` | min-p sampling (default: 0.05, 0.0 = disabled) |
+| `--top-p N` | top-p sampling (default: 0.95, 1.0 = disabled)<br/>(env: LLAMA_ARG_TOP_P) |
+| `--min-p N` | min-p sampling (default: 0.05, 0.0 = disabled)<br/>(env: LLAMA_ARG_MIN_P) |
 | `--top-nsigma, --top-n-sigma N` | top-n-sigma sampling (default: -1.00, -1.0 = disabled) |
 | `--xtc-probability N` | xtc probability (default: 0.00, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.10, 1.0 = disabled) |
 | `--typical, --typical-p N` | locally typical sampling, parameter p (default: 1.00, 1.0 = disabled) |
 | `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled) |
-| `--repeat-penalty N` | penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled) |
-| `--presence-penalty N` | repeat alpha presence penalty (default: 0.00, 0.0 = disabled) |
-| `--frequency-penalty N` | repeat alpha frequency penalty (default: 0.00, 0.0 = disabled) |
+| `--repeat-penalty N` | penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled)<br/>(env: LLAMA_ARG_REPEAT_PENALTY) |
+| `--presence-penalty N` | repeat alpha presence penalty (default: 0.00, 0.0 = disabled)<br/>(env: LLAMA_ARG_PRESENCE_PENALTY) |
+| `--frequency-penalty N` | repeat alpha frequency penalty (default: 0.00, 0.0 = disabled)<br/>(env: LLAMA_ARG_FREQUENCY_PENALTY) |
 | `--dry-multiplier N` | set DRY sampling multiplier (default: 0.00, 0.0 = disabled) |
 | `--dry-base N` | set DRY sampling base value (default: 1.75) |
 | `--dry-allowed-length N` | set allowed length for DRY sampling (default: 2) |
@@ -150,8 +151,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-l, --logit-bias TOKEN_ID(+/-)BIAS` | modifies the likelihood of token appearing in the completion,<br/>i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',<br/>or `--logit-bias 15043-1` to decrease likelihood of token ' Hello' |
 | `--grammar GRAMMAR` | BNF-like grammar to constrain generations (see samples in grammars/ dir) |
 | `--grammar-file FNAME` | file to read grammar from |
-| `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
-| `-jf, --json-schema-file FILE` | File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
+| `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{"type": "object"}` for any JSON object |
+| `-jf, --json-schema-file FILE` | File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{"type": "object"}` for any JSON object |
 | `-bs, --backend-sampling` | enable backend sampling (experimental) (default: disabled)<br/>(env: LLAMA_ARG_BACKEND_SAMPLING) |
 
 
@@ -161,9 +162,10 @@ For the full list of features, please refer to [server's changelog](https://gith
 | -------- | ----------- |
 | `-lcs, --lookup-cache-static FNAME` | path to static lookup cache to use for lookup decoding (not updated by generation) |
 | `-lcd, --lookup-cache-dynamic FNAME` | path to dynamic lookup cache to use for lookup decoding (updated by generation) |
+| `--kv-unified-per-slot N` | context limit per parallel slot (default: unset, behavior unchanged).<br/>when set without -c/--ctx-size, the shared KV pool is sized to n_parallel*N<br/>(env: LLAMA_ARG_KV_UNIFIED_PER_SLOT) |
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
-| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
+| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, 0 for decision models, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
@@ -178,14 +180,18 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
 | `--mmproj-auto, --no-mmproj, --no-mmproj-auto` | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO) |
 | `--mmproj-offload, --no-mmproj-offload` | whether to enable GPU offloading for multimodal projector (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_OFFLOAD) |
+| `-mmdev, --mmproj-device DEVICE` | device to use for multimodal projector (none = don't offload, default: follows --device)<br/>use --list-devices to see a list of available devices<br/>(env: MTMD_BACKEND_DEVICE) |
 | `--image-min-tokens N` | minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MIN_TOKENS) |
 | `--image-max-tokens N` | maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MAX_TOKENS) |
 | `--mtmd-batch-max-tokens N` | maximum number of image tokens per batch when encoding images (default: 1024)<br/>(env: LLAMA_ARG_MTMD_BATCH_MAX_TOKENS) |
+| `--video-fps N` | target video frame rate (default: 4.0)<br/>(env: LLAMA_ARG_VIDEO_FPS) |
+| `--video-timestamp-interval N` | interval in milliseconds between text timestamps (default: 5000)<br/>(env: LLAMA_ARG_VIDEO_TIMESTAMP_INTERVAL) |
+| `--video-ffmpeg-dir DIR` | path to the directory containing ffmpeg and ffprobe (default: search in PATH)<br/>(env: LLAMA_ARG_VIDEO_FFMPEG_DIR) |
 | `-a, --alias STRING` | set model name aliases, comma-separated (to be used by API)<br/>(env: LLAMA_ARG_ALIAS) |
 | `--tags STRING` | set model tags, comma-separated (informational, not used for routing)<br/>(env: LLAMA_ARG_TAGS) |
 | `--embd-normalize N` | normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm) |
-| `--host HOST` | ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
-| `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
+| `--host HOST` | IP addresses to listen on, comma-separated, or UNIX socket paths ending in .sock; with multiple TCP addresses, :: binds IPv6 only; overlapping addresses result in undefined behavior (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
+| `--port PORT` | port to listen (default: 9931)<br/>(env: LLAMA_ARG_PORT) |
 | `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
 | `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
@@ -202,6 +208,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
 | `--ui, --webui, --no-ui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
+| `--connect` | (experimental) open a peer-to-peer tunnel for server using llama-connect (default: disabled)<br/>(env: LLAMA_ARG_CONNECT) |
+| `--connect-code CODE` | manually specify a 40-character code for --connect (default: generate a new one for each run)<br/>(env: LLAMA_ARG_CONNECT_CODE) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
 | `--rerank, --reranking` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
 | `--api-key KEY` | API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)<br/>(env: LLAMA_API_KEY) |
@@ -217,7 +225,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--metrics` | enable prometheus compatible metrics endpoint (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_METRICS) |
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
-| `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
+| `--slot-save-path PATH` | path to save slot kv cache (default: disabled)<br/>(env: LLAMA_ARG_SLOT_SAVE_PATH) |
 | `--media-path PATH` | directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled) |
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
@@ -255,10 +263,14 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-draft-n-cpu-moe, --spec-draft-ncmoe, -ncmoed, --n-cpu-moe-draft N` | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU for the draft model<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE) |
 | `--spec-draft-n-max N` | number of tokens to draft for speculative decoding (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MAX) |
 | `--spec-draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 0)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN) |
+| `--spec-draft-n-ubatch N` | physical maximum batch size of the draft context, use a smaller value to spare VRAM (default: 0 - same as --n-ubatch)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_UBATCH) |
+| `--spec-synth-len L` | target mean synthetic acceptance length, including the target token (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_LEN) |
+| `--spec-synth-rates P0,P1,...` | comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_RATES) |
 | `--spec-draft-p-split, --draft-p-split P` | speculative decoding split probability (default: 0.10)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT) |
 | `--spec-draft-p-min, --draft-p-min P` | minimum speculative decoding probability (greedy) (default: 0.00)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_MIN) |
 | `--spec-draft-backend-sampling, --no-spec-draft-backend-sampling` | offload draft sampling to the backend (default: enabled)<br/>(env: LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING) |
-| `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices |
+| `--spec-draft-sampling {greedy,probabilistic}` | how the draft is sampled: greedy takes its argmax, probabilistic samples it and has the target verify by rejection sampling (default: greedy)<br/>(env: LLAMA_ARG_SPEC_DRAFT_SAMPLING) |
+| `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)<br/>use --list-devices to see a list of available devices |
 | `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
 | `--spec-draft-model, -md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL) |
 | `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
@@ -337,9 +349,9 @@ It is currently available in the following endpoints:
 
 For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
 
-### Built-in tools support
+### Server tools support
 
-The server includes a set of built-in tools that enable the LLM to access the local file system directly from the Web UI.
+The server includes a set of server tools that enable the LLM to access the local file system directly from the Web UI.
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
@@ -395,6 +407,10 @@ Recommended `--cors-origins` setting, depending on where the server runs:
 
 Related flags: `--cors-origins`, `--cors-methods`, `--cors-headers`, `--cors-credentials` / `--no-cors-credentials`. Background and rationale: [#25655](https://github.com/ggml-org/llama.cpp/pull/25655).
 
+### Running behind a proxy
+
+If your host reaches the internet through a corporate proxy, export `HTTP_PROXY` and `HTTPS_PROXY` before running commands that download models (e.g. `export HTTPS_PROXY=http://proxy.example.com:8080`). Hosts listed in `NO_PROXY` and loopback addresses are contacted directly.
+
 ## Build
 
 `llama-server` is built alongside everything else from the root of the project
@@ -435,7 +451,7 @@ To get started right away, run the following command, making sure to use the cor
 llama-server.exe -m models\7B\ggml-model.gguf -c 2048
 ```
 
-The above command will start a server that by default listens on `127.0.0.1:8080`.
+The above command will start a server that by default listens on `127.0.0.1:9931`.
 You can consume the endpoints with Postman or NodeJS with axios library. You can visit the web front end at the same url.
 
 ### Docker
@@ -453,7 +469,7 @@ Using [curl](https://curl.se/). On Windows, `curl.exe` should be available in th
 
 ```sh
 curl --request POST \
-    --url http://localhost:8080/completion \
+    --url http://localhost:9931/completion \
     --header "Content-Type: application/json" \
     --data '{"prompt": "Building a website can be done in 10 simple steps:","n_predict": 128}'
 ```
@@ -547,7 +563,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `64`, where `0` is disabled.
 
-`dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. Default: `['\n', ':', '"', '*']`
+`dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. At most 64 distinct breakers, duplicates are ignored. Default: `['\n', ':', '"', '*']`
 
 `xtc_probability`: Set the chance for token removal via XTC sampler. Default: `0.0`, which is disabled.
 
@@ -755,35 +771,123 @@ This endpoint also supports multimodal embeddings. See the documentation for the
 
 ### POST `/reranking`: Rerank documents according to a given query
 
+> [!IMPORTANT]
+>
+> This endpoint is **not** OAI-compatible.
 Similar to https://jina.ai/reranker/ but might change in the future.
-Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` options.
+Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` or `--reranking` options.
 
-*Options:*
+`query` and each `documents`/`texts` element accept a plain string, or
+(for multimodal rerankers such as Qwen3-VL-Reranker) an object of the form
+`{"text": string | [strings], "image": url | data-uri | raw-base64 | [urls]}`.
+All keys are optional; a plain string is treated as `{"text": "..."}`.
 
-`query`: The query against which the documents will be ranked.
-
-`documents`: An array strings representing the documents to be ranked.
+Options: `top_n` (default: all), `model` (echoed in the Jina response), `return_text` (TEI only).
 
 *Aliases:*
   - `/rerank`
   - `/v1/rerank`
   - `/v1/reranking`
 
-*Examples:*
+The format is selected by which key carries the documents: `texts` (TEI, same input shape as Jina,
+set `return_text: true` to echo document text) or `documents` (Jina, multimodal supported).
+
+**Text only (TEI format)** - `query` + `texts`; set `return_text: true` to echo document text:
 
 ```shell
 curl http://127.0.0.1:8012/v1/rerank \
     -H "Content-Type: application/json" \
     -d '{
-        "model": "some-model",
-            "query": "What is panda?",
-            "top_n": 3,
-            "documents": [
-                "hi",
-            "it is a bear",
-            "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
-            ]
+        "query": "What is machine learning?",
+        "texts": [
+            "Machine learning is a subset of artificial intelligence.",
+            "A python is a large snake."
+        ],
+        "return_text": true
     }' | jq
+```
+
+**Multimodal (Jina Format)** - mix text and images in `query` and/or `documents`:
+
+```shell
+curl http://127.0.0.1:8012/v1/rerank \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen3-VL-Reranker-2B",
+        "query": {
+            "text": "A city skyline with tall buildings and a river",
+            "image": "data:image/jpeg;base64,<base64>"
+        },
+        "documents": [
+            "a plain string document is also valid",
+            {
+                "text": "A photograph of the Boston skyline at dusk",
+                "image": "https://example.com/skyline.jpg"
+            },
+            {
+                "text": "caption for the two-figure spread",
+                "image": ["https://example.com/fig1.png", "data:image/jpeg;base64,<base64>"]
+            }
+        ],
+        "top_n": 2
+    }' | jq
+```
+
+Jina format returns a wrapped object with `model`, `object`, `usage` (`prompt_tokens` is the sum
+of `tokens_evaluated` across all scored pairs), and a `results` array of `{index, relevance_score}`.
+TEI format returns a bare array of `{index, score}` (+ `text` when `return_text: true`).
+Both are sorted descending by score and truncated to `top_n`; the score is the match probability in `[0, 1]`.
+
+Images never appear in any response shape.
+
+> **NOTE:** **Input size limit:** A bidirectional-encoder reranker (e.g. `bge-reranker-v2-m3`) must fit the whole prompt within
+`--ubatch-size`; if the input is too large to process, increase `--ubatch-size`.
+Causal decoder rerankers (e.g. `Qwen3-VL-Reranker`) have no such limitation.
+
+
+
+### POST `/tts`: Generate speech audio from text
+
+Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info, see [tts/README.md](../tts/README.md)
+
+*Options:*
+
+`input`: The text to speak (alias: `prompt`).
+
+`lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
+
+`speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence.
+
+`top_k`, `top_p`: Sampling params for the acoustic code predictor. Optional, model-dependent defaults apply.
+
+`repeat_penalty`: Repetition penalty applied to the backbone sampler over the whole generation (default `1.05`). Without this, the backbone can loop and re-generate the same utterance.
+
+`seed`: RNG seed for both the backbone sampler and the codec/vocoder (`-1` = random, the default). Set to a fixed value for reproducible output.
+
+`n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
+
+`response_format`: `wav` (default) or `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`).
+
+`stream`: If `true`, the response is streamed as audio becomes available instead of waiting for the full generation to finish. WAV streaming writes an RFC-noncompliant header with an unknown (`0xFFFFFFFF`) size field, since the final length isn't known up front; most players and decoders (ffmpeg, VLC, ...) handle this by reading until EOF.
+
+Note: it's highly recommended to always provide a speaker reference voice; otherwise, the model's performance may be degraded.
+
+*Examples:*
+
+```shell
+curl -X POST http://127.0.0.1:9931/tts \
+    -H "Content-Type: application/json" \
+    -d '{"input": "Hello, this is a test."}' \
+    -o output.wav
+```
+
+With a speaker reference uploaded as a file (`multipart/form-data`), instead of base64-encoding it into the JSON body:
+
+```shell
+curl -X POST http://127.0.0.1:9931/tts \
+    -F "input=Hello, this is a test." \
+    -F "speaker_ref=@/path/to/speaker-reference.wav;type=audio/wav" \
+    -o output.wav
 ```
 
 ### POST `/infill`: For code infilling.
@@ -1241,6 +1345,31 @@ Returns information about the loaded model. See [OpenAI Models API documentation
 
 The returned list always has one single element. The `meta` field can be `null` (for example, while the model is still loading).
 
+Each object in `data` has an `architecture` object. It has two string arrays:
+
+- `input_modalities` lists what the model can read. It always has `text`, plus each media type that the model supports.
+- `output_modalities` lists what the model can produce.
+
+Some output values are special:
+
+| Value | Meaning |
+|---|---|
+| `decisions` | The model is a native decision model. Serve it with [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api). |
+| `audio` | The model can generate speech. Serve it with [`/tts`](#post-tts-generate-speech-audio-from-text). A TTS-only model has `["audio"]` without `text`. |
+
+A language model that classifies with prompts does not get `decisions`. Only native decision models do.
+
+Check for membership. Tolerate values that you do not know:
+
+```js
+const useSystemOne =
+    model.architecture?.output_modalities?.includes("decisions") === true;
+```
+
+Without decision metadata, `output_modalities` is `["text"]`. This default is for compatibility only. It does not mean that the model can generate text. Values can change. New combinations such as `["text", "decisions"]` use the same shape.
+
+The router returns the same `architecture` object in [`GET /models`](#get-models-list-available-models). You can find a native decision model without a probe or a model load. This works for unloaded and sleeping models too. Older servers can omit `architecture`. If it is absent, use the legacy behavior of your client.
+
 By default, model `id` field is the path to model file, specified via `-m`. You can set a custom value for model `id` field via `--alias` argument. For example, `--alias gpt-4o-mini`.
 
 Example:
@@ -1252,6 +1381,10 @@ Example:
         {
             "id": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
             "object": "model",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            },
             "created": 1735142223,
             "owned_by": "llamacpp",
             "meta": {
@@ -1285,7 +1418,7 @@ Example usage with `openai` python library:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:9931/v1", # "http://<Your api-server IP>:port"
     api_key = "sk-no-key-required"
 )
 
@@ -1316,10 +1449,6 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
 
-`generation_prompt`: The generation prompt that was prefilled in by the template. Prepended to model output before parsing.
-
-`parse_tool_calls`: Whether to parse the generated tool call.
-
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
 
 For multimodal input (typed content, `messages[i].content[j]`):
@@ -1343,7 +1472,7 @@ You can use either Python `openai` library with appropriate checkpoints:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:9931/v1", # "http://<Your api-server IP>:port"
     api_key = "sk-no-key-required"
 )
 
@@ -1361,7 +1490,7 @@ print(completion.choices[0].message)
 ... or raw HTTP requests:
 
 ```shell
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:9931/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer no-key" \
 -d '{
@@ -1451,6 +1580,31 @@ Acts on an in-flight completion identified by its `id` (the `id` field streamed 
 
 Returns a JSON object with a boolean `success` field, and an optional `message` field describing the reason when `success` is `false`.
 
+### WebSocket `/v1/realtime`: Realtime transcription
+
+Transcribes streamed audio, for models with a streaming audio encoder. Compatible with OAI `/v1/realtime` schema.
+
+Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `audio.input.format.rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
+
+*Client events:*
+
+- `session.update`: accepted for compatibility, the server replies with `session.updated`
+- `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
+- `input_audio_buffer.commit`: flushes the audio received so far, so the words still held back by the model's delay are produced. The server replies with `input_audio_buffer.committed` and starts a new item. With `"final": true`, the input ends instead and the last item is completed once the stream drains.
+- `input_audio_buffer.clear`: accepted for compatibility, audio already sent cannot be discarded
+
+Closing the websocket also ends the input.
+
+*Server events:*
+
+- `session.created` and `session.updated`: carry the `session` object
+- `conversation.item.input_audio_transcription.delta`: `delta` holds the new text for `item_id`
+- `conversation.item.input_audio_transcription.completed`: `transcript` holds the full text of `item_id`
+- `input_audio_buffer.committed`: `item_id` of the committed item, `previous_item_id` of the item committed before it (`null` for the first one)
+- `error`: `error.message` describes the problem
+
+Note that words held back by the model's delay at the time of a commit are attributed to the next item.
+
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
 *Options:*
@@ -1465,7 +1619,7 @@ You can use either Python `openai` library with appropriate checkpoints:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:9931/v1", # "http://<Your api-server IP>:port"
     api_key = "sk-no-key-required"
 )
 
@@ -1481,7 +1635,7 @@ print(response.output_text)
 ... or raw HTTP requests:
 
 ```shell
-curl http://localhost:8080/v1/responses \
+curl http://localhost:9931/v1/responses \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer no-key" \
 -d '{
@@ -1502,12 +1656,19 @@ This endpoint requires that the model uses a pooling different than type `none`.
 
 See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
 
+For multimodal models (loaded with `--mmproj`), each element of `input` can also be an object with a `content` array, using the same parts as `/v1/chat/completions`:
+- `{ "type": "text", "text": "..." }`: text is added to the prompt as-is
+- `{ "type": "image_url", "image_url": { "url": "..." } }`: remote URL, base64 data URI, or local file (`file://`, requires `--media-path`)
+- `{ "type": "input_audio", "input_audio": { "data": "..." } }` and `{ "type": "input_video", "input_video": { "url": "..." } }`: same as `/v1/chat/completions`, requires a model with audio or video support
+
+Each object gives one embedding. This input shape is not part of the OpenAI Embeddings API; it follows the shape used by providers like OpenRouter for vision embedding models.
+
 *Examples:*
 
 - input as string
 
   ```shell
-  curl http://localhost:8080/v1/embeddings \
+  curl http://localhost:9931/v1/embeddings \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer no-key" \
   -d '{
@@ -1520,12 +1681,32 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
 - `input` as string array
 
   ```shell
-  curl http://localhost:8080/v1/embeddings \
+  curl http://localhost:9931/v1/embeddings \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer no-key" \
   -d '{
           "input": ["hello", "world"],
           "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
+
+- `input` as multimodal content
+
+  ```shell
+  curl http://localhost:9931/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": [
+              { "content": [
+                  { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..." } },
+                  { "type": "text", "text": "Describe this image" }
+              ] },
+              { "content": [
+                  { "type": "text", "text": "hello" }
+              ] }
+          ],
           "encoding_format": "float"
   }'
   ```
@@ -1582,6 +1763,8 @@ See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/mes
 
 `top_k`: Top-k sampling
 
+`extra_params`: llama.cpp parameters that the Anthropic API has no field for, such as `seed`, `min_p` or `repeat_penalty`, as an object (e.g. `{"seed": 42, "min_p": 0.05}`). Its keys are merged into the converted request and behave as on `/v1/chat/completions`.
+
 `stop_sequences`: Array of stop sequences
 
 `stream`: Enable streaming (default: false)
@@ -1593,7 +1776,7 @@ See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/mes
 *Examples:*
 
 ```shell
-curl http://localhost:8080/v1/messages \
+curl http://localhost:9931/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-api-key" \
   -d '{
@@ -1602,7 +1785,8 @@ curl http://localhost:8080/v1/messages \
     "system": "You are a helpful assistant.",
     "messages": [
       {"role": "user", "content": "Hello!"}
-    ]
+    ],
+    "extra_params": {"seed": 42, "min_p": 0.05}
   }'
 ```
 
@@ -1615,7 +1799,7 @@ Accepts the same parameters as `/v1/messages`. The `max_tokens` parameter is not
 *Example:*
 
 ```shell
-curl http://localhost:8080/v1/messages/count_tokens \
+curl http://localhost:9931/v1/messages/count_tokens \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-4",
@@ -1631,9 +1815,149 @@ curl http://localhost:8080/v1/messages/count_tokens \
 {"input_tokens": 10}
 ```
 
-## Server built-in tools
+## TypeSafe-compatible API Endpoints
 
-The server exposes a REST API under `/tools` that allows the Web UI to call built-in tools. This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+### POST `/v1/systemone`: TypeSafe-compatible System One API
+
+Answers typed questions about a `state` with a decision model.
+
+Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not supported. Multimodal input is an extension to this API, see the [OpenJev multimodal API](https://jev-skills.github.io/openjev-multimodal/api) for reference.
+
+*Options:*
+
+`state`: The content to evaluate. Can be a string, an object or an array. A value that is not a string is given to the model as JSON text. For lfm2-d1 and lfm2-d1-omni, it can be `null`, for example to ask about images only.
+
+`files`: Optional. An array of input files, the maximum number may be limited depending on the model. Each one is a data URL (`data:image/...;base64,...`). For audio-capable models, it can be audio clips (`data:audio/...;base64,...`). See the image input section below.
+
+`images`: Optional. An alias of `files`.
+
+`questions`: An object that maps a question id to a question. Each question has these fields:
+
+- `type`: One of `choice`, `score`, `noul`.
+- `instructions`: The question. Can be a string, an object or an array.
+- `criteria`: The possible answers, the shape depends on `type`:
+  - `choice`: An object that maps each option to its description. The description can be `null`.
+  - `score`: An array of 2 to 10 level descriptions, lowest level first.
+  - `noul`: Optional. An object with the descriptions of `true` and `false`.
+
+The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly.
+
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for granite-switch, laya, clef, pplx-decider, vllm-decision2, vllm-d3, lfm2-d1, lfm2-d1-omni and h2o-lightning. For laya, long questions and options are truncated to the token budget the model was trained with.
+
+For laya, clef, vllm-d3 and lfm2-d1-omni, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. An lfm2-d1-omni prompt is cut to 16384 tokens. For vllm-decision2, the options of a question and the end of the prompt must fit in one batch. An h2o-lightning state longer than 32000 tokens keeps its first and last 16000 tokens. A server that runs clef only serves this endpoint, text generation is not available. A decision model that is also a text model, such as granite-switch, serves both and reports `["text", "decisions"]`.
+
+*Image input:*
+
+Image input needs a model that supports it (for example: openjev, clef, pplx-decider, vllm-d3, lfm2-d1, lfm2-d1-omni, h2o-lightning) and its multimodal projector, see `--mmproj`.
+
+Images can be given in two ways, and both can be used in the same request:
+
+- The `files` field, or its alias `images`.
+- A `state` made of chat messages, either an array of messages or an object with a `messages` array. An `image_url` part in the `content` of a message is taken as an image, in the same format as chat completions. Only data URLs are accepted. For lfm2-d1-omni, an `input_audio` part is taken as an audio clip, as base64 data.
+
+All the images are placed before the state in the prompt, the ones from `files` and `images` first. The image parts are removed from the state.
+
+*Response:*
+
+`answers`: An object that maps each question id to its answer. The fields depend on the question type:
+
+- `choice`:
+  - `choice`: The option with the highest probability.
+  - `probabilities`: The probability of each option, they sum to 1.
+  - `confidence`: A value from 0 to 1, where 0 means all options are equally likely.
+- `score`:
+  - `score`: The expected level index, weighted by probability. It can be between two levels.
+  - `legend`: The description of each level index.
+  - `probabilities`: The probability of each level index, they sum to 1.
+  - `confidence`: A value from 0 to 1.
+- `noul`:
+  - `noul`: The probability that the answer is true.
+
+`usage`: `input_tokens` is the number of prompt tokens of all questions. `output_tokens` is always 0.
+
+The probabilities are scaled with the temperatures stored in the model file. They are not guaranteed to be calibrated for your data.
+
+For h2o-lightning, `score` questions can have 1 to 255 levels, and the `instructions` and `type` of a question can be left out (`choice` by default; `"instructions": null` is written as `null`).
+
+*Examples:*
+
+```shell
+curl http://127.0.0.1:9931/v1/systemone \
+    -H "Content-Type: application/json" \
+    -d '{
+        "state": "Customer message: I was charged twice for my order last week and nobody has replied.",
+        "questions": {
+            "route": {
+                "type": "choice",
+                "instructions": "Which team should handle this?",
+                "criteria": {"billing": null, "shipping": null, "technical": null}
+            },
+            "angry": {
+                "type": "noul",
+                "instructions": "Is the customer angry?"
+            },
+            "urgency": {
+                "type": "score",
+                "instructions": "How urgent is this?",
+                "criteria": ["can wait", "this week", "today", "right now"]
+            }
+        }
+    }' | jq
+```
+
+Response (values are shortened):
+
+```json
+{
+  "model": "openjev",
+  "answers": {
+    "route": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {"billing": 0.9998, "shipping": 0.0001, "technical": 0.0001},
+      "confidence": 0.9997
+    },
+    "angry": {
+      "type": "noul",
+      "noul": 0.6328
+    },
+    "urgency": {
+      "type": "score",
+      "score": 2.0858,
+      "legend": {"0": "can wait", "1": "this week", "2": "today", "3": "right now"},
+      "probabilities": {"0": 0.0023, "1": 0.116, "2": 0.6753, "3": 0.2064},
+      "confidence": 0.673
+    }
+  },
+  "usage": {
+    "input_tokens": 239,
+    "output_tokens": 0
+  }
+}
+```
+
+Example with an image:
+
+```shell
+curl http://127.0.0.1:9931/v1/systemone \
+    -H "Content-Type: application/json" \
+    -d '{
+        "state": "The document was received by the accounting team this morning.",
+        "images": ["data:image/jpeg;base64,/9j/4AAQSkZJRg..."],
+        "questions": {
+            "has_table": {
+                "type": "noul",
+                "instructions": "Does the image contain a table?"
+            }
+        }
+    }' | jq
+```
+
+An invalid request returns the error `400`. A model that is not a decision model returns the error `501`. A request with images returns the error `501` if the model does not support image input, or if no multimodal projector is loaded.
+
+## Server tools
+
+The server exposes a REST API under `/tools` that allows the Web UI to call server tools. This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
 
 **Please do NOT use this endpoint in a downstream application**
 
@@ -1757,8 +2081,9 @@ The precedence rule for preset options is as follows:
 3. **Global options** defined in the preset file (`[*]`)
 
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
-- `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
+- `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts. Only applies at startup: if the model list is reloaded later (for example after editing the preset file), a newly added model is listed but not loaded
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
+- `dedup-cache-models` (boolean): When the preset uses `hf-repo` pointing to a model that is already downloaded, hide the corresponding cached model entry from `GET /models` (the preset entry remains visible). Set it in the `[*]` section to apply to all presets.
 
 ### Routing requests
 
@@ -1783,6 +2108,8 @@ For **GET** endpoints (`/props`, `/metrics`, etc.) The router uses the `model` q
 ```
 GET /props?model=ggml-org%2Fgemma-3-4b-it-GGUF%3AQ4_K_M
 ```
+
+For the **WebSocket** endpoint (`/v1/realtime`) The router also uses the `model` query parameter.
 
 By default, the model will be loaded automatically if it's not loaded. To disable this, add `--no-models-autoload` when starting the server. Additionally, you can include `?autoload=true|false` in the query param to control this behavior per-request.
 
@@ -1818,6 +2145,37 @@ Note:
     - If a model is running but updated or removed from the source, it will be unloaded
     - If a model is not running, it will be added or updated according to the source
 2. When the model is loaded, the info from `/v1/models` is forwarded to router's `/v1/models`. This includes metadata about the model and the runtime instance.
+
+Each object in `data` has the same `architecture` object as [`GET /v1/models`](#get-v1models-openai-compatible-model-info-api) of a direct server. The server computes both arrays offline. It does not load the model, download files, or run inference. `output_modalities` comes from the GGUF metadata, plus `audio` when the projector file can generate speech. `input_modalities` comes from the projector file. A native decision model shows `decisions` before its first load, after unload, and while it sleeps:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "my-decision-model",
+      "object": "model",
+      "tags": ["local"],
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["decisions"]
+      },
+      "status": {
+        "value": "unloaded"
+      }
+    }
+  ]
+}
+```
+
+The values work like this:
+
+- A loaded model reports both arrays. Its values replace the cached values in full.
+- The cache keeps the values across sleep and unload. A known decision model stays advertised.
+- Before the first report, the values come from the offline computation.
+- Offline computation cannot see video. Only a loaded model reports `video` in `input_modalities`.
+- If the metadata or the model file is not available, both arrays are `["text"]`.
+- A source or preset refresh computes both arrays again. A replaced model does not keep old values.
 
 The `status` object can be:
 
@@ -1869,6 +2227,32 @@ Note: for "downloading" state, there can be multiple files be downloading in par
     }
   }
 }
+```
+
+A download that never finished (paused or interrupted) is listed under a separate
+"incomplete" status, without an instance: posting the model to `/models` again resumes it
+from the files already on disk, and `DELETE /models` drops its partial files.
+
+```json
+"status": {
+  "value": "incomplete",
+  "args": []
+}
+```
+
+Cached models and incomplete downloads carry the sidecar kinds they have on disk
+(`mmproj`, `mtp`, `dflash`, `eagle3`, `dspark`), resolved the way `-hf` loads them:
+
+```json
+"sidecars": ["mmproj", "mtp"]
+```
+
+A cached model whose download of more sidecars never finished also lists the kinds not on
+disk yet: posting the model with them resumes them, and `DELETE /models` with `&sidecar={kind}`
+drops their partial files.
+
+```json
+"incomplete_sidecars": ["mtp"]
 ```
 
 ### POST `/models/load`: Load a model
@@ -1990,7 +2374,7 @@ Example events:
 
 Trigger a new download (non-blocking), the progress can be tracked via SSE endpoint `/models/sse`
 
-To cancel model downloading, send an event to `/models/unload`
+To pause a download, send an event to `/models/unload`: it keeps its partial files and is listed as "incomplete" until it is posted again. To cancel it and drop its files, use `DELETE /models`.
 
 Download procedure:
 - Send POST request to `/models`
@@ -2003,8 +2387,13 @@ Payload:
 ```json
 {
   "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+  "sidecars": ["mmproj", "mtp"]
 }
 ```
+
+`sidecars` lists the sidecar kinds pulled with the model, picked by the server the way `-hf` picks them: `mmproj`, and the draft heads `mtp`, `dflash`, `eagle3` and `dspark`. It defaults to `["mmproj"]`, as `-hf` does.
+
+Posting a model that is already in the cache and not running downloads the sidecars it lacks and keeps the files already on disk.
 
 Response (download is started in the background):
 
@@ -2031,6 +2420,10 @@ Response (error, cannot start the download):
 IMPORTANT: only model stored in cache can be deleted. You cannot delete models in a preset.
 
 Model name must be passed via query param: `?model={name}`
+
+To remove one sidecar of a cached model and keep the model, add `&sidecar={kind}` (`mmproj`, `mtp`, `dflash`, `eagle3` or `dspark`); the model must not be running.
+
+Deleting a model keeps the files another cached quant of the repo still loads, such as an mmproj named after the deleted quant, and the partial files another download still writes. A sidecar deleted on its own goes for every quant that shares it.
 
 If delete success, it will send an SSE event of type `model_remove`
 
@@ -2070,6 +2463,7 @@ Note that the following endpoints are exempt from being considered as incoming t
 - `GET /health`
 - `GET /props`
 - `GET /models`
+- `GET /metrics`
 
 ## More examples
 

@@ -1,8 +1,12 @@
-import { ROUTES } from './routes.constants';
-import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { MODEL_ICON } from './icons.constants';
+import { MODELS_ROUTE_ID } from './routes.constants';
+import { Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
-import { ToolSource } from '$lib/enums/tools.enums';
+import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
+
+/** Delay before a copied affordance resets from its check to the copy icon. */
+export const COPY_FEEDBACK_RESET_MS = 1500;
 
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
@@ -10,6 +14,7 @@ export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 /** Data attributes for app-level DOM contracts. */
 export const UI_DATA_ATTRS = {
 	ACTIVE: 'data-active',
+	ACTIVE_TAB: 'data-active-tab',
 	CONVERSATION_ROW: 'data-conversation-row',
 	HIGHLIGHT_THEME_PREVIEW: 'data-highlight-theme-preview',
 	PICKER_INDEX: 'data-picker-index',
@@ -18,15 +23,15 @@ export const UI_DATA_ATTRS = {
 } as const;
 
 export const TOOL_GROUP_LABELS = {
-	[ToolSource.BUILTIN]: 'Built-in',
+	[ToolSource.BROWSER]: 'Browser',
 	[ToolSource.CUSTOM]: 'JSON Schema',
-	[ToolSource.FRONTEND]: 'Browser'
+	[ToolSource.SERVER]: 'Server'
 } as const;
 
 export const TOOL_SERVER_LABELS = {
-	[ToolSource.BUILTIN]: 'Built-in Tools',
+	[ToolSource.BROWSER]: 'Browser Tools',
 	[ToolSource.CUSTOM]: 'Custom Tools',
-	[ToolSource.FRONTEND]: 'Browser Tools'
+	[ToolSource.SERVER]: 'Server Tools'
 } as const;
 
 export const TOOLTIP_DELAY_DURATION = 500;
@@ -45,8 +50,20 @@ export const STATS_UNITS = {
 
 export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
-/** Icon used for the model selector and the `/model` slash command. */
-export const MODEL_SELECTOR_ICON = Package;
+/** Models listed per remote provider before the "+ X more" line; search covers the rest. */
+export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
+
+/** Orgs whose avatar is dark and needs inverting in dark mode. */
+export const DARK_INVERT_AVATAR_ORGS = ['openai'];
+
+/** Model rows mounted before the list scrolls; a local catalog can hold hundreds. */
+export const MODEL_ROW_WINDOW = 50;
+
+/** Models of one family shown before the rest fold behind a "show more" row. */
+export const FAMILY_ROW_WINDOW = 6;
+
+/** Recently used models kept per browser, most recent first. */
+export const RECENT_MODEL_LIMIT = 20;
 
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
@@ -55,18 +72,27 @@ export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
-	{ icon: SquarePen, keys: ['shift', 'cmd', 'o'], route: ROUTES.NEW_CHAT, tooltip: 'New chat' },
+	{
+		action: SidebarAction.NEW_CHAT,
+		icon: SquarePen,
+		keys: ['shift', 'cmd', 'o'],
+		tooltip: 'New chat'
+	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
-		activeRouteId: '/mcp-servers',
-		icon: McpLogo,
-		route: ROUTES.MCP_SERVERS,
-		tooltip: 'MCP Servers'
+		action: SidebarAction.MANAGE_MODELS,
+		activeRouteId: MODELS_ROUTE_ID,
+		icon: MODEL_ICON,
+		tooltip: 'Models'
 	},
 	{
-		activeUrlIncludes: '#/settings',
+		action: SidebarAction.MCP,
+		icon: McpLogo,
+		tooltip: 'MCP'
+	},
+	{
+		action: SidebarAction.SETTINGS,
 		icon: Settings,
-		route: `${ROUTES.SETTINGS}/general`,
 		tooltip: 'Settings'
 	}
 ];

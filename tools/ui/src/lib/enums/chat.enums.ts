@@ -1,41 +1,41 @@
 export enum ChatMessageStatsView {
 	GENERATION = 'generation',
 	READING = 'reading',
-	TOOLS = 'tools',
-	SUMMARY = 'summary'
+	SUMMARY = 'summary',
+	TOOLS = 'tools'
 }
 
 export enum ChatMessageStatisticsMode {
-	SWITCHABLE = 'switchable',
+	GENERATION = 'generation',
 	READING = 'reading',
-	GENERATION = 'generation'
+	SWITCHABLE = 'switchable'
 }
 
 /**
  * Connection state of a streamed completion, drives the resume status indicator.
  */
 export enum StreamConnectionState {
-	STREAMING = 'streaming',
+	LOST = 'lost',
 	RESUMING = 'resuming',
-	LOST = 'lost'
+	STREAMING = 'streaming'
 }
 
 /**
  * Reasoning format options for API requests.
  */
 export enum ReasoningFormat {
-	NONE = 'none',
-	AUTO = 'auto'
+	AUTO = 'auto',
+	NONE = 'none'
 }
 
 /**
  * Message roles for chat messages.
  */
 export enum MessageRole {
-	USER = 'user',
 	ASSISTANT = 'assistant',
 	SYSTEM = 'system',
-	TOOL = 'tool'
+	TOOL = 'tool',
+	USER = 'user'
 }
 
 /**
@@ -43,27 +43,27 @@ export enum MessageRole {
  */
 export enum MessageType {
 	ROOT = 'root',
+	SYSTEM = 'system',
 	TEXT = 'text',
-	THINK = 'think',
-	SYSTEM = 'system'
+	THINK = 'think'
 }
 
 /**
  * Content part types for API chat message content.
  */
 export enum ContentPartType {
-	TEXT = 'text',
 	IMAGE_URL = 'image_url',
 	INPUT_AUDIO = 'input_audio',
-	INPUT_VIDEO = 'input_video'
+	INPUT_VIDEO = 'input_video',
+	TEXT = 'text'
 }
 
 /**
  * Error dialog types for displaying server/timeout errors.
  */
 export enum ErrorDialogType {
-	TIMEOUT = 'timeout',
-	SERVER = 'server'
+	SERVER = 'server',
+	TIMEOUT = 'timeout'
 }
 
 export enum ConversationSelectionMode {
@@ -75,27 +75,27 @@ export enum ConversationSelectionMode {
  * PDF view mode options for previewing PDF attachments.
  */
 export enum PdfViewMode {
-	TEXT = 'text',
-	PAGES = 'pages'
+	PAGES = 'pages',
+	TEXT = 'text'
 }
 
 export enum ChatFormCommandAction {
-	PROMPT = 'prompt',
 	CWD = 'cwd',
-	MODEL = 'model'
+	MODEL = 'model',
+	PROMPT = 'prompt'
 }
 
 export enum FileMentionEntryType {
-	FILE = 'file',
-	DIRECTORY = 'directory'
+	DIRECTORY = 'directory',
+	FILE = 'file'
 }
 
 /**
  * Kinds of tokens the chat-form-input-rich produces.
  */
 export enum ChatFormInputRichTokenKind {
-	TEXT = 'text',
 	BADGE = 'badge',
+	CODE_BLOCK = 'code_block',
 	CODE_INLINE = 'code_inline',
-	CODE_BLOCK = 'code_block'
+	TEXT = 'text'
 }

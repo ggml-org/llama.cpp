@@ -1,271 +1,84 @@
 <script lang="ts">
-	import { ActionIconCopyToClipboard, BadgesModality } from '$lib/components/app';
+	import ModelsManagerModelConfigurationInformation from '$lib/components/app/models/ModelsManager/ModelsManagerModelConfiguration/ModelsManagerModelConfigurationInformation.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Table from '$lib/components/ui/table';
-	import { modelsStore, serverStore } from '$lib/stores';
-	import type { ApiLlamaCppServerProps } from '$lib/types';
-	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils';
+	import { MODEL_ICON } from '$lib/constants';
+	import { HuggingFaceService } from '$lib/services';
+	import { modelsStore, uiStore } from '$lib/stores';
+	import type { HfModelDetailInfo } from '$lib/types/huggingface';
+	import { repoOf } from '$lib/utils';
 
-	interface Props {
-		open?: boolean;
-		onOpenChange?: (open: boolean) => void;
-		// when set, fetch props from the child process (router mode)
-		modelId?: string | null;
-	}
+	// the props cache is a plain Map, so the read has to name its version to stay reactive
+	let serverProps = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
 
-	let { modelId = null, onOpenChange, open = $bindable() }: Props = $props();
-
-	let isRouter = $derived(serverStore.isRouterMode);
-
-	// per-model props fetched from the child process
-	let routerModelProps = $state<ApiLlamaCppServerProps | null>(null);
-	let isLoadingRouterProps = $state(false);
-
-	// in router mode use per-model props, otherwise use global props
-	let serverProps = $derived(isRouter && modelId ? routerModelProps : serverStore.props);
-
-	let modelName = $derived(isRouter && modelId ? modelId : modelsStore.singleModelName);
-	let models = $derived(modelsStore.models);
-	let isLoadingModels = $derived(modelsStore.loading);
-
-	// in router mode, find the model option matching modelId
-	// in single mode, use the first model as before
-	let firstModel = $derived.by(() => {
-		if (isRouter && modelId) {
-			return models.find((m) => m.model === modelId) ?? null;
-		}
-
-		return models[0] ?? null;
+		return uiStore.modelInformation
+			? modelsStore.props.getModelProps(uiStore.modelInformation.model)
+			: null;
 	});
 
-	// Get modalities from modelStore using the model ID from the first model
-	let modalities = $derived.by(() => {
-		if (!firstModel?.id) return [];
+	// The server reports the full metadata only once a model is loaded. With the
+	// Hub enabled, it fills those gaps instead.
+	let hubDetails = $state<HfModelDetailInfo | null>(null);
 
-		return modelsStore.getModelModalitiesArray(firstModel.id);
-	});
-
-	// Ensure models are fetched when dialog opens
 	$effect(() => {
-		if (open && models.length === 0) {
-			modelsStore.fetch();
-		}
-	});
+		const option = uiStore.modelInformation;
 
-	// fetch per-model props from child process when dialog opens in router mode
-	$effect(() => {
-		if (open && isRouter && modelId) {
-			isLoadingRouterProps = true;
-			modelsStore
-				.fetchModelProps(modelId)
-				.then((props) => {
-					routerModelProps = props;
-				})
-				.catch(() => {
-					routerModelProps = null;
-				})
-				.finally(() => {
-					isLoadingRouterProps = false;
-				});
+		if (!option) return;
+
+		const repo = repoOf(option.model);
+
+		let cancelled = false;
+
+		hubDetails = null;
+
+		if (!HuggingFaceService.isEnabled() || !repo.includes('/')) {
+			return;
 		}
 
-		if (!open) {
-			routerModelProps = null;
-		}
+		void HuggingFaceService.getDetails(repo)
+			.then((details) => {
+				if (!cancelled) hubDetails = details;
+			})
+			.catch(() => {});
+
+		return () => {
+			cancelled = true;
+		};
 	});
 </script>
 
-<Dialog.Root bind:open {onOpenChange}>
-	<Dialog.Content class="@container z-9999 !max-h-[80dvh] !max-w-[60rem] max-w-full">
-		<style>
-			@container (max-width: 56rem) {
-				.resizable-text-container {
-					max-width: calc(100vw - var(--threshold));
-				}
-			}
-		</style>
+<Dialog.Root
+	onOpenChange={(open) => {
+		if (!open) uiStore.modelInformation = null;
+	}}
+	open={uiStore.modelInformation !== null}
+>
+	<Dialog.Content
+		class="z-[70] flex max-md:h-[100dvh]! max-md:w-screen! max-md:max-w-none! max-md:rounded-none! max-md:border-0! md:h-[calc(100vh-4rem)]! md:w-[calc(100vw-4rem)]! md:max-w-md! flex-col"
+		onOpenAutoFocus={(event) => event.preventDefault()}
+		overlayClass="z-[70]"
+	>
+		<Dialog.Header class="flex flex-row items-center pr-8">
+			<Dialog.Title class="flex min-w-0 items-center gap-2 text-base">
+				<MODEL_ICON class="h-4 w-4 shrink-0 text-muted-foreground" />
 
-		<Dialog.Header>
-			<Dialog.Title>Model Information</Dialog.Title>
+				{#if uiStore.modelInformation}
+					<span class="min-w-0 truncate">{uiStore.modelInformation.model}</span>
+				{/if}
+			</Dialog.Title>
 
-			<Dialog.Description>Current model details and capabilities</Dialog.Description>
+			<Dialog.Description class="sr-only">
+				Details of the model, from the server or the Hub.
+			</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="space-y-6 py-4">
-			{#if isLoadingModels || isLoadingRouterProps}
-				<div class="flex items-center justify-center py-8">
-					<div class="text-sm text-muted-foreground">Loading model information...</div>
-				</div>
-			{:else if firstModel}
-				{@const modelMeta = firstModel.meta}
-
-				{#if serverProps}
-					<Table.Root>
-						<Table.Header>
-							<Table.Row>
-								<Table.Head class="w-[10rem]">Model</Table.Head>
-
-								<Table.Head>
-									<div class="inline-flex items-center gap-2">
-										<span
-											class="resizable-text-container min-w-0 flex-1 truncate"
-											style:--threshold="12rem"
-										>
-											{modelName}
-										</span>
-
-										<ActionIconCopyToClipboard
-											text={modelName || ''}
-											canCopy={!!modelName}
-											ariaLabel="Copy model name to clipboard"
-										/>
-									</div>
-								</Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							<!-- Model Path -->
-							<Table.Row>
-								<Table.Cell class="h-10 align-middle font-medium">File Path</Table.Cell>
-
-								<Table.Cell
-									class="inline-flex h-10 items-center gap-2 align-middle font-mono text-xs"
-								>
-									<span
-										class="resizable-text-container min-w-0 flex-1 truncate"
-										style:--threshold="14rem"
-									>
-										{serverProps.model_path}
-									</span>
-
-									<ActionIconCopyToClipboard
-										text={serverProps.model_path}
-										ariaLabel="Copy model path to clipboard"
-									/>
-								</Table.Cell>
-							</Table.Row>
-
-							<!-- Context Size -->
-							{#if serverProps?.default_generation_settings?.n_ctx}
-								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium">Context Size</Table.Cell>
-
-									<Table.Cell
-										>{formatNumber(serverProps.default_generation_settings.n_ctx)} tokens</Table.Cell
-									>
-								</Table.Row>
-							{:else}
-								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium text-red-500"
-										>Context Size</Table.Cell
-									>
-
-									<Table.Cell class="text-red-500">Not available</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Training Context -->
-							{#if modelMeta?.n_ctx_train}
-								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium">Training Context</Table.Cell>
-
-									<Table.Cell>{formatNumber(modelMeta.n_ctx_train)} tokens</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Model Size -->
-							{#if modelMeta?.size}
-								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium">Model Size</Table.Cell>
-
-									<Table.Cell>{formatFileSize(modelMeta.size)}</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Parameters -->
-							{#if modelMeta?.n_params}
-								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium">Parameters</Table.Cell>
-
-									<Table.Cell>{formatParameters(modelMeta.n_params)}</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Embedding Size -->
-							{#if modelMeta?.n_embd}
-								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Embedding Size</Table.Cell>
-
-									<Table.Cell>{formatNumber(modelMeta.n_embd)}</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Vocabulary Size -->
-							{#if modelMeta?.n_vocab}
-								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Vocabulary Size</Table.Cell>
-
-									<Table.Cell>{formatNumber(modelMeta.n_vocab)} tokens</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Vocabulary Type -->
-							{#if modelMeta?.vocab_type}
-								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Vocabulary Type</Table.Cell>
-									<Table.Cell class="align-middle capitalize">{modelMeta.vocab_type}</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Total Slots -->
-							<Table.Row>
-								<Table.Cell class="align-middle font-medium">Parallel Slots</Table.Cell>
-
-								<Table.Cell>{serverProps.total_slots}</Table.Cell>
-							</Table.Row>
-
-							<!-- Modalities -->
-							{#if modalities.length > 0}
-								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Modalities</Table.Cell>
-
-									<Table.Cell>
-										<div class="flex flex-wrap gap-1">
-											<BadgesModality {modalities} />
-										</div>
-									</Table.Cell>
-								</Table.Row>
-							{/if}
-
-							<!-- Build Info -->
-							<Table.Row>
-								<Table.Cell class="align-middle font-medium">Build Info</Table.Cell>
-
-								<Table.Cell class="align-middle font-mono text-xs"
-									>{serverProps.build_info}</Table.Cell
-								>
-							</Table.Row>
-
-							<!-- Chat Template -->
-							{#if serverProps.chat_template}
-								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Chat Template</Table.Cell>
-
-									<Table.Cell class="py-10">
-										<div class="rounded-md bg-muted p-4">
-											<pre
-												class="font-mono text-xs whitespace-pre-wrap">{serverProps.chat_template}</pre>
-										</div>
-									</Table.Cell>
-								</Table.Row>
-							{/if}
-						</Table.Body>
-					</Table.Root>
-				{/if}
-			{:else if !isLoadingModels}
-				<div class="flex items-center justify-center py-8">
-					<div class="text-sm text-muted-foreground">No model information available</div>
-				</div>
+		<div class="min-h-0 flex-1 overflow-y-auto">
+			{#if uiStore.modelInformation}
+				<ModelsManagerModelConfigurationInformation
+					hub={hubDetails}
+					option={uiStore.modelInformation}
+					{serverProps}
+				/>
 			{/if}
 		</div>
 	</Dialog.Content>

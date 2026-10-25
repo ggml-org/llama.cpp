@@ -212,6 +212,15 @@ Use `--backend-sampling` to run supported target-model samplers on the model bac
 
 Unsupported samplers and device layouts fall back to CPU sampling. Tensor split mode does not support backend sampling. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.
 
+### Synthetic Acceptance
+
+`llama-server` and `llama-cli` can replace normal speculative verification with synthetic decisions for benchmarking. The generated output is not valid model output because accepted draft tokens do not have to match the target model.
+
+Use exactly one of these options:
+
+- `--spec-synth-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
+- `--spec-synth-len L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
+
 ### General Speculative Parameters
 
 ```
@@ -238,6 +247,9 @@ Unsupported samplers and device layouts fall back to CPU sampling. Tensor split 
 --spec-draft-n-min                      N
                                         minimum number of draft tokens to use for speculative decoding (default: 0)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_MIN)
+--spec-draft-n-ubatch                   N
+                                        physical maximum batch size of the draft context, use a smaller value to spare VRAM (default: 0 - same as --n-ubatch)
+                                        (env: LLAMA_ARG_SPEC_DRAFT_N_UBATCH)
 --spec-draft-p-split, --draft-p-split   P
                                         speculative decoding split probability (default: 0.10)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)

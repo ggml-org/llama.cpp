@@ -1,23 +1,21 @@
+/**
+ * ToolsService - Stateless server tools API layer
+ *
+ * Fetches the server's /tools listing and streams tool execution results.
+ * No reactive state; consumed by toolsStore.
+ */
+
 import { base } from '$app/paths';
 import { API_TOOLS, HEADERS } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
-import type { ServerBuiltinToolInfo, ToolExecutionResult } from '$lib/types';
+import type { ServerToolInfo, ToolExecutionResult } from '$lib/types';
 import { apiFetch } from '$lib/utils';
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 
 export class ToolsService {
 	/**
-	 * Fetch the list of built-in tools from the server.
-	 *
-	 * @returns Array of tool definitions in OpenAI-compatible format
-	 */
-	static async list(): Promise<ServerBuiltinToolInfo[]> {
-		return apiFetch<ServerBuiltinToolInfo[]>(API_TOOLS.LIST);
-	}
-
-	/**
-	 * Execute a built-in tool on the server.
+	 * Execute a server tool on the server.
 	 *
 	 * @param cwd - Working directory for the tool call, sent as the
 	 * x-tool-cwd request header. The server resolves relative paths
@@ -48,7 +46,7 @@ export class ToolsService {
 	}
 
 	/**
-	 * Execute a built-in tool and return the raw JSON response. Unlike
+	 * Execute a server tool and return the raw JSON response. Unlike
 	 * executeTool, this preserves structured fields (e.g. file_glob_search's
 	 * `entries` and `base`) that the flattened ToolExecutionResult drops.
 	 *
@@ -77,7 +75,16 @@ export class ToolsService {
 	}
 
 	/**
-	 * Stream a built-in tool's output chunks from the server. The server
+	 * Fetch the list of server tools from the server.
+	 *
+	 * @returns Array of tool definitions in OpenAI-compatible format
+	 */
+	static async list(): Promise<ServerToolInfo[]> {
+		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST);
+	}
+
+	/**
+	 * Stream a server tool's output chunks from the server. The server
 	 * `POST /tools` endpoint with `{stream: true}` emits `data: {"chunk": "..."}`
 	 * events followed by a terminal `data: {"done": true}` (optionally with
 	 * `error`). Yields the chunk string for each partial event.

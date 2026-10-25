@@ -1,4 +1,6 @@
 
+#include "utils.glsl"
+
 // vk_op_sum_rows_push_constants
 layout (push_constant) uniform parameter
 {
@@ -14,12 +16,4 @@ layout (push_constant) uniform parameter
 
 uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_doffset() { return p.misalign_offsets & 0xFFFF; }
-
-// see init_fastdiv_values in ggml-vulkan.cpp
-uint fastdiv(uint n, uint mp, uint L) {
-    uint msbs, lsbs;
-    // msbs = mulhi(n, mp)
-    umulExtended(n, mp, msbs, lsbs);
-    return (msbs + n) >> L;
-}
 

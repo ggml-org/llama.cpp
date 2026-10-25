@@ -19,7 +19,7 @@ export type FileGlobSearchMeta = {
 };
 
 export function parseFileGlobSearchMeta(section: AgenticSection): FileGlobSearchMeta | null {
-	const args = parseToolArgs(BuiltInTool.FILE_GLOB_SEARCH, section);
+	const args = parseToolArgs(BuiltInTool.SERVER_FILE_GLOB_SEARCH, section);
 
 	if (!args) return null;
 

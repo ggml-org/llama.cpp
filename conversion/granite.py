@@ -8,7 +8,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, gguf, logger
+from .base import MmprojModel, ModelBase, gguf, jinja_str_or_json, logger
 
 from .llama import LlamaModel
 from .mamba import Mamba2Model
@@ -74,6 +74,108 @@ class GraniteModel(LlamaModel):
         return super().filter_tensors(item)
 
 
+@ModelBase.register("GraniteSWAForCausalLM")
+class GraniteSWAModel(GraniteModel):
+    """Conversion for IBM's GraniteSWAForCausalLM (interleaved sliding window attention)"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_SWA
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.endswith("sinks"):
+            name += ".weight"
+
+        return super().filter_tensors((name, gen))
+
+    def set_gguf_parameters(self):
+        """GraniteSWA uses Granite parameters plus sliding window configuration."""
+        super().set_gguf_parameters()
+
+        # Add sliding_window from config
+        sliding_window = self.hparams.get("sliding_window", 128)
+        self.gguf_writer.add_sliding_window(sliding_window)
+        logger.info("gguf: (granite_swa) sliding_window = %s", sliding_window)
+
+        # Derive sliding_window_pattern from layer_types
+        if layer_types := self.hparams.get("layer_types"):
+            is_swa = [t == "sliding_attention" for t in layer_types]
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+            logger.info("gguf: (granite_swa) sliding_window_pattern = %d SWA layers / %d total",
+                        sum(is_swa), len(is_swa))
+        else:
+            # Fall back to period-based pattern: i % 4 != 0
+            # This matches the transformers default pattern
+            n_layers = self.block_count
+            is_swa = [i % 4 != 0 for i in range(n_layers)]
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+            logger.info("gguf: (granite_swa) sliding_window_pattern (inferred) = %d SWA layers / %d total",
+                        sum(is_swa), n_layers)
+
+        # Add rope_pattern from no_rope_layers
+        if no_rope_layers := self.hparams.get("no_rope_layers"):
+            # Convert 1/0 to bool (1 = use RoPE, 0 = NoPE)
+            rope_pattern = [bool(x) for x in no_rope_layers]
+            self.gguf_writer.add_rope_pattern(rope_pattern)
+            logger.info("gguf: (granite_swa) rope_pattern = %d RoPE layers / %d total",
+                        sum(rope_pattern), len(rope_pattern))
+
+
+@ModelBase.register("GraniteMoeSWAForCausalLM")
+class GraniteMoeSWAModel(GraniteSWAModel):
+    """Conversion for IBM's GraniteMoeSWAForCausalLM (unified dense + MoE with iSWA)"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_SWA
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if shared_intermediate_size := self.hparams.get("shared_intermediate_size"):
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_intermediate_size)
+            logger.info("gguf: (granitemoewa) shared_intermediate_size = %s", shared_intermediate_size)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        """Split merged MoE tensors (gate+up) following standard MoE pattern."""
+
+        # Handle expert FFN tensors (merged gate+up) - swash format: experts.gate_up_proj
+        # Kept fused since inference (build_moe_ffn) supports a single gate_up_exps
+        # tensor for the routed experts.
+        if name.endswith("block_sparse_moe.experts.gate_up_proj"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, f"Merged FFN tensor size must be 2 * intermediate_size, got {data_torch.shape[-2]}"
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid), bid)
+            return
+
+        # Handle expert FFN down projection - swash format: experts.down_proj
+        if name.endswith("block_sparse_moe.experts.down_proj"):
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), bid)
+            return
+
+        # Handle expert FFN tensors (merged gate+up) - standard granite format: input_linear.weight
+        # Kept fused since inference (build_moe_ffn) supports a single gate_up_exps
+        # tensor for the routed experts.
+        if name.endswith("block_sparse_moe.input_linear.weight"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid), bid)
+            return
+
+        # Handle shared expert FFN tensors (if present) - kept fused since
+        # inference (build_ffn) supports a single ffn_up_shexp tensor with
+        # LLM_FFN_SWIGLU for the shared expert.
+        if name.endswith("shared_mlp.input_linear.weight"):
+            ffn_dim = self.hparams.get("shared_intermediate_size", self.hparams["intermediate_size"])
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
+            return
+
+        # Handle shared expert output (if present)
+        if name.endswith("shared_mlp.output_linear.weight"):
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, bid), bid)
+            return
+
+        # Pass through to parent for all other tensors (including sinks)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 @ModelBase.example("ibm-granite/granite-3.1-3b-a800m-instruct")
 class GraniteMoeModel(GraniteModel):
@@ -137,8 +239,21 @@ class GraniteSwitchModel(GraniteMoeModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # the weightless switch reserves one cache slot: one fewer block than num_hidden_layers
-        self.block_count = self.block_count - 1
+        # The weightless switch layer(s) are counted in num_hidden_layers but carry no tensors.
+        # The count is not fixed, nor is it present in hparams, so we derive it here based on tensor block names.
+        layer_ids = {
+            int(m.group(1))
+            for name in self.model_tensors
+            if (m := re.match(r"(?:model\.)?layers\.(\d+)\.", name))
+        }
+        if not layer_ids:
+            raise ValueError("graniteswitch: no 'model.layers.N' tensors found in checkpoint")
+        n_weight_layers = max(layer_ids) + 1
+        logger.info(
+            "gguf: (graniteswitch) num_hidden_layers %s counts %d weightless switch layer(s); using %d blocks",
+            self.hparams["num_hidden_layers"], self.block_count - n_weight_layers, n_weight_layers,
+        )
+        self.block_count = n_weight_layers
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
         self._n_adapters = int(self.hparams["num_adapters"])
@@ -169,9 +284,39 @@ class GraniteSwitchModel(GraniteMoeModel):
         self.gguf_writer.add_adapter_lora_rank(self._max_lora_rank)
         self.gguf_writer.add_adapter_token_ids_activate(self.hparams["adapter_token_ids"])
         self.gguf_writer.add_adapter_token_ids_substitute(self.hparams["adapter_substitute_token_ids"])
+        if self._has_decision_adapter():
+            self.gguf_writer.add_decision_type(gguf.DecisionType.GRANITE_SWITCH)
         router_gain = float(self.hparams.get("control_token_gain", 15.0))
         self.gguf_writer.add_adapter_router_gain(router_gain)
         logger.info("gguf: (graniteswitch) num_adapters=%s max_lora_rank=%s n_slots=%s router_gain=%s", self._n_adapters, self._max_lora_rank, self._n_slots, router_gain)
+
+    def _has_decision_adapter(self) -> bool:
+        return "decision" in self.hparams.get("adapter_names", [])
+
+    def set_vocab(self):
+        super().set_vocab()
+        if self._has_decision_adapter():
+            systemone_template = self._systemone_template()
+            logger.info("System One Template: %s", systemone_template)
+            self.gguf_writer.add_chat_template([{"name": "systemone", "template": systemone_template}])
+
+    def _systemone_template(self) -> str:
+        # prompt of the decision aLoRA: a state turn, then a question turn that opens with the control token
+        # (it replaces the first token of "### DECISION"), the answer is the label token that comes next
+        description = jinja_str_or_json("o.description")
+        option = (
+            "{% if type != 'noul' %}{{ o.label }}: {% if o.description %}" + description + "{% endif %}"
+            "{% elif o.key == 'true' %}A: {% if o.description %}" + description + "{% else %}The statement is true.{% endif %}"
+            "{% else %}B: {% if o.description %}" + description + "{% else %}The statement is false.{% endif %}{% endif %}"
+        )
+        return (
+            "<|start_of_role|>user<|end_of_role|>State:\n" + jinja_str_or_json("state") + "<|end_of_text|>\n"
+            "<|start_of_role|>user<|end_of_role|><|decision|> DECISION\nQuestion:\n" + jinja_str_or_json("instructions")
+            + "{% if type == 'score' %} Rate along the ordered levels below (lowest first).{% endif %}"
+            "{{ '\n\nOptions:\n' }}"
+            "{% for o in options %}" + option + "{{ '\n' }}{% endfor %}"
+            "{{ '\nReply with exactly one option label.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>' }}"
+        )
 
     def _lora_a(self, data: Tensor) -> Tensor:
         # on-disk A: [n_adapters, 1, max_rank, in] -> [n_adapters+1, max_rank, in]

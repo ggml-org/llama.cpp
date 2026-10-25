@@ -4,10 +4,6 @@ void llama_model_glm4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
 
-    // NextN/MTP parameters (GLM-OCR)
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
-
     switch (hparams.n_layer()) {
         case 17: type = LLM_TYPE_1B; break; // GLM-OCR
         case 40: type = LLM_TYPE_9B; break;
@@ -185,6 +181,4 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

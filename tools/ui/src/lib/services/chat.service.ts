@@ -1,4 +1,11 @@
-import { settingsStore } from '../stores/settings.svelte';
+/**
+ * ChatService - Stateless chat completion and streaming API layer
+ *
+ * Wraps the /chat/completions and /stream endpoints: request building, SSE
+ * parsing, streaming callbacks, resume/probe logic and pre-encode KV-cache
+ * warming. No reactive state; consumed by chatStore and its managers.
+ */
+
 import { getAudioInputFormat } from '../utils/audio-format';
 import { capImageDataURLSize } from '../utils/cap-img-size';
 import {
@@ -13,6 +20,7 @@ import {
 	SSE_DATA_PREFIX,
 	SSE_DONE_MARKER,
 	SSE_LINE_SEPARATOR,
+	STREAM_QUERY_PARAMS,
 	STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX,
 	STREAM_VISIBILITY_KICK_MS
 } from '$lib/constants';
@@ -24,7 +32,8 @@ import {
 	ReasoningFormat,
 	StreamConnectionState
 } from '$lib/enums';
-import { modelsStore } from '$lib/stores/models.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import type {
 	ApiChatCompletionToolCall,
@@ -33,6 +42,7 @@ import type {
 	ApiStreamSession
 } from '$lib/types/api';
 import { isAbortError } from '$lib/utils/abort';
+import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
@@ -51,13 +61,310 @@ function streamStorageKey(conversationId: string): string {
 }
 
 export class ChatService {
+	// Per-chunk localStorage writes are throttled to at most one per
+	// conversation per interval (saveStreamStateThrottled). The resume offset
+	// only needs to be roughly current: on resume the server retransmits from
+	// a line boundary and the client discards its partial line. Guaranteed
+	// immediate writes happen at stream start, at resume boundaries and when
+	// the page goes hidden or away (pagehide/visibilitychange), so a reload
+	// always finds a usable offset.
+	private static readonly STREAM_STATE_SAVE_INTERVAL_MS = 500;
+
+	private static streamStateSaveTrackers = new Map<
+		string,
+		{ lastSavedAt: number; model: string | null; pendingBytes: number | null }
+	>();
+
 	/**
+	 * Checks whether all server slots are currently idle (not processing any requests).
+	 * Queries the /slots endpoint (requires --slots flag on the server).
+	 * Returns true if all slots are idle, false if any is processing.
+	 * If the endpoint is unavailable or errors out, returns true (best-effort fallback).
 	 *
-	 *
-	 * Title Generation
-	 *
-	 *
+	 * @param signal - Optional AbortSignal to cancel the request if needed
+	 * @param model - Optional model name to check slots for (required in ROUTER mode)
+	 * @returns {Promise<boolean>} Promise that resolves to true if all slots are idle, false if any is processing
 	 */
+	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
+		try {
+			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
+			const res = await fetch(url, { signal });
+
+			if (!res.ok) return true;
+
+			const slots: { is_processing: boolean }[] = await res.json();
+
+			return slots.every((s) => !s.is_processing);
+		} catch {
+			return true;
+		}
+	}
+
+	/**
+	 * Cancels the server-side replay buffer for a conversation, freeing its slot.
+	 */
+	static async cancelServerStream(conversationId: string, model?: string | null): Promise<void> {
+		if (!conversationId) return;
+
+		try {
+			const id = streamIdentity(conversationId, model);
+
+			await fetch(ChatService.buildStreamUrl(id), {
+				headers: getAuthHeaders(),
+				method: 'DELETE'
+			});
+		} catch (e) {
+			console.warn('cancelServerStream failed:', e);
+		}
+	}
+
+	static clearStreamState(conversationId: string): void {
+		if (!conversationId) return;
+
+		ChatService.streamStateSaveTrackers.delete(conversationId);
+
+		try {
+			localStorage.removeItem(streamStorageKey(conversationId));
+		} catch {
+			// nothing to do
+		}
+	}
+
+	/**
+	 * Converts a database message with attachments to API chat message format.
+	 * Processes various attachment types (images, text files, PDFs) and formats them
+	 * as content parts suitable for the chat completion API.
+	 */
+	static async convertDbMessageToApiChatMessageData(
+		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+	): Promise<ApiChatMessageData> {
+		// Handle tool result messages (role: 'tool')
+		if (message.role === MessageRole.TOOL && message.toolCallId) {
+			return {
+				content: message.content,
+				role: MessageRole.TOOL,
+				tool_call_id: message.toolCallId
+			};
+		}
+
+		// Parse tool calls for assistant messages
+		let toolCalls: ApiChatCompletionToolCall[] | undefined;
+
+		if (message.toolCalls) {
+			try {
+				toolCalls = JSON.parse(message.toolCalls);
+			} catch {
+				// Ignore parse errors for malformed tool calls
+			}
+		}
+
+		if (!message.extra || message.extra.length === 0) {
+			const result: ApiChatMessageData = {
+				content: message.content,
+				role: message.role as MessageRole
+			};
+
+			if (message.reasoningContent) {
+				result.reasoning_content = message.reasoningContent;
+			}
+
+			if (toolCalls && toolCalls.length > 0) {
+				result.tool_calls = toolCalls;
+			}
+
+			return result;
+		}
+
+		const contentParts: ApiChatMessageContentPart[] = [];
+		const textFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
+				extra.type === AttachmentType.TEXT
+		);
+
+		for (const textFile of textFiles) {
+			contentParts.push({
+				text: formatAttachmentText(AttachmentLabel.FILE, textFile.name, textFile.content),
+				type: ContentPartType.TEXT
+			});
+		}
+
+		// Handle legacy 'context' type from the old UI (pasted content)
+		const legacyContextFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
+				extra.type === AttachmentType.LEGACY_CONTEXT
+		);
+
+		for (const legacyContextFile of legacyContextFiles) {
+			contentParts.push({
+				text: formatAttachmentText(
+					AttachmentLabel.FILE,
+					legacyContextFile.name,
+					legacyContextFile.content
+				),
+				type: ContentPartType.TEXT
+			});
+		}
+
+		const imageFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
+				extra.type === AttachmentType.IMAGE
+		);
+
+		for (const image of imageFiles) {
+			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
+			// Caps the resolution and bakes the jpeg exif orientation in one pass,
+			// untouched images pass through as is
+			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
+
+			contentParts.push({
+				image_url: { url: base64Url },
+				type: ContentPartType.IMAGE_URL
+			});
+		}
+
+		const audioFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile =>
+				extra.type === AttachmentType.AUDIO
+		);
+
+		for (const audio of audioFiles) {
+			contentParts.push({
+				input_audio: {
+					data: audio.base64Data,
+					format: getAudioInputFormat(audio.mimeType)
+				},
+				type: ContentPartType.INPUT_AUDIO
+			});
+		}
+
+		if (message.content) {
+			contentParts.push({
+				text: message.content,
+				type: ContentPartType.TEXT
+			});
+		}
+
+		const videoFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraVideoFile =>
+				extra.type === AttachmentType.VIDEO
+		);
+
+		for (const video of videoFiles) {
+			contentParts.push({
+				input_video: {
+					data: video.base64Data,
+					format: video.mimeType.includes('mp4')
+						? 'mp4'
+						: video.mimeType.includes('ogg')
+							? 'ogg'
+							: 'auto'
+				},
+				type: ContentPartType.INPUT_VIDEO
+			});
+		}
+
+		const pdfFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
+				extra.type === AttachmentType.PDF
+		);
+
+		for (const pdfFile of pdfFiles) {
+			if (pdfFile.processedAsImages && pdfFile.images) {
+				for (let i = 0; i < pdfFile.images.length; i++) {
+					contentParts.push({
+						image_url: { url: pdfFile.images[i] },
+						type: ContentPartType.IMAGE_URL
+					});
+				}
+			} else {
+				contentParts.push({
+					text: formatAttachmentText(AttachmentLabel.PDF_FILE, pdfFile.name, pdfFile.content),
+					type: ContentPartType.TEXT
+				});
+			}
+		}
+
+		const mcpPrompts = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpPrompt =>
+				extra.type === AttachmentType.MCP_PROMPT
+		);
+
+		for (const mcpPrompt of mcpPrompts) {
+			contentParts.push({
+				text: formatAttachmentText(
+					AttachmentLabel.MCP_PROMPT,
+					mcpPrompt.name,
+					mcpPrompt.content,
+					mcpPrompt.serverName
+				),
+				type: ContentPartType.TEXT
+			});
+		}
+
+		const mcpResources = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpResource =>
+				extra.type === AttachmentType.MCP_RESOURCE
+		);
+
+		for (const mcpResource of mcpResources) {
+			contentParts.push({
+				text: formatAttachmentText(
+					AttachmentLabel.MCP_RESOURCE,
+					mcpResource.name,
+					mcpResource.content,
+					mcpResource.serverName
+				),
+				type: ContentPartType.TEXT
+			});
+		}
+
+		const result: ApiChatMessageData = {
+			content: contentParts,
+			role: message.role as MessageRole
+		};
+
+		if (message.reasoningContent) {
+			result.reasoning_content = message.reasoningContent;
+		}
+
+		if (toolCalls && toolCalls.length > 0) {
+			result.tool_calls = toolCalls;
+		}
+
+		return result;
+	}
+
+	/**
+	 * Fetch the full replay of a server-side stream from byte 0. Returns the raw Response so the
+	 * caller can pipe it through the SSE parser like a fresh stream.
+	 */
+	static async fetchStreamReplay(streamId: string): Promise<Response> {
+		const resp = await fetch(ChatService.buildStreamUrl(streamId, 0), {
+			headers: getAuthHeaders()
+		});
+
+		if (!resp.ok) {
+			throw new ApiError(`Stream replay failed with HTTP ${resp.status}`, resp.status);
+		}
+
+		return resp;
+	}
+
+	// write a throttled-but-not-yet-persisted offset immediately; used at
+	// resume boundaries and on pagehide/visibilitychange so the persisted
+	// offset is the freshest one when it matters
+	static flushStreamState(conversationId: string): void {
+		const tracker = ChatService.streamStateSaveTrackers.get(conversationId);
+
+		if (!tracker || tracker.pendingBytes === null) return;
+
+		const { model, pendingBytes } = tracker;
+
+		tracker.lastSavedAt = Date.now();
+		tracker.pendingBytes = null;
+
+		ChatService.writeStreamState(conversationId, pendingBytes, model);
+	}
 
 	/**
 	 * Sends a streaming chat completion request for generating a chat title.
@@ -97,13 +404,610 @@ export class ChatService {
 		return titleResponse;
 	}
 
+	static getStreamState(conversationId: string): ResumableStreamState | null {
+		if (!conversationId) return null;
+
+		try {
+			const raw = localStorage.getItem(streamStorageKey(conversationId));
+
+			if (!raw) return null;
+
+			const parsed = JSON.parse(raw) as ResumableStreamState;
+
+			if (!parsed || typeof parsed.bytesReceived !== 'number') return null;
+
+			return parsed;
+		} catch {
+			return null;
+		}
+	}
+
 	/**
-	 *
-	 *
-	 * Messaging
-	 *
-	 *
+	 * Handles streaming response from the chat completion API.
 	 */
+	static async handleStreamResponse(
+		response: Response,
+		onChunk?: (chunk: string) => void,
+		onComplete?: (
+			response: string,
+			reasoningContent?: string,
+			timings?: ChatMessageTimings,
+			toolCalls?: string
+		) => void,
+		onError?: (error: Error) => void,
+		onReasoningChunk?: (chunk: string) => void,
+		onToolCallChunk?: (chunk: string) => void,
+		onModel?: (model: string) => void,
+		onCompletionId?: (id: string) => void,
+		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
+		conversationId?: string,
+		abortSignal?: AbortSignal,
+		onConnectionState?: (state: StreamConnectionState) => void,
+		streamModel?: string | null
+	): Promise<void> {
+		let reader = response.body?.getReader();
+
+		if (!reader) {
+			throw new Error('No response body');
+		}
+
+		// bytesParsed is the absolute server side buffer offset of the next byte to parse
+		// segmentStartOffset is the absolute offset where the current reader started, reset on resume
+		// segmentBytesRead is wire bytes read by the current reader
+		let bytesParsed = 0;
+		let segmentStartOffset = 0;
+		let segmentBytesRead = 0;
+		let lastByteAt = Date.now();
+		// each resume must produce at least one byte to be retried again
+		// if a resume returns 200 but yields nothing, we abandon
+		// since the session has a bounded size, the total number of retries is bounded by construction
+		let madeProgress = true;
+
+		const encoder = new TextEncoder();
+
+		if (conversationId) {
+			ChatService.saveStreamState(conversationId, 0, streamModel);
+		}
+
+		onConnectionState?.(StreamConnectionState.STREAMING);
+
+		let decoder = new TextDecoder();
+		let aggregatedContent = '';
+		let fullReasoningContent = '';
+		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
+		let lastTimings: ChatMessageTimings | undefined;
+		let streamFinished = false;
+		let modelEmitted = false;
+		let idEmitted = false;
+		let toolCallIndexOffset = 0;
+		let hasOpenToolCallBatch = false;
+
+		const finalizeOpenToolCallBatch = () => {
+			if (!hasOpenToolCallBatch) {
+				return;
+			}
+
+			toolCallIndexOffset = aggregatedToolCalls.length;
+			hasOpenToolCallBatch = false;
+		};
+		const processToolCallDelta = (toolCalls?: ApiChatCompletionToolCallDelta[]) => {
+			if (!toolCalls || toolCalls.length === 0) {
+				return;
+			}
+
+			aggregatedToolCalls = ChatService.mergeToolCallDeltas(
+				aggregatedToolCalls,
+				toolCalls,
+				toolCallIndexOffset
+			);
+
+			if (aggregatedToolCalls.length === 0) {
+				return;
+			}
+
+			hasOpenToolCallBatch = true;
+
+			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
+			}
+
+			if (!serializedToolCalls) {
+				return;
+			}
+
+			if (!abortSignal?.aborted) {
+				onToolCallChunk?.(serializedToolCalls);
+			}
+		};
+		const onVisibilityChange = () => {
+			if (typeof document === 'undefined') return;
+
+			if (document.visibilityState === 'hidden') {
+				// the tab is going to the background and the OS may throttle or
+				// drop the socket shortly; persist the freshest resume offset now
+				if (conversationId) ChatService.flushStreamState(conversationId);
+
+				return;
+			}
+
+			if (streamFinished) return;
+
+			if (!conversationId) return;
+
+			// the bytes have been quiet for too long, the OS likely killed the socket
+			// kicking the reader unblocks reader.read with done=true so the outer loop can resume
+			if (Date.now() - lastByteAt > STREAM_VISIBILITY_KICK_MS) {
+				reader!.cancel().catch(() => {});
+			}
+		};
+		const onPageHide = () => {
+			// a reload or navigation is about to happen; make sure the resume
+			// offset that getStreamState() will read is not a stale throttled one
+			if (conversationId) ChatService.flushStreamState(conversationId);
+		};
+
+		if (typeof document !== 'undefined') {
+			document.addEventListener('visibilitychange', onVisibilityChange);
+			window.addEventListener('pagehide', onPageHide);
+		}
+
+		try {
+			let chunk = '';
+
+			// outer loop drives the resume cycle, swaps reader on premature end of stream
+			while (true) {
+				while (true) {
+					if (abortSignal?.aborted) break;
+
+					let done: boolean;
+					let value: Uint8Array | undefined;
+
+					try {
+						const r = await reader.read();
+
+						done = r.done;
+						value = r.value;
+					} catch (readErr) {
+						// reader.read() rejects with TypeError when the underlying connection drops
+						// instead of just resolving with done=true. treat it like done so the outer
+						// loop swaps reader via the resume path
+						if (isAbortError(readErr)) {
+							throw readErr;
+						}
+
+						console.warn('reader.read() rejected, treating as premature end:', readErr);
+						done = true;
+						value = undefined;
+					}
+
+					if (done) break;
+
+					if (abortSignal?.aborted) break;
+
+					if (value && value.byteLength > 0) {
+						segmentBytesRead += value.byteLength;
+						lastByteAt = Date.now();
+
+						if (!madeProgress) {
+							madeProgress = true;
+							onConnectionState?.(StreamConnectionState.STREAMING);
+						}
+					}
+
+					chunk += decoder.decode(value, { stream: true });
+					const lines = chunk.split(SSE_LINE_SEPARATOR);
+
+					chunk = lines.pop() || '';
+
+					// the persisted offset must point right after the last fully parsed line,
+					// the trailing `chunk` is partial bytes still waiting for a newline
+					if (conversationId) {
+						const tailBytes = encoder.encode(chunk).byteLength;
+
+						bytesParsed = segmentStartOffset + segmentBytesRead - tailBytes;
+						ChatService.saveStreamStateThrottled(conversationId, bytesParsed, streamModel);
+					}
+
+					for (const line of lines) {
+						if (abortSignal?.aborted) break;
+
+						if (line.startsWith(SSE_DATA_PREFIX)) {
+							const data = line.slice(SSE_DATA_PREFIX.length).trim();
+
+							if (data === SSE_DONE_MARKER) {
+								streamFinished = true;
+
+								continue;
+							}
+
+							try {
+								const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
+								const choice = parsed.choices?.[0];
+								const content = choice?.delta?.content;
+								const reasoningContent = choice?.delta?.reasoning_content;
+								const toolCalls = choice?.delta?.tool_calls;
+								const timings = parsed.timings;
+								const promptProgress = parsed.prompt_progress;
+								const chunkModel = ChatService.extractModelName(parsed);
+
+								if (chunkModel && !modelEmitted) {
+									modelEmitted = true;
+									onModel?.(chunkModel);
+								}
+
+								if (parsed.id && !idEmitted) {
+									idEmitted = true;
+									onCompletionId?.(parsed.id);
+								}
+
+								if (promptProgress) {
+									ChatService.notifyTimings(undefined, promptProgress, onTimings);
+								}
+
+								if (timings) {
+									ChatService.notifyTimings(timings, promptProgress, onTimings);
+									lastTimings = timings;
+								}
+
+								if (content) {
+									finalizeOpenToolCallBatch();
+									aggregatedContent += content;
+
+									if (!abortSignal?.aborted) {
+										onChunk?.(content);
+									}
+								}
+
+								if (reasoningContent) {
+									finalizeOpenToolCallBatch();
+									fullReasoningContent += reasoningContent;
+
+									if (!abortSignal?.aborted) {
+										onReasoningChunk?.(reasoningContent);
+									}
+								}
+
+								processToolCallDelta(toolCalls);
+							} catch (e) {
+								console.error('Error parsing JSON chunk:', e);
+							}
+						}
+					}
+
+					if (abortSignal?.aborted) break;
+
+					if (streamFinished) break;
+				}
+
+				// inner reader done, decide whether to try a resume
+				if (abortSignal?.aborted) break;
+
+				if (streamFinished) break;
+
+				if (!conversationId) break;
+
+				if (!madeProgress) {
+					onConnectionState?.(StreamConnectionState.LOST);
+					onError?.(new Error('Stream resume produced no new bytes, giving up'));
+
+					break;
+				}
+
+				onConnectionState?.(StreamConnectionState.RESUMING);
+				madeProgress = false;
+
+				// the server resends starting at bytesParsed, discard any partial line we held, it
+				// will be retransmitted from a clean line boundary. reuse the frozen model, not the
+				// live dropdown
+				// resumeStream reads the offset from localStorage, so persist the
+				// freshest bytesParsed before asking the server to replay from it
+				ChatService.flushStreamState(conversationId);
+				const resumeResp = await ChatService.resumeStream(
+					conversationId,
+					abortSignal,
+					streamModel
+				).catch(() => null);
+
+				// an abort landing during the resume request is intentional, not a lost connection
+				if (abortSignal?.aborted) break;
+
+				if (!resumeResp || resumeResp.status !== 200) {
+					onConnectionState?.(StreamConnectionState.LOST);
+					onError?.(new Error('Stream connection lost and could not be resumed'));
+
+					break;
+				}
+
+				const newReader = resumeResp.body?.getReader();
+
+				if (!newReader) break;
+
+				try {
+					reader.releaseLock();
+				} catch {
+					/* ignore */
+				}
+				reader = newReader;
+				decoder = new TextDecoder();
+				chunk = '';
+				segmentStartOffset = bytesParsed;
+				segmentBytesRead = 0;
+				lastByteAt = Date.now();
+			}
+
+			if (abortSignal?.aborted) return;
+
+			if (streamFinished) {
+				finalizeOpenToolCallBatch();
+
+				if (conversationId) {
+					ChatService.clearStreamState(conversationId);
+				}
+
+				const finalToolCalls =
+					aggregatedToolCalls.length > 0 ? JSON.stringify(aggregatedToolCalls) : undefined;
+
+				onComplete?.(
+					aggregatedContent,
+					fullReasoningContent || undefined,
+					lastTimings,
+					finalToolCalls
+				);
+			}
+		} catch (error) {
+			const err = error instanceof Error ? error : new Error('Stream error');
+
+			onError?.(err);
+
+			throw err;
+		} finally {
+			if (typeof document !== 'undefined') {
+				document.removeEventListener('visibilitychange', onVisibilityChange);
+				window.removeEventListener('pagehide', onPageHide);
+			}
+
+			try {
+				reader.releaseLock();
+			} catch {
+				/* ignore */
+			}
+		}
+	}
+
+	/**
+	 * Look up server-side stream sessions for the given conversation ids. Ids carry the frozen
+	 * conv::model identity when a model was bound at POST time.
+	 */
+	static async lookupStreamSessions(conversationIds: string[]): Promise<ApiStreamSession[]> {
+		const resp = await fetch(API_STREAM.LOOKUP, {
+			body: JSON.stringify({ conversation_ids: conversationIds }),
+			headers: getJsonHeaders(),
+			method: 'POST'
+		});
+
+		if (!resp.ok) {
+			throw new ApiError(`Stream lookup failed with HTTP ${resp.status}`, resp.status);
+		}
+
+		const body = (await resp.json()) as unknown;
+
+		if (!Array.isArray(body)) {
+			throw new Error('Stream lookup returned a non-array response');
+		}
+
+		return body as ApiStreamSession[];
+	}
+
+	/**
+	 * Normalizes an array of messages (database or already-API-shaped) into
+	 * API chat message data, converting DB messages and dropping empty system
+	 * messages. Shared by sendMessage, preEncode and the agentic flow.
+	 */
+	static async normalizeMessagesForApi(
+		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[]
+	): Promise<ApiChatMessageData[]> {
+		return (
+			await Promise.all(
+				messages.map((msg) => {
+					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+						return ChatService.convertDbMessageToApiChatMessageData(
+							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+						);
+					}
+
+					return msg as ApiChatMessageData;
+				})
+			)
+		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
+			// Filter out empty system messages
+			if (msg.role === MessageRole.SYSTEM) {
+				const content = typeof msg.content === 'string' ? msg.content : '';
+
+				return content.trim().length > 0;
+			}
+
+			return true;
+		});
+	}
+
+	/**
+	 * Fire-and-forget request to pre-encode the conversation in the server's KV cache.
+	 * Re-submits the full conversation with n_predict=0 so the server processes the prompt
+	 * without generating tokens, warming the cache for the next turn.
+	 */
+	static async preEncode(
+		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
+		model?: string | null,
+		excludeReasoning?: boolean,
+		signal?: AbortSignal
+	): Promise<void> {
+		const normalizedMessages: ApiChatMessageData[] =
+			await ChatService.normalizeMessagesForApi(messages);
+		const requestBody: Record<string, unknown> = {
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
+				const mapped: Record<string, unknown> = {
+					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
+					role: msg.role,
+					tool_call_id: msg.tool_call_id,
+					tool_calls: msg.tool_calls
+				};
+
+				if (!excludeReasoning && msg.reasoning_content) {
+					mapped.reasoning_content = msg.reasoning_content;
+				}
+
+				return mapped;
+			}),
+			n_predict: 0,
+			stream: false
+		};
+
+		if (model) {
+			requestBody.model = model;
+		}
+
+		try {
+			await fetch(API_CHAT.COMPLETIONS, {
+				body: JSON.stringify(requestBody),
+				headers: getJsonHeaders(),
+				method: 'POST',
+				signal
+			});
+		} catch (error) {
+			if (!isAbortError(error)) {
+				console.warn('[ChatService] Pre-encode request failed:', error);
+			}
+		}
+	}
+
+	// probe the resume route status without consuming the stream: the SSE route has no HEAD,
+	// so issue the GET and abort it right after the status line. 0 on network error
+	static async probeResumeStatus(streamId: string): Promise<number> {
+		if (!streamId) return 0;
+
+		const ac = new AbortController();
+
+		try {
+			const resp = await fetch(ChatService.buildStreamUrl(streamId, 0), {
+				headers: getAuthHeaders(),
+				signal: ac.signal
+			});
+
+			ac.abort();
+
+			return resp.status;
+		} catch {
+			return 0;
+		}
+	}
+
+	static async resumeStream(
+		conversationId: string,
+		signal?: AbortSignal,
+		model?: string | null
+	): Promise<Response | null> {
+		if (!conversationId) return null;
+
+		const state = ChatService.getStreamState(conversationId);
+		const from = state?.bytesReceived ?? 0;
+		const id = streamIdentity(conversationId, model);
+		const url = ChatService.buildStreamUrl(id, from);
+
+		return await fetch(url, { headers: getAuthHeaders(), method: 'GET', signal });
+	}
+
+	/**
+	 * Rebuild the stream identity for a resume. The model persisted at POST time wins, including a
+	 * stored null which means the POST carried no explicit model so the identity stays the bare conv
+	 * id. Only fall back to the caller supplied current model when nothing was persisted.
+	 */
+	static resumeStreamIdentity(
+		conversationId: string,
+		state: ResumableStreamState | null,
+		fallbackModel: string | null
+	): string {
+		const model = state && state.model !== undefined ? state.model : fallbackModel;
+
+		return streamIdentity(conversationId, model);
+	}
+
+	// persist the running byte count and the frozen model for a conversation, a later visit
+	// resumes the SSE replay at the right offset under the same conv::model
+	// identity. Writes immediately; the per-chunk read loop uses the throttled
+	// variant instead.
+	static saveStreamState(
+		conversationId: string,
+		bytesReceived: number,
+		model?: string | null
+	): void {
+		if (!conversationId) return;
+
+		ChatService.writeStreamState(conversationId, bytesReceived, model);
+		// record the write so a throttled save landing inside the interval
+		// holds its value pending instead of re-writing
+		ChatService.streamStateSaveTrackers.set(conversationId, {
+			lastSavedAt: Date.now(),
+			model: model ?? null,
+			pendingBytes: null
+		});
+	}
+
+	// throttled variant for the per-chunk read loop: writes at most once per
+	// conversation per STREAM_STATE_SAVE_INTERVAL_MS, holding the latest value
+	// pending until the interval elapses or flushStreamState() forces it out
+	static saveStreamStateThrottled(
+		conversationId: string,
+		bytesReceived: number,
+		model?: string | null
+	): void {
+		if (!conversationId) return;
+
+		const tracker = ChatService.streamStateSaveTrackers.get(conversationId) ?? {
+			lastSavedAt: 0,
+			model: null,
+			pendingBytes: null
+		};
+
+		tracker.model = model ?? null;
+
+		if (Date.now() - tracker.lastSavedAt >= ChatService.STREAM_STATE_SAVE_INTERVAL_MS) {
+			tracker.lastSavedAt = Date.now();
+			tracker.pendingBytes = null;
+			ChatService.writeStreamState(conversationId, bytesReceived, model);
+		} else {
+			tracker.pendingBytes = bytesReceived;
+		}
+
+		ChatService.streamStateSaveTrackers.set(conversationId, tracker);
+	}
+
+	/**
+	 * Pick the running session to splice into when discoverActiveStream lists candidates for a
+	 * conversation. Finalized sessions are not candidates: their final content was already written
+	 * to the DB by the original onComplete handler, so attaching to them would replay a buffer that
+	 * may not match what the DB holds. A continue session's buffer holds only the appended deltas,
+	 * not the pre continue prefix, so replaying it as a fresh generation would erase the original.
+	 *
+	 * Among running sessions we tie break on the most recent started_at, which covers the case of
+	 * multiple inferences left running on the same conversation.
+	 */
+	static selectActiveStream(
+		sessions: ApiStreamSession[] | null | undefined
+	): ApiStreamSession | null {
+		if (!Array.isArray(sessions) || sessions.length === 0) {
+			return null;
+		}
+
+		const running = sessions.filter((s) => !s.is_done);
+
+		if (running.length === 0) {
+			return null;
+		}
+
+		return running.reduce((best, cur) => (cur.started_at > best.started_at ? cur : best));
+	}
 
 	/**
 	 * Sends a chat completion request to the llama-server.
@@ -167,31 +1071,11 @@ export class ChatService {
 			xtc_probability,
 			xtc_threshold
 		} = options;
-		const normalizedMessages: ApiChatMessageData[] = (
-			await Promise.all(
-				messages.map((msg) => {
-					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-						const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
-
-						return ChatService.convertDbMessageToApiChatMessageData(dbMsg);
-					} else {
-						return msg as ApiChatMessageData;
-					}
-				})
-			)
-		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
-			// Filter out empty system messages
-			if (msg.role === MessageRole.SYSTEM) {
-				const content = typeof msg.content === 'string' ? msg.content : '';
-
-				return content.trim().length > 0;
-			}
-
-			return true;
-		});
+		const normalizedMessages: ApiChatMessageData[] =
+			await ChatService.normalizeMessagesForApi(messages);
 
 		// Filter out image attachments if the model doesn't support vision
-		if (options.model && !modelsStore.modelSupportsVision(options.model)) {
+		if (options.model && !modelsStore.props.modelSupportsVision(options.model)) {
 			normalizedMessages.forEach((msg) => {
 				if (Array.isArray(msg.content)) {
 					msg.content = msg.content.filter((part: ApiChatMessageContentPart) => {
@@ -435,31 +1319,6 @@ export class ChatService {
 	}
 
 	/**
-	 * Checks whether all server slots are currently idle (not processing any requests).
-	 * Queries the /slots endpoint (requires --slots flag on the server).
-	 * Returns true if all slots are idle, false if any is processing.
-	 * If the endpoint is unavailable or errors out, returns true (best-effort fallback).
-	 *
-	 * @param signal - Optional AbortSignal to cancel the request if needed
-	 * @param model - Optional model name to check slots for (required in ROUTER mode)
-	 * @returns {Promise<boolean>} Promise that resolves to true if all slots are idle, false if any is processing
-	 */
-	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
-		try {
-			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
-			const res = await fetch(url, { signal });
-
-			if (!res.ok) return true;
-
-			const slots: { is_processing: boolean }[] = await res.json();
-
-			return slots.every((s) => !s.is_processing);
-		} catch {
-			return true;
-		}
-	}
-
-	/**
 	 * Ends the current reasoning block of a running completion, targeted by its
 	 * chat completion id (streamed back as `id`). Matching the completion rather
 	 * than a slot index avoids a TOCTOU: a finished completion simply matches
@@ -508,587 +1367,68 @@ export class ChatService {
 		}
 	}
 
+	// build the replay route url for a stream identity, from is the resume byte offset, omitted
+	// for the cancel route
+	private static buildStreamUrl(streamId: string, from?: number): string {
+		const query = `${STREAM_QUERY_PARAMS.CONV_ID}=${encodeURIComponent(streamId)}`;
+		const offset = from === undefined ? '' : `&${STREAM_QUERY_PARAMS.FROM}=${from}`;
+
+		return `${API_STREAM.BASE}?${query}${offset}`;
+	}
+
 	/**
-	 * Sends a fire-and-forget request to pre-encode the conversation in the server's KV cache.
-	 * After a response completes, this re-submits the full conversation
-	 * using n_predict=0 and stream=false so the server processes the prompt without generating tokens.
-	 * This warms the cache for the next turn, making it faster.
+	 * Extracts model name from Chat Completions API response data.
+	 * Handles various response formats including streaming chunks and final responses.
 	 *
-	 * When excludeReasoningFromContext is true, reasoning content is stripped from the messages
-	 * to match what sendMessage would send on the next turn (avoiding cache misses).
-	 * When false, reasoning_content is preserved so the cached prompt matches the next request.
+	 * WORKAROUND: In single model mode, llama-server returns a default/incorrect model name
+	 * in the response. We override it with the actual model name from serverStore.
 	 *
-	 * @param messages - The full conversation including the latest assistant response
-	 * @param model - Optional model name (required in ROUTER mode)
-	 * @param excludeReasoning - Whether to strip reasoning content (should match excludeReasoningFromContext setting)
-	 * @param signal - Optional AbortSignal to cancel the pre-encode request
+	 * @param data - Raw response data from the Chat Completions API
+	 * @returns Model name string if found, undefined otherwise
+	 * @private
 	 */
-	static async cancelServerStream(conversationId: string, model?: string | null): Promise<void> {
-		if (!conversationId) return;
-
-		try {
-			const id = streamIdentity(conversationId, model);
-
-			await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}`, {
-				headers: getAuthHeaders(),
-				method: 'DELETE'
-			});
-		} catch (e) {
-			console.warn('cancelServerStream failed:', e);
-		}
-	}
-
-	/**
-	 * Pick the running session to splice into when discoverActiveStream lists candidates for a
-	 * conversation. Finalized sessions are not candidates: their final content was already written
-	 * to the DB by the original onComplete handler, so attaching to them would replay a buffer that
-	 * may not match what the DB holds. A continue session's buffer holds only the appended deltas,
-	 * not the pre continue prefix, so replaying it as a fresh generation would erase the original.
-	 *
-	 * Among running sessions we tie break on the most recent started_at, which covers the case of
-	 * multiple inferences left running on the same conversation.
-	 */
-	static selectActiveStream(
-		sessions: ApiStreamSession[] | null | undefined
-	): ApiStreamSession | null {
-		if (!Array.isArray(sessions) || sessions.length === 0) {
-			return null;
-		}
-
-		const running = sessions.filter((s) => !s.is_done);
-
-		if (running.length === 0) {
-			return null;
-		}
-
-		return running.reduce((best, cur) => (cur.started_at > best.started_at ? cur : best));
-	}
-
-	// persist the running byte count and the frozen model for a conversation, a later visit
-	// resumes the SSE replay at the right offset under the same conv::model identity
-	static saveStreamState(
-		conversationId: string,
-		bytesReceived: number,
-		model?: string | null
-	): void {
-		if (!conversationId) return;
-
-		try {
-			const state: ResumableStreamState = {
-				bytesReceived,
-				model: model ?? null,
-				updatedAt: Date.now()
-			};
-
-			localStorage.setItem(streamStorageKey(conversationId), JSON.stringify(state));
-		} catch {
-			// localStorage may be full or disabled, silently ignore
-		}
-	}
-
-	static getStreamState(conversationId: string): ResumableStreamState | null {
-		if (!conversationId) return null;
-
-		try {
-			const raw = localStorage.getItem(streamStorageKey(conversationId));
-
-			if (!raw) return null;
-
-			const parsed = JSON.parse(raw) as ResumableStreamState;
-
-			if (!parsed || typeof parsed.bytesReceived !== 'number') return null;
-
-			return parsed;
-		} catch {
-			return null;
-		}
-	}
-
-	static clearStreamState(conversationId: string): void {
-		if (!conversationId) return;
-
-		try {
-			localStorage.removeItem(streamStorageKey(conversationId));
-		} catch {
-			// nothing to do
-		}
-	}
-
-	/**
-	 * Rebuild the stream identity for a resume. The model persisted at POST time wins, including a
-	 * stored null which means the POST carried no explicit model so the identity stays the bare conv
-	 * id. Only fall back to the caller supplied current model when nothing was persisted.
-	 */
-	static resumeStreamIdentity(
-		conversationId: string,
-		state: ResumableStreamState | null,
-		fallbackModel: string | null
-	): string {
-		const model = state && state.model !== undefined ? state.model : fallbackModel;
-
-		return streamIdentity(conversationId, model);
-	}
-
-	/**
-	 * Reconnect to an interrupted stream for this conversation. Returns the fetch Response so the
-	 * existing SSE parser drains it like a fresh stream. The server returns 200 on success, 404 if
-	 * no session exists for the conv_id, and 400 if the offset is below the dropped prefix.
-	 */
-	// probe the resume route status without consuming the stream: the SSE route has no HEAD,
-	// so issue the GET and abort it right after the status line. 0 on network error
-	static async probeResumeStatus(streamId: string): Promise<number> {
-		if (!streamId) return 0;
-
-		const ac = new AbortController();
-
-		try {
-			const resp = await fetch(
-				`${API_STREAM.BASE}?conv_id=${encodeURIComponent(streamId)}&from=0`,
-				{
-					headers: getAuthHeaders(),
-					signal: ac.signal
-				}
-			);
-
-			ac.abort();
-
-			return resp.status;
-		} catch {
-			return 0;
-		}
-	}
-
-	static async resumeStream(
-		conversationId: string,
-		signal?: AbortSignal,
-		model?: string | null
-	): Promise<Response | null> {
-		if (!conversationId) return null;
-
-		const state = ChatService.getStreamState(conversationId);
-		const from = state?.bytesReceived ?? 0;
-		const id = streamIdentity(conversationId, model);
-		const url = `${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}&from=${from}`;
-
-		return await fetch(url, { headers: getAuthHeaders(), method: 'GET', signal });
-	}
-
-	static async preEncode(
-		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
-		model?: string | null,
-		excludeReasoning?: boolean,
-		signal?: AbortSignal
-	): Promise<void> {
-		const normalizedMessages: ApiChatMessageData[] = (
-			await Promise.all(
-				messages.map((msg) => {
-					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-						return ChatService.convertDbMessageToApiChatMessageData(
-							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-						);
-					}
-
-					return msg as ApiChatMessageData;
-				})
-			)
-		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
-			if (msg.role === MessageRole.SYSTEM) {
-				const content = typeof msg.content === 'string' ? msg.content : '';
-
-				return content.trim().length > 0;
-			}
-
-			return true;
-		});
-		const requestBody: Record<string, unknown> = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
-				const mapped: Record<string, unknown> = {
-					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
-					role: msg.role,
-					tool_call_id: msg.tool_call_id,
-					tool_calls: msg.tool_calls
-				};
-
-				if (!excludeReasoning && msg.reasoning_content) {
-					mapped.reasoning_content = msg.reasoning_content;
-				}
-
-				return mapped;
-			}),
-			n_predict: 0,
-			stream: false
+	private static extractModelName(data: unknown): string | undefined {
+		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+			return typeof value === 'object' && value !== null
+				? (value as Record<string, unknown>)
+				: undefined;
 		};
-
-		if (model) {
-			requestBody.model = model;
-		}
-
-		try {
-			await fetch(API_CHAT.COMPLETIONS, {
-				body: JSON.stringify(requestBody),
-				headers: getJsonHeaders(),
-				method: 'POST',
-				signal
-			});
-		} catch (error) {
-			if (!isAbortError(error)) {
-				console.warn('[ChatService] Pre-encode request failed:', error);
-			}
-		}
-	}
-
-	/**
-	 *
-	 *
-	 * Streaming
-	 *
-	 *
-	 */
-
-	/**
-	 * Handles streaming response from the chat completion API
-	 * @param response - The Response object from the fetch request
-	 * @param onChunk - Optional callback invoked for each content chunk received
-	 * @param onComplete - Optional callback invoked when the stream is complete with full response
-	 * @param onError - Optional callback invoked if an error occurs during streaming
-	 * @param onReasoningChunk - Optional callback invoked for each reasoning content chunk
-	 * @param conversationId - Optional conversation ID for per-conversation state tracking
-	 * @returns {Promise<void>} Promise that resolves when streaming is complete
-	 * @throws {Error} if the stream cannot be read or parsed
-	 */
-	static async handleStreamResponse(
-		response: Response,
-		onChunk?: (chunk: string) => void,
-		onComplete?: (
-			response: string,
-			reasoningContent?: string,
-			timings?: ChatMessageTimings,
-			toolCalls?: string
-		) => void,
-		onError?: (error: Error) => void,
-		onReasoningChunk?: (chunk: string) => void,
-		onToolCallChunk?: (chunk: string) => void,
-		onModel?: (model: string) => void,
-		onCompletionId?: (id: string) => void,
-		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
-		conversationId?: string,
-		abortSignal?: AbortSignal,
-		onConnectionState?: (state: StreamConnectionState) => void,
-		streamModel?: string | null
-	): Promise<void> {
-		let reader = response.body?.getReader();
-
-		if (!reader) {
-			throw new Error('No response body');
-		}
-
-		// bytesParsed is the absolute server side buffer offset of the next byte to parse
-		// segmentStartOffset is the absolute offset where the current reader started, reset on resume
-		// segmentBytesRead is wire bytes read by the current reader
-		let bytesParsed = 0;
-		let segmentStartOffset = 0;
-		let segmentBytesRead = 0;
-		let lastByteAt = Date.now();
-		// each resume must produce at least one byte to be retried again
-		// if a resume returns 200 but yields nothing, we abandon
-		// since the session has a bounded size, the total number of retries is bounded by construction
-		let madeProgress = true;
-
-		const encoder = new TextEncoder();
-
-		if (conversationId) {
-			ChatService.saveStreamState(conversationId, 0, streamModel);
-		}
-
-		onConnectionState?.(StreamConnectionState.STREAMING);
-
-		let decoder = new TextDecoder();
-		let aggregatedContent = '';
-		let fullReasoningContent = '';
-		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
-		let lastTimings: ChatMessageTimings | undefined;
-		let streamFinished = false;
-		let modelEmitted = false;
-		let idEmitted = false;
-		let toolCallIndexOffset = 0;
-		let hasOpenToolCallBatch = false;
-
-		const finalizeOpenToolCallBatch = () => {
-			if (!hasOpenToolCallBatch) {
-				return;
-			}
-
-			toolCallIndexOffset = aggregatedToolCalls.length;
-			hasOpenToolCallBatch = false;
+		const getTrimmedString = (value: unknown): string | undefined => {
+			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 		};
-		const processToolCallDelta = (toolCalls?: ApiChatCompletionToolCallDelta[]) => {
-			if (!toolCalls || toolCalls.length === 0) {
-				return;
-			}
+		const root = asRecord(data);
 
-			aggregatedToolCalls = ChatService.mergeToolCallDeltas(
-				aggregatedToolCalls,
-				toolCalls,
-				toolCallIndexOffset
-			);
+		if (!root) return undefined;
 
-			if (aggregatedToolCalls.length === 0) {
-				return;
-			}
+		// 1) root (some implementations provide `model` at the top level)
+		const rootModel = getTrimmedString(root.model);
 
-			hasOpenToolCallBatch = true;
-
-			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
-
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
-			}
-
-			if (!serializedToolCalls) {
-				return;
-			}
-
-			if (!abortSignal?.aborted) {
-				onToolCallChunk?.(serializedToolCalls);
-			}
-		};
-		const onVisibilityChange = () => {
-			if (typeof document === 'undefined') return;
-
-			if (document.visibilityState !== 'visible') return;
-
-			if (streamFinished) return;
-
-			if (!conversationId) return;
-
-			// the bytes have been quiet for too long, the OS likely killed the socket
-			// kicking the reader unblocks reader.read with done=true so the outer loop can resume
-			if (Date.now() - lastByteAt > STREAM_VISIBILITY_KICK_MS) {
-				reader!.cancel().catch(() => {});
-			}
-		};
-
-		if (typeof document !== 'undefined') {
-			document.addEventListener('visibilitychange', onVisibilityChange);
+		if (rootModel) {
+			return rootModel;
 		}
 
-		try {
-			let chunk = '';
+		// 2) streaming choice (delta) or final response (message)
+		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
 
-			// outer loop drives the resume cycle, swaps reader on premature end of stream
-			while (true) {
-				while (true) {
-					if (abortSignal?.aborted) break;
-
-					let done: boolean;
-					let value: Uint8Array | undefined;
-
-					try {
-						const r = await reader.read();
-
-						done = r.done;
-						value = r.value;
-					} catch (readErr) {
-						// reader.read() rejects with TypeError when the underlying connection drops
-						// instead of just resolving with done=true. treat it like done so the outer
-						// loop swaps reader via the resume path
-						if (isAbortError(readErr)) {
-							throw readErr;
-						}
-
-						console.warn('reader.read() rejected, treating as premature end:', readErr);
-						done = true;
-						value = undefined;
-					}
-
-					if (done) break;
-
-					if (abortSignal?.aborted) break;
-
-					if (value && value.byteLength > 0) {
-						segmentBytesRead += value.byteLength;
-						lastByteAt = Date.now();
-
-						if (!madeProgress) {
-							madeProgress = true;
-							onConnectionState?.(StreamConnectionState.STREAMING);
-						}
-					}
-
-					chunk += decoder.decode(value, { stream: true });
-					const lines = chunk.split(SSE_LINE_SEPARATOR);
-
-					chunk = lines.pop() || '';
-
-					// the persisted offset must point right after the last fully parsed line,
-					// the trailing `chunk` is partial bytes still waiting for a newline
-					if (conversationId) {
-						const tailBytes = encoder.encode(chunk).byteLength;
-
-						bytesParsed = segmentStartOffset + segmentBytesRead - tailBytes;
-						ChatService.saveStreamState(conversationId, bytesParsed, streamModel);
-					}
-
-					for (const line of lines) {
-						if (abortSignal?.aborted) break;
-
-						if (line.startsWith(SSE_DATA_PREFIX)) {
-							const data = line.slice(SSE_DATA_PREFIX.length).trim();
-
-							if (data === SSE_DONE_MARKER) {
-								streamFinished = true;
-
-								continue;
-							}
-
-							try {
-								const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
-								const choice = parsed.choices?.[0];
-								const content = choice?.delta?.content;
-								const reasoningContent = choice?.delta?.reasoning_content;
-								const toolCalls = choice?.delta?.tool_calls;
-								const timings = parsed.timings;
-								const promptProgress = parsed.prompt_progress;
-								const chunkModel = ChatService.extractModelName(parsed);
-
-								if (chunkModel && !modelEmitted) {
-									modelEmitted = true;
-									onModel?.(chunkModel);
-								}
-
-								if (parsed.id && !idEmitted) {
-									idEmitted = true;
-									onCompletionId?.(parsed.id);
-								}
-
-								if (promptProgress) {
-									ChatService.notifyTimings(undefined, promptProgress, onTimings);
-								}
-
-								if (timings) {
-									ChatService.notifyTimings(timings, promptProgress, onTimings);
-									lastTimings = timings;
-								}
-
-								if (content) {
-									finalizeOpenToolCallBatch();
-									aggregatedContent += content;
-
-									if (!abortSignal?.aborted) {
-										onChunk?.(content);
-									}
-								}
-
-								if (reasoningContent) {
-									finalizeOpenToolCallBatch();
-									fullReasoningContent += reasoningContent;
-
-									if (!abortSignal?.aborted) {
-										onReasoningChunk?.(reasoningContent);
-									}
-								}
-
-								processToolCallDelta(toolCalls);
-							} catch (e) {
-								console.error('Error parsing JSON chunk:', e);
-							}
-						}
-					}
-
-					if (abortSignal?.aborted) break;
-
-					if (streamFinished) break;
-				}
-
-				// inner reader done, decide whether to try a resume
-				if (abortSignal?.aborted) break;
-
-				if (streamFinished) break;
-
-				if (!conversationId) break;
-
-				if (!madeProgress) {
-					onConnectionState?.(StreamConnectionState.LOST);
-					onError?.(new Error('Stream resume produced no new bytes, giving up'));
-
-					break;
-				}
-
-				onConnectionState?.(StreamConnectionState.RESUMING);
-				madeProgress = false;
-
-				// the server resends starting at bytesParsed, discard any partial line we held, it
-				// will be retransmitted from a clean line boundary. reuse the frozen model, not the
-				// live dropdown
-				const resumeResp = await ChatService.resumeStream(
-					conversationId,
-					abortSignal,
-					streamModel
-				).catch(() => null);
-
-				// an abort landing during the resume request is intentional, not a lost connection
-				if (abortSignal?.aborted) break;
-
-				if (!resumeResp || resumeResp.status !== 200) {
-					onConnectionState?.(StreamConnectionState.LOST);
-					onError?.(new Error('Stream connection lost and could not be resumed'));
-
-					break;
-				}
-
-				const newReader = resumeResp.body?.getReader();
-
-				if (!newReader) break;
-
-				try {
-					reader.releaseLock();
-				} catch {
-					/* ignore */
-				}
-				reader = newReader;
-				decoder = new TextDecoder();
-				chunk = '';
-				segmentStartOffset = bytesParsed;
-				segmentBytesRead = 0;
-				lastByteAt = Date.now();
-			}
-
-			if (abortSignal?.aborted) return;
-
-			if (streamFinished) {
-				finalizeOpenToolCallBatch();
-
-				if (conversationId) {
-					ChatService.clearStreamState(conversationId);
-				}
-
-				const finalToolCalls =
-					aggregatedToolCalls.length > 0 ? JSON.stringify(aggregatedToolCalls) : undefined;
-
-				onComplete?.(
-					aggregatedContent,
-					fullReasoningContent || undefined,
-					lastTimings,
-					finalToolCalls
-				);
-			}
-		} catch (error) {
-			const err = error instanceof Error ? error : new Error('Stream error');
-
-			onError?.(err);
-
-			throw err;
-		} finally {
-			if (typeof document !== 'undefined') {
-				document.removeEventListener('visibilitychange', onVisibilityChange);
-			}
-
-			try {
-				reader.releaseLock();
-			} catch {
-				/* ignore */
-			}
+		if (!firstChoice) {
+			return undefined;
 		}
+
+		// priority: delta.model (first chunk) else message.model (final response)
+		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
+
+		if (deltaModel) {
+			return deltaModel;
+		}
+
+		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
+
+		if (messageModel) {
+			return messageModel;
+		}
+
+		// avoid guessing from non-standard locations (metadata, etc.)
+		return undefined;
 	}
 
 	/**
@@ -1223,253 +1563,23 @@ export class ChatService {
 	}
 
 	/**
+	 * Calls the onTimings callback with timing data from streaming response.
 	 *
-	 *
-	 * Conversion
-	 *
-	 *
+	 * @param timings - Timing information from the Chat Completions API response
+	 * @param promptProgress - Prompt processing progress data
+	 * @param onTimingsCallback - Callback function to invoke with timing data
+	 * @private
 	 */
+	private static notifyTimings(
+		timings: ChatMessageTimings | undefined,
+		promptProgress: ChatMessagePromptProgress | undefined,
+		onTimingsCallback:
+			| ((timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void)
+			| undefined
+	): void {
+		if (!onTimingsCallback || (!timings && !promptProgress)) return;
 
-	/**
-	 * Converts a database message with attachments to API chat message format.
-	 * Processes various attachment types (images, text files, PDFs) and formats them
-	 * as content parts suitable for the chat completion API.
-	 *
-	 * @param message - Database message object with optional extra attachments
-	 * @param message.content - The text content of the message
-	 * @param message.role - The role of the message sender (user, assistant, system)
-	 * @param message.extra - Optional array of message attachments (images, files, etc.)
-	 * @returns {ApiChatMessageData} object formatted for the chat completion API
-	 * @static
-	 */
-	static async convertDbMessageToApiChatMessageData(
-		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-	): Promise<ApiChatMessageData> {
-		// Handle tool result messages (role: 'tool')
-		if (message.role === MessageRole.TOOL && message.toolCallId) {
-			return {
-				content: message.content,
-				role: MessageRole.TOOL,
-				tool_call_id: message.toolCallId
-			};
-		}
-
-		// Parse tool calls for assistant messages
-		let toolCalls: ApiChatCompletionToolCall[] | undefined;
-
-		if (message.toolCalls) {
-			try {
-				toolCalls = JSON.parse(message.toolCalls);
-			} catch {
-				// Ignore parse errors for malformed tool calls
-			}
-		}
-
-		if (!message.extra || message.extra.length === 0) {
-			const result: ApiChatMessageData = {
-				content: message.content,
-				role: message.role as MessageRole
-			};
-
-			if (message.reasoningContent) {
-				result.reasoning_content = message.reasoningContent;
-			}
-
-			if (toolCalls && toolCalls.length > 0) {
-				result.tool_calls = toolCalls;
-			}
-
-			return result;
-		}
-
-		const contentParts: ApiChatMessageContentPart[] = [];
-		const textFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
-				extra.type === AttachmentType.TEXT
-		);
-
-		for (const textFile of textFiles) {
-			contentParts.push({
-				text: formatAttachmentText(AttachmentLabel.FILE, textFile.name, textFile.content),
-				type: ContentPartType.TEXT
-			});
-		}
-
-		// Handle legacy 'context' type from the old UI (pasted content)
-		const legacyContextFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
-				extra.type === AttachmentType.LEGACY_CONTEXT
-		);
-
-		for (const legacyContextFile of legacyContextFiles) {
-			contentParts.push({
-				text: formatAttachmentText(
-					AttachmentLabel.FILE,
-					legacyContextFile.name,
-					legacyContextFile.content
-				),
-				type: ContentPartType.TEXT
-			});
-		}
-
-		const imageFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
-				extra.type === AttachmentType.IMAGE
-		);
-
-		for (const image of imageFiles) {
-			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
-			// Caps the resolution and bakes the jpeg exif orientation in one pass,
-			// untouched images pass through as is
-			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
-
-			contentParts.push({
-				image_url: { url: base64Url },
-				type: ContentPartType.IMAGE_URL
-			});
-		}
-
-		const audioFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile =>
-				extra.type === AttachmentType.AUDIO
-		);
-
-		for (const audio of audioFiles) {
-			contentParts.push({
-				input_audio: {
-					data: audio.base64Data,
-					format: getAudioInputFormat(audio.mimeType)
-				},
-				type: ContentPartType.INPUT_AUDIO
-			});
-		}
-
-		if (message.content) {
-			contentParts.push({
-				text: message.content,
-				type: ContentPartType.TEXT
-			});
-		}
-
-		const videoFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraVideoFile =>
-				extra.type === AttachmentType.VIDEO
-		);
-
-		for (const video of videoFiles) {
-			contentParts.push({
-				input_video: {
-					data: video.base64Data,
-					format: video.mimeType.includes('mp4')
-						? 'mp4'
-						: video.mimeType.includes('ogg')
-							? 'ogg'
-							: 'auto'
-				},
-				type: ContentPartType.INPUT_VIDEO
-			});
-		}
-
-		const pdfFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
-				extra.type === AttachmentType.PDF
-		);
-
-		for (const pdfFile of pdfFiles) {
-			if (pdfFile.processedAsImages && pdfFile.images) {
-				for (let i = 0; i < pdfFile.images.length; i++) {
-					contentParts.push({
-						image_url: { url: pdfFile.images[i] },
-						type: ContentPartType.IMAGE_URL
-					});
-				}
-			} else {
-				contentParts.push({
-					text: formatAttachmentText(AttachmentLabel.PDF_FILE, pdfFile.name, pdfFile.content),
-					type: ContentPartType.TEXT
-				});
-			}
-		}
-
-		const mcpPrompts = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpPrompt =>
-				extra.type === AttachmentType.MCP_PROMPT
-		);
-
-		for (const mcpPrompt of mcpPrompts) {
-			contentParts.push({
-				text: formatAttachmentText(
-					AttachmentLabel.MCP_PROMPT,
-					mcpPrompt.name,
-					mcpPrompt.content,
-					mcpPrompt.serverName
-				),
-				type: ContentPartType.TEXT
-			});
-		}
-
-		const mcpResources = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpResource =>
-				extra.type === AttachmentType.MCP_RESOURCE
-		);
-
-		for (const mcpResource of mcpResources) {
-			contentParts.push({
-				text: formatAttachmentText(
-					AttachmentLabel.MCP_RESOURCE,
-					mcpResource.name,
-					mcpResource.content,
-					mcpResource.serverName
-				),
-				type: ContentPartType.TEXT
-			});
-		}
-
-		const result: ApiChatMessageData = {
-			content: contentParts,
-			role: message.role as MessageRole
-		};
-
-		if (message.reasoningContent) {
-			result.reasoning_content = message.reasoningContent;
-		}
-
-		if (toolCalls && toolCalls.length > 0) {
-			result.tool_calls = toolCalls;
-		}
-
-		return result;
-	}
-
-	/**
-	 *
-	 *
-	 * Utilities
-	 *
-	 *
-	 */
-
-	/**
-	 * Strips legacy inline reasoning content tags from message content.
-	 * Handles both plain string content and multipart content arrays.
-	 */
-	private static stripReasoningContent(
-		content: string | ApiChatMessageContentPart[]
-	): string | ApiChatMessageContentPart[] {
-		const stripFromString = (text: string): string =>
-			text.replace(LEGACY_AGENTIC_REGEX.REASONING_BLOCK, '').trim();
-
-		if (typeof content === 'string') {
-			return stripFromString(content);
-		}
-
-		return content.map((part) => {
-			if (part.type === ContentPartType.TEXT && part.text) {
-				return { ...part, text: stripFromString(part.text) };
-			}
-
-			return part;
-		});
+		onTimingsCallback(timings, promptProgress);
 	}
 
 	/**
@@ -1512,77 +1622,44 @@ export class ChatService {
 	}
 
 	/**
-	 * Extracts model name from Chat Completions API response data.
-	 * Handles various response formats including streaming chunks and final responses.
-	 *
-	 * WORKAROUND: In single model mode, llama-server returns a default/incorrect model name
-	 * in the response. We override it with the actual model name from serverStore.
-	 *
-	 * @param data - Raw response data from the Chat Completions API
-	 * @returns Model name string if found, undefined otherwise
-	 * @private
+	 * Strips legacy inline reasoning content tags from message content.
+	 * Handles both plain string content and multipart content arrays.
 	 */
-	private static extractModelName(data: unknown): string | undefined {
-		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
-			return typeof value === 'object' && value !== null
-				? (value as Record<string, unknown>)
-				: undefined;
-		};
-		const getTrimmedString = (value: unknown): string | undefined => {
-			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-		};
-		const root = asRecord(data);
+	private static stripReasoningContent(
+		content: string | ApiChatMessageContentPart[]
+	): string | ApiChatMessageContentPart[] {
+		const stripFromString = (text: string): string =>
+			text.replace(LEGACY_AGENTIC_REGEX.REASONING_BLOCK, '').trim();
 
-		if (!root) return undefined;
-
-		// 1) root (some implementations provide `model` at the top level)
-		const rootModel = getTrimmedString(root.model);
-
-		if (rootModel) {
-			return rootModel;
+		if (typeof content === 'string') {
+			return stripFromString(content);
 		}
 
-		// 2) streaming choice (delta) or final response (message)
-		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
+		return content.map((part) => {
+			if (part.type === ContentPartType.TEXT && part.text) {
+				return { ...part, text: stripFromString(part.text) };
+			}
 
-		if (!firstChoice) {
-			return undefined;
-		}
-
-		// priority: delta.model (first chunk) else message.model (final response)
-		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
-
-		if (deltaModel) {
-			return deltaModel;
-		}
-
-		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
-
-		if (messageModel) {
-			return messageModel;
-		}
-
-		// avoid guessing from non-standard locations (metadata, etc.)
-		return undefined;
+			return part;
+		});
 	}
 
-	/**
-	 * Calls the onTimings callback with timing data from streaming response.
-	 *
-	 * @param timings - Timing information from the Chat Completions API response
-	 * @param promptProgress - Prompt processing progress data
-	 * @param onTimingsCallback - Callback function to invoke with timing data
-	 * @private
-	 */
-	private static notifyTimings(
-		timings: ChatMessageTimings | undefined,
-		promptProgress: ChatMessagePromptProgress | undefined,
-		onTimingsCallback:
-			| ((timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void)
-			| undefined
+	// write the resume state straight to localStorage, bypassing the throttle
+	private static writeStreamState(
+		conversationId: string,
+		bytesReceived: number,
+		model?: string | null
 	): void {
-		if (!onTimingsCallback || (!timings && !promptProgress)) return;
+		try {
+			const state: ResumableStreamState = {
+				bytesReceived,
+				model: model ?? null,
+				updatedAt: Date.now()
+			};
 
-		onTimingsCallback(timings, promptProgress);
+			localStorage.setItem(streamStorageKey(conversationId), JSON.stringify(state));
+		} catch {
+			// localStorage may be full or disabled, silently ignore
+		}
 	}
 }

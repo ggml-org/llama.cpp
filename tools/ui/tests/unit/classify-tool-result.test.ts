@@ -37,6 +37,10 @@ describe('classifyToolResult', () => {
 			expect(classifyToolResult('["a", "b", "c"]')).toBe('json');
 		});
 
+		it('classifies a nested JSON array', () => {
+			expect(classifyToolResult('[[1, 2], [3, 4]]')).toBe('json');
+		});
+
 		it('classifies a pretty-printed JSON object', () => {
 			expect(classifyToolResult('{\n  "key": "value"\n}')).toBe('json');
 		});

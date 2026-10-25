@@ -5,21 +5,25 @@
 #include "llama.h"
 #include "chat.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
+#include "subproc.h"
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cinttypes>
+#include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <mutex>
+#include <thread>
 #include <queue>
 #include <string>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 #define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_TRC(slot, fmt, ...) LOG_TRC("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
@@ -42,9 +46,9 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     // Fallback null to default value
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
-            return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
+            return body.at(key).get<T>();
+        } catch (const common_json_error & err) {
+            LOG_WRN("Wrong type supplied for parameter '%s', using default value: %s\n", key.c_str(), err.what());
             return default_value;
         }
     } else {
@@ -92,6 +96,9 @@ struct server_grammar_trigger {
 
 json format_error_response(const std::string & message, const enum error_type type);
 
+// path of the running llama-server binary, used to spawn siblings. throws on failure
+std::filesystem::path get_server_exec_path();
+
 //
 // random string / id
 //
@@ -102,6 +109,23 @@ std::string gen_tool_call_id();
 
 // get a random marker; note: each time the server restarts, the marker will be different
 const char * get_media_marker();
+
+//
+// model output modalities
+//
+
+// output modalities for architecture.output_modalities in GET /models
+// has_cap_chat: false for a tts-only model, has_cap_tts: the model can generate audio
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type, bool has_cap_chat, bool has_cap_tts);
+// same, with the decision type read from a loaded model
+std::vector<std::string> server_model_output_modalities(const llama_model * model, bool has_cap_chat, bool has_cap_tts);
+
+// architecture object of GET /models; shared by the direct server and the router
+json server_model_architecture_json(
+        bool inp_image,
+        bool inp_audio,
+        bool inp_video,
+        const std::vector<std::string> & output_modalities);
 
 //
 // lora utils
@@ -268,9 +292,23 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
+// load a media file from an URL (http, file, data) or from raw base64 data
+void handle_media(
+        std::vector<raw_buffer> & out_files,
+        const std::string & url,
+        const std::string & media_path);
+
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
+server_tokens process_mtmd_prompt(
+                                        mtmd_context * mctx,
+                                        const std::string & prompt,
+                                        const std::vector<raw_buffer> & files,
+                                         const mtmd_helper_init_opt & init_opt,
+                                          bool is_placeholder = false);
+
+// decode one media url (http/file/data-uri) into out_files; throws on failure
+void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -290,7 +328,17 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         mtmd_context * mctx,
                                         const json & json_prompt,
                                         bool add_special,
-                                        bool parse_special);
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
+
+// tokenize a single prompt, see tokenize_input_prompts() for the supported shapes
+server_tokens tokenize_input_subprompt(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & json_prompt,
+                                        bool add_special,
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
 
 //
 // OAI utils
@@ -318,9 +366,21 @@ json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
+    const llama_vocab * vocab,
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    common_chat_session & out_session);
+
+// used by /embeddings endpoint, content has the same format as a chat message content array
+server_tokens tokenize_oai_content_array(
+    const llama_vocab * vocab,
+    mtmd_context * mctx,
+    const server_chat_params & opt,
+    json content,
+    bool add_special,
+    bool parse_special,
+    const mtmd_helper_init_opt & init_opt);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
@@ -533,13 +593,23 @@ llama_tokens format_prompt_infill(
         const bool spm_infill,
         const llama_tokens & tokens_prompt);
 
+std::string format_rerank_template(
+        const std::string & tmpl,
+        const std::string & query,
+        const std::string & doc);
+
 // format rerank task: [BOS]query[EOS][SEP]doc[EOS].
+// query_files/doc_files carry decoded media for multimodal (Qwen) inputs; when non-empty the
+// prompt is built with get_media_marker() sentinels and spliced via process_mtmd_prompt.
 server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc);
+        const std::string & doc,
+        const std::vector<raw_buffer> & query_files,
+        const std::vector<raw_buffer> & doc_files,
+        const mtmd_helper_init_opt & init_opt);
 
 // simple implementation of a pipe
 // used for streaming data between threads
@@ -603,4 +673,150 @@ struct server_pipe {
         cv.notify_one();
         return true;
     }
+};
+
+// a child server writes its state commands to stdout and its logs to stderr
+enum server_subproc_stream {
+    SERVER_SUBPROC_STDOUT,
+    SERVER_SUBPROC_STDERR,
+    SERVER_SUBPROC_STREAMS,
+};
+
+// gives the current stdout to the caller as a stream of its own, and sends everything else written to stdout to stderr
+FILE * server_reserve_stdout();
+
+// wrapper around common_subproc to manage a child server process
+// mainly used by router mode
+struct server_subproc {
+    common_subproc sproc;
+    std::atomic<bool> stopped{false}; // set by the monitor once the process exited and was reaped
+
+    bool is_alive() { return sproc.alive(); }
+    void terminate() { sproc.terminate(); }
+    int  join() { return sproc.join(); }
+
+    // true if both output pipes of the child are available (call after create())
+    bool has_output();
+
+    // true once both output pipes are closed
+    bool output_closed() const;
+
+    // non-blocking read from one output pipe
+    // returns the number of bytes read, 0 when nothing is available, -1 when the pipe is closed or broken
+    int read_output(server_subproc_stream stream, char * buf, size_t len);
+
+    // wait until one of a set of children has output, wake() is called, or a timeout passes
+    struct waiter {
+        waiter();
+        ~waiter();
+
+        // thread-safe; on Windows this is a no-op, wait() returns within 50 ms anyway
+        void wake();
+
+        // timeout_ms < 0 waits until data or wake(); ready[i] is set for each child with data on an open pipe (or a broken pipe)
+        void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
+
+    private:
+#ifndef _WIN32
+        intptr_t wake_fd[2] = { -1, -1 }; // POSIX self-pipe
+#endif
+    };
+
+private:
+    intptr_t out_handles[SERVER_SUBPROC_STREAMS] = { -1, -1 }; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
+    bool     out_closed [SERVER_SUBPROC_STREAMS] = { false, false };
+};
+
+//
+// router <-> child protocol
+//
+
+// what this llama-server process does. a router spawns the other roles as child processes
+// and talks to them over their stdin/stdout
+enum server_role_type {
+    SERVER_ROLE_ROUTER,   // no model: lists the models, spawns instances on demand and proxies requests to them
+    SERVER_ROLE_INSTANCE, // serves one model, standalone or as a child of a router
+    SERVER_ROLE_DOWNLOAD, // child of a router: download a model, report the progress, exit
+};
+
+static inline const char * server_role_type_to_str(server_role_type role) {
+    switch (role) {
+        case SERVER_ROLE_ROUTER:   return "router";
+        case SERVER_ROLE_INSTANCE: return "instance";
+        case SERVER_ROLE_DOWNLOAD: return "download";
+        default: GGML_ASSERT(false && "invalid server_role_type");
+    }
+}
+
+// the role a router asks of a child; anything it does not name is an instance
+static inline server_role_type server_role_type_from_str(const std::string & str) {
+    if (str == "download") {
+        return SERVER_ROLE_DOWNLOAD;
+    }
+    return SERVER_ROLE_INSTANCE;
+}
+
+// set by the router in the environment of every child
+#define SERVER_ENV_ROUTER_PORT "LLAMA_SERVER_ROUTER_PORT" // its presence makes the process a child
+#define SERVER_ENV_CHILD_ROLE  "LLAMA_SERVER_CHILD_ROLE"  // server_role_type_to_str(), an instance when unset
+
+// lines on the child's stdin (router -> child) and stdout (child -> router),
+// see server_role::setup() and server_role::notify_to_router()
+#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
+
+// address a child binds to: the router may listen on 0.0.0.0, but reaches its children locally
+// ref: https://github.com/ggml-org/llama.cpp/issues/17862
+#define CHILD_ADDR "127.0.0.1"
+
+// the states a child reports to the router
+enum server_state {
+    SERVER_STATE_DOWNLOADING,
+    SERVER_STATE_LOADING,
+    SERVER_STATE_READY,
+    SERVER_STATE_SLEEPING,
+};
+
+static inline std::string server_state_to_str(server_state state) {
+    switch (state) {
+        case SERVER_STATE_DOWNLOADING: return "downloading";
+        case SERVER_STATE_LOADING:     return "loading";
+        case SERVER_STATE_READY:       return "ready";
+        case SERVER_STATE_SLEEPING:    return "sleeping";
+        default: GGML_ASSERT(false && "invalid server_state");
+    }
+}
+
+static inline server_state server_state_from_str(const std::string & str) {
+    if (str == "downloading") return SERVER_STATE_DOWNLOADING;
+    if (str == "loading")     return SERVER_STATE_LOADING;
+    if (str == "ready")       return SERVER_STATE_READY;
+    if (str == "sleeping")    return SERVER_STATE_SLEEPING;
+    GGML_ASSERT(false && "invalid server_state string");
+}
+
+// the role of this process and, when it is a child of a router, its side of the protocol
+struct server_role {
+    // serializes the notify_to_router writes
+    std::mutex mtx_stdout;
+
+    // in a child, keeps stdout for the commands to the router, so it is created before anything is written;
+    // everything else written to stdout goes to stderr with the logs
+    server_role();
+    ~server_role();
+
+    // true if the current process was spawned by a router
+    bool is_managed_by_router();
+    server_role_type get_role();
+
+    // register the shutdown_handler to be called by the router
+    // return the monitoring thread (to be joined by the caller)
+    std::thread setup(const std::function<void(int)> & shutdown_handler);
+
+    // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
+    // message will be handled by server_models::handle_child_state() on the router side
+    void notify_to_router(const std::string & state_name, const json & payload);
+
+private:
+    FILE * cmd_out = nullptr; // the stdout the router reads the commands from
 };

@@ -71,3 +71,21 @@ describe('isExitCodeSummaryLine', () => {
 		expect(isExitCodeSummaryLine('[exit code: 7]', undefined)).toBe(false);
 	});
 });
+
+describe('parseExecShellCommandExitStatus tail scan', () => {
+	it('finds the marker at the end of a blob larger than the tail window', () => {
+		// the parser matches only the last ~128 chars; a marker past that
+		// window must still parse, and an earlier fake must not match
+		const blob = `${'the shell prints [exit code: 1] mid-stream\n'.repeat(2000)}[exit code: 0]`;
+		const status = parseExecShellCommandExitStatus(blob);
+
+		expect(status?.code).toBe(0);
+		expect(status?.timedOut).toBe(false);
+	});
+
+	it('keeps rejecting markers that are not at the absolute end', () => {
+		const blob = `${'stdout\n'.repeat(2000)}[exit code: 0]\nsome trailing log line`;
+
+		expect(parseExecShellCommandExitStatus(blob)).toBeUndefined();
+	});
+});

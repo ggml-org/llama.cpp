@@ -66,7 +66,7 @@ These recur often enough in review comments on past add-model PRs that they're w
 - Optional hparams that are genuinely absent from some configs (e.g. a shared-expert count) should be read with an explicit optional/fallback accessor, not assumed present.
 - Hparams that are actually load-bearing (the model produces wrong output or crashes without them, e.g. `sliding_window_pattern`, norm-eps) must hard-error if missing, not silently fall back to a default.
 - Don't bake a default chat template into the C++ binary - inject it into the GGUF at conversion time instead, since one `llm_arch` can be reused by multiple fine-tunes with different templates, and a baked-in C++ default fails silently for those.
-- Before writing a dedicated tool-call/output parser, check whether the existing autoparser already handles the template (`llama-debug-template-parser <jinja>` shows what it detects).
+- Before writing a dedicated tool-call/output parser, check whether the existing autoparser already handles the template (`test-chat-auto-parser <jinja>` shows what it detects).
 - Marking a custom EOS/closing-tag token as `eot` at conversion time isn't always sufficient - in long/agentic generations a model can emit the closing sequence as literal text instead of the token, so generation never stops on EOG and raw text leaks past the parser. Verify this case, not just the token path.
 - If reusing or aliasing an existing pre-tokenizer for convenience, justify and test that choice explicitly - silent reuse is an easy source of subtle tokenizer bugs.
 - Watch for excessive graph splits caused by building per-layer view/index tensors inside the layer loop - hoist tensors that don't vary per layer out of the loop (relevant if you hit `GGML_SCHED_MAX_SPLIT_INPUTS`).

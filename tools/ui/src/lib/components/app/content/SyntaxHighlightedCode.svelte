@@ -129,8 +129,8 @@
 
 <div
 	bind:this={scrollEl}
-	onscroll={handleScrollEvent}
 	class="code-preview-wrapper min-w-0 max-w-full overflow-auto rounded-xl border shadow-[0_1px_2px_0_rgb(0_0_0_/_0.05)] {className}"
+	onscroll={handleScrollEvent}
 	style="border-color: color-mix(in oklch, var(--border) 30%, transparent); background: var(--code-background); max-height: {maxHeight}; {maxWidth
 		? `max-width: ${maxWidth};`
 		: ''}"
@@ -147,12 +147,19 @@
 	.code-preview-wrapper pre {
 		background: transparent;
 		padding: 0;
+		/* Stretch to the content's intrinsic width so a single long line
+		   propagates its overflow to this scrolling wrapper instead of being
+		   clipped at the wrapper's width with no way to scroll to it. */
+		width: max-content;
+		min-width: 100%;
 	}
 
 	.code-preview-wrapper code {
 		background: transparent;
 		display: block;
 		padding: 0.5rem;
+		width: max-content;
+		min-width: 100%;
 	}
 
 	:global(.dark) .code-preview-wrapper {

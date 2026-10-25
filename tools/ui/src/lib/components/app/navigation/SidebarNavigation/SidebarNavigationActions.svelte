@@ -11,8 +11,9 @@
 		ROUTES,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
-	import { TooltipSide } from '$lib/enums';
-	import { isMobile } from '$lib/stores';
+	import { SidebarAction, TooltipSide } from '$lib/enums';
+	import { conversationsStore, deviceStore } from '$lib/stores';
+	import type { DesktopIconStripItem } from '$lib/types';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -25,24 +26,36 @@
 		searchQuery: string;
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
+		onManageModelsClick?: () => void;
+		onMcpClick?: () => void;
 		onNewChat?: () => void;
+		onSettingsClick?: () => void;
 	}
 
 	let {
 		class: className,
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
+		onManageModelsClick,
+		onMcpClick,
 		onNewChat,
 		onSearchClick,
 		onSearchDeactivated,
+		onSettingsClick,
 		searchQuery = $bindable('')
 	}: Props = $props();
 
+	// the models manager stays desktop-only: a phone picks its models in the selector
+	const actions = $derived(
+		SIDEBAR_ACTIONS_ITEMS.filter(
+			(item) => item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile
+		)
+	);
 	let initialized = $state(false);
 	let showIcons = $state(false);
 	let searchInputRef = $state<HTMLInputElement | null>(null);
 
-	const isOnMobile = $derived(isMobile.current);
+	const isOnMobile = $derived(deviceStore.isMobile);
 
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {
@@ -55,8 +68,39 @@
 
 		setTimeout(() => {
 			initialized = true;
-		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * actions.length);
 	});
+
+	/** Click handler of one icon strip item: a sidebar action, a route, or the search. */
+	function itemClickHandler(
+		item: DesktopIconStripItem,
+		isSearchOnMobile: boolean
+	): (() => void) | undefined {
+		switch (item.action) {
+			case SidebarAction.NEW_CHAT:
+				return () => {
+					onNewChat?.();
+					void conversationsStore.openNewChat();
+				};
+			case SidebarAction.MANAGE_MODELS:
+				return () => onManageModelsClick?.();
+			case SidebarAction.MCP:
+				return () => onMcpClick?.();
+			case SidebarAction.SETTINGS:
+				return () => onSettingsClick?.();
+			default:
+				break;
+		}
+
+		if (item.route) {
+			return () => {
+				onNewChat?.();
+				goto(item.route!);
+			};
+		}
+
+		return isSearchOnMobile ? undefined : onSearchClick;
+	}
 
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
@@ -92,8 +136,8 @@
 {#if isSearchModeActive}
 	<div class="px-4 my-2">
 		<SearchInput
-			bind:value={searchQuery}
 			bind:ref={searchInputRef}
+			bind:value={searchQuery}
 			onClose={handleSearchModeDeactivate}
 			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
 			placeholder="Search conversations..."
@@ -105,18 +149,11 @@
 			? 'hidden pointer-events-none'
 			: ''}"
 	>
-		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{#each actions as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const isSearchOnMobile = item.icon === Search && isMobile.current}
+			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
-			{@const itemOnClick = item.route
-				? () => {
-						onNewChat?.();
-						goto(item.route!);
-					}
-				: isSearchOnMobile
-					? undefined
-					: onSearchClick}
+			{@const itemOnClick = itemClickHandler(item, isSearchOnMobile)}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -131,8 +168,8 @@
 							: ''}"
 						href={itemHref}
 						onclick={itemOnClick}
-						variant="ghost"
 						size="default"
+						variant="ghost"
 					>
 						<span class="flex min-w-0 items-center px-0.5 gap-2">
 							{@render itemIcon(item.icon)}
@@ -154,17 +191,10 @@
 	</div>
 {:else}
 	<div class="{className} flex-col gap-1 hidden md:flex">
-		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{#each actions as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const isSearchOnMobile = item.icon === Search && isMobile.current}
-			{@const itemOnClick = item.route
-				? () => {
-						onNewChat?.();
-						goto(item.route!);
-					}
-				: isSearchOnMobile
-					? undefined
-					: onSearchClick}
+			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
+			{@const itemOnClick = itemClickHandler(item, isSearchOnMobile)}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -174,15 +204,15 @@
 			{#if showIcons}
 				<div transition:fade={itemTransition}>
 					<ActionIcon
-						icon={item.icon}
-						tooltip={item.tooltip}
-						tooltipSide={TooltipSide.RIGHT}
-						size="lg"
-						iconSize={ICON_CLASS_DEFAULT}
 						class="h-9 w-9 rounded-full hover:bg-accent! {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"
+						icon={item.icon}
+						iconSize={ICON_CLASS_DEFAULT}
 						onclick={itemOnClick}
+						size="lg"
+						tooltip={item.tooltip}
+						tooltipSide={TooltipSide.RIGHT}
 					/>
 				</div>
 			{/if}

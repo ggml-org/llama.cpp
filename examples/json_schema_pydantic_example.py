@@ -10,7 +10,7 @@ import json, requests
 
 if True:
 
-    def create_completion(*, response_model=None, endpoint="http://localhost:8080/v1/chat/completions", messages, **kwargs):
+    def create_completion(*, response_model=None, endpoint="http://localhost:9931/v1/chat/completions", messages, **kwargs):
         '''
         Creates a chat completion using an OpenAI-compatible endpoint w/ JSON schema support
         (llama.cpp server, llama-cpp-python, Anyscale / Together...)
@@ -45,7 +45,7 @@ else:
     #! pip install instructor openai
     import instructor, openai
     client = instructor.patch(
-        openai.OpenAI(api_key="123", base_url="http://localhost:8080"),
+        openai.OpenAI(api_key="123", base_url="http://localhost:9931"),
         mode=instructor.Mode.JSON_SCHEMA)
     create_completion = client.chat.completions.create
 

@@ -50,38 +50,55 @@ struct mtmd_audio_cache {
     );
 };
 
+// compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
+void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);
+
 struct mtmd_audio_preprocessor {
     const clip_hparams & hparams;
 
     mtmd_audio_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
+    mtmd_audio_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
 
     virtual ~mtmd_audio_preprocessor() = default;
     virtual void initialize() = 0; // NOT thread-safe
-    virtual bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) = 0;
+    virtual bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const = 0;
 };
 
 struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_whisper(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
 };
 
+struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_muse_spark_audio(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override {}
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+};
+
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_conformer(const clip_hparams & hparams) : mtmd_audio_preprocessor(hparams) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
+};
+
+// same as conformer, the audio is cut to 30 s and padded to 0.5 s (d1-omni audio.py)
+struct mtmd_audio_preprocessor_d1omni : mtmd_audio_preprocessor_conformer {
+    using mtmd_audio_preprocessor_conformer::mtmd_audio_preprocessor_conformer;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 };
 
 struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_granite_speech(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
@@ -90,7 +107,7 @@ struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_gemma4a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
@@ -99,13 +116,22 @@ struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_gemma4ua : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_gemma4ua(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 };
 
 struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_qwen3a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
+struct mtmd_audio_preprocessor_dots3note : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_dots3note(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
@@ -114,7 +140,7 @@ struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_mimo_audio : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_mimo_audio(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
@@ -123,7 +149,7 @@ struct mtmd_audio_preprocessor_mimo_audio : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_qwen3tts_spk : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_qwen3tts_spk(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
@@ -133,13 +159,13 @@ struct mtmd_audio_preprocessor_qwen3tts_spk : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_pockettts : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_pockettts(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override {}
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 };
 
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_parakeet(clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) { }
     void initialize() override;
-    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;

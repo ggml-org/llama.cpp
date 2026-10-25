@@ -23,13 +23,30 @@ extern "C" {
 struct mtmd_helper_video;
 typedef struct mtmd_helper_video mtmd_helper_video;
 
+struct mtmd_helper_video_init_params {
+    float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
+    const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
+    int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
+    // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
+};
+
+MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
+
+// opt for mtmd_helper_bitmap_init_from_*()
+struct mtmd_helper_init_opt {
+    struct mtmd_helper_video_init_params video_params;
+};
+typedef struct mtmd_helper_init_opt mtmd_helper_init_opt;
+
+MTMD_API struct mtmd_helper_init_opt mtmd_helper_init_opt_default(void);
+
 // Set callback for all future logging events.
 // If this is not called, or NULL is supplied, everything is output on stderr.
 // Note: this also call mtmd_log_set() internally
 MTMD_API void mtmd_helper_log_set(ggml_log_callback log_callback, void * user_data);
 
 // Returns true if this build includes video support (MTMD_VIDEO was ON at compile time).
-MTMD_API bool mtmd_helper_support_video(mtmd_context * ctx);
+MTMD_API bool mtmd_helper_support_video(const mtmd_context * ctx);
 
 struct mtmd_helper_bitmap_wrapper {
     mtmd_bitmap * bitmap;
@@ -40,11 +57,16 @@ struct mtmd_helper_bitmap_wrapper {
 // it calls mtmd_helper_bitmap_init_from_buf() internally
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder);
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
+                    const mtmd_context * ctx,
+                    const char * fname,
+                    bool placeholder,
+                    struct mtmd_helper_init_opt opt);
 
 // helper function to construct a mtmd_bitmap from a buffer containing a file
 // supported formats:
 //     image: formats supported by stb_image: jpg, png, bmp, gif, etc.
+//            webp is decoded via ffmpeg, requires MTMD_VIDEO build with ffmpeg in PATH
 //     audio: formats supported by miniaudio: wav, mp3, flac
 // note:
 //   - for now, video input is only supported via C++ helper functions
@@ -52,7 +74,11 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtm
 //   - output bitmap will have SHA-256 hash (hex string) as the ID
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder);
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
+                    const mtmd_context * ctx,
+                    const unsigned char * buf, size_t len,
+                    bool placeholder,
+                    struct mtmd_helper_init_opt opt);
 
 // helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks);
@@ -66,9 +92,9 @@ MTMD_API llama_pos mtmd_helper_get_n_pos(const mtmd_input_chunks * chunks);
 MTMD_API void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * image, llama_pos pos_0, struct mtmd_decoder_pos * out_pos);
 
 // helper function that automatically:
-// 1. run llama_decode() on text chunks
-// 2. run mtmd_encode_chunk() on image chunks, then mtmd_get_output_embd() and then llama_decode()
-// if any of the mtmd_encode_chunk() or llama_decode() calls return non-zero, stop and forward the error
+// 1. decode text chunks
+// 2. run mtmd_encode_chunk() on image chunks, then mtmd_get_output_embd() and then decode the embeddings
+// if any of the mtmd_encode_chunk() or decode calls return non-zero, stop and forward the error
 // otherwise, returns 0 on success
 // this function is NOT thread-safe
 MTMD_API int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
@@ -91,7 +117,17 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                bool logits_last,
                                                llama_pos * new_n_past);
 
-typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, void * user_data);
+// one decoded sub-batch of embeddings, passed to mtmd_helper_post_decode_callback
+struct mtmd_helper_embd_batch {
+    int32_t n_tokens;
+    const float     * embd;   // [n_tokens, n_embd]
+    int32_t           n_embd;
+    const llama_pos * pos;    // [n_pos, n_tokens], section-major
+    int32_t           n_pos;  // 4 for M-RoPE models, 1 otherwise
+    llama_seq_id      seq_id;
+};
+
+typedef int32_t (*mtmd_helper_post_decode_callback)(const struct mtmd_helper_embd_batch * batch, void * user_data);
 
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)
@@ -123,18 +159,11 @@ struct mtmd_helper_video_info {
     int32_t  n_frames; // estimated total frames at effective fps (-1 if unknown)
 };
 
-struct mtmd_helper_video_init_params {
-    float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
-    const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
-    int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
-    // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
-};
-
-MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
+// note: mtmd_helper_video_init_params is defined at the top, as it is part of mtmd_helper_init_opt
 
 // returns NULL on failure (ffprobe not found, file unreadable, etc.)
 MTMD_API mtmd_helper_video * mtmd_helper_video_init(
-                    struct mtmd_context * mctx,
+                    const struct mtmd_context * mctx,
                     const char * path,
                     struct mtmd_helper_video_init_params params);
 
@@ -143,7 +172,7 @@ MTMD_API mtmd_helper_video * mtmd_helper_video_init(
 // Note: pipe input is not seekable, so seeking will use output-side seeking
 // (ffmpeg decodes and discards frames up to the target position).
 MTMD_API mtmd_helper_video * mtmd_helper_video_init_from_buf(
-                    struct mtmd_context * mctx,
+                    const struct mtmd_context * mctx,
                     const unsigned char * buf, size_t len,
                     struct mtmd_helper_video_init_params params);
 MTMD_API void mtmd_helper_video_free(mtmd_helper_video * ctx);
@@ -158,7 +187,7 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
             char ** out_text);
 
 // return true if model can be used for chat
-MTMD_API bool mtmd_helper_model_can_chat(struct llama_context * lctx, struct mtmd_context * mctx);
+MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx);
 
 //
 // Audio generation helpers
@@ -175,6 +204,7 @@ enum mtmd_helper_gen_audio_outtype {
     MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE, mono
 };
 struct mtmd_helper_gen_audio_inp {
+    bool stream; // if true, output() must be called after each step_gen()
     llama_seq_id seq_id;
 
     const char * prompt;
@@ -189,6 +219,8 @@ struct mtmd_helper_gen_audio_inp {
 
     enum mtmd_helper_gen_audio_outtype out_type;
 };
+
+MTMD_API struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void);
 
 MTMD_API mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(
                                     struct llama_context * lctx,
@@ -221,12 +253,18 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
 
 // out_data valid until next get_output() or reset() call
 // out_n_samples (optional, can be NULL) receives the number of generated PCM samples
+// if inp->stream is true: returns only audio produced since the previous call, and
+// *out_data_len == 0 whenever a full window_frames batch hasn't accumulated yet
 MTMD_API int32_t mtmd_helper_gen_audio_get_output(
                         mtmd_helper_gen_audio * ctx,
                         int32_t * out_sample_rate,
                         const char ** out_data,
                         size_t * out_data_len,
                         int64_t * out_n_samples);
+
+// forces any buffered codes through code2wav now, regardless of window_frames;
+// call once when generation has ended, before the last get_output() in stream mode
+MTMD_API int32_t mtmd_helper_gen_audio_flush(mtmd_helper_gen_audio * ctx);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -254,8 +292,41 @@ struct mtmd_helper_gen_audio_deleter {
 };
 using gen_audio_ptr = std::unique_ptr<mtmd_helper_gen_audio, mtmd_helper_gen_audio_deleter>;
 struct gen_audio {
+
+    // sub-struct, RAII wrapper for mtmd_helper_gen_audio_inp
+    struct inp {
+        mtmd_helper_gen_audio_inp data = mtmd_helper_gen_audio_inp_default();
+        std::string prompt_str;
+        std::string lang_str;
+        mtmd::bitmap_ptr speaker_ref_ptr;
+
+        inp()                             = default;
+        inp(inp &&)                       = default;
+        inp & operator=(inp &&)           = default;
+        inp(const inp &)                  = delete;
+        inp & operator=(const inp &)      = delete;
+
+        void set_prompt     (std::string p)        { prompt_str = std::move(p); }
+        void set_lang       (std::string l)        { lang_str   = std::move(l); }
+        void set_speaker_ref(mtmd::bitmap_ptr bmp) { speaker_ref_ptr = std::move(bmp); }
+
+        // pointers are only valid as long as *this is alive
+        const mtmd_helper_gen_audio_inp * get() {
+            data.prompt      = prompt_str.c_str();
+            data.prompt_len  = prompt_str.size();
+            data.lang        = lang_str.empty() ? nullptr : lang_str.c_str();
+            data.speaker_ref = speaker_ref_ptr.get();
+            return &data;
+        }
+    };
+
     gen_audio_ptr ctx;
-    gen_audio(struct llama_context * lctx, struct mtmd_context * mctx) : ctx(mtmd_helper_gen_audio_init(lctx, mctx)) {}
+    void init(struct llama_context * lctx, struct mtmd_context * mctx) {
+        ctx.reset(mtmd_helper_gen_audio_init(lctx, mctx));
+    }
+    bool valid() const {
+        return ctx.get() != nullptr;
+    }
     void reset() {
         mtmd_helper_gen_audio_reset(ctx.get());
     }
@@ -270,6 +341,9 @@ struct gen_audio {
     }
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples = nullptr) {
         return mtmd_helper_gen_audio_get_output(ctx.get(), out_sample_rate, out_data, out_data_len, out_n_samples);
+    }
+    int32_t flush() {
+        return mtmd_helper_gen_audio_flush(ctx.get());
     }
 };
 

@@ -28,7 +28,7 @@ OutputVector translate_l2_norm(const NodeContext & context) {
         // 93: [   128,    16,     1,     2] L2_NORM              q_conv_predelta-1
         //      [   128,    16,     1,     2]            0: VIEW        q_conv-1
         auto output_shape = context.get_output_shape().to_shape();
-        input_node = process_view_input(context, 0, output_shape[2] * output_shape[3]);
+        input_node = process_view_input(context, 0, output_shape[2] * output_shape[3], 3);
         input_node =
             std::make_shared<ov::op::v0::Squeeze>(input_node, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
 

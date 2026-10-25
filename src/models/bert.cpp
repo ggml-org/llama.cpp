@@ -29,15 +29,13 @@ void llama_model_bert::load_arch_tensors(llama_model_loader &) {
     tok_embd     = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
     type_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, TENSOR_NOT_REQUIRED);
 
-    if (arch == LLM_ARCH_BERT) {
-        pos_embd = create_tensor(tn(LLM_TENSOR_POS_EMBD,    "weight"), {n_embd, n_ctx_train}, 0);
+    pos_embd = create_tensor(tn(LLM_TENSOR_POS_EMBD,    "weight"), {n_embd, n_ctx_train}, 0);
 
-        cls   = create_tensor(tn(LLM_TENSOR_CLS, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
-        cls_b = create_tensor(tn(LLM_TENSOR_CLS, "bias"),   {n_embd},         TENSOR_NOT_REQUIRED);
+    cls   = create_tensor(tn(LLM_TENSOR_CLS, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
+    cls_b = create_tensor(tn(LLM_TENSOR_CLS, "bias"),   {n_embd},         TENSOR_NOT_REQUIRED);
 
-        cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
-        cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
-    }
+    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
 
     tok_norm   = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight", 0), {n_embd}, 0);
     tok_norm_b = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "bias",   0), {n_embd}, 0);
@@ -53,20 +51,10 @@ void llama_model_bert::load_arch_tensors(llama_model_loader &) {
         layer.attn_out_norm   = create_tensor(tn(LLM_TENSOR_ATTN_OUT_NORM, "weight", i), {n_embd}, 0);
         layer.attn_out_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT_NORM, "bias", i),   {n_embd}, 0);
 
-        if (hparams.moe_every_n_layers > 0 && i % hparams.moe_every_n_layers == 1) {
-            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff,   n_expert}, 0);
-            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff,   n_embd, n_expert}, 0);
-            layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,   "weight", i), {n_embd, n_expert}, 0);
-        } else {
-            layer.ffn_up     = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
-            layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i),   {n_ff}, TENSOR_NOT_REQUIRED);
-            layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
-            layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
-
-            if (arch == LLM_ARCH_NOMIC_BERT) {
-                layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
-            }
-        }
+        layer.ffn_up     = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+        layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i),   {n_ff}, TENSOR_NOT_REQUIRED);
+        layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+        layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
 
         layer.layer_out_norm   = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM, "weight", i), {n_embd}, 0);
         layer.layer_out_norm_b = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM, "bias", i),   {n_embd}, 0);
@@ -85,9 +73,15 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
     ggml_tensor * cur;
     ggml_tensor * inpL;
     ggml_tensor * inp_pos = nullptr;
+    ggml_tensor * embd_pos = nullptr;
 
     if (model.arch != LLM_ARCH_JINA_BERT_V2) {
         inp_pos = build_inp_pos();
+    }
+
+    if (model.arch == LLM_ARCH_BERT) {
+        embd_pos = ggml_get_rows(ctx0, model.pos_embd, inp_pos);
+        ggml_build_forward_order(gf, embd_pos);
     }
 
     // construct input embeddings (token, type, position)
@@ -99,7 +93,7 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
         inpL                    = ggml_add(ctx0, inpL, type_row0);
     }
     if (model.arch == LLM_ARCH_BERT) {
-        inpL = ggml_add(ctx0, ggml_get_rows(ctx0, model.pos_embd, inp_pos), inpL);
+        inpL = ggml_add(ctx0, embd_pos, inpL);
     }
     cb(inpL, "inp_embd", -1);
 
@@ -182,7 +176,7 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
                     nullptr,
                     model.layers[il].ffn_down_exps,
                     nullptr,
-                    hparams.n_expert, hparams.n_expert_used,
+                    hparams.n_expert, hparams.n_expert_used(),
                     LLM_FFN_GELU, false,
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
@@ -228,6 +222,4 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
 
     cb(cur, "result_embd", -1);
     res->t_embd = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

@@ -1,7 +1,7 @@
 import { redactValue } from './redact';
 import { CORS_PROXY, HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 
 /**
  * Get authorization headers for API requests

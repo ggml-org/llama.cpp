@@ -7,6 +7,11 @@ enable f16;
 requires packed_4x8_integer_dot_product;
 #endif
 
+#ifdef SRC_OVERLAP
+#define SRC0 merged_src
+#define SRC1 merged_src
+#endif
+
 #define DECLARE_BYTE_LOADERS_SRC0
 #include "common_decls.tmpl"
 
@@ -35,17 +40,22 @@ struct MulMatParams {
     broadcast3: u32
 };
 
+#if defined(MMVQ)
 @group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>;
-
-#ifdef MMVQ
 @group(0) @binding(1) var<storage, read_write> src1q: array<q8_1>;
+#define DST_BINDING 2
+#elif defined(SRC_OVERLAP)
+@group(0) @binding(0) var<storage, read_write> merged_src: array<SRC0_TYPE>;
+#define DST_BINDING 1
 #else
+@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>;
 @group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>;
+#define DST_BINDING 2
 #endif
 
-@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<f32>;
 // "mul_mat_vec_acc.tmpl" requires params.k, params.m, params.stride_01
-@group(0) @binding(3) var<uniform> params: MulMatParams;
+@group(0) @binding(DST_BINDING + 1) var<uniform> params: MulMatParams;
 
 // Flattened as [row][thread] to keep each row's reduction contiguous in memory.
 var<workgroup> partial_sums: array<f32, OUTPUTS_PER_WG * WG_SIZE>;

@@ -44,7 +44,7 @@ if (WIN32)
         if(DEFINED ENV{LEVEL_ZERO_V1_SDK_PATH})
             set(LEVEL_ZERO_V1_SDK_PATH $ENV{LEVEL_ZERO_V1_SDK_PATH})
             if(EXISTS "${LEVEL_ZERO_V1_SDK_PATH}")
-                target_include_directories(ggml-sycl PRIVATE "${LEVEL_ZERO_V1_SDK_PATH}/include")
+                target_include_directories(ggml-sycl SYSTEM PRIVATE "${LEVEL_ZERO_V1_SDK_PATH}/include")
                 set(LEVEL_ZERO_V1_SDK_LIB_PATH "${LEVEL_ZERO_V1_SDK_PATH}/lib")
             else()
                 message(WARNING "LEVEL_ZERO_V1_SDK_PATH set but folder not found: ${LEVEL_ZERO_V1_SDK_PATH}")
@@ -110,48 +110,86 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
     # Link against Level Zero loader for direct device memory allocation.
     # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
     # in the xe kernel driver during multi-GPU inference.
-    find_path(LEVEL_ZERO_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
+    find_path(LEVEL_ZERO_DEV_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
     find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
-    if(ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+    if(ZE_LOADER_LIB AND LEVEL_ZERO_DEV_INCLUDE_DIR)
         target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
         target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
-        message(STATUS "Level Zero headers found: ${LEVEL_ZERO_INCLUDE_DIR}")
+        message(STATUS "Level Zero development headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
     else()
-        message(WARNING "Level Zero loader or headers not found, Level Zero support disabled")
+        message(WARNING "Level Zero loader or development headers not found, "
+                        "Level Zero API support disabled. "
+                        "Please install the Level Zero SDK/development package "
+                        "to support Level Zero API features. "
+                        "Level Zero API is not mandatory for SYCL backend, "
+                        "but it is required by the special features for better "
+                        "function & performance on Intel GPUs.")
     endif()
 endif()
 
 # Link against oneDNN
 set(GGML_SYCL_DNNL 0)
 if(GGML_SYCL_DNN)
+    # oneAPI installs dnnl-config.cmake under a versioned path CMake does not
+    # search by default. When the user did not point CMake at it explicitly
+    # (DNNL_DIR), auto-detect the oneAPI-bundled GPU build via the DNNLROOT
+    # environment variable or the standard oneAPI install prefixes. A shell
+    # with setvars.sh sourced already exports CMAKE_PREFIX_PATH and finds it
+    # without any of this.
+    if(NOT DEFINED DNNL_DIR)
+        if(DEFINED ENV{DNNLROOT} AND EXISTS "$ENV{DNNLROOT}/lib/cmake/dnnl/dnnl-config.cmake")
+            set(DNNL_DIR "$ENV{DNNLROOT}/lib/cmake/dnnl")
+        elseif(EXISTS "/opt/intel/oneapi/dnnl/latest/lib/cmake/dnnl/dnnl-config.cmake")
+            set(DNNL_DIR "/opt/intel/oneapi/dnnl/latest/lib/cmake/dnnl")
+        elseif(EXISTS "/usr/intel/oneapi/dnnl/latest/lib/cmake/dnnl/dnnl-config.cmake")
+            set(DNNL_DIR "/usr/intel/oneapi/dnnl/latest/lib/cmake/dnnl")
+        endif()
+        if(DEFINED DNNL_DIR)
+            message(STATUS "oneDNN: auto-detected config at ${DNNL_DIR}")
+        endif()
+    endif()
     find_package(DNNL)
-    if(DNNL_FOUND)
-        if (NOT DEFINED DNNL_GPU_VENDOR)
-            # default to intel target
-            set(DNNL_GPU_VENDOR "INTEL")
-            if(NOT "${GGML_SYCL_TARGET}" STREQUAL "INTEL")
-                message(WARNING "oneDNN builds bundled with oneapi release only support INTEL target")
-            endif()
-        endif()
+    if(NOT DNNL_FOUND)
+        # GGML_SYCL_DNN defaults to ON, so a plain build used to continue
+        # silently without oneDNN: every flash-attention then runs the much
+        # slower MKL-FA path (20-40% prefill loss on long prompts). Fail
+        # loudly instead of producing a degraded binary.
+        message(FATAL_ERROR
+            "oneDNN (DNNL) was requested (GGML_SYCL_DNN=ON) but not found. "
+            "The SYCL backend needs the oneAPI-bundled GPU build: install "
+            "intel-oneapi-dnnl and intel-oneapi-dnnl-devel from the oneAPI "
+            "repo, source setvars.sh, or pass "
+            "-DDNNL_DIR=<dnnl-prefix>/lib/cmake/dnnl (or export DNNLROOT). "
+            "To build without oneDNN on purpose, pass -DGGML_SYCL_DNN=OFF.")
+    endif()
+    if(NOT DEFINED DNNL_GPU_VENDOR)
+        # A DNNL package that does not declare DNNL_GPU_VENDOR has no GPU/SYCL
+        # support compiled in (e.g. Debian/Ubuntu's CPU-only libdnnl-dev).
+        # The old code defaulted the vendor to INTEL here, which fake-passed
+        # the target check below and silently linked a CPU-only library into
+        # the SYCL backend.
+        message(FATAL_ERROR
+            "Found oneDNN at ${DNNL_DIR} but it does not declare "
+            "DNNL_GPU_VENDOR - it is a CPU-only build (Debian/Ubuntu "
+            "libdnnl-dev?). Install the oneAPI-bundled GPU build "
+            "(intel-oneapi-dnnl-devel) instead.")
+    endif()
 
-        # Verify oneDNN was compiled for the same target as llama
-        if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
-            target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
-            set(GGML_SYCL_DNNL 1)
-            get_target_property(CONFIGS DNNL::dnnl IMPORTED_CONFIGURATIONS)
-            foreach(CONFIG ${CONFIGS})
-                get_target_property(DNNL_LIB DNNL::dnnl IMPORTED_LOCATION_${CONFIG})
-                message(STATUS "Found oneDNN: ${DNNL_LIB}")
-            endforeach()
-        else()
-            message(WARNING
-                "oneDNN must be compiled for the same target as llama.cpp.
-                 llama.cpp: ${GGML_SYCL_TARGET}, oneDNN: ${DNNL_GPU_VENDOR}.
-                 Disabling oneDNN support.")
-        endif()
+    # Verify oneDNN was compiled for the same target as llama
+    if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
+        target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
+        set(GGML_SYCL_DNNL 1)
+        get_target_property(CONFIGS DNNL::dnnl IMPORTED_CONFIGURATIONS)
+        foreach(CONFIG ${CONFIGS})
+            get_target_property(DNNL_LIB DNNL::dnnl IMPORTED_LOCATION_${CONFIG})
+            message(STATUS "Found oneDNN: ${DNNL_LIB}")
+        endforeach()
     else()
-        message(STATUS "oneDNN not found, disabling oneDNN support")
+        message(FATAL_ERROR
+            "oneDNN must be compiled for the same target as llama.cpp: "
+            "llama.cpp: ${GGML_SYCL_TARGET}, oneDNN: ${DNNL_GPU_VENDOR}. "
+            "Pass -DGGML_SYCL_DNN=OFF to build without oneDNN.")
     endif()
 else()
     message(STATUS "oneDNN support disabled by the user")
@@ -215,4 +253,27 @@ if (GGML_SYCL_DEVICE_ARCH)
         "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
+
+    # The XMX dequant-GEMM tiles need the sub-group size of the target: 8 on Xe-HPG (DG2, ARL-H),
+    # 16 on Xe-HPC and Xe2 or newer. ocloc fails on the other size, so build only the one that fits.
+    # 0 (unknown name, mixed list, or no XMX) builds no XMX tile and the path stays off.
+    set(_ggml_sycl_xmx_sg "")
+    string(TOLOWER "${GGML_SYCL_DEVICE_ARCH}" _ggml_sycl_archs)
+    string(REPLACE "," ";" _ggml_sycl_archs "${_ggml_sycl_archs}")
+    foreach(_arch IN LISTS _ggml_sycl_archs)
+        if (_arch MATCHES "^(dg2|acm|ats-m|arl-h|xe-hpg|12\\.5[567]\\.|12\\.74\\.)")
+            set(_sg 8)
+        elseif (_arch MATCHES "^(pvc|bmg|lnl|ptl|wcl|nvl|cri|xe2|xe3|xe-hpc|12\\.60\\.|20\\.|30\\.)")
+            set(_sg 16)
+        else()
+            set(_sg 0)
+        endif()
+        if (_ggml_sycl_xmx_sg STREQUAL "" OR _ggml_sycl_xmx_sg EQUAL _sg)
+            set(_ggml_sycl_xmx_sg ${_sg})
+        else()
+            set(_ggml_sycl_xmx_sg 0)
+        endif()
+    endforeach()
+    message(STATUS "GGML_SYCL_DEVICE_ARCH: XMX dequant-GEMM sub-group size ${_ggml_sycl_xmx_sg} (0 = off)")
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_XMX_AOT_SG=${_ggml_sycl_xmx_sg})
 endif()

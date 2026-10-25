@@ -116,6 +116,8 @@ HTPDRV_API domain * htpdrv_get_domain(int domain_id);
  */
 HTPDRV_API int htpdrv_get_arch(int domain, int * arch);
 
+HTPDRV_API int remote_system_request(system_req_payload * req);
+
 #ifdef __cplusplus
 }
 #endif

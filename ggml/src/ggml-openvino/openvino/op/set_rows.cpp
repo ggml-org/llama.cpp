@@ -7,6 +7,7 @@
 #include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
+#include <openvino/core/type.hpp>
 #include <openvino/frontend/exception.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
@@ -75,7 +76,7 @@ OutputVector translate_set_rows(const NodeContext & context) {
         res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
     }
 
-    auto dst_reshape = std::dynamic_pointer_cast<ov::op::v1::Reshape>(dst.get_node_shared_ptr());
+    auto dst_reshape = ov::as_type_ptr<ov::op::v1::Reshape>(dst.get_node_shared_ptr());
     if (!multidim_indices && dst_reshape) {
         // Fix the case of multiple sequences, reshape back to original shape [1, n_seq, ctx_per_seq, emb]
         // ctx_per_seq is not fixed due to llama-bench compatibility

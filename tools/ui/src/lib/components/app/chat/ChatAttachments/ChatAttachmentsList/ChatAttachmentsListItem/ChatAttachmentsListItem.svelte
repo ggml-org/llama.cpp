@@ -41,6 +41,9 @@
 	}: Props = $props();
 
 	const scrollClasses = $derived(limitToSingleRow ? 'first:ml-4 last:mr-4' : '');
+	// Carousel items must keep their width; wrapped attachments (message bubbles)
+	// shrink so wide images fit the bubble instead of overflowing it
+	const layoutClasses = $derived(limitToSingleRow ? 'flex-shrink-0' : 'min-w-0');
 
 	function toMcpResourceAttachment(
 		extra: DatabaseMessageExtraMcpResource,
@@ -75,58 +78,58 @@
 	{#if mcpPrompt}
 		<ChatAttachmentsListItemMcpPrompt
 			class="max-w-[300px] min-w-[200px] flex-shrink-0 {className} {scrollClasses}"
-			prompt={mcpPrompt}
-			{readonly}
 			isLoading={item.isLoading}
 			loadError={item.loadError}
 			onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+			prompt={mcpPrompt}
+			{readonly}
 		/>
 	{/if}
 {:else if isMcpResource(item)}
 	{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
 
 	<ChatAttachmentsListItemMcpResource
-		class="flex-shrink-0 {className} {scrollClasses}"
 		attachment={toMcpResourceAttachment(mcpResource, item.id)}
+		class="flex-shrink-0 {className} {scrollClasses}"
 		onclick={() => onMcpResourcePreview?.(mcpResource)}
 	/>
 {:else if item.isImage && item.preview}
 	<ChatAttachmentsListItemThumbnailImage
-		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
+		class="{layoutClasses} cursor-pointer {className} {scrollClasses}"
+		height={imageHeight}
 		id={item.id}
+		{imageClass}
 		name={item.name}
+		onRemove={onFileRemove}
+		onclick={() => onPreview?.(item)}
 		preview={item.preview}
 		{readonly}
-		onRemove={onFileRemove}
-		height={imageHeight}
 		width={imageWidth}
-		{imageClass}
-		onclick={() => onPreview?.(item)}
 	/>
 {:else if isPdfFile(item.attachment, item.uploadedFile)}
 	<ChatAttachmentsListItemThumbnailFile
+		attachment={item.attachment}
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}
-		size={item.size}
-		{readonly}
 		onRemove={onFileRemove}
-		textContent={item.textContent}
-		attachment={item.attachment}
-		uploadedFile={item.uploadedFile}
 		onclick={() => onPreview?.(item)}
+		{readonly}
+		size={item.size}
+		textContent={item.textContent}
+		uploadedFile={item.uploadedFile}
 	/>
 {:else}
 	<ChatAttachmentsListItemThumbnailFile
+		attachment={item.attachment}
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}
-		size={item.size}
-		{readonly}
 		onRemove={onFileRemove}
-		textContent={item.textContent}
-		attachment={item.attachment}
-		uploadedFile={item.uploadedFile}
 		onclick={() => onPreview?.(item)}
+		{readonly}
+		size={item.size}
+		textContent={item.textContent}
+		uploadedFile={item.uploadedFile}
 	/>
 {/if}

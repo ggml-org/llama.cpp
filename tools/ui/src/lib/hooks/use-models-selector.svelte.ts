@@ -1,8 +1,15 @@
-import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import { modelsStore, serverStore } from '$lib/stores';
+import { deviceStore, modelsStore, serverStore, uiStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
+import {
+	filterModelOptions,
+	groupFavoriteOptions,
+	groupModelOptions,
+	type ModelItem
+} from '$lib/utils';
+import { nameOf } from '$lib/utils/model-names';
 import { onMount } from 'svelte';
+import { SvelteSet } from 'svelte/reactivity';
 
 export interface UseModelsSelectorOptions {
 	currentModel: () => string | null;
@@ -18,19 +25,20 @@ export interface UseModelsSelectorReturn {
 	readonly loading: boolean;
 	readonly updating: boolean;
 	readonly activeId: string | null;
+	readonly emptyMessage: string;
+	readonly isMultiModel: boolean;
 	readonly isRouter: boolean;
 	readonly serverModel: string | null;
 	readonly isHighlightedCurrentModelActive: boolean;
 	readonly isCurrentModelInCache: boolean;
+	readonly favoriteItems: ModelItem[];
+	readonly loadedItems: ModelItem[];
 	readonly filteredOptions: ModelOption[];
+	readonly isEmpty: boolean;
 	readonly groupedFilteredOptions: ReturnType<typeof groupModelOptions>;
 	readonly isLoadingModel: boolean;
 	readonly searchTerm: string;
-	readonly showModelDialog: boolean;
-	readonly infoModelId: string | null;
 	setSearchTerm(value: string): void;
-	setShowModelDialog(value: boolean): void;
-	handleInfoClick(modelName: string): void;
 	handleSelect(modelId: string): Promise<void>;
 	handleOpenChange(open: boolean): void;
 	isFavorite(model: string): boolean;
@@ -40,14 +48,17 @@ export interface UseModelsSelectorReturn {
 /**
  * Shared reactive state and logic for model selection.
  *
- * Used by both the desktop dropdown (`ModelsSelectorDropdown`)
- * and the mobile sheet (`ModelsSelectorSheet`) to avoid
- * duplicating store derivations, selection handling, and model loading.
+ * Used by the model selector dropdown, which serves the desktop an anchored menu
+ * and the phone a bottom drawer, to avoid duplicating store derivations,
+ * selection handling, and model loading.
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
+	let isLoadingModel = $state(false);
+	let searchTerm = $state('');
+
 	const options = $derived(
 		modelsStore.models.filter((option) => {
-			const modelProps = modelsStore.getModelProps(option.model);
+			const modelProps = modelsStore.props.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
 		})
@@ -55,6 +66,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const loading = $derived(modelsStore.loading);
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
+	// a lone llama.cpp server without a router has nothing to choose from
 	const isRouter = $derived(serverStore.isRouterMode);
 	const serverModel = $derived(modelsStore.singleModelName);
 	const currentModel = $derived(opts.currentModel());
@@ -71,23 +83,36 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		return options.some((option) => option.model === currentModel);
 	});
-
-	let isLoadingModel = $state(false);
-	let searchTerm = $state('');
-	let showModelDialog = $state(false);
-	let infoModelId = $state<string | null>(null);
-
-	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
-	const groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
-			modelsStore.isModelLoaded(m)
+	// the search, the rows and the sections all read the visible set; only the current
+	// model resolves against `options`, since it can be hidden and still selected
+	const visibleOptions = $derived(options.filter((option) => !modelsStore.isHidden(option.id)));
+	// one filter pass feeds the favorites, the loaded rows and the sections alike
+	const filteredOptions = $derived(filterModelOptions(visibleOptions, searchTerm));
+	const loadedItems = $derived(
+		filteredOptions
+			.filter((option) => modelsStore.isModelLoaded(option.model))
+			.map((option) => ({ option }))
+	);
+	const loadedIds = $derived(new SvelteSet(loadedItems.map((item) => item.option.id)));
+	// loaded models lead the list: their own sections list them once, so a
+	// loaded favorite shows there and not twice
+	const favoriteItems = $derived(
+		groupFavoriteOptions(
+			filteredOptions.filter((option) => !loadedIds.has(option.id)),
+			modelsStore.favoriteModelIds
 		)
 	);
-
-	function handleInfoClick(modelName: string) {
-		infoModelId = modelName;
-		showModelDialog = true;
-	}
+	// loaded models and favorites are listed once, at the top: the sections skip both
+	const sectionOptions = $derived(
+		filteredOptions.filter(
+			(option) => !modelsStore.favoriteModelIds.has(option.model) && !loadedIds.has(option.id)
+		)
+	);
+	const groupedFilteredOptions = $derived(groupModelOptions(sectionOptions));
+	const isEmpty = $derived(
+		filteredOptions.length === 0 && favoriteItems.length === 0 && loadedItems.length === 0
+	);
+	const emptyMessage = $derived(searchTerm ? 'No models found.' : 'No models yet.');
 
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
@@ -98,19 +123,21 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		if (isRouter) {
-			searchTerm = '';
+		// a single-model desktop server has no list: the trigger opens the manager
+		// instead. a phone has no manager, so its drawer opens with the one model
+		if (!isRouter && !deviceStore.isMobile) {
+			if (open) uiStore.openModelsManager();
 
-			if (open) {
-				modelsStore.fetchRouterModels().then(() => {
-					modelsStore.fetchModalitiesForLoadedModels();
-				});
-			}
-
-			opts.onOpenChange?.(open);
-		} else {
-			showModelDialog = open;
+			return;
 		}
+
+		searchTerm = '';
+
+		if (open && isRouter) {
+			modelsStore.props.fetchModalitiesForLoadedModels();
+		}
+
+		opts.onOpenChange?.(open);
 	}
 
 	async function handleSelect(modelId: string) {
@@ -127,7 +154,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 				shouldCloseMenu = false;
 			}
 		} else {
-			await modelsStore.selectModelById(option.id);
+			await modelsStore.selectModelById(option.id, { recordRecent: true });
 		}
 
 		if (shouldCloseMenu) {
@@ -140,11 +167,12 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			});
 		}
 
+		// only the built-in server loads on request, and only in router mode
 		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
 
-			modelsStore
-				.loadModel(option.model)
+			modelsStore.status
+				.load(option.model)
 				.catch((error) => console.error('Failed to load model:', error))
 				.finally(() => (isLoadingModel = false));
 		}
@@ -159,7 +187,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					capabilities: [],
 					id: serverModel ? 'current' : 'offline-current',
 					model: displayModel,
-					name: displayModel.split('/').pop() || displayModel
+					name: nameOf(displayModel)
 				};
 			}
 
@@ -172,7 +200,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					capabilities: [],
 					id: 'not-in-cache',
 					model: currentModel,
-					name: currentModel.split('/').pop() || currentModel
+					name: nameOf(currentModel)
 				};
 			}
 
@@ -191,6 +219,13 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return activeId;
 		},
 
+		get emptyMessage() {
+			return emptyMessage;
+		},
+
+		get favoriteItems() {
+			return favoriteItems;
+		},
 		get filteredOptions() {
 			return filteredOptions;
 		},
@@ -201,18 +236,16 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return groupedFilteredOptions;
 		},
 
-		handleInfoClick,
-
 		handleOpenChange,
 
 		handleSelect,
 
-		get infoModelId() {
-			return infoModelId;
-		},
-
 		get isCurrentModelInCache() {
 			return isCurrentModelInCache;
+		},
+
+		get isEmpty() {
+			return isEmpty;
 		},
 
 		isFavorite(model: string) {
@@ -227,8 +260,16 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return isLoadingModel;
 		},
 
+		get isMultiModel() {
+			return isRouter;
+		},
+
 		get isRouter() {
 			return isRouter;
+		},
+
+		get loadedItems() {
+			return loadedItems;
 		},
 
 		get loading() {
@@ -249,14 +290,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		setSearchTerm(value: string) {
 			searchTerm = value;
-		},
-
-		setShowModelDialog(value: boolean) {
-			showModelDialog = value;
-		},
-
-		get showModelDialog() {
-			return showModelDialog;
 		},
 
 		get updating() {

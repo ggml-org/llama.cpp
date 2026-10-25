@@ -83,16 +83,16 @@
 	{#if editCtx.isEditing}
 		<div class="w-full max-w-[80%]">
 			<textarea
-				style="max-height: var(--max-message-height);"
 				bind:this={textareaElement}
-				value={editCtx.editedContent}
 				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={handleEditKeydown}
 				oninput={(e) => {
 					autoResizeTextarea(e.currentTarget);
 					editCtx.setContent(e.currentTarget.value);
 				}}
+				onkeydown={handleEditKeydown}
 				placeholder="Edit system message..."
+				style="max-height: var(--max-message-height);"
+				value={editCtx.editedContent}
 			></textarea>
 
 			<div class="mt-2 flex justify-end gap-2">
@@ -104,8 +104,8 @@
 
 				<Button
 					class="h-8 px-3"
-					onclick={editCtx.save}
 					disabled={!editCtx.editedContent.trim()}
+					onclick={editCtx.save}
 					size="sm"
 				>
 					<Check class="mr-1 h-3 w-3" />

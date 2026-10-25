@@ -342,24 +342,24 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
             }
         #endif // __riscv_zvfh
     #else
-        const int np = (n & ~(GGML_F16_STEP - 1));
+        const int np = (n & ~(GGML_F16_DOT_STEP - 1));
 
-        GGML_F16_VEC sum[GGML_F16_ARR] = { GGML_F16_VEC_ZERO };
+        GGML_F16_DOT_VEC sum[GGML_F16_DOT_ARR] = { GGML_F16_DOT_VEC_ZERO };
 
-        GGML_F16_VEC ax[GGML_F16_ARR];
-        GGML_F16_VEC ay[GGML_F16_ARR];
+        GGML_F16_DOT_VEC ax[GGML_F16_DOT_ARR];
+        GGML_F16_DOT_VEC ay[GGML_F16_DOT_ARR];
 
-        for (int i = 0; i < np; i += GGML_F16_STEP) {
-            for (int j = 0; j < GGML_F16_ARR; j++) {
-                ax[j] = GGML_F16_VEC_LOAD(x + i + j*GGML_F16_EPR, j);
-                ay[j] = GGML_F16_VEC_LOAD(y + i + j*GGML_F16_EPR, j);
+        for (int i = 0; i < np; i += GGML_F16_DOT_STEP) {
+            for (int j = 0; j < GGML_F16_DOT_ARR; j++) {
+                ax[j] = GGML_F16_DOT_VEC_LOAD(x + i + j*GGML_F16_DOT_EPR, j);
+                ay[j] = GGML_F16_DOT_VEC_LOAD(y + i + j*GGML_F16_DOT_EPR, j);
 
-                sum[j] = GGML_F16_VEC_FMA(sum[j], ax[j], ay[j]);
+                sum[j] = GGML_F16_DOT_VEC_FMA(sum[j], ax[j], ay[j]);
             }
         }
 
         // reduce sum0..sum3 to sum0
-        GGML_F16_VEC_REDUCE(sumf, sum);
+        GGML_F16_DOT_VEC_REDUCE(sumf, sum);
 
         // leftovers
         for (int i = np; i < n; ++i) {
@@ -401,6 +401,10 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     for (; i + 3 < n; i += 4) {
         vst1q_f32(y + i, ggml_v_silu(vld1q_f32(x + i)));
     }
+#elif defined(__VXE__) || defined(__VXE2__)
+    for (; i + 3 < n; i += 4) {
+        vec_xst(ggml_v_silu(vec_xl(0, x + i)), 0, y + i);
+    }
 #elif defined(__riscv_v_intrinsic)
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
@@ -438,6 +442,10 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
     for (; i + 3 < n; i += 4) {
         vst1q_f32(y + i, vmulq_f32(ggml_v_silu(vld1q_f32(x + i)), vld1q_f32(g + i)));
     }
+#elif defined(__VXE__) || defined(__VXE2__)
+    for (; i + 3 < n; i += 4) {
+        vec_xst(vec_mul(ggml_v_silu(vec_xl(0, x + i)), vec_xl(0, g + i)), 0, y + i);
+    }
 #elif defined(__riscv_v_intrinsic)
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
@@ -451,6 +459,92 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
         y[i] = ggml_silu_f32(x[i]) * g[i];
     }
 }
+
+#ifndef GGML_GELU_QUICK_FP16
+// computed in f32 without the fp16 table, which loses precision on f32 input
+void ggml_vec_gelu_quick_f32(const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    for (; i + 15 < n; i += 16) {
+        _mm512_storeu_ps(y + i, ggml_v_gelu_quick(_mm512_loadu_ps(x + i)));
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i, ggml_v_gelu_quick(_mm256_loadu_ps(x + i)));
+    }
+#elif defined(__SSE2__)
+    for (; i + 3 < n; i += 4) {
+        _mm_storeu_ps(y + i, ggml_v_gelu_quick(_mm_loadu_ps(x + i)));
+    }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svst1_f32(pg, y + i, ggml_v_gelu_quick(pg, svld1_f32(pg, x + i)));
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    for (; i + 3 < n; i += 4) {
+        vst1q_f32(y + i, ggml_v_gelu_quick(vld1q_f32(x + i)));
+    }
+#elif defined(__VXE__) || defined(__VXE2__)
+    for (; i + 3 < n; i += 4) {
+        vec_xst(ggml_v_gelu_quick(vec_xl(0, x + i)), 0, y + i);
+    }
+#elif defined(__riscv_v_intrinsic)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
+        vfloat32m2_t vy = ggml_v_gelu_quick_m2(vx, vl);
+        __riscv_vse32_v_f32m2(&y[i], vy, vl);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = ggml_gelu_quick_f32(x[i]);
+    }
+}
+
+void ggml_vec_geglu_quick_f32(const int n, float * y, const float * x, const float * g) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    for (; i + 15 < n; i += 16) {
+        _mm512_storeu_ps(y + i, _mm512_mul_ps(ggml_v_gelu_quick(_mm512_loadu_ps(x + i)), _mm512_loadu_ps(g + i)));
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i, _mm256_mul_ps(ggml_v_gelu_quick(_mm256_loadu_ps(x + i)), _mm256_loadu_ps(g + i)));
+    }
+#elif defined(__SSE2__)
+    for (; i + 3 < n; i += 4) {
+        _mm_storeu_ps(y + i, _mm_mul_ps(ggml_v_gelu_quick(_mm_loadu_ps(x + i)), _mm_loadu_ps(g + i)));
+    }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svst1_f32(pg, y + i, svmul_f32_x(pg, ggml_v_gelu_quick(pg, svld1_f32(pg, x + i)), svld1_f32(pg, g + i)));
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    for (; i + 3 < n; i += 4) {
+        vst1q_f32(y + i, vmulq_f32(ggml_v_gelu_quick(vld1q_f32(x + i)), vld1q_f32(g + i)));
+    }
+#elif defined(__VXE__) || defined(__VXE2__)
+    for (; i + 3 < n; i += 4) {
+        vec_xst(vec_mul(ggml_v_gelu_quick(vec_xl(0, x + i)), vec_xl(0, g + i)), 0, y + i);
+    }
+#elif defined(__riscv_v_intrinsic)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
+        vfloat32m2_t vg = __riscv_vle32_v_f32m2(&g[i], vl);
+        vfloat32m2_t vy = __riscv_vfmul_vv_f32m2(ggml_v_gelu_quick_m2(vx, vl), vg, vl);
+        __riscv_vse32_v_f32m2(&y[i], vy, vl);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = ggml_gelu_quick_f32(x[i]) * g[i];
+    }
+}
+#endif
 
 ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const float mean) {
     int i = 0;
@@ -580,6 +674,12 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
                                                 vdupq_n_f32(max)));
         vst1q_f32(y + i, val);
         sum += (ggml_float)vaddvq_f32(val);
+    }
+#elif defined(__VXE__) || defined(__VXE2__)
+    for (; i + 3 < n; i += 4) {
+        float32x4_t v_val = ggml_v_expf(vec_sub(vec_xl(0, x + i), vec_splats(max)));
+        vec_xst(v_val, 0, y + i);
+        sum += (ggml_float)vec_hsum_f32x4(v_val);
     }
 #elif defined(__riscv_v_intrinsic)
     vfloat64m1_t vsum = __riscv_vfmv_v_f_f64m1(0, 1);

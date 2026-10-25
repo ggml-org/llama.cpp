@@ -31,7 +31,7 @@
     ]
     && blas.meta.available,
   useCuda ? config.cudaSupport,
-  useMetalKit ? stdenv.isAarch64 && stdenv.isDarwin,
+  useMetalKit ? stdenv.hostPlatform.isAarch64 && stdenv.hostPlatform.isDarwin,
   # Increases the runtime closure size by ~700M
   useMpi ? false,
   useRocm ? config.rocmSupport,
@@ -92,7 +92,7 @@ let
 
   cudaBuildInputs = with cudaPackages; [
     cuda_cudart
-    cuda_cccl # <nv/target>
+    cccl # <nv/target>
     libcublas
   ];
 
@@ -166,7 +166,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   # `xcrun` is used find the path of the Metal compiler, which is varible
   # and not on $PATH
   # see https://github.com/ggml-org/llama.cpp/pull/6118 for discussion
-  __noChroot = effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders;
+  __noChroot = effectiveStdenv.hostPlatform.isDarwin && useMetalKit && precompileMetalShaders;
 
   nativeBuildInputs =
     [
@@ -181,10 +181,10 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       autoAddDriverRunpath
     ]
     ++ optionals (effectiveStdenv.hostPlatform.isGnu && enableStatic) [ glibc.static ]
-    ++ optionals (effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders) [ xcrunHost ];
+    ++ optionals (effectiveStdenv.hostPlatform.isDarwin && useMetalKit && precompileMetalShaders) [ xcrunHost ];
 
   buildInputs =
-    optionals effectiveStdenv.isDarwin darwinBuildInputs
+    optionals effectiveStdenv.hostPlatform.isDarwin darwinBuildInputs
     ++ optionals useCuda cudaBuildInputs
     ++ optionals useMpi [ mpi ]
     ++ optionals useRocm rocmBuildInputs
@@ -245,7 +245,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
 
     # Configurations that are known to result in build failures. Can be
     # overridden by importing Nixpkgs with `allowBroken = true`.
-    broken = (useMetalKit && !effectiveStdenv.isDarwin);
+    broken = (useMetalKit && !effectiveStdenv.hostPlatform.isDarwin);
 
     description = "Inference of LLaMA model in pure C/C++${descriptionSuffix}";
     homepage = "https://github.com/ggml-org/llama.cpp/";

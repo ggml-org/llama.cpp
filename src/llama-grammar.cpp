@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #define MAX_REPETITION_THRESHOLD 2000
+#define MAX_GRAMMAR_RECURSION_DEPTH 256
 //
 // helpers
 //
@@ -172,6 +173,7 @@ static std::pair<uint32_t, const char *> parse_char(const char * src) {
             case '"':
             case '[':
             case ']':
+            case '-':
                       return std::make_pair(src[1], src + 2);
             default:
                       throw std::runtime_error(std::string("unknown escape at ") + src);
@@ -193,7 +195,11 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
     if (*pos == '[') {
         pos++;
         const char * int_end = parse_int(pos);
-        uint32_t token_id = std::stoul(std::string(pos, int_end - pos));
+        unsigned long id = std::stoul(std::string(pos, int_end - pos));
+        if (id > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error(std::string("parsed token id is too big at ") + pos);
+        }
+        uint32_t token_id = static_cast<uint32_t>(id);
         pos = int_end;
         if (*pos != ']') {
             throw std::runtime_error(std::string("expecting ']' at ") + pos);
@@ -435,13 +441,14 @@ const char * llama_grammar_parser::parse_alternates(
         const char        * src,
         const std::string & rule_name,
         uint32_t            rule_id,
-        bool                is_nested) {
+        bool                is_nested,
+        uint32_t            depth) {
     llama_grammar_rule rule;
-    const char * pos = parse_sequence(src, rule_name, rule, is_nested);
+    const char * pos = parse_sequence(src, rule_name, rule, is_nested, depth);
     while (*pos == '|') {
         rule.push_back({LLAMA_GRETYPE_ALT, 0});
         pos = parse_space(pos + 1, true);
-        pos = parse_sequence(pos, rule_name, rule, is_nested);
+        pos = parse_sequence(pos, rule_name, rule, is_nested, depth);
     }
     rule.push_back({LLAMA_GRETYPE_END, 0});
     add_rule(rule_id, rule);
@@ -452,7 +459,8 @@ const char * llama_grammar_parser::parse_sequence(
         const char         * src,
         const std::string  & rule_name,
         llama_grammar_rule & rule,
-        bool               is_nested) {
+        bool               is_nested,
+        uint32_t           depth) {
     size_t last_sym_start = rule.size();
     const char * pos = src;
     uint64_t n_prev_rules = 1;
@@ -491,7 +499,7 @@ const char * llama_grammar_parser::parse_sequence(
             total_rules = min_times;
         }
 
-        if (n_prev_rules * total_rules >= MAX_REPETITION_THRESHOLD) {
+        if (n_prev_rules * total_rules > MAX_REPETITION_THRESHOLD) {
             throw std::runtime_error("number of rules that are going to be repeated multiplied by the new repetition exceeds sane defaults, please reduce the number of repetitions or rule complexity");
         }
 
@@ -590,11 +598,14 @@ const char * llama_grammar_parser::parse_sequence(
             n_prev_rules = 1;
             rule.push_back({LLAMA_GRETYPE_RULE_REF, ref_rule_id});
         } else if (*pos == '(') { // grouping
+            if (depth >= MAX_GRAMMAR_RECURSION_DEPTH) {
+                throw std::runtime_error("grammar recursion depth limit exceeded (max " + std::to_string(MAX_GRAMMAR_RECURSION_DEPTH) + "), please reduce nesting depth");
+            }
             // parse nested alternates into synthesized rule
             pos = parse_space(pos + 1, true);
             uint32_t n_rules_before = symbol_ids.size();
             uint32_t sub_rule_id = generate_symbol_id(rule_name);
-            pos = parse_alternates(pos, rule_name, sub_rule_id, true);
+            pos = parse_alternates(pos, rule_name, sub_rule_id, true, depth + 1);
             n_prev_rules = std::max(1u, (uint32_t)symbol_ids.size() - n_rules_before);
             last_sym_start = rule.size();
             // output reference to synthesized rule
@@ -870,17 +881,18 @@ static void llama_grammar_advance_stack(
     std::set<llama_grammar_stack, decltype(stack_cmp)> seen(stack_cmp);
 
     while (!todo.empty()) {
-        llama_grammar_stack curr_stack = std::move(todo.back());
+        llama_grammar_stack curr_stack_candidate = std::move(todo.back());
         todo.pop_back();
 
-        if (seen.find( curr_stack) != seen.end()) {
+        auto [curr_stack_it, inserted] = seen.insert(std::move(curr_stack_candidate));
+        if (!inserted) {
             continue;
         }
-        seen.insert(curr_stack);
+        const llama_grammar_stack & curr_stack = *curr_stack_it;
 
         if (curr_stack.empty()) {
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
-                new_stacks.emplace_back(std::move(curr_stack));
+                new_stacks.emplace_back(curr_stack);
             }
             continue;
         }
@@ -923,7 +935,7 @@ static void llama_grammar_advance_stack(
         case LLAMA_GRETYPE_TOKEN_NOT:
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
                 // only add the stack if it's not a duplicate of one we already have
-                new_stacks.emplace_back(std::move(curr_stack));
+                new_stacks.emplace_back(curr_stack);
             }
             break;
         default:

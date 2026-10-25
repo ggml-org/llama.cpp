@@ -5,10 +5,9 @@ enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 
 #define BYTE_HELPERS
-#include "common_decls.tmpl"
-
 #define FLASH_ATTN_SCALAR_KV
 #include "flash_attn_decls.tmpl"
+#include "common_decls.tmpl"
 
 // Default values
 // The actual values are defined in shader-lib.

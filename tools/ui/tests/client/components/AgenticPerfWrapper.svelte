@@ -7,10 +7,10 @@
 <Tooltip.Provider>
 	{#if perfState.message}
 		<ChatMessageAgenticContent
+			isLastAssistantMessage
+			isStreaming={perfState.isStreaming}
 			message={perfState.message}
 			toolMessages={perfState.toolMessages}
-			isStreaming={perfState.isStreaming}
-			isLastAssistantMessage
 		/>
 	{/if}
 </Tooltip.Provider>

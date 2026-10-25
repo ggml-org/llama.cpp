@@ -13,21 +13,21 @@
 
 {#if show}
 	<Button
-		variant="secondary"
-		size="icon"
+		aria-label="Previous"
 		class="absolute top-1/2 left-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
 		onclick={onPrev}
-		aria-label="Previous"
+		size="icon"
+		variant="secondary"
 	>
 		<ChevronLeft class="size-4" />
 	</Button>
 
 	<Button
-		variant="secondary"
-		size="icon"
+		aria-label="Next"
 		class="absolute top-1/2 right-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
 		onclick={onNext}
-		aria-label="Next"
+		size="icon"
+		variant="secondary"
 	>
 		<ChevronRight class="size-4" />
 	</Button>

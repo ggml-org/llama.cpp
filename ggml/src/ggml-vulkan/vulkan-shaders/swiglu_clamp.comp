@@ -1,0 +1,12 @@
+#version 450
+
+#include "glu_head.glsl"
+
+float op(float a, float b) {
+    float gate = min(a, p.limit);
+    float up = clamp(b, -p.limit, p.limit);
+
+    return gate / (1.0f + exp(-gate)) * up;
+}
+
+#include "glu_main.glsl"

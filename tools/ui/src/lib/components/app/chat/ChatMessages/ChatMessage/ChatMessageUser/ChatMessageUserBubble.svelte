@@ -54,7 +54,12 @@
 
 {#if attachments && attachments.length > 0}
 	<div class="mb-2 max-w-[80%]">
-		<ChatAttachmentsList {attachments} readonly imageHeight="h-40" />
+		<ChatAttachmentsList
+			{attachments}
+			imageHeight="max-h-40"
+			imageWidth="w-auto max-w-full"
+			readonly
+		/>
 	</div>
 {/if}
 

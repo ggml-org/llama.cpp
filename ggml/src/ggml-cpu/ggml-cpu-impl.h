@@ -78,7 +78,7 @@ struct ggml_compute_params {
 #if defined(__ARM_NEON)
 
 // ref: https://github.com/ggml-org/llama.cpp/pull/5404
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(__clang__)
 #define ggml_vld1q_u32(w,x,y,z) { ((w) + ((uint64_t)(x) << 32)), ((y) + ((uint64_t)(z) << 32)) }
 #else
 #define ggml_vld1q_u32(w,x,y,z) { (w), (x), (y), (z) }
@@ -390,16 +390,15 @@ typedef unsigned char uchar8x16_t __attribute__((vector_size(16)));
 typedef int8_t  int8x16_t __attribute__((vector_size(16)));
 typedef int16_t int16x8_t __attribute__((vector_size(16)));
 typedef int32_t int32x4_t __attribute__((vector_size(16)));
+typedef int64_t int64x2_t __attribute__((vector_size(16)));
 
 typedef uint8_t  uint8x16_t __attribute__((vector_size(16)));
 typedef uint16_t uint16x8_t __attribute__((vector_size(16)));
 typedef uint32_t uint32x4_t __attribute__((vector_size(16)));
+typedef uint64_t uint64x2_t __attribute__((vector_size(16)));
 
 typedef float  float32x4_t  __attribute__((vector_size(16)));
 typedef double double64x2_t __attribute__((vector_size(16)));
-
-typedef signed   long long long64x2_t  __attribute__((vector_size(16)));
-typedef unsigned long long ulong64x2_t __attribute__((vector_size(16)));
 
 typedef struct ggml_uint8x16x2_t {
     uint8x16_t val[2];
@@ -444,6 +443,13 @@ inline static ggml_int8x16x4_t ggml_vec_xl_s8x4(const int8_t * ptr) {
     return res;
 }
 
+// load 4 bytes and replicate them into all 4 word lanes
+inline static int8x16_t ggml_vec_xl_s8x4_splat(const int8_t * ptr) {
+    uint32_t tmp;
+    memcpy(&tmp, ptr, sizeof(tmp));
+    return (int8x16_t)vec_splats(tmp);
+}
+
 typedef struct ggml_int16x8x2_t {
     int16x8_t val[2];
 } ggml_int16x8x2_t;
@@ -457,31 +463,17 @@ inline static ggml_int16x8x2_t ggml_vec_xl_s16x2(const int16_t * ptr) {
     return res;
 }
 
-/*
-    ! WARNING: Very slow. Use vec_perm if possible. Refer to iq4_xs
-    !          or iq4_nl for example implementation.
-*/
-inline static int8x16_t ggml_vec_tbl(int8x16_t a, uint8x16_t b) {
-    int8x16_t res;
+// faster fp16 -> fp32 conversion using vector intrinsics
+// WARNING: fp16 inf converts into 65536.0f. use this only for finite values.
+inline static float32x4_t ggml_vec_xl_f16x4_finite(const ggml_fp16_t * x) {
+    uint64_t tmp;
+    memcpy(&tmp, x, sizeof(tmp));
 
-    res[ 0] = a[b[ 0]];
-    res[ 1] = a[b[ 1]];
-    res[ 2] = a[b[ 2]];
-    res[ 3] = a[b[ 3]];
-    res[ 4] = a[b[ 4]];
-    res[ 5] = a[b[ 5]];
-    res[ 6] = a[b[ 6]];
-    res[ 7] = a[b[ 7]];
-    res[ 8] = a[b[ 8]];
-    res[ 9] = a[b[ 9]];
-    res[10] = a[b[10]];
-    res[11] = a[b[11]];
-    res[12] = a[b[12]];
-    res[13] = a[b[13]];
-    res[14] = a[b[14]];
-    res[15] = a[b[15]];
-
-    return res;
+    const uint64x2_t  v_x    = { tmp, tmp };
+    const uint32x4_t  v_xh   = vec_unpackh((uint16x8_t)v_x);
+    const uint32x4_t  v_bits = vec_sl(vec_and(v_xh, vec_splats((uint32_t)0x7FFF)), 13);
+    const float32x4_t v_abs  = vec_mul((float32x4_t)v_bits, vec_splats(0x1.0p+112f));
+    return (float32x4_t)vec_or((uint32x4_t)v_abs, vec_sl(vec_and(v_xh, vec_splats((uint32_t)0x8000)), 16));
 }
 
 inline static int16x8_t vec_padd_s16(int16x8_t a, int16x8_t b) {
@@ -491,6 +483,11 @@ inline static int16x8_t vec_padd_s16(int16x8_t a, int16x8_t b) {
     const int16x8_t v_abo = vec_pack((int32x4_t)a, (int32x4_t)b);
     const int16x8_t v_abe = vec_perm(a, b, v_maske);
     return v_abo + v_abe;
+}
+
+inline static int32x4_t vec_paddl_s16(int16x8_t a) {
+    const int16x8_t v_ones = vec_splats((int16_t)1);
+    return vec_mule(a, v_ones) + vec_mulo(a, v_ones);
 }
 
 /**
@@ -506,7 +503,11 @@ inline static int32_t vec_hsum_i32x4(int32x4_t v) {
     return v_temp[0] + v_temp[1];
 }
 
-inline static int32x4_t ggml_vec_dot(int32x4_t acc, int8x16_t a, int8x16_t b) {
+inline static int16x8_t ggml_vec_dot_s16(int16x8_t acc, int8x16_t a, int8x16_t b) {
+    return vec_meadd(a, b, vec_moadd(a, b, acc));
+}
+
+inline static int32x4_t ggml_vec_dot_s32(int32x4_t acc, int8x16_t a, int8x16_t b) {
     const int16x8_t p = vec_mule(a, b) + vec_mulo(a, b);
     return acc + (vec_unpackh(p) + vec_unpackl(p));
 }

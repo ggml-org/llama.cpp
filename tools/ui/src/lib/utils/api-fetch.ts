@@ -1,7 +1,6 @@
 import { getAuthHeaders, getJsonHeaders } from './api-headers';
 import { base } from '$app/paths';
-import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
-import { UrlProtocol } from '$lib/enums';
+import { API_ABSOLUTE_URL_PROTOCOLS, ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
 
 /**
  * API Fetch Utilities
@@ -50,7 +49,7 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
  * @example
  * ```typescript
  * // GET request
- * const models = await apiFetch<ApiModelListResponse>('/v1/models');
+ * const models = await apiFetch<ApiModelsListResponse>('/v1/models');
  *
  * // POST request
  * const result = await apiFetch<ApiResponse>('/models/load', {
@@ -63,10 +62,8 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
-	const url =
-		path.startsWith(UrlProtocol.HTTP) || path.startsWith(UrlProtocol.HTTPS)
-			? path
-			: `${base}${path}`;
+	// absolute URLs with an allowed protocol pass through untouched; relative paths get the base prefix
+	const url = API_ABSOLUTE_URL_PROTOCOLS.some((p) => path.startsWith(p)) ? path : `${base}${path}`;
 
 	let response;
 
@@ -117,28 +114,7 @@ export async function apiFetchWithParams<T>(
 		}
 	}
 
-	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
-	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
-	const headers = { ...baseHeaders, ...customHeaders };
-
-	let response;
-
-	try {
-		response = await fetch(url.toString(), {
-			...fetchOptions,
-			headers
-		});
-	} catch (e) {
-		throw new Error(beautifyNetworkError(e));
-	}
-
-	if (!response.ok) {
-		const errorMessage = await parseErrorMessage(response);
-
-		throw new ApiError(errorMessage, response.status);
-	}
-
-	return response.json() as Promise<T>;
+	return apiFetch<T>(url.toString(), options);
 }
 
 /**
@@ -159,6 +135,40 @@ export async function apiPost<T, B = unknown>(
 		method: 'POST',
 		...options
 	});
+}
+
+/**
+ * Send a DELETE request to an API endpoint, optionally with query parameters.
+ *
+ * @param path - API path (query string is appended if `params` is provided)
+ * @param params - Optional record of query parameters
+ * @param options - Additional fetch options
+ * @returns Parsed JSON response
+ */
+export async function apiDelete<T>(
+	path: string,
+	params?: Record<string, string>,
+	options: ApiFetchOptions = {}
+): Promise<T> {
+	// the query is appended to the path so `apiFetch` applies its base-path prefix;
+	// `apiFetchWithParams` resolves an absolute URL and would bypass it
+	let query = '';
+
+	if (params) {
+		const search = new URLSearchParams();
+
+		for (const [key, value] of Object.entries(params)) {
+			if (value !== undefined && value !== null) {
+				search.set(key, value);
+			}
+		}
+
+		const qs = search.toString();
+
+		if (qs) query = `?${qs}`;
+	}
+
+	return apiFetch<T>(`${path}${query}`, { ...options, method: 'DELETE' });
 }
 
 /**

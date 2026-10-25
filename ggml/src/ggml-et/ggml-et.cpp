@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #if __has_include(<filesystem>)
@@ -32,9 +33,7 @@ namespace fs = std::experimental::filesystem;
  * @brief prints the metadata of a single tensorf
  */
 static void ggml_et_dump_tensor_metadata(const ggml_tensor * ggtensor, size_t indent_level, const char * title) {
-    char * spaces = (char *) alloca(indent_level + 1);
-    memset(spaces, ' ', indent_level);
-    spaces[indent_level] = '\0';
+    std::string spaces(indent_level, ' ');
     fprintf(stderr,
             "%s%s: %s\n"
             "%s  type: %s\n"
@@ -43,10 +42,10 @@ static void ggml_et_dump_tensor_metadata(const ggml_tensor * ggtensor, size_t in
             "%s  op: %s\n"
             "%s  data: %p\n"
             "%s  src0: %p\n",
-            spaces, title, ggtensor->name, spaces, ggml_type_name(ggtensor->type), spaces, (long long) ggtensor->ne[0],
-            (long long) ggtensor->ne[1], (long long) ggtensor->ne[2], (long long) ggtensor->ne[3], spaces,
-            ggtensor->nb[0], ggtensor->nb[1], ggtensor->nb[2], ggtensor->nb[3], spaces, ggml_op_name(ggtensor->op),
-            spaces, ggtensor->data, spaces, (void *) ggtensor->src[0]);
+            spaces.c_str(), title, ggtensor->name, spaces.c_str(), ggml_type_name(ggtensor->type), spaces.c_str(), (long long) ggtensor->ne[0],
+            (long long) ggtensor->ne[1], (long long) ggtensor->ne[2], (long long) ggtensor->ne[3], spaces.c_str(),
+            ggtensor->nb[0], ggtensor->nb[1], ggtensor->nb[2], ggtensor->nb[3], spaces.c_str(), ggml_op_name(ggtensor->op),
+            spaces.c_str(), ggtensor->data, spaces.c_str(), (void *) ggtensor->src[0]);
 }
 
 /*
@@ -440,12 +439,14 @@ static bool ggml_backend_et_buffer_type_is_host(ggml_backend_buffer_type_t buft)
 }
 
 static const struct ggml_backend_buffer_type_i ggml_backend_et_buffer_type_i = {
-    /* .get_name         = */ ggml_backend_et_buffer_type_get_name,
-    /* .alloc_buffer     = */ ggml_backend_et_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_et_buffer_type_get_alignment,
-    /* .get_max_size     = */ ggml_backend_et_buffer_type_get_max_size,
-    /* .get_alloc_size   = */ ggml_backend_et_buffer_type_get_alloc_size,
-    /* .is_host          = */ ggml_backend_et_buffer_type_is_host,
+    /* .get_name            = */ ggml_backend_et_buffer_type_get_name,
+    /* .alloc_buffer        = */ ggml_backend_et_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n      = */ NULL,
+    /* .get_alignment       = */ ggml_backend_et_buffer_type_get_alignment,
+    /* .get_max_size        = */ ggml_backend_et_buffer_type_get_max_size,
+    /* .get_alloc_size      = */ ggml_backend_et_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n    = */ NULL,
+    /* .is_host             = */ ggml_backend_et_buffer_type_is_host,
 };
 
 static const char * ggml_backend_et_get_name(ggml_backend_t backend) {
@@ -1061,9 +1062,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const bool zero_view_offset = op->src[0]->view_src == nullptr || op->src[0]->view_offs == 0;
                 const bool has_sections = ggml_get_op_params_i32(op, 11) > 0 || ggml_get_op_params_i32(op, 12) > 0 ||
                                           ggml_get_op_params_i32(op, 13) > 0;
+                // FIXME: support ggml_rope_set_offset
+                const bool zero_rot_offset  = ggml_get_op_params_i32(op, 15) == 0;
 
                 supported =
-                    zero_view_offset && ndims <= 512 &&
+                    zero_view_offset && zero_rot_offset && ndims <= 512 &&
                     (is_normal || (is_neox && ndims % 16 == 0) || (is_imrope && ndims % 16 == 0 && has_sections));
             } else {
                 supported = false;
@@ -1208,7 +1211,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Check GLU variant - support SWIGLU, SWIGLU_OAI, GEGLU, GEGLU_ERF, GEGLU_QUICK, REGLU
                 ggml_glu_op glu_type          = ggml_get_glu_op(op);
                 const bool  supported_variant = glu_type == GGML_GLU_OP_SWIGLU || glu_type == GGML_GLU_OP_SWIGLU_OAI ||
-                                                glu_type == GGML_GLU_OP_GEGLU || glu_type == GGML_GLU_OP_GEGLU_ERF ||
+                                                glu_type == GGML_GLU_OP_SWIGLU_CLAMP || glu_type == GGML_GLU_OP_GEGLU ||
+                                                glu_type == GGML_GLU_OP_GEGLU_ERF ||
                                                 glu_type == GGML_GLU_OP_GEGLU_QUICK || glu_type == GGML_GLU_OP_REGLU;
 
                 if (op->src[1]) {

@@ -27,7 +27,9 @@
 				outline:
 					'shadow-sm hover:text-accent-foreground hover:bg-muted-foreground/10 backdrop-blur-sm dark:border-input border',
 				secondary:
-					'bg-background dark:bg-muted-foreground/15 dark:text-secondary-foreground shadow-sm text-foreground hover:bg-muted-foreground/20 dark:hover:bg-muted-foreground/25'
+					'bg-muted/30 dark:bg-muted-foreground/15 dark:text-secondary-foreground shadow-sm border-muted border text-foreground hover:bg-muted dark:hover:bg-muted-foreground/25',
+				tertiary:
+					'bg-muted/60 dark:bg-muted/75 shadow-sm border border-border/30 text-foreground hover:bg-muted/80 dark:border-border/20 dark:hover:bg-muted'
 			}
 		}
 	});
@@ -59,10 +61,10 @@
 {#if href}
 	<a
 		bind:this={ref}
-		data-slot="button"
-		class={cn(buttonVariants({ size, variant }), className)}
-		href={disabled ? undefined : href}
 		aria-disabled={disabled}
+		class={cn(buttonVariants({ size, variant }), className)}
+		data-slot="button"
+		href={disabled ? undefined : href}
 		role={disabled ? 'link' : undefined}
 		tabindex={disabled ? -1 : undefined}
 		{...restProps}
@@ -72,10 +74,10 @@
 {:else}
 	<button
 		bind:this={ref}
-		data-slot="button"
 		class={cn(buttonVariants({ size, variant }), className)}
-		{type}
+		data-slot="button"
 		{disabled}
+		{type}
 		{...restProps}
 	>
 		{@render children?.()}

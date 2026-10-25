@@ -1,5 +1,7 @@
 // Meta parser for `exec_shell_command` tool calls. Surfaces the
 // command text from args `command` / `cmd` / `shell_command` aliases.
+// Args are parsed partially so the title can render the command while
+// it is still streaming.
 // The exit-status and error parsing live in their own utilities
 // (`parse-exec-shell-status.ts` / `parse-exec-shell-error.ts`) - this
 // file only deals with what's strictly about *calling* the tool, since
@@ -14,7 +16,7 @@ export type ExecShellCommandMeta = {
 };
 
 export function parseExecShellCommandMeta(section: AgenticSection): ExecShellCommandMeta | null {
-	const args = parseToolArgs(BuiltInTool.EXEC_SHELL_COMMAND, section);
+	const args = parseToolArgs(BuiltInTool.SERVER_EXEC_SHELL_COMMAND, section, { partial: true });
 
 	if (!args) return null;
 

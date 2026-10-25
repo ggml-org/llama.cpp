@@ -10,12 +10,7 @@ void llama_model_muse_glimmer::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    uint32_t swa_period = 4;
-    if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false)) {
-        hparams.set_swa_pattern(swa_period);
-    } else {
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
-    }
+    load_swa_pattern(ml, 4);
 
     switch (hparams.n_layer()) {
         case 52: type = LLM_TYPE_30B; break;
@@ -199,8 +194,6 @@ llama_model_muse_glimmer::graph::graph(const llama_model & model, const llm_grap
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 std::unique_ptr<llm_graph_context> llama_model_muse_glimmer::build_arch_graph(const llm_graph_params & params) const {

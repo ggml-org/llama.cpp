@@ -25,7 +25,7 @@ class MiniMaxText01Model(TextModel):
         # they get in the way of the token sampling process and must be suppressed
 
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        tokenizer_vocab_size = tokenizer.vocab_size
+        tokenizer_vocab_size = tokenizer.vocab_size  # ty: ignore[unresolved-attribute]
 
         with open(self.dir_model / "model.safetensors.index.json", "r", encoding="utf-8") as f:
             weight_map = json.load(f)["weight_map"]

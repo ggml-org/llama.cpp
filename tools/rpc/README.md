@@ -97,14 +97,41 @@ By default, the cache is stored in the `$HOME/.cache/llama.cpp/rpc` directory an
 
 ### RDMA transport
 
-On Linux systems with RoCEv2-capable NICs (e.g. Mellanox ConnectX), the RPC backend can use RDMA instead of TCP for lower latency and higher throughput. The transport is negotiated automatically -- no changes to command-line usage are required.
+The RPC backend can use RDMA instead of TCP for lower latency and higher throughput. The transport is negotiated during the initial handshake -- no changes to command-line usage are required, and the connection falls back to TCP unless both peers can use RDMA.
 
-RDMA is enabled by default when `libibverbs` is found at build time.
+Two providers are supported, each enabled by default when its library is found at build time:
+
+- **Linux**: RoCEv2-capable NICs (e.g. Mellanox ConnectX), via `libibverbs`.
+- **macOS**: RDMA over Thunderbolt on Apple silicon Macs with Thunderbolt 5, via `librdma`. Requires macOS 26.2 or later, with RDMA enabled once from macOS Recovery via `rdma_ctl enable`. See [TN3205](https://developer.apple.com/documentation/technotes/tn3205-low-latency-communication-with-rdma-over-thunderbolt).
+
+RDMA is point-to-point, so each side uses the local device whose GID matches the address the connection was made on. Connect over the RDMA-capable link -- with Thunderbolt, use the peer's Thunderbolt address in `--rpc`; a connection made over another interface stays on TCP.
+
+To force plain TCP without rebuilding, set `GGML_RPC_NO_RDMA` on either peer:
+```bash
+$ GGML_RPC_NO_RDMA=1 bin/ggml-rpc-server
+```
 
 ### Troubleshooting
 
-Use the `GGML_RPC_DEBUG` environment variable to enable debug messages from `ggml-rpc-server`:
+The `GGML_RPC_DEBUG` environment variable controls the verbosity of the logs emitted by the RPC backend.
+It can be set on the server, on the client (e.g. `llama-cli`), or both. Larger values produce more detailed output:
+
+- unset / `0` - disabled (only warnings and errors are printed)
+- `1` - high-level events: connections, handshake, buffer allocations, graph computes, cache evictions
+- `2` - per-command trace: every RPC message sent/received, tensor transfers, cache hits/misses
+- `3` - fine detail: per-command timings, graph node dumps, transport byte counts
+
+Non-numeric values are treated as `1`.
+
 ```bash
 $ GGML_RPC_DEBUG=1 bin/ggml-rpc-server
+```
+
+> [!NOTE]
+> The debug levels are emitted as `ggml` debug records, which `llama.cpp` applications drop unless the
+> global verbosity threshold is raised. On the client, pass `-lv 5` together with `GGML_RPC_DEBUG`:
+
+```bash
+$ GGML_RPC_DEBUG=2 bin/llama-cli -hf ggml-org/gemma-3-1b-it-GGUF -ngl 99 --rpc 192.168.88.10:50052 -lv 5
 ```
 

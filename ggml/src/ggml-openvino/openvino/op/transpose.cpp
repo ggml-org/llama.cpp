@@ -14,9 +14,7 @@ OutputVector translate_transpose(const NodeContext & context) {
 
     // Compute permute order from input/output shape and stride information
     // so it adapts to different input and output layouts.
-    auto input_shape = context.get_input_shape(0).to_shape();
     auto input_stride = context.get_input_stride(0);
-    auto output_shape = context.get_output_shape().to_shape();
     auto output_stride = context.get_output_stride();
 
     // Compute permute order by matching output and input stride rankings.

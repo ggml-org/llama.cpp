@@ -9,7 +9,7 @@ void llama_model_step35::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_rot_full = hparams.n_rot_full / 2;
 
     // MoE + SWA parameters
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
@@ -23,14 +23,10 @@ void llama_model_step35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,  hparams.n_swa);
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,        hparams.rope_freq_base_train_swa, false);
 
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
 
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer(), false);
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer(), false);
-
-    // NextN/MTP (Step3p5): extra decoder block appended beyond the main stack.
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer_all, false);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer_all, false);
 
     switch (hparams.n_layer()) {
         case 45: type = LLM_TYPE_196B_A11B; break;
@@ -41,18 +37,9 @@ void llama_model_step35::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    // Trunk-only: the GGUF declares MTP layers in metadata but the actual MTP
-    // tensors live in a separate file (e.g. user split target/draft). Mark
-    // MTP tensors NOT_REQUIRED so the trunk loads cleanly.
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    const int trunk_flags = mtp_only  ? TENSOR_NOT_REQUIRED : 0;
-    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
-
-    if (!ml.load_mtp) {
-        mtp_flags |= TENSOR_SKIP;
-    }
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -103,7 +90,7 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, TENSOR_NOT_REQUIRED);
 
         // MoE routed experts + selection bias (router_bias)
-        const int64_t n_ff_exp = hparams.n_ff_exp;
+        const int64_t n_ff_exp = hparams.n_ff_exp();
         layer.ffn_gate_inp      = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
         layer.ffn_gate_exps     = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp,   n_expert}, TENSOR_NOT_REQUIRED);
         layer.ffn_down_exps     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, TENSOR_NOT_REQUIRED);
@@ -154,7 +141,7 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, TENSOR_NOT_REQUIRED);
 
         // MoE routed experts + selection bias (router_bias)
-        const int64_t n_ff_exp = hparams.n_ff_exp;
+        const int64_t n_ff_exp = hparams.n_ff_exp();
         layer.ffn_gate_inp      = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
         layer.ffn_gate_exps     = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp,   n_expert}, TENSOR_NOT_REQUIRED);
         layer.ffn_down_exps     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, TENSOR_NOT_REQUIRED);
@@ -220,9 +207,11 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
         {
             cur = build_norm(cur, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head_k, n_head_l,
+                    n_embd_head_k, n_head_kv_l,
+                    n_embd_head_v, n_head_kv_l,
+                    il, false);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -289,7 +278,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "attn_proj", il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -351,7 +340,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -362,8 +351,6 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for Step3p5 (MoE)
@@ -391,19 +378,22 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     const float freq_base_l  = model.get_rope_freq_base(cparams, il);
     const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
-    auto inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
 
-    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
     ggml_set_input(inp->embd);
-    ggml_set_name(inp->embd, "mtp_h_input");
+
+    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+    ggml_set_input(inp->h);
+    ggml_set_name(inp->h, "mtp_h_input");
 
     ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
 
-    ggml_tensor * h_input  = inp->embd;
-    ggml_tensor * tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    ggml_tensor * h_input  = inp->h;
+    ggml_tensor * tok_embd = ubatch.token ? ggml_get_rows(ctx0, tok_embd_w, inp->tokens) : inp->embd;
     cb(tok_embd, "mtp_tok_embd", il);
 
     res->add_input(std::move(inp));
@@ -429,9 +419,11 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
 
-    ggml_tensor * Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
-    ggml_tensor * Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
-    ggml_tensor * Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
+    auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur,
+            n_embd_head_k, n_head_l,
+            n_embd_head_k, n_head_kv_l,
+            n_embd_head_v, n_head_kv_l,
+            il, false);
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
     cb(Vcur, "mtp_Vcur", il);
@@ -556,5 +548,4 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

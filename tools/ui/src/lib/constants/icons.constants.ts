@@ -1,17 +1,37 @@
 /**
- * Icon mappings for file types and model modalities
+ * Icon and modality mappings for file types and models
  * Centralized configuration to ensure consistent icon usage across the app
  */
 
 import {
+	CircleAlert as LoadFailedIcon,
+	Compass as DiscoverIcon,
+	Eject as UnloadIcon,
 	Eye as VisionIcon,
 	File as FileIcon,
 	FileText as FileTextIcon,
+	FolderOpen as CwdCommandIcon,
 	Image as ImageIcon,
+	Lightbulb as ReasoningIcon,
+	Loader2 as LoadingIcon,
 	Mic as AudioIcon,
-	Video as VideoIcon
+	Package as ModelIcon,
+	Pause as PauseDownloadIcon,
+	Play as ResumeDownloadIcon,
+	Power as LoadIcon,
+	RotateCw as RetryIcon,
+	Sparkles as PromptCommandIcon,
+	Video as VideoIcon,
+	Wrench as ToolUseIcon
 } from '@lucide/svelte';
-import { FileTypeCategory, ModelModality } from '$lib/enums';
+import {
+	ChatFormCommandAction,
+	FileTypeCategory,
+	ModelCapability,
+	ModelModality
+} from '$lib/enums';
+import type { ModelCapabilities, ModelModalities } from '$lib/types/models';
+import type { Component } from 'svelte';
 
 export const FILE_TYPE_ICONS = {
 	[FileTypeCategory.AUDIO]: AudioIcon,
@@ -23,6 +43,12 @@ export const FILE_TYPE_ICONS = {
 
 export const DEFAULT_FILE_ICON = FileIcon;
 
+/** The mark for a model, wherever one is listed. */
+export const MODEL_ICON = ModelIcon;
+
+/** The mark for the Discover Models surface and its entry points. */
+export const DISCOVER_ICON = DiscoverIcon;
+
 export const MODALITY_ICONS = {
 	[ModelModality.AUDIO]: AudioIcon,
 	[ModelModality.VIDEO]: VideoIcon,
@@ -33,6 +59,69 @@ export const MODALITY_LABELS = {
 	[ModelModality.AUDIO]: 'Audio',
 	[ModelModality.VIDEO]: 'Video',
 	[ModelModality.VISION]: 'Vision'
+} as const;
+
+/** Maps an input ModelModality to the boolean flag it drives on the ModelModalities type */
+export const MODALITY_FLAG_KEYS: Record<
+	Exclude<ModelModality, ModelModality.TEXT>,
+	keyof ModelModalities
+> = {
+	[ModelModality.AUDIO]: 'audio',
+	[ModelModality.VIDEO]: 'video',
+	[ModelModality.VISION]: 'vision'
+};
+
+/** Modalities in the order the filters and the model cards list them. */
+export const MODALITY_ORDER: Exclude<ModelModality, ModelModality.TEXT>[] = [
+	ModelModality.VISION,
+	ModelModality.VIDEO,
+	ModelModality.AUDIO
+];
+
+/** Boolean flag a modality drives on the ModelModalities type. */
+export type ModalityKey = (typeof MODALITY_FLAG_KEYS)[keyof typeof MODALITY_FLAG_KEYS];
+
+/** Modality flags a model can carry, in display order. */
+export const MODALITY_KEYS: ModalityKey[] = MODALITY_ORDER.map(
+	(modality) => MODALITY_FLAG_KEYS[modality]
+);
+
+export const CAPABILITY_ICONS: Record<ModelCapability, Component> = {
+	[ModelCapability.REASONING]: ReasoningIcon,
+	[ModelCapability.TOOL_USE]: ToolUseIcon
+} as const;
+
+export const CAPABILITY_LABELS: Record<ModelCapability, string> = {
+	[ModelCapability.REASONING]: 'Reasoning',
+	[ModelCapability.TOOL_USE]: 'Tool use'
+} as const;
+
+/** Maps a ModelCapability to the boolean flag it drives on the ModelCapabilities type */
+export const CAPABILITY_FLAG_KEYS: Record<ModelCapability, keyof ModelCapabilities> = {
+	[ModelCapability.REASONING]: 'reasoning',
+	[ModelCapability.TOOL_USE]: 'tools'
+};
+
+/** Icons of the slash-command picker, one per chat-form command. */
+export const CHAT_FORM_COMMAND_ICONS: Record<ChatFormCommandAction, Component> = {
+	[ChatFormCommandAction.CWD]: CwdCommandIcon,
+	[ChatFormCommandAction.MODEL]: MODEL_ICON,
+	[ChatFormCommandAction.PROMPT]: PromptCommandIcon
+};
+
+/** Icons of the download control a manager row shows while it downloads. */
+export const MODEL_DOWNLOAD_ICONS = {
+	pause: PauseDownloadIcon,
+	resume: ResumeDownloadIcon
+} as const;
+
+/** Icons the model load control shows for its states and actions. */
+export const MODEL_LOAD_ICONS = {
+	failed: LoadFailedIcon,
+	load: LoadIcon,
+	loading: LoadingIcon,
+	retry: RetryIcon,
+	unload: UnloadIcon
 } as const;
 
 // Shared SVG icon strings for copy and preview buttons

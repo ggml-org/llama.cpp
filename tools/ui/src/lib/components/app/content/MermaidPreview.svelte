@@ -103,22 +103,22 @@
 	<div
 		class="mermaid-preview-diagram transform-origin-center inline-block min-h-fit min-w-fit will-change-transform {isDragging &&
 			'select-none'}"
+		onpointerdown={handlePointerDown}
+		onpointerleave={handlePointerUp}
+		onpointermove={handlePointerMove}
+		onpointerup={handlePointerUp}
 		style="transform: translate({translateX}px, {translateY}px) scale({scale}); cursor: {isDragging
 			? 'grabbing'
 			: 'grab'};"
-		onpointerdown={handlePointerDown}
-		onpointermove={handlePointerMove}
-		onpointerup={handlePointerUp}
-		onpointerleave={handlePointerUp}
 	>
 		<div bind:this={svgHost}></div>
 	</div>
 
 	<MermaidPreviewControls
-		{scale}
-		{svgHtml}
+		onResetView={resetView}
 		onZoomIn={zoomIn}
 		onZoomOut={zoomOut}
-		onResetView={resetView}
+		{scale}
+		{svgHtml}
 	/>
 </div>

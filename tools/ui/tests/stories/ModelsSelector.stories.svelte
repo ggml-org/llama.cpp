@@ -1,10 +1,10 @@
-<script module lang="ts">
+<script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ModelsSelectorList from '$lib/components/app/models/ModelsSelectorList.svelte';
-	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelectorOption.svelte';
-	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/models/utils';
+	import ModelsSelectorList from '$lib/components/app/models/ModelsSelector/ModelsSelectorList.svelte';
+	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelector/ModelsSelectorOption.svelte';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores/models/index.svelte';
+	import type { GroupedModelOptions, ModelItem } from '$lib/utils';
 
 	const { Story } = defineMeta({
 		parameters: {
@@ -60,24 +60,23 @@
 	mockModelsStore();
 
 	const loadedModels: ModelItem[] = [
-		{ flatIndex: 0, option: mockModel('llama3.1-8b', 'Llama-3.1-8B-Instruct', 'meta') },
-		{ flatIndex: 1, option: mockModel('mistral-7b', 'Mistral-7B-v0.3', 'mistralai') }
+		{ option: mockModel('llama3.1-8b', 'Llama-3.1-8B-Instruct', 'meta') },
+		{ option: mockModel('mistral-7b', 'Mistral-7B-v0.3', 'mistralai') }
 	];
 
 	const favoriteModels: ModelItem[] = [
-		{ flatIndex: 2, option: mockModel('qwen2.5-7b', 'Qwen2.5-7B-Instruct', 'Qwen') },
-		{ flatIndex: 3, option: mockModel('llama3.2-3b', 'Llama-3.2-3B-Instruct', 'meta') }
+		{ option: mockModel('qwen2.5-7b', 'Qwen2.5-7B-Instruct', 'Qwen') },
+		{ option: mockModel('llama3.2-3b', 'Llama-3.2-3B-Instruct', 'meta') }
 	];
 
 	const availableModels: ModelItem[] = [
 		{
-			flatIndex: 4,
 			option: mockModel('deepseek-coder-6.7b', 'DeepSeek-Coder-6.7B', 'deepseek', ['coding'])
 		},
-		{ flatIndex: 5, option: mockModel('gemma-2-9b', 'Gemma-2-9B-IT', 'google') },
-		{ flatIndex: 6, option: mockModel('phi-3-mini', 'Phi-3-mini-4k', 'microsoft') },
-		{ flatIndex: 7, option: mockModel('codellama-7b', 'CodeLlama-7B', 'codellama', ['coding']) },
-		{ flatIndex: 8, option: mockModel('neural-chat-7b', 'Neural-Chat-7B-v3-3', 'intel') }
+		{ option: mockModel('gemma-2-9b', 'Gemma-2-9B-IT', 'google') },
+		{ option: mockModel('phi-3-mini', 'Phi-3-mini-4k', 'microsoft') },
+		{ option: mockModel('codellama-7b', 'CodeLlama-7B', 'codellama', ['coding']) },
+		{ option: mockModel('neural-chat-7b', 'Neural-Chat-7B-v3-3', 'intel') }
 	];
 
 	const groupedOptions: GroupedModelOptions = {
@@ -102,9 +101,7 @@
 				items: [availableModels[4]],
 				orgName: 'intel'
 			}
-		],
-		favorites: favoriteModels,
-		loaded: loadedModels
+		]
 	};
 
 	function handleSelect(modelId: string) {
@@ -122,11 +119,11 @@
 <Story name="List">
 	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
 		<ModelsSelectorList
-			groups={groupedOptions}
-			currentModel={selectedModel}
 			{activeId}
+			currentModel={selectedModel}
+			favorites={favoriteModels}
+			groups={groupedOptions}
 			onSelect={handleSelect}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 		/>
 	</div>
 </Story>
@@ -134,15 +131,11 @@
 <Story name="SingleLoaded">
 	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
 		<ModelsSelectorList
-			groups={{
-				available: [],
-				favorites: [],
-				loaded: [loadedModels[0]]
-			}}
-			currentModel={null}
 			activeId={null}
+			currentModel={null}
+			groups={{ available: [] }}
+			loaded={[loadedModels[0]]}
 			onSelect={handleSelect}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 		/>
 	</div>
 </Story>
@@ -150,15 +143,11 @@
 <Story name="WithFavoritesOnly">
 	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
 		<ModelsSelectorList
-			groups={{
-				available: [],
-				favorites: favoriteModels,
-				loaded: []
-			}}
-			currentModel={null}
 			activeId={null}
+			currentModel={null}
+			favorites={favoriteModels}
+			groups={{ available: [] }}
 			onSelect={handleSelect}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 		/>
 	</div>
 </Story>
@@ -168,55 +157,60 @@
 		<div class="px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none">
 			Server model states
 		</div>
+
 		<ModelsSelectorOption
+			hideOrgName={true}
+			isFav={false}
+			isHighlighted={false}
+			isSelected={false}
+			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
 			option={mockModel('model-idle', 'Model (idle)', 'meta')}
-			isSelected={false}
-			isHighlighted={false}
-			isFav={false}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
-			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
+			hideOrgName={true}
+			isFav={false}
+			isHighlighted={false}
+			isSelected={false}
+			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
 			option={mockModel('model-loading', 'Model (loading)', 'meta')}
-			isSelected={false}
-			isHighlighted={false}
-			isFav={false}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
-			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
+			hideOrgName={true}
+			isFav={false}
+			isHighlighted={false}
+			isSelected={false}
+			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
 			option={mockModel('model-loaded', 'Model (loaded)', 'meta')}
-			isSelected={false}
-			isHighlighted={false}
-			isFav={false}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
-			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
+			hideOrgName={true}
+			isFav={false}
+			isHighlighted={false}
+			isSelected={false}
+			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
 			option={mockModel('model-sleeping', 'Model (sleeping)', 'meta')}
-			isSelected={false}
-			isHighlighted={false}
-			isFav={false}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
-			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
-			option={mockModel('model-failed', 'Model (failed)', 'meta')}
-			isSelected={false}
-			isHighlighted={false}
-			isFav={false}
 			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
+			isFav={false}
+			isHighlighted={false}
+			isSelected={false}
 			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
+			option={mockModel('model-failed', 'Model (failed)', 'meta')}
 		/>
 	</div>
 </Story>
@@ -226,45 +220,49 @@
 		<div class="px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none">
 			Selection states
 		</div>
+
 		<ModelsSelectorOption
+			hideOrgName={true}
+			isFav={false}
+			isHighlighted={false}
+			isSelected={false}
+			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
 			option={mockModel('normal-model', 'Normal Model', 'meta')}
-			isSelected={false}
-			isHighlighted={false}
-			isFav={false}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
-			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
-			option={mockModel('selected-model', 'Selected Model', 'meta')}
+			hideOrgName={true}
+			isFav={false}
+			isHighlighted={false}
 			isSelected={true}
-			isHighlighted={false}
-			isFav={false}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
+			option={mockModel('selected-model', 'Selected Model', 'meta')}
 		/>
+
 		<ModelsSelectorOption
-			option={mockModel('highlighted-model', 'Highlighted Model', 'meta')}
-			isSelected={false}
+			hideOrgName={true}
+			isFav={false}
 			isHighlighted={true}
-			isFav={false}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
-			onKeyDown={() => {}}
-		/>
-		<ModelsSelectorOption
-			option={mockModel('fav-model', 'Favorite Model', 'Qwen')}
 			isSelected={false}
-			isHighlighted={false}
-			isFav={true}
-			hideOrgName={true}
-			onSelect={() => {}}
-			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
+			option={mockModel('highlighted-model', 'Highlighted Model', 'meta')}
+		/>
+
+		<ModelsSelectorOption
+			hideOrgName={true}
+			isFav={true}
+			isHighlighted={false}
+			isSelected={false}
+			onKeyDown={() => {}}
+			onMouseEnter={() => {}}
+			onSelect={() => {}}
+			option={mockModel('fav-model', 'Favorite Model', 'Qwen')}
 		/>
 	</div>
 </Story>

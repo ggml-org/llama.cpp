@@ -15,7 +15,7 @@ import type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile
 } from './database';
-import type { MessageRole } from '$lib/enums';
+import type { MessageRole, ToolSource } from '$lib/enums';
 import { AgenticSectionType, ContinueIntentKind, ToolCallType } from '$lib/enums';
 
 /**
@@ -162,6 +162,12 @@ export interface AgenticFlowOptions {
 /**
  * Parameters for starting an agentic flow
  */
+/** Per-conversation tool policy, captured at flow start */
+export interface AgenticToolPolicy {
+	disabledToolCategories: ToolSource[];
+	disabledTools: string[];
+}
+
 export interface AgenticFlowParams {
 	conversationId: string;
 	/** ID of the flow's first assistant message, used to keep its stats live */
@@ -170,7 +176,7 @@ export interface AgenticFlowParams {
 	options?: AgenticFlowOptions;
 	callbacks: AgenticFlowCallbacks;
 	signal?: AbortSignal;
-	perChatOverrides?: McpServerOverride[];
+	toolPolicy?: AgenticToolPolicy;
 }
 
 /**
@@ -205,7 +211,7 @@ export interface AgenticSection {
 	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
 	 *  downstream consumers correlate a section with the agentic loop's
 	 *  currently-executing tool, e.g. to drive live-streaming UI state
-	 *  by matching against agenticStore.executingToolCallId. */
+	 *  by matching against agenticStore.getExecutingToolCallId. */
 	toolCallId?: string;
 	wasInterrupted?: boolean;
 }

@@ -3,8 +3,7 @@ export {
 	AttachmentType,
 	AttachmentMenuItemId,
 	AttachmentItemEnabledWhen,
-	AttachmentAction,
-	AttachmentItemVisibleWhen
+	AttachmentAction
 } from './attachment.enums';
 
 export {
@@ -58,6 +57,8 @@ export {
 	SpecialFileType
 } from './files.enums';
 
+export { HfEntryType, HfModelSort, SidecarForm } from './huggingface.enums';
+
 export {
 	MCPConnectionPhase,
 	MCPLogLevel,
@@ -68,7 +69,22 @@ export {
 	JsonSchemaType
 } from './mcp.enums';
 
-export { ModelModality } from './model.enums';
+export {
+	ModelAuxSidecar,
+	ModelCapability,
+	ModelDraftSidecar,
+	ModelModality,
+	ModelSelectableFileKind
+} from './model.enums';
+
+export {
+	ModelDownloadConfirmAction,
+	ModelDownloadStopRequest,
+	ModelGroupKind,
+	ModelRowDownloadState,
+	ModelsTableGroupKind,
+	ModelsTableSortKey
+} from './model.enums';
 
 export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 
@@ -79,6 +95,8 @@ export {
 	ColorMode,
 	HtmlInputType,
 	McpPromptVariant,
+	ScrollCarouselVariant,
+	SidebarAction,
 	TooltipSide,
 	UrlProtocol
 } from './ui.enums';

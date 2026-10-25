@@ -5,6 +5,7 @@
 
 #define MMQ
 #define NEEDS_IQ1S_GRID_GPU
+#define KVALUES_IQ4NL_I8
 #define B_TYPE block_q8_1_x4
 
 #include "mul_mat_vec_base.glsl"
@@ -15,7 +16,7 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 #define K_PER_ITER 16
 #elif defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
 #define K_PER_ITER 8
-#elif defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M)
+#elif defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M) || defined(DATA_A_IQ4_XS)
 #define K_PER_ITER 32
 #else
 #error unimplemented

@@ -27,7 +27,7 @@ static inline void hmx_init_column_scales(void *out_scales, HVX_Vector v_scale) 
 // vscatter offsets for fused dequant+transpose: write K-values directly to [K][N] tile.
 // word[i] = i*128 maps K-row-pair i to byte offset i*128.
 // Column offset (n*4) is added at runtime.  Entries 0..15 cover one tile (region 2047);
-// entries 16..31 cover the next adjacent tile (region 4095) — pick region size at the
+// entries 16..31 cover the next adjacent tile (region 4095) - pick region size at the
 // call site to scatter into one tile (masked) or two contiguous tiles (unmasked).
 static const int32_t hmx_transpose_scatter_offsets[32] __attribute__((aligned(VLEN))) = {
     0 * 128,  1 * 128,  2 * 128,  3 * 128,  4 * 128,  5 * 128,  6 * 128,  7 * 128,  8 * 128,  9 * 128,  10 * 128,
@@ -73,19 +73,20 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
         for (uint32_t r = start_row; r < end_row; r += 2) {
             const uint32_t   ct             = r / HMX_FP16_TILE_N_ROWS;
             const uint32_t   local_r        = r % HMX_FP16_TILE_N_ROWS;
+            const bool       row0_valid     = r < n_cols;
             const bool       next_row_valid = (r + 1) < end_row && (r + 1) < n_cols;
             const HVX_Vector v_off0         = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
             const HVX_Vector v_off1         = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
 
             __fp16 * tile_base = vtcm_dst + (size_t) ct * n_k_tiles * HMX_FP16_TILE_N_ELMS;
-            const uint8_t * p0 = (const uint8_t *) (vtcm_src + r * src_stride);
+            const uint8_t * p0 = row0_valid ? (const uint8_t *) (vtcm_src + r * src_stride) : NULL;
             const uint8_t * p1 = next_row_valid ? (const uint8_t *) (vtcm_src + (r + 1) * src_stride) : NULL;
 
-            assert(hex_is_aligned(p0, 128));
-            assert(hex_is_aligned(p1, 128));
+            assert(!p0 || hex_is_aligned(p0, 128));
+            assert(!p1 || hex_is_aligned(p1, 128));
             assert(c_byte_step % 128 == 0);
 
-            if (p1) {
+            if (p0 && p1) {
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmem(p0); p0 += c_byte_step;
                     HVX_Vector v1 = hvx_vmem(p1); p1 += c_byte_step;
@@ -96,9 +97,12 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             } else {
                 const HVX_Vector vzero = Q6_V_vzero();
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
-                    HVX_Vector v0 = hvx_vmem(p0); p0 += c_byte_step;
+                    HVX_Vector v0 = p0 ? hvx_vmem(p0) : vzero;
+                    if (p0) p0 += c_byte_step;
+                    HVX_Vector v1 = p1 ? hvx_vmem(p1) : vzero;
+                    if (p1) p1 += c_byte_step;
                     Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off0, v0);
-                    Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off1, vzero);
+                    Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off1, v1);
                     tile_base += dst_step;
                 }
             }
@@ -113,15 +117,16 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
         for (uint32_t r = start_row; r < end_row; r += 2) {
             const uint32_t   ct             = r / HMX_FP16_TILE_N_ROWS;
             const uint32_t   local_r        = r % HMX_FP16_TILE_N_ROWS;
+            const bool       row0_valid     = r < n_cols;
             const bool       next_row_valid = (r + 1) < end_row && (r + 1) < n_cols;
             const HVX_Vector v_off0         = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
             const HVX_Vector v_off1         = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
 
             __fp16 * tile_base = vtcm_dst + (size_t) ct * n_k_tiles * HMX_FP16_TILE_N_ELMS;
-            const uint8_t * p0 = (const uint8_t *) (vtcm_src + r * src_stride);
+            const uint8_t * p0 = row0_valid ? (const uint8_t *) (vtcm_src + r * src_stride) : NULL;
             const uint8_t * p1 = next_row_valid ? (const uint8_t *) (vtcm_src + (r + 1) * src_stride) : NULL;
 
-            if (p1) {
+            if (p0 && p1) {
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmemu(p0); p0 += c_byte_step;
                     HVX_Vector v1 = hvx_vmemu(p1); p1 += c_byte_step;
@@ -132,9 +137,12 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             } else {
                 const HVX_Vector vzero = Q6_V_vzero();
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
-                    HVX_Vector v0 = hvx_vmemu(p0); p0 += c_byte_step;
+                    HVX_Vector v0 = p0 ? hvx_vmemu(p0) : vzero;
+                    if (p0) p0 += c_byte_step;
+                    HVX_Vector v1 = p1 ? hvx_vmemu(p1) : vzero;
+                    if (p1) p1 += c_byte_step;
                     Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off0, v0);
-                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off1, vzero);
+                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off1, v1);
                     tile_base += dst_step;
                 }
             }
@@ -198,16 +206,16 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
 }
 
 // --- HMX inline asm macros for load-store packetization ---
-#define HMX_LOAD_MPY_F16(act, wt, range) \
-    "{\n" \
+#define HMX_LOAD_MPY_F16(act, wt, range)              \
+    "{\n"                                             \
     "    activation.hf = mxmem(" act ", " range ")\n" \
-    "    weight.hf = mxmem(" wt ", " range ")\n" \
+    "    weight.hf = mxmem(" wt ", " range ")\n"      \
     "}\n"
 
-#define HMX_LOAD_MPY_DEEP_F16(act, wt, range) \
-    "{\n" \
+#define HMX_LOAD_MPY_DEEP_F16(act, wt, range)              \
+    "{\n"                                                  \
     "    activation.hf = mxmem(" act ", " range "):deep\n" \
-    "    weight.hf = mxmem(" wt ", " range ")\n" \
+    "    weight.hf = mxmem(" wt ", " range ")\n"           \
     "}\n"
 
 #define HMX_STORE_AFTER_F16(out, scale_reg) \

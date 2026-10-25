@@ -101,6 +101,14 @@ struct clip_graph {
 
     ggml_tensor * build_inp_raw(int channels = 3);
 
+    // qwen-vl style temporal merge, handles n_batch == 1 (image) or n_batch == 2 (2 video frames)
+    // requires patch_embeddings_0 and patch_embeddings_1; returns tensor with shape [w, h, n_embd, 1]
+    ggml_tensor * build_inp_temporal_merge();
+
+    // f16 if flash attn is enabled, set it with set_input_attn_mask()
+    // idx is only needed when the graph has more than one mask
+    ggml_tensor * build_inp_attn_mask(int64_t n_kv, int64_t n_q, int idx = 0);
+
     ggml_tensor * build_norm(
             ggml_tensor * cur,
             ggml_tensor * mw,
@@ -120,6 +128,12 @@ struct clip_graph {
             ffn_op_type type_op,
             int il) const;
 
+    ggml_tensor * build_moe_ffn(
+            ggml_tensor * cur,
+            const clip_layer & layer,
+            ffn_op_type type_op,
+            int il) const;
+
     ggml_tensor * build_attn(
             ggml_tensor * wo,
             ggml_tensor * wo_b,
@@ -131,9 +145,15 @@ struct clip_graph {
             int il,
             ggml_tensor * sinks = nullptr) const;
 
-    // implementation of the 2D RoPE without adding a new op in ggml
-    // this is not efficient (use double the memory), but works on all backends
-    // TODO: there was a more efficient which relies on ggml_view and ggml_rope_ext_inplace, but the rope inplace does not work well with non-contiguous tensors ; we should fix that and revert back to the original implementation in https://github.com/ggml-org/llama.cpp/pull/13065
+    // implementation of the 2D RoPE using two ggml_rope_ext calls
+    //
+    // unlike GGML_ROPE_TYPE_VISION which forces NEOX ordering, this rotates adjacent pairs (normal ordering)
+    //
+    // example:
+    //  given a single head with size = 8 --> [00000000]
+    //  dims [0, 4) rotate with pos_a, dims [4, 8) rotate with pos_b --> [aaaabbbb]
+    //  interleave_freq = false --> both halves use the same inv_freq set (like GGML_ROPE_TYPE_VISION)
+    //  interleave_freq = true  --> first half uses even inv_freq, second half uses odd inv_freq (used by pixtral)
     ggml_tensor * build_rope_2d(
         ggml_context * ctx0,
         ggml_tensor * cur,
@@ -150,4 +170,7 @@ struct clip_graph {
     // Generic function to stack frames for audio processing
     // Abstracts out the StackAudioFrames logic used by ultravox
     ggml_tensor * build_stack(ggml_tensor * cur, int32_t stack_factor, int32_t n_embed);
+
+    // append the separators of img.suffix_type after the image tokens
+    ggml_tensor * build_suffix(ggml_tensor * cur);
 };

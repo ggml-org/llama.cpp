@@ -2,7 +2,14 @@
 
 #extension GL_EXT_control_flow_attributes : enable
 
+#ifdef USE_SUBGROUPS
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_vote : enable
+#endif
+
 #include "types.glsl"
+#include "utils.glsl"
 
 layout (push_constant) uniform parameter
 {
@@ -11,41 +18,135 @@ layout (push_constant) uniform parameter
     uint32_t nb00;
     uint32_t nb01;
     uint32_t a_offset;
+    uint32_t n_experts;
+    uint32_t ne00mp;
+    uint32_t ne00L;
+    uint32_t row_tile_size;
+    uint32_t row_ids_offset;
+    uint32_t ne0_dst;
+    uint32_t stride_dst;
+    uint32_t batch_stride_dst;
 } p;
 
 #define BLOCK_SIZE 256
+#define EXPERTS_PER_CHUNK 1024
 
 layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {uint data_a[];};
 layout (binding = 1) writeonly buffer D {uint data_d[];};
+layout (binding = 2) writeonly buffer DST {float data_dst[];};
 
-shared uint vals[BLOCK_SIZE];
+shared uint vals[EXPERTS_PER_CHUNK];
+shared uint offsets[EXPERTS_PER_CHUNK];
+shared uint cursors[EXPERTS_PER_CHUNK];
 
-void main() {
-    const uint expert_id = gl_WorkGroupID.x;
+// data_d[0] is the tile count. Each tile has (expert, valid rows).
+// Packed (token << 16) | slot row ids start at p.row_ids_offset, with each expert on a tile boundary.
+void write_tiles(uint expert, uint count, uint tile_begin, uint n_tiles) {
+    for (uint t = 0; t < n_tiles; ++t) {
+        const uint descriptor = 1 + 2 * (tile_begin + t);
+        data_d[descriptor] = expert;
+        data_d[descriptor + 1] = min(p.row_tile_size, count - t * p.row_tile_size);
+    }
+}
+
+// the matmul writes only the rows that an expert owns, so zero the rows of the skipped slots
+void zero_skipped_rows() {
     const uint num_elements = p.ne00 * p.ne01;
     const uint tid = gl_LocalInvocationID.x;
 
-    uint count = 0;
-    for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
-        const uint i01 = idx / p.ne00;
-        const uint i00 = idx % p.ne00;
-        const uint a = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
+    for (uint idx = 0; idx < num_elements; idx++) {
+        const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+        const uint i00 = idx - i01 * p.ne00;
 
-        count += uint(a == expert_id);
+        if (int(data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00]) != -1) {
+            continue;
+        }
+
+        const uint d_off = i00 * p.stride_dst + i01 * p.batch_stride_dst;
+        for (uint i = tid; i < p.ne0_dst; i += BLOCK_SIZE) {
+            data_dst[d_off + i] = 0.0f;
+        }
     }
+}
 
-    vals[tid] = count;
-    barrier();
-    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
-        if (tid < s) {
-            vals[tid] += vals[tid + s];
+void main() {
+    const uint num_elements = p.ne00 * p.ne01;
+    const uint tid = gl_LocalInvocationID.x;
+    const uint tile_shift = findLSB(p.row_tile_size);
+    uint total_tiles = 0;
+#ifdef USE_SUBGROUPS
+    // Use the subgroup that contains invocation 0.
+    const bool prefix_subgroup = subgroupAny(tid == 0);
+#endif
+
+    for (uint expert_base = 0; expert_base < p.n_experts;) {
+        const uint n_experts = min(EXPERTS_PER_CHUNK, p.n_experts - expert_base);
+        for (uint e = tid; e < n_experts; e += BLOCK_SIZE) {
+            vals[e] = 0;
         }
         barrier();
+
+        for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
+            const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+            const uint i00 = idx - i01 * p.ne00;
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00] - expert_base;
+            if (expert < n_experts) {
+                atomicAdd(vals[expert], 1);
+            }
+        }
+        barrier();
+
+#ifdef USE_SUBGROUPS
+        if (prefix_subgroup) {
+            const uint n_experts_padded = (n_experts + gl_SubgroupSize - 1) & ~(gl_SubgroupSize - 1);
+            uint base = subgroupAdd(tid == 0 ? total_tiles : 0u);
+            for (uint e = gl_SubgroupInvocationID; e < n_experts_padded; e += gl_SubgroupSize) {
+                const bool in_range = e < n_experts;
+                const uint count = in_range ? vals[e] : 0;
+                const uint n_tiles = (count + p.row_tile_size - 1) >> tile_shift;
+                const uint tile_begin = base + subgroupExclusiveAdd(n_tiles);
+                if (in_range) {
+                    offsets[e] = tile_begin * p.row_tile_size;
+                    cursors[e] = 0;
+                    write_tiles(expert_base + e, count, tile_begin, n_tiles);
+                }
+                base += subgroupAdd(n_tiles);
+            }
+            if (tid == 0) {
+                total_tiles = base;
+            }
+        }
+#else
+        if (tid == 0) {
+            for (uint e = 0; e < n_experts; ++e) {
+                const uint count = vals[e];
+                const uint n_tiles = (count + p.row_tile_size - 1) >> tile_shift;
+                offsets[e] = total_tiles * p.row_tile_size;
+                cursors[e] = 0;
+                write_tiles(expert_base + e, count, total_tiles, n_tiles);
+                total_tiles += n_tiles;
+            }
+        }
+#endif
+        barrier();
+
+        for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
+            const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+            const uint i00 = idx - i01 * p.ne00;
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00] - expert_base;
+            if (expert < n_experts) {
+                const uint row = atomicAdd(cursors[expert], 1);
+                data_d[p.row_ids_offset + offsets[expert] + row] = (i01 << 16) | i00;
+            }
+        }
+        // The next chunk clears vals. Scatter uses only offsets and cursors.
+        expert_base += n_experts;
+    }
+    if (tid == 0) {
+        data_d[0] = total_tiles;
     }
 
-    if (tid == 0) {
-        data_d[expert_id] = vals[0];
-    }
+    zero_skipped_rows();
 }

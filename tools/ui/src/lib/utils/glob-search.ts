@@ -42,7 +42,7 @@ export async function runGlobSearch(
 	}
 
 	const res = await ToolsService.executeToolRaw(
-		BuiltInTool.FILE_GLOB_SEARCH,
+		BuiltInTool.SERVER_FILE_GLOB_SEARCH,
 		{ include: args.include, limit, max_depth: args.maxDepth, path: args.path, type },
 		signal
 	);

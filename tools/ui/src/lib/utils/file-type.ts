@@ -51,6 +51,7 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		// Video
 		case MimeTypeVideo.MP4:
 		case MimeTypeVideo.OGG:
+		case MimeTypeVideo.WEBM:
 			return FileTypeCategory.VIDEO;
 
 		// PDF

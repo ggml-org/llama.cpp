@@ -14,9 +14,11 @@ export type {
 	ApiModelLoadStage,
 	ApiModelsSseProgress,
 	ApiModelsSseData,
+	ApiModelsSseDownloadProgressData,
 	ApiModelsSseEvent,
+	ApiModelsDownloadRequest,
+	ApiModelsDownloadResponse,
 	ApiModelDetails,
-	ApiModelListResponse,
 	ApiLlamaCppServerProps,
 	ApiChatCompletionRequest,
 	ApiChatCompletionToolCallFunctionDelta,
@@ -26,17 +28,28 @@ export type {
 	ApiChatCompletionResponse,
 	ApiSlotData,
 	ApiProcessingState,
-	ApiRouterModelMeta,
-	ApiRouterModelsLoadRequest,
-	ApiRouterModelsLoadResponse,
-	ApiRouterModelsStatusRequest,
-	ApiRouterModelsStatusResponse,
-	ApiRouterModelsListResponse,
-	ApiRouterModelsUnloadRequest,
-	ApiRouterModelsUnloadResponse,
+	ApiModelsLoadResponse,
+	ApiModelsListResponse,
+	ApiModelsUnloadResponse,
 	AudioInputFormat,
 	ApiStreamSession
 } from './api';
+
+// HuggingFace types
+export type {
+	HfCatalogBuild,
+	HfCatalogEntry,
+	HfCatalogSize,
+	HfModelApiResponse,
+	HfModelCardData,
+	HfModelDetails,
+	HfModelDetailInfo,
+	HfModelGguf,
+	HfModelInfo,
+	HfModelSearchParams,
+	HfModelSibling,
+	HfModelSiblingRef
+} from './huggingface';
 
 // Chat types
 export type {
@@ -89,11 +102,26 @@ export type {
 
 // Model types
 export type {
+	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadEntry,
+	ModelDownloadFileProgress,
+	ModelDownloadProgress,
 	ModelLoadProgress,
+	ModelSidecarBadge,
 	ModalityCapabilities
 } from './models';
+
+// Models discover types
+export type {
+	ModelBitDepthRow,
+	ModelCompanionDraft,
+	ModelDownloadEntryState,
+	ModelQuantChip,
+	ModelQuantOption,
+	ModelSelectableFile
+} from './models-discover';
 
 // Settings types
 export type {
@@ -147,7 +175,7 @@ export type {
 	ServerStatus,
 	ToolCallParams,
 	ToolExecutionResult,
-	ServerBuiltinToolInfo,
+	ServerToolInfo,
 	Tool,
 	Prompt,
 	GetPromptResult,
@@ -208,7 +236,16 @@ export type {
 export type { DesktopIconStripItem } from './navigation';
 
 // Tools types
-export type { ToolEntry, ToolGroup, BuiltinToolUiEntry } from './tools';
+export type {
+	EditFileEdit,
+	EditFileMeta,
+	EditFileTitleMeta,
+	ToolEntry,
+	ToolGroup,
+	ToolUiEntry,
+	WriteFileMeta,
+	WriteFileTitleMeta
+} from './tools';
 
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';

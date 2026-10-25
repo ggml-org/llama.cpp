@@ -8,14 +8,14 @@
 		MarkdownContent
 	} from '$lib/components/app';
 	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
-	import { agenticStore, settingsStore } from '$lib/stores';
+	import { agenticStore, conversationsStore, settingsStore } from '$lib/stores';
 	import type {
 		AgenticSection,
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
-	import { deriveAgenticSections } from '$lib/utils';
+	import { deriveAgenticSections, isSectionExpandedByDefault } from '$lib/utils';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -34,6 +34,7 @@
 	let expandedStates: Record<number, boolean> = $state({});
 
 	const showThoughtInProgress = $derived(Boolean(settingsStore.config.showThoughtInProgress));
+	const showToolCallInProgress = $derived(Boolean(settingsStore.config.showToolCallInProgress));
 	const alwaysShowToolCallContent = $derived(
 		Boolean(settingsStore.config.alwaysShowToolCallContent)
 	);
@@ -43,51 +44,46 @@
 	);
 
 	const hasReasoningError = $derived(
-		isLastAssistantMessage ? !!agenticStore.lastError(message.convId) : false
+		isLastAssistantMessage ? !!agenticStore.getLastError(message.convId) : false
 	);
-
-	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
 		isStreaming && isLastAssistantMessage
-			? agenticStore.pendingPermissionRequest(message.convId)
+			? agenticStore.getPendingPermissionRequest(message.convId)
 			: null
 	);
 
-	let prevPendingRef: typeof pendingPermission = null;
-	$effect(() => {
-		if (pendingPermission !== prevPendingRef) {
-			prevPendingRef = pendingPermission;
+	// dismissal applies to the request object, so the next request ( new
+	// identity ) shows the card again without any reset bookkeeping
+	let dismissedPermission: typeof pendingPermission = $state(null);
 
-			if (pendingPermission) {
-				permissionDismissed = false;
-			}
-		}
-	});
+	const visiblePermission = $derived(
+		pendingPermission && dismissedPermission !== pendingPermission ? pendingPermission : null
+	);
 
 	function handlePermission(decision: ToolPermissionDecision) {
-		permissionDismissed = true;
+		dismissedPermission = pendingPermission;
 		agenticStore.resolvePermission(message.convId, decision);
 	}
 
-	let continueDismissed = $state(false);
-
 	const pendingContinue = $derived(
 		isStreaming && isLastAssistantMessage
-			? agenticStore.pendingContinueRequest(message.convId)
+			? agenticStore.getPendingContinueRequest(message.convId)
 			: false
 	);
 
-	let prevContinueRef = false;
-	$effect(() => {
-		if (pendingContinue !== prevContinueRef) {
-			prevContinueRef = pendingContinue;
+	let continueDismissed = $state(false);
 
-			if (pendingContinue) {
-				continueDismissed = false;
-			}
+	// the continue request is a plain boolean, so there is no identity to
+	// compare against; clear the dismissal whenever no request is pending so
+	// the next one starts from a clean state
+	$effect(() => {
+		if (!pendingContinue) {
+			continueDismissed = false;
 		}
 	});
+
+	const showContinue = $derived(Boolean(pendingContinue) && !continueDismissed);
 
 	function handleContinue(shouldContinue: boolean) {
 		continueDismissed = true;
@@ -97,7 +93,15 @@
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	const currentlyExecutingToolCallId = $derived(
-		isStreaming ? agenticStore.executingToolCallId(message.convId) : null
+		isStreaming ? agenticStore.getExecutingToolCallId(message.convId) : null
+	);
+
+	// Cwd the agentic loop passes to tool calls in this conversation; the exec
+	// block shows it until the result message persists the real one.
+	const conversationCwd = $derived(
+		conversationsStore.activeConversation?.id === message.convId
+			? conversationsStore.activeConversation?.cwd
+			: undefined
 	);
 
 	type TurnGroup = {
@@ -137,28 +141,17 @@
 		return groups;
 	});
 
-	function getDefaultExpanded(section: AgenticSection): boolean {
-		if (
-			section.type === AgenticSectionType.TOOL_CALL ||
-			section.type === AgenticSectionType.TOOL_CALL_PENDING ||
-			section.type === AgenticSectionType.TOOL_CALL_STREAMING
-		) {
-			return alwaysShowToolCallContent;
-		}
-
-		if (section.type === AgenticSectionType.REASONING_PENDING) {
-			return showThoughtInProgress;
-		}
-
-		return false;
-	}
-
 	function isExpanded(index: number, section: AgenticSection): boolean {
 		if (expandedStates[index] !== undefined) {
 			return expandedStates[index];
 		}
 
-		return getDefaultExpanded(section);
+		return isSectionExpandedByDefault(section, {
+			alwaysShowToolCallContent,
+			executingToolCallId: currentlyExecutingToolCallId,
+			showThoughtInProgress,
+			showToolCallInProgress
+		});
 	}
 
 	function toggleExpanded(index: number, section: AgenticSection) {
@@ -181,26 +174,27 @@
 {#snippet renderSection(section: AgenticSection, index: number)}
 	{#if section.type === AgenticSectionType.TEXT}
 		<div class="agentic-text">
-			<MarkdownContent content={section.content} attachments={message?.extra} />
+			<MarkdownContent attachments={message?.extra} content={section.content} />
 		</div>
 	{:else if section.type === AgenticSectionType.REASONING || section.type === AgenticSectionType.REASONING_PENDING}
 		<ChatMessageReasoningBlock
-			{section}
-			open={isExpanded(index, section)}
-			{isStreaming}
-			{hasReasoningError}
 			attachments={message?.extra}
+			{hasReasoningError}
+			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
+			open={isExpanded(index, section)}
+			{section}
 		/>
 	{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING || section.type === AgenticSectionType.TOOL_CALL_STREAMING}
 		<ChatMessageToolCallBlock
-			{section}
-			open={isExpanded(index, section)}
-			{isStreaming}
+			attachments={section.toolResultExtras}
+			{conversationCwd}
 			isExecuting={section.toolCallId !== undefined &&
 				section.toolCallId === currentlyExecutingToolCallId}
-			attachments={message?.extra}
+			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
+			open={isExpanded(index, section)}
+			{section}
 		/>
 	{/if}
 {/snippet}
@@ -218,15 +212,15 @@
 				{#if turnStats && showAgenticTurnStats}
 					<div class="turn-stats transition-opacity duration-150 mt-1 mb-4">
 						<ChatMessageStatistics
-							promptTokens={turnStats.llm.prompt_n}
-							promptMs={turnStats.llm.prompt_ms}
-							predictedTokens={turnStats.llm.predicted_n}
-							predictedMs={turnStats.llm.predicted_ms}
 							agenticTimings={turnStats.toolCalls.length > 0
 								? buildTurnAgenticTimings(turnStats)
 								: undefined}
-							initialView={ChatMessageStatsView.GENERATION}
 							hideSummary
+							initialView={ChatMessageStatsView.GENERATION}
+							predictedMs={turnStats.llm.predicted_ms}
+							predictedTokens={turnStats.llm.predicted_n}
+							promptMs={turnStats.llm.prompt_ms}
+							promptTokens={turnStats.llm.prompt_n}
 						/>
 					</div>
 				{/if}
@@ -238,15 +232,15 @@
 		{/each}
 	{/if}
 
-	{#if pendingPermission && !permissionDismissed}
+	{#if visiblePermission}
 		<ChatMessageActionCardPermissionRequest
-			toolName={pendingPermission.toolName}
-			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
+			serverLabel={visiblePermission.serverLabel}
+			toolName={visiblePermission.toolName}
 		/>
 	{/if}
 
-	{#if pendingContinue && !continueDismissed}
+	{#if showContinue}
 		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>

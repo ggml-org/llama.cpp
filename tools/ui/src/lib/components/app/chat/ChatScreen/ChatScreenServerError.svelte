@@ -8,7 +8,7 @@
 	let isLoadingModel = $derived(serverStore.status === 503);
 </script>
 
-{#if hasError}
+{#if hasError || isLoadingModel}
 	<div class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1">
 		<Alert.Root variant={isLoadingModel ? 'default' : 'destructive'}>
 			{#if isLoadingModel}
@@ -22,9 +22,9 @@
 
 				{#if !isLoadingModel}
 					<button
-						onclick={() => serverStore.fetch()}
-						disabled={serverStore.loading}
 						class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
+						disabled={serverStore.loading}
+						onclick={() => serverStore.fetch()}
 					>
 						<RefreshCw class="h-3 w-3 {serverStore.loading ? 'animate-spin' : ''}" />
 						{serverStore.loading ? 'Retrying...' : 'Retry'}

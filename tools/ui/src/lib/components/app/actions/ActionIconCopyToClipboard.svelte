@@ -10,9 +10,9 @@
 </script>
 
 <ActionIcon
-	icon={Copy}
-	tooltip={ariaLabel}
-	iconSize={ICON_CLASS_DEFAULT}
 	disabled={!canCopy}
+	icon={Copy}
+	iconSize={ICON_CLASS_DEFAULT}
 	onclick={() => canCopy && copyToClipboard(text)}
+	tooltip={ariaLabel}
 />

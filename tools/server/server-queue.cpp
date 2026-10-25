@@ -3,6 +3,7 @@
 
 #include "log.h"
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
@@ -20,6 +21,10 @@
 // server_queue
 //
 
+static bool task_resets_idle_timer(server_task_type type) {
+    return type != SERVER_TASK_TYPE_METRICS;
+}
+
 int server_queue::post(server_task && task, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     GGML_ASSERT(task.id != -1);
@@ -27,20 +32,24 @@ int server_queue::post(server_task && task, bool front) {
     if (task.type == SERVER_TASK_TYPE_CANCEL) {
         cleanup_pending_task(task.id_target);
     }
-    const int task_id = task.id;
+    const int  task_id     = task.id;
+    const bool reset_timer = task_resets_idle_timer(task.type);
     QUE_DBG("new task, id = %d, front = %d\n", task_id, front);
     if (front) {
         queue_tasks.push_front(std::move(task));
     } else {
         queue_tasks.push_back(std::move(task));
     }
-    time_last_task = ggml_time_ms();
+    if (reset_timer) {
+        time_last_task = ggml_time_ms();
+    }
     condition_tasks.notify_one();
     return task_id;
 }
 
 int server_queue::post(std::vector<server_task> && tasks, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
+    bool reset_timer = false;
     for (auto & task : tasks) {
         if (task.id == -1) {
             task.id = id++;
@@ -49,6 +58,7 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
         if (task.type == SERVER_TASK_TYPE_CANCEL) {
             cleanup_pending_task(task.id_target);
         }
+        reset_timer |= task_resets_idle_timer(task.type);
         QUE_DBG("new task, id = %d/%d, front = %d\n", task.id, (int) tasks.size(), front);
         if (front) {
             queue_tasks.push_front(std::move(task));
@@ -56,7 +66,9 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
             queue_tasks.push_back(std::move(task));
         }
     }
-    time_last_task = ggml_time_ms();
+    if (reset_timer) {
+        time_last_task = ggml_time_ms();
+    }
     condition_tasks.notify_one();
     return 0;
 }
@@ -294,11 +306,14 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
         QUE_DBG("%s", "update slots\n");
 
         // this will run the main inference process for all slots
+        const int64_t t_update_slots = ggml_time_ms();
         callback_update_slots();
         {
             // update_slots() may take a while to finish, we need to make sure it's not counted as idle
+            // shift instead of reset, so that non-task_resets_idle_timer tasks do not delay the sleep
             std::unique_lock<std::mutex> lock(mutex_tasks);
-            time_last_task = ggml_time_ms();
+            const int64_t now = ggml_time_ms();
+            time_last_task = std::min(now, time_last_task + (now - t_update_slots));
         }
 
         QUE_DBG("%s", "waiting for new tasks\n");
@@ -312,7 +327,10 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
             if (should_sleep()) {
                 QUE_INF("%s", "entering sleeping state\n");
                 sleeping = true;
-                callback_sleeping_state(true);
+                // Call order cb0 -> cb1 -> cb{N}
+                for (auto & cb : callback_sleeping_state) {
+                    cb(true);
+                }
                 req_stop_sleeping = false;
                 // wait until we are requested to exit sleeping state
                 condition_tasks.wait(lock, [&]{
@@ -323,7 +341,10 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
                 }
                 QUE_INF("%s", "exiting sleeping state\n");
                 req_stop_sleeping = false;
-                callback_sleeping_state(false);
+                // Call order cb{N} -> cb1 -> cb0
+                for (size_t i = callback_sleeping_state.size(); i > 0; i--) {
+                    callback_sleeping_state[i - 1](false);
+                }
                 sleeping = false;
                 time_last_task = ggml_time_ms();
                 condition_tasks.notify_all(); // notify wait_until_no_sleep()
@@ -427,6 +448,7 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
 }
 
 server_task_result_ptr server_response::recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout);
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
 
@@ -438,7 +460,7 @@ server_task_result_ptr server_response::recv_with_timeout(const std::unordered_s
             }
         }
 
-        std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::seconds(timeout));
+        std::cv_status cr_res = condition_results.wait_until(lock, deadline);
         if (!running) {
             RES_DBG("%s : queue result stop\n", __func__);
             std::terminate(); // we cannot return here since the caller is HTTP code
@@ -496,23 +518,23 @@ void server_response_reader::post_task(server_task && task, bool front) {
     GGML_ASSERT(!task.is_parent() && "not supported, use post_tasks() instead");
     task.index = 0;
     id_tasks.insert(task.id);
-    states.push_back(task.create_state());
+    states.push_back(task_result_state());
     queue_results.add_waiting_task_id(task.id);
     queue_tasks.post(std::move(task), front);
 }
 
-void server_response_reader::post_tasks(std::vector<server_task> && tasks, bool front) {
+void server_response_reader::post_tasks(std::vector<server_task> && tasks, const common_chat_session & session, bool front) {
     GGML_ASSERT(id_tasks.empty() && "post_tasks() can only be called once per reader");
     id_tasks = server_task::get_list_id(tasks);
     states.reserve(tasks.size());
     size_t index = 0;
     for (auto & task : tasks) {
         task.index = index++;
-        states.push_back(task.create_state());
+        states.push_back(task_result_state(session));
         // for child tasks
         for (auto & child_task : task.child_tasks) {
             child_task.index = index++;
-            states.push_back(child_task.create_state());
+            states.push_back(task_result_state(session));
         }
     }
     GGML_ASSERT(states.size() == id_tasks.size());

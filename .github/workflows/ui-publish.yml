@@ -7,38 +7,35 @@ on:
         description: 'Version tag to publish under (e.g., b1234)'
         required: true
         type: string
+      run_id:
+        required: true
+        type: number
     secrets:
       hf_token:
         description: 'Hugging Face token with write access'
         required: true
 
-jobs:
-  build:
-    name: Build static output
-    uses: ./.github/workflows/ui-build.yml
+cache-mode: none
+permissions:
+  actions: read
+  contents: read
 
+jobs:
   publish:
     name: Publish UI Static Output
-    needs: build
     runs-on: ubuntu-slim
-
-    permissions:
-      contents: read
 
     env:
       HF_BUCKET_NAME: ${{ vars.HF_BUCKET_UI_STATIC_OUTPUT }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-
       - name: Download UI build artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Create distribution archive
         run: |

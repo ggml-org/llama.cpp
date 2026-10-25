@@ -29,6 +29,11 @@ on:
       'tools/server/tests/**.*'
     ]
 
+cache-mode: none
+permissions:
+  actions: read
+  contents: read
+
 env:
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
@@ -43,6 +48,9 @@ jobs:
   ui-build:
     name: Build static output
     uses: ./.github/workflows/ui-build-self-hosted.yml
+    permissions:
+      actions: write
+      contents: read
 
   ui-checks:
     name: Checks
@@ -64,7 +72,7 @@ jobs:
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
 
       - name: Run type checking
@@ -106,7 +114,7 @@ jobs:
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
 
       - name: Build Storybook
