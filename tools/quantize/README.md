@@ -69,7 +69,7 @@ Advanced options:
 * `--override-kv` option to override model metadata by key in the quantized model. May be specified multiple times
 * `--target-bpw` automatically choose quant types to meet an overall bits per weight (bpw) target
 * `--target-size` automatically choose quant types to meet a file size target
-* `--state-file` file name to use or save to the bpw/size error computations; if no name is provided it defaults to `<model name>-<model hash>.bpw_state`
+* `--state-file` file name to use or save to the bpw/size error computations; if no name is provided it defaults to `<model name>-<key>.bpw_state`, where `key` combines the model's and imatrix metadata
 * `--target-exclude` comma-separated list of quant types (names or ordinals) that automatic quant type selection must ignore; for use with `--target-bpw`/`--target-size`. May be specified multiple times. A state checkpoint is not written while this option is active
 
 ## (Optional) Convert the multimodal components

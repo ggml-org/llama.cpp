@@ -935,18 +935,49 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     // DJB2 hashing algorithm
-    auto djb2_hash = [&](const uint8_t * data, const size_t n) -> uint64_t {
-        uint64_t h = 5381;
+    auto djb2_hash = [&](const uint8_t * data, const size_t n, uint64_t h = 5381) -> uint64_t {
         for (size_t i = 0; i < n; ++i) { h = (h << 5) + h + data[i]; }
         return h ? h : HASH_MAGIC;
     };
 
-    // Model ID from metadata hash
+    // Model ID from the metadata, the imatrix data and the pruned layers
     const uint64_t model_id = [&] {
         const size_t sz = gguf_get_meta_size(ml.metadata);
         std::vector<uint8_t> buf(sz);
         gguf_get_meta_data(ml.metadata, buf.data());
-        return djb2_hash(buf.data(), buf.size());
+        uint64_t h = djb2_hash(buf.data(), buf.size());
+        auto hash_bytes = [&](const void * data, const size_t n) { h = djb2_hash((const uint8_t *)data, n, h); };
+        auto hash_size = [&](const uint64_t n) { hash_bytes(& n, sizeof(n)); };
+
+        for (const auto * m : { values_data, activations_data, statistics_data }) {
+            const uint8_t present = m != nullptr;
+            hash_bytes(& present, sizeof(present));
+            if (!m) { continue; }
+
+            // the maps have no fixed order
+            std::vector<std::string> names;
+            names.reserve(m->size());
+            for (const auto & e : * m) { names.push_back(e.first); }
+            std::sort(names.begin(), names.end());
+
+            hash_size(names.size());
+            for (const auto & name : names) {
+                const std::vector<float> & v = m->at(name);
+                hash_size(name.size());
+                hash_bytes(name.data(), name.size());
+                hash_size(v.size());
+                hash_bytes(v.data(), v.size() * sizeof(float));
+            }
+        }
+
+        for (const auto & [blk, num] : mapped) {
+            const int32_t b = blk;
+            hash_bytes(& b, sizeof(b));
+            hash_size(num.size());
+            hash_bytes(num.data(), num.size());
+        }
+
+        return h;
     }();
 
     std::string checkpoint_file;
@@ -1042,7 +1073,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         ifs.read((char *)& magic, sizeof(magic));
         ifs.read((char *)& id, sizeof(id));
         if (id != model_id) {
-            LLAMA_LOG_WARN("%s: invalid target state file, ignoring\n", func);
+            LLAMA_LOG_WARN("%s: state file does not match this model, imatrix or pruned layers, ignoring\n", func);
             return {};
         }
 
