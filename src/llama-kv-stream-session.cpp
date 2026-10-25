@@ -29,25 +29,41 @@ static bool decode_workspace_bytes(ggml_backend_t backend, const llama_kv_stream
     auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
         ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)),"ggml_backend_kv_stream_partial_ops"));
     const auto * ops=get ? get() : nullptr;
-    if (ops && ops->version >= 10 && ops->decode_workspace) return ops->decode_workspace(
-        backend,config.policy.shape.type_k,config.policy.shape.type_v,config.query_heads,
-        config.policy.shape.heads,std::min(config.max_decode_rows,config.max_batch_rows),tokens,bytes);
+    const bool geometry=ops && ops->version >= 15 && ops->geometry;
+    const ggml_kv_stream_attention_request request{config.policy.shape,config.query_heads,
+        std::min(config.max_decode_rows,config.max_batch_rows),tokens};
+    if (ops && ops->version >= 10 && (ops->decode_workspace || geometry))
+        return ggml_kv_stream_workspace_query(ops,backend,request,ggml_kv_stream_workspace_kind::decode,bytes);
     ggml_kv_stream_resume_plan plan;
-    if (!ops || ops->version < 5 || !ops->resume_plan) return false;
+    if (!ops || ops->version < 5 || (!ops->resume_plan && !geometry)) return false;
     const uint32_t queries = std::min(2u,config.max_batch_rows);
     const auto query = [&](uint32_t rows) {
-        return ops->resume_plan(backend,config.policy.shape.type_k,config.policy.shape.type_v,
-            config.query_heads,config.policy.shape.heads,rows,tokens,plan);
+        return ggml_kv_stream_resume_plan_query(ops,backend,{config.policy.shape,config.query_heads,rows,tokens},plan);
     };
     // Match the model owner's TG1-only fallback during phase transitions and session reconstruction.
     if (!query(queries) && (queries != 2 || !query(1))) return false;
     bytes=plan.bytes;
-    if (ops->version >= 9 && ops->mma_workspace) {
+    if (ops->version >= 9 && (ops->mma_workspace || geometry)) {
         size_t mma=0;
-        if (ops->mma_workspace(backend,config.policy.shape.type_k,config.policy.shape.type_v,
-                config.query_heads,config.policy.shape.heads,tokens,3,mma)) bytes=std::max(bytes,mma);
+        if (ggml_kv_stream_workspace_query(ops,backend,request,ggml_kv_stream_workspace_kind::mma,mma)) bytes=std::max(bytes,mma);
     }
     return true;
+}
+
+// A read lookahead uses the same admitted geometry and scratch as its later attention call.
+static bool read_workspace_supported(ggml_backend_t backend,const llama_kv_stream_session_config & config,
+        size_t capacity,size_t active,uint32_t queries,uint32_t heads,ggml_backend_memory_lease_t lease) {
+    if (!lease || !queries || queries > config.max_decode_rows || queries > config.max_batch_rows ||
+            !heads || heads > config.query_heads || !config.policy.shape.heads || heads%config.policy.shape.heads) return false;
+    auto * workspace=ggml_backend_memory_lease_buffer(lease);
+    auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+        ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)),"ggml_backend_kv_stream_partial_ops"));
+    size_t needed=0;
+    ggml_kv_stream_resume_plan selected;
+    return workspace && get && get() && ggml_kv_stream_resume_plan_query(get(),backend,
+        {config.policy.shape,heads,queries,(active+255)/256*256},selected) &&
+        ggml_kv_stream_workspace_query(get(),backend,{config.policy.shape,heads,queries,capacity},
+            ggml_kv_stream_workspace_kind::decode,needed) && needed <= ggml_backend_buffer_get_size(workspace);
 }
 
 struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
@@ -85,8 +101,11 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     uint64_t revision = 0, expected_generation = 0;
     bool running = false, produced = false, poisoned = false, busy = false;
     bool direct_mode = false, report_layout = false, primed = false;
+    bool primed_read = false;
     size_t primed_active = 0;
     uint32_t primed_queries = 1;
+    uint32_t primed_layer = UINT32_MAX, primed_heads = 0;
+    uint64_t primed_epoch = 0;
     pool_rebind * transition = nullptr;
     bool transition_closed = false;
     bool device_suspended = false;
@@ -103,7 +122,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     // End copy use before releasing the execution pin that owns native metadata.
     bool drain() override {
         if (resident) resident->cancel_sequence();
-        primed = false; primed_active = 0;
+        primed = primed_read = false; primed_active = 0;
         ggml_backend_synchronize(backend);
         const bool retired = retire_publication();
         pin.reset();
@@ -141,7 +160,8 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         if (!pin || !resident->prime_sequence(order,active,next_span,committed,{queries,true},ring_guard)) {
             pin.reset(); return false;
         }
-        state=decision.next; span=next_span; primed=true; primed_active=active; primed_queries=queries;
+        state=decision.next; span=next_span; primed=true; primed_read=false; primed_active=active; primed_queries=queries;
+        primed_epoch=content->mirror_epoch();
         return true;
     }
     bool attention_bytes(bool decode, size_t & bytes) const {
@@ -597,15 +617,17 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
     if (!backend || !content || !config.max_batch_rows || config.max_batch_rows > INT32_MAX || !config.query_heads ||
             !config.max_decode_rows || config.max_decode_rows > 8 ||
             (config.max_decode_rows > 4 && (!config.native_graph_attention || !config.resume_decode)) ||
-            config.query_heads > SIZE_MAX/config.max_batch_rows || config.policy.shape.head_dim_k != 256 ||
-            config.policy.shape.head_dim_v != 256 || config.policy.shape.heads <= 0 ||
+            config.query_heads > SIZE_MAX/config.max_batch_rows || config.policy.shape.head_dim_k <= 0 ||
+            config.policy.shape.head_dim_k > INT32_MAX || config.policy.shape.head_dim_v <= 0 ||
+            config.policy.shape.head_dim_v > INT32_MAX || config.policy.shape.heads <= 0 ||
             config.query_heads%config.policy.shape.heads) return {};
     auto * type = llama_kv_stream_device_buffer_type(ggml_backend_get_device(backend));
     if (!type || ggml_backend_buffer_get_type(content->host()->buffer()) != llama_kv_stream_host_buffer_type(ggml_backend_get_device(backend))) return {};
     llama_kv_stream_policy_state state;
     if (llama_kv_stream_policy_initialize(config.policy,state).status != llama_kv_stream_policy_status::success) return {};
     ggml_kv_stream_block_layout work;
-    if (ggml_kv_stream_block_layout_make(size_t(config.query_heads)*config.max_batch_rows,256,work).status != ggml_kv_stream_partial_status::success) return {};
+    if (ggml_kv_stream_block_layout_make(size_t(config.query_heads)*config.max_batch_rows,
+            size_t(config.policy.shape.head_dim_v),work).status != ggml_kv_stream_partial_status::success) return {};
     const std::array<ggml_backend_memory_lease_t,3> grants{pool,writer,partial};
     std::array<ggml_backend_memory_region,3> regions{};
     std::array<uintptr_t,3> addresses{};
@@ -653,7 +675,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
     try {
         bool adopted=false;
         if (s.primed) {
-            bool policy_stable=decode && (!s.primed_queries || queries == s.primed_queries);
+            bool policy_stable=!s.primed_read && decode && (!s.primed_queries || queries == s.primed_queries);
             if (policy_stable) {
                 llama_kv_stream_policy_decision decision;
                 policy_stable=s.resident->recommend_policy(s.state,active,queries,decision,true,false) &&
@@ -668,7 +690,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
             if (!adopted) {
                 s.resident->cancel_sequence(); s.pin.reset();
             }
-            s.primed=false; s.primed_active=0;
+            s.primed=s.primed_read=false; s.primed_active=0;
         }
         if (!adopted) {
             llama_kv_stream_policy_decision decision;
@@ -682,20 +704,20 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
                 const auto * ops=get ? get() : nullptr;
                 size_t mma_bytes=0;
                 ggml_kv_stream_resume_plan resume;
-                const bool resumable=s.config.resume_decode && ops && ops->version >= 10 && ops->resume_plan &&
-                    ops->resume_plan(s.backend,s.config.policy.shape.type_k,s.config.policy.shape.type_v,
-                        s.config.query_heads,s.config.policy.shape.heads,queries,(active+255)/256*256,resume);
+                const bool geometry=ops && ops->version >= 15 && ops->geometry;
+                const ggml_kv_stream_attention_request request{s.config.policy.shape,s.config.query_heads,
+                    std::min(s.config.max_decode_rows,s.config.max_batch_rows),s.content->host()->layout().tokens};
+                const bool resumable=s.config.resume_decode && ops && ops->version >= 10 && (ops->resume_plan || geometry) &&
+                    ggml_kv_stream_resume_plan_query(ops,s.backend,{s.config.policy.shape,
+                        s.config.query_heads,queries,(active+255)/256*256},resume);
                 const bool capable = s.config.native_graph_attention && s.config.resume_decode &&
-                    ops && ((ops->version >= 10 && ops->decode_workspace) || (ops->version >= 9 && ops->mma_workspace));
+                    ops && ((ops->version >= 10 && (ops->decode_workspace || geometry)) || (ops->version >= 9 && ops->mma_workspace));
                 bool planned = capable && s.config.span_workspace_bytes != 0;
                 if (planned) mma_bytes = s.config.span_workspace_bytes;
-                else if (capable && ops->version >= 10 && ops->decode_workspace) planned=ops->decode_workspace(s.backend,
-                    s.config.policy.shape.type_k,s.config.policy.shape.type_v,s.config.query_heads,
-                    s.config.policy.shape.heads,std::min(s.config.max_decode_rows,s.config.max_batch_rows),s.content->host()->layout().tokens,mma_bytes);
-                else if (capable) planned = ops->mma_workspace(s.backend,
-                    s.config.policy.shape.type_k, s.config.policy.shape.type_v,
-                    s.config.query_heads, s.config.policy.shape.heads,
-                    s.content->host()->layout().tokens, 3, mma_bytes);
+                else if (capable && ops->version >= 10 && (ops->decode_workspace || geometry))
+                    planned=ggml_kv_stream_workspace_query(ops,s.backend,request,ggml_kv_stream_workspace_kind::decode,mma_bytes);
+                else if (capable) planned=ggml_kv_stream_workspace_query(
+                    ops,s.backend,request,ggml_kv_stream_workspace_kind::mma,mma_bytes);
                 const size_t available = ggml_backend_buffer_get_size(
                     ggml_backend_memory_lease_buffer(s.leases[2].get()));
                 if (!planned || mma_bytes > available) {
@@ -894,6 +916,98 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
 }
 
+bool llama_kv_stream_session::read_source(llama_memory_cache_requirement & output) const noexcept {
+    const auto & s=*impl;
+    if (s.busy || s.running || s.poisoned || s.transition || s.transition_closed || s.device_suspended ||
+            s.publication.pending() || !s.committed || !s.binding || !s.binding->ready() ||
+            s.content->generation() != s.expected_generation) return false;
+    const auto & host=s.content->host()->config();
+    const auto & layout=s.content->host()->layout();
+    if (host.context_tokens > UINT32_MAX || layout.k_token_bytes > SIZE_MAX-layout.v_token_bytes) return false;
+    llama_memory_cache_requirement source;
+    source.identity={host.cache_id,s.expected_generation};
+    source.role=llama_memory_cache_role::full_history;
+    source.layers=host.layers; source.history_rows=uint32_t(host.context_tokens);
+    source.row_padding=uint32_t(host.shape.page_tokens);
+    source.row_bytes=layout.k_token_bytes+layout.v_token_bytes;
+    source.format={ggml_type(host.shape.type_k),ggml_type(host.shape.type_v),
+        uint32_t(host.shape.head_dim_k),uint32_t(host.shape.head_dim_v),uint32_t(host.shape.heads),false};
+    llama_memory_cache_bound bound;
+    if (!llama_memory_cache_bound_make(source,nullptr,bound)) return false;
+    output=source;
+    return true;
+}
+
+bool llama_kv_stream_session::prefetch_read(const llama_memory_cache_read_binding & binding,
+        uint32_t queries,uint32_t heads) {
+    auto & s=*impl;
+    llama_memory_cache_requirement source;
+    if (!read_source(source) || s.ring_guard || binding.cache.layers != 1 ||
+            !llama_memory_cache_read_binding_valid(binding,source,0,uint32_t(s.committed),s.revision) ||
+            !read_workspace_supported(s.backend,s.config,s.content->host()->layout().tokens,
+                s.committed,queries,heads,s.leases[2].get())) return false;
+    const uint32_t layer=binding.cache.source_first_layer;
+    if (s.primed && s.primed_read && s.primed_active == s.committed && s.primed_layer == layer &&
+            s.primed_queries == queries && s.primed_heads == heads && s.primed_epoch == s.content->mirror_epoch()) return true;
+    session_operation operation(s.busy);
+    try {
+        if (!s.drain()) { s.poisoned=true; return false; }
+        s.pin=s.binding->acquire();
+        if (!s.pin) return false;
+        const size_t span=std::max(size_t(1),s.resident->suggested_span_pages());
+        if (!s.resident->prime_sequence({layer},s.committed,span,s.committed,{queries,true,true})) {
+            s.pin.reset(); return false;
+        }
+        s.span=span; s.primed=s.primed_read=true; s.primed_active=s.committed;
+        s.primed_layer=layer; s.primed_queries=queries; s.primed_heads=heads;
+        s.primed_epoch=s.content->mirror_epoch();
+        return true;
+    } catch (...) { s.drain(); s.poisoned=true; throw; }
+}
+
+bool llama_kv_stream_session::read_attention(const llama_memory_cache_read_binding & binding,
+        ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale) {
+    auto & s=*impl;
+    llama_memory_cache_requirement source;
+    if (!read_source(source) || s.ring_guard || binding.cache.layers != 1 ||
+            !llama_memory_cache_read_binding_valid(binding,source,0,uint32_t(s.committed),s.revision) ||
+            !q || !mask || !output || q->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 ||
+            q->ne[0] != source.format.key_head_dim || q->ne[1] <= 0 || q->ne[1] > s.config.max_decode_rows ||
+            q->ne[1] > s.config.max_batch_rows || q->ne[2] <= 0 || q->ne[2] > s.config.query_heads ||
+            q->ne[2]%source.format.kv_heads || q->ne[3] != 1 ||
+            output->ne[0] != source.format.value_head_dim || output->ne[1] != q->ne[2] ||
+            output->ne[2] != q->ne[1] || output->ne[3] != 1 || mask->type != GGML_TYPE_F16 ||
+            mask->ne[0] < int64_t((s.committed+255)/256*256) || mask->ne[1] != q->ne[1] ||
+            mask->ne[2] != 1 || mask->ne[3] != 1) return false;
+    if (!read_workspace_supported(s.backend,s.config,s.content->host()->layout().tokens,
+            s.committed,uint32_t(q->ne[1]),uint32_t(q->ne[2]),s.leases[2].get())) return false;
+    session_operation operation(s.busy);
+    try {
+        const uint32_t layer=binding.cache.source_first_layer;
+        const bool adopted=s.primed && s.primed_read && s.pin && s.primed_active == s.committed &&
+            s.primed_layer == layer && s.primed_queries == q->ne[1] && s.primed_heads == q->ne[2] &&
+            s.primed_epoch == s.content->mirror_epoch() &&
+            s.resident->adopt_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true,true});
+        if (!adopted) {
+            if (!s.drain()) { s.poisoned=true; return false; }
+            s.pin=s.binding->acquire();
+            if (!s.pin) return false;
+            s.span=std::max(size_t(1),s.resident->suggested_span_pages());
+            if (!s.resident->begin_sequence({layer},s.committed,s.span,s.committed,{uint32_t(q->ne[1]),true,true})) {
+                s.drain(); s.poisoned=true; return false;
+            }
+        }
+        s.primed=s.primed_read=false; s.primed_active=0;
+        if (!s.resident->compute_streamed(layer,q,mask,output,s.committed,scale,s.leases[2].get(),true,s.span)) {
+            s.drain(); s.poisoned=true; return false;
+        }
+        // DMA retirement does not complete resident-only attention.
+        ggml_backend_synchronize(s.backend);
+        s.pin.reset();
+        return true;
+    } catch (...) { s.drain(); s.poisoned=true; throw; }
+}
+
 // Cancellation is not inference-state rollback, even when no KV token frontier was committed yet.
 void llama_kv_stream_session::abort() {
     auto & s = *impl;
@@ -983,6 +1097,7 @@ bool llama_kv_stream_session::prefetch_decode(uint32_t query_tokens) {
     auto & s=*impl;
     if (s.busy || s.running || s.transition || s.transition_closed || s.publication.pending()) return false;
     session_operation operation(s.busy);
+    if (s.primed_read && !s.drain()) { s.poisoned=true; return false; }
     return s.prime_next(query_tokens);
 }
 
@@ -1218,7 +1333,12 @@ bool llama_kv_stream_session::set_workspaces(const std::vector<ggml_backend_memo
         retained.emplace_back(ggml_backend_memory_lease_retain(lease),ggml_backend_memory_lease_free);
     }
     auto bindings = workspaces;
-    if (!s.drain()) { s.poisoned=true; return false; }
+    // Lookahead owns pool and host bytes, not the graph grants being retired or rebound.
+    const bool keep_prime=s.primed && s.pin &&
+        !s.publication.pending() && s.content->generation() == s.expected_generation &&
+        s.primed_epoch == s.content->mirror_epoch();
+    if (keep_prime) ggml_backend_synchronize(s.backend);
+    else if (!s.drain()) { s.poisoned=true; return false; }
     s.graphs.clear();
     s.resident->release_write_workspace();
     if (!bindings.empty()) {
@@ -1242,7 +1362,8 @@ bool llama_kv_stream_session::set_attention_workspace(ggml_backend_memory_lease_
         size_t needed = s.config.prefill_span_bytes ? s.config.prefill_span_bytes : s.content->host()->layout().bytes;
         if (!s.config.native_graph_attention) {
             ggml_kv_stream_block_layout partial;
-            if (ggml_kv_stream_block_layout_make(size_t(s.config.query_heads)*s.config.max_batch_rows,256,partial).status != ggml_kv_stream_partial_status::success) return false;
+            if (ggml_kv_stream_block_layout_make(size_t(s.config.query_heads)*s.config.max_batch_rows,
+                    size_t(s.config.policy.shape.head_dim_v),partial).status != ggml_kv_stream_partial_status::success) return false;
             needed = partial.bytes;
         }
         if (decode && s.config.resume_decode) {

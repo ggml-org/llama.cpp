@@ -13,6 +13,58 @@ static llama_memory_text_phase_signal signal(text_phase phase, uint32_t tokens =
 
 int main() {
     testing t;
+    t.test("shared_assistant_bindings_are_read_only_and_versioned", [](testing & t) {
+        using role = llama_memory_cache_role;
+        llama_memory_cache_requirement local{{101,2},{},role::bounded_resident,50,262144,1024,256,256,6656,
+            0,{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,256,256,16,false}};
+        auto full=local;
+        full.identity={102,3}; full.role=role::full_history; full.layers=10;
+        full.window_rows=full.headroom_rows=0; full.row_bytes=3328;
+        full.format={GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,512,512,4,false};
+        for (uint32_t block=0;block<4;++block) {
+            const auto & source=block == 3 ? full : local;
+            auto alias=source;
+            alias.identity={201+block,1}; alias.source=source.identity;
+            alias.role=role::read_only_source; alias.layers=1;
+            alias.source_first_layer=source.layers-1;
+            llama_memory_cache_read_binding binding;
+            const uint32_t first=block == 3 ? 0 : 8192-1024;
+            if (!t.assert_true(llama_memory_cache_read_binding_make(alias,source,first,8192,7,binding))) return;
+            t.assert_true(llama_memory_cache_read_binding_valid(binding,source,first,8192,7));
+            llama_memory_cache_bound bound;
+            if (!t.assert_true(llama_memory_cache_bound_make(binding.cache,&source,bound))) return;
+            t.assert_equal(size_t(0),bound.storage_bytes);
+            t.assert_true(!bound.writable);
+            llama_memory_workload_requirement work{llama_memory_work_phase::mtp_draft,
+                binding.cache.identity,1,1,1,0,256,true,false,true};
+            t.assert_true(llama_memory_workload_requirement_valid(work,binding.cache));
+            work.writes_cache=true;
+            t.assert_true(!llama_memory_workload_requirement_valid(work,binding.cache));
+            auto changed=source;
+            ++changed.identity.generation;
+            t.assert_true(!llama_memory_cache_read_binding_valid(binding,changed,first,8192,7));
+            changed=source; changed.format.value_type=GGML_TYPE_Q8_0;
+            t.assert_true(!llama_memory_cache_read_binding_valid(binding,changed,first,8192,7));
+            t.assert_true(!llama_memory_cache_read_binding_valid(binding,source,first,8192,8));
+            t.assert_true(!llama_memory_cache_read_binding_valid(binding,source,first,8193,7));
+            const auto saved=binding;
+            for (int failure=0;failure<5;++failure) {
+                auto invalid=alias;
+                if (failure == 0) invalid.source_first_layer=source.layers;
+                if (failure == 1) invalid.role=role::full_history;
+                if (failure == 2) invalid.source.generation++;
+                if (failure == 3) invalid.format.key_type=GGML_TYPE_Q4_0;
+                if (failure == 4) invalid.identity.id=source.identity.id;
+                t.assert_true(!llama_memory_cache_read_binding_make(invalid,source,first,8192,7,binding));
+                t.assert_equal(saved.lease_revision,binding.lease_revision);
+                t.assert_equal(saved.cache.identity.id,binding.cache.identity.id);
+            }
+            t.assert_true(!llama_memory_cache_read_binding_make(alias,source,first,8192,0,binding));
+            t.assert_true(!llama_memory_cache_read_binding_make(alias,source,8193,8192,7,binding));
+            t.assert_true(!llama_memory_cache_read_binding_make(alias,source,first,262145,7,binding));
+            if (block != 3) t.assert_true(!llama_memory_cache_read_binding_make(alias,source,0,8192,7,binding));
+        }
+    });
     t.test("serial_draft_rebuild_uses_its_measured_block_width", [](testing & t) {
         llama_cparams params{};
         params.n_ctx = 8192;

@@ -2,6 +2,7 @@
 
 #include "llama-memory-executor.h"
 #include "llama-memory-phase.h"
+#include "llama-memory-plan.h"
 #include "llama-context-workspace.h"
 #include <functional>
 #include <utility>
@@ -43,6 +44,19 @@ struct llama_context_memory_diagnostics {
     size_t publication_stage_bytes = 0;
 };
 
+enum class llama_context_memory_create_status {
+    success, invalid_configuration, insufficient_budget, allocation_failed, capture_failed, transition_failed,
+};
+
+struct llama_context_memory_create_result {
+    llama_context_memory_create_status status = llama_context_memory_create_status::invalid_configuration;
+    size_t available_bytes = 0, required_bytes = 0, additional_bytes = 0;
+    llama_memory_stage_id stage = 0;
+    llama_memory_resource_id resource = 0;
+};
+
+const char * llama_context_memory_create_status_name(llama_context_memory_create_status status) noexcept;
+
 // One serial scheduler lifetime; native caches and arena leases retire before scheduler destruction.
 // The caller owns the scheduler/backends and must not submit or mutate their graph caches concurrently.
 // Callbacks may retry admission, but must not destroy owners or their schedulers.
@@ -63,9 +77,13 @@ public:
             const std::vector<ggml_backend_t> & backends,
             const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
             llama_context_memory * serial_parent = nullptr, bool suspended_workspace = false,
-            const std::function<bool()> & before_capture = {}, size_t serial_parent_bytes = 0);
+            const std::function<bool()> & before_capture = {}, size_t serial_parent_bytes = 0,
+            llama_context_memory_create_result * result = nullptr);
     // Reserve a fixed cache suffix inside the declared parent, not a second backend allocation.
     LLAMA_API std::unique_ptr<llama_context_memory_loan> reserve_bounded_cache(const llama_memory_bounded_kv_layout & layout);
+    // Quote all phase minima before mutation; required_bytes describes a restart with movable fixed suffixes.
+    LLAMA_API std::unique_ptr<llama_context_memory_loan> reserve_bounded_cache(const llama_memory_bounded_kv_layout & layout,
+        llama_context_memory_create_result * admission);
     // Stable publication staging stays disjoint from both graph scratch and elastic KV.
     LLAMA_API std::unique_ptr<llama_context_memory_loan> reserve_staging(size_t bytes);
     // External leases prevent cleanup; the parent remains usable with the fixed region until they return.
@@ -73,6 +91,9 @@ public:
     LLAMA_API bool has_bounded_cache() const noexcept;
     // A graph rebuild can keep ownership only when its measured catalog fits every existing phase grant.
     LLAMA_API bool covers_workspace(const llama_compute_workspace_plan & plan) const noexcept;
+    // Grow the elastic target prefix before attaching serial children; fixed caches and the parent allocation stay in place.
+    LLAMA_API bool grow_workspace(const llama_compute_workspace_plan & plan,
+        llama_context_memory_create_result * result = nullptr) noexcept;
     // Borrow measured scratch, or the full parent after explicit KV suspension. Return grants before resume.
     LLAMA_API static std::unique_ptr<llama_context_memory> borrow_workspace(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
@@ -100,6 +121,9 @@ public:
     LLAMA_API bool kv_device_suspended() const noexcept;
     // A failed reverse transition closes this owner permanently; recreate the context to recover.
     LLAMA_API bool valid() const noexcept;
+    // Metadata-only preflight preserves current fixed regions; the restart minimum repacks their suffix.
+    LLAMA_API bool quote_suspended_loans(const std::vector<size_t> & bytes,
+        llama_context_memory_create_result & result) const noexcept;
     // Loan disjoint regions of a suspended parent. Output owns lease handles; all must return before resume.
     LLAMA_API bool lend_suspended(const std::vector<size_t> & bytes,
         std::vector<ggml_backend_memory_lease_t> & output) noexcept;
@@ -115,7 +139,9 @@ public:
     LLAMA_API const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
     LLAMA_API bool shares_kv_memory() const noexcept;
     LLAMA_API bool has_speculative_consumer() const noexcept;
-    // Vision can suspend only the known host-backed auxiliary cache and its registered serial draft.
+    // Declare an existing serial child that only reads its parent's committed cache.
+    LLAMA_API bool register_shared_read_consumer() noexcept;
+    // Suspend only known auxiliary-cache writers or declared shared-cache readers.
     LLAMA_API bool can_suspend_for_vision() const noexcept;
     LLAMA_API bool borrows_serial_parent() const noexcept;
     LLAMA_API ggml_backend_buffer_t shared_parent() const noexcept;
@@ -128,7 +154,8 @@ public:
 
 private:
     friend class llama_context_memory_loan;
-    std::unique_ptr<llama_context_memory_loan> reserve_region(size_t bytes,const llama_memory_bounded_kv_layout * layout);
+    std::unique_ptr<llama_context_memory_loan> reserve_region(size_t bytes,const llama_memory_bounded_kv_layout * layout,
+        llama_context_memory_create_result * admission = nullptr);
     bool release_staging() noexcept;
     bool release_region(bool cache) noexcept;
     struct implementation;

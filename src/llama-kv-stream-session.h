@@ -3,6 +3,7 @@
 #include "llama-kv-stream-publication.h"
 #include "../ggml/src/ggml-kv-stream-copy.h"
 #include "llama-memory-transition.h"
+#include "llama-memory-phase.h"
 
 struct llama_kv_stream_session_config {
     llama_kv_stream_policy_config policy;
@@ -44,6 +45,13 @@ public:
     bool reconstruct(size_t tokens);
     bool produce(uint32_t layer, const ggml_tensor * k, const ggml_tensor * v);
     bool attention(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale);
+    // Describe only a completed source. Readers still need a matching binding revision and completion fence.
+    bool read_source(llama_memory_cache_requirement & output) const noexcept;
+    // Queue one immutable source read without advancing its frontier. Matching attention adopts the queued work.
+    bool prefetch_read(const llama_memory_cache_read_binding & binding, uint32_t query_tokens, uint32_t query_heads);
+    // Synchronous correctness path over one committed layer; neither appends KV nor requires complete-layer residency.
+    bool read_attention(const llama_memory_cache_read_binding & binding,
+            ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale);
     // Cancellation may follow model-state mutation; this session cannot be resumed without reconstruction.
     void abort();
     bool active() const noexcept;

@@ -129,7 +129,7 @@ if (CUDAToolkit_FOUND)
     ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR} SRCS)
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
-    # Compile private head-256 streamed kernels without changing stock attention dispatch.
+    # Compile private streamed geometries without changing stock attention dispatch.
     foreach(KV_STREAM_KEY IN ITEMS F32 F16 BF16 Q4_0 Q4_1 Q5_0 Q5_1 Q8_0)
         set(KV_STREAM_COMPILED_KEY ${KV_STREAM_KEY})
         if (KV_STREAM_KEY STREQUAL "F32")
@@ -139,13 +139,27 @@ if (CUDAToolkit_FOUND)
         if (KV_STREAM_KEY MATCHES "^(F16|BF16|Q4_0|Q8_0)$")
             set(KV_STREAM_DEFAULT_NATIVE 1)
         endif()
+        set(KV_STREAM_DIM 256)
+        set(KV_STREAM_SYMBOL ${KV_STREAM_KEY})
+        set(KV_STREAM_BUILD_VECTOR 1)
         set(KV_STREAM_INSTANCE "${CMAKE_CURRENT_BINARY_DIR}/kv-stream-instance-${KV_STREAM_KEY}.cu")
         configure_file(kv-stream-instance.cu.in "${KV_STREAM_INSTANCE}" @ONLY)
         list(APPEND GGML_SOURCES_CUDA "${KV_STREAM_INSTANCE}")
         set(KV_STREAM_TILE_INSTANCE "${CMAKE_CURRENT_BINARY_DIR}/kv-stream-tile-instance-${KV_STREAM_KEY}.cu")
         configure_file(kv-stream-tile-instance.cu.in "${KV_STREAM_TILE_INSTANCE}" @ONLY)
         list(APPEND GGML_SOURCES_CUDA "${KV_STREAM_TILE_INSTANCE}")
+        # Stock head-512 uses MMA/tile, not a new vector execution family.
+        set(KV_STREAM_DIM 512)
+        set(KV_STREAM_SYMBOL ${KV_STREAM_KEY}_D512)
+        set(KV_STREAM_BUILD_VECTOR 0)
+        set(KV_STREAM_TILE_INSTANCE "${CMAKE_CURRENT_BINARY_DIR}/kv-stream-tile-instance-${KV_STREAM_KEY}-D512.cu")
+        configure_file(kv-stream-tile-instance.cu.in "${KV_STREAM_TILE_INSTANCE}" @ONLY)
+        list(APPEND GGML_SOURCES_CUDA "${KV_STREAM_TILE_INSTANCE}")
     endforeach()
+
+    include(${CMAKE_CURRENT_SOURCE_DIR}/kv-stream-runtime.cmake)
+    ggml_cuda_kv_stream_runtime_instances("${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}" SRCS)
+    list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
     ggml_add_backend_library(ggml-cuda
                              ${GGML_HEADERS_CUDA}

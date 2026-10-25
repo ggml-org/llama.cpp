@@ -1,0 +1,1166 @@
+{
+  "qualified": true,
+  "stages_complete": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "profile": {
+    "target": "Q3_K_S",
+    "projector": "Q8_0",
+    "assistant": "Q8_0 external shared-KV",
+    "draft_lengths": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "image_budgets": [
+      70,
+      140,
+      280,
+      560,
+      1120
+    ],
+    "normal_parent_mib": {
+      "70-560": 2048,
+      "1120": 2143
+    },
+    "sanitizer_only_parent_mib": 1536,
+    "KV_reference": "Q8_0/Q4_0",
+    "additional_fitting_API_pairs": [
+      "Q8_0/Q8_0",
+      "Q5_1/Q5_1"
+    ],
+    "device": "RTX5070Ti / CUDA SM120",
+    "uvm": false,
+    "serial_requests": 1
+  },
+  "native_scope": {
+    "all_modes_API": [
+      70,
+      140,
+      280,
+      560
+    ],
+    "target_only_API": [
+      1120
+    ],
+    "1120_MTP": "Eager native encoder workspace671878528bytes OOM after valid text. Separate exact native component/vector oracles plus arena lifecycle self-consistency, not full native API equivalence.",
+    "long": "131072capacity/98304textprefix/budget70/all0-3:68completions4352IDs/16stateactions and initial+restart ring proof. Streamed self-consistency, not native equivalence or full256K vision."
+  },
+  "precision_scope": "Current deterministic fixtures and F16 reference only; no broad OCR/chart/detail or arbitrary-image quality claim. Q4 is not the selected deployment artifact.",
+  "memory_scope": "One parent preserves native SWA while vision weights/compute borrow disjoint regions. Main+assistant weights stayGPU outside the parent. Strict1536 covers declared default encoder-forward API and full-vector cases; largest components have separate scoped strict controls, not a full joint1120 MTP sanitizer run.",
+  "capacity_scope": "Two-image1120 workload minimum2246487936bytes. Independent max parents2812MiB T0/2332MiB MTP1-3, actual rejected+1MiB neighbors. Workload/card-specific, no universal guarantee against host/driver/resource OOM.",
+  "timing_scope": "First-image points are single measurements, not repeated latency/speedup trials. Encoder time includes host output; preprocessing/text-image prefill are not independently isolated. Separate text-only8-pair no-material-regression screen is not statistical proof.",
+  "artifacts": {
+    "target": {
+      "file_bytes": 13210856384,
+      "sha256": "02cdd36af753d2a61832c3e71b621e6d6be65906bbee4adfcde9f62b42154d97",
+      "metadata": {
+        "general.architecture": "gemma4",
+        "gemma4.block_count": 60,
+        "gemma4.embedding_length": 5376,
+        "gemma4.attention.sliding_window": 1024,
+        "general.file_type": 11
+      },
+      "types": {
+        "F32": {
+          "tensors": 422,
+          "bytes": 5327088,
+          "elements": 1331772
+        },
+        "Q3_K": {
+          "tensors": 411,
+          "bytes": 13189693440,
+          "elements": 30696013824
+        }
+      },
+      "filename": "gemma-4-31B-it-Q3_K_S.gguf"
+    },
+    "assistant": {
+      "sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de",
+      "filename": "mtp-gemma-4-31B-it-Q8_0.gguf",
+      "file_bytes": 514687104
+    },
+    "projector_reference": {
+      "file_bytes": 1198957024,
+      "sha256": "6edcca228213c28d3567a35d22f849eea52d8360875093851959adf5d2f270eb",
+      "metadata": {
+        "general.architecture": "clip",
+        "general.file_type": 1,
+        "clip.vision.projection_dim": 5376,
+        "clip.vision.patch_size": 16,
+        "clip.vision.embedding_length": 1152,
+        "clip.vision.block_count": 27
+      },
+      "filename": "mmproj-F16.gguf"
+    },
+    "projector_candidates": {
+      "Q8_0": {
+        "file_bytes": 807772384,
+        "sha256": "ce5b38c7b9f22468acd0156c278cf8d70622d9b1669f34e23ea01f448d45448e",
+        "metadata": {
+          "general.architecture": "clip",
+          "clip.vision.projection_dim": 5376,
+          "clip.vision.patch_size": 16,
+          "clip.vision.embedding_length": 1152,
+          "clip.vision.block_count": 27,
+          "general.file_type": 7
+        },
+        "tensor_count": 356,
+        "tensor_payload_bytes": 807749568,
+        "types": {
+          "Q8_0": {
+            "tensors": 163,
+            "bytes": 443342592,
+            "elements": 417263616
+          },
+          "F32": {
+            "tensors": 165,
+            "bytes": 94894272,
+            "elements": 23723568
+          },
+          "F16": {
+            "tensors": 28,
+            "bytes": 269512704,
+            "elements": 134756352
+          }
+        },
+        "filename": "mmproj-gemma4-31B-Q8_0-local.gguf"
+      },
+      "Q4_0": {
+        "file_bytes": 599140576,
+        "sha256": "424ea8bdd1743a169328fc2fb2603907efd40cf7515c837b4e2b0aa85236d1a9",
+        "metadata": {
+          "general.architecture": "clip",
+          "clip.vision.projection_dim": 5376,
+          "clip.vision.patch_size": 16,
+          "clip.vision.embedding_length": 1152,
+          "clip.vision.block_count": 27,
+          "general.file_type": 2
+        },
+        "tensor_count": 356,
+        "tensor_payload_bytes": 599117760,
+        "types": {
+          "Q4_0": {
+            "tensors": 163,
+            "bytes": 234710784,
+            "elements": 417263616
+          },
+          "F32": {
+            "tensors": 165,
+            "bytes": 94894272,
+            "elements": 23723568
+          },
+          "F16": {
+            "tensors": 28,
+            "bytes": 269512704,
+            "elements": 134756352
+          }
+        },
+        "filename": "mmproj-gemma4-31B-Q4_0-local.gguf"
+      }
+    },
+    "source_revision": "c1ac76e99d5513b141e8adde7288b85c3f9c32ec",
+    "qualification_scope": "Scoped by this receipt; Q8 selected, Q4 component/fixture candidate only."
+  },
+  "image_finder_results": [
+    {
+      "mtp": 0,
+      "arena_mib": 2812,
+      "next_mib_rejected": 2813,
+      "context_size": 4096,
+      "cache_type_k": "q8_0",
+      "cache_type_v": "q4_0",
+      "draft_length": 0,
+      "projector_configured": true,
+      "vision_execution_validated": true,
+      "decode_tokens": 16,
+      "tokens_evaluated": 3216,
+      "generated_token_ids": [
+        642,
+        107,
+        138,
+        236775,
+        3947,
+        1083,
+        870,
+        107,
+        140,
+        236840,
+        107,
+        142,
+        236812,
+        236812,
+        236771,
+        236764
+      ],
+      "uvm": false,
+      "reserve_mib": 0,
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/llama-server",
+        "--model",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-Q3_K_S.gguf",
+        "--ctx-size",
+        "4096",
+        "--batch-size",
+        "1280",
+        "--ubatch-size",
+        "1280",
+        "--parallel",
+        "1",
+        "--n-gpu-layers",
+        "999",
+        "--flash-attn",
+        "on",
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q4_0",
+        "--shared-device-memory-mib",
+        "2812",
+        "--fit",
+        "off",
+        "--spec-type",
+        "none",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "1249",
+        "--offline",
+        "--no-context-shift",
+        "--cache-ram",
+        "0",
+        "-lv",
+        "3",
+        "--mmproj",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mmproj-gemma4-31B-Q8_0-local.gguf",
+        "--image-min-tokens",
+        "1120",
+        "--image-max-tokens",
+        "1120"
+      ],
+      "source_result": "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/mtp0/result.json",
+      "source_result_sha256": "b90c81fa37ce3b817333a4b89fd2d18b5e2e72c78f076cd8bd3d7fae83e186a2",
+      "probes_sha256": "cc8ca216fe8af4bd4b0a29dbf39eee146faa3421e1af0783f3c89e23e734dc8b"
+    },
+    {
+      "mtp": 1,
+      "arena_mib": 2332,
+      "next_mib_rejected": 2333,
+      "context_size": 4096,
+      "cache_type_k": "q8_0",
+      "cache_type_v": "q4_0",
+      "draft_length": 1,
+      "projector_configured": true,
+      "vision_execution_validated": true,
+      "decode_tokens": 16,
+      "tokens_evaluated": 3216,
+      "generated_token_ids": [
+        642,
+        623,
+        715,
+        1083,
+        623,
+        818,
+        1171,
+        2471,
+        563,
+        496,
+        1816,
+        236772,
+        5140,
+        3759,
+        529,
+        506
+      ],
+      "uvm": false,
+      "reserve_mib": 0,
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/llama-server",
+        "--model",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-Q3_K_S.gguf",
+        "--ctx-size",
+        "4096",
+        "--batch-size",
+        "1280",
+        "--ubatch-size",
+        "1280",
+        "--parallel",
+        "1",
+        "--n-gpu-layers",
+        "999",
+        "--flash-attn",
+        "on",
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q4_0",
+        "--shared-device-memory-mib",
+        "2332",
+        "--fit",
+        "off",
+        "--spec-type",
+        "draft-mtp",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "1249",
+        "--offline",
+        "--no-context-shift",
+        "--cache-ram",
+        "0",
+        "-lv",
+        "3",
+        "--spec-draft-n-max",
+        "1",
+        "--spec-draft-n-min",
+        "0",
+        "--spec-draft-p-min",
+        "0",
+        "--model-draft",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mtp-gemma-4-31B-it-Q8_0.gguf",
+        "--spec-draft-ngl",
+        "999",
+        "--mmproj",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mmproj-gemma4-31B-Q8_0-local.gguf",
+        "--image-min-tokens",
+        "1120",
+        "--image-max-tokens",
+        "1120"
+      ],
+      "source_result": "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/mtp1/result.json",
+      "source_result_sha256": "237be70258c72ee1f9b83f6d4c39b6d48be146210bcea78d5e8154876015e935",
+      "probes_sha256": "17104d027e24b4b00d747a436426721a21a8673f1d6c081329dc91bfd4331fd3"
+    },
+    {
+      "mtp": 2,
+      "arena_mib": 2332,
+      "next_mib_rejected": 2333,
+      "context_size": 4096,
+      "cache_type_k": "q8_0",
+      "cache_type_v": "q4_0",
+      "draft_length": 2,
+      "projector_configured": true,
+      "vision_execution_validated": true,
+      "decode_tokens": 16,
+      "tokens_evaluated": 3216,
+      "generated_token_ids": [
+        642,
+        623,
+        32061,
+        1083,
+        623,
+        236776,
+        12815,
+        236764,
+        7628,
+        236764,
+        16085,
+        3759,
+        607,
+        28239,
+        7913,
+        532
+      ],
+      "uvm": false,
+      "reserve_mib": 0,
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/llama-server",
+        "--model",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-Q3_K_S.gguf",
+        "--ctx-size",
+        "4096",
+        "--batch-size",
+        "1280",
+        "--ubatch-size",
+        "1280",
+        "--parallel",
+        "1",
+        "--n-gpu-layers",
+        "999",
+        "--flash-attn",
+        "on",
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q4_0",
+        "--shared-device-memory-mib",
+        "2332",
+        "--fit",
+        "off",
+        "--spec-type",
+        "draft-mtp",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "1249",
+        "--offline",
+        "--no-context-shift",
+        "--cache-ram",
+        "0",
+        "-lv",
+        "3",
+        "--spec-draft-n-max",
+        "2",
+        "--spec-draft-n-min",
+        "0",
+        "--spec-draft-p-min",
+        "0",
+        "--model-draft",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mtp-gemma-4-31B-it-Q8_0.gguf",
+        "--spec-draft-ngl",
+        "999",
+        "--mmproj",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mmproj-gemma4-31B-Q8_0-local.gguf",
+        "--image-min-tokens",
+        "1120",
+        "--image-max-tokens",
+        "1120"
+      ],
+      "source_result": "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/mtp2/result.json",
+      "source_result_sha256": "a29db65606e2690d620a8bfec38caaf902e7813f8f9dba78c9dee93f018aadf2",
+      "probes_sha256": "4191fb4140176f4703c414622d27b86ba7bf64a1ea93405752204cfa3dceb92b"
+    },
+    {
+      "mtp": 3,
+      "arena_mib": 2332,
+      "next_mib_rejected": 2333,
+      "context_size": 4096,
+      "cache_type_k": "q8_0",
+      "cache_type_v": "q4_0",
+      "draft_length": 3,
+      "projector_configured": true,
+      "vision_execution_validated": true,
+      "decode_tokens": 16,
+      "tokens_evaluated": 3216,
+      "generated_token_ids": [
+        642,
+        623,
+        32061,
+        1083,
+        623,
+        236776,
+        12815,
+        236764,
+        7628,
+        236764,
+        16085,
+        3759,
+        607,
+        28239,
+        7913,
+        532
+      ],
+      "uvm": false,
+      "reserve_mib": 0,
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/llama-server",
+        "--model",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-Q3_K_S.gguf",
+        "--ctx-size",
+        "4096",
+        "--batch-size",
+        "1280",
+        "--ubatch-size",
+        "1280",
+        "--parallel",
+        "1",
+        "--n-gpu-layers",
+        "999",
+        "--flash-attn",
+        "on",
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q4_0",
+        "--shared-device-memory-mib",
+        "2332",
+        "--fit",
+        "off",
+        "--spec-type",
+        "draft-mtp",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "1249",
+        "--offline",
+        "--no-context-shift",
+        "--cache-ram",
+        "0",
+        "-lv",
+        "3",
+        "--spec-draft-n-max",
+        "3",
+        "--spec-draft-n-min",
+        "0",
+        "--spec-draft-p-min",
+        "0",
+        "--model-draft",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mtp-gemma-4-31B-it-Q8_0.gguf",
+        "--spec-draft-ngl",
+        "999",
+        "--mmproj",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mmproj-gemma4-31B-Q8_0-local.gguf",
+        "--image-min-tokens",
+        "1120",
+        "--image-max-tokens",
+        "1120"
+      ],
+      "source_result": "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/mtp3/result.json",
+      "source_result_sha256": "ea26394c5800e54a522dec9a06928b77425c1aff9dc44c32e975e60692fa106e",
+      "probes_sha256": "7eb20c13a875d0e4429022e96d264dbfe6628586acf7a5e8164d20712f8103ef"
+    }
+  ],
+  "projector_quality_fixture_agreement": {
+    "70": {
+      "F16": {
+        "f16_label_agreement": 9,
+        "cases": 9,
+        "known_label_correct": 9,
+        "additional_errors_vs_f16": []
+      },
+      "Q8_0": {
+        "f16_label_agreement": 9,
+        "cases": 9,
+        "known_label_correct": 9,
+        "additional_errors_vs_f16": []
+      },
+      "Q4_0": {
+        "f16_label_agreement": 9,
+        "cases": 9,
+        "known_label_correct": 9,
+        "additional_errors_vs_f16": []
+      }
+    },
+    "280": {
+      "F16": {
+        "f16_label_agreement": 9,
+        "cases": 9,
+        "known_label_correct": 9,
+        "additional_errors_vs_f16": []
+      },
+      "Q8_0": {
+        "f16_label_agreement": 9,
+        "cases": 9,
+        "known_label_correct": 9,
+        "additional_errors_vs_f16": []
+      },
+      "Q4_0": {
+        "f16_label_agreement": 9,
+        "cases": 9,
+        "known_label_correct": 9,
+        "additional_errors_vs_f16": []
+      }
+    }
+  },
+  "projector_embedding_characterization": {
+    "scope": "Descriptive numerical differences on deterministic fixture, NOT task accuracy. Each quantized phase is independently bit-exact to its own native oracle.",
+    "rows": 256,
+    "width": 5376,
+    "metrics": {
+      "Q8_0": {
+        "relative_l2": 0.06412669182087308,
+        "cosine_min": 0.955686650271193,
+        "cosine_mean": 0.9979161423007359,
+        "max_abs": 4.07356595993042,
+        "rmse": 0.08620621435790679
+      },
+      "Q4_0": {
+        "relative_l2": 0.2671612999397768,
+        "cosine_min": 0.21036012352505148,
+        "cosine_mean": 0.9641556526392083,
+        "max_abs": 15.582828521728516,
+        "rmse": 0.3591478624077231
+      }
+    }
+  },
+  "preprocessing_reference": {
+    "repository": "huggingface/transformers",
+    "revision": "19d179f2165fc02dbc7c45456d794a3f78d7e310",
+    "source_sha256": "5d280d5448b1c219183a27e95b6aa7178b350275772d07881c91c65f13fa815e",
+    "scope": "Reviewed floor-aligned size geometry; native CXX interpolation/normalization is not a claimed bit-identical Torch reproduction."
+  },
+  "generated_png_sha256": {
+    "(256, 256, 0)": "9225dc3be70b3cb8d6c72c0f554a51f3edaac5033b48d0a463d1133bf0d1978e",
+    "(256, 256, 1)": "d8882bf00c1626fc50170b9f354f64e30762d7d491c7e67bd423c3b85b8ad8af",
+    "(512, 384, 2)": "d1bce3ef15dd8b3e8bdf6104e2be2f27b8c38a0b4ad2b0f3a5a150eef00d35f3",
+    "(384, 512, 3)": "fa023faf7c1eefe90fb9e86da307444680c7b853bc336a6524a050424bed5e9d",
+    "(32, 1024, 4)": "067f3ec04fab92867743460fc61832454220ef3572e2e86ed0985789d14b4993"
+  },
+  "qualified_runtime_archive": {
+    "path": "benchmarks/results/gemma4-vision-20261023/vision-qualified-bin/archive-state.json",
+    "sha256": "e87fcfd2a237b4a7206120798192b64c35707f3b81c3431692e451c7cc22c955"
+  },
+  "documentation_validation_record": "benchmarks/results/gemma4-vision-20261023/gv9-doc-validation/audit.json",
+  "runtime_build_origin_commit": "6612846ed4a30024e8c8dcb54c25df3600523cf6",
+  "runtime9_sha256": {
+    "llama-server": "bfb1f2cb4e9b05375059dce7c90546778dc1245f6ac7d1c60778dfe86ff7514e",
+    "libllama.so.0": "b09747e29bb7e323c7483c2e631735c43f4e5a21e3d5ddcc242df68f8570b28f",
+    "libllama-common.so.0": "23c2513ab73eb5da6c428076ea4707d37565cedc582711dbe5478eb1499aff34",
+    "libllama-server-impl.so": "d33e9bcab4edf9e52e8077c00335c461962ed6ac5fe15b0404c6c471827a6805",
+    "libggml-cuda.so.0": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741",
+    "libggml-base.so.0": "76ea23b3b8d4e5da7f6238ec555acc74f561dfb81cabbdd4dd4e9505a6f71064",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libmtmd.so.0": "d6b1f5ed0115cb2fca4aa262ee89e0666211a41d8ee7a5ac63b0b9d679c810af"
+  },
+  "runtime_build_origin_source_diff_sha256": "824667f1a15a7ddbf336c36f659aaa1c4030c7ccaf15c0ad720d6be6cc226586",
+  "qualified_changed_source_sha256": {
+    "src/llama-context-memory.cpp": "162a1b8c9256daa063097f34558a60c8cf7b7860bc84abef7f5ff5bb40f2a5d0",
+    "src/llama-context-memory.h": "00bac8933b83f71f04aaf19731188be90f29a25616db5fce52e89457d169d8c0",
+    "src/llama-context.cpp": "bab7196644d7950e2e6d6e4ff1c1d243525db6fc6b1765383ce8546510cfd7b7",
+    "src/llama-kv-cache.cpp": "2f1f2d8bfe9a3defd7313ecd3a3f939dce058cd979156e5b9316b1e961b576b3",
+    "src/llama-kv-cache.h": "d536c5c0d6c28740391cf21811dc7e9aef4b05e90cedaf10905f5d64c7c8766e",
+    "tests/test-context-memory.cpp": "97803c91e4ec07ddff8450f4387f142888f2df5a09be2692915602ccc3801aa2",
+    "tests/test-kv-stream-context.cpp": "9996c5c4393d12119c4c316c263791e095aeb4bce0ce410ae9d4d94b8f5892a9",
+    "tests/test-mtmd-impl.cpp": "6bdf4d5ae85f54c37fccb5e793bcec6533a993229fe6cd5463de55ae92ef9c5d",
+    "tests/test-mtmd-projector-storage.cpp": "0b01d11d2467bf0ba87c8cc806a36ef66a77c9fa4167bc15891bd9ed4f2bef23",
+    "tests/test-server-vision.cpp": "c8e525f1ae7147c00c81841fc7e3af7cacf695caafe98e18ce79d524858001dd",
+    "tools/mtmd/mtmd-image.cpp": "5932746efaf499324b49e225919609c420345983fd7c9e88a3096524225f2446",
+    "tools/mtmd/mtmd-image.h": "58dc635504e0e7f4bcdd05e84a62dc41bf90dc174f01b5914456be590a6582f6",
+    "tools/mtmd/mtmd-session.cpp": "a05b81c7cd279a5707d502c94d710abbcad908681d65b9fec88e68432d9865aa",
+    "tools/mtmd/mtmd-session.h": "48986fa1ae97c067f0c322fa3884ad1b9460397c36b7ed1bee73ad8bf9e31fb5",
+    "tools/mtmd/mtmd.cpp": "143812bf28b5e17ba091bcbd0c8ebfcdd52c3f0e70663a74022fe72b8e24f509",
+    "tools/server/server-common.cpp": "486e6be17b2f7d71e71270ca52d87ffee0e9ad6f2712c7d17c83acec9551ff6e",
+    "tools/server/server-common.h": "6b14f2b75bec9e3912d28535d5fd8c89ab3dd85bd77ce3a8502a47184e6246a3",
+    "tools/server/server-context.cpp": "98ab32415df614c7764a8a79865842b19cb4fe35ccf2549770da3ea383151881",
+    "tools/server/tests/test_adaptive_gemma.py": "706cb2eec0bb2c9467c4749f8f56188d01bb24b524fdf8e7a6811f355b5d57d5",
+    "tools/server/tests/test_adaptive_gemma_harness.py": "3a1253a050119b8ead1640e9796049246cdf5ff5676fbf6d0e07516719caa121",
+    "tools/server/tests/test_adaptive_vision.py": "e29851bddeb85a1f19d482b43193f87252d853daf402fc894641a9486bee2d7d",
+    "tools/server/tests/test_adaptive_vision_harness.py": "ae827498e25a3da4b674480b189c9141dd42c3fe1658ee3758c0b61e1be2bf9b"
+  },
+  "published_measurement_sha256": {
+    "benchmarks/data/gemma4-vision-measurements.csv": "7eba454612f3e1ecafb13ce8ed7d19130b58a9377549cac90fdf449056c82899",
+    "benchmarks/data/gemma4-vision-measurements.json": "c3a05acfb7f3b06cd5acc013be96a516dd64ca42c2b30ccc638c4d45fe3e0941",
+    "media/gemma4-vision-phase-memory.png": "3e1bd6cf32147c9b5c35038c283232ca64efde7501eca72955bf119828604cfb",
+    "media/gemma4-vision-phase-latency.png": "5662454e66fef93472ba06fd77e0f1526e21298005f2bcd0f44d52828889f681"
+  },
+  "corpus_fixture_reuse_proof": {
+    "path": "benchmarks/results/gemma4-vision-20261023/gv7-corpus-fix-proof/resume-audit.json",
+    "sha256": "29b48582f2c2acd3cf96d8655f0d3a4fa00dac789798b7811ff1b2521d6cee08"
+  },
+  "regression_fixture_reuse_proof": {
+    "path": "benchmarks/results/gemma4-vision-20261023/gv8-resume-proof/resume-audit.json",
+    "sha256": "7d1a5948dd1d22133f8834711169aefbce82cf196e0eb1bdb3b87ebc03a379c2",
+    "finding": "The unchanged1GiB/128-prefix Qwen phase fixture is resident. Its missing resident-control declaration caused exactly1/231 assertion failures after three exact native-logit comparisons. No CXX/runtime change. The declared resident case and separate16MiB/6000-prefix required-streaming case execute in the final continuation."
+  },
+  "adopted_public_record_locations": {
+    "public-server": {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v1/public-server/results.json",
+      "records": 24,
+      "outputs": 1536,
+      "result_sha256": "b5f1d2463121bb3c5e09309a7c99e6fe9d3b124f33361ab77b2810f6db830937"
+    },
+    "vision-q8_0-q4_0": {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v1/vision-q8_0-q4_0/results.json",
+      "records": 112,
+      "outputs": 1792,
+      "result_sha256": "b95bfa9e4464a3d225c5e28f5f9bed8cf41b386e32f6dbd25542b77dd270536d"
+    },
+    "vision-q8_0-q8_0": {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v1/vision-q8_0-q8_0/results.json",
+      "records": 112,
+      "outputs": 1792,
+      "result_sha256": "0d4550962c55fe2d9f82e3adf820977fe486e94003df9065eec1a64144aae725"
+    },
+    "vision-q5_1-q5_1": {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v1/vision-q5_1-q5_1/results.json",
+      "records": 112,
+      "outputs": 1792,
+      "result_sha256": "c18934867186daca3151ae97882f8a0fcb232c424546573fb4048aaa4156afd1"
+    }
+  },
+  "Qwen_control_scope": "The requested legacy16MiB pool is not the whole-parent bound: existing phase reuse gives82.08MiB effective decodeKV; active27/resident11/ring26 still requires streaming. The1GiB/128-prefix full-vision-phase control is deliberately resident.",
+  "text_regression_screen": {
+    "policy": {
+      "contexts": [
+        8192,
+        65536
+      ],
+      "depths": [
+        0,
+        3
+      ],
+      "models": [
+        "gemma",
+        "qwen"
+      ],
+      "pairs": 8,
+      "requests": 16,
+      "repeated_trials": false,
+      "arena_mib": 1024,
+      "KV": "Q8Q4",
+      "batch_ubatch": 256,
+      "uvm": false,
+      "outputs": 256,
+      "screen_drop_threshold_percent": 3,
+      "scope": "One uninstrumented matched pair per point, not statistical proof. Both variants use Q3_K_M Gemma/QwenIQ4_XS text profiles; Q3_K_S image timings are separate. No new decode optimization."
+    },
+    "points": [
+      {
+        "model": "gemma",
+        "context": 8192,
+        "mtp": 0,
+        "prefill_tps_baseline": 1342.3553532033334,
+        "prefill_tps_candidate": 1340.3591776783917,
+        "prefill_tps_change_percent": -0.14870693666756418,
+        "decode_tps_baseline": 39.5500537725633,
+        "decode_tps_candidate": 39.57781798332237,
+        "decode_tps_change_percent": 0.07020018460335287
+      },
+      {
+        "model": "gemma",
+        "context": 8192,
+        "mtp": 3,
+        "prefill_tps_baseline": 1318.7340818757223,
+        "prefill_tps_candidate": 1319.4653708220746,
+        "prefill_tps_change_percent": 0.05545385960694649,
+        "decode_tps_baseline": 90.10170892907934,
+        "decode_tps_candidate": 90.16762692242685,
+        "decode_tps_change_percent": 0.07315953729511993
+      },
+      {
+        "model": "gemma",
+        "context": 65536,
+        "mtp": 0,
+        "prefill_tps_baseline": 895.2477549637555,
+        "prefill_tps_candidate": 894.6521923598306,
+        "prefill_tps_change_percent": -0.06652489220138058,
+        "decode_tps_baseline": 19.672792851508834,
+        "decode_tps_candidate": 19.656699974623585,
+        "decode_tps_change_percent": -0.08180270593362016
+      },
+      {
+        "model": "gemma",
+        "context": 65536,
+        "mtp": 3,
+        "prefill_tps_baseline": 885.4157516364387,
+        "prefill_tps_candidate": 886.0993996749544,
+        "prefill_tps_change_percent": 0.07721209355628922,
+        "decode_tps_baseline": 56.227306493724704,
+        "decode_tps_candidate": 56.39927145411698,
+        "decode_tps_change_percent": 0.305838872810793
+      },
+      {
+        "model": "qwen",
+        "context": 8192,
+        "mtp": 0,
+        "prefill_tps_baseline": 1821.4467129681902,
+        "prefill_tps_candidate": 1820.9521917864274,
+        "prefill_tps_change_percent": -0.027149912113377805,
+        "decode_tps_baseline": 46.57158271423567,
+        "decode_tps_candidate": 46.54240149665761,
+        "decode_tps_change_percent": -0.06265884876001104
+      },
+      {
+        "model": "qwen",
+        "context": 8192,
+        "mtp": 3,
+        "prefill_tps_baseline": 1685.076426225414,
+        "prefill_tps_candidate": 1685.3919435243695,
+        "prefill_tps_change_percent": 0.01872421298196869,
+        "decode_tps_baseline": 78.71874287093739,
+        "decode_tps_candidate": 78.96501942539479,
+        "decode_tps_change_percent": 0.3128563102959836
+      },
+      {
+        "model": "qwen",
+        "context": 65536,
+        "mtp": 0,
+        "prefill_tps_baseline": 1328.933352052903,
+        "prefill_tps_candidate": 1327.5749823564643,
+        "prefill_tps_change_percent": -0.10221503541471,
+        "decode_tps_baseline": 33.40112233010421,
+        "decode_tps_candidate": 33.41561436965768,
+        "decode_tps_change_percent": 0.04338788203057664
+      },
+      {
+        "model": "qwen",
+        "context": 65536,
+        "mtp": 3,
+        "prefill_tps_baseline": 1197.544491580665,
+        "prefill_tps_candidate": 1196.6525631632333,
+        "prefill_tps_change_percent": -0.07447977287711183,
+        "decode_tps_baseline": 62.278255827840425,
+        "decode_tps_candidate": 62.42589984486552,
+        "decode_tps_change_percent": 0.23707153494028077
+      }
+    ]
+  },
+  "strict_memory_logs": [
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2/server/streamed-mtp0.log",
+      "sha256": "594c95287b708c941be4d58f36cda3b4ece94cbd145bcdfab705529280fe9b04",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2/server/streamed-mtp3.log",
+      "sha256": "0ac1e35e3214876506b889431721ebe2a21941ffdb72f3933741be62965b246f",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3/strict-native.log",
+      "sha256": "1918043aad48412bda539c51a9cfaa3d79bfc5b85eaaf1adac383e8b47bdce02",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3/strict-streamed-1536.log",
+      "sha256": "509113209dd5941ddcc0cd7102336912042c17bf5361e5a46156204f928526d1",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv7-protected-memory-1536-v1/lifecycle.log",
+      "sha256": "82b33e38c22a9b2049c2b064417c37e0bc0a71c22ed4994b6adf3a942718eea8",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv7-largest-decoder-memory-1536-v1/lifecycle.log",
+      "sha256": "b173b747a4dbc7b2672482f6853438ba62e73a11a47f6509b9a1de7ec12bc8e5",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1/narrow-1120-strict.log",
+      "sha256": "694329e053fb84ec599c0f901b59c215701a91da4d1043eb40e5f910bae1fe1b",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1/portrait-1120-strict.log",
+      "sha256": "6c76101c8f682b7c600ed171816c728597f0b0571980aad6df98e94cdd22f4bc",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/memcheck-acceptance-ring.log",
+      "sha256": "369005d3893947dab2874d9b05683601010769042db1981c49ffa824504bcb77",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/memcheck-cache-source.log",
+      "sha256": "e842b5c9f87404cc4cc40a2d2d1ad9615c3659ff5d595b946c5795efc8587dc0",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/memcheck-copy-init.log",
+      "sha256": "38018118bb3d276bcb83158b79257b2417e12ce8f23e2a1b38105ec9bd3fcbc4",
+      "zero_error_summaries": 1
+    },
+    {
+      "path": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/memcheck-d512-all64-progressive.log",
+      "sha256": "ec457c79d21933944a3d6d88eaea8d515d3ac606f64224805e2bd2c7c3d2f68b",
+      "zero_error_summaries": 1
+    }
+  ],
+  "evidence": [
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv0-fixture-quality-v1",
+      "result": {
+        "stage": "fixture_reference_comparison_completed",
+        "time": 1792825070.9802055,
+        "gates": 12,
+        "scope": "Review absolute errors and F16-relative agreement before precision selection; no broad task-quality claim."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv0-fixture-quality-v1/status.json": "5399fbd8e94eb66fb7c6ea45ce65d7a1423d131de5bcd4fe7ae05f29f32bca68",
+        "benchmarks/results/gemma4-vision-20261023/gv0-fixture-quality-v1/provenance.json": "ba865532a5dfd2904f97e7a387dcbbcec20d1f02fb9370bc24af9a88d89755d9",
+        "benchmarks/results/gemma4-vision-20261023/gv0-fixture-quality-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv0-fixture-quality-v1/accepted-gates.json": "ac285f11f05578bd6eef97d1039d321c4b247953f9f8ae306708093f648633dd",
+        "benchmarks/results/gemma4-vision-20261023/gv0-fixture-quality-v1/source.patch": "b408f797104ac6895a28ce39ae8bb4e273f9bbe52ce62a67577c23b38cddbeb2"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1",
+      "result": {
+        "stage": "aspect_encoder_oracles_passed",
+        "time": 1792868529.2011123,
+        "gates": 15,
+        "scope": "Q8 aspect encoder components, not new task-quality or joint-fit evidence."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1/status.json": "672cfbf01f009c922cfd059dcedbfb67504daf9a951b2f55f60be1322ae5d4e1",
+        "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1/provenance.json": "03404f134335294deef4c04f838a7dc0d1ba3a86437ed5621126481fcf8581ef",
+        "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1/accepted-gates.json": "f5bc737615da879e378a49bb94524323e6afacea3aec632708fd3a34c22bb4c0",
+        "benchmarks/results/gemma4-vision-20261023/gv0-aspect-oracles-v1/source.patch": "e4779f95b38272f027d49c9b4d6241e818703990e56fe7c69d79823b89ec9d4b"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3",
+      "result": {
+        "stage": "image_1120_physical_fit_profiles_passed",
+        "time": 1792826284.607277,
+        "modes": 4,
+        "scope": "Workload-specific maxima, not native equivalence or whole vision qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/status.json": "251c3c79aee4a8859141923489bc664b46ea6fbde0d2592859ea6e385540a941",
+        "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/provenance.json": "85798a9f2d042eda2f033a0ddd49fadb9c04d2ec3df4ff2080cadfaf1a7670f7",
+        "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/accepted-gates.json": "714b840d4893ad74a16cca3afdf12bc193ba1ee033a7a6a4b94032f2ccd80799",
+        "benchmarks/results/gemma4-vision-20261023/gv1-image-fit-1120-accounting-v3/source.patch": "f3c1176e303603008e661481342ffaaf550e8be7a8b0284b80a3ee91eb872fa8"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv5-boundary-lifecycle-v1",
+      "result": {
+        "stage": "vision_lifecycle_profiles_passed",
+        "time": 1792867268.709646,
+        "records": 224,
+        "scope": "Declared image budget/artifact only; not whole-feature qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv5-boundary-lifecycle-v1/status.json": "54532bea488f68a62d5435989b8b43ccd09927ea02a80086ca18f12ee2debdcb",
+        "benchmarks/results/gemma4-vision-20261023/gv5-boundary-lifecycle-v1/provenance.json": "e860debca2a02e757d4d727fc9a61256b037f954c2908be55edd618ec5ef668f",
+        "benchmarks/results/gemma4-vision-20261023/gv5-boundary-lifecycle-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv5-boundary-lifecycle-v1/accepted-gates.json": "b7653c67c7339eda455e990a7c544053853e6ed1fae71db835fe0cc9fdc70c47",
+        "benchmarks/results/gemma4-vision-20261023/gv5-boundary-lifecycle-v1/source.patch": "7294d2453ba4aaba34f84d1f587835cc72f22fca4582e130b47ceaa89d27d4a5"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3",
+      "result": {
+        "stage": "split_image_vector_memory_passed",
+        "time": 1792863081.80088,
+        "gates": 5,
+        "scope": "Same-profile image-conditioned target/assistant full vectors and ownership; not actual encoder-forward memory qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3/status.json": "a679dbdde66e191a114388cb5797dc8595db7c339acd333dc7363244859943f5",
+        "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3/provenance.json": "87c07e46597ae361de3a362006a8a44fb554a8a8d5f7220b7c07aaa80e9546f0",
+        "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3/accepted-gates.json": "08d28e1e7ae979f8424dc758af0a17fc4b504b6e2eefd51d806b907d900b74bb",
+        "benchmarks/results/gemma4-vision-20261023/gv6-split-vector-memory-1536-v3/source.patch": "824667f1a15a7ddbf336c36f659aaa1c4030c7ccaf15c0ad720d6be6cc226586"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2",
+      "result": {
+        "stage": "public_vision_memory_passed",
+        "time": 1792865526.6177602,
+        "records": 36,
+        "strict_summaries": 2,
+        "scope": "Budget70 target0/MTP3 actual encoder-forward, not all-budget/long-session qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2/status.json": "e01df45ba320065614b31d156ca7556a341abc9e7c5bf36d0743d11e47cc16fa",
+        "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2/provenance.json": "934fd71b96aa7eeb0927ab207dcd3592a47d08af16e5b3e44bcb013957353982",
+        "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2/accepted-gates.json": "b018dad61881a86fca218ec4ebfa2241201d2c4dc94a3a84f3076e902b3c0244",
+        "benchmarks/results/gemma4-vision-20261023/gv7-public-memory-1536-v2/source.patch": "824667f1a15a7ddbf336c36f659aaa1c4030c7ccaf15c0ad720d6be6cc226586"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-largest-protected-vision-v1",
+      "result": {
+        "stage": "focused_lifecycle_green",
+        "time": 1792870770.8844302,
+        "expected": null,
+        "log_sha256": "074bddeecf9be952d5487fb13e692f7e14049251ad473e7e24ecfd0c2a422e7e"
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-protected-vision-v1/status.json": "1d6780d866974004db48af2b16355e78dc54a82bcf208bd01684d672c201d41b",
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-protected-vision-v1/provenance.json": "5c219ab6949e008739c009e72c93e08d405da8887818c0b3cc503ecf39c3062d",
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-protected-vision-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-protected-vision-v1/source.patch": "62a97c0fb6ef0f8a83ff09fb9780b49b007c6bd672e69c8f2ba196bc4a6154d5"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-largest-decoder-memory-1536-v1",
+      "result": {
+        "stage": "focused_lifecycle_green",
+        "time": 1792871510.2368696,
+        "expected": null,
+        "log_sha256": "b173b747a4dbc7b2672482f6853438ba62e73a11a47f6509b9a1de7ec12bc8e5"
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-decoder-memory-1536-v1/status.json": "97e044beb111ab81bfea49cd3a5dde5dfc54a9635b443cc4208f090036155200",
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-decoder-memory-1536-v1/provenance.json": "b345223f322e2e7508277d09a6154bde2f5e940013242ef650aa4d37b2632016",
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-decoder-memory-1536-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-largest-decoder-memory-1536-v1/source.patch": "62a97c0fb6ef0f8a83ff09fb9780b49b007c6bd672e69c8f2ba196bc4a6154d5"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-long-protected-vision-v1",
+      "result": {
+        "stage": "focused_lifecycle_green",
+        "time": 1792866822.8795717,
+        "expected": null,
+        "log_sha256": "bd6be30f2a1bb0fefa66e0abc68f142949e653f4b67bd8f947686a91e5595227"
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-protected-vision-v1/status.json": "155e575c9d3021f610d8c8dc43a83ab244cfe2b454a4546dfda26efe916948a4",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-protected-vision-v1/provenance.json": "e2fd34a8e87a555f8f211a01b46c3cddd5af78da60edf193b3e524f38c32a510",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-protected-vision-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-protected-vision-v1/source.patch": "7294d2453ba4aaba34f84d1f587835cc72f22fca4582e130b47ceaa89d27d4a5"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-protected-memory-1536-v1",
+      "result": {
+        "stage": "focused_lifecycle_green",
+        "time": 1792866600.3599012,
+        "expected": null,
+        "log_sha256": "82b33e38c22a9b2049c2b064417c37e0bc0a71c22ed4994b6adf3a942718eea8"
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-protected-memory-1536-v1/status.json": "e8c510a46d4bf5506f06fc767546363a5ce71ad54ea1d6a9b7e3170cd67ddb80",
+        "benchmarks/results/gemma4-vision-20261023/gv7-protected-memory-1536-v1/provenance.json": "004fb1884b1be9ae2478bccc001979b8a39119ea4d716bb40f08e221101589ab",
+        "benchmarks/results/gemma4-vision-20261023/gv7-protected-memory-1536-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-protected-memory-1536-v1/source.patch": "a57ac23a4f53dbc1d99ac62a12afe3abd75c5ad6b03058b1857504ffdb5e86f9"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-encoder-exception-retry-v4",
+      "result": {
+        "stage": "focused_lifecycle_green",
+        "time": 1792862595.127131,
+        "expected": null,
+        "log_sha256": "36e77cb6b1d75fa40263a5deee42314952be43ccaf00061d876e2ddc7ecbf7d2"
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-encoder-exception-retry-v4/status.json": "2099209d916919287806c1560a699398ac07a9d64c8f93e47af1f31309007d08",
+        "benchmarks/results/gemma4-vision-20261023/gv7-encoder-exception-retry-v4/provenance.json": "ae4f245a12f37c8982bc97637e27d9a5e979fdf81de9ea52edb669906394377c",
+        "benchmarks/results/gemma4-vision-20261023/gv7-encoder-exception-retry-v4/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-encoder-exception-retry-v4/source.patch": "824667f1a15a7ddbf336c36f659aaa1c4030c7ccaf15c0ad720d6be6cc226586"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-long-decode-4k-v1",
+      "result": {
+        "stage": "vision_lifecycle_profiles_passed",
+        "time": 1792874324.3906803,
+        "records": 80,
+        "scope": "Declared image budget/artifact only; not whole-feature qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-decode-4k-v1/status.json": "80f9fbb2960fc4025a52b3905d19e52bde48f01080a02dbe47564b3993b3189c",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-decode-4k-v1/provenance.json": "602a4f69e01ab691fa2b3ad9d4f95dc310669bf7b082db123afa0786aea0ccea",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-decode-4k-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-decode-4k-v1/accepted-gates.json": "6d25872b218076a71e40e1250d0e46e0aed45b4a4a78b61f41fd4e19ba1ffecf",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-decode-4k-v1/source.patch": "62a97c0fb6ef0f8a83ff09fb9780b49b007c6bd672e69c8f2ba196bc4a6154d5"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-long-ring-lifecycle-v2",
+      "result": {
+        "stage": "vision_lifecycle_profiles_passed",
+        "time": 1792877837.769738,
+        "records": 68,
+        "scope": "Declared image budget/artifact only; not whole-feature qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-ring-lifecycle-v2/status.json": "0691a1c9e4616eed3a76be9912a817bc5696fe0613fa77f3a5f9aa4aab30ac5f",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-ring-lifecycle-v2/provenance.json": "f16373f980131d6443077cc84fa422b8b244a85a656134211c4571586d4b4d7b",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-ring-lifecycle-v2/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-ring-lifecycle-v2/accepted-gates.json": "b5934396726b485dcbb3835f17dadf32fb8f023e4db2bedfbb2969a32c73690b",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-ring-lifecycle-v2/source.patch": "95660c3077726eaa163ea60ddb6ebb9f07a90223b37a033ac1e39138599adf6c",
+        "benchmarks/results/gemma4-vision-20261023/gv7-long-ring-lifecycle-v2/ring-proof.json": "b055532ba43caff530d878b66c6c6a25abe00af0ca301881b0eb550cdc1b3fd2"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2",
+      "result": {
+        "stage": "vision_whole_regressions_passed",
+        "time": 1792882417.9489777,
+        "base_gates": 26,
+        "extra_gates": 18,
+        "remaining": "Audit native image scenarios, long lifecycle, source/input manifests, memory zero summaries and performance, then GV9 documentation/qualified handoff."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/status.json": "c96add6e449286210e06b1fe4de5c159fcd695b0cfed3ef316c396cb009f91c0",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/provenance.json": "1e8aad816440cb8db60d2193ee3aa6be99b410b0736845112a341871290d7aac",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/production-health.json": "b588da1f977499c25fe176f73192186468e113852eb242777ba4b6de389e2059",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/accepted-gates.json": "2f63d01f3f5778dd4a3f0be7a33dcc80cdfe200ed7182dc86b6a8f3e3a5ebfdd",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/extra-provenance.json": "2d66698fec557abd301c0b2510b10ba8c790a690ed1244214c521a2c4efe50a9",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/extra-gates.json": "362aa253241b2caec6505527be058796de59779f27779e1493425ad1e05f6c5a",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/vision-memory-evidence.json": "fb6fdd30c77bc239a0aa5201647fc9f019b0278719b92adafddb77bbab19cf78",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/reused-evidence.json": "090af26fe2e281f3d55dc53252695c6f71f7c320dfa5d0fdbf5395565e7f543a",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/input-audit.json": "f567933d2fc7e2f14b16e722ffe35573c7b5df89e18962f27366e1c32a685cea",
+        "benchmarks/results/gemma4-vision-20261023/gv8-final-regressions-v2/source.patch": "95660c3077726eaa163ea60ddb6ebb9f07a90223b37a033ac1e39138599adf6c"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv8-text-performance-v1",
+      "result": {
+        "stage": "vision_text_screen_passed",
+        "time": 1792883178.3348527,
+        "requests": 16,
+        "pairs": 8,
+        "scope": "Single-pair regression screen only, not a statistical speedup claim."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv8-text-performance-v1/status.json": "28f2268b684bd84e80997e446e990de7effd6e19e825eb870dfe6a710e6f8b09",
+        "benchmarks/results/gemma4-vision-20261023/gv8-text-performance-v1/provenance.json": "eb04986b48d73c344dfc65e2caefdfde8a3dc1c0c9769888ea74c4e054ee31ce",
+        "benchmarks/results/gemma4-vision-20261023/gv8-text-performance-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv8-text-performance-v1/comparison.json": "0f76c80a678d72a44fbad90d000900b2902e2986ab8233c0deb944da90d9e9a1",
+        "benchmarks/results/gemma4-vision-20261023/gv8-text-performance-v1/results.csv": "aa5524cb935ef39281d55fef2835687a75257ff498e99d86e8cf3adf11bc8455"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp1-lifecycle-v1",
+      "result": {
+        "stage": "vision_lifecycle_profiles_passed",
+        "time": 1792872624.3808951,
+        "records": 22,
+        "scope": "Declared image budget/artifact only; not whole-feature qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp1-lifecycle-v1/status.json": "dfc7f02bf87e8dccc50b4d8d80d14cdc5f19d30cdb79b383d8d341bf9f72a7b8",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp1-lifecycle-v1/provenance.json": "a7313936cc4f6731ecd2f573fc0b65d89898cc40e9dafea039b2dfab8181f22f",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp1-lifecycle-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp1-lifecycle-v1/accepted-gates.json": "a887e5e9ba137e21027a61b081159b36cb361961a6d83f55f6fc691035b9130f",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp1-lifecycle-v1/source.patch": "62a97c0fb6ef0f8a83ff09fb9780b49b007c6bd672e69c8f2ba196bc4a6154d5"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp2-lifecycle-v1",
+      "result": {
+        "stage": "vision_lifecycle_profiles_passed",
+        "time": 1792872920.8112931,
+        "records": 22,
+        "scope": "Declared image budget/artifact only; not whole-feature qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp2-lifecycle-v1/status.json": "8998eb17876d1cb14066eb33fc294145fa6c343c4fb7203577670c20e3e9c6d8",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp2-lifecycle-v1/provenance.json": "541c2b23907052fd853b74268669f46110194df4bedbfed7f620d291d8c2c1c5",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp2-lifecycle-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp2-lifecycle-v1/accepted-gates.json": "29f23eebf2ca318567ee62fc1ac79daaee5cd64e5bd113683e56f044b59dba36",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp2-lifecycle-v1/source.patch": "62a97c0fb6ef0f8a83ff09fb9780b49b007c6bd672e69c8f2ba196bc4a6154d5"
+      }
+    },
+    {
+      "directory": "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp3-lifecycle-v1",
+      "result": {
+        "stage": "vision_lifecycle_profiles_passed",
+        "time": 1792873010.7071548,
+        "records": 22,
+        "scope": "Declared image budget/artifact only; not whole-feature qualification."
+      },
+      "files_sha256": {
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp3-lifecycle-v1/status.json": "7699053b3f7b894195680e78f7149b0ece51a5b97b5919262caf9601e0940709",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp3-lifecycle-v1/provenance.json": "d0656ef99e6012c03e545463e8313317d637978add504c18bfec15f658e8bfed",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp3-lifecycle-v1/production-health.json": "f63fd1931a376b1dfc8426c684dc237f2998dfc00a210dc205a7052435db49ce",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp3-lifecycle-v1/accepted-gates.json": "a256c029abee8ca20fef95eab4bbf1444c91236d699b562c55fc06da241cffb1",
+        "benchmarks/results/gemma4-vision-20261023/gv7-budget1120-mtp3-lifecycle-v1/source.patch": "62a97c0fb6ef0f8a83ff09fb9780b49b007c6bd672e69c8f2ba196bc4a6154d5"
+      }
+    }
+  ],
+  "production_healthy": true,
+  "not_qualified": [
+    "Other Gemma variants",
+    "Gemma DFlash",
+    "audio/video",
+    "parallel or multi-GPU",
+    "physical older-GPU vision runtime",
+    "all64pairs whole-image performance",
+    "full256K image prefill",
+    "broad projector task-quality certification"
+  ]
+}

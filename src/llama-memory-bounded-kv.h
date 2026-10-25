@@ -31,6 +31,12 @@ public:
     explicit operator bool() const noexcept;
     ggml_backend_buffer_t buffer() const noexcept;
     const llama_memory_bounded_kv_layout * layout() const noexcept;
+    // Revalidate native roots or cached full-layer views without allocating metadata or initializing backend state.
+    bool contains_layer(uint32_t layer, const ggml_tensor * key, const ggml_tensor * value) const noexcept;
+    // Create caller-owned views of a retained layer without reinitializing its bytes or private backend state.
+    // Keep native roots and this pin alive through every view's completion. Failure preserves outputs, not consumed metadata space.
+    bool bind_layer_views(ggml_context * context, uint32_t layer, ggml_tensor * native_key, ggml_tensor * native_value,
+            ggml_tensor * & key, ggml_tensor * & value) const noexcept;
     void reset() noexcept;
 private:
     friend class llama_memory_bounded_kv;

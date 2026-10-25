@@ -47,8 +47,8 @@ struct fixture {
     // The unused ring remains at the front; active resident planes must use policy offsets, not a flat host copy.
     fixture(ggml_backend_t backend, bool cuda, ggml_type k = GGML_TYPE_F16, ggml_type v = GGML_TYPE_F16,
             size_t context = 769, bool fallback = false, uint32_t layers = 2, uint32_t heads = 2,
-            size_t pool_pages = 0) : backend(backend), cuda(cuda) {
-        llama_kv_stream_host_config c{37, {k, v, 256, 256, int32_t(heads), 256, 128},
+            size_t pool_pages = 0, uint32_t key_width = 256, uint32_t value_width = 256) : backend(backend), cuda(cuda) {
+        llama_kv_stream_host_config c{37, {k, v, key_width, value_width, int32_t(heads), 256, 128},
             {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, context, layers};
         auto * dev = ggml_backend_get_device(backend);
         if (cuda) {

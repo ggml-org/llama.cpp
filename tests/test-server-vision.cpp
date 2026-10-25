@@ -91,6 +91,13 @@ int main() {
         p.speculative.types = {COMMON_SPECULATIVE_TYPE_NONE}; p.kv_stream_auxiliary_layers = 1;
         t.assert_true(server_vision_arena_config_error(p) != nullptr);
     });
+    t.test("declared_external_mtp_pair_reaches_loaded_model_validation",[](testing & t) {
+        auto p=qualified();
+        p.speculative.types={COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        p.speculative.draft.n_max=3;
+        p.speculative.draft.mparams.path="matching-assistant.gguf";
+        t.assert_true(server_vision_arena_config_error(p)==nullptr);
+    });
     t.test("request_cannot_override_the_qualified_execution_mode", [](testing & t) {
         server_task task(SERVER_TASK_TYPE_COMPLETION);
         task.tokens = server_tokens(llama_tokens{1,2,3},true);
@@ -107,6 +114,32 @@ int main() {
         t.assert_true(server_vision_arena_request_error(task) != nullptr);
         task.type = SERVER_TASK_TYPE_COMPLETION; task.tokens = server_tokens(llama_tokens{LLAMA_TOKEN_NULL},true);
         t.assert_true(server_vision_arena_request_error(task) != nullptr);
+    });
+    t.test("configured_shared_assistant_is_not_a_request_model_override",[](testing & t) {
+        auto p=qualified();p.speculative.types={COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        p.speculative.draft.n_max=3;p.speculative.draft.mparams.path="matching-assistant.gguf";
+        server_task task(SERVER_TASK_TYPE_COMPLETION);task.tokens=server_tokens(llama_tokens{1,2,3},true);
+        task.params.speculative=p.speculative;
+        t.assert_true(!server_vision_arena_request_error(task,true,&p.speculative));
+        for (int change=0;change<8;++change) {
+            server_task bad(SERVER_TASK_TYPE_COMPLETION);bad.tokens=server_tokens(llama_tokens{1,2,3},true);
+            bad.params.speculative=task.params.speculative;
+            switch (change) {
+                case 0: bad.params.speculative.draft.mparams.path="foreign.gguf";break;
+                case 1: bad.params.speculative.draft.mparams.url="https://invalid.example/model.gguf";break;
+                case 2: bad.params.speculative.draft.mparams.hf_repo="foreign/repo";break;
+                case 3: bad.params.speculative.draft.mparams.hf_file="foreign.gguf";break;
+                case 4: bad.params.speculative.draft.mparams.docker_repo="foreign/repo";break;
+                case 5: bad.params.speculative.draft.cache_type_k_explicit=true;break;
+                case 6: bad.params.speculative.draft.cache_type_v_explicit=true;break;
+                case 7: bad.params.speculative.draft.n_max=4;break;
+            }
+            t.assert_true(server_vision_arena_request_error(bad,true,&p.speculative)!=nullptr);
+        }
+        p.speculative.draft.n_max=1;
+        t.assert_true(server_vision_arena_request_error(task,true,&p.speculative)!=nullptr);
+        task.params.speculative.draft.n_max=1;
+        t.assert_true(!server_vision_arena_request_error(task,true,&p.speculative));
     });
     return t.summary();
 }

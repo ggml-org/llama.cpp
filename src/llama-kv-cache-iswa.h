@@ -4,6 +4,9 @@
 
 #include <vector>
 
+struct llama_memory_phase_cache_identity;
+struct llama_memory_bounded_kv_layout;
+
 //
 // llama_kv_cache_iswa
 //
@@ -13,6 +16,11 @@
 
 class llama_kv_cache_iswa : public llama_memory_i {
 public:
+    // Quote the owned local-layer roots with stock window/headroom padding, before allocating their persistent lease.
+    static bool bounded_storage_requirements(const llama_hparams & hparams, const llama_memory_params & params,
+            const llama_cparams & cparams, ggml_backend_buffer_type_t buft,
+            llama_memory_phase_cache_identity identity, llama_memory_bounded_kv_layout & output) noexcept;
+
     llama_kv_cache_iswa(
             const llama_model & model,
                     ggml_type   type_k,
@@ -28,7 +36,7 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share, const llama_memory_params * bounded = nullptr);
+        const  layer_share_cb & share, const llama_memory_params * stream = nullptr);
 
     llama_kv_cache_iswa(
             const llama_model & model,
@@ -46,7 +54,7 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share, const llama_memory_params * bounded = nullptr);
+        const  layer_share_cb & share, const llama_memory_params * stream = nullptr);
 
     ~llama_kv_cache_iswa() = default;
 

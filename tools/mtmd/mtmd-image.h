@@ -121,6 +121,16 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
 struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    static clip_image_size target_size(const clip_hparams & hparams, const clip_image_size & original_size);
+
+protected:
+    mtmd_image_preproc_out resize(const clip_image_u8 & img, const clip_image_size & target_size) const;
+};
+
+struct mtmd_image_preprocessor_gemma4 : mtmd_image_preprocessor_dyn_size {
+    mtmd_image_preprocessor_gemma4(const clip_ctx * ctx) : mtmd_image_preprocessor_dyn_size(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    static clip_image_size target_size(const clip_hparams & hparams, const clip_image_size & original_size);
 };
 
 // GLM 5.3 flash, similar to dyn_size, but each edge is aligned up to patch_size*n_merge, and max budget is met by a search over the height with the width scaled proportionally

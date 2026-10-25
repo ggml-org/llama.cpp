@@ -15,6 +15,7 @@ struct llama_kv_stream_write_stats {
 struct llama_kv_stream_prefetch_stats {
     size_t pending_pages = 0, peak_pages = 0, max_layer_distance = 0;
     size_t copy_bytes = 0, copy_calls = 0;
+    size_t reused_bytes = 0, reused_pages = 0;
     size_t feedback_stride = 1, feedback_uploads = 0;
     size_t ready_pages = 0;
     bool demand_ready = false, primed = false, adopted = false;
@@ -23,6 +24,7 @@ struct ggml_kv_stream_copy_feedback;
 struct llama_kv_stream_feedback_context {
     uint32_t query_tokens = 0;
     bool decode = false;
+    bool read_only = false;
 };
 struct llama_kv_stream_capture_stamp {
     ggml_backend_buffer_t buffer = nullptr;

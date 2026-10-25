@@ -1,5 +1,6 @@
 #include "llama-memory-bounded-kv.h"
 #include "ggml-cpp.h"
+#include "../ggml/src/ggml-backend-impl.h"
 
 #include <algorithm>
 #include <climits>
@@ -78,6 +79,50 @@ const llama_memory_bounded_kv_layout * llama_memory_bounded_kv_read::layout() co
     return binding ? &binding->layout : nullptr;
 }
 void llama_memory_bounded_kv_read::reset() noexcept { binding.reset(); }
+
+bool llama_memory_bounded_kv_read::contains_layer(uint32_t id,
+        const ggml_tensor * native_key,const ggml_tensor * native_value) const noexcept {
+    if (!binding) return false;
+    const auto & source=binding->layout;
+    const auto found=std::find_if(source.layers.begin(),source.layers.end(),
+        [&](const llama_memory_bounded_kv_layer & layer) { return layer.id == id; });
+    if (found == source.layers.end()) return false;
+    auto * storage=buffer();
+    const size_t end=found+1 == source.layers.end() ? source.allocation.bytes : (found+1)->k_offset;
+    if (!storage || found->k_offset >= found->v_offset || found->v_offset >= end ||
+            end > ggml_backend_buffer_get_size(storage)) return false;
+    try {
+        const auto & format=source.cache.format;
+        const auto base=uintptr_t(ggml_backend_buffer_get_base(storage));
+        if (!base || source.allocation.bytes > UINTPTR_MAX-base) return false;
+        const auto valid=[&](const ggml_tensor * root,bool value) {
+            if (!root || !root->buffer || root->type != (value ? format.value_type : format.key_type) ||
+                    root->ne[0] != int64_t(value ? format.value_head_dim : format.key_head_dim)*format.kv_heads ||
+                    root->ne[1] != source.allocation.capacity_rows || root->ne[2] != 1 || root->ne[3] != 1 ||
+                    !ggml_is_contiguous(root) || ggml_nbytes(root) != (value ? found->v_bytes : found->k_bytes) ||
+                    uintptr_t(root->data) != base+(value ? found->v_offset : found->k_offset)) return false;
+            auto * parent=storage;
+            while (parent && parent != root->buffer) parent=parent->parent;
+            return parent != nullptr;
+        };
+        return valid(native_key,false) && valid(native_value,true);
+    } catch (...) { return false; }
+}
+
+bool llama_memory_bounded_kv_read::bind_layer_views(ggml_context * context,uint32_t id,
+        ggml_tensor * native_key,ggml_tensor * native_value,
+        ggml_tensor * & key,ggml_tensor * & value) const noexcept {
+    if (!binding || !context || !ggml_get_no_alloc(context) || &key == &value) return false;
+    const size_t used=ggml_used_mem(context),capacity=ggml_get_mem_size(context);
+    if (used > capacity || 2*ggml_tensor_overhead() > capacity-used || !contains_layer(id,native_key,native_value)) return false;
+    try {
+        auto * k=ggml_view_tensor(context,native_key);
+        auto * v=ggml_view_tensor(context,native_value);
+        if (ggml_backend_view_init(k) != GGML_STATUS_SUCCESS || ggml_backend_view_init(v) != GGML_STATUS_SUCCESS) return false;
+        key=k; value=v;
+        return true;
+    } catch (...) { return false; }
+}
 
 llama_memory_bounded_kv::llama_memory_bounded_kv(llama_memory_bounded_kv_layout layout, llama_memory_resource resource) :
     planned(std::move(layout)), resource(resource) {}

@@ -15,6 +15,16 @@ static __device__ __forceinline__ void ggml_cuda_fattn_mma_checkpoint_copy(void 
     for (size_t i=0;i<bytes/4;++i) dst[i]=src[i];
 }
 
+template<size_t thread_bytes>
+static __device__ __forceinline__ char * ggml_cuda_fattn_mma_checkpoint_thread(
+        const ggml_cuda_fattn_mma_resume_control & control, int slice, uint32_t block) {
+    const size_t thread = threadIdx.y*blockDim.x+threadIdx.x;
+    const size_t original_slot = size_t(slice)+block;
+    const size_t slot = control.state_per_block ? block :
+        control.state_ids ? control.state_ids[original_slot] : original_slot;
+    return reinterpret_cast<char *>(uintptr_t(control.state)+(slot*blockDim.x*blockDim.y+thread)*thread_bytes);
+}
+
 // Resolve an ordered logical token without using physical span order.
 static __device__ __forceinline__ int flash_attn_ext_f16_span_index(
         const ggml_cuda_kv_span * spans, int count, int token) {
@@ -223,6 +233,7 @@ struct ggml_cuda_fattn_mma_contiguous_kv {
     static constexpr bool spanned = false;
     static constexpr bool staged = false;
     static constexpr bool resumable = false;
+    static constexpr bool feature_pipelined = false;
     __device__ __forceinline__ const int32_t * mask_bounds() const { return nullptr; }
     __device__ __forceinline__ uint32_t block_index() const { return blockIdx.x; }
     __device__ __forceinline__ uint32_t block_count() const { return gridDim.x; }
@@ -244,6 +255,7 @@ struct ggml_cuda_fattn_mma_typed_span_kv {
     static constexpr bool encoded = key != GGML_TYPE_F16 || value_type != GGML_TYPE_F16;
     static constexpr bool staged = encoded;
     static constexpr bool resumable = resume;
+    static constexpr bool feature_pipelined = false;
     // F32 is rounded on ingress so every staged row fits the existing decoded tile.
     static constexpr ggml_type key_type = key == GGML_TYPE_F32 ? GGML_TYPE_F16 : key;
     static constexpr ggml_type v_type = value_type == GGML_TYPE_F32 ? GGML_TYPE_F16 : value_type;

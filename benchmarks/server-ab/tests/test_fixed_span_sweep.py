@@ -15,6 +15,68 @@ SPEC.loader.exec_module(SWEEP)
 
 
 class MtpSweepTests(unittest.TestCase):
+    def test_external_assistant_cli_and_commands_do_not_load_it_for_target_only(self):
+        with patch("sys.argv",[str(SCRIPT),"--model","target.gguf","--model-draft","assistant.gguf","--mtp-lengths","0,1,2,3"]):
+            args=SWEEP.arguments()
+        self.assertEqual(args.model_draft,Path("assistant.gguf"))
+        for depth in (0,1,2,3):
+            command=SWEEP.server_command(args,8192,depth)
+            self.assertIn("--offline",command)
+            self.assertIn("--no-context-shift",command)
+            if depth:
+                self.assertEqual(command[command.index("--model-draft")+1],"assistant.gguf")
+                self.assertEqual(command[command.index("--spec-draft-ngl")+1],"999")
+            else:
+                self.assertNotIn("--model-draft",command)
+                self.assertNotIn("--spec-draft-ngl",command)
+            self.assertNotIn("--spec-draft-type-k",command)
+            self.assertNotIn("--spec-draft-type-v",command)
+
+    def test_missing_external_assistant_is_rejected_before_managing_production(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp)
+            for name in ("target","server","corpus"):
+                (directory/name).write_text("fixture")
+            argv=[str(SCRIPT),"--model",str(directory/"target"),"--server",str(directory/"server"),
+                "--prefill-text",str(directory/"corpus"),"--model-draft",str(directory/"missing"),"--mtp-lengths","3"]
+            with patch("sys.argv",argv),patch.object(SWEEP.subprocess,"run") as manage, \
+                    self.assertRaisesRegex(SystemExit,"draft"):
+                SWEEP.main()
+            manage.assert_not_called()
+
+    def test_benchmark_environment_cannot_inherit_draft_quant_or_model_overrides(self):
+        with patch.dict(SWEEP.os.environ,{"LLAMA_ARG_MODEL":"wrong","LLAMA_ARG_SPEC_DRAFT_TYPE_K":"f16", "KEEP_ME":"yes"},clear=True):
+            env=SWEEP.server_environment(False)
+        self.assertEqual(env["KEEP_ME"],"yes")
+        self.assertFalse(any(name.startswith("LLAMA_ARG_") for name in env))
+
+    def test_persistent_local_quota_is_a_lower_bound_not_an_oom(self):
+        diagnostic="persistent local cache does not fit the declared shared arena: insufficient arena quota; required=788880128, available=536870912, additional=252009216 bytes; phase=1, resource=6"
+        self.assertEqual(SWEEP.arena_minimum_mib(diagnostic),753)
+        self.assertFalse(SWEEP.is_arena_capacity_failure(diagnostic))
+        self.assertIsNone(SWEEP.arena_minimum_mib(diagnostic.replace("insufficient arena quota","invalid request")))
+        self.assertIsNone(SWEEP.arena_minimum_mib("unsupported geometry: required=788880128 bytes"))
+
+    def test_full_context_request_deadline_is_configurable_and_bounded(self):
+        with patch("sys.argv",[str(SCRIPT),"--model","target.gguf","--request-timeout","3600"]):
+            self.assertEqual(SWEEP.arguments().request_timeout,3600)
+        for value in ("0","-1","nan","inf","43201"):
+            with patch("sys.argv",[str(SCRIPT),"--model","target.gguf","--request-timeout",value]),self.assertRaises(SystemExit):
+                SWEEP.arguments()
+
+    def test_full_workload_probe_uses_the_configured_deadline(self):
+        args=SimpleNamespace(server=Path("server"),model=Path("model"),batch_size=256,ubatch_size=256,
+            arena_mib=1024,port=1246,uvm=False,decode_tokens=8,mtp_lengths=(3,),request_timeout=3600)
+        def completion(_url,payload,**kwargs):
+            return {"timings":{"prompt_n":len(payload["prompt"]),"predicted_n":payload["n_predict"]},
+                "tokens":list(range(payload["n_predict"]))}
+        with tempfile.TemporaryDirectory() as temp,patch.object(SWEEP.subprocess,"Popen"), \
+                patch.object(SWEEP,"wait_ready"),patch.object(SWEEP,"stop_process"), \
+                patch.object(SWEEP,"stream_completion",side_effect=completion) as complete:
+            self.assertTrue(SWEEP.probe_arena(args,8192,3,1024,Path(temp),"http://localhost","article",
+                {"tokens":list(range(8192))},full_workload=True))
+        self.assertEqual(complete.call_args_list[-1].kwargs["timeout"],3600)
+
     def test_physical_auto_fitting_rejects_uvm_before_loading_inputs(self):
         with patch("sys.argv", [str(SCRIPT), "--model", "missing.gguf", "--auto-max-arena", "--uvm"]):
             with self.assertRaisesRegex(SystemExit, "UVM"):

@@ -2720,11 +2720,21 @@ common_speculative_init_result::common_speculative_init_result(
     //       the extra memory for small models is likely negligible?
     cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
+    bool shared_gemma_mtp=false;
+    if (spec_mtp && target_memory && target_memory->shares_kv_memory()) {
+        char architecture[32]={};
+        if (llama_model_meta_val_str(model_tgt,"general.architecture",architecture,sizeof(architecture)) == 6 &&
+                !std::strcmp(architecture,"gemma4")) {
+            cparams.n_batch=cparams.n_ubatch=1;
+            cparams.kv_stream_verify_max=0;
+            shared_gemma_mtp=true;
+        }
+    }
 
     std::string model_path;
     if (has_draft) {
         model_path = params.speculative.draft.mparams.path;
-        if (streamed_block) {
+        if (streamed_block || shared_gemma_mtp) {
             auto * device=llama_model_get_device(model_tgt,0);
             size_t before=0,after=0,total=0;
             ggml_backend_dev_memory(device,&before,&total);
@@ -2742,6 +2752,14 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->model.reset(model_dft);
+
+        if (shared_gemma_mtp) {
+            char architecture[32]={};
+            if (llama_model_meta_val_str(model_dft,"general.architecture",architecture,sizeof(architecture)) != 16 ||
+                    std::strcmp(architecture,"gemma4-assistant")) {
+                throw std::invalid_argument("shared-target Gemma MTP requires a matching Gemma4 assistant model");
+            }
+        }
 
         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
         if (ctx_dft == nullptr) {

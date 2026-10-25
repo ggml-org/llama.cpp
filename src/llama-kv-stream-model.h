@@ -2,7 +2,16 @@
 #include "llama-kv-stream-session.h"
 #include "llama-kv-stream-layer-lease.h"
 class llama_kv_stream_logical_cache;
+class llama_context_memory;
 
+enum class llama_kv_stream_access_role : uint32_t { append, read };
+
+// Scheduling intent only. Read frontiers/generations are resolved after publication, not inferred from cache membership.
+struct llama_kv_stream_next_consumer {
+    llama_kv_stream_access_role access = llama_kv_stream_access_role::append;
+    uint64_t cache_id = 0, reader_id = 0;
+    uint32_t layer = 0, query_tokens = 0, query_heads = 0, future_tokens = 0;
+};
 
 // Exact device-local grants contributed to the common text compute/KV parent.
 struct llama_kv_stream_memory_requirements {
@@ -68,6 +77,13 @@ public:
     bool acquire_mtp_layer(size_t future_tokens = 0, bool prefetch = false);
     // Cache identity selects the next reader; no model layer count is encoded in the schedule.
     bool schedule_next_cache(uint64_t cache_id, uint32_t future_tokens);
+    // The same cache can be an append producer or an immutable reader; each declares its own successor.
+    bool schedule_next_consumer(llama_kv_stream_access_role producer, const llama_kv_stream_next_consumer & next);
+    llama_kv_stream_next_consumer next_consumer(llama_kv_stream_access_role producer) const noexcept;
+    // Completed-role statistics do not include an upcoming successor's prefetch.
+    llama_kv_stream_prefetch_stats sequence_stats(llama_kv_stream_access_role producer) const noexcept;
+    // Finish a read phase, including confidence cutoff, and restore target append lookahead.
+    bool finish_read_access();
     bool wait_auxiliary_population(ggml_backend_t consumer);
     bool prefetch_target_after(ggml_backend_t last_reader);
     size_t mtp_reserved_tokens() const noexcept;
@@ -90,6 +106,11 @@ public:
     llama_kv_stream_population_stats mtp_layer_population() const noexcept;
     bool begin(size_t active_tokens, uint32_t query_tokens, bool decode);
     bool complete() const noexcept;
+    // Read-only consumers do not enter the target append/publication path.
+    bool read_source(llama_memory_cache_requirement & output, uint64_t * revision = nullptr) const noexcept;
+    bool prefetch_read(const llama_memory_cache_read_binding & binding, uint32_t query_tokens, uint32_t query_heads);
+    bool read_attention(const llama_memory_cache_read_binding & binding,
+            ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale);
     // Host identity and the logical frontier survive a zero-grant device phase.
     bool device_suspended() const noexcept;
     bool suspend_ready() const noexcept;
@@ -101,6 +122,7 @@ public:
     bool truncate(size_t tokens);
     size_t tokens() const noexcept;
     uint32_t max_batch_rows() const noexcept;
+    uint32_t max_decode_rows() const noexcept;
     bool bounded_prefill() const noexcept;
     bool compact_prefill_mask() const noexcept;
     size_t granted_bytes() const noexcept;
@@ -124,9 +146,34 @@ public:
     size_t pool_grant_bytes() const noexcept;
     size_t writer_grant_bytes() const noexcept;
     size_t attention_grant_bytes() const noexcept;
+    // Target copy counts and timing share one role; borrowed transfer counts remain in sequence_stats(read).
     bool runtime_diagnostics(llama_kv_stream_runtime_diagnostics & output) const noexcept;
 private:
     llama_kv_stream_model() = default;
+    struct implementation;
+    std::shared_ptr<implementation> impl;
+    ggml_backend_buffer_t proxy = nullptr;
+};
+
+// Read-only host aliases for one streamed layer. Target, memory owner and backend outlive this adapter and its graphs.
+class llama_kv_stream_read_proxy {
+public:
+    static std::unique_ptr<llama_kv_stream_read_proxy> create(llama_kv_stream_model & source,
+            llama_context_memory & parent, uint32_t layer, const llama_memory_cache_format & format,
+            uint32_t query_heads, uint32_t max_queries);
+    ~llama_kv_stream_read_proxy();
+    ggml_tensor * key() const noexcept;
+    ggml_tensor * value() const noexcept;
+    ggml_backend_buffer_t buffer() const noexcept;
+    // Snapshot a committed source after phase preparation. A stale armed frame must be disarmed before rebinding.
+    bool arm();
+    // Describe the existing alias, without inventing a cache or retaining an execution frame.
+    bool next_consumer(uint32_t query_tokens, llama_kv_stream_next_consumer & output) const noexcept;
+    bool prefetch(uint32_t query_tokens);
+    bool ready() const noexcept;
+    bool disarm() noexcept;
+private:
+    llama_kv_stream_read_proxy() = default;
     struct implementation;
     std::shared_ptr<implementation> impl;
     ggml_backend_buffer_t proxy = nullptr;

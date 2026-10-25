@@ -1,6 +1,7 @@
 #include "kv-stream-block-test.h"
 #include "../src/llama-kv-stream-session.h"
 #include "../src/llama-kv-stream-layer-lease.h"
+#include "../src/llama-memory-phase.h"
 
 struct session_inputs {
     ggml_context_ptr ctx;
@@ -25,15 +26,31 @@ struct resume_wave_probe {
     ggml_kv_stream_partial_ops ops;
     decltype(ggml_kv_stream_partial_ops::resume) legacy;
     decltype(ggml_kv_stream_partial_ops::resume_spans) wave;
+    decltype(ggml_kv_stream_partial_ops::spans) span_call;
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::synchronize) synchronize;
+    bool track_completion=false, pending=false;
     size_t calls=0, wrapped=0, resident_combined=0;
     testing * checks=nullptr;
     bool checked=false;
-    resume_wave_probe(ggml_backend_t backend,bool enabled,testing * checks=nullptr) : reg(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend))),
-            previous(reg->iface.get_proc_address) {
+    resume_wave_probe(ggml_backend_t backend,bool enabled,testing * checks=nullptr,bool completion=false) : reg(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend))),
+            previous(reg->iface.get_proc_address),backend(backend),synchronize(backend->iface.synchronize),track_completion(completion) {
         auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(previous(reg,"ggml_backend_kv_stream_partial_ops"));
         GGML_ASSERT(get && get() && !active);
         ops=*get(); legacy=ops.resume; wave=ops.resume_spans; active=this;
         this->checks=checks;
+        span_call=ops.spans;
+        if (track_completion) {
+            ops.spans=[](ggml_backend_t b,const ggml_tensor * op,ggml_kv_stream_span_plan_t p,ggml_backend_buffer_t w) {
+                const bool accepted=active->span_call(b,op,p,w);
+                if (accepted) active->pending=true;
+                return accepted;
+            };
+            backend->iface.synchronize=[](ggml_backend_t b) {
+                active->synchronize(b);
+                active->pending=false;
+            };
+        }
         ops.resume=[](ggml_backend_t b,const ggml_tensor * op,ggml_backend_buffer_t w,
                 const ggml_kv_stream_resume_plan & p,size_t n,size_t f,bool last) {
             ++active->calls; return active->legacy(b,op,w,p,n,f,last);
@@ -71,7 +88,10 @@ struct resume_wave_probe {
             return active->previous(r,name);
         };
     }
-    ~resume_wave_probe() { reg->iface.get_proc_address=previous; active=nullptr; }
+    ~resume_wave_probe() {
+        if (track_completion) backend->iface.synchronize=synchronize;
+        reg->iface.get_proc_address=previous; active=nullptr;
+    }
 };
 
 int main(int argc, char ** argv) {
@@ -83,7 +103,9 @@ int main(int argc, char ** argv) {
     const bool wide_resume_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wide-resume");
     const bool wave_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wave-batching");
     const bool consumer_only = argc > 1 && !std::strcmp(argv[1],"--cuda-consumer-prefetch");
-    const bool cuda = consumer_only || physical_map_only || guard_only || page_boundary_only || short_prefill_only || prefill_tail_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool read_only = argc > 1 && !std::strcmp(argv[1],"--cuda-read-only");
+    const bool read_reuse = argc > 1 && !std::strcmp(argv[1],"--cuda-read-reuse");
+    const bool cuda = read_reuse || read_only || consumer_only || physical_map_only || guard_only || page_boundary_only || short_prefill_only || prefill_tail_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -96,6 +118,226 @@ int main(int argc, char ** argv) {
     if (wide_resume_only) t.set_filter("wide_target_decode_reuses_small_ring_and_matches_stock");
     if (wave_only) t.set_filter("wrapped_resume_waves_reduce_launches_without_changing_tokens");
     if (consumer_only) t.set_filter("explicit_consumer_prefetch_adopts_actual_query_width_without_extra_uploads");
+    if (read_only) t.set_filter("borrowed_attention_reads_committed_layers_without_appending");
+    if (read_reuse) t.set_filter("immutable_reader_reuses_only_still_present_ring_pages");
+    if (cuda) t.test("borrowed_attention_reads_committed_layers_without_appending",[&](testing & t) {
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(get && get())) return;
+        for (uint32_t dimension : {256u,512u}) for (auto pair : {
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16}})
+                for (size_t active : {257u,4097u}) for (uint32_t queries : {1u,3u,4u}) for (uint32_t heads : {4u,32u}) {
+            t.out << "borrowed D" << dimension << ' ' << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second)
+                << " active=" << active << " TG" << queries << " heads=" << heads << std::endl;
+            resume_wave_probe probe(backend.get(),true,nullptr,true);
+            fixture f(backend.get(),true,pair.first,pair.second,8192,false,2,4,8,dimension,dimension);
+            f.policy.initial_ring_slots=2; f.policy.fixed_ring=true;
+            size_t bytes=0;
+            if (!t.assert_true(ggml_kv_stream_workspace_query(get(),backend.get(),
+                    {f.policy.shape,32,4,f.host->layout().tokens},ggml_kv_stream_workspace_kind::decode,bytes))) return;
+            block_workspace writer(f,131072,19), attention(f,bytes,29), graph_workspace(f,262144,49);
+            llama_kv_stream_session_config config{f.policy,4,32,false,true,true};
+            config.initial_decode=true; config.cross_token_prefetch=true; config.span_workspace_bytes=bytes;
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+                f.lease.get(),writer.lease.get(),attention.lease.get());
+            if (!t.assert_true(bool(session) && session->restore(active))) return;
+            llama_memory_cache_requirement source;
+            if (!t.assert_true(session->read_source(source))) return;
+            t.assert_equal(f.host->cache_id(),source.identity.id);
+            t.assert_equal(f.content->generation(),source.identity.generation);
+            auto alias=source;
+            alias.identity={source.identity.id+100,1}; alias.source=source.identity;
+            alias.role=llama_memory_cache_role::read_only_source; alias.layers=1; alias.source_first_layer=1;
+            llama_memory_cache_read_binding binding;
+            if (!t.assert_true(llama_memory_cache_read_binding_make(alias,source,0,uint32_t(active),session->layout_revision(),binding))) return;
+            block_inputs input(f,active,queries,false,heads);
+            const auto untouched=input.read();
+            ggml_kv_stream_resume_plan native;
+            if (!ggml_kv_stream_resume_plan_query(get(),backend.get(),
+                    {f.policy.shape,heads,queries,input.padded},native)) {
+                if (!t.assert_true("the required 32-head geometry is compiled",heads != 32)) return;
+                t.assert_true(!session->prefetch_read(binding,queries,heads));
+                t.assert_true(!session->read_attention(binding,input.q,input.mask,input.output,1.0f/16));
+                t.assert_true(same_float_bits(untouched,input.read()) && !session->failed());
+                t.out << "unsupported narrower-head family rejected before execution" << std::endl;
+                continue;
+            }
+            for (uint32_t invalid=0;invalid<8;++invalid) {
+                auto bad=binding;
+                if (invalid == 0) ++bad.cache.source.generation;
+                if (invalid == 1) ++bad.lease_revision;
+                if (invalid == 2) bad.cache.format.value_type=GGML_TYPE_Q8_0;
+                if (invalid == 3) ++bad.cache.format.key_head_dim;
+                if (invalid == 4) ++bad.cache.source.id;
+                if (invalid == 5) ++bad.first_position;
+                if (invalid == 6) --bad.end_position;
+                if (invalid == 7) bad.cache.layers=2;
+                t.assert_true(!session->prefetch_read(bad,queries,heads));
+                t.assert_true(!session->read_attention(bad,input.q,input.mask,input.output,1.0f/16));
+                t.assert_true(same_float_bits(untouched,input.read()) && !session->failed());
+            }
+            std::vector<uint8_t> before(f.host->bytes()),after(before.size());
+            std::memcpy(before.data(),ggml_backend_buffer_get_base(f.host->buffer()),before.size());
+            const auto generation=f.content->generation(),revision=session->layout_revision();
+            for (uint32_t repeat=0;repeat<2;++repeat) {
+                if (!t.assert_true(session->set_workspaces({graph_workspace.lease.get()}))) return;
+                if (!t.assert_true("a committed borrowed source admits read lookahead",session->prefetch_read(binding,queries,heads))) return;
+                const auto primed=session->sequence_stats();
+                t.assert_true(session->prefetch_primed() && primed.primed);
+                t.assert_true("identical borrowed lookahead is idempotent",session->prefetch_read(binding,queries,heads));
+                t.assert_equal(primed.copy_calls,session->sequence_stats().copy_calls);
+                auto stale=binding; ++stale.cache.source.generation;
+                t.assert_true(!session->prefetch_read(stale,queries,heads) && session->prefetch_primed());
+                session->release_graphs();
+                if (!t.assert_true(session->set_workspaces({}))) return;
+                if (!t.assert_true("retiring target graph grants preserves immutable read lookahead",session->prefetch_primed())) return;
+                t.assert_equal(primed.copy_calls,session->sequence_stats().copy_calls);
+                if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+                t.assert_true("matching borrowed attention adopts prefetched requests",session->sequence_stats().adopted && !session->prefetch_primed());
+                llama_kv_stream_policy_layout layout;
+                if (!t.assert_true(llama_kv_stream_policy_layout_make(f.policy,session->policy(),active,layout).status == llama_kv_stream_policy_status::success)) return;
+                const size_t prefix=std::min(active,layout.layers[1].planes.tokens);
+                t.assert_equal("read lookahead uploads each nonresident row once",
+                    (active-prefix)*(f.host->layout().k_token_bytes+f.host->layout().v_token_bytes),session->sequence_stats().copy_bytes);
+                t.assert_true("borrowed read completes queued spans before returning",!probe.pending);
+                t.assert_true("borrowed output matches native bits",same_float_bits(stock_attention(f,input,1),input.read()));
+                t.assert_equal(active,session->tokens());
+                t.assert_equal(generation,f.content->generation());
+                t.assert_equal(revision,session->layout_revision());
+                t.assert_true("borrowed read leaves target idle and usable",!session->active() && !session->failed());
+            }
+            auto other=binding; other.cache.source_first_layer=0;
+            if (!t.assert_true(session->prefetch_read(other,queries,heads))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("a different source layer drains lookahead rather than adopting it",!session->sequence_stats().adopted &&
+                same_float_bits(stock_attention(f,input,1),input.read()) && !session->failed());
+            std::memcpy(after.data(),ggml_backend_buffer_get_base(f.host->buffer()),after.size());
+            t.assert_true("borrowed reads preserve every authoritative host byte",before == after);
+            block_workspace short_attention(f,bytes-1,39);
+            const auto grant=session->granted_bytes();
+            t.assert_true("one-byte-short scratch cannot replace the admitted grant",
+                !session->set_attention_workspace(short_attention.lease.get(),true));
+            t.assert_equal(grant,session->granted_bytes());
+            const auto completed=input.read();
+            if (!t.assert_true(session->set_attention_workspace(nullptr,true))) return;
+            t.assert_true(!session->prefetch_read(binding,queries,heads));
+            t.assert_true("borrowed read rejects detached scratch without poisoning",!session->read_attention(
+                binding,input.q,input.mask,input.output,1.0f/16) && !session->failed());
+            t.assert_true(same_float_bits(completed,input.read()));
+            if (!t.assert_true(session->set_attention_workspace(attention.lease.get(),true))) return;
+            if (!t.assert_true(session->prefetch_read(binding,queries,heads))) return;
+            if (!t.assert_true("target reattaches graph and writer grants before publication",
+                    session->set_workspaces({graph_workspace.lease.get()}))) return;
+            session_inputs kv(backend.get(),1,size_t(dimension)*4);
+            block_inputs append(f,active+1,1,false,32,ggml_backend_memory_lease_buffer(graph_workspace.lease.get()));
+            if (!t.assert_true(session->begin(active+1,1,true))) return;
+            t.assert_true("a target append cancels borrowed lookahead",!session->prefetch_primed());
+            t.assert_true("active target hides read source",!session->read_source(source));
+            t.assert_true(!session->prefetch_read(binding,queries,heads));
+            t.assert_true("active target rejects borrowed read",!session->read_attention(binding,input.q,input.mask,input.output,1.0f/16));
+            for (uint32_t layer=0;layer<2;++layer) {
+                if (!t.assert_true("target publication resumes after graph handoff",session->produce(layer,kv.k,kv.v))) return;
+                if (!t.assert_true("target attention resumes after graph handoff",
+                        session->attention(layer,append.q,append.mask,append.output,1.0f/16))) return;
+            }
+            t.assert_true("completed append invalidates old read binding",!session->read_attention(binding,input.q,input.mask,input.output,1.0f/16));
+            t.assert_true(!session->prefetch_read(binding,queries,heads));
+            t.assert_equal(active+1,session->tokens());
+            if (session->prefetch_primed()) {
+                const auto primed=session->sequence_stats();
+                if (!t.assert_true(session->set_workspaces({graph_workspace.lease.get()}))) return;
+                t.assert_true("reattaching target graph grants preserves append lookahead",session->prefetch_primed());
+                t.assert_equal(primed.copy_calls,session->sequence_stats().copy_calls);
+                block_inputs next_append(f,active+2,1,false,32,ggml_backend_memory_lease_buffer(graph_workspace.lease.get()));
+                if (!t.assert_true(session->begin(active+2,1,true))) return;
+                t.assert_true("graph handoff keeps the next append adoptable",session->sequence_stats().adopted);
+                for (uint32_t layer=0;layer<2;++layer)
+                    if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                            session->attention(layer,next_append.q,next_append.mask,next_append.output,1.0f/16))) return;
+                t.assert_true("append after graph reattachment matches native bits",same_float_bits(stock_attention(f,next_append,1),next_append.read()));
+            }
+        }
+    });
+    if (cuda) t.test("immutable_reader_reuses_only_still_present_ring_pages",[&](testing & t) {
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(get && get())) return;
+        for (uint32_t dimension : {256u,512u}) for (auto pair : {
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16},
+                std::pair{GGML_TYPE_F32,GGML_TYPE_BF16},std::pair{GGML_TYPE_Q4_1,GGML_TYPE_Q5_0},
+                std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q5_1},std::pair{GGML_TYPE_Q4_0,GGML_TYPE_F16}})
+                for (size_t active : {1025u,1281u,4097u}) for (uint32_t queries : {1u,2u,3u,4u}) {
+            t.out << "retained D" << dimension << ' ' << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second)
+                << " active=" << active << " TG" << queries << std::endl;
+            fixture f(backend.get(),true,pair.first,pair.second,8192,false,2,4,8,dimension,dimension);
+            f.policy.initial_ring_slots=2; f.policy.fixed_ring=true;
+            size_t bytes=0;
+            if (!t.assert_true(ggml_kv_stream_workspace_query(get(),backend.get(),{f.policy.shape,32,4,f.host->layout().tokens},
+                    ggml_kv_stream_workspace_kind::decode,bytes))) return;
+            block_workspace writer(f,131072,19),attention(f,bytes,29);
+            llama_kv_stream_session_config config{f.policy,4,32,false,true,true};
+            config.initial_decode=true; config.span_workspace_bytes=bytes;
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,config,f.lease.get(),writer.lease.get(),attention.lease.get());
+            if (!t.assert_true(bool(session) && session->restore(active))) return;
+            llama_memory_cache_requirement source;
+            if (!t.assert_true(session->read_source(source))) return;
+            auto alias=source; alias.identity={source.identity.id+100,1}; alias.source=source.identity;
+            alias.role=llama_memory_cache_role::read_only_source; alias.layers=1; alias.source_first_layer=1;
+            llama_memory_cache_read_binding binding;
+            if (!t.assert_true(llama_memory_cache_read_binding_make(alias,source,0,uint32_t(active),session->layout_revision(),binding))) return;
+            llama_kv_stream_policy_layout layout;
+            if (!t.assert_true(llama_kv_stream_policy_layout_make(f.policy,session->policy(),active,layout).status == llama_kv_stream_policy_status::success)) return;
+            const size_t prefix=std::min(active,layout.layers[1].planes.tokens);
+            const size_t row=f.host->layout().k_token_bytes+f.host->layout().v_token_bytes;
+            const size_t pages=((active+255)/256*256-prefix)/256;
+            if (!t.assert_equal(size_t(768),prefix)) return;
+            block_inputs input(f,active,queries,false,32);
+            for (uint32_t repeat=0;repeat<3;++repeat) {
+                auto query=input.qdata;
+                for (auto & value : query) value*=float(repeat+1);
+                ggml_backend_tensor_set(input.q,query.data(),0,query.size()*sizeof(float));
+                const auto expected=stock_attention(f,input,1);
+                if (!t.assert_true(session->prefetch_read(binding,queries,32) && session->read_attention(
+                        binding,input.q,input.mask,input.output,1.0f/16))) return;
+                if (!t.assert_true("ring retention preserves exact native arithmetic for each new query",same_float_bits(expected,input.read()))) return;
+                const size_t saved=repeat ? (pages <= 2 ? active-prefix : pages == 3 ? 256 : 0) : 0;
+                if (!t.assert_equal("only missing live rows are uploaded",(active-prefix-saved)*row,session->sequence_stats().copy_bytes)) return;
+                t.assert_equal(saved*row,session->sequence_stats().reused_bytes);
+                t.assert_equal(active,session->tokens());
+                t.assert_equal(source.identity.generation,f.content->generation());
+            }
+            const auto expected=input.read();
+            if (!t.assert_true(session->prefetch_read(binding,queries,32) && session->set_attention_workspace(nullptr,true) &&
+                    session->set_attention_workspace(attention.lease.get(),true))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("cancelled lookahead cannot advertise unqualified retained pages",same_float_bits(expected,input.read()));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
+            auto other=binding; other.cache.source_first_layer=0;
+            if (!t.assert_true(session->read_attention(other,input.q,input.mask,input.output,1.0f/16))) return;
+            if (!t.assert_true(same_float_bits(stock_attention(f,input,0),input.read()))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("a different layer cannot donate stale ring contents",same_float_bits(expected,input.read()));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
+            ggml_backend_buffer_clear(ggml_backend_memory_lease_buffer(f.lease.get()),0);
+            if (!t.assert_true(f.content->reset_mirror() && session->reconstruct(active))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            t.assert_true("physical mirror invalidation requires refilling every missing row",same_float_bits(expected,input.read()));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
+            std::vector<uint8_t> zeros((active-prefix)*f.host->layout().v_token_bytes,0);
+            llama_kv_stream_write changed;
+            if (!t.assert_true(f.content->prepare({{1,ggml_kv_stream_operand::v,prefix*f.host->layout().v_token_bytes,
+                    zeros.data(),zeros.size()}},changed) && f.content->commit(changed) && session->reconstruct(active))) return;
+            t.assert_true("old-generation read bindings reject without changing output",!session->read_attention(
+                binding,input.q,input.mask,input.output,1.0f/16) && same_float_bits(expected,input.read()) && !session->failed());
+            if (!t.assert_true(session->read_source(source))) return;
+            alias.source=source.identity;
+            if (!t.assert_true(llama_memory_cache_read_binding_make(alias,source,0,uint32_t(active),session->layout_revision(),binding))) return;
+            if (!t.assert_true(session->read_attention(binding,input.q,input.mask,input.output,1.0f/16))) return;
+            const auto rewritten=stock_attention(f,input,1);
+            t.assert_true("same-frontier rewritten bytes replace retained pages",same_float_bits(rewritten,input.read()) && !same_float_bits(expected,rewritten));
+            t.assert_equal((active-prefix)*row,session->sequence_stats().copy_bytes);
+        }
+    });
     if (cuda) t.test("wrapped_resume_waves_reduce_launches_without_changing_tokens",[&](testing & t) {
         auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -69,6 +70,84 @@ MAKE_TEST(test_image_preprocessor_lfm2) {
             "tiling for " + std::to_string(size.width) + "x" + std::to_string(size.height),
             std::string(expected ? "tiled" : "single"),
             std::string(actual   ? "tiled" : "single"));
+    }
+}
+
+MAKE_TEST(test_image_preprocessor_gemma4_budget) {
+    clip_hparams hparams;
+    hparams.patch_size = 16;
+    hparams.n_merge = 3;
+    // Reference get_aspect_ratio_preserving_size, patch16/pooling3.
+    const std::vector<std::tuple<int, clip_image_size, clip_image_size>> cases = {
+        {   70, { 256, 256 }, {  384,  384 } },
+        {  140, { 256, 256 }, {  528,  528 } },
+        {  280, { 256, 256 }, {  768,  768 } },
+        {  560, { 256, 256 }, { 1104, 1104 } },
+        { 1120, { 256, 256 }, { 1584, 1584 } },
+        { 1120, { 280, 400 }, { 1344, 1920 } },
+        { 1120, { 400, 280 }, { 1920, 1344 } },
+        { 1120, {   1, 10000 }, {   48, 53760 } },
+        { 1120, { 10000, 1 }, { 53760,   48 } },
+        {  280, { 768, 768 }, {  768,  768 } },
+    };
+    for (const auto & [budget, original, expected] : cases) {
+        hparams.custom_image_min_tokens = budget;
+        hparams.custom_image_max_tokens = budget;
+        hparams.set_limit_image_tokens(70, 1120);
+        const auto actual = mtmd_image_preprocessor_gemma4::target_size(hparams, original);
+        t.assert_equal("reference width", expected.width, actual.width);
+        t.assert_equal("reference height", expected.height, actual.height);
+        t.assert_true("aligned under budget", actual.width > 0 && actual.height > 0 && actual.width % 48 == 0 &&
+            actual.height % 48 == 0 && int64_t(actual.width) * actual.height <= int64_t(budget) * 48 * 48);
+    }
+    hparams.custom_image_min_tokens = 1;
+    hparams.custom_image_max_tokens = 280;
+    hparams.set_limit_image_tokens(70, 1120);
+    const auto small = mtmd_image_preprocessor_gemma4::target_size(hparams, { 16, 16 });
+    t.assert_equal(768, small.width);
+    t.assert_equal(768, small.height);
+    for (int budget : {70,140,280,560,1120}) {
+        hparams.custom_image_min_tokens = budget;
+        hparams.custom_image_max_tokens = budget;
+        hparams.set_limit_image_tokens(70,1120);
+        for (const auto & size : std::vector<clip_image_size>{ {1,1},{1,2},{2,1},{47,49},{49,47},{384,384},
+                {768,1024},{1024,768},{1920,1080},{1080,1920},{32768,1},{1,32768},
+                {std::numeric_limits<int>::max(),1},{1,std::numeric_limits<int>::max()} }) {
+            const auto result = mtmd_image_preprocessor_gemma4::target_size(hparams,size);
+            t.assert_true("bounded extreme/aspect dimensions", result.width > 0 && result.height > 0 && result.width % 48 == 0 &&
+                result.height % 48 == 0 && int64_t(result.width) * result.height <= int64_t(budget) * 48 * 48);
+        }
+    }
+    for (int invalid=0;invalid<9;++invalid) {
+        auto bad = hparams;
+        clip_image_size size{256,256};
+        if (invalid==0) size.width=0;
+        if (invalid==1) size.height=-1;
+        if (invalid==2) bad.patch_size=0;
+        if (invalid==3) bad.n_merge=0;
+        if (invalid==4) bad.patch_size=std::numeric_limits<int>::max();
+        if (invalid==5) bad.image_max_pixels=-1;
+        if (invalid==6) bad.image_max_pixels=1;
+        if (invalid==7) bad.image_max_pixels=1121*48*48;
+        if (invalid==8) bad.n_merge=std::numeric_limits<int>::max();
+        bool rejected=false;
+        try { mtmd_image_preprocessor_gemma4::target_size(bad,size); }
+        catch (const std::runtime_error &) { rejected=true; }
+        t.assert_true("invalid metadata rejects before resizing",rejected);
+    }
+}
+
+MAKE_TEST(test_image_preprocessor_qwen_resize_unchanged) {
+    clip_hparams hparams;
+    hparams.patch_size = 16;
+    hparams.n_merge = 2;
+    hparams.set_limit_image_tokens(64, 4096);
+    for (const auto & [input, expected] : std::vector<std::pair<clip_image_size, clip_image_size>>{
+            { { 256, 256 }, { 256, 256 } }, { { 512, 384 }, { 512, 384 } },
+            { { 8192, 8192 }, { 2048, 2048 } }, { { 16, 16 }, { 256, 256 } } }) {
+        const auto actual = mtmd_image_preprocessor_dyn_size::target_size(hparams, input);
+        t.assert_equal(expected.width, actual.width);
+        t.assert_equal(expected.height, actual.height);
     }
 }
 

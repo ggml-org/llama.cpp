@@ -1,0 +1,176 @@
+{
+  "description": "Incremental bounded prefill pipeline versus the qualified conversion-only adaptive implementation, not stock/no-streaming",
+  "gpu": "NVIDIA GeForce RTX5070Ti,15880MiB reported",
+  "models": {
+    "gemma": "unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-Q3_K_M.gguf with matching Q8_0 assistant",
+    "qwen": "unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ4_XS.gguf with embedded MTP"
+  },
+  "profile": {
+    "arena_mib": 1024,
+    "arena_policy": "fixed, not maximum-fit",
+    "key_cache": "q8_0",
+    "value_cache": "q4_0",
+    "batch": 256,
+    "ubatch": 256,
+    "uvm": false,
+    "web_ui": false,
+    "decode_outputs": 256,
+    "prompt_tokens": "context_capacity-271",
+    "warmup": "256 prompt tokens +4 outputs, then a fresh uncached measured prompt",
+    "sampling": "temperature0, seed123, ignore_eos",
+    "variant_order": "AB/BA alternating by trial",
+    "repetitions": "3 pairs at8/64Ki for MTP0/3; single120Ki MTP0 controls are not repeatability evidence"
+  },
+  "qualified_base_commit": "88335d2e0749f10463bb09a5fb52bd238afb3027",
+  "qualified_working_tree_diff_sha256": "4a1b2023cd471739f9c8457634213eedc1c80247ced2432d4877bcd4c13689d6",
+  "pipeline_runtime_sha256": {
+    "llama-server": "997d42b066bb2ef3b011b5092c4f9db674bb04fac9de2361d49172ac80dafccd",
+    "libllama.so.0": "51dd9eaf20c25956bd786ef4f454d4dad4526e31af803ab78790cd5ab8cf8a0f",
+    "libllama-common.so.0": "42e26838b5bac01a914444aa465c9a0fee8bb041e60fe20a83415dcab29213e7",
+    "libllama-server-impl.so": "94001a00ac7c69125ec4bc8e522ce24ef9491b0e4b61f5844e237edd738620e2",
+    "libggml-cuda.so.0": "9f040a24cf23f05846699cf2d96cb2ecfde7aed2aeb22297b2e635dc43558aa3",
+    "libggml-base.so.0": "d8a0021f6ff6b2270a7a77cf0ea41640ec390f4c3a64e9ef3abd1876cf97f514",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libmtmd.so.0": "88da0c39bf658d2e5621db02b8c924cff77bc28955c28ede969505651fc5ee18"
+  },
+  "conversion_only_runtime_sha256": {
+    "llama-server": "9cf243c5b09760c6eaa16d133bd4bdeb718f80a933bed71de0bb0650f007ab02",
+    "libllama.so.0": "a91ccf987260d91aa6182c39cf38caecaea43cc6b7b31a09037da4c7f63d3b6e",
+    "libllama-common.so.0": "5b27b12cc1abff2e83ea542b3c586204f0d2da3584df932eabce9bafe2bd5346",
+    "libllama-server-impl.so": "a9b8fc48aabb4c80411b4383934395b1da8e800ad62a059d6a7c8af5cbfb3899",
+    "libggml-cuda.so.0": "9f040a24cf23f05846699cf2d96cb2ecfde7aed2aeb22297b2e635dc43558aa3",
+    "libggml-base.so.0": "016ceed682111482bb5ca1798a9b37101e6979271616cb6553e016c32950d1df",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libmtmd.so.0": "88da0c39bf658d2e5621db02b8c924cff77bc28955c28ede969505651fc5ee18"
+  },
+  "runtime_source_sha256": {
+    "src/llama-kv-stream-resident.cpp": "8a0673e19f1949463e7637bcff6a5bbe1118e46c323230a892ce8534d1488dd0",
+    "tests/test-kv-stream-prefetch.cpp": "a4fc3bc18326a5c7bb4a1770228cb8e0058e167ac6aaca22bad15f519cd65dbc",
+    "ggml/src/ggml-cuda/fattn.cu": "08982e3126c5a9ab609b88c50b559088d16bd2d9f6e8f8c0dded630d128d9085",
+    "ggml/src/ggml-cuda/kv-stream-partial.cu": "b1b6c988ae66dde71d35fc319391bde1ae55778dff6bb9f31e52c8e45c0b9c22"
+  },
+  "inputs": {
+    "gemma-4-31B-it-Q3_K_M.gguf": {
+      "sha256": "d2d7a0f9117eb1a9a4b8b68bbb53c1ce5d1f602c45b9028dc12add0d0056f4fd",
+      "size": 14736608192
+    },
+    "40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199": {
+      "sha256": "40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199",
+      "size": 14252845984
+    },
+    "mtp-gemma-4-31B-it-Q8_0.gguf": {
+      "sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de",
+      "size": 514687104
+    },
+    "online-articles-262144-words.txt": {
+      "sha256": "ca19e089c46f80c2f661d31a1312aeda21fbc73bd17ddf371e5f3a0befa9102e",
+      "size": 1662873
+    }
+  },
+  "all_52_requests_and_26_pairs_audited": true,
+  "generated_ids_checked": 13312,
+  "paired_prompt_ids_output_ids_draft_counts_and_decode_layouts_exact": true,
+  "instrumented_timings_are_not_speedup_evidence": true,
+  "nsight": {
+    "profile": "Both variants/both models at120Ki,122609prompt/256outputs;2x512token capture windows at8/96Ki",
+    "method": "Clipped interval unions/intersections. H2D/kernel overlap is not SM occupancy or bandwidth. Concurrent durations are not additive.",
+    "hardware_counter_permission_gap": "NCU ERR_NVGPUCTRPERM unchanged; no hardware counter claims",
+    "windows": {
+      "gemma-baseline-early": {
+        "window_ms": 408.53098,
+        "streamed_attention_union_ms": 64.745895,
+        "row_converter_union_ms": 3.452731,
+        "h2d_union_ms": 1.38971,
+        "h2d_with_any_gpu_kernel_ms": 0,
+        "h2d_without_any_gpu_kernel_ms": 1.38971,
+        "h2d_overlapped_fraction": 0
+      },
+      "gemma-baseline-late": {
+        "window_ms": 1279.002449,
+        "streamed_attention_union_ms": 780.068534,
+        "row_converter_union_ms": 40.489756,
+        "h2d_union_ms": 116.854305,
+        "h2d_with_any_gpu_kernel_ms": 3.769348,
+        "h2d_without_any_gpu_kernel_ms": 113.084957,
+        "h2d_overlapped_fraction": 0.03225681758151743
+      },
+      "gemma-candidate-early": {
+        "window_ms": 408.457282,
+        "streamed_attention_union_ms": 64.766193,
+        "row_converter_union_ms": 3.451171,
+        "h2d_union_ms": 1.386316,
+        "h2d_with_any_gpu_kernel_ms": 0,
+        "h2d_without_any_gpu_kernel_ms": 1.386316,
+        "h2d_overlapped_fraction": 0
+      },
+      "gemma-candidate-late": {
+        "window_ms": 1175.377361,
+        "streamed_attention_union_ms": 779.743224,
+        "row_converter_union_ms": 40.487787,
+        "h2d_union_ms": 117.522356,
+        "h2d_with_any_gpu_kernel_ms": 101.771478,
+        "h2d_without_any_gpu_kernel_ms": 15.750878,
+        "h2d_overlapped_fraction": 0.8659754744875945
+      },
+      "qwen-baseline-early": {
+        "window_ms": 289.082484,
+        "streamed_attention_union_ms": 29.028024,
+        "row_converter_union_ms": 2.760798,
+        "h2d_union_ms": 1.24686,
+        "h2d_with_any_gpu_kernel_ms": 0,
+        "h2d_without_any_gpu_kernel_ms": 1.24686,
+        "h2d_overlapped_fraction": 0
+      },
+      "qwen-baseline-late": {
+        "window_ms": 724.341444,
+        "streamed_attention_union_ms": 350.193567,
+        "row_converter_union_ms": 32.853675,
+        "h2d_union_ms": 72.103208,
+        "h2d_with_any_gpu_kernel_ms": 2.125015,
+        "h2d_without_any_gpu_kernel_ms": 69.978193,
+        "h2d_overlapped_fraction": 0.029471850961194403
+      },
+      "qwen-candidate-early": {
+        "window_ms": 289.083232,
+        "streamed_attention_union_ms": 29.045841,
+        "row_converter_union_ms": 2.761522,
+        "h2d_union_ms": 1.23438,
+        "h2d_with_any_gpu_kernel_ms": 0,
+        "h2d_without_any_gpu_kernel_ms": 1.23438,
+        "h2d_overlapped_fraction": 0
+      },
+      "qwen-candidate-late": {
+        "window_ms": 673.989581,
+        "streamed_attention_union_ms": 351.686753,
+        "row_converter_union_ms": 32.335321,
+        "h2d_union_ms": 72.137214,
+        "h2d_with_any_gpu_kernel_ms": 44.793102,
+        "h2d_without_any_gpu_kernel_ms": 27.344112,
+        "h2d_overlapped_fraction": 0.6209430544406663
+      }
+    }
+  },
+  "final_safety": {
+    "fresh_base_gates": 26,
+    "fresh_extra_gates": 9,
+    "binary_hashes_verified": 112,
+    "fresh_strict_zero_error_gates": [
+      "memcheck-cache-source",
+      "memcheck-acceptance-ring",
+      "memcheck-prepared-copy-init"
+    ],
+    "portable_inventory_each": 47,
+    "portable_executed_passed_each": 45,
+    "portable_expected_cuda_cli_skips_each": 2,
+    "native_matched_server_records": 120,
+    "server_generated_ids": 7680,
+    "benchmark_host_tests": 159,
+    "gemma_host_harness_tests": 25,
+    "reuse": "Matrix14gates only with identical source/commit/14native+5ASAN hashes and explicit prerequisite artifact checks before/after",
+    "production_restored_healthy": true
+  },
+  "resource_scope": "Two alternating waves reuse the existing encoded ring, prepared transfer fences and single bounded FP16 stage; no new GPU allocation, CUDA kernel/math, public ABI or allocator. Higher8/16MiB preparation minimum remains the accepted G6d.1 policy.",
+  "scope": "This52-request fixed-arena cohort and eight Nsight windows are separate from historical pre-conversion/smoke data and the new60-point maximum-fit120Ki sweep."
+}

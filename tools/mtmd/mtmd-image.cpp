@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 void mtmd_image_preproc_out::append(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized) {
@@ -769,13 +771,11 @@ mtmd_image_preproc_out mtmd_image_preprocessor_fixed_size::preprocess(const clip
 // mtmd_image_preprocessor_dyn_size
 //
 
-mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img) const {
+clip_image_size mtmd_image_preprocessor_dyn_size::target_size(const clip_hparams & hparams, const clip_image_size & original_size) {
     GGML_ASSERT(hparams.image_min_pixels > 0 && hparams.image_max_pixels > 0);
-    clip_image_u8 resized_image;
-    const clip_image_size original_size = img.get_size();
     // the original pixtral model doesn't have n_merge
     const int cur_merge = hparams.n_merge;
-    const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
+    return img_tool::calc_size_preserved_ratio(
         original_size,
         {
             /* align_size   */ hparams.patch_size * cur_merge,
@@ -783,6 +783,14 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
             /* max_pixels   */ hparams.image_max_pixels,
             /* longest_edge */ 0,
         });
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img) const {
+    return resize(img, target_size(hparams, img.get_size()));
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::resize(const clip_image_u8 & img, const clip_image_size & target_size) const {
+    clip_image_u8 resized_image;
     img_tool::resize(img, resized_image, target_size,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
@@ -790,6 +798,39 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
     mtmd_image_preproc_out output;
     output.append(hparams, resized_image, true);
     return output;
+}
+
+clip_image_size mtmd_image_preprocessor_gemma4::target_size(const clip_hparams & hparams, const clip_image_size & original_size) {
+    if (original_size.width <= 0 || original_size.height <= 0 || hparams.patch_size <= 0 || hparams.n_merge <= 0 ||
+            hparams.patch_size > std::numeric_limits<int>::max() / hparams.n_merge || hparams.image_max_pixels <= 0) {
+        throw std::runtime_error("invalid Gemma4 image size or patch budget");
+    }
+    const int alignment = hparams.patch_size * hparams.n_merge;
+    const int budget = hparams.image_max_pixels / alignment / alignment;
+    if (budget <= 0 || budget > 1120 || budget > std::numeric_limits<int>::max() / alignment) {
+        throw std::runtime_error("unsupported Gemma4 image token budget");
+    }
+    // Match the reference processor's floor-aligned patch budget, including narrow images.
+    // https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma4/image_processing_gemma4.py
+    const double area = double(budget) * alignment * alignment;
+    const double scale = std::sqrt(area / (double(original_size.width) * original_size.height));
+    int width = int(std::floor(scale * original_size.width / alignment)) * alignment;
+    int height = int(std::floor(scale * original_size.height / alignment)) * alignment;
+    if (!width) {
+        width = alignment;
+        height = int(std::min(std::floor(double(original_size.height) / original_size.width), double(budget))) * alignment;
+    } else if (!height) {
+        height = alignment;
+        width = int(std::min(std::floor(double(original_size.width) / original_size.height), double(budget))) * alignment;
+    }
+    if (width <= 0 || height <= 0 || int64_t(width) * height > int64_t(budget) * alignment * alignment) {
+        throw std::runtime_error("Gemma4 resized image exceeds its patch budget");
+    }
+    return { width, height };
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_gemma4::preprocess(const clip_image_u8 & img) const {
+    return resize(img, target_size(hparams, img.get_size()));
 }
 
 //

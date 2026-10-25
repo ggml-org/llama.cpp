@@ -825,7 +825,8 @@ int main(int argc, char ** argv) {
             t.assert_true(cudaGetLastError() == cudaSuccess);
         });
         t.test("producer_and_final_consumer_events_prevent_early_copy_and_reuse", [&](testing & t) {
-            fixture f(backend.get(),true);
+            for (uint32_t width : {256u,512u}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,2,2,0,width,width);
             ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
             auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
             std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,1),ops->free);
@@ -869,6 +870,7 @@ int main(int argc, char ** argv) {
             ops->drain(queue.get()); // cancel a queued, unacquired block
             t.assert_true(ops->begin(queue.get()));
             ops->drain(queue.get());
+            }
         });
         t.test("pending_teardown_drains_and_retains_backing", [&](testing & t) {
             fixture f(backend.get(),true);

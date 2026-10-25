@@ -3,7 +3,7 @@
 #include "fattn-tile-span-access.cuh"
 #include "fattn-tile-resume.h"
 
-template<ggml_type key, ggml_type value>
+template<ggml_type key, ggml_type value, bool managed_mask = false>
 struct ggml_cuda_fattn_tile_resume_kv : ggml_cuda_fattn_tile_span_kv<key,value> {
     using base = ggml_cuda_fattn_tile_span_kv<key,value>;
     __device__ ggml_cuda_fattn_tile_resume_kv(const ggml_cuda_fattn_tile_span_table * table,int head) : base{table,head} {}
@@ -11,6 +11,16 @@ struct ggml_cuda_fattn_tile_resume_kv : ggml_cuda_fattn_tile_span_kv<key,value> 
     // The descriptor's leading table is pointer-interconvertible with the descriptor itself.
     __device__ __forceinline__ const ggml_cuda_fattn_tile_resume_control & control() const {
         return reinterpret_cast<const ggml_cuda_fattn_tile_resume_descriptor *>(this->table)->control;
+    }
+
+    // Materialize the exact native mask value at its original arithmetic position.
+    __device__ __forceinline__ float mask_value(const half * dense, int stride, int query, int token) const {
+        const auto * bounds=control().mask_bounds;
+        if (!bounds) return dense ? __half2float(dense[query*stride+token]) : 0.0f;
+        const auto * row=bounds+4*query;
+        const bool visible=row[3] == 1 && row[0] >= 0 && row[0] <= row[1] && row[1] <= row[2] &&
+            token >= row[0] && token < row[1];
+        return visible ? 0.0f : -INFINITY;
     }
 
     // Copy native representations without reducing lanes or converting half accumulators to float.
@@ -51,7 +61,12 @@ struct ggml_cuda_fattn_tile_resume_kv : ggml_cuda_fattn_tile_span_kv<key,value> 
     }
 };
 
+template<ggml_type key, ggml_type value, bool managed_mask>
+struct ggml_cuda_fattn_tile_resume_traits<ggml_cuda_fattn_tile_resume_kv<key,value,managed_mask>> {
+    static constexpr bool enabled = true;
+};
+
 template<ggml_type key, ggml_type value>
-struct ggml_cuda_fattn_tile_resume_traits<ggml_cuda_fattn_tile_resume_kv<key,value>> {
+struct ggml_cuda_fattn_tile_mask_traits<ggml_cuda_fattn_tile_resume_kv<key,value,true>> {
     static constexpr bool enabled = true;
 };

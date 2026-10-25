@@ -432,6 +432,9 @@ extern "C" {
         size_t shared_device_memory_bytes;
         // Experimental: reserve one separate MTP logical host cache in the target's physical KV policy.
         uint32_t kv_stream_auxiliary_layers;
+        // Explicit target verification query bound, independent of recurrent snapshots; zero keeps the inferred profile.
+        // Initially supported for serial streamed Gemma4 targets with 1-4 queries that fit n_ubatch.
+        uint32_t kv_stream_verify_max;
     };
 
     struct llama_model_tensor_override {

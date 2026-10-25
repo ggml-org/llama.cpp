@@ -57,7 +57,7 @@ int main() {
         ggml_cuda_fattn_plan_cache<size_t> cache;
         ggml_cuda_fattn_plan_key original{0,1200,1200,70,32,101376,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,24,4,4,131072,3,1,true,true};
         cache.store(original,4096);
-        for (int field=0;field<16;++field) {
+        for (int field=0;field<18;++field) {
             auto key=original;
             switch (field) {
                 case 0: ++key.device; break;
@@ -76,6 +76,8 @@ int main() {
                 case 13: ++key.family; break;
                 case 14: key.resume=false; break;
                 case 15: key.dense_strided=false; break;
+                case 16: key.head_dim_k=512; break;
+                case 17: key.head_dim_v=512; break;
             }
             size_t output=77;
             t.assert_true(!cache.find(key,output));

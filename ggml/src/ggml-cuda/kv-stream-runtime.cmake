@@ -1,0 +1,13 @@
+# Generate arithmetic per tile, not per K/V format combination.
+function(ggml_cuda_kv_stream_runtime_instances directory output_directory output_sources)
+    set(sources "")
+    foreach(geometry IN ITEMS 1-8 2-8 4-8 8-8 4-2 8-2)
+        string(REPLACE "-" ";" shape "${geometry}")
+        list(GET shape 0 KV_STREAM_COLUMNS)
+        list(GET shape 1 KV_STREAM_GROUPS)
+        set(path "${output_directory}/kv-stream-mma-runtime-${geometry}.cu")
+        configure_file("${directory}/kv-stream-mma-runtime-instance.cu.in" "${path}" @ONLY)
+        list(APPEND sources "${path}")
+    endforeach()
+    set(${output_sources} ${sources} PARENT_SCOPE)
+endfunction()

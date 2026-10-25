@@ -16,8 +16,12 @@ struct llama_context;
 class llama_kv_stream_model;
 class llama_kv_stream_logical_cache;
 class llama_kv_stream_mtp_proxy;
+class llama_kv_stream_read_proxy;
+struct llama_kv_stream_next_consumer;
+class llama_context_memory;
 struct llama_memory_bounded_kv_layout;
 class llama_memory_bounded_kv;
+class llama_memory_bounded_kv_read;
 
 //
 // llama_kv_cache
@@ -125,6 +129,16 @@ public:
 
     ~llama_kv_cache();
     llama_kv_stream_model * get_kv_stream() const noexcept { return kv_stream.get(); }
+    // Replace shared full-cache roots with owned read-only metadata. The target and parent outlive all reader graphs.
+    bool attach_shared_stream_reader(llama_context_memory & parent, uint32_t max_queries);
+    // Arm only after preparing the parent's serial phase; release before any target mutation.
+    bool arm_shared_stream_reader();
+    bool release_shared_stream_reader() noexcept;
+    // Own view metadata for shared local roots. The target's native roots outlive this cache and all its graphs.
+    bool attach_shared_bounded_reader(const llama_memory_bounded_kv_read & source);
+    // The caller completes native readers before releasing this physical read pin.
+    bool arm_shared_bounded_reader(const llama_memory_bounded_kv_read & source) noexcept;
+    void release_shared_bounded_reader() noexcept;
     // The stock device cache remains available for prefill and unsupported MTP phases.
     // The caller must keep the target context (which owns the physical pool) alive.
     bool attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache,
@@ -139,6 +153,8 @@ public:
         return attached_mtp_cache;
     }
     bool kv_stream_can_remove(llama_seq_id seq_id, llama_pos p0, llama_pos p1, size_t * retained = nullptr) const;
+    // A retained prefix needs every local row visible to its next query, not only full-cache backing.
+    bool bounded_prefix_available(const llama_kv_cells & full, size_t retained) const noexcept;
 
     //
     // llama_memory_i
@@ -187,12 +203,17 @@ public:
     ggml_type type_v() const;
 
     std::vector<uint32_t> get_layer_ids() const;
+    // First streamed source follows this cache's actual graph-layer order, not the target's layer count.
+    bool shared_stream_consumer(uint32_t query_tokens, llama_kv_stream_next_consumer & output) const noexcept;
     // Describe one serial homogeneous SWA allocation without changing stock cells, tensors or masks.
     bool describe_bounded_storage(uint64_t identity,uint64_t generation,uint32_t history_rows,
             uint32_t headroom_rows,llama_memory_bounded_kv_layout & output) const;
     // Retain existing SWA bytes without another device allocation. The caller gates writes and their completion.
     std::unique_ptr<llama_memory_bounded_kv> retain_bounded_storage(uint64_t identity,uint64_t generation,
             uint32_t history_rows,uint32_t headroom_rows,llama_memory_resource resource = {}) const;
+    bool bounded_storage_pending() const noexcept;
+    // Bind an empty deferred cache after retiring reservation graphs; old placeholder metadata stays alive.
+    bool bind_bounded_storage(ggml_backend_memory_lease_t lease);
     ggml_tensor * get_k_storage(int32_t il) const;
     ggml_tensor * get_v_storage(int32_t il) const;
 
@@ -263,6 +284,7 @@ public:
 
     void set_input_k_shift(ggml_tensor * dst) const;
 
+    bool mask_is_causal(bool causal_attn) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
@@ -299,6 +321,12 @@ private:
     std::unique_ptr<llama_kv_stream_mtp_proxy> mtp_proxy;
     std::shared_ptr<llama_kv_stream_logical_cache> attached_mtp_cache;
     std::unique_ptr<llama_kv_stream_model> kv_stream;
+    std::vector<std::unique_ptr<llama_kv_stream_read_proxy>> shared_readers;
+    ggml_context_ptr shared_read_metadata;
+    std::unique_ptr<llama_memory_bounded_kv_read> shared_bounded_read;
+    std::vector<uint32_t> shared_bounded_layers;
+    ggml_backend_buffer_t shared_bounded_buffer = nullptr;
+    uint64_t shared_bounded_source = 0, shared_bounded_generation = 0;
     bool v_trans = true;  // the value tensor is transposed
 
     const uint32_t n_seq_max = 1;
@@ -330,6 +358,8 @@ private:
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> retired_bounded_metadata;
+    bool bounded_pending = false;
     std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> bounded_lease{nullptr,ggml_backend_memory_lease_free};
 
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())

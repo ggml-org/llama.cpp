@@ -3,9 +3,48 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-model.h"
+#include "llama-cparams.h"
+#include "llama-memory-bounded-kv.h"
+#include "llama-kv-stream-model.h"
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
+#include <stdexcept>
+
+bool llama_kv_cache_iswa::bounded_storage_requirements(const llama_hparams & hp, const llama_memory_params & params,
+        const llama_cparams & cp, ggml_backend_buffer_type_t buft,
+        llama_memory_phase_cache_identity identity, llama_memory_bounded_kv_layout & output) noexcept {
+    if (!buft || !identity.id || !identity.generation || params.swa_full || cp.n_seq_max != 1 ||
+            !cp.n_ctx_seq || !cp.n_ubatch || !hp.n_swa || !hp.n_layer_all || hp.n_layer_all > LLAMA_MAX_LAYERS ||
+            hp.n_layer_nextn > hp.n_layer_all || hp.swa_type == LLAMA_SWA_TYPE_NONE) return false;
+    int32_t kt, vt;
+    std::memcpy(&kt,&params.type_k,sizeof(kt)); std::memcpy(&vt,&params.type_v,sizeof(vt));
+    if (kt < 0 || kt >= GGML_TYPE_COUNT || vt < 0 || vt >= GGML_TYPE_COUNT) return false;
+    try {
+        std::vector<uint32_t> ids;
+        for (uint32_t il=0;il<hp.n_layer();++il) if (hp.is_swa(il) && hp.has_kv(il)) ids.push_back(il);
+        if (ids.empty()) return false;
+        llama_memory_cache_requirement cache;
+        cache.identity=identity; cache.role=llama_memory_cache_role::bounded_resident;
+        cache.layers=uint32_t(ids.size()); cache.history_rows=cp.n_ctx_seq;
+        cache.window_rows=hp.n_swa; cache.headroom_rows=cp.n_ubatch; cache.row_padding=256;
+        const auto first=ids.front();
+        cache.format={params.type_k,params.type_v,hp.n_embd_head_k(first),hp.n_embd_head_v(first),hp.n_head_kv(first),!cp.flash_attn};
+        for (auto il : ids) if (hp.n_embd_head_k(il) != cache.format.key_head_dim ||
+                hp.n_embd_head_v(il) != cache.format.value_head_dim || hp.n_head_kv(il) != cache.format.kv_heads) return false;
+        const uint64_t kw=uint64_t(cache.format.key_head_dim)*cache.format.kv_heads;
+        const uint64_t vw=uint64_t(cache.format.value_head_dim)*cache.format.kv_heads;
+        const auto kb=ggml_blck_size(params.type_k), vb=ggml_blck_size(params.type_v);
+        const auto ks=ggml_type_size(params.type_k), vs=ggml_type_size(params.type_v);
+        if (!kw || !vw || kb <= 0 || vb <= 0 || !ks || !vs || kw%kb || vw%vb ||
+                kw > INT64_MAX || vw > INT64_MAX || kw > SIZE_MAX/ks || vw > SIZE_MAX/vs) return false;
+        const auto kr=ggml_row_size(params.type_k,int64_t(kw)), vr=ggml_row_size(params.type_v,int64_t(vw));
+        if (kr > SIZE_MAX-vr) return false;
+        cache.row_bytes=kr+vr;
+        return llama_memory_bounded_kv_layout_make(cache,ids,buft,output);
+    } catch (...) { return false; }
+}
 
 //
 // llama_kv_cache_iswa
@@ -26,9 +65,9 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share, const llama_memory_params * bounded) :
+    const  layer_share_cb & share, const llama_memory_params * stream) :
     llama_kv_cache_iswa(model, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified,
-            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share, bounded) {
+            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share, stream) {
 }
 
 llama_kv_cache_iswa::llama_kv_cache_iswa(
@@ -47,7 +86,16 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share, const llama_memory_params * bounded) : unified(unified) {
+    const  layer_share_cb & share, const llama_memory_params * stream) : unified(unified) {
+
+    const bool streaming=stream && (stream->kv_stream_pool_bytes || stream->shared_device_memory_bytes);
+    if (streaming && swa_full) throw std::runtime_error("KV streaming requires bounded SWA storage (swa_full=false)");
+    llama_memory_params base_params{};
+    if (streaming) {
+        base_params=*stream;
+        base_params.bounded_cache_lease=nullptr;
+        base_params.defer_bounded_cache=false;
+    }
 
     // chain filters
     const layer_filter_cb filter_base = [&](int32_t il) {
@@ -95,14 +143,15 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     kv_base = std::make_unique<llama_kv_cache>(
             model, hparams, type_k, type_v,
             v_trans, offload, unified, size_base, n_seq_max, n_pad,
-            0, LLAMA_SWA_TYPE_NONE, mem_other_base, filter_base, reuse, share);
+            0, LLAMA_SWA_TYPE_NONE, mem_other_base, filter_base, reuse, share,"",streaming ? &base_params : nullptr);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache>(
             model, hparams, type_k, type_v,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
-            hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share, "", bounded);
+            hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share,"",
+            stream && (stream->bounded_cache_lease || stream->defer_bounded_cache) ? stream : nullptr);
 }
 
 void llama_kv_cache_iswa::clear(bool data) {
@@ -111,12 +160,12 @@ void llama_kv_cache_iswa::clear(bool data) {
 }
 
 bool llama_kv_cache_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    bool res = true;
-
-    res = res & kv_base->seq_rm(seq_id, p0, p1);
-    res = res & kv_swa ->seq_rm(seq_id, p0, p1);
-
-    return res;
+    size_t retained=0;
+    if (!kv_base->kv_stream_can_remove(seq_id,p0,p1,&retained) || !kv_swa->kv_stream_can_remove(seq_id,p0,p1)) return false;
+    const auto * stream=kv_base->get_kv_stream();
+    if (stream && retained && retained < stream->tokens() &&
+            !kv_swa->bounded_prefix_available(kv_base->get_cells(0),retained)) return false;
+    return kv_base->seq_rm(seq_id,p0,p1) && kv_swa->seq_rm(seq_id,p0,p1);
 }
 
 void llama_kv_cache_iswa::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {

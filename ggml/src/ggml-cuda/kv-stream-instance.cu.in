@@ -35,8 +35,8 @@ struct dense_strided_kv : ggml_cuda_fattn_mma_typed_span_kv<K,V,resume> {
 };
 
 // Keep the stock arithmetic body; only its input policy is static.
-template<int C1, int C2, ggml_type K, ggml_type V, bool resume>
-__launch_bounds__(ggml_cuda_fattn_mma_get_nthreads(256,256,C1*C2),ggml_cuda_fattn_mma_get_occupancy(256,256,C1*C2))
+template<int D, int C1, int C2, ggml_type K, ggml_type V, bool resume>
+__launch_bounds__(ggml_cuda_fattn_mma_get_nthreads(D,D,C1*C2),ggml_cuda_fattn_mma_get_occupancy(D,D,C1*C2))
 static __global__ void flash_attn_ext_f16_dense_strided(
         const char * Q, const char * K_ptr, const char * V_ptr, const char * mask, const char * sinks, const int * KV_max,
         float * dst, float2 * meta, float scale, float bias, float m0, float m1, uint32_t log2, float softcap,
@@ -52,7 +52,7 @@ static __global__ void flash_attn_ext_f16_dense_strided(
     const int thread=threadIdx.y*blockDim.x+threadIdx.x;
     if (thread < count) cached[thread]=spans[thread];
     __syncthreads();
-    flash_attn_ext_f16_impl<256,256,C1,C2,false,false,false>(
+    flash_attn_ext_f16_impl<D,D,C1,C2,false,false,false>(
         Q,K_ptr,V_ptr,mask,sinks,KV_max,dst,meta,scale,bias,m0,m1,log2,softcap,
         ne00,ne01,ne02,ne03,nb01,nb02,nb03,ne10,ne11,ne12,ne13,nb11,nb12,nb13,nb21,nb22,nb23,
         ne31,ne32,ne33,nb31,nb32,nb33,dense_strided_kv<K,V,resume>{cached,count,control});
@@ -61,15 +61,15 @@ static __global__ void flash_attn_ext_f16_dense_strided(
 template<ggml_type V>
 static ggml_kv_mma_span_kernel_t mma_kernel(uint32_t c1, uint32_t c2, bool resume, bool dense_strided) {
 #define MMA(C1, C2) if (c1 == C1 && c2 == C2) { \
-    if (dense_strided) return resume ? flash_attn_ext_f16_dense_strided<C1,C2,GGML_TYPE_@KV_STREAM_KEY@,V,true> : flash_attn_ext_f16_dense_strided<C1,C2,GGML_TYPE_@KV_STREAM_KEY@,V,false>; \
-    return resume ? flash_attn_ext_f16_spans<256,256,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V,true> : flash_attn_ext_f16_spans<256,256,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V>; }
+    if (dense_strided) return resume ? flash_attn_ext_f16_dense_strided<@KV_STREAM_DIM@,C1,C2,GGML_TYPE_@KV_STREAM_KEY@,V,true> : flash_attn_ext_f16_dense_strided<@KV_STREAM_DIM@,C1,C2,GGML_TYPE_@KV_STREAM_KEY@,V,false>; \
+    return resume ? flash_attn_ext_f16_spans<@KV_STREAM_DIM@,@KV_STREAM_DIM@,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V,true> : flash_attn_ext_f16_spans<@KV_STREAM_DIM@,@KV_STREAM_DIM@,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V>; }
     MMA(1,8) MMA(2,8) MMA(4,8) MMA(4,2) MMA(8,8) MMA(8,2)
 #undef MMA
     return nullptr;
 }
 
 // Compile only pairs selected in the upstream FlashAttention registry.
-ggml_kv_mma_span_kernel_t ggml_cuda_kv_stream_mma_kernel_@KV_STREAM_KEY@(
+ggml_kv_mma_span_kernel_t ggml_cuda_kv_stream_mma_kernel_@KV_STREAM_SYMBOL@(
         ggml_type value, uint32_t c1, uint32_t c2, bool resume, bool dense_strided) {
     GGML_UNUSED_VARS(value,c1,c2,resume,dense_strided);
 #ifndef GGML_CUDA_NO_FA
@@ -102,6 +102,7 @@ ggml_kv_mma_span_kernel_t ggml_cuda_kv_stream_mma_kernel_@KV_STREAM_KEY@(
     return nullptr;
 }
 
+#if @KV_STREAM_BUILD_VECTOR@
 // Use the same compiled-pair flags as the upstream vector registry.
 fattn_kernel_t ggml_cuda_kv_stream_kernel_@KV_STREAM_KEY@(ggml_type value) {
     GGML_UNUSED(value);
@@ -251,3 +252,4 @@ ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_aligned_kernel_@KV_STREAM_KEY
 #endif
     return nullptr;
 }
+#endif

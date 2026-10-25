@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find a physical arena limit by executing a configured text or image workload.
+"""Find a physical arena limit with runtime probes of a text or image workload.
 
 Does not stop containers, download models, enable UVM, or reserve arbitrary VRAM.
 The result is workload-specific, not a guarantee for other image/prompt shapes.
@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shlex
 import socket
 import subprocess
@@ -45,6 +46,10 @@ def arguments(argv=None):
     parser.add_argument("--prompt-file", type=Path, help="literal image-request prompt; one <__media__> per image")
     parser.add_argument("--prefill-text", type=Path, default=ROOT/"benchmarks/data/online-articles-262144-words.txt")
     parser.add_argument("--prompt-tokens", type=int, help="text-only prefill length; default fills context minus outputs and headroom")
+    parser.add_argument("--probe-mode", choices=("full", "preflight"), default="full",
+                        help="full: test the requested workload for every candidate; preflight: use bounded text history plus real decoding")
+    parser.add_argument("--validate-selected", action="store_true",
+                        help="after a preflight search, run the full requested workload once at the selected arena; fail if it does not fit")
     parser.add_argument("--decode-tokens", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--ubatch-size", type=int, default=256)
@@ -55,14 +60,18 @@ def arguments(argv=None):
     parser.add_argument("--request-timeout", type=float, default=3600)
     parser.add_argument("--output", type=Path, default=ROOT/"benchmarks/results/arena-fit")
     args = parser.parse_args(argv)
+    if args.validate_selected and args.probe_mode != "preflight":
+        parser.error("--validate-selected requires --probe-mode preflight")
     if args.draft_length is None:
         args.draft_length = {"none":0, "mtp":3, "dflash":7}[args.spec_mode]
     if not (args.spec_mode == "none" and args.draft_length == 0 or
             args.spec_mode == "mtp" and 1 <= args.draft_length <= 3 or
             args.spec_mode == "dflash" and 1 <= args.draft_length <= 7):
         parser.error("target-only uses length 0; MTP supports 1-3; DFlash supports 1-7")
-    if bool(args.model_draft) != (args.spec_mode == "dflash"):
-        parser.error("--model-draft is required only for DFlash")
+    if args.spec_mode == "dflash" and not args.model_draft:
+        parser.error("--model-draft is required for DFlash")
+    if args.spec_mode == "none" and args.model_draft:
+        parser.error("--model-draft requires MTP or DFlash")
     if args.image and not args.mmproj or args.mmproj and args.spec_mode == "dflash":
         parser.error("--image requires --mmproj; vision+DFlash is unsupported")
     if args.prompt_file and not args.image or args.prompt_tokens is not None and args.image:
@@ -115,6 +124,18 @@ def bounded_bytes(path, maximum=64*1048576):
     return data
 
 
+def requested_text_tokens(args):
+    return args.prompt_tokens or args.context_size-args.decode_tokens-15
+
+
+def probe_text_tokens(args):
+    requested = requested_text_tokens(args)
+    if args.probe_mode == "preflight":
+        # Exercise wide prefill and decode transitions without filling the whole history.
+        return min(requested, max(2048, 2*max(args.batch_size, args.ubatch_size)))
+    return requested
+
+
 def payload(args, prompt, images):
     if images:
         if not isinstance(prompt, str) or prompt.count(MARKER) != len(images):
@@ -140,6 +161,8 @@ def validate_result(args, result, expected_prompt):
 def probe(args, candidate):
     try:
         with socket.socket() as available:
+            if os.name == "posix":
+                available.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             available.bind(("127.0.0.1", args.port))
     except OSError as error:
         raise RuntimeError(f"port {args.port} is unavailable; choose --port for this finder") from error
@@ -158,7 +181,7 @@ def probe(args, candidate):
                 prompt = bounded_bytes(args.prompt_file).decode("utf-8") if args.prompt_file else \
                     "Describe these images: " + " ".join([MARKER]*len(images))
             else:
-                expected = args.prompt_tokens or args.context_size-args.decode_tokens-15
+                expected = probe_text_tokens(args)
                 corpus = bounded_bytes(args.prefill_text).decode("utf-8")
                 tokens = request_json(url+"/tokenize", {"content":corpus, "add_special":True}, timeout=args.request_timeout)["tokens"]
                 if len(tokens) < expected:
@@ -171,6 +194,8 @@ def probe(args, candidate):
         finally:
             SWEEP.stop_process(process)
     text = log_path.read_text(errors="replace")
+    if re.search(r"illegal memory access|misaligned address|device-side assert|unspecified launch failure", text, re.IGNORECASE):
+        raise RuntimeError(f"probe reported a device fault, not an arena capacity boundary; see {log_path}")
     if failure is None:
         try:
             SWEEP.validate_execution_log(text)
@@ -182,7 +207,7 @@ def probe(args, candidate):
     if failure and not SWEEP.is_arena_capacity_failure(text):
         raise RuntimeError(f"probe failed; not a physical OOM: {failure}; see {log_path}") from failure
     return {"arena_mib":candidate, "fits":failure is None, "log":str(log_path), "command":command,
-        "timings":result.get("timings"), "error":str(failure) if failure else None}
+        "probe_mode":args.probe_mode, "timings":result.get("timings"), "error":str(failure) if failure else None}
 
 
 def fit(args):
@@ -202,16 +227,37 @@ def fit(args):
         return record["fits"]
     maximum = SWEEP.find_max_arena_mib(args.initial_arena_mib, checked)
     next_rejected = any(row["arena_mib"] == maximum+1 and not row["fits"] for row in records)
+    selected = next((row for row in records if row["arena_mib"] == maximum and row.get("fits")), None)
+    runtime_validated = selected is not None and selected.get("timings") is not None
+    selected_validation = None
+    if args.validate_selected:
+        full = argparse.Namespace(**vars(args))
+        full.probe_mode, full.validate_selected = "full", False
+        full.output = args.output/"selected-validation"
+        full.output.mkdir(exist_ok=False)
+        try:
+            selected_validation = probe(full, maximum)
+        except Exception as error:
+            (full.output/"record.json").write_text(json.dumps({"arena_mib":maximum,"fits":False,"error":str(error)},indent=2)+"\n")
+            raise RuntimeError(f"selected arena full workload validation failed: {error}; see {full.output}") from error
+        (full.output/"record.json").write_text(json.dumps(selected_validation,indent=2)+"\n")
+        if not selected_validation["fits"]:
+            raise RuntimeError(f"selected arena failed full workload validation; no fit published; see {full.output}")
+    full_validated = bool(selected_validation and selected_validation["fits"]) or runtime_validated and (args.probe_mode == "full" or bool(args.image))
     report = {"arena_mib":maximum, "initial_arena_mib":args.initial_arena_mib,
         "next_mib_rejected":maximum+1 if next_rejected else None,
         "command":server_command(args,maximum), "uvm":False, "reserve_mib":0,
         "context_size":args.context_size, "cache_type_k":args.cache_type_k, "cache_type_v":args.cache_type_v,
         "spec_mode":args.spec_mode, "draft_length":args.draft_length, "images":[str(path) for path in args.image],
+        "model_draft":str(args.model_draft) if args.model_draft else None,
         "prompt_file":str(args.prompt_file) if args.prompt_file else None,
-        "projector_configured":bool(args.mmproj), "vision_execution_validated":bool(args.image),
-        "prompt_tokens":None if args.image else args.prompt_tokens or args.context_size-args.decode_tokens-15,
+        "projector_configured":bool(args.mmproj), "vision_execution_validated":bool(args.image) and runtime_validated,
+        "probe_mode":args.probe_mode, "runtime_probe_validated":runtime_validated,
+        "full_workload_validated":full_validated, "selected_validation":selected_validation,
+        "prompt_tokens":None if args.image else probe_text_tokens(args),
+        "requested_prompt_tokens":None if args.image else requested_text_tokens(args),
         "decode_tokens":args.decode_tokens,
-        "scope":"Tested workload only; different image dimensions/counts, prompt shapes, other processes or driver allocations can change fit."}
+        "scope":"Preflight executes bounded text history plus the requested decode, or the complete supplied image request. Full text history is validated only in full mode or by --validate-selected. Different image shapes, prompts, other processes or driver allocations can change fit."}
     removed = sorted(set(REMOVED_ENV) | {name for name in os.environ if name.startswith("LLAMA_ARG_")})
     report["environment"] = {name:None for name in removed}
     report["environment"]["LLAMA_MEDIA_MARKER"] = MARKER

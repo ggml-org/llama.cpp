@@ -49,19 +49,30 @@ const char * server_vision_arena_config_error(const common_params & params) {
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
         return "vision arena requires -fa on; cache support is checked during context initialization";
     const bool mtp = common_params_uses_streamed_mtp(params);
-    if (params.speculative.has_dft() || (params.kv_stream_auxiliary_layers && !mtp) ||
+    if ((params.speculative.has_dft() && (!mtp || params.kv_stream_auxiliary_layers)) || (params.kv_stream_auxiliary_layers && !mtp) ||
             params.kv_stream_auxiliary_layers > 1 || (mtp && (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 3)))
-        return "vision arena supports only serial embedded MTP with 1-3 draft tokens";
+        return "vision arena supports only serial MTP with 1-3 draft tokens; external assistants require a matching shared-KV target";
     for (auto type : params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP)
         return "vision arena does not support this speculation mode";
     return nullptr;
 }
 
-const char * server_vision_arena_request_error(const server_task & task, bool embedded_mtp) {
+const char * server_vision_arena_request_error(const server_task & task, bool streamed_mtp,
+        const common_params_speculative * configured) {
     if (task.type != SERVER_TASK_TYPE_COMPLETION || !task.params.lora.empty()) return "vision arena supports completion requests without LoRA";
-    if (task.params.speculative.has_dft()) return "vision arena request cannot enable a draft model";
+    const auto & requested=task.params.speculative;
+    if (requested.draft.cache_type_k_explicit || requested.draft.cache_type_v_explicit)
+        return "vision arena request cannot override inherited draft cache types";
+    if (configured) {
+        const auto & source=requested.draft.mparams;
+        const auto & allowed=configured->draft.mparams;
+        if (source.path!=allowed.path || source.url!=allowed.url || source.hf_repo!=allowed.hf_repo ||
+                source.hf_file!=allowed.hf_file || source.docker_repo!=allowed.docker_repo)
+            return "vision arena request cannot change the configured draft model";
+    } else if (requested.has_dft()) return "vision arena request cannot enable a draft model";
     for (auto type : task.params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE &&
-            !(embedded_mtp && type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && task.params.speculative.draft.n_max >= 1 && task.params.speculative.draft.n_max <= 3))
+            !(streamed_mtp && type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && requested.draft.n_max >= 1 && requested.draft.n_max <= 3 &&
+                (!configured || requested.draft.n_max <= configured->draft.n_max)))
         return "vision arena request cannot change the qualified speculation mode";
     try {
         for (size_t i = 0; i < task.tokens.size();) {

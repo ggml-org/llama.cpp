@@ -9,6 +9,7 @@
 #include "llama-kv-stream-positions.h"
 #include "llama-kv-stream-mtp-proxy.h"
 #include "llama-memory-bounded-kv.h"
+#include "llama-context-memory.h"
 #include "ggml-alloc.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 
@@ -25,9 +26,121 @@ static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
 }
 
+bool llama_kv_cache::attach_shared_stream_reader(llama_context_memory & parent,uint32_t max_queries) {
+    if (!other || n_swa || n_seq_max != 1 || n_stream != 1 || v_trans || kv_stream || mtp_proxy ||
+            bounded_pending || shared_read_metadata || layers.empty() || layers.size() > LLAMA_MAX_LAYERS || !other->kv_stream) return false;
+    try {
+        auto * source=other->kv_stream.get();
+        const auto & shape=source->host()->config().shape;
+        const llama_memory_cache_format format{ggml_type(shape.type_k),ggml_type(shape.type_v),
+            uint32_t(shape.head_dim_k),uint32_t(shape.head_dim_v),uint32_t(shape.heads),false};
+        ggml_context_ptr metadata(ggml_init({4096+2*layers.size()*ggml_tensor_overhead(),nullptr,true}));
+        if (!metadata) return false;
+        auto replacement=layers;
+        std::vector<std::unique_ptr<llama_kv_stream_read_proxy>> readers;
+        for (auto & layer : replacement) {
+            size_t ordinal=0;
+            for (;ordinal<other->layers.size();++ordinal) {
+                const auto & candidate=other->layers[ordinal];
+                if (candidate.k == layer.k && candidate.v == layer.v) break;
+            }
+            if (ordinal == other->layers.size() || layer.k->type != format.key_type || layer.v->type != format.value_type ||
+                    hparams.n_embd_head_k(layer.il) != format.key_head_dim ||
+                    hparams.n_embd_head_v(layer.il) != format.value_head_dim ||
+                    hparams.n_head_kv(layer.il) != format.kv_heads) return false;
+            auto reader=llama_kv_stream_read_proxy::create(*source,parent,uint32_t(ordinal),format,
+                hparams.n_head(layer.il),max_queries);
+            if (!reader) return false;
+            layer.k=reader->key(); layer.v=reader->value();
+            layer.k_stream={ggml_view_2d(metadata.get(),layer.k,layer.k->ne[0],layer.k->ne[1],layer.k->nb[1],0)};
+            layer.v_stream={ggml_view_2d(metadata.get(),layer.v,layer.v->ne[0],layer.v->ne[1],layer.v->nb[1],0)};
+            if (ggml_backend_view_init(layer.k_stream[0]) != GGML_STATUS_SUCCESS ||
+                    ggml_backend_view_init(layer.v_stream[0]) != GGML_STATUS_SUCCESS) return false;
+            readers.push_back(std::move(reader));
+        }
+        shared_readers=std::move(readers);
+        shared_read_metadata=std::move(metadata);
+        layers.swap(replacement);
+        return true;
+    } catch (const std::bad_alloc &) { return false; }
+}
+
+bool llama_kv_cache::arm_shared_stream_reader() {
+    if (shared_readers.empty()) return false;
+    for (auto & reader : shared_readers) if (!reader->arm()) {
+        release_shared_stream_reader();
+        return false;
+    }
+    // Only the next full graph source owns lookahead. Later sources can replace the intent when reached.
+    try {
+        if (!shared_readers.front()->prefetch(1) && !shared_readers.front()->ready()) {
+            release_shared_stream_reader(); return false;
+        }
+    } catch (...) { release_shared_stream_reader(); throw; }
+    return true;
+}
+
+bool llama_kv_cache::shared_stream_consumer(uint32_t queries,llama_kv_stream_next_consumer & output) const noexcept {
+    return !shared_readers.empty() && shared_readers.front()->next_consumer(queries,output);
+}
+
+bool llama_kv_cache::release_shared_stream_reader() noexcept {
+    for (auto & reader : shared_readers) if (!reader->disarm()) return false;
+    return true;
+}
+
+bool llama_kv_cache::attach_shared_bounded_reader(const llama_memory_bounded_kv_read & source) {
+    if (!source || !other || !n_swa || n_seq_max != 1 || n_stream != 1 || v_trans || kv_stream || mtp_proxy ||
+            bounded_pending || shared_read_metadata || !other->bounded_lease || layers.empty() ||
+            layers.size() > LLAMA_MAX_LAYERS || source.layout()->allocation.capacity_rows != get_size()) return false;
+    try {
+        ggml_context_ptr metadata(ggml_init({4096+4*layers.size()*ggml_tensor_overhead(),nullptr,true}));
+        if (!metadata) return false;
+        auto replacement=layers;
+        std::vector<uint32_t> ids;
+        auto read=std::make_unique<llama_memory_bounded_kv_read>();
+        for (auto & layer : replacement) {
+            const auto root=std::find_if(other->layers.begin(),other->layers.end(),[&](const kv_layer & candidate) {
+                return candidate.k == layer.k && candidate.v == layer.v;
+            });
+            if (root == other->layers.end() || !layer.k || !layer.v || layer.k->ne[0] != hparams.n_embd_k_gqa(layer.il) ||
+                    layer.v->ne[0] != hparams.n_embd_v_gqa(layer.il) ||
+                    !source.bind_layer_views(metadata.get(),root->il,root->k,root->v,layer.k,layer.v)) return false;
+            layer.k_stream={ggml_view_2d(metadata.get(),layer.k,layer.k->ne[0],layer.k->ne[1],layer.k->nb[1],0)};
+            layer.v_stream={ggml_view_2d(metadata.get(),layer.v,layer.v->ne[0],layer.v->ne[1],layer.v->nb[1],0)};
+            if (ggml_backend_view_init(layer.k_stream[0]) != GGML_STATUS_SUCCESS ||
+                    ggml_backend_view_init(layer.v_stream[0]) != GGML_STATUS_SUCCESS) return false;
+            ids.push_back(root->il);
+        }
+        shared_bounded_source=source.layout()->cache.identity.id;
+        shared_bounded_generation=source.layout()->cache.identity.generation;
+        shared_bounded_buffer=source.buffer();
+        shared_bounded_layers=std::move(ids);
+        shared_bounded_read=std::move(read);
+        shared_read_metadata=std::move(metadata);
+        layers.swap(replacement);
+        return true;
+    } catch (const std::bad_alloc &) { return false; }
+}
+
+bool llama_kv_cache::arm_shared_bounded_reader(const llama_memory_bounded_kv_read & source) noexcept {
+    if (!source || !shared_bounded_read || source.buffer() != shared_bounded_buffer ||
+            source.layout()->cache.identity.id != shared_bounded_source ||
+            source.layout()->cache.identity.generation < shared_bounded_generation || shared_bounded_layers.size() != layers.size()) return false;
+    for (size_t i=0;i<layers.size();++i)
+        if (!source.contains_layer(shared_bounded_layers[i],layers[i].k,layers[i].v)) return false;
+    *shared_bounded_read=source;
+    shared_bounded_generation=source.layout()->cache.identity.generation;
+    return true;
+}
+
+void llama_kv_cache::release_shared_bounded_reader() noexcept {
+    if (shared_bounded_read) shared_bounded_read->reset();
+}
+
 bool llama_kv_cache::describe_bounded_storage(uint64_t identity,uint64_t generation,uint32_t history_rows,
         uint32_t headroom_rows,llama_memory_bounded_kv_layout & output) const {
-    if (!n_swa || n_seq_max != 1 || n_stream != 1 || layers.empty() || ctxs_bufs.size() != 1 ||
+    if (bounded_pending || !n_swa || n_seq_max != 1 || n_stream != 1 || layers.empty() || ctxs_bufs.size() != 1 ||
             other || kv_stream || attached_mtp_cache) return false;
     const auto & first=layers.front();
     if (!first.k || !first.v) return false;
@@ -60,6 +173,49 @@ bool llama_kv_cache::describe_bounded_storage(uint64_t identity,uint64_t generat
                 uintptr_t(layer.k->data) != base+placement.k_offset || uintptr_t(layer.v->data) != base+placement.v_offset) return false;
     }
     output=std::move(next); return true;
+}
+
+bool llama_kv_cache::bounded_storage_pending() const noexcept { return bounded_pending; }
+
+bool llama_kv_cache::bind_bounded_storage(ggml_backend_memory_lease_t lease) {
+    if (!lease || !n_swa || n_seq_max != 1 || n_stream != 1 || other || kv_stream || attached_mtp_cache ||
+            layers.empty() || ctxs_bufs.size() != 1) return false;
+    if (!bounded_pending) {
+        ggml_backend_memory_region old{}, next{};
+        return bounded_lease && ggml_backend_memory_lease_get_region(bounded_lease.get(),&old) &&
+            ggml_backend_memory_lease_get_region(lease,&next) &&
+            ggml_backend_memory_lease_buffer(bounded_lease.get()) == ggml_backend_memory_lease_buffer(lease) &&
+            old.id == next.id && old.offset == next.offset && old.size == next.size &&
+            old.alignment == next.alignment && old.flags == next.flags;
+    }
+    for (const auto & cells : v_cells) if (cells.get_used()) return false;
+    try {
+        auto * buffer=ggml_backend_memory_lease_buffer(lease);
+        auto * buft=ggml_backend_buffer_get_type(ctxs_bufs.front().second.get());
+        ggml_backend_memory_region region{};
+        if (!buffer || ggml_backend_buffer_get_type(buffer) != buft ||
+                !ggml_backend_memory_lease_get_region(lease,&region) ||
+                !(region.flags&GGML_BACKEND_MEMORY_REGION_PERSISTENT)) return false;
+        std::vector<ggml_tensor *> roots;
+        for (const auto & layer : layers) { roots.push_back(layer.k); roots.push_back(layer.v); }
+        const auto bytes=ggml_backend_buft_get_alloc_size_n(buft,roots.data(),int(roots.size()));
+        if (!bytes || region.size != bytes || ggml_backend_buffer_get_size(buffer) != bytes) return false;
+        const auto ids=get_layer_ids();
+        const layer_filter_cb filter=[&](int32_t il) { return std::find(ids.begin(),ids.end(),uint32_t(il)) != ids.end(); };
+        llama_memory_params params{};
+        params.type_k=type_k(); params.type_v=type_v(); params.bounded_cache_lease=lease;
+        // Reuse native tensor initialization so stateful backends keep metadata at its final address.
+        llama_kv_cache next(model,hparams,params.type_k,params.type_v,v_trans,true,true,get_size(),1,n_pad,
+            n_swa,swa_type,nullptr,filter,nullptr,nullptr,"",&params);
+        if (next.get_layer_ids() != ids || next.ctxs_bufs.size() != 1 || !retired_bounded_metadata.empty()) return false;
+        retired_bounded_metadata.swap(ctxs_bufs);
+        ctxs_bufs.swap(next.ctxs_bufs);
+        layers.swap(next.layers);
+        map_layer_ids.swap(next.map_layer_ids);
+        bounded_lease.swap(next.bounded_lease);
+        bounded_pending=false;
+        return true;
+    } catch (...) { return false; }
 }
 
 std::unique_ptr<llama_memory_bounded_kv> llama_kv_cache::retain_bounded_storage(uint64_t identity,uint64_t generation,
@@ -170,16 +326,30 @@ llama_kv_cache::llama_kv_cache(
 
     const uint32_t requested_kv_size = kv_size;
     auto * mtp_host = stream ? stream->mtp_host_cache : nullptr;
-    if (stream && stream->bounded_cache_lease) {
-        if (!n_swa || n_seq_max != 1 || n_stream != 1 || other || reuse || share || !offload || hparams.no_alloc || mtp_host) {
+    if (stream && (stream->bounded_cache_lease || stream->defer_bounded_cache)) {
+        if (!n_swa || n_seq_max != 1 || n_stream != 1 || other || share || !offload || hparams.no_alloc || mtp_host) {
             throw std::runtime_error("bounded cache lease requires one allocated serial SWA group");
         }
+        if (stream->bounded_cache_lease && stream->defer_bounded_cache)
+            throw std::runtime_error("bounded cache storage cannot be both deferred and bound");
+        if (reuse) for (uint32_t il=0;il<hparams.n_layer_all;++il) {
+            if ((!filter || filter(int32_t(il))) && reuse(int32_t(il)) >= 0)
+                throw std::runtime_error("bounded cache lease cannot alias selected layers");
+        }
         bounded_lease.reset(ggml_backend_memory_lease_retain(stream->bounded_cache_lease));
+        bounded_pending=stream->defer_bounded_cache;
     }
-    if (stream && !mtp_host && !bounded_lease) {
-        if (model.arch != LLM_ARCH_QWEN35 || hparams.no_alloc || v_trans || !offload || n_seq_max != 1 ||
-                n_swa || other || reuse || share || !stream->kv_stream_backend || kv_size > UINT32_MAX-255) {
-            throw std::runtime_error("KV streaming requires an allocated serial Qwen35 CUDA target context with Flash Attention and no shared/SWA cache");
+    if (stream && !mtp_host && !bounded_lease && !bounded_pending) {
+        if (model.arch == LLM_ARCH_GEMMA4 && stream->kv_stream_auxiliary_layers)
+            throw std::runtime_error("Gemma shared-KV drafting does not allocate auxiliary KV histories");
+        if ((model.arch != LLM_ARCH_QWEN35 && model.arch != LLM_ARCH_GEMMA4) || hparams.no_alloc || v_trans ||
+                !offload || n_seq_max != 1 || n_swa || other || share || !stream->kv_stream_backend ||
+                kv_size > UINT32_MAX-255) {
+            throw std::runtime_error("KV streaming requires an allocated serial CUDA target with supported architecture, Flash Attention and unshared full-attention storage");
+        }
+        if (reuse) for (uint32_t il=0;il<hparams.n_layer_all;++il) {
+            if ((!filter || filter(int32_t(il))) && reuse(int32_t(il)) >= 0)
+                throw std::runtime_error("KV streaming cannot alias selected layers");
         }
         kv_size = GGML_PAD(kv_size,256);
     }
@@ -255,15 +425,16 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
-    if (stream && !mtp_host && !bounded_lease) {
+    if (stream && !mtp_host && !bounded_lease && !bounded_pending) {
         auto * dev = ggml_backend_get_device(stream->kv_stream_backend);
         std::vector<uint32_t> ids;
         for (uint32_t il = 0; il < n_layer; ++il) if (hparams.has_kv(il) && (!filter || filter(il))) ids.push_back(il);
         if (ids.empty()) throw std::runtime_error("KV streaming found no attention layers");
         const auto first = ids.front();
-        for (auto il : ids) if (model.dev_layer(il) != dev || hparams.n_embd_head_k(il) != 256 || hparams.n_embd_head_v(il) != 256 ||
+        const auto dk=hparams.n_embd_head_k(first), dv=hparams.n_embd_head_v(first);
+        for (auto il : ids) if (model.dev_layer(il) != dev || hparams.n_embd_head_k(il) != dk || hparams.n_embd_head_v(il) != dv ||
                 hparams.n_head_kv(il) != hparams.n_head_kv(first) || hparams.n_head(il) != hparams.n_head(first)) {
-            throw std::runtime_error("KV streaming requires uniform 256-wide attention on one CUDA device");
+            throw std::runtime_error("KV streaming requires uniform attention geometry on one CUDA device");
         }
         auto * reg = ggml_backend_dev_backend_reg(dev);
         auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
@@ -276,7 +447,7 @@ llama_kv_cache::llama_kv_cache(
         config.max_batch_rows = stream->kv_stream_max_rows; config.query_heads = hparams.n_head(first);
         config.max_decode_rows = stream->kv_stream_max_decode_rows;
         config.measure = true;
-        config.host = {0,{type_k,type_v,256,256,hparams.n_head_kv(first),256,128},
+        config.host = {0,{type_k,type_v,dk,dv,hparams.n_head_kv(first),256,128},
             get()->capabilities(config.backend,type_k,type_v),requested_kv_size,uint32_t(ids.size())};
         if (!config.pool_bytes) {
             llama_kv_stream_policy_config bootstrap;
@@ -320,7 +491,16 @@ llama_kv_cache::llama_kv_cache(
             const int32_t il_share = share(il);
 
             if (il_share >= 0) {
-                const auto & layer_share = other->layers[other->map_layer_ids[il_share]];
+                const auto source=other->map_layer_ids.find(il_share);
+                if (source == other->map_layer_ids.end()) throw std::runtime_error("shared KV source layer is unavailable");
+                const auto & layer_share = other->layers[source->second];
+                if (!layer_share.k || layer_share.k->type != type_k ||
+                        (layer_share.v && layer_share.v->type != type_v) ||
+                        (other->kv_stream && (!layer_share.v || v_trans ||
+                            layer_share.k->ne[0] != hparams.n_embd_k_gqa(il) ||
+                            layer_share.v->ne[0] != hparams.n_embd_v_gqa(il)))) {
+                    throw std::runtime_error("shared KV source has incompatible cache geometry or format");
+                }
 
                 LLAMA_LOG_WARN("%s: layer %3d: sharing with layer %d. k = %p, v = %p\n", __func__, il, il_share,
                         layer_share.k->data, layer_share.v->data);
@@ -363,6 +543,10 @@ llama_kv_cache::llama_kv_cache(
             dev_name = ggml_backend_dev_name(dev);
         }
         if (kv_stream) buft = ggml_backend_buffer_get_type(kv_stream->buffer());
+        if (bounded_pending) {
+            buft=llama_kv_stream_device_buffer_type(model.dev_layer(il));
+            if (!buft) throw std::runtime_error("deferred bounded cache requires device-local buffer views");
+        }
         if (bounded_lease) buft=ggml_backend_buffer_get_type(ggml_backend_memory_lease_buffer(bounded_lease.get()));
         if (mtp_host) {
             if (il != hparams.n_layer() || !layers.empty()) throw std::runtime_error("invalid attached MTP layer");
@@ -455,7 +639,7 @@ llama_kv_cache::llama_kv_cache(
                     ggml_backend_buffer_free(buf); throw std::runtime_error("bounded SWA cache exceeds its measured grant");
                 }
             }
-        } else if (hparams.no_alloc) {
+        } else if (hparams.no_alloc || bounded_pending) {
             buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
             for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
                 t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
@@ -469,7 +653,7 @@ llama_kv_cache::llama_kv_cache(
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
 
-        if (!kv_stream && !mtp_host) ggml_backend_buffer_clear(buf, 0);
+        if (!kv_stream && !mtp_host && !bounded_pending) ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
@@ -566,6 +750,7 @@ llama_kv_cache::llama_kv_cache(
 llama_kv_cache::~llama_kv_cache() = default;
 
 void llama_kv_cache::clear(bool data) {
+    if (shared_read_metadata) return;
     if (mtp_proxy && !mtp_proxy->remove_suffix(0, std::numeric_limits<size_t>::max()))
         throw std::runtime_error("failed to reset attached MTP host cache");
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -577,7 +762,7 @@ void llama_kv_cache::clear(bool data) {
         if (!kv_stream->reset(data)) throw std::runtime_error("failed to reset KV streaming session");
         return;
     }
-    if (data) {
+    if (data && !bounded_pending) {
         for (auto & [_, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
@@ -591,6 +776,27 @@ bool llama_kv_cache::kv_stream_can_remove(llama_seq_id seq_id,llama_pos p0,llama
     if (!llama_kv_stream_suffix(v_cells[0], kv_stream->tokens(), p0, p1, keep)) return false;
     if (retained) *retained = keep;
     return true;
+}
+
+bool llama_kv_cache::bounded_prefix_available(const llama_kv_cells & full,size_t retained) const noexcept {
+    if (!retained) return true;
+    if (bounded_pending || !n_swa || n_swa > INT32_MAX || n_stream != 1 || n_seq_max != 1 ||
+            (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED && swa_type != LLAMA_SWA_TYPE_SYMMETRIC) ||
+            retained > full.size() || full.is_empty(uint32_t(retained-1))) return false;
+    auto query=full.pos_get(uint32_t(retained-1));
+    // Single-position appends query the next token. A native checkpoint need not retain the previous query's oldest row.
+    if (hparams.n_pos_per_embd() == 1) {
+        if (query == INT32_MAX) return false;
+        ++query;
+    }
+    size_t first=0, end=retained;
+    while (first < end) {
+        const auto middle=first+(end-first)/2;
+        if (full.is_empty(uint32_t(middle))) return false;
+        if (llama_hparams::is_masked_swa(n_swa,swa_type,full.pos_get(uint32_t(middle)),query)) first=middle+1;
+        else end=middle;
+    }
+    return llama_kv_stream_bounded_contains(full,first,retained,v_cells[0],has_cell_ext());
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -988,6 +1194,7 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
 
 llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool optimize) {
     GGML_UNUSED(optimize);
+    if (bounded_pending) return std::make_unique<llama_kv_cache_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 
     bool do_shift = get_has_shift();
 
@@ -996,6 +1203,7 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool 
 
 llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
     llama_kv_cache::slot_info_vec_t res;
+    if (bounded_pending) return res;
 
     struct state_t {
         slot_info sinfo; // slot info for the ubatch
@@ -1628,6 +1836,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
+    if (shared_read_metadata) throw std::runtime_error("cannot write a borrowed KV source");
     GGML_UNUSED(sinfo);
 
     const int32_t ikv = map_layer_ids.at(il);
@@ -1663,6 +1872,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 }
 
 ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
+    if (shared_read_metadata) throw std::runtime_error("cannot write a borrowed KV source");
     GGML_UNUSED(sinfo);
 
     const int32_t ikv = map_layer_ids.at(il);
@@ -2038,6 +2248,10 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
     }
 }
 
+bool llama_kv_cache::mask_is_causal(bool causal_attn) const {
+    return causal_attn || (hparams.non_causal_type==LLAMA_NON_CAUSAL_TYPE_SWA_ONLY && swa_type==LLAMA_SWA_TYPE_NONE);
+}
+
 void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     const uint32_t n_tokens = ubatch->n_tokens;
 
@@ -2053,9 +2267,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
 
     // see llama_non_causal_type
     // only the SWA cache (or the SWA layers of a single cache) become non-causal
-    if (!causal_attn && hparams.non_causal_type == LLAMA_NON_CAUSAL_TYPE_SWA_ONLY) {
-        causal_attn = swa_type == LLAMA_SWA_TYPE_NONE;
-    }
+    causal_attn=mask_is_causal(causal_attn);
 
     //const int64_t t_start = ggml_time_us();
 
@@ -3289,7 +3501,7 @@ bool llama_kv_cache_context::prepare_mask_bounds(const llama_ubatch & ubatch, bo
     mask_bounds.clear();
     if (!kv->supports_mask_bounds() || n_kv <= 0) return false;
     const auto & cells=kv->get_cells(0);
-    return llama_kv_stream_mask_bounds(cells,cells.get_used(),size_t(n_kv),ubatch,causal,mask_bounds);
+    return llama_kv_stream_mask_bounds(cells,cells.get_used(),size_t(n_kv),ubatch,kv->mask_is_causal(causal),mask_bounds);
 }
 
 

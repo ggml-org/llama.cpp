@@ -8,6 +8,7 @@ struct ggml_cuda_fattn_tile_native_rows {};
 
 // Native and complete-layer readers do not checkpoint or alter their loop bounds.
 template<typename KV> struct ggml_cuda_fattn_tile_resume_traits { static constexpr bool enabled = false; };
+template<typename KV> struct ggml_cuda_fattn_tile_mask_traits { static constexpr bool enabled = false; };
 
 struct ggml_cuda_fattn_tile_contiguous_f16_rows {
     const half2 * data;

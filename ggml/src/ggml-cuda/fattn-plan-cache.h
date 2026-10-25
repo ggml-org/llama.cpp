@@ -11,13 +11,15 @@ struct ggml_cuda_fattn_plan_key {
     int key=0, value=0;
     uint32_t heads=0, kv_heads=0, queries=0, tokens=0, spans=0, family=0;
     bool resume=false, dense_strided=false;
+    uint32_t head_dim_k=256, head_dim_v=256;
 
     bool operator==(const ggml_cuda_fattn_plan_key & other) const {
         return device == other.device && cc == other.cc && compiled_arch == other.compiled_arch &&
             sms == other.sms && warp == other.warp && shared_limit == other.shared_limit &&
             key == other.key && value == other.value && heads == other.heads && kv_heads == other.kv_heads &&
             queries == other.queries && tokens == other.tokens && spans == other.spans && family == other.family &&
-            resume == other.resume && dense_strided == other.dense_strided;
+            resume == other.resume && dense_strided == other.dense_strided &&
+            head_dim_k == other.head_dim_k && head_dim_v == other.head_dim_v;
     }
 };
 

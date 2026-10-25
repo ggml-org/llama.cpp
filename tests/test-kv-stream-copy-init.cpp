@@ -118,17 +118,24 @@ int main(int argc, char ** argv) {
     testing t;
 #ifdef KV_COPY_INIT_MODEL_TEST
     t.test("model_preflight_propagates_resource_oom_before_inference", [&](testing & t) {
-        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, 513, false, 1);
-        failure_probe probe(1, true, cudaErrorMemoryAllocation, true);
-        uint32_t unavailable = 99;
-        auto model = llama_kv_stream_model::create({backend.get(), f.host->config(), f.policy.pool_bytes, 256, 4, true}, &unavailable);
-        t.assert_true(!model);
-        t.assert_equal(uint32_t(0), unavailable);
-        t.assert_equal(size_t(1), probe.calls);
-        t.assert_equal(size_t(0), probe.invalid);
-        t.assert_true(probe.log.find("preflight failed") != std::string::npos);
-        t.assert_true(probe.log.find("out of memory") != std::string::npos);
-        t.assert_true(probe.streams.empty() && probe.events.empty());
+        for (uint32_t dim : {256u,512u}) {
+            fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, 513, false,
+                dim==512 ? 10 : 1,dim==512 ? 4 : 2,0,dim,dim);
+            const llama_kv_stream_model_config config{backend.get(), f.host->config(), f.policy.pool_bytes, 256, dim==512 ? 32u : 4u, true};
+            {
+                failure_probe probe(1, true, cudaErrorMemoryAllocation, true);
+                uint32_t unavailable = 99;
+                auto model = llama_kv_stream_model::create(config, &unavailable);
+                t.assert_true(!model);
+                t.assert_equal(uint32_t(0), unavailable);
+                t.assert_equal(size_t(1), probe.calls);
+                t.assert_equal(size_t(0), probe.invalid);
+                t.assert_true(probe.log.find("preflight failed") != std::string::npos);
+                t.assert_true(probe.log.find("out of memory") != std::string::npos);
+                t.assert_true(probe.streams.empty() && probe.events.empty());
+            }
+            t.assert_true("prepared-resource failure leaves model admission retryable",bool(llama_kv_stream_model::create(config)));
+        }
     });
 #endif
     t.test("prepared_copy_resources_reject_invalid_capacity_before_creation", [&](testing & t) {

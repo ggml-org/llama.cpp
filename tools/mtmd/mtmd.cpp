@@ -5,6 +5,7 @@
 #include "mtmd-audio.h"
 #include "mtmd-image.h"
 #include "mtmd-workspace.h"
+#include "mtmd-session.h"
 #include "mtmd-embeddings.h"
 #include "mtmd-projector-storage.h"
 #include "debug/mtmd-debug.h"
@@ -900,7 +901,11 @@ struct mtmd_context {
                     // <|image> ... (image embeddings) ... <image|>
                     img_beg = "<|image>";
                     img_end = "<image|>";
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                    if (proj_type_v() == PROJECTOR_TYPE_GEMMA4V) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_gemma4>(ctx_v);
+                    } else {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                    }
                 } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
             case PROJECTOR_TYPE_DEEPSEEKOCR2:
@@ -2290,6 +2295,17 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
 
 bool mtmd_decode_use_mrope(const mtmd_context * ctx) {
     return ctx->pos_type == MTMD_POS_TYPE_MROPE;
+}
+
+bool mtmd_vision_phase_compatible(const mtmd_context * ctx,const llama_model * model) noexcept {
+    if (!ctx || !model || !ctx->ctx_v || ctx->ctx_a) return false;
+    const auto rope=llama_model_rope_type(model);
+    if (mtmd_decode_use_mrope(ctx)) return rope==LLAMA_ROPE_TYPE_MROPE || rope==LLAMA_ROPE_TYPE_IMROPE;
+    if (ctx->proj_type_v()!=PROJECTOR_TYPE_GEMMA4V || rope!=LLAMA_ROPE_TYPE_NEOX ||
+            !mtmd_decode_use_non_causal(ctx,nullptr)) return false;
+    char architecture[32];
+    const auto length=llama_model_meta_val_str(model,"general.architecture",architecture,sizeof(architecture));
+    return length>0 && size_t(length)<sizeof(architecture) && !std::strcmp(architecture,"gemma4");
 }
 
 bool mtmd_support_vision(const mtmd_context * ctx) {

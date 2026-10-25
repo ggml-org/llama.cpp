@@ -229,7 +229,7 @@ def validate_pair(target, draft, publisher):
     }
 
 
-def read_gguf(path):
+def read_gguf(path, end_tokens=(b"<|endoftext|>", b"<|im_end|>")):
     reader = GGUFReader(path)
     arch = reader.get_field("general.architecture")
     if arch is None or [kind.name for kind in arch.types] != ["STRING"]:
@@ -245,14 +245,17 @@ def read_gguf(path):
     if types is None or [kind.name for kind in types.types] != ["ARRAY", "INT32"] or len(types.data) != len(tokens.data):
         raise ValueError("invalid tokenizer token types")
     digest = hashlib.sha256()
+    text_digest = hashlib.sha256()
     end_ids = []
     for index, (token, token_type) in enumerate(zip(tokens.data, types.data)):
         raw = tokens.parts[token].tobytes()
-        if raw in (b"<|endoftext|>", b"<|im_end|>"):
+        if raw in end_tokens:
             end_ids.append(index)
         digest.update(struct.pack("<Q", len(raw)))
         digest.update(raw)
         digest.update(struct.pack("<i", int(types.parts[token_type][0])))
+        text_digest.update(struct.pack("<Q", len(raw)))
+        text_digest.update(raw)
     fields = {}
     for name, item in reader.fields.items():
         if name == "general.architecture" or name.startswith(architecture+".") or name in ("tokenizer.ggml.mask_token_id", "tokenizer.ggml.eos_token_id"):
@@ -264,7 +267,8 @@ def read_gguf(path):
                for item in reader.tensors}
     return {"metadata": fields, "tensors": tensors,
             "tokenizer": {"model": model.contents(), "count": len(tokens.data),
-                          "token_ids_sha256": digest.hexdigest(), "end_token_ids": end_ids}}
+                          "token_ids_sha256": digest.hexdigest(),
+                          "token_text_sha256": text_digest.hexdigest(), "end_token_ids": end_ids}}
 
 
 def verify_file(path, pin):

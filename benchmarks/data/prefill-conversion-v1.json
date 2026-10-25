@@ -1,0 +1,77 @@
+{
+  "description": "Bounded prefill conversion reuse versus the pre-conversion adaptive KV implementation, not stock/no-streaming",
+  "gpu": "NVIDIA GeForce RTX5070Ti,15880MiB reported",
+  "models": {
+    "gemma": "unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-Q3_K_M.gguf with matching Q8_0 assistant",
+    "qwen": "unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ4_XS.gguf with embedded MTP"
+  },
+  "profile": {
+    "arena_mib": 1024,
+    "arena_policy": "fixed, not maximum-fit",
+    "key_cache": "q8_0",
+    "value_cache": "q4_0",
+    "batch": 256,
+    "ubatch": 256,
+    "uvm": false,
+    "decode_outputs": 256,
+    "prompt_tokens": "context_capacity-271 (256 outputs +15 shared headroom)",
+    "warmup": "256 prompt tokens +4 outputs, then fresh uncached measured prompt",
+    "sampling": "temperature0, seed123, ignore_eos",
+    "variant_order": "alternating before/after then after/before by trial",
+    "repetitions": "3 pairs at8/64Ki for MTP0/3; single120Ki MTP0 control, no repeatability claim"
+  },
+  "qualified_base_commit": "1e9fb695eee0f303501d8d94b838d26240a2e822",
+  "qualified_working_tree_diff_sha256": "158eb257cf7161a859e32c43960cef6cb9d3a1155ec7d86a05de91a25eb44914",
+  "prepared_runtime_sha256": {
+    "llama-server": "9cf243c5b09760c6eaa16d133bd4bdeb718f80a933bed71de0bb0650f007ab02",
+    "libllama.so.0": "a91ccf987260d91aa6182c39cf38caecaea43cc6b7b31a09037da4c7f63d3b6e",
+    "libllama-common.so.0": "5b27b12cc1abff2e83ea542b3c586204f0d2da3584df932eabce9bafe2bd5346",
+    "libllama-server-impl.so": "a9b8fc48aabb4c80411b4383934395b1da8e800ad62a059d6a7c8af5cbfb3899",
+    "libggml-cuda.so.0": "9f040a24cf23f05846699cf2d96cb2ecfde7aed2aeb22297b2e635dc43558aa3",
+    "libggml-base.so.0": "016ceed682111482bb5ca1798a9b37101e6979271616cb6553e016c32950d1df",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libmtmd.so.0": "88da0c39bf658d2e5621db02b8c924cff77bc28955c28ede969505651fc5ee18"
+  },
+  "baseline_runtime_sha256": {
+    "llama-server": "9cf243c5b09760c6eaa16d133bd4bdeb718f80a933bed71de0bb0650f007ab02",
+    "libllama.so.0": "a91ccf987260d91aa6182c39cf38caecaea43cc6b7b31a09037da4c7f63d3b6e",
+    "libllama-common.so.0": "5b27b12cc1abff2e83ea542b3c586204f0d2da3584df932eabce9bafe2bd5346",
+    "libllama-server-impl.so": "a9b8fc48aabb4c80411b4383934395b1da8e800ad62a059d6a7c8af5cbfb3899",
+    "libggml-cuda.so.0": "035000ed2b139d403a819078b4073155285933c82f7c29189cfc6940e966449d",
+    "libggml-base.so.0": "016ceed682111482bb5ca1798a9b37101e6979271616cb6553e016c32950d1df",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libmtmd.so.0": "88da0c39bf658d2e5621db02b8c924cff77bc28955c28ede969505651fc5ee18"
+  },
+  "runtime_source_sha256": {
+    "ggml/src/ggml-cuda/fattn.cu": "08982e3126c5a9ab609b88c50b559088d16bd2d9f6e8f8c0dded630d128d9085",
+    "ggml/src/ggml-cuda/kv-stream-partial.cu": "b1b6c988ae66dde71d35fc319391bde1ae55778dff6bb9f31e52c8e45c0b9c22",
+    "tests/test-kv-stream-vector-spans.cpp": "ce697c4bd49209d35f78ace21ce46a4defe2831ee6f0ce132c415d5940ed5eee"
+  },
+  "inputs": {
+    "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-Q3_K_M.gguf": {
+      "sha256": "d2d7a0f9117eb1a9a4b8b68bbb53c1ce5d1f602c45b9028dc12add0d0056f4fd",
+      "size": 14736608192,
+      "mtime_ns": 1792266503280014000
+    },
+    "/home/raymond/LLM/llama-cache/models--unsloth--Qwen3.8-27B-GGUF/blobs/40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199": {
+      "sha256": "40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199",
+      "size": 14252845984,
+      "mtime_ns": 1787701670836544500
+    },
+    "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mtp-gemma-4-31B-it-Q8_0.gguf": {
+      "sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de",
+      "size": 514687104,
+      "mtime_ns": 1792266298805876000
+    },
+    "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/benchmarks/data/online-articles-262144-words.txt": {
+      "sha256": "ca19e089c46f80c2f661d31a1312aeda21fbc73bd17ddf371e5f3a0befa9102e",
+      "size": 1662873,
+      "mtime_ns": 1791685407733808600
+    }
+  },
+  "correctness": "All26 pairs have identical prompt and256 generated IDs, draft/acceptance counts; decode pools/layouts identical",
+  "workspace_policy": "User-approved mandatory extra8MiB(D256) or16MiB(D512), four KV heads, single2048-token FP16 K/V chunk INSIDE the arena, reused across layers/context, reclaimed for decode; no automatic low-budget fallback",
+  "qualification": "768 all-pair/dimension/query profiles,19969 assertions and strict CUDA0; final26+11 gates,111 binary hashes,120 native-exact server records; legacy affected-object compile coverage only"
+}

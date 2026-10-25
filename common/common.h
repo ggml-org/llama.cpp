@@ -998,6 +998,7 @@ struct common_init_result {
     std::vector<llama_adapter_lora_ptr> & lora();
 
 private:
+    friend std::unique_ptr<common_init_result> common_init_from_params(common_params &, bool);
     struct impl;
     std::unique_ptr<impl> pimpl;
 };
@@ -1014,7 +1015,10 @@ const char * common_streamed_kv_config_error(const common_params & params);
 // Configuration checks precede model-specific geometry and compiled-path qualification.
 const char * common_streamed_dflash_config_error(const common_params & params);
 // Resolve the count before context allocation; reject missing metadata and conflicting legacy values.
-uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers);
+uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers,
+        bool shares_target_kv = false);
+// Shared-target assistants require verification queries but no recurrent snapshot allocation.
+uint32_t common_kv_stream_verify_max(const common_params & params, bool shares_target_kv);
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);

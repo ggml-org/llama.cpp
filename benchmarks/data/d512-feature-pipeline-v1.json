@@ -1,0 +1,488 @@
+{
+  "title": "SM120 D512 feature pipeline fixed-arena qualification",
+  "hardware": "RTX 5070 Ti, SM120, 16 GB; CUDA 13 functional build",
+  "baseline": "Shipping bounded conversion plus host half-ring pipeline; no internal feature pipeline or checkpoint prototype.",
+  "candidate": "Full rebuilt runtime, narrowly scoped D512 internal feature pipeline and checkpoint address rematerialization.",
+  "binary_build_origin": {
+    "runtime_build_source_commit": "a02ea5b21bc73a9d986730d87cdd7811a00c79a8",
+    "runtime_build_source_diff_sha256": "1edfac94da46d3967065f506019a5484808549d91faf4fcc411cb749b30cffdc",
+    "current_source_diff_sha256": "a4a3366d7a61a37ff5787f23d2eac48591e811f3f9a6f7b7dfc4c9d75ea1bf8d",
+    "runtime_and_helper_sources": {
+      "ggml/src/ggml-cuda/fattn-mma-f16.cuh": "da8949069cfdabd6e62ba154363255a0f6cea3522dd0fe38b61cc5ef239013d0",
+      "ggml/src/ggml-cuda/fattn-mma-span.cuh": "d534a301c6da30812f4de2057a53a24741642f96c153338cd48c049c4a214fea",
+      "ggml/src/ggml-cuda/fattn.cu": "3b67dbfdcb90da67d81279b4bb9e8fd9c9464dc48eb90bd4490f50996d3fe42d",
+      "ggml/src/ggml-cuda/kv-stream-mma-runtime.cuh": "d2aeddeb451cf4e8fe0a5df93be78978508780e00e0204354521991b4259485a",
+      "tests/kv-stream-pascal-native.cu": "1cd24a11cee7e268cefffe3a396503371865cd648f8a11c907f73b9a5c1432a2"
+    },
+    "test_only_delta": {
+      "path": "tests/test-kv-stream-vector-spans.cpp",
+      "old_sha256": "55b5b3a732da838f38655099d98bde37326323ca44bb9ced48ddf2dcc77f0db4",
+      "new_sha256": "284210f2e3ef7feff1ba85c4411606ca0b64e81ab6de15e74728909ed209fe89",
+      "change": "Only add5and8to the existing non-hazard query list; no function-body or runtime changes."
+    },
+    "binaries": {
+      "llama-server": "9dff23c9c5a3ccaef8cf6a37b419ea40bb0fd066f922feb633921cd77892a7e3",
+      "libllama.so.0": "51dd9eaf20c25956bd786ef4f454d4dad4526e31af803ab78790cd5ab8cf8a0f",
+      "libllama-common.so.0": "a2e9c7577ec3d9722547741277d84186fa06d995466347ca7da3f9636551340c",
+      "libllama-server-impl.so": "5beaabc3b4ce00ff0c682621606c8eac0f2938623da12d1471afa6057e367ce2",
+      "libggml-cuda.so.0": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741",
+      "libggml-base.so.0": "a9768335be0fb3b24ac2acbb454362faf145b32510268f00935bb077fb4e31b5",
+      "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+      "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+      "libmtmd.so.0": "88da0c39bf658d2e5621db02b8c924cff77bc28955c28ede969505651fc5ee18"
+    }
+  },
+  "qualified_source_files": {
+    "ggml/src/ggml-cuda/fattn-mma-f16.cuh": "da8949069cfdabd6e62ba154363255a0f6cea3522dd0fe38b61cc5ef239013d0",
+    "ggml/src/ggml-cuda/fattn-mma-span.cuh": "d534a301c6da30812f4de2057a53a24741642f96c153338cd48c049c4a214fea",
+    "ggml/src/ggml-cuda/fattn.cu": "3b67dbfdcb90da67d81279b4bb9e8fd9c9464dc48eb90bd4490f50996d3fe42d",
+    "ggml/src/ggml-cuda/kv-stream-mma-runtime.cuh": "d2aeddeb451cf4e8fe0a5df93be78978508780e00e0204354521991b4259485a",
+    "tests/kv-stream-pascal-native.cu": "1cd24a11cee7e268cefffe3a396503371865cd648f8a11c907f73b9a5c1432a2",
+    "tests/test-kv-stream-vector-spans.cpp": "284210f2e3ef7feff1ba85c4411606ca0b64e81ab6de15e74728909ed209fe89"
+  },
+  "profile": {
+    "arena_mib": 1024,
+    "cache_k": "q8_0",
+    "cache_v": "q4_0",
+    "batch": 256,
+    "ubatch": 256,
+    "uvm": false,
+    "prompt": "capacity minus 271 tokens, fresh uncached",
+    "outputs": 256,
+    "gemma_target": "Q3_K_M",
+    "gemma_assistant": "matching Q8_0, only MTP3",
+    "qwen_target": "IQ4_XS",
+    "pairs_per_full_model_point": 1,
+    "request_count": 12,
+    "exact_output_ids": 3072,
+    "comparisons": "Prompt IDs, all output IDs, draft counters and decode pool/resident/ring layouts exact."
+  },
+  "models": [
+    {
+      "model": "gemma",
+      "context": 8192,
+      "mtp": 0,
+      "baseline_prefill_tps": 1324.0538681479043,
+      "candidate_prefill_tps": 1342.5603495368837,
+      "prefill_change_percent": 1.3977136304028415,
+      "baseline_decode_tps": 39.650312234546995,
+      "candidate_decode_tps": 39.78632714003243,
+      "decode_change_percent": 0.3430361523532266
+    },
+    {
+      "model": "gemma",
+      "context": 8192,
+      "mtp": 3,
+      "baseline_prefill_tps": 1304.7970275468497,
+      "candidate_prefill_tps": 1322.2931344089855,
+      "prefill_change_percent": 1.3409064009771932,
+      "baseline_decode_tps": 90.1418089728924,
+      "candidate_decode_tps": 90.26385718346323,
+      "decode_change_percent": 0.13539578577519418
+    },
+    {
+      "model": "gemma",
+      "context": 65536,
+      "mtp": 0,
+      "baseline_prefill_tps": 834.4603843944029,
+      "candidate_prefill_tps": 895.7333078934917,
+      "prefill_change_percent": 7.342819940284717,
+      "baseline_decode_tps": 19.5924779943818,
+      "candidate_decode_tps": 19.60625714859513,
+      "decode_change_percent": 0.07032879770125788
+    },
+    {
+      "model": "gemma",
+      "context": 65536,
+      "mtp": 3,
+      "baseline_prefill_tps": 826.0689096267577,
+      "candidate_prefill_tps": 887.0017889398372,
+      "prefill_change_percent": 7.376246533792297,
+      "baseline_decode_tps": 56.100660865784995,
+      "candidate_decode_tps": 56.00982082787786,
+      "decode_change_percent": -0.1619232937816184
+    },
+    {
+      "model": "qwen",
+      "context": 8192,
+      "mtp": 0,
+      "baseline_prefill_tps": 1821.1849727063668,
+      "candidate_prefill_tps": 1819.9877901589234,
+      "prefill_change_percent": -0.06573646089690355,
+      "baseline_decode_tps": 46.4678256775009,
+      "candidate_decode_tps": 46.637722016132265,
+      "decode_change_percent": 0.3656214513037437
+    },
+    {
+      "model": "qwen",
+      "context": 65536,
+      "mtp": 0,
+      "baseline_prefill_tps": 1327.6054712520374,
+      "candidate_prefill_tps": 1328.3372195651973,
+      "prefill_change_percent": 0.05511790430252628,
+      "baseline_decode_tps": 33.37389242848465,
+      "candidate_decode_tps": 33.400444212809816,
+      "decode_change_percent": 0.079558548293579
+    }
+  ],
+  "operator_samples": [
+    {
+      "context": 8192,
+      "queries": 5,
+      "baseline_median_us": 404.51025,
+      "candidate_median_us": 313.447375,
+      "throughput_change_percent": 29.052045817898442,
+      "baseline_samples_us": [
+        404.92475,
+        405.3505,
+        403.89025,
+        404.272312,
+        404.51025
+      ],
+      "candidate_samples_us": [
+        313.261437,
+        313.892938,
+        313.606688,
+        313.21625,
+        313.447375
+      ]
+    },
+    {
+      "context": 8192,
+      "queries": 8,
+      "baseline_median_us": 407.433375,
+      "candidate_median_us": 317.573312,
+      "throughput_change_percent": 28.295848424441928,
+      "baseline_samples_us": [
+        407.433375,
+        407.27075,
+        408.086813,
+        407.273875,
+        408.702187
+      ],
+      "candidate_samples_us": [
+        318.604938,
+        317.636437,
+        317.573312,
+        317.005812,
+        317.313938
+      ]
+    },
+    {
+      "context": 8192,
+      "queries": 64,
+      "baseline_median_us": 1472.053688,
+      "candidate_median_us": 1188.6165,
+      "throughput_change_percent": 23.845974542672078,
+      "baseline_samples_us": [
+        1467.298812,
+        1471.747437,
+        1472.174062,
+        1472.572875,
+        1472.053688
+      ],
+      "candidate_samples_us": [
+        1188.881063,
+        1187.769063,
+        1189.325625,
+        1188.6165,
+        1187.829375
+      ]
+    },
+    {
+      "context": 8192,
+      "queries": 129,
+      "baseline_median_us": 1645.742313,
+      "candidate_median_us": 1283.47975,
+      "throughput_change_percent": 28.22503144284123,
+      "baseline_samples_us": [
+        1645.873063,
+        1645.52675,
+        1645.457375,
+        1645.742313,
+        1646.277125
+      ],
+      "candidate_samples_us": [
+        1281.083125,
+        1282.517812,
+        1283.47975,
+        1286.57825,
+        1285.891312
+      ]
+    },
+    {
+      "context": 8192,
+      "queries": 256,
+      "baseline_median_us": 2998.841438,
+      "candidate_median_us": 2442.967437,
+      "throughput_change_percent": 22.754048727011345,
+      "baseline_samples_us": [
+        2989.333562,
+        2990.4035,
+        2999.68725,
+        3000.04825,
+        2998.841438
+      ],
+      "candidate_samples_us": [
+        2432.071313,
+        2437.728062,
+        2442.967437,
+        2443.022063,
+        2444.01175
+      ]
+    },
+    {
+      "context": 65536,
+      "queries": 5,
+      "baseline_median_us": 11028.046437,
+      "candidate_median_us": 8133.277813,
+      "throughput_change_percent": 35.59166046649833,
+      "baseline_samples_us": [
+        11027.11325,
+        11032.194875,
+        11031.68375,
+        11027.34625,
+        11028.046437
+      ],
+      "candidate_samples_us": [
+        8134.218875,
+        8133.277813,
+        8133.122312,
+        8133.973063,
+        8131.466375
+      ]
+    },
+    {
+      "context": 65536,
+      "queries": 8,
+      "baseline_median_us": 11049.854812,
+      "candidate_median_us": 8148.498188,
+      "throughput_change_percent": 35.606028952337795,
+      "baseline_samples_us": [
+        11050.648938,
+        11052.52,
+        11048.80575,
+        11049.537625,
+        11049.854812
+      ],
+      "candidate_samples_us": [
+        8147.473687,
+        8147.28225,
+        8148.498188,
+        8148.934125,
+        8149.188938
+      ]
+    },
+    {
+      "context": 65536,
+      "queries": 64,
+      "baseline_median_us": 12838.145813,
+      "candidate_median_us": 9668.136688,
+      "throughput_change_percent": 32.788211703032545,
+      "baseline_samples_us": [
+        12838.145813,
+        12838.92425,
+        12839.045,
+        12835.098938,
+        12836.308937
+      ],
+      "candidate_samples_us": [
+        9656.641063,
+        9673.42075,
+        9670.506375,
+        9668.136688,
+        9667.946438
+      ]
+    },
+    {
+      "context": 65536,
+      "queries": 129,
+      "baseline_median_us": 13591.089813,
+      "candidate_median_us": 10676.671125,
+      "throughput_change_percent": 27.297072784940713,
+      "baseline_samples_us": [
+        13578.191563,
+        13593.241187,
+        13591.089813,
+        13590.913562,
+        13592.015563
+      ],
+      "candidate_samples_us": [
+        10658.161813,
+        10656.414937,
+        10676.671125,
+        10693.433375,
+        10694.537062
+      ]
+    },
+    {
+      "context": 65536,
+      "queries": 256,
+      "baseline_median_us": 25286.806688,
+      "candidate_median_us": 20245.92075,
+      "throughput_change_percent": 24.898279511441835,
+      "baseline_samples_us": [
+        25286.806688,
+        25286.4525,
+        25294.348438,
+        25284.412875,
+        25288.864625
+      ],
+      "candidate_samples_us": [
+        20162.154063,
+        20173.054,
+        20248.286875,
+        20245.92075,
+        20377.229188
+      ]
+    },
+    {
+      "context": 122880,
+      "queries": 5,
+      "baseline_median_us": 22390.744188,
+      "candidate_median_us": 16560.140813,
+      "throughput_change_percent": 35.208658192223055,
+      "baseline_samples_us": [
+        22389.19175,
+        22391.811562,
+        22389.001313,
+        22393.537688,
+        22390.744188
+      ],
+      "candidate_samples_us": [
+        16558.360187,
+        16560.107687,
+        16560.140813,
+        16560.375938,
+        16562.481687
+      ]
+    },
+    {
+      "context": 122880,
+      "queries": 8,
+      "baseline_median_us": 22428.894938,
+      "candidate_median_us": 16579.536125,
+      "throughput_change_percent": 35.28059391348022,
+      "baseline_samples_us": [
+        22428.545375,
+        22428.894938,
+        22434.66125,
+        22422.999375,
+        22429.479625
+      ],
+      "candidate_samples_us": [
+        16580.016437,
+        16580.259438,
+        16579.536125,
+        16578.090688,
+        16577.81575
+      ]
+    },
+    {
+      "context": 122880,
+      "queries": 64,
+      "baseline_median_us": 24209.19725,
+      "candidate_median_us": 18083.323625,
+      "throughput_change_percent": 33.87581703471283,
+      "baseline_samples_us": [
+        24212.876812,
+        24207.1855,
+        24210.142563,
+        24209.19725,
+        24208.185562
+      ],
+      "candidate_samples_us": [
+        18083.323625,
+        18083.658188,
+        18083.024688,
+        18081.952562,
+        18083.560438
+      ]
+    },
+    {
+      "context": 122880,
+      "queries": 129,
+      "baseline_median_us": 25613.999313,
+      "candidate_median_us": 19974.948437,
+      "throughput_change_percent": 28.230615432051252,
+      "baseline_samples_us": [
+        25529.2525,
+        25614.602563,
+        25613.999313,
+        25611.003875,
+        25616.823313
+      ],
+      "candidate_samples_us": [
+        19966.677188,
+        19974.948437,
+        19972.91825,
+        20040.06175,
+        19975.787187
+      ]
+    },
+    {
+      "context": 122880,
+      "queries": 256,
+      "baseline_median_us": 48130.51475,
+      "candidate_median_us": 38165.371188,
+      "throughput_change_percent": 26.110432708521003,
+      "baseline_samples_us": [
+        48104.002188,
+        48130.825375,
+        48130.51475,
+        48129.323,
+        48131.771687
+      ],
+      "candidate_samples_us": [
+        38041.617688,
+        38165.371188,
+        38089.168437,
+        38263.01925,
+        38225.466063
+      ]
+    }
+  ],
+  "operator_scope": "Resident F16 D512, 32 Q/4 KV heads, 2048-row waves; 5 samples per point. Includes checkpoint work, not PCIe/full-model timing.",
+  "resources": {
+    "extra_on_chip_shared_bytes": 16384,
+    "total_user_shared_bytes": 100136,
+    "measured_optin_limit": 101376,
+    "new_device_allocations": 0,
+    "extra_arena_bytes": 0,
+    "threads": 256,
+    "registers_per_thread": 255,
+    "candidate_stack_bytes": 96,
+    "shipping_stack_bytes": 368,
+    "candidate_static_local_instruction_rows": 94,
+    "shipping_static_local_instruction_rows": 290,
+    "note": "Static SASS/resource counts are not dynamic stall attribution or occupancy gains."
+  },
+  "qualification": {
+    "accepted_entries": 65,
+    "intentional_baseline_reds": 2,
+    "strict_zero_error_gates": 17,
+    "portable_binary_hashes_verified": 94,
+    "server_records": 120,
+    "server_output_ids": 7680,
+    "focused_profiles": 120,
+    "focused_query_widths": [
+      5,
+      8,
+      64,
+      129,
+      256
+    ],
+    "normal_arena_mib": 1024,
+    "approved_wide_sanitizer_arena_mib": 769,
+    "legacy_scope": "5 new objects, 2 representative affected units, 8 actual SM61/70/75/86 images; compile-only.",
+    "failed_fixture": "Both shipping and candidate reject 768 MiB at the unchanged 768.335 MiB minimum. Failed run retained; approved 769 MiB retry passes all 8 full logit vectors and strict memcheck."
+  },
+  "performance_analysis_sha256": "17a668fdae75642b0ce202bf419f55da7fc475b4bb4c419dda203fccbe5024c4",
+  "qualification_receipt_sha256": "a8997c8325f1123f2526fc5e97f29f8539e69c9c6bfbeab1917287af2ba5e8b3",
+  "limitations": [
+    "One full-model A/B pair per point, not repeated statistical evidence.",
+    "Generic kernel geometry support does not qualify another model architecture.",
+    "Do not multiply gains from earlier conversion, host-pipeline or pilot cohorts.",
+    "Post-commit MTP3 8-256 Ki maximum-fit sweep is a separate pending cohort."
+  ]
+}
