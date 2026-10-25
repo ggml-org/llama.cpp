@@ -879,17 +879,17 @@ class DeepseekV4Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if re.match(r"layers\.\d+\.ffn\.experts\.\d+\.w[123]\.(weight|scale)$", name):
-            return []
+            return
 
         # hash layers route text tokens via tid2eid and image tokens via bias_vl; gate.bias is unused
         if name.endswith(".ffn.gate.bias") and bid is not None and bid < self.hparams["num_hash_layers"]:
-            return []
+            return
 
         tensor_key, suffix = self._map_dsv4_tensor_name(name, bid)
         if tensor_key == gguf.MODEL_TENSOR.FFN_GATE_TID2EID:
-            return []
+            return
 
-        return [(self._format_dsv4_tensor_name(tensor_key, bid, suffix), data_torch)]
+        yield self._format_dsv4_tensor_name(tensor_key, bid, suffix), data_torch
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del bid  # unused
