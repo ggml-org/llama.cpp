@@ -261,6 +261,14 @@ struct clip_hparams {
     bool is_feature_layer(int32_t layer) const {
         return std::find(feature_layers.begin(), feature_layers.end(), layer) != feature_layers.end();
     }
+
+    int32_t feature_layer_max_index(projector_type proj_type) const {
+        return proj_type == PROJECTOR_TYPE_GRANITE4_VISION ? n_layer - 1 : n_layer;
+    }
+
+    bool is_feature_layer_in_range(int32_t layer, projector_type proj_type) const {
+        return layer >= 0 && layer <= feature_layer_max_index(proj_type);
+    }
 };
 
 struct clip_layer {
