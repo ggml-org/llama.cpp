@@ -161,6 +161,12 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
     return tensor_category::OTHER;
 }
 
+// check if tensor is a MoE expert tensor (used by GGML_OP_MUL_MAT_ID)
+static bool tensor_is_expert(const std::string & tensor_name) {
+    return tensor_name.find("_exps.")   != std::string::npos ||
+           tensor_name.find("_chexps.") != std::string::npos;
+}
+
 // check if category is for attention-v-like tensors (more sensitive to quantization)
 static bool category_is_attn_v(tensor_category cat) {
     return cat == tensor_category::ATTENTION_V     ||
@@ -296,7 +302,7 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // trivial checks first -- no string ops needed
     if (params->only_copy)       return false;
 
-    // quantize only 2D and 3D tensors (experts)
+    // quantize only 2D+ tensors (matrices, experts, conv kernels)
     if (ggml_n_dims(tensor) < 2) return false;
 
     const std::string name = ggml_get_name(tensor);
@@ -541,12 +547,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     } else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
         // MoE   tensors -> MXFP4
         // other tensors -> Q8_0
-        // MLA projection tensors are also 3D, so match expert tensor roles explicitly.
-        const bool is_bailingmoe3_expert = arch == LLM_ARCH_BAILINGMOE3 &&
-            (category == tensor_category::FFN_UP ||
-             category == tensor_category::FFN_GATE ||
-             category == tensor_category::FFN_DOWN);
-        if (tensor->ne[2] > 1 && (arch != LLM_ARCH_BAILINGMOE3 || is_bailingmoe3_expert)) {
+        if (tensor_is_expert(name)) {
             new_type = GGML_TYPE_MXFP4;
         } else {
             new_type = GGML_TYPE_Q8_0;
@@ -1307,11 +1308,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     if (it == imatrix_data->end()) {
                         LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                     } else {
-                        if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
+                        if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]*tensor->ne[3]) {
                             imatrix = it->second.data();
                         } else {
                             LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
-                                    int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
+                                    int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]*tensor->ne[3]), tensor->name);
 
                             // this can happen when quantizing an old mixtral model with split tensors with a new incompatible imatrix
                             // this is a significant error and it may be good idea to abort the process if this happens,
@@ -1319,7 +1320,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                             // tok_embd should be ignored in this case, since it always causes this warning
                             if (!tensor_name_match_token_embd(tensor->name)) {
                                 throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
-                                        int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
+                                        int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]*tensor->ne[3]), tensor->name));
                             }
                         }
                     }
@@ -1341,7 +1342,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
                 const int64_t n_per_row = tensor->ne[0];
                 const int64_t nrows_per_expert = tensor->ne[1];
-                const int64_t nrows_total = tensor->ne[1] * tensor->ne[2];
+                const int64_t nrows_total = ggml_nrows(tensor);
 
                 const size_t row_size_src = ggml_row_size(tensor->type, n_per_row);
                 const size_t row_size_dst = ggml_row_size(new_type,     n_per_row);
