@@ -525,10 +525,12 @@ static bool ggml_backend_webgpu_graph_should_throttle(const struct ggml_cgraph *
         if (node->op == GGML_OP_IM2COL || node->op == GGML_OP_CONV_2D) {
             return true;
         }
-        // Allow small multi-token graphs, such as speculative decoding.
-        if (node->op == GGML_OP_GET_ROWS && node->src[1] != nullptr &&
-            node->src[1]->ne[0] >= WEBGPU_PREFILL_MIN_TOKENS) {
-            return true;
+        if (node->op == GGML_OP_FLASH_ATTN_EXT || node->op == GGML_OP_SOFT_MAX) {
+            const struct ggml_tensor * attn = node->src[0];
+            // Allow small multi-token graphs, such as speculative decoding.
+            if (attn != nullptr && attn->ne[1] * attn->ne[3] >= WEBGPU_PREFILL_MIN_TOKENS) {
+                return true;
+            }
         }
     }
     return false;
