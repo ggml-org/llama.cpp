@@ -100,6 +100,21 @@
 #define N_R0_TQ2_0 4
 #define N_SG_TQ2_0 2
 
+#define N_R0_JQ2_K 2
+#define N_SG_JQ2_K 2
+
+#define N_R0_JQ3_K 2
+#define N_SG_JQ3_K 2
+
+#define N_R0_JQ4_K 2
+#define N_SG_JQ4_K 2
+
+#define N_R0_JQ5_K 2
+#define N_SG_JQ5_K 2
+
+#define N_R0_JQ6_K 2
+#define N_SG_JQ6_K 2
+
 // function constants offsets
 #define FC_FLASH_ATTN_EXT_PAD          100
 #define FC_FLASH_ATTN_EXT_BLK          200

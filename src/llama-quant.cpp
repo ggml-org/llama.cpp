@@ -421,17 +421,22 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             case GGML_TYPE_IQ2_XXS:
             case GGML_TYPE_IQ2_XS:
             case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_JQ2_K:
             case GGML_TYPE_IQ3_XXS:
-            case GGML_TYPE_IQ3_S:   // types on the right: block size 32
-            case GGML_TYPE_IQ4_XS:  return_type = GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_JQ3_K:
+            case GGML_TYPE_IQ4_XS:  // types on the right: block size 32
+            case GGML_TYPE_JQ4_K:   return_type = GGML_TYPE_IQ4_NL; break;
             case GGML_TYPE_Q2_0:
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_TQ1_0:
             case GGML_TYPE_TQ2_0:   return_type = GGML_TYPE_Q4_0;   break;
             case GGML_TYPE_Q4_K:    return_type = GGML_TYPE_Q5_0;   break;
-            case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
-            case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
+            case GGML_TYPE_Q5_K:
+            case GGML_TYPE_JQ5_K:   return_type = GGML_TYPE_Q5_1;   break;
+            case GGML_TYPE_Q6_K:
+            case GGML_TYPE_JQ6_K:   return_type = GGML_TYPE_Q8_0;   break;
             default:
                 if (qk_k <= 32) {
                     // the target is already a 32-block type, so there is no smaller block to demote to
@@ -597,6 +602,9 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) {
             new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_Q4_K : GGML_TYPE_Q3_K;
         }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ2_K) {
+            new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_JQ4_K : GGML_TYPE_JQ3_K;
+        }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S && qs.model.hparams.n_gqa() >= 4) {
             new_type = GGML_TYPE_Q4_K;
         }
@@ -612,18 +620,24 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M) {
             new_type = qs.i_attention_wv < 2 ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
         }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ3_K) {
+            new_type = qs.i_attention_wv < 2 ? GGML_TYPE_JQ5_K : GGML_TYPE_JQ4_K;
+        }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) new_type = GGML_TYPE_Q5_K;
         else if ((ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS) && qs.model.hparams.n_gqa() >= 4) {
             new_type = GGML_TYPE_Q5_K;
         }
         else if ((ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) &&
                 use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_Q6_K;
+        else if ((ftype == LLAMA_FTYPE_MOSTLY_JQ4_K || ftype == LLAMA_FTYPE_MOSTLY_JQ5_K) &&
+                use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_JQ6_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S && qs.i_attention_wv < 4) new_type = GGML_TYPE_Q5_K;
         if (qs.model.type == LLM_TYPE_70B) {
             // In the 70B model we have 8 heads sharing the same attn_v weights. As a result, the attn_v.weight tensor is
             // 8x smaller compared to attn_q.weight. Hence, we can get a nice boost in quantization accuracy with
             // nearly negligible increase in model size by quantizing this tensor with more bits:
             if (new_type == GGML_TYPE_Q3_K || new_type == GGML_TYPE_Q4_K) new_type = GGML_TYPE_Q5_K;
+            if (new_type == GGML_TYPE_JQ3_K || new_type == GGML_TYPE_JQ4_K) new_type = GGML_TYPE_JQ5_K;
         }
         if (qs.model.hparams.n_expert == 8) {
             // for the 8-expert model, bumping this to Q8_0 trades just ~128MB
@@ -654,6 +668,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
         int i_layer = info.first, n_layer = info.second;
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ2_K) new_type = GGML_TYPE_JQ3_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
             if (i_layer < n_layer/8) new_type = GGML_TYPE_Q4_K;
         }
@@ -664,6 +679,11 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = i_layer < n_layer/16 ? GGML_TYPE_Q5_K
                      : arch != LLM_ARCH_FALCON || use_more_bits(i_layer, n_layer) ? GGML_TYPE_Q4_K
                      : GGML_TYPE_Q3_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ3_K) {
+            new_type = i_layer < n_layer/16 ? GGML_TYPE_JQ5_K
+                     : arch != LLM_ARCH_FALCON || use_more_bits(i_layer, n_layer) ? GGML_TYPE_JQ4_K
+                     : GGML_TYPE_JQ3_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M && (i_layer < n_layer/8 ||
                     (qs.model.hparams.n_expert == 8 && use_more_bits(i_layer, n_layer)))) {
@@ -680,10 +700,19 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 if (use_more_bits(i_layer, n_layer)) new_type = GGML_TYPE_Q6_K;
             }
         }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ4_K) {
+            if (arch == LLM_ARCH_FALCON) {
+                new_type = i_layer < n_layer/16 ? GGML_TYPE_JQ6_K :
+                           use_more_bits(i_layer, n_layer) ? GGML_TYPE_JQ5_K : GGML_TYPE_JQ4_K;
+            } else {
+                if (use_more_bits(i_layer, n_layer)) new_type = GGML_TYPE_JQ6_K;
+            }
+        }
         else if (i_layer < n_layer/8 && (ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS) && !qs.has_imatrix) {
             new_type = GGML_TYPE_Q5_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M && use_more_bits(i_layer, n_layer)) new_type = GGML_TYPE_Q6_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ5_K && use_more_bits(i_layer, n_layer)) new_type = GGML_TYPE_JQ6_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S && arch != LLM_ARCH_FALCON && i_layer < n_layer/8) {
             new_type = GGML_TYPE_Q5_K;
         }
@@ -704,10 +733,15 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                     ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS) {
                     new_type = GGML_TYPE_Q5_K;
                 }
+                else if (ftype == LLAMA_FTYPE_MOSTLY_JQ2_K || ftype == LLAMA_FTYPE_MOSTLY_JQ3_K || ftype == LLAMA_FTYPE_MOSTLY_JQ4_K) {
+                    new_type = GGML_TYPE_JQ5_K;
+                }
             } else {
                 if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   ) new_type = GGML_TYPE_Q3_K;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_JQ2_K  ) new_type = GGML_TYPE_JQ3_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) new_type = GGML_TYPE_IQ3_S;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M ) new_type = GGML_TYPE_Q4_K;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_JQ3_K  ) new_type = GGML_TYPE_JQ4_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L ) new_type = GGML_TYPE_Q5_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  ) new_type = GGML_TYPE_Q4_K;
             }
@@ -719,8 +753,11 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L || ftype == LLAMA_FTYPE_MOSTLY_IQ3_M) {
             new_type = GGML_TYPE_Q4_K;
         }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ3_K ) new_type = GGML_TYPE_JQ4_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M) new_type = GGML_TYPE_Q5_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ4_K ) new_type = GGML_TYPE_JQ5_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) new_type = GGML_TYPE_Q6_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_JQ5_K ) new_type = GGML_TYPE_JQ6_K;
     }
     else if (category == tensor_category::FFN_GATE) {
         auto info = layer_info(qs.i_ffn_gate, qs.n_ffn_gate, name.c_str());
@@ -893,6 +930,8 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_JQ2_K:
+        case GGML_TYPE_JQ3_K:
             return true;
         case GGML_TYPE_Q2_K:
             // as a general rule, the k-type quantizations don't require imatrix data.
@@ -947,6 +986,11 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return GGML_TYPE_IQ4_XS;
         case LLAMA_FTYPE_MOSTLY_IQ3_S:
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   return GGML_TYPE_IQ3_S;
+        case LLAMA_FTYPE_MOSTLY_JQ2_K:   return GGML_TYPE_JQ2_K;
+        case LLAMA_FTYPE_MOSTLY_JQ3_K:   return GGML_TYPE_JQ3_K;
+        case LLAMA_FTYPE_MOSTLY_JQ4_K:   return GGML_TYPE_JQ4_K;
+        case LLAMA_FTYPE_MOSTLY_JQ5_K:   return GGML_TYPE_JQ5_K;
+        case LLAMA_FTYPE_MOSTLY_JQ6_K:   return GGML_TYPE_JQ6_K;
 
         default: return GGML_TYPE_COUNT;
     }
