@@ -7,6 +7,7 @@ import { toolsStore } from './tools.svelte';
 import { versionStore } from './version.svelte';
 import { browser } from '$app/environment';
 import { MigrationService } from '$lib/services/migration.service';
+import { validateApiKey } from '$lib/utils/api-key-validation';
 
 let startup: Promise<void> | null = null;
 
@@ -29,4 +30,12 @@ export function initStores(): Promise<void> {
 	})();
 
 	return startup;
+}
+
+/** Load shared by the app's pages: start the stores, then check the API key. */
+export async function loadAppRoute(fetch: typeof globalThis.fetch): Promise<void> {
+	// loads run before the root layout script, so the stored API key reaches
+	// the probe only once the settings store has read localStorage
+	await initStores();
+	await validateApiKey(fetch);
 }

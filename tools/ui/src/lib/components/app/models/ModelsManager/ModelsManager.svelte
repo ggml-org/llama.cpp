@@ -10,9 +10,10 @@
 		type ModelsTableGroup,
 		splitHiddenQuants
 	} from './utils';
+	import * as Drawer from '$lib/components/ui/drawer';
 	import { LOCAL_BACKEND_ID, type ModalityKey, MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
 	import { ModelCapability, ModelsTableGroupKind } from '$lib/enums';
-	import { conversationsStore, modelsStore, serverStore, uiStore } from '$lib/stores';
+	import { conversationsStore, deviceStore, modelsStore, serverStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { filterModelOptions } from '$lib/utils';
 	import { type Snippet, untrack } from 'svelte';
@@ -48,8 +49,8 @@
 			downloads.find((group) => group.base.id === selectedId)?.base ??
 			null
 	);
-	// The pane is laid out before it is ever opened, so the first open only slides a
-	// finished panel in. It renders the selection, else the model it last showed.
+	// The pane renders the selection, else the model it last showed, so its copy stays
+	// in place while it closes.
 	let lastPicked = $state<ModelOption | null>(null);
 	let target = $derived(selected ?? lastPicked ?? allModels[0] ?? null);
 	let shownId = $state<string | null>(null);
@@ -254,10 +255,31 @@
 		await modelsStore.status.load(option.model);
 	}
 
-	/** The chat sits behind the dialog, so the dialog closes and the composer takes focus. */
+	/** Leave the models page for the chat it was opened from, with the composer focused. */
 	function returnToChat(): void {
-		uiStore.manageModelsOpen = false;
 		uiStore.requestComposerFocus();
+		void uiStore.closeModelsManager();
+	}
+
+	/** Overlays that handle their own Escape, so the page leaves them alone. */
+	const OPEN_OVERLAY_SELECTOR = [
+		'[role="dialog"][data-state="open"]',
+		'[role="alertdialog"][data-state="open"]',
+		'[role="menu"][data-state="open"]',
+		'[role="listbox"][data-state="open"]'
+	].join(', ');
+
+	// Escape steps back the way the dialog's did: the pane's drawer closes itself, then
+	// the next Escape leaves the page
+	function handleKeydown(event: KeyboardEvent): void {
+		if (event.key !== 'Escape' || event.defaultPrevented) return;
+
+		if (document.querySelector(OPEN_OVERLAY_SELECTOR)) return;
+
+		// a typed filter is not thrown away by a stray Escape
+		if (event.target instanceof HTMLInputElement && event.target.value) return;
+
+		returnToChat();
 	}
 
 	/** Load the model when the server can take load requests, without waiting for it. */
@@ -292,6 +314,8 @@
 	}
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <div class={['relative flex min-h-0 flex-1', className]}>
 	<div class="min-h-0 min-w-0 flex-1">
 		<ModelsManagerModelsTable
@@ -306,16 +330,29 @@
 			{toolbarEnd}
 		/>
 	</div>
+</div>
 
-	<!-- on a phone the pane covers the whole dialog: the manager header would only
-	     repeat what the pane's own header says -->
-	<div
-		class="pane-drawer max-md:fixed max-md:inset-0 max-md:z-[60] shrink-0"
-		data-open={selected !== null}
+<!-- the pane is a drawer over the table, from the right on desktop and from the bottom
+     on a phone: Escape, the overlay and the pane's own close button clear the selection -->
+<Drawer.Root
+	direction={deviceStore.isMobile ? 'bottom' : 'right'}
+	onOpenChange={(open) => {
+		if (!open) selectedId = null;
+	}}
+	open={selected !== null}
+	shouldScaleBackground={false}
+>
+	<Drawer.Content
+		class="data-[vaul-drawer-direction=bottom]:h-[85dvh] data-[vaul-drawer-direction=bottom]:max-h-[85dvh] data-[vaul-drawer-direction=right]:w-[30rem] data-[vaul-drawer-direction=right]:max-w-[calc(100vw-2rem)] data-[vaul-drawer-direction=right]:sm:max-w-[30rem]"
 	>
-		<!-- the content box keeps the open width, so it never reflows with the drawer -->
+		<Drawer.Title class="sr-only">Model details</Drawer.Title>
+
+		<Drawer.Description class="sr-only">
+			Configuration, actions and metadata of the selected model.
+		</Drawer.Description>
+
 		<div
-			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 max-md:w-full max-md:max-w-none max-md:border-l-0 max-md:bg-background"
+			class="pane-content flex min-h-0 flex-1 flex-col"
 			data-fade={fade}
 			data-visible={selected !== null && !isSwapping}
 		>
@@ -331,33 +368,10 @@
 				{/key}
 			{/if}
 		</div>
-	</div>
-</div>
+	</Drawer.Content>
+</Drawer.Root>
 
 <style>
-	/*
-	 * The drawer moves by width because the table behind it gets that space back, so
-	 * the content box inside holds the open width and only the container changes.
-	 * Opening takes the iOS-like drawer curve; closing is the system responding, so
-	 * it snaps back on the stronger ease-out.
-	 */
-	.pane-drawer {
-		width: 0;
-		overflow: clip;
-		visibility: hidden;
-		transition:
-			width 120ms cubic-bezier(0.23, 1, 0.32, 1),
-			visibility 120ms;
-	}
-
-	.pane-drawer[data-open='true'] {
-		width: 30rem;
-		visibility: visible;
-		transition:
-			width 200ms cubic-bezier(0.32, 0.72, 0, 1),
-			visibility 200ms;
-	}
-
 	.pane-content {
 		opacity: 0;
 		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
@@ -375,12 +389,5 @@
 	/* swapping models: out, then in, with no pause */
 	.pane-content[data-visible='true'][data-fade='swap'] {
 		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
-	}
-
-	/* a phone has no room beside the table: the pane covers it instead */
-	@media (max-width: 767px) {
-		.pane-drawer[data-open='true'] {
-			width: auto;
-		}
 	}
 </style>
