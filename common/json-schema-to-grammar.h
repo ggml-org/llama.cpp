@@ -12,6 +12,8 @@ std::string json_schema_to_grammar(const common_chat_schema_document & schema);
 struct common_grammar_builder {
     std::function<std::string(const std::string &, const std::string &)>    add_rule;
     std::function<std::string(const std::string &, const common_chat_schema &)> add_schema;
+    // like add_schema, but objects accept their properties in any order
+    std::function<std::string(const std::string &, const common_chat_schema &)> add_schema_unordered;
 };
 
 struct common_grammar_options {

@@ -9,7 +9,9 @@
 
 #include "json.h"
 
+#include <algorithm>
 #include <cassert>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -190,6 +192,12 @@ static void test_grammar(const std::string & test_desc, const std::string & gram
 }
 static void test_schema(const std::string & test_desc, const std::string & schema_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
     test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true), passing_strings, failing_strings);
+}
+
+static void test_schema_unordered(const std::string & test_desc, const std::string & schema_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
+    auto doc = common_chat_schema_from_json(json::parse(schema_str));
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) { builder.add_schema_unordered("root", *doc.root); });
+    test(test_desc + ". Schema: " + schema_str, grammar, passing_strings, failing_strings);
 }
 
 static void test_simple_grammar() {
@@ -1478,6 +1486,309 @@ static void test_json_schema() {
     );
 }
 
+static void test_json_schema_unordered_properties() {
+    auto make_schema = [](const std::string & extra) {
+        return R"""({
+            "type": "object",
+            "properties": {
+                "expr": {"type": "string"},
+                "dtype": {"type": "string"},
+                "n": {"type": "integer"}
+            })""" + extra + "}";
+    };
+
+    test_schema_unordered(
+        "properties in any order, additional allowed",
+        make_schema(R"""(, "additionalProperties": true)"""),
+        {
+            R"""({})""",
+            R"""({"expr": "0", "dtype": "int"})""",
+            R"""({"dtype": "int", "expr": "0"})""",
+            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
+            R"""({"dtype": "int", "other": 1, "expr": "0"})""",
+            R"""({"other": 1, "more": 2})""",
+        },
+        {
+            R"""({"n": "x"})""",
+            R"""({"expr": "0",})""",
+            R"""({"expr": "0", "expr": "1"})""",
+        });
+
+    test_schema_unordered(
+        "properties in any order, no additional",
+        make_schema(R"""(, "additionalProperties": false)"""),
+        {
+            R"""({"dtype": "int", "expr": "0"})""",
+            R"""({"n": 1, "expr": "0"})""",
+        },
+        {
+            R"""({"dtype": "int", "other": 1})""",
+            R"""({"expr": 0})""",
+            R"""({"dtype": "int", "expr": "0", "dtype": "int"})""",
+        });
+
+    test_schema_unordered(
+        "required properties in any order",
+        make_schema(R"""(, "required": ["expr", "n"], "additionalProperties": false)"""),
+        {
+            R"""({"expr": "0", "n": 1})""",
+            R"""({"n": 1, "expr": "0"})""",
+            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
+            R"""({"dtype": "int", "expr": "0", "n": 1})""",
+        },
+        {
+            R"""({})""",
+            R"""({"expr": "0"})""",
+            R"""({"dtype": "int", "n": 1})""",
+            R"""({"n": 1, "n": 1, "expr": "0"})""",
+        });
+
+    test_schema_unordered(
+        "optional properties declared before a required one",
+        R"""({
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "project": {"type": "string"}, "spec": {"type": "object"}},
+            "required": ["spec"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"name": "n", "project": "p", "spec": {}})""",
+            R"""({"spec": {}, "name": "n"})""",
+            R"""({"project": "p", "spec": {}, "name": "n"})""",
+        },
+        {
+            R"""({"name": "n", "project": "p"})""",
+            R"""({"name": "n", "project": "p", "spec": {}, "project": "p"})""",
+            R"""({"spec": {}, "name": "n", "name": "n"})""",
+        });
+
+    test_schema_unordered(
+        "many properties: 6 tracked at most once, the rest repeat",
+        R"""({
+            "type": "object",
+            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
+            "required": ["a", "b"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"a": 1, "b": 2})""",
+            R"""({"b": 2, "a": 1})""",
+            R"""({"g": 3, "b": 2, "a": 1})""",
+            R"""({"a": 1, "g": 3, "b": 2, "f": 4, "g": 5})""",
+        },
+        {
+            R"""({"a": 1})""",
+            R"""({"g": 3, "a": 1})""",
+            R"""({"a": 1, "a": 2, "b": 3})""",
+            R"""({"a": 1, "b": 2, "x": 3})""",
+            R"""({"a": 1, "b": 2, "c": 3, "c": 4})""",
+        });
+
+    test_schema_unordered(
+        "column-like object: 14 properties, 2 required, additional allowed",
+        R"""({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}, "column_type": {"type": "string"}, "drop": {"type": "boolean"},
+                "expr": {"type": "string"}, "dtype": {"type": "string"}, "sampler_type": {"type": "string"},
+                "params": {"type": "object"}, "code_lang": {"type": "string"}, "scores": {"type": "array"},
+                "output_format": {"type": "object"}, "prompt": {"type": "string"}, "model_alias": {"type": "string"},
+                "system_prompt": {"type": "string"}, "extract_reasoning_content": {"type": "boolean"}
+            },
+            "required": ["name", "column_type"],
+            "additionalProperties": true
+        })""",
+        {
+            R"""({"name": "n", "column_type": "expression", "expr": "0", "dtype": "int"})""",
+            R"""({"name": "n", "column_type": "expression", "dtype": "int", "expr": "0"})""",
+            R"""({"column_type": "llm-text", "model_alias": "m", "prompt": "p", "name": "q"})""",
+            R"""({"name": "n", "column_type": "sampler", "params": {"values": ["a"]}, "sampler_type": "category"})""",
+            R"""({"name": "n", "column_type": "x", "extract_reasoning_content": true, "other": 1})""",
+        },
+        {
+            R"""({"name": "n"})""",
+            R"""({"name": "n", "dtype": "int"})""",
+            R"""({"name": "n", "name": "m", "column_type": "x"})""",
+            R"""({"name": "n", "column_type": "x", "prompt": 1})""",
+            R"""({"name": "n", "column_type": "x", "dtype": "int", "expr": "0", "dtype": "int"})""",
+        });
+
+    test_schema_unordered(
+        "too many required properties: keep their declared order, the rest anywhere",
+        R"""({
+            "type": "object",
+            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}},
+            "required": ["a", "b", "c", "d", "e", "f", "g"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
+            R"""({"i": 1, "a": 1, "b": 1, "h": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "i": 1})""",
+        },
+        {
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
+            R"""({"g": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "a": 1})""",
+        });
+
+    test_schema_unordered(
+        "property names that clash with generated rule names",
+        R"""({
+            "type": "object",
+            "properties": {"rest-0": {"type": "integer"}, "rest-1": {"type": "string"}, "free-kv": {"type": "boolean"}},
+            "required": ["rest-1"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"rest-1": "x"})""",
+            R"""({"free-kv": true, "rest-1": "x", "rest-0": 1})""",
+        },
+        {
+            R"""({"rest-0": 1})""",
+            R"""({"rest-1": 1})""",
+            R"""({"rest-1": "x", "rest-1": "y"})""",
+        });
+
+    test_schema(
+        "ordered (default) still rejects out-of-order keys",
+        make_schema(R"""(, "additionalProperties": false)"""),
+        {
+            R"""({"expr": "0", "dtype": "int"})""",
+        },
+        {
+            R"""({"dtype": "int", "expr": "0"})""",
+        });
+}
+
+static void test_json_schema_unordered_ref_with_ordered() {
+    auto doc = common_chat_schema_from_json(json::parse(R"""({
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/D"}},
+        "$defs": {"D": {"type": "object", "properties": {"unordered": {"enum": ["a"]}, "d": {"type": "boolean"}}, "required": ["d"]}}
+    })"""));
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+        auto resp = builder.add_schema("resp", *doc.root);
+        auto tool = builder.add_schema_unordered("tool", *doc.root);
+        builder.add_rule("root", "\"R\" " + resp + " | \"T\" " + tool);
+    });
+    test("$ref used by both an ordered and an unordered schema", grammar,
+        {
+            R"""(R{"x": {"d": true}})""",
+            R"""(T{"x": {"d": true}})""",
+            R"""(T{"x": {"unordered": "a", "d": true}})""",
+            R"""(T{"x": {"d": true, "unordered": "a"}})""",
+        },
+        {
+            R"""(T{"x": "a"})""",
+            R"""(R{"x": {"unordered": "a", "d": true}})""",
+        });
+}
+
+static void test_unordered_accepts_ordered(const std::string & test_desc, const std::string & schema_str, size_t max_len) {
+    fprintf(stderr, "⚫ Testing unordered accepts everything ordered accepts: %s\n", test_desc.c_str());
+    auto schema = json::parse(schema_str);
+    std::vector<std::string> keys;
+    for (const auto & [key, _] : schema.at("properties").items()) {
+        keys.push_back(key);
+    }
+    if (schema.at("additionalProperties").get<bool>()) {
+        keys.push_back("extra");
+    }
+    std::vector<std::string> required_first;
+    if (schema.contains("required")) {
+        const auto & required = schema.at("required");
+        for (size_t i = 0; i < required.size(); i++) {
+            required_first.push_back(required[i].get<std::string>());
+        }
+    }
+    for (const auto & key : keys) {
+        if (std::find(required_first.begin(), required_first.end(), key) == required_first.end()) {
+            required_first.push_back(key);
+        }
+    }
+
+    std::vector<std::vector<std::string>> sequences;
+    std::function<void(std::vector<std::string> &)> extend = [&](std::vector<std::string> & seq) {
+        sequences.push_back(seq);
+        if (seq.size() == max_len) {
+            return;
+        }
+        for (const auto & key : keys) {
+            if (std::find(seq.begin(), seq.end(), key) == seq.end()) {
+                seq.push_back(key);
+                extend(seq);
+                seq.pop_back();
+            }
+        }
+    };
+    std::vector<std::string> seq;
+    extend(seq);
+    for (const auto & order : {keys, required_first}) {
+        for (size_t mask = 0; mask < (size_t(1) << order.size()); mask++) {
+            std::vector<std::string> subset;
+            for (size_t i = 0; i < order.size(); i++) {
+                if (mask & (size_t(1) << i)) {
+                    subset.push_back(order[i]);
+                }
+            }
+            sequences.push_back(subset);
+        }
+    }
+
+    auto * ordered = build_grammar(json_schema_to_grammar(schema, true));
+    auto doc = common_chat_schema_from_json(schema);
+    auto * unordered = build_grammar(build_grammar([&](const common_grammar_builder & builder) { builder.add_schema_unordered("root", *doc.root); }));
+    const auto ordered_org = llama_grammar_get_stacks(ordered);
+    const auto unordered_org = llama_grammar_get_stacks(unordered);
+
+    size_t n_accepted = 0;
+    for (const auto & s : sequences) {
+        std::string input = "{";
+        for (size_t i = 0; i < s.size(); i++) {
+            input += (i > 0 ? ", \"" : "\"") + s[i] + "\": 1";
+        }
+        input += "}";
+        if (match_string(input, ordered)) {
+            n_accepted++;
+            bool matched = match_string(input, unordered);
+            if (!matched) {
+                fprintf(stderr, "  ❌ ordered accepts but unordered rejects: %s\n", input.c_str());
+            }
+            assert(matched);
+            llama_grammar_get_stacks(unordered) = unordered_org;
+        }
+        llama_grammar_get_stacks(ordered) = ordered_org;
+    }
+    fprintf(stderr, "  ✅︎ %zu of %zu inputs accepted by ordered, all accepted by unordered\n", n_accepted, sequences.size());
+    assert(n_accepted > 0);
+
+    llama_grammar_free_impl(ordered);
+    llama_grammar_free_impl(unordered);
+}
+
+static void test_json_schema_unordered_superset() {
+    test_unordered_accepts_ordered(
+        "optional declared before required",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}}, "required": ["b"], "additionalProperties": false})""",
+        3);
+    test_unordered_accepts_ordered(
+        "all optional, additional allowed",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}}, "additionalProperties": true})""",
+        5);
+    test_unordered_accepts_ordered(
+        "2 required, 3 optional, additional allowed",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}}, "required": ["c", "a"], "additionalProperties": true})""",
+        6);
+    test_unordered_accepts_ordered(
+        "2 required, 6 optional: more keys than are tracked",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}}, "required": ["b", "g"], "additionalProperties": false})""",
+        4);
+    test_unordered_accepts_ordered(
+        "7 required, 2 optional: required keep the declared order",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}}, "required": ["a", "b", "c", "d", "e", "f", "g"], "additionalProperties": false})""",
+        2);
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1490,6 +1801,9 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_json_schema_unordered_properties();
+    test_json_schema_unordered_superset();
+    test_json_schema_unordered_ref_with_ordered();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }

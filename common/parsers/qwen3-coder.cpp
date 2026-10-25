@@ -109,7 +109,8 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                     auto arg_value = p.eps();
                     if (!types.has(common_chat_schema::TYPE_STRING)) {
-                        arg_value = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
+                        // Accept object keys in any order, as Qwen does not always adhere to the order provided.
+                        arg_value = p.tool_arg_json_value(p.unordered_schema(p.schema(p.json(), rule_name + "-schema", doc, *param.schema))) + arg_close;
                     } else if (types.is_only(common_chat_schema::TYPE_STRING)) {
                         arg_value = arg_string;
                     } else {

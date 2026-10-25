@@ -343,8 +343,10 @@ class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     bool _dotall;
+    bool _unordered_properties = false;
     std::map<std::string, std::string> _rules;
     std::unordered_set<std::string> _refs_being_resolved;
+    std::map<const common_chat_schema *, std::string> _unordered_refs;
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
 
@@ -365,6 +367,17 @@ private:
         }
         std::string key = esc_name + std::to_string(i);
         _rules[key] = rule;
+        return key;
+    }
+
+    // for rules that refer to themselves: pick a free name now, set the body later
+    std::string _reserve_rule_name(const std::string & name) {
+        std::string esc_name = regex_replace(name, INVALID_RULE_CHARS_RE, "-");
+        std::string key = esc_name;
+        for (int i = 0; _rules.find(key) != _rules.end(); i++) {
+            key = esc_name + std::to_string(i);
+        }
+        _rules[key] = "";
         return key;
     }
 
@@ -684,6 +697,23 @@ private:
         std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
         static const std::regex nonalphanumeric_regex(R"([^a-zA-Z0-9-]+)");
         std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-");
+        if (_unordered_properties) {
+            // keyed by target, so an ordered rule with the same name is never reused
+            auto it = _unordered_refs.find(schema.target);
+            if (it != _unordered_refs.end()) {
+                return it->second;
+            }
+            if (!schema.target) {
+                _errors.push_back("Unresolved $ref " + schema.ref);
+                return "";
+            }
+            std::string name = ref_name + "-unordered";
+            for (int i = 0; _rules.find(name) != _rules.end(); i++) {
+                name = ref_name + "-unordered" + std::to_string(i);
+            }
+            _unordered_refs[schema.target] = name;
+            return _unordered_refs[schema.target] = visit(*schema.target, name);
+        }
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
             if (!schema.target) {
                 _errors.push_back("Unresolved $ref " + schema.ref);
@@ -738,6 +768,63 @@ private:
 
         if (required_props.empty() && optional_props.empty()) {
             return "\"{\" space \"}\"";
+        }
+
+        // up to max_tracked keys, required first: in any order, at most once, close only when all required keys are seen (like common_chat_peg_builder::permute)
+        // other keys: anywhere, repeats allowed; with more than max_tracked required keys, those keep the declared order
+        constexpr size_t max_tracked = 6;
+        if (_unordered_properties) {
+            const size_t n_required = required_props.size();
+            const bool any_order = n_required <= max_tracked;
+            std::vector<std::string> tracked = required_props;
+            std::vector<std::string> free_kvs;
+            for (const auto & prop_name : optional_props) {
+                if (any_order && prop_name != "*" && tracked.size() < max_tracked) {
+                    tracked.push_back(prop_name);
+                } else {
+                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
+                }
+            }
+            std::string free_kv = free_kvs.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
+
+            // seen: bitmask of tracked keys, or with any_order == false the count of required keys
+            const size_t required_mask = any_order ? (size_t(1) << n_required) - 1 : 0;
+            auto all_required = [&](size_t seen) { return any_order ? (seen & required_mask) == required_mask : seen == n_required; };
+            auto tracked_alts = [&](size_t seen, const std::function<std::string(size_t)> & rest) {
+                std::vector<std::string> alts;
+                for (size_t i = 0; i < tracked.size(); i++) {
+                    if (any_order ? !(seen & (size_t(1) << i)) : i == seen) {
+                        alts.push_back(prop_kv_rule_names[tracked[i]] + " " + rest(any_order ? seen | (size_t(1) << i) : seen + 1));
+                    }
+                }
+                return alts;
+            };
+            // one "," then the next key, so only one stack waits for the comma
+            std::map<size_t, std::string> rest_rules;
+            std::function<std::string(size_t)> rest = [&](size_t seen) -> std::string {
+                auto it = rest_rules.find(seen);
+                if (it != rest_rules.end()) {
+                    return it->second;
+                }
+                auto alts = tracked_alts(seen, rest);
+                if (alts.empty() && free_kv.empty()) {
+                    return rest_rules[seen] = "";
+                }
+                auto rule_name = _reserve_rule_name(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen));
+                rest_rules[seen] = rule_name;
+                if (!free_kv.empty()) {
+                    alts.insert(alts.begin(), free_kv + " " + rule_name);
+                }
+                std::string body = "\",\" space ( " + string_join(alts, " | ") + " )";
+                _rules[rule_name] = all_required(seen) ? "( " + body + " )?" : body;
+                return rule_name;
+            };
+
+            auto firsts = tracked_alts(0, rest);
+            if (!free_kv.empty()) {
+                firsts.push_back(free_kv + " " + rest(0));
+            }
+            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (n_required == 0 ? "?" : "") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
@@ -819,6 +906,14 @@ public:
 
     std::string add_schema(const std::string & name, const common_chat_schema & schema) {
         return visit(schema, name);
+    }
+
+    std::string add_schema_unordered(const std::string & name, const common_chat_schema & schema) {
+        bool prev = _unordered_properties;
+        _unordered_properties = true;
+        auto rule = visit(schema, name);
+        _unordered_properties = prev;
+        return rule;
     }
 
     static std::string _generate_constant_rule(const json & value) {
@@ -1020,6 +1115,9 @@ std::string build_grammar(const std::function<void(const common_grammar_builder 
         },
         /* .add_schema = */ [&](const std::string & name, const common_chat_schema & schema) {
             return converter.add_schema(name == "root" ? "" : name, schema);
+        },
+        /* .add_schema_unordered = */ [&](const std::string & name, const common_chat_schema & schema) {
+            return converter.add_schema_unordered(name == "root" ? "" : name, schema);
         },
     };
     cb(builder);
