@@ -61,6 +61,8 @@ private:
         std::vector<ggml_tensor *> score_stream;
     };
 
+    const llama_hparams & hparams;
+
     const uint32_t ratio;
     const uint32_t state_size;
     const uint32_t n_embd_state;
