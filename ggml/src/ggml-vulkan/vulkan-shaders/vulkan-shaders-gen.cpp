@@ -70,6 +70,11 @@ const std::vector<std::string> type_names = {
     "iq3_s",
     "iq4_xs",
     "iq4_nl",
+    "jq2_k",
+    "jq3_k",
+    "jq4_k",
+    "jq5_k",
+    "jq6_k",
     "mxfp4",
     "nvfp4",
     "tq1_0",
@@ -238,16 +243,20 @@ bool is_legacy_quant(const std::string& type_name) {
     return type_name == "q2_0" || type_name == "q4_0" || type_name == "q4_1" || type_name == "q5_0" || type_name == "q5_1" || type_name == "q8_0";
 }
 
-bool is_k_quant(const std::string& type_name) {
-    return string_ends_with(type_name, "_k");
-}
-
 bool is_iq_quant(const std::string& type_name) {
     return string_starts_with(type_name, "iq");
 }
 
+bool is_jq_quant(const std::string& type_name) {
+    return string_starts_with(type_name, "jq");
+}
+
+bool is_k_quant(const std::string& type_name) {
+    return string_ends_with(type_name, "_k") && !is_jq_quant(type_name);
+}
+
 bool is_lut_quant(const std::string& type_name) {
-    return is_iq_quant(type_name) || type_name == "mxfp4" || type_name == "nvfp4";
+    return is_iq_quant(type_name) || is_jq_quant(type_name) || type_name == "mxfp4" || type_name == "nvfp4";
 }
 
 std::string lut_load_vec_a(const std::string& type_name) {
