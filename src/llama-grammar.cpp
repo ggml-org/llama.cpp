@@ -1049,10 +1049,8 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
     grammar->stacks = std::move(stacks_new);
 }
 
-// one code point of the candidates against one stack, the candidates are indices into the input
-// and depth is the code point they are at: the candidates the stack decides go to rejects, the ones
-// that match the code point go to next, to be checked against next_stacks
-// returns false when the stack decides every candidate at this code point
+// checks the code point at depth of each candidate (an index into the input) against the stack
+// returns true when some match: they go to next, and the stacks that follow to next_stacks
 static bool llama_grammar_reject_step(
         const llama_grammar_rules      & rules,
         const llama_grammar_stack      & stack,
