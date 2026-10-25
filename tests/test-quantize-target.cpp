@@ -6,12 +6,15 @@
 #include "llama-cpp.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <random>
 #include <string>
@@ -33,6 +36,7 @@ static void set_tensor_data(ggml_tensor * tensor, void * /*userdata*/) {
     ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
 }
 
+// test model
 static bool save_model(const std::string & fname) {
     gguf_context_ptr meta(gguf_init_empty());
     gguf_set_val_str(meta.get(), "general.architecture",                   "llama");
@@ -56,6 +60,7 @@ static bool save_model(const std::string & fname) {
     return true;
 }
 
+// test imatrix
 struct imatrix_data {
     std::vector<std::string>        names;
     std::vector<std::vector<float>> values;
@@ -197,7 +202,30 @@ static size_t count_type_changes(const quant_run & a, const quant_run & b) {
     return n;
 }
 
-// the model, its imatrix and the first, scored run that the cases compare against
+static std::string read_file(const std::string & fname) {
+    std::ifstream file(fname, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
+
+static void write_file(const std::string & fname, const std::string & data) {
+    std::ofstream file(fname, std::ios::binary);
+    file << data;
+}
+
+static const size_t state_header_size    = 24; // magic, model id, tensor count
+static const size_t state_entry_size     = 28; // candidate count, choice, min and max bpw, elements
+static const size_t state_candidate_size = 24; // type, bpw, bytes, error
+
+// offset of the first tensor's candidate count; 0 if the checkpoint holds no candidate
+static size_t first_count_offset(const std::string & state) {
+    uint32_t len = 0;
+    if (state.size() < state_header_size + sizeof(len)) { return 0; }
+    memcpy(&len, state.data() + state_header_size, sizeof(len));
+    const size_t offset = state_header_size + sizeof(len) + len;
+
+    return state.size() >= offset + state_entry_size + state_candidate_size ? offset : 0;
+}
+
 struct fixture {
     std::string  fname_model;
     std::string  fname_out;
@@ -206,7 +234,7 @@ struct fixture {
     quant_run    base;
 };
 
-// the parameters of the first run
+// first run parameters
 static llama_model_quantize_params base_params(const fixture & f) {
     llama_model_quantize_params params = llama_model_quantize_default_params();
     params.nthread    = 4;
@@ -214,6 +242,10 @@ static llama_model_quantize_params base_params(const fixture & f) {
     params.state_file = f.fname_state.c_str();
 
     return params;
+}
+
+static std::string sibling_path(const fixture & f, const std::string & name) {
+    return (std::filesystem::path(f.fname_state).parent_path() / name).string();
 }
 
 static void test_target_bpw(testing & t, const fixture & f) {
@@ -281,6 +313,236 @@ static void test_excluded_type(testing & t, const fixture & f) {
     t.assert_equal("checkpoint is not saved while types are excluded", (size_t) 0, count_matches(loaded.log, "saved target progress"));
 }
 
+static void test_unknown_type(testing & t, const fixture & f) {
+    std::string state = read_file(f.fname_state);
+    const size_t offset = first_count_offset(state);
+    t.assert_true("first run's checkpoint holds a candidate", offset > 0);
+    if (offset == 0) { return; }
+
+    // type 4 was Q4_2; within ggml_type range but invalid
+    const int32_t type = 4;
+    memcpy(&state[offset + state_entry_size], &type, sizeof(type));
+    const std::string fname = sibling_path(f, "unknown.bpw_state");
+    write_file(fname, state);
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    const quant_run run = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("quantize succeeds", 0u, run.rc);
+    t.assert_equal("unknown type is reported", (size_t) 1, count_matches(run.log, "candidate type is not in the selection pool, ignoring state file"));
+    t.assert_equal("unknown checkpoint is not loaded", (size_t) 0, count_matches(run.log, "using " + fname));
+    t.assert_equal("unknown checkpoint is scored again", count_matches(f.base.log, "processing tensor"), count_matches(run.log, "processing tensor"));
+    t.assert_equal("scored again, tensors whose type changed", (size_t) 0, count_type_changes(f.base, run));
+}
+
+static void test_zero_candidates(testing & t, const fixture & f) {
+    std::string state = read_file(f.fname_state);
+    const size_t offset = first_count_offset(state);
+    t.assert_true("the first run's checkpoint holds a candidate", offset > 0);
+    if (offset == 0) { return; }
+
+    // drop the first tensor's candidates
+    uint64_t n = 0;
+    memcpy(&n, &state[offset], sizeof(n));
+    state.erase(offset + state_entry_size, n * state_candidate_size);
+    n = 0;
+    memcpy(&state[offset], &n, sizeof(n));
+    const std::string fname = sibling_path(f, "zero.bpw_state");
+    write_file(fname, state);
+
+    // with a type excluded, an empty candidate list that is loaded fails the call instead of crashing the test
+    const ggml_type exclude[] = { GGML_TYPE_IQ1_S, GGML_TYPE_COUNT };
+    llama_model_quantize_params params = base_params(f);
+    params.state_file     = fname.c_str();
+    params.target_exclude = exclude;
+    const quant_run run = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("quantize succeeds", 0u, run.rc);
+    t.assert_equal("empty candidate list is reported", (size_t) 1, count_matches(run.log, "candidate count out of range, ignoring state file"));
+    t.assert_equal("checkpoint with an empty candidate list is not loaded", (size_t) 0, count_matches(run.log, "using " + fname));
+    t.assert_equal("checkpoint with an empty candidate list is scored again", count_matches(f.base.log, "processing tensor"), count_matches(run.log, "processing tensor"));
+}
+
+static void test_truncated(testing & t, const fixture & f) {
+    const std::string state = read_file(f.fname_state);
+    const size_t offset = first_count_offset(state);
+    t.assert_true("first run's checkpoint has a candidate", offset > 0);
+    if (offset == 0) { return; }
+
+    // cut before the first candidate count, then before the first candidate type
+    const std::string fname = sibling_path(f, "truncated.bpw_state");
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    write_file(fname, state.substr(0, offset));
+    const quant_run at_count = quantize(f.fname_model, f.fname_out, f.im, params);
+    write_file(fname, state.substr(0, offset + state_entry_size));
+    const quant_run at_type = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("quantize succeeds", 0u, at_count.rc);
+    t.assert_equal("checkpoint cut before a candidate count is reported as truncated", (size_t) 1, count_matches(at_count.log, "state file truncated or read error, ignoring"));
+    t.assert_equal("quantize succeeds", 0u, at_type.rc);
+    t.assert_equal("checkpoint cut before a candidate type is reported as truncated", (size_t) 1, count_matches(at_type.log, "state file truncated or read error, ignoring"));
+}
+
+static void test_missing_dir(testing & t, const fixture & f) {
+    const std::string dir   = sibling_path(f, "no-such-dir");
+    const std::string fname = (std::filesystem::path(dir) / "model.bpw_state").string();
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    const quant_run run = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("path in missing directory fails", 1u, run.rc);
+    t.assert_equal("path in missing directory is reported", (size_t) 1, count_matches(run.log, "failed to open " + fname + ": "));
+    t.assert_equal("path in missing directory stops execution before scoring", (size_t) 0, count_matches(run.log, "processing tensor"));
+    t.assert_true("missing directory is not created", !std::filesystem::exists(dir));
+}
+
+static void test_unreadable_file(testing & t, const fixture & f) {
+#ifdef _WIN32
+    GGML_UNUSED(f);
+    t.skip("POSIX permissions only");
+#else
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const std::string fname = sibling_path(f, "locked.bpw_state");
+    write_file(fname, "forbidden");
+    // write-only, so that a probe that opens the file for writing could still damage it
+    fs::permissions(fname, fs::perms::owner_write, ec);
+    if (std::ifstream(fname).good()) {
+        fs::permissions(fname, fs::perms::owner_read | fs::perms::owner_write, ec);
+        t.skip("the file can still be read, as by root");
+        return;
+    }
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    const quant_run run = quantize(f.fname_model, f.fname_out, f.im, params);
+    const bool kept_perms = fs::status(fname, ec).permissions() == fs::perms::owner_write;
+    fs::permissions(fname, fs::perms::owner_read | fs::perms::owner_write, ec);
+    t.assert_equal("an unreadable file fails the call", 1u, run.rc);
+    t.assert_equal("an unreadable file is reported", (size_t) 1, count_matches(run.log, "failed to open " + fname + ": "));
+    t.assert_equal("an unreadable file stops the run before scoring", (size_t) 0, count_matches(run.log, "processing tensor"));
+    t.assert_true("an unreadable file keeps its permissions", kept_perms);
+    t.assert_true("an unreadable file keeps its content", read_file(fname) == "forbidden");
+#endif
+}
+
+static void test_directory_path(testing & t, const fixture & f) {
+    const std::string fname = sibling_path(f, "dir.bpw_state");
+    std::filesystem::create_directory(fname);
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    const quant_run run = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("a directory instead of a file fails the call", 1u, run.rc);
+    t.assert_equal("a directory instead of a file is reported", (size_t) 1, count_matches(run.log, "failed to open " + fname + ": "));
+    t.assert_equal("a directory stops the run before scoring", (size_t) 0, count_matches(run.log, "processing tensor"));
+    t.assert_true("the directory is left as it was", std::filesystem::is_directory(fname) && std::filesystem::is_empty(fname));
+}
+
+static void test_save_error(testing & t, const fixture & f) {
+    const std::string fname = sibling_path(f, "unsaved.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+    std::filesystem::create_directory(fname + ".tmp");
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    const quant_run run = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("quantize succeeds", 0u, run.rc);
+    t.assert_equal("a failed save is reported", (size_t) 1, count_matches(run.log, "failed to save progress to " + fname + ".tmp (open error)"));
+    t.assert_equal("a failed save logs no saved checkpoint", (size_t) 0, count_matches(run.log, "saved target progress"));
+}
+
+static void test_imatrix_swap(testing & t, const fixture & f) {
+    const imatrix_data im = make_imatrix(f.fname_model, 4321);
+    const std::string fname = sibling_path(f, "swap.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = nullptr;
+    const quant_run fresh = quantize(f.fname_model, f.fname_out, im, params);
+    params.state_file = fname.c_str();
+    const quant_run reused = quantize(f.fname_model, f.fname_out, im, params);
+    t.log(std::to_string(count_type_changes(f.base, fresh)) + " tensors change type with the other imatrix");
+    t.assert_equal("quantize succeeds", 0u, fresh.rc);
+    t.assert_equal("quantize succeeds", 0u, reused.rc);
+    t.assert_equal("a checkpoint from another imatrix is reported", (size_t) 1, count_matches(reused.log, "state file does not match this model, imatrix or pruned layers, ignoring"));
+    t.assert_equal("a checkpoint from another imatrix is scored again", count_matches(f.base.log, "processing tensor"), count_matches(reused.log, "processing tensor"));
+    t.assert_equal("scored again with another imatrix, tensors whose type differs from a fresh run", (size_t) 0, count_type_changes(fresh, reused));
+}
+
+static void test_imatrix_parts(testing & t, const fixture & f) {
+    // one float doubled in one list at a time
+    auto check = [&](const std::string & part, const imatrix_data & im) {
+        const std::string fname = sibling_path(f, part + ".bpw_state");
+        write_file(fname, read_file(f.fname_state));
+
+        llama_model_quantize_params params = base_params(f);
+        params.state_file = fname.c_str();
+        const quant_run run = quantize(f.fname_model, f.fname_out, im, params);
+        t.assert_equal("quantize succeeds", 0u, run.rc);
+        t.assert_equal("a checkpoint from other " + part + " is reported", (size_t) 1, count_matches(run.log, "state file does not match this model, imatrix or pruned layers, ignoring"));
+        t.assert_equal("a checkpoint from other " + part + " is scored again", count_matches(f.base.log, "processing tensor"), count_matches(run.log, "processing tensor"));
+    };
+
+    imatrix_data im = f.im;
+    im.values[0][0] *= 2.0f;
+    check("values", im);
+
+    im = f.im;
+    im.activations[0][0] *= 2.0f;
+    check("activations", im);
+
+    im = f.im;
+    im.statistics[0][0] *= 2.0f;
+    check("statistics", im);
+}
+
+static void test_imatrix_order(testing & t, const fixture & f) {
+    // the same imatrix data, passed in reverse order
+    imatrix_data im = f.im;
+    std::reverse(im.names.begin(),       im.names.end());
+    std::reverse(im.values.begin(),      im.values.end());
+    std::reverse(im.activations.begin(), im.activations.end());
+    std::reverse(im.statistics.begin(),  im.statistics.end());
+    const std::string fname = sibling_path(f, "reversed.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    const std::string n_tensors = std::to_string(count_matches(f.base.log, "processing tensor")) + " tensors";
+    const quant_run run = quantize(f.fname_model, f.fname_out, im, params);
+    t.assert_equal("quantize succeeds", 0u, run.rc);
+    t.assert_equal("the same imatrix in another order loads the checkpoint", (size_t) 1, count_matches(run.log, "using " + fname + " (data for " + n_tensors + " loaded)"));
+    t.assert_equal("the same imatrix in another order scores no tensor", (size_t) 0, count_matches(run.log, "processing tensor"));
+}
+
+static void test_pruned_layer(testing & t, const fixture & f) {
+    // pruning a block renumbers the ones after it
+    const int32_t prune[] = { 1, -1 };
+    const std::string fname = sibling_path(f, "pruned.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+
+    llama_model_quantize_params params = base_params(f);
+    params.prune_layers = prune;
+    params.state_file   = nullptr;
+    const quant_run fresh = quantize(f.fname_model, f.fname_out, f.im, params);
+    params.state_file = fname.c_str();
+    const quant_run reused = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("quantize succeeds", 0u, fresh.rc);
+    t.assert_equal("quantize succeeds", 0u, reused.rc);
+    t.assert_equal("a checkpoint without pruning is reported", (size_t) 1, count_matches(reused.log, "state file does not match this model, imatrix or pruned layers, ignoring"));
+    t.assert_equal("a checkpoint without pruning is scored again", count_matches(fresh.log, "processing tensor"), count_matches(reused.log, "processing tensor"));
+    t.assert_equal("scored again with a pruned block, tensors whose type differs from a fresh run", (size_t) 0, count_type_changes(fresh, reused));
+
+    // another block pruned, reusing the checkpoint saved for block 1
+    const int32_t prune_other[] = { 2, -1 };
+    params.prune_layers = prune_other;
+    const quant_run other = quantize(f.fname_model, f.fname_out, f.im, params);
+    t.assert_equal("the pruned run saves its checkpoint", (size_t) 1, count_matches(reused.log, "saved target progress"));
+    t.assert_equal("quantize succeeds", 0u, other.rc);
+    t.assert_equal("a checkpoint for another pruned block is reported", (size_t) 1, count_matches(other.log, "state file does not match this model, imatrix or pruned layers, ignoring"));
+    t.assert_equal("a checkpoint for another pruned block is scored again", count_matches(fresh.log, "processing tensor"), count_matches(other.log, "processing tensor"));
+}
+
 static int run_tests(testing & t, const std::filesystem::path & dir) {
     fixture f;
     f.fname_model = (dir / "model-f32.gguf").string();
@@ -307,6 +569,17 @@ static int run_tests(testing & t, const std::filesystem::path & dir) {
     t.test("target_size",      [&](testing & t) { test_target_size(t, f); });
     t.test("state_checkpoint", [&](testing & t) { test_state_checkpoint(t, f); });
     t.test("excluded_type",    [&](testing & t) { test_excluded_type(t, f); });
+    t.test("unknown_type",     [&](testing & t) { test_unknown_type(t, f); });
+    t.test("zero_candidates",  [&](testing & t) { test_zero_candidates(t, f); });
+    t.test("truncated",        [&](testing & t) { test_truncated(t, f); });
+    t.test("missing_dir",      [&](testing & t) { test_missing_dir(t, f); });
+    t.test("unreadable_file",  [&](testing & t) { test_unreadable_file(t, f); });
+    t.test("directory_path",   [&](testing & t) { test_directory_path(t, f); });
+    t.test("save_error",       [&](testing & t) { test_save_error(t, f); });
+    t.test("imatrix_swap",     [&](testing & t) { test_imatrix_swap(t, f); });
+    t.test("imatrix_parts",    [&](testing & t) { test_imatrix_parts(t, f); });
+    t.test("imatrix_order",    [&](testing & t) { test_imatrix_order(t, f); });
+    t.test("pruned_layer",     [&](testing & t) { test_pruned_layer(t, f); });
 
     return t.summary();
 }
