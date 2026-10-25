@@ -7511,6 +7511,7 @@ struct ggml_backend_sycl_comm_context {
         for (int i = 0; i < 2; ++i) {
             const sycl::context sctx = ((ggml_backend_sycl_context *) backends[i]->context)->stream()->get_context();
             if (host_out[i]) { sycl::free(host_out[i], sctx); host_out[i] = nullptr; }
+            if (host_in[i])  { sycl::free(host_in[i],  sctx); host_in[i]  = nullptr; }
         }
         host_bytes = 0;
     }
