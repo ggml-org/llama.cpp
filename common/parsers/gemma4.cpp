@@ -59,7 +59,6 @@ struct gemma4_model_turn_builder {
                 // Try to parse the content as JSON; fall back to raw string
                 try {
                     response = json::parse(content.get<std::string>());
-                    common_chat_check_json_depth(response); // too deep: keep the string
                 } catch (...) {
                     response = content;
                 }

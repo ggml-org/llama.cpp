@@ -465,22 +465,28 @@ static void test_rerank_template(testing & t) {
 }
 
 //
-// server_decision_context::parse_questions
+// server_decision_context: the recursive functions stop at RECURSIVE_LIMIT
 //
 
 static void test_decision_depth(testing & t) {
-    t.test("deep state", [](testing & t) {
-        const size_t deep = 1000;
-        const json body = json::parse(R"({"state": )" + std::string(deep, '[') + std::string(deep, ']') +
-                                      R"(, "questions": {"q": {"type": "noul", "instructions": "Is it nested?"}}})");
+    const auto prepare = [](size_t depth) {
         server_decision_context ctx;
+        ctx.type = COMMON_DECISION_TYPE_H2O_LIGHTNING; // the state goes through decision_py_dump
         std::string error;
         try {
-            ctx.parse_questions(body);
-        } catch (const std::exception & e) {
+            ctx.prepare_state(json::parse(std::string(depth, '[') + std::string(depth, ']')));
+        } catch (const std::invalid_argument & e) {
             error = e.what();
         }
-        t.assert_true("rejected as nested: " + error, error.find("nested") != std::string::npos);
+        return error;
+    };
+    t.test("state at the limit", [&](testing & t) {
+        const std::string error = prepare(128);
+        t.assert_true("accepted: " + error, error.empty());
+    });
+    t.test("deep state", [&](testing & t) {
+        const std::string error = prepare(1000);
+        t.assert_true("rejected as nested: " + error, error.find("nested more than 128 levels deep") != std::string::npos);
     });
 }
 

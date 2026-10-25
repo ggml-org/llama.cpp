@@ -457,12 +457,6 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const common_jso
 
 common_chat_continuation common_chat_continuation_parse(const common_json & value);
 
-// the schema builder, jinja and the decision code walk JSON with recursion, a deeper value overflows the stack
-#define COMMON_CHAT_JSON_MAX_DEPTH 128
-
-// throws std::invalid_argument if arrays and objects are nested more than COMMON_CHAT_JSON_MAX_DEPTH levels
-void common_chat_check_json_depth(const common_json & value);
-
 // DEPRECATED: only used in tests
 common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 

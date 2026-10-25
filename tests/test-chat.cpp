@@ -10,6 +10,8 @@
 #include "../tools/server/server-chat.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
+#include "json-schema-to-grammar.h"
+#include "json-schema.h"
 #include "common.h"
 #include "ggml.h"
 #include "log.h"
@@ -7948,16 +7950,17 @@ static void test_chat_json_depth() {
         try {
             fn();
         } catch (const std::invalid_argument & e) {
-            return std::string(e.what()).find("nested more than 128 levels") != std::string::npos;
+            return std::string(e.what()).find("nested more than 128 levels deep") != std::string::npos;
         }
         return false;
     };
 
-    assert_equals(false, rejected([&] { common_chat_check_json_depth(json::parse(arrays(128))); }));
-    assert_equals(true, rejected([&] { common_chat_check_json_depth(json::parse(arrays(129))); }));
-    assert_equals(true, rejected([&] { common_chat_check_json_depth(json::parse(R"({"a": )" + arrays(128) + "}")); }));
+    // the schema builder stops at 128 levels, the root schema is one of them
+    assert_equals(false, rejected([&] { common_chat_schema_from_json(json::parse(schema(127))); }));
+    assert_equals(true, rejected([&] { common_chat_schema_from_json(json::parse(schema(128))); }));
+    assert_equals(true, rejected([&] { json_schema_to_grammar(json::parse(schema(1000))); }));
 
-    // the inputs are checked before the template and the schema code walk them with recursion
+    // the jinja engine and the schema builder reject the inputs before they recurse too deep
     auto         tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
     const size_t deep  = 1000;
 
