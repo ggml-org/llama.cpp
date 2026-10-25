@@ -284,6 +284,7 @@ llama_build_and_test(test-chat-template.cpp  LABEL behavior)
 # debug tool for chat template differential analysis (not registered as a test, run it manually)
 llama_build(test-chat-analysis.cpp)
 llama_build_and_test(test-log.cpp  LABEL behavior)
+llama_build_and_test(test-ngram-cache.cpp  LABEL "main behavior")
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp
