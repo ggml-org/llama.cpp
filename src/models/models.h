@@ -1498,11 +1498,7 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    // Engram: the hash constants are hparams.ple_* (one module per Engram layer), hashed on the host (ggml has no
-    // int64 mul/xor/mod); the token map and its pad id are V4.1 only
-    uint32_t engram_pad_id = 0;
-    std::vector<int32_t> engram_token_map;
-
+    // Engram: the hash constants are hparams.ple_* (one module per Engram layer), hashed on the host (ggml has no int64 mul/xor/mod)
     int engram_index(int il) const;
 
     void engram_hash(int e, const llama_ubatch & ubatch, const std::vector<llama_token> & prev, std::vector<int32_t> & out) const;

@@ -96,7 +96,7 @@ void llama_model_deepseek41::load_arch_hparams(llama_model_loader & ml) {
         ml.get_arr(LLM_KV_PLE_LAYER_MULTIPLIERS,      mult);
         ml.get_arr(LLM_KV_PLE_HEAD_OFFSETS,           offsets);
         ml.get_arr(LLM_KV_PLE_HEAD_VOCAB_SIZES,       primes);
-        ml.get_key(LLM_KV_ENGRAM_PAD_TOKEN_ID,        engram_pad_id);
+        ml.get_key(LLM_KV_ENGRAM_PAD_TOKEN_ID,        hparams.engram_pad_id);
         ml.get_arr(LLM_KV_ENGRAM_TOKEN_MAP,           engram_token_map);
 
         const size_t n_e    = e_layers.size();
@@ -105,7 +105,7 @@ void llama_model_deepseek41::load_arch_hparams(llama_model_loader & ml) {
         if (n_cols == 0 || hparams.ple_head_dim == 0 ||
                 mult.size() != n_e*n_gram || primes.size() != n_e*n_cols || offsets.size() != n_e*n_cols ||
                 mult.size() > LLAMA_MAX_PLE_NGRAM || primes.size() > LLAMA_MAX_PLE_HEADS ||
-                engram_pad_id >= engram_token_map.size()) {
+                hparams.engram_pad_id >= engram_token_map.size()) {
             throw std::runtime_error("DeepSeek-V4.1 engram metadata is inconsistent");
         }
         for (size_t e = 0; e < n_e; ++e) {
@@ -247,7 +247,7 @@ void llama_model_deepseek41::engram_hash(int e, const llama_ubatch & ubatch, con
 
     const uint64_t * mult   = hparams.ple_layer_multipliers.data() + (size_t) e*n_gram;
     const uint32_t * primes = hparams.ple_head_vocab_sizes.data()  + (size_t) e*n_cols;
-    const int64_t    pad    = engram_token_map[engram_pad_id];
+    const int64_t    pad    = engram_token_map[hparams.engram_pad_id];
     const uint32_t * offs   = hparams.ple_head_offsets.data()      + (size_t) e*n_cols;
 
     const auto cid = [&](llama_token t) -> int64_t {

@@ -730,6 +730,9 @@ struct llama_model {
     std::vector<std::string> classifier_labels;
     std::vector<std::string> decision_labels;
 
+    // deepseek41 Engram: token id -> id of its normalized form, hashed into the n-grams
+    std::vector<int32_t> engram_token_map;
+
     struct ggml_tensor * tok_embd   = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;
