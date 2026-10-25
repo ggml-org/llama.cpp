@@ -76,11 +76,7 @@ struct server_grammar_trigger {
     server_grammar_trigger(const json & in) {
         const int type = in.at("type").get<int>();
         if (type < COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN || type > COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL) {
-            throw std::invalid_argument("invalid grammar trigger type " + std::to_string(type) + ", expected one of: " +
-                std::to_string(COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) + " (token), " +
-                std::to_string(COMMON_GRAMMAR_TRIGGER_TYPE_WORD) + " (word), " +
-                std::to_string(COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN) + " (pattern), " +
-                std::to_string(COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL) + " (pattern_full)");
+            throw std::invalid_argument("invalid grammar trigger type: " + std::to_string(type));
         }
         value.type = (common_grammar_trigger_type) type;
         value.value = in.at("value").get<std::string>();
