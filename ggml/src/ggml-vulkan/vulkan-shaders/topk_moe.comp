@@ -122,6 +122,7 @@ void main() {
             probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? 1.f / (1.f + exp(-probs[i / WARP_SIZE])) : -INFINITY;
         }
     } else if (gating_func == GATING_FUNC_SQRT_SOFTPLUS) {
+        // TODO: CPU and CUDA use log1p(exp(x)), which is more accurate for x << 0
         [[unroll]]
         for (uint i = 0; i < n_experts; i += WARP_SIZE) {
             const uint expert = i + lane;

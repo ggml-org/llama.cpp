@@ -155,6 +155,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
             val > 0.0));
 #endif
 #ifdef SOFTPLUS
+    // TODO: CPU and CUDA use log1p(exp(x)), which is more accurate for x << 0
     let src_f32 = f32(src[params.offset_src + src_idx]);
     let res = TYPE(select(log(1.0 + exp(src_f32)), src_f32, src_f32 > 20.0));
 #endif
