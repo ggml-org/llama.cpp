@@ -108,7 +108,43 @@ python3 tools/server/tests/test_adaptive_gemma.py \
   --depths 1,2,3 --output /path/to/gemma-test-results
 ```
 
-Each depth checks fresh, cached and changed prompts, then disconnect cancellation and the next clean request. Complete token IDs must match native execution, the assistant must actually draft, and all requested outputs must arrive. The native control explicitly selects matching draft KV types; adaptive execution inherits the target types and does not permit draft overrides. Model/backend behavior is compared under matching execution modes, not against no-MTP TG1. This is a finite text-only correctness qualification, not full-native-context performance or Gemma vision qualification. Logs, exact launch commands and accepted responses are retained per mode. `test_adaptive_gemma_harness.py` checks launch and process-group cleanup contracts without loading a model.
+Each depth checks fresh, cached and changed prompts, then disconnect cancellation and the next clean request. Complete token IDs must match native execution, the assistant must actually draft, and all requested outputs must arrive. The native control explicitly selects matching draft KV types; adaptive execution inherits the target types and does not permit draft overrides. Model/backend behavior is compared under matching execution modes, not against no-MTP TG1. Without `--mmproj`, this is a finite text-only correctness qualification, not full-native-context performance. The opt-in Gemma image mode and its separate profile are documented below. Logs, exact launch commands and accepted responses are retained per mode. `test_adaptive_gemma_harness.py` checks launch and process-group cleanup contracts without loading a model.
+
+### Gemma 4 vision and shared-KV MTP qualification
+
+Use `test_adaptive_gemma.py --mmproj` for Gemma, not the Qwen-specific `test_adaptive_vision.py` launch profile. The qualified artifacts are the pinned Q3_K_S 31B target, matching local Q8_0 projector and external Q8_0 assistant. Target-only depth 0 accepts the assistant path for a common test invocation but does not load its weights. Both controls use GPU execution with UVM disabled. The harness starts only its own loopback servers and does not stop production; free the GPU yourself first.
+
+```sh
+python3 tools/server/tests/test_adaptive_gemma.py \
+  --server build-v2/bin/llama-server \
+  --model /path/to/gemma-4-31B-it-Q3_K_S.gguf \
+  --assistant /path/to/mtp-gemma-4-31B-it-Q8_0.gguf \
+  --mmproj /path/to/mmproj-gemma4-31B-Q8_0-local.gguf \
+  --context 4096 --prefill 1333 --predict 16 --arena-mib 2048 \
+  --batch-size 256 --ubatch-size 256 --depths 0,1,2,3 \
+  --image-min-tokens 70 --image-max-tokens 70 \
+  --lifecycle --vision-boundaries --vision-aspects --vision-rejections \
+  --output /path/to/new-gemma-vision-results
+```
+
+Every matching native/adaptive scenario compares complete output IDs, generated/accepted draft counts, actual `cache_n`/`prompt_n`, evaluated context extent and request identity. Each scenario has its own native replay/layout oracle; fresh and cached native execution can select different numerical layouts and are not assumed to be interchangeable. Saved-state byte/token counts, complete file hashes, restart restores and uncached self-references are retained with commands and server logs. Avoid reusing an output directory: preserve earlier evidence rather than overwriting it.
+
+`--vision-boundaries` adds image-only/image-first prompts, context-end rejection/recovery, and (with `--lifecycle`) truncated-state-file rejection plus explicit uncached recovery. It checks that the valid on-disk save file remains unchanged; it does not claim a rejected partial restore preserved the in-memory cache. `--vision-rejections` adds empty/truncated/garbage/oversized/pixel-product-overflow images, unsupported audio and blocked file URLs, with exact-cause checks and no OOM counted as a successful rejection. `--vision-aspects` adds portrait and narrow/tall inputs. `--vision-followup-after-decode` retains returned generated text before another image; the separate forced C++ fixture proves monotonic 1024-step KV-window wrapping.
+
+All five image budgets are tested, but they need different admitted microbatches. For budgets 70/140/280/560/1120, set both batch and ubatch to 256/256/512/768/1280 respectively. Normal parents are 2048 MiB through budget 560 and 2143 MiB for 1120 in the recorded 4 Ki profile. These are reference fixtures, not portable fit recommendations. Full native API controls cover all modes through 560 and target-only 1120. Native 1120 MTP encoder workspace allocation fails on the reference GPU; those arena lifecycle runs use `--streamed-only --lifecycle` with separate native component/vector controls and are labeled self-consistency, not full native API equivalence.
+
+The long-ring profile uses capacity 131072, prefix 98304, budget 70, b/ub 256/256, arena 2048 MiB, 64 outputs and depths 0-3 with `--streamed-only --lifecycle --vision-followup-after-decode`. The corpus must contain the requested token prefix; character count is not token count. Actual active pages must exceed resident coverage and ring slots must be nonzero in initial and restarted server logs. Long native equivalence is not claimed. Large slot files and host KV need substantial RAM/disk space outside the GPU arena.
+
+The 1536 MiB arena is an explicit user-approved **sanitizer-only** fixture, not a new normal profile. Strict CUDA evidence requires profiler exit 0 and a final `ERROR SUMMARY: 0 errors` with API-all reporting/error-exit 99; functional output before missing summaries, instrumentation OOM or timeout is not a memory pass. Fresh-process encoder-output and full-vector oracles cover separate numerical stages; do not relabel them as actual joint encoder-forward API runs.
+
+Host-only launch/protocol tests:
+
+```sh
+python3 -B -m unittest discover -s tools/server/tests -p 'test_adaptive_*harness.py'
+python3 -B tools/server/tests/test_adaptive_vision_measurements.py
+```
+
+The [vision roadmap](../../../GEMMA4_VISION_PHASE_ROADMAP.md) and [published qualification manifest](../../../benchmarks/data/gemma4-vision-qualification.json) identify exact artifacts, measured image-fit examples, strict-memory scope, stage lineage and unsupported configurations. The device phase arena bounds its grants, not arbitrary host decoding, driver resources or every later image request.
 
 ### Adaptive KV vision qualification
 
