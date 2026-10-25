@@ -272,6 +272,28 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1"
     )
 
+    # the sparse attention of large ubatches is split into query chunks, small chunks cover the split with the dummy models
+    llama_test(
+        test-llama-archs
+        NAME test-llama-archs-qsa-chunk
+        LABEL main
+        ARGS -a "qwen4exp"
+    )
+    set_tests_properties(test-llama-archs-qsa-chunk PROPERTIES
+        ENVIRONMENT "LLAMA_QSA_CHUNK=24"
+    )
+
+    llama_test(
+        test-llama-context
+        NAME test-llama-context-qsa-chunk
+        LABEL main
+        ARGS -m "${MODEL_DIR}/qwen4exp-moe.gguf"
+    )
+    set_tests_properties(test-llama-context-qsa-chunk PROPERTIES
+        FIXTURES_REQUIRED generate-models
+        ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_QSA_CHUNK=24"
+    )
+
     llama_build(test-fusion.cpp)
 endif()
 

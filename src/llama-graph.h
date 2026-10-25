@@ -36,6 +36,7 @@ class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
 class llama_memory_hybrid_iswa_context;
+class llama_memory_hybrid_idx_context;
 
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
@@ -662,6 +663,43 @@ public:
     const llama_kv_cache_dsv4_context * mctx;
 };
 
+// k-pool sparse attention inputs (qwen4exp), shared by the layers: pools of kpool cells in sequence order, see llama_memory_hybrid_idx
+class llm_graph_input_kpool : public llm_graph_input_i {
+public:
+    llm_graph_input_kpool(const llama_memory_hybrid_idx_context * mctx, uint32_t kpool) : mctx(mctx), kpool(kpool) {}
+    virtual ~llm_graph_input_kpool() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * k_idxs        = nullptr; // I64     [n_tokens]
+    ggml_tensor * pool_cells    = nullptr; // I32     [n_pool]        cell caching each pool's pooled key
+    ggml_tensor * pool_idxs     = nullptr; // I32     [kpool, n_pool] member cells per pool, n_kv sentinel for the padded pools
+    ggml_tensor * pool_mask     = nullptr; // F32/F16 [n_pool, n_tokens]
+    ggml_tensor * tail_idxs     = nullptr; // I32     [kpool - 1, n_tokens]
+    ggml_tensor * new_pool_idxs = nullptr; // I32     [kpool, n_new]  members of the pools to re-pool this ubatch
+    ggml_tensor * new_pool_flat = nullptr; // I32     [kpool*n_new]   view of new_pool_idxs, shared by the layers
+    ggml_tensor * new_pool_rep  = nullptr; // I64     [n_new]         cell to write each new pooled key into
+    ggml_tensor * new_pool_pos  = nullptr; // I32     [4*n_new]       M-RoPE position of each new pool's first member, null without rope
+
+    // a range of query tokens; the layers share the views, as each view of a host input is a separate upload
+    struct chunk {
+        int64_t       t0;
+        int64_t       n;
+        ggml_tensor * pool_mask; // [n_pool, n]
+        ggml_tensor * tail_idxs; // [kpool - 1, n], null without the tail selection
+    };
+    std::vector<chunk> chunks;
+
+    const llama_memory_hybrid_idx_context * mctx;
+    const uint32_t kpool;
+    ggml_type type_mask = GGML_TYPE_F16; // the kq_mask type, which the selection takes
+    uint32_t n_new = 0; // padded to a stable bound, never below 1
+    uint32_t n_sel = 0; // the top pools plus the optional tail
+    uint32_t n_kv  = 0;
+};
+
 class llm_graph_input_attn_cross : public llm_graph_input_i {
 public:
     llm_graph_input_attn_cross(const llama_cross * cross) : cross(cross) {}
@@ -1007,6 +1045,9 @@ using llm_graph_result_ptr = std::unique_ptr<llm_graph_result>;
 // used in build_rs to properly order writes and avoid unnecessary copies
 using llm_graph_get_rows_fn = std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
 
+// sparse attention picks of query chunk ic, see llm_graph_input_kpool::chunk
+using llm_kpool_pick_fn = std::function<std::pair<ggml_tensor *, ggml_tensor *> (size_t ic)>; // top_k and score, see build_kpool_sel
+
 struct llm_graph_qkv {
     ggml_tensor * q; // [n_embd_head, n_head,    n_tokens]
     ggml_tensor * k; // [n_embd_head, n_head_kv, n_tokens]
@@ -1346,6 +1387,32 @@ struct llm_graph_context {
             ggml_tensor * extra,   // [n_extra, n_tokens], can be null
             ggml_tensor * mask,    // [n_kv], kq_mask if null
                     int   il) const;
+
+    // type_pool is the pool_mask type that the indexer takes
+    llm_graph_input_kpool * build_inp_kpool(
+            const llama_memory_hybrid_idx_context * mctx_hyb,
+                              const ggml_tensor * kq_mask,
+                                      ggml_type   type_pool) const;
+
+    // the mask [n_kv, n] of query chunk ic: the cells of the live picked pools and the tail, -inf elsewhere
+    ggml_tensor * build_kpool_sel(
+          llm_graph_input_kpool * inp,
+                    ggml_tensor * top_k, // [n_top_pool, n]
+                    ggml_tensor * score, // [n_pool, n], a pick is live when its score is finite
+                         size_t   ic,
+                            int   il) const;
+
+    // attention over the k-pool selection, one query chunk at a time
+    ggml_tensor * build_attn_kpool(
+          llm_graph_input_kpool * inp,
+      const llm_kpool_pick_fn   & pick,
+                    ggml_tensor * q,       // [n_embd_head_q, n_head_q, n_tokens]
+                    ggml_tensor * k,
+                    ggml_tensor * v,
+                    ggml_tensor * v_mla,
+              const ggml_tensor * kq_mask, // [n_kv, n_tokens/n_stream, 1, n_stream]
+                          float   kq_scale,
+                            int   il) const;
 
     llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
 

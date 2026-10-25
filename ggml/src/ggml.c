@@ -4058,8 +4058,8 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(a->ne[2] == b->ne[2]);
     GGML_ASSERT(a->ne[3] == b->ne[3]);
     GGML_ASSERT(b->ne[1] == c->ne[0]);
-    GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
-    GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
+    GGML_ASSERT(c->ne[1] == 0 ? b->ne[2] == 0 : b->ne[2] % c->ne[1] == 0);
+    GGML_ASSERT(c->ne[2] == 0 ? b->ne[3] == 0 : b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
     GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
@@ -6673,7 +6673,8 @@ struct ggml_tensor * ggml_top_k_mask(
     GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
     GGML_ASSERT(mask->nb[0] == ggml_type_size(mask->type));
     GGML_ASSERT(top_k->type == GGML_TYPE_I32);
-    GGML_ASSERT(top_k->ne[1] % mask->ne[1] == 0 && top_k->ne[2] % mask->ne[2] == 0 && top_k->ne[3] % mask->ne[3] == 0);
+    GGML_ASSERT(mask->ne[1] == 0 ? top_k->ne[1] == 0 : top_k->ne[1] % mask->ne[1] == 0);
+    GGML_ASSERT(top_k->ne[2] % mask->ne[2] == 0 && top_k->ne[3] % mask->ne[3] == 0);
 
     if (score) {
         GGML_ASSERT(score->type == GGML_TYPE_F32);

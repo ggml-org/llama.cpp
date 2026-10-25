@@ -564,6 +564,13 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
 
     auto handle_concat = [&](const std::vector<ggml_backend_meta_split_state> & src_ss) -> ggml_backend_meta_split_state {
         const ggml_backend_meta_split_axis concat_axis = ggml_backend_meta_split_axis(ggml_get_op_params_i32(tensor, 0));
+        // an empty source has no split state, the result is the other source
+        if (ggml_nelements(tensor->src[1]) == 0) {
+            return src_ss[0];
+        }
+        if (ggml_nelements(tensor->src[0]) == 0) {
+            return src_ss[1];
+        }
         if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[1].axis >= 0 && src_ss[1].axis < GGML_MAX_DIMS) {
             GGML_ASSERT(concat_axis != src_ss[1].axis);
             return src_ss[1];
@@ -863,7 +870,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 continue;
             }
             src_ss[i] = ggml_backend_meta_get_split_state(stc, tensor->src[i], /*assume_sync =*/ true);
-            GGML_ASSERT(src_ss[i].axis != GGML_BACKEND_SPLIT_AXIS_UNKNOWN);
+            GGML_ASSERT(src_ss[i].axis != GGML_BACKEND_SPLIT_AXIS_UNKNOWN || ggml_nelements(tensor->src[i]) == 0);
         }
 
         ggml_backend_meta_split_state split_state;
