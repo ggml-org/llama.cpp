@@ -7498,7 +7498,14 @@ struct ggml_backend_sycl_comm_context {
 
     // pinned host staging per device context, reused across calls (queues are in-order)
     uint8_t * host_out[2] = { nullptr, nullptr };
+    uint8_t * host_in[2]  = { nullptr, nullptr };  // only used by the 4-buffer path (separate SYCL contexts)
     size_t    host_bytes  = 0;
+
+    // SYCL_ENABLE_DEFAULT_CONTEXTS=1 sets comm_exchange_fast on Linux - PR #30956
+    using exchange_fn_t = void (*)(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
+                                   void * dst0, const void * src1, void * dst1, const void * src0,
+                                   size_t nbytes);
+    exchange_fn_t comm_exchange = nullptr; // Moves same context check out of hot path; tests only once
 
     void free_host() {
         for (int i = 0; i < 2; ++i) {
@@ -7509,17 +7516,17 @@ struct ggml_backend_sycl_comm_context {
     }
 };
 
-// dst0 <- src1 and dst1 <- src0 through pinned host memory
-static void ggml_sycl_comm_exchange(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
-                                    void * dst0, const void * src1, void * dst1, const void * src0,
-                                    size_t nbytes) {
+// dst0 <- src1 and dst1 <- src0 through pinned host memory.
+static void ggml_sycl_comm_exchange_fast(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
+                                         void * dst0, const void * src1, void * dst1, const void * src0,
+                                         size_t nbytes) {
+
+    // Increases Linux tensor split prompt eval speeds on par with layer split speeds
     // Reallocate host buffers if they are too small
     if (comm->host_bytes < nbytes) {
         q0->wait();
         q1->wait();
         comm->free_host();
-
-        // OPTIMIZATION: Only 2 host buffers are required now instead of 4
         comm->host_out[0] = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
         comm->host_out[1] = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
 
@@ -7527,22 +7534,47 @@ static void ggml_sycl_comm_exchange(ggml_backend_sycl_comm_context * comm, queue
         comm->host_bytes = nbytes;
     }
 
-    // Step 1: Concurrently copy from GPUs into their respective host buffers (Asynchronous)
+    // Step 1: Concurrently copy from GPUs into host buffers (Asynchronous)
     sycl::event e_d2h_0 = q0->memcpy(comm->host_out[0], src0, nbytes);
     sycl::event e_d2h_1 = q1->memcpy(comm->host_out[1], src1, nbytes);
 
-    // Step 2: Asynchronous Barrier Interlocking (NO HOST BLOCKING, wait() causes MTP degredation)
+    // Step 2: Asynchronous Barrier Interlocking (NO HOST BLOCKING), wait() causes MTP conflicts
     q0->ext_oneapi_submit_barrier({e_d2h_1}); // q0 waits for q1's device-to-host copy
     q1->ext_oneapi_submit_barrier({e_d2h_0}); // q1 waits for q0's device-to-host copy
 
     // Step 3: Cross-upload directly from the opposing host buffer.
-    // CPU std::memcpy is eliminated. Both queues pull from host memory in parallel.
     sycl::event e_h2d_0 = q0->memcpy(dst0, comm->host_out[1], nbytes); // q0 pulls from host_out[1]
     sycl::event e_h2d_1 = q1->memcpy(dst1, comm->host_out[0], nbytes); // q1 pulls from host_out[0]
 
-    // Step 4: Finalize the exchange before returning
+    // Step 4: Finalize the exchange before returning to host code
     e_h2d_0.wait();
     e_h2d_1.wait();
+}
+
+// dst0 <- src1 and dst1 <- src0 through pinned host memory, with a single host wait
+static void ggml_sycl_comm_exchange(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
+                                    void * dst0, const void * src1, void * dst1, const void * src0,
+                                    size_t nbytes) {
+    if (comm->host_bytes < nbytes) {
+        q0->wait();
+        q1->wait();
+        comm->free_host();
+        comm->host_out[0] = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
+        comm->host_in[0]  = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
+        comm->host_out[1] = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
+        comm->host_in[1]  = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
+        GGML_ASSERT(comm->host_out[0] && comm->host_in[0] && comm->host_out[1] && comm->host_in[1]);
+        comm->host_bytes = nbytes;
+    }
+
+    sycl::event e0 = q0->memcpy(comm->host_out[0], src0, nbytes);
+    sycl::event e1 = q1->memcpy(comm->host_out[1], src1, nbytes);
+    e0.wait();
+    e1.wait();
+    std::memcpy(comm->host_in[0], comm->host_out[1], nbytes);
+    std::memcpy(comm->host_in[1], comm->host_out[0], nbytes);
+    q0->memcpy(dst0, comm->host_in[0], nbytes);
+    q1->memcpy(dst1, comm->host_in[1], nbytes);
 }
 
 void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends) try {
@@ -7564,6 +7596,11 @@ void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends)
     auto * sctx1 = (ggml_backend_sycl_context *) backends[1]->context;
     ctx->buf0 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx0->pool());
     ctx->buf1 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx1->pool());
+    
+    // SYCL_ENABLE_DEFAULT_CONTEXTS=1 sets comm_exchange_fast on Linux - PR #30956
+    ctx->comm_exchange = (sctx0->stream()->get_context() == sctx1->stream()->get_context())
+                       ? ggml_sycl_comm_exchange_fast
+                       : ggml_sycl_comm_exchange;    
     return ctx;
 }
 catch (const sycl::exception &) { return nullptr; }
@@ -7647,7 +7684,7 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
         sycl::half * f16_tmp0 = (sycl::half *) buf0;
         sycl::half * f16_tmp1 = (sycl::half *) buf1;
 
-        ggml_sycl_comm_exchange(comm_ctx, q0, q1, f16_tmp0, tensors[1]->data, f16_tmp1, tensors[0]->data, nbytes);
+        comm_ctx->comm_exchange(comm_ctx, q0, q1, f16_tmp0, tensors[1]->data, f16_tmp1, tensors[0]->data, nbytes);
 
         q0->submit([&](sycl::handler & h) {
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
@@ -7677,7 +7714,7 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
         float * tmp1 = (float *) buf1;
 
         // separate SYCL contexts: a raw peer-USM q->memcpy is a silent no-op, so stage through host memory
-        ggml_sycl_comm_exchange(comm_ctx, q0, q1, tmp0, tensors[1]->data, tmp1, tensors[0]->data, nbytes);
+        comm_ctx->comm_exchange(comm_ctx, q0, q1, tmp0, tensors[1]->data, tmp1, tensors[0]->data, nbytes);
 
         q0->submit([&](sycl::handler & h) {
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
@@ -7711,7 +7748,7 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
 
     // Phase B: exchange the compressed bytes (in-order queues keep this after the compress kernels).
     const size_t bf16_bytes = nelem * sizeof(uint16_t);
-    ggml_sycl_comm_exchange(comm_ctx, q0, q1, inbox0, outbox1, inbox1, outbox0, bf16_bytes);
+    comm_ctx->comm_exchange(comm_ctx, q0, q1, inbox0, outbox1, inbox1, outbox0, bf16_bytes);
 
     // Phase C: decompress + add into local FP32 partial.
     q0->submit([&](sycl::handler & h) {
