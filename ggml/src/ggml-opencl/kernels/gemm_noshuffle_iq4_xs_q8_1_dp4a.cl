@@ -11,10 +11,10 @@
 #endif
 
 inline uint iq4_xs_pack(ushort q) {
-    return ((uint)iq4_xs_values[q & 15] & 255u)
-         | (((uint)iq4_xs_values[(q >> 4) & 15] & 255u) << 8)
-         | (((uint)iq4_xs_values[(q >> 8) & 15] & 255u) << 16)
-         | (((uint)iq4_xs_values[q >> 12] & 255u) << 24);
+    return iq4_xs_code(q & 15)
+         | (iq4_xs_code((q >> 4) & 15) << 8)
+         | (iq4_xs_code((q >> 8) & 15) << 16)
+         | (iq4_xs_code(q >> 12) << 24);
 }
 
 // Pass staged operands by value; local dp4a operands miscompile on X2.

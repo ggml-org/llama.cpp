@@ -1080,6 +1080,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_noshuffle_iq4_xs_f32 = nullptr;
     cl_kernel kernel_gemm_noshuffle_iq4_xs_f32 = nullptr;
     cl_kernel kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a_narrow = nullptr;
+    int iq4_xs_mv_nsg = 8;
     cl_kernel kernel_mul_mv_iq4_xs_f32;
     cl_kernel kernel_mul_mv_q4_K_f32;
     cl_kernel kernel_mul_mv_q4_K_f32_flat;
@@ -4970,6 +4972,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog = build_program_from_source(backend_ctx, (iq4_xs_grid_src + kernel_src).c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a = clCreateKernel(prog, "kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a", &err), err));
         CL_CHECK(clReleaseProgram(prog));
+        prog = build_program_from_source(backend_ctx, (iq4_xs_grid_src + kernel_src).c_str(), compile_opts + " -DTILESIZE_N=8");
+        CL_CHECK((backend_ctx->kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a_narrow = clCreateKernel(prog, "kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -5012,9 +5017,29 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("gemv_noshuffle_iq4_xs_f32.cl");
 #endif
-        cl_program prog = build_program_from_source(backend_ctx, (iq4_xs_grid_src + kernel_src).c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_gemv_noshuffle_iq4_xs_f32 = clCreateKernel(prog, "kernel_gemv_noshuffle_iq4_xs_f32", &err), err));
-        CL_CHECK(clReleaseProgram(prog));
+        if (const char * env = getenv("GGML_OPENCL_IQ4_XS_MV_NSG")) {
+            const int nsg = atoi(env);
+            if (nsg == 1 || nsg == 2 || nsg == 4 || nsg == 8) {
+                backend_ctx->iq4_xs_mv_nsg = nsg;
+            }
+        }
+        for (;;) {
+            const std::string opts = compile_opts + " -DIQ4_XS_MV_NSG=" + std::to_string(backend_ctx->iq4_xs_mv_nsg);
+            cl_program prog = build_program_from_source(backend_ctx, (iq4_xs_grid_src + kernel_src).c_str(), opts);
+            cl_kernel kernel = clCreateKernel(prog, "kernel_gemv_noshuffle_iq4_xs_f32", &err);
+            CL_CHECK(err);
+            size_t max_workgroup;
+            CL_CHECK(clGetKernelWorkGroupInfo(kernel, backend_ctx->device, CL_KERNEL_WORK_GROUP_SIZE, sizeof(max_workgroup), &max_workgroup, nullptr));
+            if (64*(size_t)backend_ctx->iq4_xs_mv_nsg <= max_workgroup) {
+                backend_ctx->kernel_gemv_noshuffle_iq4_xs_f32 = kernel;
+                CL_CHECK(clReleaseProgram(prog));
+                break;
+            }
+            CL_CHECK(clReleaseKernel(kernel));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_ASSERT(backend_ctx->iq4_xs_mv_nsg > 1);
+            backend_ctx->iq4_xs_mv_nsg /= 2;
+        }
         GGML_LOG_CONT(".");
     }
 
@@ -25762,7 +25787,9 @@ static bool ggml_cl_mul_mat_iq4_xs_dp4a(ggml_backend_t backend, const ggml_tenso
     const int n = src1->ne[1];
     const int k = src0->ne[0];
 
-    cl_kernel gemm = backend_ctx->kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a;
+    const int tile_n = n <= 8 ? 8 : 32;
+    cl_kernel gemm = n <= 8 ? backend_ctx->kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a_narrow
+                            : backend_ctx->kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a;
     const char * env = getenv("GGML_OPENCL_IQ4_XS_DENSE_DP4A");
     if (!gemm || !backend_ctx->has_integer_dot || (env && env[0] == '0') ||
         n <= 1 || !ggml_is_contiguous(src1) || offset1 % backend_ctx->alignment != 0) {
@@ -25800,7 +25827,7 @@ static bool ggml_cl_mul_mat_iq4_xs_dp4a(ggml_backend_t backend, const ggml_tenso
     CL_CHECK(clSetKernelArg(gemm,  8, sizeof(int),       &m));
     CL_CHECK(clSetKernelArg(gemm,  9, sizeof(int),       &n));
     CL_CHECK(clSetKernelArg(gemm, 10, sizeof(int),       &k));
-    size_t global[] = { 64, (size_t)CEIL_DIV(m, 64), (size_t)CEIL_DIV(n, 32) };
+    size_t global[] = { 64, (size_t)CEIL_DIV(m, 64), (size_t)CEIL_DIV(n, tile_n) };
     size_t local[] = { 64, 1, 1 };
     backend_ctx->enqueue_ndrange_kernel(gemm, 3, global, local, dst);
     CL_CHECK(clReleaseMemObject(activation));
@@ -25835,8 +25862,9 @@ static void ggml_cl_mul_mat_iq4_xs_f32_adreno(ggml_backend_t backend, const ggml
         CL_CHECK(clSetKernelArg(gemv,  9, sizeof(int),       &m));
         CL_CHECK(clSetKernelArg(gemv, 10, sizeof(int),       &stride_b));
         CL_CHECK(clSetKernelArg(gemv, 11, sizeof(int),       &stride_d));
-        size_t global[] = { (size_t)CEIL_DIV(m, 64)*64, (size_t)n, 1 };
-        size_t local[] = { 64, 1, 1 };
+        const size_t nsg = backend_ctx->iq4_xs_mv_nsg;
+        size_t global[] = { (size_t)CEIL_DIV(m, 128)*64, (size_t)n*nsg, 1 };
+        size_t local[] = { 64, nsg, 1 };
         backend_ctx->enqueue_ndrange_kernel(gemv, 3, global, local, dst);
         return;
     }
