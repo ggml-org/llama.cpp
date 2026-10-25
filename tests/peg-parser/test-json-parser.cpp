@@ -145,8 +145,8 @@ void test_json_parser(testing &t) {
             }
         };
 
-        t.assert_equal("128 levels", std::string(), parse(128));
-        t.assert_true("129 levels", parse(129).find("nested more than 128 levels deep") != std::string::npos);
-        t.assert_true("100000 levels", parse(100000).find("nested more than 128 levels deep") != std::string::npos);
+        t.assert_equal("64 levels", std::string(), parse(64));
+        t.assert_true("65 levels", parse(65).find("nested more than 64 levels deep") != std::string::npos);
+        t.assert_true("100000 levels", parse(100000).find("nested more than 64 levels deep") != std::string::npos);
     });
 }

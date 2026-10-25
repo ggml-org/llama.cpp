@@ -13,6 +13,9 @@
 #include <set>
 #include <stdexcept>
 
+// The parser can run with a lower limit than COMMON_RECURSIVE_LIMIT
+static constexpr int RULE_RECURSIVE_LIMIT = 64;
+
 // Trick to catch missing branches
 template <typename T>
 inline constexpr bool is_always_false_v = false;
@@ -740,8 +743,8 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
         // only rules recurse, a recursive rule is entered once per input level
-        if (ctx.rule_depth[p.child] >= COMMON_RECURSIVE_LIMIT) {
-            throw common_peg_recursion_error("input is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+        if (ctx.rule_depth[p.child] >= RULE_RECURSIVE_LIMIT) {
+            throw common_peg_recursion_error("input is nested more than " + std::to_string(RULE_RECURSIVE_LIMIT) + " levels deep");
         }
 
         // Parse the child
