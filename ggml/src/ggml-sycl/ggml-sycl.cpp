@@ -2964,11 +2964,8 @@ static void top_k_f32_sycl(
 
     // Short rows: one work-item per column and k work-group argmax rounds.
     // Ties take the lower column.
-    if (ncols <= ggml_sycl_info().max_work_group_sizes[ctx.device]) {
-        int wg = WARP_SIZE;
-        while (wg < ncols) {
-            wg *= 2;
-        }
+    const int wg = std::max(WARP_SIZE, next_power_of_2((int) ncols));
+    if (wg <= ggml_sycl_info().max_work_group_sizes[ctx.device]) {
         main_stream->parallel_for(
             sycl::nd_range<1>(sycl::range<1>(nrows * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> item_ct1) {
