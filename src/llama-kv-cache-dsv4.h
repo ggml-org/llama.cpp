@@ -16,15 +16,15 @@ public:
 
     llama_dsv4_comp_state(
             const llama_model & model,
-            bool            no_alloc,
-            bool            offload,
-            bool            unified,
-            uint32_t        n_seq_max,
-            uint32_t        ratio,
-            uint32_t        state_size,
-            uint32_t        n_embd_state,
-            uint32_t        n_rs_seq,
-            const char    * name,
+                         bool   no_alloc,
+                         bool   offload,
+                         bool   unified,
+                     uint32_t   n_seq_max,
+                     uint32_t   ratio,
+                     uint32_t   state_size,
+                     uint32_t   n_embd_state,
+                     uint32_t   n_rs_seq,
+                   const char * name,
         const llama_memory_i::layer_filter_cb & filter);
 
     void clear(llama_seq_id seq_id, bool data);
@@ -91,7 +91,7 @@ class llama_kv_cache_dsv4 : public llama_memory_i {
 public:
     llama_kv_cache_dsv4(
             const llama_model & model,
-                    bool   no_alloc,
+                         bool   no_alloc,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,

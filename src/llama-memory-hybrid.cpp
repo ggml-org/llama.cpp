@@ -10,7 +10,7 @@
 
 llama_memory_hybrid::llama_memory_hybrid(
         const llama_model & model,
-                      bool   no_alloc,
+                     bool   no_alloc,
                             /* attn */
                 ggml_type   type_k,
                 ggml_type   type_v,

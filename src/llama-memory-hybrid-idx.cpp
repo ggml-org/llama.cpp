@@ -1,20 +1,16 @@
 #include "llama-memory-hybrid-idx.h"
 
-#include <algorithm>
-#include <cmath>
-#include <type_traits>
-
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-model.h"
-
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <iterator>
 #include <stdexcept>
+#include <type_traits>
 
 //
 // llama_memory_hybrid_idx
@@ -22,7 +18,7 @@
 
 llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         const llama_model & model,
-                      bool   no_alloc,
+                     bool   no_alloc,
                             /* attn */
                 ggml_type   type_k,
                 ggml_type   type_v,

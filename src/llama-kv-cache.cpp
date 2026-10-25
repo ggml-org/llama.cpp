@@ -64,8 +64,8 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
 
 llama_kv_cache::llama_kv_cache(
         const llama_model & model,
-                 bool   no_alloc,
-        const llama_hparams & hparams,
+                     bool   no_alloc,
+      const llama_hparams & hparams,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -80,7 +80,7 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-             const char *   name_tag) :
+               const char * name_tag) :
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     ctxs_bufs(no_alloc),

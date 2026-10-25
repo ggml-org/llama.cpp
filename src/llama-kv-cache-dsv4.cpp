@@ -937,15 +937,15 @@ static void dsv4_make_k_only(llama_hparams & hparams) {
 
 llama_dsv4_comp_state::llama_dsv4_comp_state(
         const llama_model & model,
-                bool        no_alloc,
-                bool        offload,
-                bool        unified,
-            uint32_t        n_seq_max,
-            uint32_t        ratio,
-            uint32_t        state_size,
-            uint32_t        n_embd_state,
-            uint32_t        n_rs_seq,
-        const char    * name,
+                     bool   no_alloc,
+                     bool   offload,
+                     bool   unified,
+                 uint32_t   n_seq_max,
+                 uint32_t   ratio,
+                 uint32_t   state_size,
+                 uint32_t   n_embd_state,
+                 uint32_t   n_rs_seq,
+               const char * name,
         const llama_memory_i::layer_filter_cb & filter) :
     ratio(ratio),
     state_size(state_size),
@@ -1248,7 +1248,7 @@ size_t llama_dsv4_comp_state::total_size() const {
 
 llama_kv_cache_dsv4::llama_kv_cache_dsv4(
         const llama_model & model,
-                 bool   no_alloc,
+                     bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,

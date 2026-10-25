@@ -12,7 +12,7 @@
 
 llama_kv_cache_msa::llama_kv_cache_msa(
         const llama_model & model,
-                 bool   no_alloc,
+                     bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
