@@ -159,6 +159,8 @@ llama_model_granite::graph::graph(
             cb(inpL, "deepstack_in", il);
         }
 
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -198,8 +200,6 @@ llama_model_granite::graph::graph(
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_granite::graph::build_attention_layer(

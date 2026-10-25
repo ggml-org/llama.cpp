@@ -74,16 +74,12 @@ struct context {
     }
     ~context() = default;
 
-    context(const context & parent) : context() {
+    context(const context & parent) :
+        src(parent.src),
+        current_time(parent.current_time),
+        is_get_stats(parent.is_get_stats),
         // inherit variables (for example, when entering a new scope)
-        auto & pvar = parent.env->as_ordered_object();
-        for (const auto & pair : pvar) {
-            set_val(pair.first, pair.second);
-        }
-        current_time = parent.current_time;
-        is_get_stats = parent.is_get_stats;
-        src = parent.src;
-    }
+        env(mk_val<value_object>(*parent.env)) {}
 
     value get_val(const std::string & name) {
         value default_val = mk_val<value_undefined>(name);

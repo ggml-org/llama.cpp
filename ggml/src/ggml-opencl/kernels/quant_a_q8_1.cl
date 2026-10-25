@@ -1,9 +1,7 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 
-// Quantize a contiguous [N, K] f32 activation buffer (token-major, K contiguous
-// per token) into q8_1 blocks of 32: int8 quants + per-block scale d + per-block
-// sum s (= d * Sum(qs)). Consumed by kernel_gemm_noshuffle_q4_k_q8_1_dp4a for the
-// dp4a (int8) dense q4_K prefill GEMM. One work-item per 32-element block.
+// Quantize a contiguous K-major [N, K] f32 activation buffer (K contiguous) into 32-value Q8_1 SoA blocks.
+// Store int8 quants, per-block scale d, and scaled sum s = d * sum(qs); one work-item handles each block.
 __kernel void kernel_quant_a_q8_1(
         __global const float * src,   // [N * K]
         __global       char  * qa,    // [N * K]

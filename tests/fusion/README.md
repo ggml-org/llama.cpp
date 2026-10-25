@@ -22,5 +22,5 @@ rm -rf build-ci-models && mkdir -p build-ci-models
 ```
 
 Non-zero exit means a row differs from the baseline. Use `--model FILE` to run a single
-architecture. Note `--check` only sees present rows — a fusion that stops matching is not
-reported, so diff the recorded CSV to catch removed patterns.
+architecture. `--check` also reports baseline rows that the run no longer produces, so a fusion
+that stops matching fails the run instead of silently dropping out of the CSV.

@@ -600,6 +600,7 @@ value for_statement::execute_impl(context & ctx) const {
     bool noIteration = true;
     for (size_t i = 0; i < filtered_items.size(); i++) {
         JJ_DEBUG("For loop iteration %zu/%zu", i + 1, filtered_items.size());
+        context loop_scope(scope);
         value_object loop_obj = mk_val<value_object>();
         loop_obj->has_builtins = false; // loop object has no builtins
         loop_obj->insert("index", mk_val<value_int>(i + 1));
@@ -611,11 +612,11 @@ value for_statement::execute_impl(context & ctx) const {
         loop_obj->insert("length", mk_val<value_int>(filtered_items.size()));
         loop_obj->insert("previtem", i > 0 ? filtered_items[i - 1] : mk_val<value_undefined>("previtem"));
         loop_obj->insert("nextitem", i < filtered_items.size() - 1 ? filtered_items[i + 1] : mk_val<value_undefined>("nextitem"));
-        scope.set_val("loop", loop_obj);
-        scope_update_fns[i](scope);
+        loop_scope.set_val("loop", loop_obj);
+        scope_update_fns[i](loop_scope);
         try {
             for (auto & stmt : body) {
-                value val = stmt->execute(scope);
+                value val = stmt->execute(loop_scope);
                 result->push_back(val);
             }
         } catch (const continue_statement::signal &) {

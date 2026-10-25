@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from enum import IntEnum
 from pathlib import Path
 from hashlib import sha256
@@ -568,7 +569,7 @@ class ModelBase:
                                 tensors_to_remove.append(base_name + "_zero_point")
                 else:
                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
-            elif quant_method == "modelopt":
+            elif quant_method in ("modelopt", "modelopt_mixed"):
                 dequant_fp8()
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
@@ -672,6 +673,171 @@ class ModelBase:
             name = name.rpartition(".")[0]
         if algo == "W4A16_NVFP4":
             self._prec_a4[gguf_name] = False
+
+    def hadamard_folded_names(self) -> set[str]:
+        """Source-tensor names folded under a Hadamard manifest, or empty."""
+        cached = getattr(self, "_hadamard_folded_names", None)
+        if cached is not None:
+            return cached
+        names: set[str] = set()
+        manifest_path = self.dir_model / "hadamard_packing.json"
+        if manifest_path.is_file():
+            with manifest_path.open("r", encoding="utf-8") as f:
+                for record in json.load(f).get("tensors", []):
+                    if isinstance(record, dict) and isinstance(record.get("name"), str):
+                        names.add(record["name"])
+        self._hadamard_folded_names = names
+        return names
+
+    def add_hadamard_metadata(self) -> None:
+        """Transfer a packed-checkpoint transform contract into GGUF metadata."""
+        manifest_path = self.dir_model / "hadamard_packing.json"
+        if not manifest_path.is_file():
+            return
+
+        with manifest_path.open("r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        schema_version = manifest.get("schema_version")
+        if schema_version not in (1, 2, 3) or manifest.get("kind") != "hadamard-weight-fold":
+            raise ValueError(f"Unsupported Hadamard manifest: {manifest_path}")
+        if manifest.get("status") != "requires-matching-runtime":
+            raise ValueError(f"Unexpected Hadamard manifest status: {manifest.get('status')!r}")
+
+        transform = manifest.get("transform")
+        if not isinstance(transform, dict):
+            raise ValueError("Hadamard manifest is missing transform metadata")
+        block_size = transform.get("block_size")
+        if not isinstance(block_size, int) or block_size <= 0 or block_size & (block_size - 1):
+            raise ValueError(f"Invalid Hadamard block size: {block_size!r}")
+        if transform.get("name") != "normalized-signed-sylvester-walsh-hadamard":
+            raise ValueError(f"Unsupported Hadamard transform: {transform.get('name')!r}")
+        sign_mode = transform.get("sign_mode")
+        if sign_mode not in ("identity", "explicit"):
+            raise ValueError(f"Unsupported Hadamard sign mode: {sign_mode!r}")
+        sign_widths: list[int] = []
+        sign_values: list[int] = []
+        if sign_mode == "explicit":
+            signs = manifest.get("signs")
+            if not isinstance(signs, dict) or not signs:
+                raise ValueError("explicit sign mode requires a signs table")
+            for width_str, vec in sorted(signs.items(), key=lambda kv: int(kv[0])):
+                width = int(width_str)
+                # same width rule as the runtime, so a manifest that converts also loads
+                if width <= 0 or width % block_size != 0:
+                    raise ValueError(
+                        f"sign width {width} must be positive and a multiple of block size {block_size}"
+                    )
+                if len(vec) != width or any(v not in (-1, 1) for v in vec):
+                    raise ValueError(f"invalid sign vector for width {width}")
+                sign_widths.append(width)
+                sign_values.extend(int(v) for v in vec)
+
+        tensor_records = manifest.get("tensors")
+        if not isinstance(tensor_records, list) or not tensor_records:
+            raise ValueError("Hadamard manifest has no folded tensors")
+
+        # only build_lora_mm/build_lora_mm_id apply the transform: refuse archs and tensor kinds that can skip them
+        _HADAMARD_ARCHS = {
+            gguf.MODEL_ARCH.LLAMA,
+            gguf.MODEL_ARCH.QWEN3,
+            gguf.MODEL_ARCH.QWEN3MOE,
+            gguf.MODEL_ARCH.QWEN35,
+            gguf.MODEL_ARCH.QWEN35MOE,
+            gguf.MODEL_ARCH.QWEN3NEXT,
+        }
+        if self.model_arch not in _HADAMARD_ARCHS:
+            raise ValueError(
+                f"Hadamard folding is not verified for arch {self.model_arch.name}; "
+                "the runtime would load the GGUF without applying the activation transform"
+            )
+        _HADAMARD_KINDS = re.compile(
+            r"output\.weight|"
+            r"blk\.\d+\.("
+            r"attn_q|attn_k|attn_v|attn_qkv|attn_gate|attn_output"
+            r"|ffn_gate|ffn_up|ffn_down"
+            r"|ffn_gate_exps|ffn_up_exps|ffn_down_exps|ffn_gate_up_exps"
+            r"|ffn_gate_shexp|ffn_up_shexp|ffn_down_shexp"
+            r"|ssm_out"
+            r")\.weight"
+        )
+        weight_names: list[str] = []
+        inverse_weight_names: list[str] = []
+        for record in tensor_records:
+            if not isinstance(record, dict) or not isinstance(record.get("name"), str):
+                raise ValueError("Hadamard manifest has an invalid tensor record")
+            if record.get("axis") != -1:
+                raise ValueError(f"Unsupported Hadamard tensor axis for {record['name']!r}")
+            role = record.get("role", "fold-before-matmul")
+            if role not in ("fold-before-matmul", "inverse-after-lookup"):
+                raise ValueError(f"Unsupported Hadamard tensor role for {record['name']!r}: {role!r}")
+            filtered = self.filter_tensors((record["name"], lambda: torch.empty(0)))
+            if filtered is None:
+                raise ValueError(f"Hadamard tensor is filtered out: {record['name']!r}")
+            mapped = self.map_tensor_name(filtered[0])
+            if role == "inverse-after-lookup":
+                # the runtime applies the inverse only after the token-embedding lookup, other latent tables stay rotated
+                if mapped != "token_embd.weight":
+                    raise ValueError(
+                        f"Hadamard tensor {record['name']!r} maps to {mapped!r}, which is not a "
+                        "verified inverse-after-lookup table"
+                    )
+                inverse_weight_names.append(mapped)
+            else:
+                if not _HADAMARD_KINDS.fullmatch(mapped):
+                    raise ValueError(
+                        f"Hadamard tensor {record['name']!r} maps to {mapped!r}, which is not on a "
+                        "verified Hadamard-aware matmul path"
+                    )
+                weight_names.append(mapped)
+
+        # --fuse-qkv writes one attn_qkv per layer, so Q, K and V must all be folded and get one name
+        for bid in sorted(self._fusable_qkv_weight_layers):
+            qkv = [
+                self.format_tensor_name(t, bid)
+                for t in (gguf.MODEL_TENSOR.ATTN_Q, gguf.MODEL_TENSOR.ATTN_K, gguf.MODEL_TENSOR.ATTN_V)
+            ]
+            n_folded = sum(name in weight_names for name in qkv)
+            if n_folded == 0:
+                continue
+            if n_folded != len(qkv):
+                raise ValueError(f"--fuse-qkv needs all of Q, K and V folded in layer {bid}, or none of them")
+            weight_names = [name for name in weight_names if name not in qkv]
+            weight_names.append(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid))
+
+        tied_output = manifest.get("tied_output", False)
+        if not isinstance(tied_output, bool) or (schema_version == 3) != tied_output:
+            raise ValueError("Hadamard schema 3 requires tied_output=true; older schemas forbid it")
+        if tied_output:
+            if inverse_weight_names != ["token_embd.weight"]:
+                raise ValueError("Tied Hadamard output requires one latent token embedding")
+            if not self.hparams.get("tie_word_embeddings", False):
+                raise ValueError("Tied Hadamard output requires tie_word_embeddings=true")
+            if "output.weight" in weight_names or any(
+                self.tensor_map.get_name(name, try_suffixes=(".weight", ".bias")) == "output.weight"
+                for name in self.model_tensors
+            ):
+                raise ValueError("Tied Hadamard output must not carry a separate output head")
+            self.gguf_writer.add_prism_hadamard_tied_output(True)
+        elif "token_embd.weight" in inverse_weight_names and self.hparams.get("tie_word_embeddings", False):
+            raise ValueError("A tied latent embedding requires Hadamard schema 3 and tied_output=true")
+
+        self.gguf_writer.add_prism_hadamard_version(2 if tied_output else 1)
+        self.gguf_writer.add_prism_hadamard_block_size(block_size)
+        self.gguf_writer.add_prism_hadamard_transform("normalized-sylvester-walsh-hadamard")
+        self.gguf_writer.add_prism_hadamard_axis("input-last-dimension")
+        self.gguf_writer.add_prism_hadamard_sign_mode(sign_mode)
+        self.gguf_writer.add_prism_hadamard_weight_names(weight_names)
+        if sign_mode == "explicit":
+            self.gguf_writer.add_prism_hadamard_sign_widths(sign_widths)
+            self.gguf_writer.add_prism_hadamard_sign_values(sign_values)
+        if inverse_weight_names:
+            self.gguf_writer.add_prism_hadamard_inverse_weight_names(inverse_weight_names)
+        if getattr(self, "_hadamard_gdn_v_grouped", False):
+            self.gguf_writer.add_prism_hadamard_gdn_v_grouped(True)
+            logger.info("GGUF Hadamard: linear-attention out_proj kept in grouped V order")
+        logger.info("GGUF Hadamard contract: H%d, sign_mode=%s, %d folded weight(s), %d inverse-lookup",
+                    block_size, sign_mode, len(weight_names), len(inverse_weight_names))
 
     def set_gguf_parameters(self):
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
@@ -1220,6 +1386,8 @@ class ModelBase:
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
 
+        self.add_hadamard_metadata()
+
         if self._prec_a4:
             names = sorted(self._prec_a4.keys())
             values = [self._prec_a4[n] for n in names]
@@ -1389,14 +1557,17 @@ class TextModel(ModelBase):
         name, gen = item
 
         # Skip multimodal tensors
-        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
+        # strip the "model." wrapper so the prefixes below match (name is not returned)
+        if name.startswith("model."):
+            name = name[len("model."):]
+        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "connector.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
                 or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
                 or "vision_" in name or "audio_" in name \
                 or "token2wav." in name or "code2wav." in name \
                 or "projector." in name or "pre_mm_projector_norm" in name \
                 or "image_newline" in name or "view_seperator" in name \
                 or "patch_embed" in name or "patch_embedding" in name \
-                or "patch_merger." in name or "patch_merge_mlp." in name or "model.connector." in name:
+                or "patch_merger." in name or "patch_merge_mlp." in name:
             return None
 
         return super().filter_tensors(item)
@@ -1455,7 +1626,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_head_count_kv(n_head_kv)
             logger.info(f"gguf: key-value head count = {n_head_kv}")
 
-        if self.hparams.get("is_causal") is False:
+        if self.hparams.get("is_causal") is False or self.hparams.get("use_bidirectional_attention") is True:
             self.gguf_writer.add_causal_attention(False)
             logger.info("gguf: causal attention = False")
 
@@ -1473,6 +1644,8 @@ class TextModel(ModelBase):
                 self.gguf_writer.add_rope_scaling_type(rope_gguf_type)
                 self.gguf_writer.add_rope_scaling_factor(rope_factor)
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_params["original_max_position_embeddings"])
+                if (truncate := rope_params.get("truncate")) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_truncate(truncate)
                 if (yarn_ext_factor := rope_params.get("extrapolation_factor")) is not None:
                     self.gguf_writer.add_rope_scaling_yarn_ext_factor(yarn_ext_factor)
                 if (yarn_attn_factor := rope_params.get("attention_factor", rope_params.get("attn_factor"))) is not None:
@@ -1528,7 +1701,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func", "router_score_function"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -1664,6 +1837,9 @@ class TextModel(ModelBase):
         if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
             # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
             res = "minerva-7b"
+        if chkhsh == "6e4d72c6e5260b90606e26a0931fa15e4b42ec6e97719d12919f2b1f93478262":
+            # ref: https://huggingface.co/domyn/Domyn-Small-v1.0
+            res = "domyn-small"
         if chkhsh == "7e57df22b1fe23a7b1e1c7f3dc4e3f96d43a4eb0836d0c6bdc3436d7b2f1c664":
             # ref: https://huggingface.co/tencent/Hunyuan-A13B-Instruct
             res = "hunyuan"
@@ -1697,6 +1873,12 @@ class TextModel(ModelBase):
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
+        if chkhsh == "f5c965e4198da6e7525072d87d1ecf4c51d981fd486c7c4ec728ef9cec7e03fc":
+            # ref: https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B
+            res = "gpt-4o"
+        if chkhsh == "6e040dfe72e4b85855588c53acf4909ac4e98e55bc3a33cd7db499180dc42a78":
+            # ref: https://huggingface.co/Aleph-Alpha/Kolibri-1
+            res = "qwen2"
         if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
             # ref: https://huggingface.co/aari1995/German_Semantic_V3
             res = "jina-v2-de"
@@ -1760,6 +1942,9 @@ class TextModel(ModelBase):
         if chkhsh == "52df12b4c8d4176e7481aab4b6e8454d1fd0a210a04a574f6d4e067d10e23c3e":
             # ref: https://huggingface.co/CohereLabs/North-Mini-Code-1.0
             res = "cohere2moe"
+        if chkhsh == "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637":
+            # ref: https://huggingface.co/RecursiveSI/flint
+            res = "flint"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
@@ -1991,20 +2176,34 @@ class TextModel(ModelBase):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
+    def _is_hybriddna(self) -> bool:
+        tokenizer_config_file = self.dir_model / "tokenizer_config.json"
+        if not tokenizer_config_file.is_file():
+            return False
+        with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+            return json.load(f).get("tokenizer_class") == "HybridDNATokenizer"
+
     def _set_vocab_hybriddna(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
-        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+        vocab = tokenizer.get_vocab()
+        vocab_size = self.hparams.get("vocab_size", len(vocab))
+        assert max(vocab.values()) < vocab_size
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
-        # k-mers can share text with a base-vocab BPE token (e.g. CCCCCC) and get
-        # dropped by get_vocab(); a reserved marker suffix (U+E000) keeps each
-        # k-mer's own id (llama.cpp strips it on detokenization)
-        for kmer in tokenizer.kmers:  # ty: ignore[unresolved-attribute]
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
+        # k-mers can share text with a base-vocab BPE token (e.g. CCCCCC) and get dropped by get_vocab()
+        # a reserved marker suffix (U+E000) keeps each k-mer's own id (llama.cpp strips it on detokenization)
+        # tail="pad_n" (Carbon-14B) adds N-padded tail tokens ("CT" -> "CTNNNN") that get the same marker
+        # llama.cpp detects them to pad with N and strips the padding on detokenization, tail="char" is unsupported
+        tail = getattr(tokenizer, "tail", "pad_a")
+        if tokenizer.k != 6 or tail not in ("pad_a", "pad_n"):
+            raise NotImplementedError(f"HybridDNATokenizer with k={tokenizer.k}, tail={tail!r}")
+        for kmer in [*tokenizer.kmers, *getattr(tokenizer, "npad_tokens", [])]:
             reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"  # ty: ignore[unresolved-attribute]
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
-        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+        # older HybridDNATokenizer versions (Carbon-500M/3B/8B) do not register the base tokenizer's added tokens (<|im_start|>, <think>, ...) as their own
+        # but they are still encoded as special tokens: take their types from the base tokenizer
+        base_tokenizer = getattr(tokenizer, "_base_tokenizer", tokenizer)
+        added_tokens_decoder = {**base_tokenizer.added_tokens_decoder, **tokenizer.added_tokens_decoder}  # ty: ignore[unresolved-attribute]
 
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -2014,7 +2213,7 @@ class TextModel(ModelBase):
                 toktypes.append(gguf.TokenType.UNUSED)
             else:
                 token: str = reverse_vocab[i]
-                if token in added_vocab:
+                if i in added_tokens_decoder:
                     if added_tokens_decoder[i].special or self.does_token_look_special(token):
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
@@ -2026,10 +2225,19 @@ class TextModel(ModelBase):
         tokpre = self.get_vocab_base_pre(tokenizer)
         self.gguf_writer.add_tokenizer_model("hybriddna")
         self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_dna_auto_tags(getattr(tokenizer, "auto_dna_tags", False))
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        if not special_vocab.merges:
+            # Carbon-500M/3B/8B ship only tokenizer.py, no tokenizer.json
+            # take the merges and special token ids from the base BPE tokenizer, keeping the model's own chat template (if any)
+            with tempfile.TemporaryDirectory() as tmp:
+                base_tokenizer.save_pretrained(tmp)
+                base_special_vocab = gguf.SpecialVocab(Path(tmp), load_merges=True)
+            base_special_vocab.chat_template = special_vocab.chat_template
+            special_vocab = base_special_vocab
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_qwen(self):
@@ -2941,7 +3149,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

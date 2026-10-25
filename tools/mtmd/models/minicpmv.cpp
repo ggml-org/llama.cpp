@@ -350,6 +350,8 @@ ggml_cgraph * clip_graph_minicpmv4_6::build() {
         inpL = cur;
     }
 
+    inpL = build_suffix(inpL);
+
     ggml_build_forward_expand(gf, inpL);
     return gf;
 }

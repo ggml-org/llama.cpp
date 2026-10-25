@@ -26,6 +26,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <random>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -917,9 +918,13 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
 }
 
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
+    // a random suffix gives every writer its own temporary file, across processes and containers
+    std::random_device rd;
+    const uint64_t id = ((uint64_t) rd() << 32) | rd();
+
     std::error_code ec;
     std::filesystem::path path_tmp = path;
-    path_tmp += ".tmp";
+    path_tmp += "." + std::to_string(id) + ".tmp";
 
     if (path.has_parent_path()) {
         std::filesystem::create_directories(path.parent_path(), ec);
@@ -1170,8 +1175,13 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_LAYA,           "laya"          },
     { COMMON_DECISION_TYPE_CLEF,           "clef"          },
     { COMMON_DECISION_TYPE_PPLX_DECIDER,   "pplx-decider"  },
+    { COMMON_DECISION_TYPE_VLLM_DECISION2, "vllm-decision2" },
+    { COMMON_DECISION_TYPE_VLLM_D3,        "vllm-d3"        },
     { COMMON_DECISION_TYPE_LFM2_D1,        "lfm2-d1"       },
     { COMMON_DECISION_TYPE_LFM2_D1_OMNI,   "lfm2-d1-omni"  },
+    { COMMON_DECISION_TYPE_GRANITE_SWITCH, "granite-switch"},
+    { COMMON_DECISION_TYPE_H2O_LIGHTNING,  "h2o-lightning" },
+    // for future models, ALWAYS add org name prefix to avoid name collisions, e.g. "orgname-modelname"
 };
 
 static common_decision_type common_decision_type_from_string(const std::string & str) {
@@ -1229,6 +1239,9 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     if (ctx_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), ctx_id) == GGUF_TYPE_UINT32) {
         info.n_ctx_train = gguf_get_val_u32(gguf_ctx.get(), ctx_id);
     }
+
+    // same key as llama_model_chat_template(model, nullptr)
+    info.has_chat_tmpl = gguf_find_key(gguf_ctx.get(), "tokenizer.chat_template") >= 0;
 
     return info;
 }
@@ -1289,7 +1302,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     // TODO: maybe improve this in the future
     const auto decision_type = common_get_decision_type(model);
     if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV || decision_type == COMMON_DECISION_TYPE_CLEF ||
-        decision_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
+        decision_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI || decision_type == COMMON_DECISION_TYPE_VLLM_DECISION2) {
         params.embedding    = true;
         params.pooling_type = LLAMA_POOLING_TYPE_NONE;
 

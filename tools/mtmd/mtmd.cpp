@@ -7,6 +7,7 @@
 #include "debug/mtmd-debug.h"
 
 #include "llama.h"
+#include "../src/llama-ext.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,7 +29,10 @@
 #include <vector>
 
 // remember to bump this if the serialization format changes
-#define MTMD_SERIALIZATION_VERSION 2
+#define MTMD_SERIALIZATION_VERSION 3
+
+// oldest compat version that can be loaded
+#define MTMD_SERIALIZATION_VERSION_MIN 2
 
 struct mtmd_serialization {
     // note: using 64-bit here for future-proofing
@@ -45,7 +50,7 @@ struct mtmd_serialization {
         // copy buf to data
         data.assign(buf, buf + len);
         uint64_t ver_in = read<uint64_t>();
-        if (ver_in != version) {
+        if (ver_in < MTMD_SERIALIZATION_VERSION_MIN || ver_in > version) {
             throw std::runtime_error("version mismatch");
         }
         this->version = ver_in;
@@ -106,6 +111,11 @@ void clip_image_f32::serialize(mtmd_serialization & ser) const {
     ser.write(add_viewsep);
     ser.write(add_newline);
     ser.write(lead_pad);
+    ser.write((int32_t)suffix_type);
+    ser.write((int32_t)anyres.grid_x);
+    ser.write((int32_t)anyres.grid_y);
+    ser.write((int32_t)anyres.orig_nx);
+    ser.write((int32_t)anyres.orig_ny);
     ser.write((int32_t)nx_);
     ser.write((int32_t)ny_);
 }
@@ -113,6 +123,17 @@ void clip_image_f32::deserialize(mtmd_serialization & ser) {
     add_viewsep = ser.read<bool>();
     add_newline = ser.read<bool>();
     lead_pad = ser.read<int32_t>();
+    if (ser.version >= 3) {
+        const int32_t suffix_raw = ser.read<int32_t>();
+        if (suffix_raw < 0 || suffix_raw >= CLIP_SUFFIX_COUNT) {
+            throw std::runtime_error("invalid suffix type");
+        }
+        suffix_type = (clip_suffix_type)suffix_raw;
+        anyres.grid_x = ser.read<int32_t>();
+        anyres.grid_y = ser.read<int32_t>();
+        anyres.orig_nx = ser.read<int32_t>();
+        anyres.orig_ny = ser.read<int32_t>();
+    }
     nx_ = ser.read<int32_t>();
     ny_ = ser.read<int32_t>();
     buf.clear(); // always a placeholder after loading
@@ -204,8 +225,11 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
     MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
     MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_SENSENOVA_U1, // U1 uses zero-based H/W and one temporal position per image
+    MTMD_POS_TYPE_CANVAS,    // MiniCPM-V 4.7: overview + slices in one chunk, sharing one 2D canvas (see mtmd_image_tokens::canvas_tile_grid)
     MTMD_POS_TYPE_COUNT,     // for validation
 };
+
 
 struct mtmd_image_tokens {
     uint32_t nx = 0; // number of tokens in x direction
@@ -217,6 +241,14 @@ struct mtmd_image_tokens {
         if (pos == MTMD_POS_TYPE_HUNYUANVL) {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
+        }
+        if (pos == MTMD_POS_TYPE_CANVAS) {
+            uint32_t n = 0;
+            for (size_t k = 0; k < batch_f32.entries.size(); ++k) {
+                const auto [gw, gh] = canvas_tile_grid(k);
+                n += gw * gh + (uint32_t) clip_suffix_rows(batch_f32.entries[k].suffix_type).size();
+            }
+            return n;
         }
         uint32_t nz = batch_f32.entries.size();
         if (n_temporal_merge > 1) {
@@ -243,8 +275,17 @@ struct mtmd_image_tokens {
         return false;
     }
 
+    // MTMD_POS_TYPE_CANVAS: entries are [overview, slices row by row], nx/ny is the token grid of the last entry
+    // returns the token grid (w, h) of entry k, scaled from its pixel size
+    std::pair<uint32_t, uint32_t> canvas_tile_grid(size_t k) const {
+        const auto & ref = batch_f32.entries.back();
+        const auto & e   = batch_f32.entries[k];
+        return { (uint32_t) e.nx() * nx / ref.nx(), (uint32_t) e.ny() * ny / ref.ny() };
+    }
+
     bool can_batch_with(const mtmd_image_tokens & other) {
-        return nx == other.nx && ny == other.ny && pos == other.pos;
+        // a canvas chunk holds a whole image group, its layout is not given by nx/ny alone
+        return nx == other.nx && ny == other.ny && pos == other.pos && pos != MTMD_POS_TYPE_CANVAS;
     }
 
     mtmd_image_tokens clone() {
@@ -483,17 +524,13 @@ struct mtmd_context {
 
     // generation context
     struct clip_ctx * ctx_gen_a; // audio
-    std::vector<int32_t> gen_out_codes; // this frame's 16 sampled codes (GEN_CODE)
-    std::vector<float>   gen_out_feats; // this frame's continuous features, if any (GEN_CODE)
-    std::vector<float>   gen_out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
-    std::vector<float>   gen_out_audio; // decoded PCM samples for the current frame (GEN_WAV)
-    std::vector<uint8_t> gen_out_state; // state to feed into the next GEN_WAV call
 
     bool print_timings;
     int n_threads;
     std::string media_marker;
     const int n_embd_text = -1; // -1 means llm context not provided, skip checking this
     const llama_vocab * vocab = nullptr; // can be nullptr if text_model is not provided
+    const llama_model * text_model = nullptr; // for the token embeddings of mtmd_audio_stream
     mtmd_pos_type pos_type;
 
     // these are not token, but strings used to mark the beginning and end of image/audio embeddings
@@ -516,6 +553,9 @@ struct mtmd_context {
     bool tok_row_end_trail = false;
     bool ov_img_first      = false;
 
+    // MiniCPM-V 4.6/4.7 prepends an <image_id>N</image_id> tag before <image>
+    bool use_image_id = false;
+
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
 
@@ -536,6 +576,7 @@ struct mtmd_context {
         media_marker    (ctx_params.media_marker),
         n_embd_text     (text_model ? llama_model_n_embd_inp(text_model) : -1),
         vocab           (text_model ? llama_model_get_vocab(text_model) : nullptr),
+        text_model      (text_model),
         batch_max_tokens(ctx_params.batch_max_tokens)
     {
         if (ctx_params.image_marker != nullptr) {
@@ -583,7 +624,9 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         ctx_gen_a = res.ctx_gen_a;
-        if (!ctx_v && !ctx_a) {
+        // soprano has no speaker encoder, its mmproj only holds the decoder
+        const bool gen_only = ctx_gen_a && clip_get_projector_type(ctx_gen_a) == PROJECTOR_TYPE_SOPRANO;
+        if (!ctx_v && !ctx_a && !gen_only) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
 
@@ -600,7 +643,8 @@ struct mtmd_context {
 
         // since we already validate n_embd of vision and audio mmproj,
         // we can safely assume that they are the same
-        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
+        // a gen-only mmproj is validated below
+        int n_embd_clip = ctx_v || ctx_a ? clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a) : n_embd_text;
         if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
             throw std::runtime_error(string_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
@@ -680,6 +724,8 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
+            case PROJECTOR_TYPE_MINICPMV4_7:
+            case PROJECTOR_TYPE_MINICPM_OCR_1_0:
                 {
                     slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
                     tok_ov_img_start  = {lookup_token("<image>")};
@@ -689,7 +735,12 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
-                    image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
+                    use_image_id      = true;
+                    if (clip_get_projector_type(ctx_v) == PROJECTOR_TYPE_MINICPM_OCR_1_0) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpm_ocr_1_0>(ctx_v);
+                    } else {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
+                    }
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
@@ -707,6 +758,12 @@ struct mtmd_context {
                     // ]<]start of image[>[ ... (image embeddings) ... ]<]end of image[>[
                     img_beg = "]<]start of image[>[";
                     img_end = "]<]end of image[>[";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_SENSENOVA_U1:
+                {
+                    img_beg = "<img>";
+                    img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
@@ -757,7 +814,11 @@ struct mtmd_context {
                 {
                     // https://github.com/huggingface/transformers/blob/1cd110c6cb6a6237614130c470e9a902dbc1a4bd/docs/source/en/model_doc/pixtral.md
                     img_end = "[IMG_END]";
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                    if (clip_get_hparams(ctx_v)->image_longest_edge > 0) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
+                    } else {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                    }
                 } break;
             case PROJECTOR_TYPE_PHI4:
                 {
@@ -842,6 +903,11 @@ struct mtmd_context {
                     // no vocab tokens are added; the start/end/newline markers are learned embeddings emitted by the encoder
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseek4v>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_DEEPSEEK41V:
+                {
+                    // as deepseek4v: markers come from the encoder, the block is decoded causally
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseek41v>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_DOTS_OCR:
             case PROJECTOR_TYPE_DOTS3NOTE_V:
                 {
@@ -853,6 +919,12 @@ struct mtmd_context {
             case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                 {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_fixed_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_NEMOTRON_OMNI:
+                {
+                    img_beg = "<img>";
+                    img_end = "</img>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_LFM2:
                 {
@@ -959,6 +1031,12 @@ struct mtmd_context {
                     aud_end = "<|audio_eos|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+                {
+                    aud_beg = "<|soft_audio_start|>";
+                    aud_end = "<|soft_audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_muse_spark_audio>(ctx_a);
+                } break;
             case PROJECTOR_TYPE_QWEN3A:
                 {
                     aud_beg = "<|audio_start|>";
@@ -976,6 +1054,10 @@ struct mtmd_context {
                     // <sound> ... (embeddings) ...
                     aud_beg = "<sound>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_VOXTRAL_RT:
+                {
+                    // audio and text share positions, only usable via mtmd_audio_stream
                 } break;
             case PROJECTOR_TYPE_ULTRAVOX:
             case PROJECTOR_TYPE_GLMA:
@@ -1037,8 +1119,9 @@ struct mtmd_context {
         }
 
         // initialize audio preprocessor
-        GGML_ASSERT(audio_preproc != nullptr);
-        audio_preproc->initialize();
+        if (audio_preproc) {
+            audio_preproc->initialize();
+        }
     }
 
     // get clip ctx based on chunk type
@@ -1429,7 +1512,15 @@ struct mtmd_tokenizer {
             const bool has_tiling_grid = (preproc_out.grid_x > 0 && preproc_out.grid_y > 0)
                 || preproc_out.has_overview();
 
-            if (has_tiling_grid) {
+            if (has_tiling_grid && ctx->proj_type_v() == PROJECTOR_TYPE_MINICPMV4_7) {
+                GGML_ASSERT(bitmaps.size() == 1);
+                if (ctx->use_image_id) {
+                    add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
+                }
+                add_text(ctx->tok_ov_img_start);
+                // the separators after <image> are appended by clip, see add_canvas_chunk()
+                add_canvas_chunk(std::move(preproc_out), bitmaps[0]->id);
+            } else if (has_tiling_grid) {
                 // [QWEN_VIDEO] we do not support "frame merging" for llama-uhd style, so no batching for now
                 GGML_ASSERT(bitmaps.size() == 1);
 
@@ -1448,6 +1539,9 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
+                    if (ctx->use_image_id) {
+                        add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
+                    }
                     add_text(ctx->tok_ov_img_start);
                     cur.entries.emplace_back(std::move(ov_chunk));
                     add_text(ctx->tok_ov_img_end);
@@ -1541,10 +1635,15 @@ struct mtmd_tokenizer {
                     image_tokens->ny = 1;
                 }
                 image_tokens->pos = ctx->pos_type;
+                // U1 uses M-RoPE, but unlike Qwen its image H/W coordinates are
+                // zero-based and the whole image occupies one temporal position.
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_SENSENOVA_U1) {
+                    image_tokens->pos = MTMD_POS_TYPE_SENSENOVA_U1;
+                }
                 // HunyuanVL wraps the image grid with BOI/EOI and adds one newline per row,
                 // and uses XD-RoPE (dim-3 = image index). Override the position type so that
                 // n_tokens() and mtmd_image_tokens_get_decoder_pos pick the HunyuanVL layout.
-                if (ctx->proj_type_v() == PROJECTOR_TYPE_HUNYUANVL) {
+                else if (ctx->proj_type_v() == PROJECTOR_TYPE_HUNYUANVL) {
                     image_tokens->pos       = MTMD_POS_TYPE_HUNYUANVL;
                     image_tokens->image_idx = n_images_added;
                     GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
@@ -1552,6 +1651,7 @@ struct mtmd_tokenizer {
 
                 clip_image_f32_batch batch_f32;
                 batch_f32.is_audio = false;
+                batch_f32.is_video = bitmaps[0]->mergeable;
                 batch_f32.entries = std::move(preproc_out.entries);
                 // do NOT use preproc_out from this point on, it's moved
 
@@ -1622,6 +1722,10 @@ struct mtmd_tokenizer {
                     samples = (const float *)buf.data();
                     n_samples = buf.size() / sizeof(float);
                 }
+                if (!ctx->audio_preproc) {
+                    LOG_ERR("%s: this model takes audio input only via mtmd_audio_stream\n", __func__);
+                    return 2;
+                }
                 bool ok = ctx->audio_preproc->preprocess(samples, n_samples, mel_spec_chunks);
                 if (!ok) {
                     LOG_ERR("Unable to preprocess audio\n");
@@ -1671,6 +1775,62 @@ struct mtmd_tokenizer {
         }
 
         return 0;
+    }
+
+    // MiniCPM-V 4.7: the overview and all slices go in one chunk, clip appends the separators after each tile:
+    //   [ov] </image><slice> [S00] </slice><slice> [S01] </slice>\n<slice> [S10] </slice><slice> [S11] </slice>
+    void add_canvas_chunk(mtmd_image_preproc_out && preproc_out, const std::string & id) {
+        const int n_col = preproc_out.grid_x;
+        const int n_row = preproc_out.grid_y;
+        auto & slices = preproc_out.entries;
+        GGML_ASSERT(preproc_out.has_overview());
+        GGML_ASSERT((int) slices.size() == n_col * n_row);
+
+        auto & ov = preproc_out.overview;
+        ov.suffix_type = CLIP_SUFFIX_MINICPMV_OV;
+        if (!slices.empty()) {
+            ov.suffix_type = CLIP_SUFFIX_MINICPMV_OV_SLICE;
+            ov.anyres.grid_x = n_col;
+            ov.anyres.grid_y = n_row;
+        }
+        for (int y = 0; y < n_row; y++) {
+            for (int x = 0; x < n_col; x++) {
+                auto & suffix = slices[y * n_col + x].suffix_type;
+                if (y == n_row - 1 && x == n_col - 1) {
+                    suffix = CLIP_SUFFIX_MINICPMV_LAST;
+                } else if (x == n_col - 1) {
+                    suffix = CLIP_SUFFIX_MINICPMV_ROW_END;
+                } else {
+                    suffix = CLIP_SUFFIX_MINICPMV_SLICE;
+                }
+            }
+        }
+
+        mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+        image_tokens->pos = MTMD_POS_TYPE_CANVAS;
+        image_tokens->id  = id;
+        auto & entries = image_tokens->batch_f32.entries;
+        entries.push_back(std::move(ov));
+        for (auto & slice : slices) {
+            entries.push_back(std::move(slice));
+        }
+        // token grid of the last entry, the grids of the other entries are scaled from it
+        image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, &entries.back());
+        image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, &entries.back());
+
+        size_t n_tokens = 0;
+        for (const auto & entry : entries) {
+            n_tokens += clip_n_output_tokens(ctx->ctx_v, &entry);
+        }
+        GGML_ASSERT(n_tokens == image_tokens->n_tokens());
+
+        mtmd_input_chunk chunk{
+            MTMD_INPUT_CHUNK_TYPE_IMAGE,
+            {}, // text tokens
+            std::move(image_tokens),
+            nullptr, // audio tokens
+        };
+        cur.entries.emplace_back(std::move(chunk));
     }
 
     std::vector<mtmd_input_chunk> split_batch_to_chunk(mtmd_image_preproc_out && preproc_out, const std::string & id) {
@@ -1814,6 +1974,24 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
         return 1;
     }
 
+    if (image_tokens->pos == MTMD_POS_TYPE_CANVAS) {
+        // the tiles differ in size, encode them one by one
+        size_t offset = 0;
+        for (const auto & entry : image_tokens->batch_f32.entries) {
+            clip_image_f32_batch one;
+            one.entries.push_back(entry);
+            std::vector<float> embd((size_t) n_embd_out * clip_n_output_tokens(ctx_clip, &entry));
+            if (!clip_image_batch_encode(ctx_clip, ctx->n_threads, &one, embd)) {
+                return 1;
+            }
+            GGML_ASSERT(offset + embd.size() <= out_embd.size());
+            std::copy(embd.begin(), embd.end(), out_embd.begin() + offset);
+            offset += embd.size();
+        }
+        GGML_ASSERT(offset == out_embd.size());
+        return 0;
+    }
+
     bool ok = clip_image_batch_encode(
         ctx_clip,
         ctx->n_threads,
@@ -1912,6 +2090,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_POCKETTTS;
             info.sample_rate = 24000;
             break;
+        case PROJECTOR_TYPE_SOPRANO:
+            info.type = MTMD_GEN_AUDIO_TYPE_SOPRANO;
+            info.sample_rate = 32000;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -1922,7 +2104,6 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     mtmd_gen_inp inp{};
     inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
-    inp.seed = UINT32_MAX;
     if (!ctx->ctx_gen_a) {
         return inp;
     }
@@ -1940,20 +2121,77 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.top_p = 1.0f;
             inp.temp  = 0.7f;
             break;
+        case PROJECTOR_TYPE_SOPRANO:
+            inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            break;
         default:
             break;
     }
     return inp;
 }
 
-static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+struct mtmd_gen_state {
+    clip_ctx * ctx_clip = nullptr;
+    clip_gen_state * clip_state = nullptr;
+
+    std::vector<int32_t> out_codes; // this frame's 16 sampled codes (GEN_CODE)
+    std::vector<float>   out_feats; // this frame's continuous features, if any (GEN_CODE)
+    std::vector<float>   out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
+    std::vector<float>   out_audio; // decoded PCM samples for the current frame (GEN_WAV)
+
+    ~mtmd_gen_state() {
+        clip_gen_state_free(clip_state);
+    }
+};
+
+mtmd_gen_state_params mtmd_gen_state_params_default(void) {
+    mtmd_gen_state_params params{};
+    params.seed = UINT32_MAX;
+    return params;
+}
+
+mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params params) {
+    if (!ctx->ctx_gen_a) {
+        LOG_ERR("%s: model does not support audio generation\n", __func__);
+        return nullptr;
+    }
+    auto st = std::make_unique<mtmd_gen_state>();
+    st->ctx_clip   = ctx->ctx_gen_a;
+    st->clip_state = clip_gen_state_init(ctx->ctx_gen_a, params.seed);
+    if (!st->clip_state) {
+        return nullptr;
+    }
+    return st.release();
+}
+
+void mtmd_gen_state_free(mtmd_gen_state * state) {
+    delete state;
+}
+
+void mtmd_gen_state_reset(mtmd_gen_state * state) {
+    clip_gen_state_reset(state->clip_state);
+}
+
+static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     clip_ctx * ctx_clip = ctx->ctx_gen_a;
     if (!ctx_clip) {
         LOG_ERR("%s: model does not support audio generation\n", __func__);
         return 1;
     }
+    if (!state || state->ctx_clip != ctx_clip) {
+        LOG_ERR("%s: invalid gen state\n", __func__);
+        return 1;
+    }
 
     *out = {};
+
+    if (clip_get_projector_type(ctx_clip) == PROJECTOR_TYPE_SOPRANO) {
+        const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
+        if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->feats || inp->n_feats < 2 * n_embd || inp->n_feats % n_embd != 0 || inp->codes) {
+            LOG_ERR("%s: soprano requires at least 2 frames of features, without codes\n", __func__);
+            return 1;
+        }
+    }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {
         const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
@@ -1981,24 +2219,24 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
         params.code0         = inp->code0;
         params.top_k         = inp->top_k;
         params.top_p         = inp->top_p;
-        params.seed          = inp->seed;
         params.temp          = inp->temp;
         params.out_is_eos    = &is_eos;
+        params.gen_state     = state->clip_state;
 
         if (!clip_encode(ctx_clip, &params)) {
             LOG_ERR("%s: clip_encode failed (gen_code)\n", __func__);
             return 1;
         }
 
-        ctx->gen_out_embd  = std::move(out_embd);
-        ctx->gen_out_codes = std::move(out_codes);
-        ctx->gen_out_feats = std::move(out_feats);
+        state->out_embd  = std::move(out_embd);
+        state->out_codes = std::move(out_codes);
+        state->out_feats = std::move(out_feats);
 
-        out->embd      = ctx->gen_out_embd.data();
-        out->codes     = ctx->gen_out_codes.data();
-        out->n_codes   = ctx->gen_out_codes.size();
-        out->feats     = ctx->gen_out_feats.data();
-        out->n_feats   = ctx->gen_out_feats.size();
+        out->embd      = state->out_embd.data();
+        out->codes     = state->out_codes.data();
+        out->n_codes   = state->out_codes.size();
+        out->feats     = state->out_feats.data();
+        out->n_feats   = state->out_feats.size();
         out->is_eos    = is_eos;
         return 0;
     }
@@ -2017,10 +2255,6 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
     } else {
         in_feats.assign(inp->feats, inp->feats + inp->n_feats);
     }
-    std::vector<uint8_t> in_state;
-    if (inp->state_data) {
-        in_state.assign(inp->state_data, inp->state_data + inp->state_size);
-    }
 
     // gen_wav has no hidden-state input, the batch entry is an unused placeholder
     // TODO @ngxson : some models in the future may require hidden-state input, need to update this code later
@@ -2036,30 +2270,25 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
     params.imgs        = &batch;
     params.n_threads   = ctx->n_threads;
     params.gen_process = CLIP_GEN_PROCESS_GEN_WAV;
-    // gen_wav draws no randomness, but keep the seed so it does not reseed mid-generation
-    params.seed        = inp->seed;
     params.codes       = has_codes ? &in_codes : nullptr;
     params.feats       = has_feats ? &in_feats : nullptr;
-    params.out_audio   = &ctx->gen_out_audio;
-    params.state_in    = inp->state_data ? &in_state : nullptr;
-    params.state_out   = &ctx->gen_out_state;
+    params.out_audio   = &state->out_audio;
+    params.gen_state   = state->clip_state;
 
     if (!clip_encode(ctx_clip, &params)) {
         LOG_ERR("%s: clip_encode failed (code2wav)\n", __func__);
         return 1;
     }
 
-    out->audio      = ctx->gen_out_audio.data();
-    out->n_samples  = ctx->gen_out_audio.size();
-    out->state_data = (const char *) ctx->gen_out_state.data();
-    out->state_size = ctx->gen_out_state.size();
+    out->audio      = state->out_audio.data();
+    out->n_samples  = state->out_audio.size();
 
     return 0;
 }
 
-int32_t mtmd_gen_audio_process(mtmd_context * ctx, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
+int32_t mtmd_gen_audio_process(mtmd_context * ctx, mtmd_gen_state * state, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
     try {
-        return mtmd_gen_audio_process_impl(ctx, inp, out);
+        return mtmd_gen_audio_process_impl(ctx, state, inp, out);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return 1;
@@ -2209,6 +2438,7 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
             }
         case PROJECTOR_TYPE_GEMMA4UV:
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_DEEPSEEK4V:
             return true;
         default:
@@ -2494,6 +2724,67 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
 }
 
+// map a tile coordinate onto the canvas like the reference: round(linspace(0, canvas - 1, grid)), round() breaks ties to even
+static uint32_t mtmd_canvas_scale(uint32_t coord, uint32_t grid, uint32_t canvas) {
+    if (grid <= 1 || canvas <= 1) {
+        return 0;
+    }
+    const double v = (double) coord * (double) (canvas - 1) / (double) (grid - 1);
+    return std::min((uint32_t) std::nearbyint(v), canvas - 1);
+}
+
+// MTMD_POS_TYPE_CANVAS: every tile shares the <image> token before the chunk as origin
+// the overview is stretched over the whole canvas, each slice fills its own cell; the time component is the origin, in slot z
+// a tile takes one position in slot t (the KV cache position), the separators after it take one position each
+static mtmd_decoder_pos mtmd_canvas_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
+    const auto & entries = image_tokens->batch_f32.entries;
+    const auto & grid    = entries[0].anyres;
+    const uint32_t nx = image_tokens->nx;
+    const uint32_t ny = image_tokens->ny;
+    const uint32_t canvas_w = grid.is_tiled() ? grid.grid_x * nx : nx;
+    const uint32_t canvas_h = grid.is_tiled() ? grid.grid_y * ny : ny;
+    const uint32_t base = pos_0 - 1;
+
+    mtmd_decoder_pos pos;
+    uint32_t t = pos_0;
+    for (size_t k = 0; k < entries.size(); ++k) {
+        const auto [gw, gh] = image_tokens->canvas_tile_grid(k);
+        if (i < gw * gh) {
+            const uint32_t row = i / gw;
+            const uint32_t col = i % gw;
+            uint32_t h;
+            uint32_t w;
+            if (k == 0) {
+                h = mtmd_canvas_scale(row, gh, canvas_h);
+                w = mtmd_canvas_scale(col, gw, canvas_w);
+            } else {
+                const uint32_t s = k - 1;
+                h = (s / grid.grid_x) * ny + row;
+                w = (s % grid.grid_x) * nx + col;
+            }
+            pos.t = t;
+            pos.x = base + w;
+            pos.y = base + h;
+            pos.z = base;
+            return pos;
+        }
+        i -= gw * gh;
+
+        const size_t n_sep = clip_suffix_rows(entries[k].suffix_type).size();
+        if (i < n_sep) {
+            const uint32_t p = t + 1 + i;
+            pos.t = p;
+            pos.x = p;
+            pos.y = p;
+            pos.z = p;
+            return pos;
+        }
+        i -= n_sep;
+        t += 1 + n_sep;
+    }
+    GGML_ABORT("token index out of range");
+}
+
 mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
     mtmd_decoder_pos pos;
     switch (image_tokens->pos) {
@@ -2510,6 +2801,13 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                 pos.x = pos_0 + i;
                 pos.y = pos_0 + i;
                 pos.z = pos_0 + i;
+            } break;
+        case MTMD_POS_TYPE_SENSENOVA_U1:
+            {
+                pos.t = pos_0;
+                pos.x = i % image_tokens->nx;
+                pos.y = i / image_tokens->nx;
+                pos.z = 0;
             } break;
         case MTMD_POS_TYPE_HUNYUANVL:
             {
@@ -2543,6 +2841,10 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                     pos.z = image_tokens->image_idx;
                 }
             } break;
+        case MTMD_POS_TYPE_CANVAS:
+            {
+                pos = mtmd_canvas_decoder_pos(image_tokens, pos_0, i);
+            } break;
         default:
             GGML_ABORT("invalid position type");
     }
@@ -2559,10 +2861,21 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
             return std::max(image_tokens->nx, image_tokens->ny);
         case MTMD_POS_TYPE_NORMAL:
             return image_tokens->n_tokens();
+        case MTMD_POS_TYPE_SENSENOVA_U1:
+            return 1;
         case MTMD_POS_TYPE_HUNYUANVL:
             // HunyuanVL: the sequential (dim-0) position advances by the full token count
             // (includes BOI/EOI and row newline tokens), not by max(nx, ny)
             return image_tokens->n_tokens();
+        case MTMD_POS_TYPE_CANVAS:
+            {
+                // one position per tile, plus one per separator
+                llama_pos n_pos = 0;
+                for (const auto & entry : image_tokens->batch_f32.entries) {
+                    n_pos += 1 + (llama_pos) clip_suffix_rows(entry.suffix_type).size();
+                }
+                return n_pos;
+            }
         default:
             GGML_ABORT("invalid position type");
     }
@@ -2614,10 +2927,11 @@ struct mtmd_caps mtmd_get_cap_from_file(const char * fname) {
         mtmd_caps cap;
         cap.inp_audio  = tmp.has_audio;
         cap.inp_vision = tmp.has_vision;
+        cap.gen_audio  = tmp.has_gen_audio;
         return cap;
     } catch (const std::exception & e) {
         LOG_ERR("%s: failed to get capabilities from file '%s': %s\n", __func__, fname, e.what());
-        return mtmd_caps{ false, false };
+        return mtmd_caps{ false, false, false };
     }
 }
 
@@ -2703,7 +3017,7 @@ void mtmd_debug_preprocess_image(mtmd_context * ctx, const std::vector<uint8_t> 
 }
 
 void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & samples) {
-    if (!ctx->ctx_a) {
+    if (!ctx->ctx_a || !ctx->audio_preproc) {
         LOG_ERR("%s: model does not support audio input\n", __func__);
         return;
     }
@@ -2755,6 +3069,9 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
         if (ctx->ctx_a) {
             merge(ctx->ctx_a);
         }
+        if (ctx->ctx_gen_a) {
+            merge(ctx->ctx_gen_a);
+        }
         mtmd_memory_usage res;
         res.backend_mem_usage = std::move(total_mem);
         res.image_max_tokens  = ctx->ctx_v ? clip_get_image_max_tokens(ctx->ctx_v) : -1;
@@ -2765,4 +3082,316 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return {{}, -1, false};
     }
+}
+
+//
+// realtime audio input
+//
+
+struct mtmd_audio_stream {
+    mtmd_context * ctx;
+    clip_ctx * ctx_clip;
+    clip_enc_state * enc_state = nullptr;
+
+    // model constants
+    int n_mel;
+    int n_fft;
+    int hop;
+    int n_embd;          // decoder embedding size
+    int frames_per_tok;  // mel frames per decoder row
+    int samples_per_tok;
+    int n_frames_max;    // encoder frames per clip_encode() call
+    int n_step_mel;      // mel frames per encoder call
+    int n_right_pad;     // silence tokens added by flush()
+    float log_mel_max;   // global_log_mel_max in params.json
+
+    std::vector<llama_token> prefix; // text tokens paired with the first rows
+
+    mtmd_audio_cache cache;
+
+    // samples not yet turned into mel frames, buf[0] is at absolute index buf_pos
+    std::vector<float> buf;
+    int64_t buf_pos   = 0;
+    int64_t n_samples = 0; // total samples pushed, including padding
+    int64_t n_frames  = 0; // mel frames computed so far
+
+    std::vector<float> mel;     // pending mel frames, frame-major
+    std::vector<float> mel_ctx; // last 2 mel frames, the left context of the conv stem
+    std::vector<float> embd;    // pending audio embeddings
+    size_t embd_off = 0;        // rows of embd already consumed
+    std::vector<float> out;     // rows of the last step
+    std::vector<float> tok_embd;
+
+    int64_t n_rows = 0;         // rows produced so far
+    int64_t n_rows_flushed = 0; // rows produced once the audio up to the last flush is consumed
+    bool pending_flush = false;
+    bool ended = false;
+
+    ~mtmd_audio_stream() {
+        clip_enc_state_free(enc_state);
+    }
+};
+
+bool mtmd_support_audio_stream(const mtmd_context * ctx) {
+    return ctx->ctx_a && ctx->text_model && clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_VOXTRAL_RT;
+}
+
+mtmd_audio_stream_params mtmd_audio_stream_params_default(void) {
+    mtmd_audio_stream_params params;
+    params.step_ms = 320;
+    return params;
+}
+
+static void mtmd_audio_stream_add_silence(mtmd_audio_stream * s, int64_t n) {
+    s->buf.insert(s->buf.end(), n, 0.0f);
+    s->n_samples += n;
+}
+
+mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream_params params) {
+    if (!mtmd_support_audio_stream(ctx)) {
+        LOG_ERR("%s: the model does not support streaming audio input\n", __func__);
+        return nullptr;
+    }
+    const clip_hparams * hparams = clip_get_hparams(ctx->ctx_a);
+    const llama_vocab * vocab = ctx->vocab;
+
+    auto s = std::make_unique<mtmd_audio_stream>();
+    s->ctx      = ctx;
+    s->ctx_clip = ctx->ctx_a;
+    s->n_mel    = hparams->n_mel_bins;
+    s->n_fft    = hparams->audio_n_fft;
+    s->hop      = hparams->audio_hop_len;
+    s->n_embd   = clip_n_mmproj_embd(ctx->ctx_a);
+    if (s->n_embd != ctx->n_embd_text) {
+        LOG_ERR("%s: mmproj embedding size %d does not match the text model (%d)\n", __func__, s->n_embd, ctx->n_embd_text);
+        return nullptr;
+    }
+
+    // one decoder row per 80 ms of audio: the conv stem has stride 2, then frames are stacked
+    s->frames_per_tok  = 2 * hparams->proj_stack_factor;
+    s->samples_per_tok = s->frames_per_tok * s->hop;
+    s->n_frames_max    = (hparams->warmup_audio_size - 2) / 2;
+    s->log_mel_max     = 1.5f;
+
+    // the encoder works in whole decoder rows
+    int n_step = (int) ((int64_t) params.step_ms * hparams->audio_sample_rate / 1000 / s->hop);
+    n_step = std::max(n_step, s->frames_per_tok);
+    n_step = CLIP_ALIGN(n_step, s->frames_per_tok);
+    s->n_step_mel = std::min(n_step, 2 * s->n_frames_max);
+
+    // prefix: BOS then one pad token per silence token and per delay token
+    // the output lags behind the audio by n_delay rows, the text model is conditioned on the same value
+    const int n_delay    = llama_model_n_tokens_delay(ctx->text_model);
+    const int n_left_pad = 32;
+    s->n_right_pad = n_delay + 1 + 10;
+    {
+        const std::string pad_str = "[STREAMING_PAD]";
+        std::vector<llama_token> pad(8);
+        const int n_pad = llama_tokenize(vocab, pad_str.c_str(), pad_str.size(), pad.data(), pad.size(), false, true);
+        if (n_pad != 1) {
+            LOG_ERR("%s: cannot find the %s token\n", __func__, pad_str.c_str());
+            return nullptr;
+        }
+        s->prefix.push_back(llama_vocab_bos(vocab));
+        s->prefix.insert(s->prefix.end(), n_left_pad + n_delay, pad[0]);
+    }
+
+    s->cache.fill_sin_cos_table(s->n_fft);
+    s->cache.fill_hann_window(hparams->audio_window_len, true);
+    s->cache.fill_mel_filterbank_matrix(s->n_mel, s->n_fft, hparams->audio_sample_rate);
+
+    s->enc_state = clip_enc_state_init(s->ctx_clip, s->n_frames_max);
+    if (!s->enc_state) {
+        return nullptr;
+    }
+
+    // the first mel frame is centered on the first sample, so its window starts before the audio
+    s->buf.assign(s->n_fft / 2, 0.0f);
+    s->buf_pos = -s->n_fft / 2;
+    s->mel_ctx.assign(2 * s->n_mel, 0.0f);
+
+    // silence before the audio
+    mtmd_audio_stream_add_silence(s.get(), (int64_t) n_left_pad * s->samples_per_tok);
+
+    return s.release();
+}
+
+void mtmd_audio_stream_free(mtmd_audio_stream * stream) {
+    delete stream;
+}
+
+int32_t mtmd_audio_stream_push(mtmd_audio_stream * s, const float * samples, size_t n_samples) {
+    if (s->ended) {
+        return 1;
+    }
+    s->buf.insert(s->buf.end(), samples, samples + n_samples);
+    s->n_samples += n_samples;
+    return 0;
+}
+
+int32_t mtmd_audio_stream_flush(mtmd_audio_stream * s, bool end) {
+    if (s->ended) {
+        return 1;
+    }
+    // align to a whole row, then add the silence the model expects after the audio
+    const int64_t n_align = (s->samples_per_tok - s->n_samples % s->samples_per_tok) % s->samples_per_tok;
+    mtmd_audio_stream_add_silence(s, n_align + (int64_t) s->n_right_pad * s->samples_per_tok);
+    // one row per samples_per_tok, the left padding included
+    s->n_rows_flushed = s->n_samples / s->samples_per_tok;
+    s->pending_flush = true;
+    s->ended = end;
+    return 0;
+}
+
+// mel frame k is centered on sample k * hop, with force the samples past the end are taken as silence
+static void mtmd_audio_stream_compute_mel(mtmd_audio_stream * s, bool force) {
+    const int half = s->n_fft / 2;
+    std::vector<float> window(s->n_fft);
+    std::vector<float> frame(s->n_mel);
+
+    while (true) {
+        const int64_t start = s->n_frames * s->hop - half;
+        if (start + s->n_fft > s->n_samples && !(force && start + half < s->n_samples)) {
+            break;
+        }
+        for (int j = 0; j < s->n_fft; j++) {
+            const int64_t idx = start + j - s->buf_pos;
+            window[j] = idx < (int64_t) s->buf.size() ? s->buf[idx] : 0.0f;
+        }
+        mtmd_audio_log_mel_frame(s->cache, window.data(), s->n_fft, s->n_mel, frame.data());
+        for (int m = 0; m < s->n_mel; m++) {
+            const float v = std::max(frame[m], s->log_mel_max - 8.0f);
+            s->mel.push_back((v + 4.0f) / 4.0f);
+        }
+        s->n_frames++;
+    }
+
+    // drop the samples no frame will need again
+    const int64_t keep_from = s->n_frames * s->hop - half;
+    if (keep_from > s->buf_pos) {
+        s->buf.erase(s->buf.begin(), s->buf.begin() + (keep_from - s->buf_pos));
+        s->buf_pos = keep_from;
+    }
+}
+
+static bool mtmd_audio_stream_encode(mtmd_audio_stream * s, bool force) {
+    while (true) {
+        const int n_avail = (int) (s->mel.size() / s->n_mel);
+        int n = n_avail - n_avail % s->frames_per_tok;
+        if (!force) {
+            if (n_avail < s->n_step_mel) {
+                break;
+            }
+            n = std::min(n, s->n_step_mel);
+        }
+        n = std::min(n, 2 * s->n_frames_max);
+        if (n <= 0) {
+            break;
+        }
+
+        // 2 context frames, then the new frames, stored mel-major
+        const int n_in = 2 + n;
+        std::vector<float> data((size_t) s->n_mel * n_in);
+        for (int m = 0; m < s->n_mel; m++) {
+            data[(size_t) m * n_in + 0] = s->mel_ctx[m];
+            data[(size_t) m * n_in + 1] = s->mel_ctx[s->n_mel + m];
+            for (int t = 0; t < n; t++) {
+                data[(size_t) m * n_in + 2 + t] = s->mel[(size_t) t * s->n_mel + m];
+            }
+        }
+
+        clip_image_f32 img;
+        img.set_size({n_in, s->n_mel}, false, /* is_audio */ true);
+        img.cpy_buf(data);
+        clip_image_f32_batch batch;
+        batch.is_audio = true;
+        batch.entries.push_back(std::move(img));
+
+        std::vector<float> res((size_t) s->n_embd * (n / s->frames_per_tok));
+        clip_encode_params params;
+        params.n_threads = s->ctx->n_threads;
+        params.imgs      = &batch;
+        params.out_embd  = &res;
+        params.enc_state = s->enc_state;
+        if (!clip_encode(s->ctx_clip, &params)) {
+            LOG_ERR("%s: failed to encode audio\n", __func__);
+            return false;
+        }
+        s->embd.insert(s->embd.end(), res.begin(), res.end());
+
+        s->mel_ctx.assign(s->mel.begin() + (size_t) (n - 2) * s->n_mel, s->mel.begin() + (size_t) n * s->n_mel);
+        s->mel.erase(s->mel.begin(), s->mel.begin() + (size_t) n * s->n_mel);
+    }
+    return true;
+}
+
+// out rows = audio embeddings + token embeddings
+static bool mtmd_audio_stream_add_rows(mtmd_audio_stream * s, const llama_token * tokens, size_t n) {
+    s->tok_embd.resize(n * s->n_embd);
+    if (llama_model_get_tok_embd_rows(s->ctx->text_model, tokens, n, s->tok_embd.data()) == 0) {
+        LOG_ERR("%s: invalid token\n", __func__);
+        return false;
+    }
+    const float * audio = s->embd.data() + s->embd_off * s->n_embd;
+    for (size_t i = 0; i < n * s->n_embd; i++) {
+        s->out.push_back(audio[i] + s->tok_embd[i]);
+    }
+    s->embd_off += n;
+    s->n_rows   += n;
+    return true;
+}
+
+int32_t mtmd_audio_stream_step(mtmd_audio_stream * s, llama_token last_token) {
+    const bool force = s->pending_flush;
+    s->pending_flush = false;
+
+    mtmd_audio_stream_compute_mel(s, force);
+    if (!mtmd_audio_stream_encode(s, force)) {
+        return -2;
+    }
+
+    // drop the consumed rows once in a while
+    if (s->embd_off >= 1024) {
+        s->embd.erase(s->embd.begin(), s->embd.begin() + s->embd_off * s->n_embd);
+        s->embd_off = 0;
+    }
+
+    const int64_t n_avail = (int64_t) (s->embd.size() / s->n_embd) - s->embd_off;
+    s->out.clear();
+
+    if (s->n_rows == 0) {
+        // the prefix rows go out together, the caller samples from the last one
+        const int64_t n_prefix = (int64_t) s->prefix.size();
+        if (n_avail < n_prefix) {
+            return s->ended ? -1 : 0;
+        }
+        if (!mtmd_audio_stream_add_rows(s, s->prefix.data(), s->prefix.size())) {
+            return -2;
+        }
+        return (int32_t) n_prefix;
+    }
+
+    if (n_avail == 0) {
+        return s->ended ? -1 : 0;
+    }
+    if (last_token == LLAMA_TOKEN_NULL) {
+        LOG_ERR("%s: the token sampled from the previous row is required\n", __func__);
+        return -2;
+    }
+    if (!mtmd_audio_stream_add_rows(s, &last_token, 1)) {
+        return -2;
+    }
+    return 1;
+}
+
+const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream * s) {
+    return s->out.data();
+}
+
+int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {
+    return s->n_rows;
+}
+
+int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * s) {
+    return s->n_rows_flushed;
 }

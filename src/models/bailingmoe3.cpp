@@ -412,7 +412,6 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }
 
 llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
@@ -555,5 +554,4 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

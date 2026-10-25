@@ -590,7 +590,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
     }
 
     // Pass through common params
-    for (const auto & key : {"temperature", "top_p", "top_k", "stream", "chat_template_kwargs"}) {
+    for (const auto & key : {"temperature", "top_p", "top_k", "stream", "chat_template_kwargs", "id_slot"}) {
         if (body.contains(key)) {
             oai_body[key] = body.at(key);
         }
@@ -612,6 +612,13 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         std::string user_id = json_value(metadata, "user_id", std::string());
         if (!user_id.empty()) {
             oai_body["__metadata_user_id"] = user_id;
+        }
+    }
+
+    // llama.cpp params (e.g. seed, min_p) go under extra_params and are merged into the converted body
+    if (body.contains("extra_params") && body.at("extra_params").is_object()) {
+        for (const auto & [key, value] : body.at("extra_params").items()) {
+            oai_body[key] = value;
         }
     }
 

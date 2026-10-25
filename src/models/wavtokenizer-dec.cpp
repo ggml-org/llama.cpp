@@ -259,6 +259,4 @@ llama_model_wavtokenizer_dec::graph::graph(const llama_model & model, const llm_
 
     cb(cur, "result_embd", -1);
     res->t_embd = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

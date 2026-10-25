@@ -11,6 +11,8 @@ struct topk_moe_config {
     bool use_sqrt_softplus;
     bool with_norm;
     bool delayed_softmax;
+    int  n_groups;
+    int  n_group_used;
 };
 
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
@@ -74,9 +76,56 @@ __device__ void sqrt_softplus_warp_inplace(float (&vals)[experts_per_thread], co
     for (int i = 0; i < experts_per_thread; i++) {
         const int  idx    = lane + i * WARP_SIZE;
         const bool active = !use_limit || (idx < limit);
-        vals[i]           = active ? sqrtf(vals[i] > 20.0f ? vals[i] : logf(1.0f + expf(vals[i]))) : -INFINITY;
+        vals[i]           = active ? sqrtf(vals[i] > 20.0f ? vals[i] : log1pf(expf(vals[i]))) : -INFINITY;
     }
 }
+
+#if !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
+// Set -inf for experts outside the top n_group_used groups. Group score is the sum of its top-2 experts (DeepSeek V3).
+template <int n_experts, int experts_per_thread>
+__device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const int n_groups, const int n_group_used, const int lane) {
+    const int n_per_group = n_experts / n_groups;
+
+    float score = -INFINITY; // lane g holds the score of group g
+    for (int g = 0; g < n_groups; g++) {
+        float top1 = -INFINITY;
+        float top2 = -INFINITY;
+#pragma unroll
+        for (int i = 0; i < experts_per_thread; i++) {
+            if ((i * WARP_SIZE + lane) / n_per_group == g) {
+                top2 = fmaxf(top2, fminf(top1, vals[i]));
+                top1 = fmaxf(top1, vals[i]);
+            }
+        }
+#pragma unroll
+        for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+            const float o1 = __shfl_xor_sync(0xFFFFFFFF, top1, offset, WARP_SIZE);
+            const float o2 = __shfl_xor_sync(0xFFFFFFFF, top2, offset, WARP_SIZE);
+            top2 = fmaxf(fminf(top1, o1), fmaxf(top2, o2));
+            top1 = fmaxf(top1, o1);
+        }
+        if (lane == g) {
+            score = top1 + top2;
+        }
+    }
+
+    // rank of each group, lower index wins ties
+    int rank = 0;
+    for (int g = 0; g < n_groups; g++) {
+        const float other = __shfl_sync(0xFFFFFFFF, score, g, WARP_SIZE);
+        rank += other > score || (other == score && g < lane);
+    }
+    const auto keep = __ballot_sync(0xFFFFFFFFULL, lane < n_groups && rank < n_group_used);
+
+#pragma unroll
+    for (int i = 0; i < experts_per_thread; i++) {
+        const int g = (i * WARP_SIZE + lane) / n_per_group;
+        if (g >= n_groups || !((keep >> g) & 1)) {
+            vals[i] = -INFINITY;
+        }
+    }
+}
+#endif // !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
 
 /*
     This kernel does the following:
@@ -170,6 +219,17 @@ __global__ void topk_moe_cuda(const float *         logits,
                 (n_experts % WARP_SIZE == 0 || expert < n_experts) ? wt[i / WARP_SIZE] + bias[expert] : -INFINITY;
         }
     }
+
+#if !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
+    // without bias, masking wt is safe: the matcher ensures the kept groups hold all used experts
+    if (config.n_groups > 0) {
+        if constexpr (has_bias) {
+            group_mask_warp_inplace<n_experts>(selection_wt, config.n_groups, config.n_group_used, threadIdx.x);
+        } else {
+            group_mask_warp_inplace<n_experts>(wt, config.n_groups, config.n_group_used, threadIdx.x);
+        }
+    }
+#endif // !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
 
     //at this point, each thread holds either a portion of the softmax distribution
     //or the raw logits. We do the argmax reduce over n_expert_used, each time marking
@@ -297,6 +357,10 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
     cudaStream_t stream = ctx.stream();
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, stream);
 
+#if defined(GGML_USE_HIP) && HIP_VERSION < 60300000
+    GGML_ASSERT(config.n_groups == 0 && "expert groups fusion is not supported on this HIP version");
+#endif
+
     switch (n_expert) {
         case 1:
             ggml_cuda_kernel_launch(topk_moe_cuda<1, has_bias>, launch_params,
@@ -348,7 +412,6 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
             break;
         default:
             GGML_ASSERT(false && "fatal error");
-            break;
     }
 }
 
@@ -390,6 +453,8 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
     config.use_sqrt_softplus = args.sqrt_softplus;
     config.with_norm         = with_norm;
     config.delayed_softmax   = args.delayed_softmax;
+    config.n_groups          = args.n_groups;
+    config.n_group_used      = args.n_group_used;
 
     if (bias) {
         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,

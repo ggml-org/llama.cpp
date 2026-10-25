@@ -4,6 +4,7 @@
 #include "common.h"
 #include "log.h"
 #include "download.h"
+#include "file-lock.h"
 #include "hf-cache.h"
 #include "json.h"
 
@@ -38,6 +39,9 @@
 //
 // downloader
 //
+
+// the suffix of the file a download writes until it completes
+static const std::string PARTIAL_SUFFIX = ".downloadInProgress";
 
 static void write_etag(const std::string & path, const std::string & etag) {
     const std::string etag_path = path + ".etag";
@@ -74,6 +78,18 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
     return {hf_repo, tag};
 }
 
+// file name from url, without the query string
+static std::string url_get_filename(const std::string & url) {
+    std::string filename = url;
+    if (auto pos = filename.rfind('/'); pos != std::string::npos) {
+        filename = filename.substr(pos + 1);
+    }
+    if (auto pos = filename.find('?'); pos != std::string::npos) {
+        filename = filename.substr(0, pos);
+    }
+    return filename;
+}
+
 class ProgressBar : public common_download_callback {
     static inline std::mutex mutex;
     static inline std::map<const ProgressBar *, int> lines;
@@ -97,14 +113,8 @@ public:
     ProgressBar() = default;
 
     void on_start(const common_download_progress & p) override {
-        filename = p.url;
+        filename = url_get_filename(p.url);
 
-        if (auto pos = filename.rfind('/'); pos != std::string::npos) {
-            filename = filename.substr(pos + 1);
-        }
-        if (auto pos = filename.find('?'); pos != std::string::npos) {
-            filename = filename.substr(0, pos);
-        }
         for (size_t i = 0; i < filename.size(); ++i) {
             if ((filename[i] & 0xC0) != 0x80) {
                 if (len++ == 39) {
@@ -186,6 +196,13 @@ static bool common_pull_file(httplib::Client & cli,
         [&](const httplib::Response &response) {
             if (p.downloaded > 0 && response.status != 206) {
                 LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", func, response.status);
+                if (response.status == 416 || response.status == 200) {
+                    // the kept partial cannot be resumed: 416 for a complete or stale one,
+                    // 200 from a server that ignores the range; drop it, so the next
+                    // attempt starts over instead of wedging on the same answer
+                    ofs.close();
+                    remove(path_tmp.c_str());
+                }
                 return false;
             }
             if (p.downloaded == 0 && response.status != 200) {
@@ -214,7 +231,7 @@ static bool common_pull_file(httplib::Client & cli,
             if (progress_step >= p.total / 1000 || p.downloaded == p.total) {
                 if (callback) {
                     callback->on_update(p);
-                    if (callback->is_cancelled()) {
+                    if (callback->is_cancelled() && (p.total == 0 || p.downloaded != p.total)) {
                         return false;
                     }
                 }
@@ -247,15 +264,62 @@ static bool common_pull_file(httplib::Client & cli,
 static int common_download_file_single_online(const std::string & url,
                                               const std::string & path,
                                               const common_download_opts & opts,
-                                              bool skip_etag) {
+                                              bool skip_etag,
+                                              const std::string & lock_path,
+                                              const std::string & alt_path) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
-    const bool file_exists = std::filesystem::exists(std::filesystem::u8path(path));
+    const std::string path_temporary = path + PARTIAL_SUFFIX;
+    const std::string path_lock = lock_path.empty() ? path + ".lock" : lock_path;
+
+    common_download_progress p;
+    p.url = url;
+
+    if (opts.callback) {
+        opts.callback->on_start(p);
+    }
+
+    // the completion callback may itself take the same lock (the HF cache
+    // finalizes blobs under it), so every exit goes through finish()
+    common_file_lock lock(path_lock);
+    auto finish = [&](int status) {
+        lock.close();
+        if (opts.callback) {
+            opts.callback->on_done(p, is_http_status_ok(status));
+        }
+        return status;
+    };
+
+    // alt_path is the HF snapshot: the blob may have been moved there when symlinks are unavailable
+    auto cache_hit = [&] {
+        return std::filesystem::exists(std::filesystem::u8path(path)) ||
+               (!alt_path.empty() && std::filesystem::exists(std::filesystem::u8path(alt_path)));
+    };
+
+    if (skip_etag && cache_hit()) {
+        LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
+        return finish(304); // 304 Not Modified - fake cached response
+    }
+
+    // take the lock before touching the cache, so two processes cannot race on the same file
+    bool waited = false;
+    if (!lock.acquire([&] {
+            if (!waited) {
+                LOG_INF("%s: file '%s' is being downloaded by another process, waiting...\n", __func__, url_get_filename(url).c_str());
+                waited = true;
+            }
+            return !(opts.callback && opts.callback->is_cancelled());
+        })) {
+        return finish(-1);
+    }
+
+    // under the lock: another process may have finished while we waited
+    bool file_exists = cache_hit();
 
     if (file_exists && skip_etag) {
         LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
-        return 304; // 304 Not Modified - fake cached response
+        return finish(304); // 304 Not Modified - fake cached response
     }
 
     auto [cli, parts] = common_http_client(url);
@@ -284,9 +348,9 @@ static int common_download_file_single_online(const std::string & url,
         LOG_TRC("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
         if (file_exists) {
             LOG_TRC("%s: using cached file (HEAD failed): %s\n", __func__, path.c_str());
-            return 304; // 304 Not Modified - fake cached response
+            return finish(304); // 304 Not Modified - fake cached response
         }
-        return head ? head->status : -1;
+        return finish(head ? head->status : -1);
     }
 
     std::string etag;
@@ -294,8 +358,6 @@ static int common_download_file_single_online(const std::string & url,
         etag = head->get_header_value("ETag");
     }
 
-    common_download_progress p;
-    p.url = url;
     if (head->has_header("Content-Length")) {
         try {
             p.total = std::stoull(head->get_header_value("Content-Length"));
@@ -312,16 +374,16 @@ static int common_download_file_single_online(const std::string & url,
     if (file_exists) {
         if (etag.empty()) {
             LOG_DBG("%s: using cached file (no server etag): %s\n", __func__, path.c_str());
-            return 304; // 304 Not Modified - fake cached response
+            return finish(304); // 304 Not Modified - fake cached response
         }
         if (!last_etag.empty() && last_etag == etag) {
             LOG_DBG("%s: using cached file (same etag): %s\n", __func__, path.c_str());
-            return 304; // 304 Not Modified - fake cached response
+            return finish(304); // 304 Not Modified - fake cached response
         }
         // pass this point, the file exists but is different from the server version, so we need to redownload it
         if (remove(path.c_str()) != 0) {
             LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
-            return -1;
+            return finish(-1);
         }
     }
 
@@ -331,11 +393,24 @@ static int common_download_file_single_online(const std::string & url,
     }
 
     bool success = false;
-    const std::string path_temporary = path + ".downloadInProgress";
     int delay = retry_delay_seconds;
 
+    if (!skip_etag && !etag.empty()) {
+        if (std::filesystem::exists(path_temporary) && read_etag(path_temporary) != etag) {
+            LOG_WRN("%s: partial file does not match the server etag, discarding it: %s\n", __func__, path_temporary.c_str());
+            if (remove(path_temporary.c_str()) != 0) {
+                LOG_ERR("%s: unable to delete file: %s\n", __func__, path_temporary.c_str());
+                return finish(-1);
+            }
+        }
+        write_etag(path_temporary, etag);
+    }
+
     if (opts.callback) {
-        opts.callback->on_start(p);
+        // report the resume offset, so a resumed file does not start at 0
+        p.downloaded = supports_ranges && std::filesystem::exists(path_temporary) ?
+                       std::filesystem::file_size(path_temporary) : 0;
+        opts.callback->on_update(p);
     }
 
     for (int i = 0; i < max_attempts; ++i) {
@@ -372,27 +447,19 @@ static int common_download_file_single_online(const std::string & url,
             }
             if (!etag.empty() && !skip_etag) {
                 write_etag(path, etag);
+                remove((path_temporary + ".etag").c_str());
             }
             success = true;
             break;
         }
     }
 
-    if (opts.callback) {
-        opts.callback->on_done(p, success);
-    }
-    if (opts.callback && opts.callback->is_cancelled() &&
-        std::filesystem::exists(path_temporary)) {
-        if (remove(path_temporary.c_str()) != 0) {
-            LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, path_temporary.c_str());
-        }
-    }
+    // a stopped download keeps path_temporary, so the next attempt resumes from it
     if (!success) {
         LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
-        return -1; // max attempts reached
     }
 
-    return head->status;
+    return finish(success ? head->status : -1);
 }
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
@@ -432,14 +499,16 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const common_download_opts & opts,
-                                bool skip_etag) {
+                                bool skip_etag,
+                                const std::string & lock_path,
+                                const std::string & alt_path) {
     if (!opts.offline) {
         ProgressBar tty_cb;
         common_download_opts online_opts = opts;
         if (!online_opts.callback) {
             online_opts.callback = &tty_cb;
         }
-        return common_download_file_single_online(url, path, online_opts, skip_etag);
+        return common_download_file_single_online(url, path, online_opts, skip_etag, lock_path, alt_path);
     }
 
     if (!std::filesystem::exists(std::filesystem::u8path(path))) {
@@ -594,33 +663,65 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
     return best;
 }
 
-static hf_cache::hf_file find_best_mmproj(const hf_cache::hf_files & files,
-                                          const std::string        & model) {
-    return find_best_sibling(files, model, "mmproj");
+static const std::vector<common_download_sidecar> sidecars = {
+    { "mmproj", "mmproj",  false, &common_download_opts::download_mmproj, &common_download_hf_plan::mmproj },
+    { "mtp",    "mtp-",    true,  &common_download_opts::download_mtp,    &common_download_hf_plan::mtp    },
+    { "dflash", "dflash-", true,  &common_download_opts::download_dflash, &common_download_hf_plan::dflash },
+    { "eagle3", "eagle3-", true,  &common_download_opts::download_eagle3, &common_download_hf_plan::eagle3 },
+    { "dspark", "dspark-", true,  &common_download_opts::download_dspark, &common_download_hf_plan::dspark },
+};
+
+const std::vector<common_download_sidecar> & common_download_sidecars() {
+    return sidecars;
 }
 
-static hf_cache::hf_file find_best_mtp(const hf_cache::hf_files & files,
-                                       const std::string        & model,
-                                       const std::string        & tag = "") {
-    return find_best_sibling(files, model, "mtp-", tag);
+bool common_download_opts_add_sidecar(common_download_opts & opts, const std::string & kind) {
+    for (const auto & s : sidecars) {
+        if (kind == s.name) {
+            opts.*s.opt = true;
+            return true;
+        }
+    }
+    return false;
 }
 
-static hf_cache::hf_file find_best_eagle3(const hf_cache::hf_files & files,
-                                          const std::string        & model,
-                                          const std::string        & tag = "") {
-    return find_best_sibling(files, model, "eagle3-", tag);
+std::vector<std::string> common_download_plan_sidecars(const common_download_hf_plan & plan) {
+    std::vector<std::string> out;
+    for (const auto & s : sidecars) {
+        if (!(plan.*s.file).path.empty()) {
+            out.emplace_back(s.name);
+        }
+    }
+    return out;
 }
 
-static hf_cache::hf_file find_best_dflash(const hf_cache::hf_files & files,
-                                          const std::string        & model,
-                                          const std::string        & tag = "") {
-    return find_best_sibling(files, model, "dflash-", tag);
+std::vector<common_download_partial> common_download_plan_partials(const common_download_hf_plan & plan) {
+    std::vector<common_download_partial> out;
+
+    // a file in the cache resolves to its snapshot entry, a file still to download to its blob
+    auto add = [&](const std::string & kind, const hf_cache::hf_file & f) {
+        if (!f.local_path.empty() && f.local_path != f.final_path) {
+            out.push_back({ kind, f.local_path + PARTIAL_SUFFIX });
+        }
+    };
+
+    for (const auto & f : plan.model_files) {
+        add("", f);
+    }
+    for (const auto & s : sidecars) {
+        add(s.name, plan.*s.file);
+    }
+    return out;
 }
 
-static hf_cache::hf_file find_best_dspark(const hf_cache::hf_files & files,
-                                          const std::string        & model,
-                                          const std::string        & tag = "") {
-    return find_best_sibling(files, model, "dspark-", tag);
+// true when `name` carries the keyword of a sidecar kind
+static bool name_is_sidecar(const std::string & name) {
+    for (const auto & s : sidecars) {
+        if (name.find(s.keyword) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool gguf_filename_is_model(const std::string & filepath) {
@@ -633,12 +734,7 @@ static bool gguf_filename_is_model(const std::string & filepath) {
         filename = filename.substr(pos + 1);
     }
 
-    return filename.find("mmproj")  == std::string::npos &&
-           filename.find("imatrix") == std::string::npos &&
-           filename.find("mtp-")    == std::string::npos &&
-           filename.find("eagle3-") == std::string::npos &&
-           filename.find("dflash-") == std::string::npos &&
-           filename.find("dspark-") == std::string::npos;
+    return filename.find("imatrix") == std::string::npos && !name_is_sidecar(filename);
 }
 
 static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
@@ -730,8 +826,11 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
         }
     } else {
         primary = find_best_model(all, tag);
-        // a requested sidecar can resolve on its own, without a full model of the same tag
-        if (primary.path.empty() && !opts.download_mtp && !opts.download_dflash && !opts.download_eagle3 && !opts.download_dspark) {
+        // a requested draft can resolve on its own, without a full model of the same tag
+        const bool want_draft = std::any_of(sidecars.begin(), sidecars.end(), [&](const common_download_sidecar & s) {
+            return s.draft && opts.*s.opt;
+        });
+        if (primary.path.empty() && !want_draft) {
             LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
             list_available_gguf_files(all);
             return plan;
@@ -743,24 +842,22 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
         plan.model_files = get_split_files(all, primary);
     }
 
-    if (opts.download_mmproj && !primary.path.empty()) {
-        plan.mmproj = find_best_mmproj(all, primary.path);
-    }
-    if (opts.download_mtp) {
-        plan.mtp = find_best_mtp(all, primary.path, tag);
-    }
-    if (opts.download_dflash) {
-        plan.dflash = find_best_dflash(all, primary.path, tag);
-    }
-    if (opts.download_eagle3) {
-        plan.eagle3 = find_best_eagle3(all, primary.path, tag);
-    }
-    if (opts.download_dspark) {
-        plan.dspark = find_best_dspark(all, primary.path, tag);
+    // a draft resolves at the tag, the mmproj pairs with the model
+    for (const auto & s : sidecars) {
+        if (!(opts.*s.opt)) {
+            continue;
+        }
+        if (s.draft) {
+            plan.*s.file = find_best_sibling(all, primary.path, s.keyword, tag);
+        } else if (!primary.path.empty()) {
+            plan.*s.file = find_best_sibling(all, primary.path, s.keyword);
+        }
     }
 
-    if (primary.path.empty() &&
-        plan.mtp.local_path.empty() && plan.dflash.local_path.empty() && plan.eagle3.local_path.empty() && plan.dspark.local_path.empty()) {
+    const bool has_draft = std::any_of(sidecars.begin(), sidecars.end(), [&](const common_download_sidecar & s) {
+        return s.draft && !(plan.*s.file).local_path.empty();
+    });
+    if (primary.path.empty() && !has_draft) {
         LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
         list_available_gguf_files(all);
     }
@@ -773,7 +870,7 @@ void common_download_run_tasks(const std::vector<common_download_task> & tasks) 
     for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
             [&task]() {
-                return common_download_file_single(task.url, task.local_path, task.opts, task.is_hf);
+                return common_download_file_single(task.url, task.local_path, task.opts, task.is_hf, task.lock_path, task.alt_path);
             }
         ));
     }
@@ -926,6 +1023,11 @@ std::string common_docker_resolve_model(const std::string & docker) {
     }
 }
 
+// a cached file that lists a model under its tag: the first split of a model, not a sidecar
+static bool is_listed_model(const gguf_split_info & split) {
+    return split.index == 1 && !split.tag.empty() && !name_is_sidecar(split.prefix);
+}
+
 std::vector<common_cached_model_info> common_list_cached_models() {
     std::unordered_set<std::string> seen;
     std::vector<common_cached_model_info> result;
@@ -934,12 +1036,7 @@ std::vector<common_cached_model_info> common_list_cached_models() {
 
     for (const auto & f : files) {
         auto split = get_gguf_split_info(f.path);
-        if (split.index != 1 || split.tag.empty() ||
-            split.prefix.find("mmproj")  != std::string::npos ||
-            split.prefix.find("mtp-")    != std::string::npos ||
-            split.prefix.find("eagle3-") != std::string::npos ||
-            split.prefix.find("dflash-") != std::string::npos ||
-            split.prefix.find("dspark-") != std::string::npos) {
+        if (!is_listed_model(split)) {
             continue;
         }
         if (seen.insert(f.repo_id + ":" + split.tag).second) {
@@ -970,6 +1067,44 @@ std::string common_download_resolve_path(const std::string & hf_repo_with_tag, c
     return find_best_model(files, tag).local_path;
 }
 
+// the files -hf loads from the cache, the model with every sidecar, for each cached
+// tag of `repo_id` other than `tag`
+static std::unordered_set<std::string> files_in_use(const std::string & repo_id, const std::string & tag) {
+    common_download_opts opts;
+    opts.offline = true;
+    for (const auto & s : sidecars) {
+        opts.*s.opt = true;
+    }
+
+    std::unordered_set<std::string> tags;
+    std::unordered_set<std::string> used;
+
+    for (const auto & f : hf_cache::get_cached_files(repo_id)) {
+        auto split = get_gguf_split_info(f.path);
+        if (!is_listed_model(split) || split.tag == tag || !tags.insert(split.tag).second) {
+            continue;
+        }
+
+        common_params_model model;
+        model.hf_repo = repo_id + ":" + split.tag;
+
+        auto plan = common_download_get_hf_plan(model, opts);
+
+        for (const auto & m : plan.model_files) {
+            used.insert(m.local_path);
+        }
+        for (const auto & s : sidecars) {
+            const auto & sf = plan.*s.file;
+            if (!sf.local_path.empty()) {
+                used.insert(sf.local_path);
+            }
+        }
+    }
+    return used;
+}
+
+static bool remove_snapshot_entries(const std::string & repo_id, const std::vector<std::filesystem::path> & to_remove);
+
 bool common_download_remove(const std::string & hf_repo_with_tag) {
     namespace fs = std::filesystem;
 
@@ -989,11 +1124,13 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
         return false;
     }
 
-    // collect snapshot entries whose tag matches
+    // collect snapshot entries whose tag matches, but a file another tag loads stays
+    const auto used = files_in_use(repo_id, tag_upper);
+
     std::vector<fs::path> to_remove;
     for (const auto & f : files) {
         auto split = get_gguf_split_info(f.path);
-        if (split.tag == tag_upper) {
+        if (split.tag == tag_upper && used.find(f.local_path) == used.end()) {
             to_remove.emplace_back(f.local_path);
         }
     }
@@ -1001,6 +1138,13 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
     if (to_remove.empty()) {
         return false;
     }
+
+    return remove_snapshot_entries(repo_id, to_remove);
+}
+
+// remove snapshot entries of `repo_id`, then the blobs no remaining entry references
+static bool remove_snapshot_entries(const std::string & repo_id, const std::vector<std::filesystem::path> & to_remove) {
+    namespace fs = std::filesystem;
 
     // resolve blob paths from symlinks before deleting snapshot entries
     std::vector<fs::path> blobs_to_check;
@@ -1052,4 +1196,27 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
     }
 
     return true;
+}
+
+bool common_download_remove_sidecars(const std::string & hf_repo_with_tag, const common_download_opts & opts) {
+    common_params_model model;
+    model.hf_repo = hf_repo_with_tag;
+
+    common_download_opts cached = opts;
+    cached.offline = true;
+
+    auto plan = common_download_get_hf_plan(model, cached);
+
+    std::vector<std::filesystem::path> to_remove;
+    for (const auto & s : sidecars) {
+        const auto & f = plan.*s.file;
+        if (!f.local_path.empty()) {
+            to_remove.emplace_back(std::filesystem::u8path(f.local_path));
+        }
+    }
+    if (to_remove.empty()) {
+        return false;
+    }
+
+    return remove_snapshot_entries(common_download_split_repo_tag(hf_repo_with_tag).first, to_remove);
 }

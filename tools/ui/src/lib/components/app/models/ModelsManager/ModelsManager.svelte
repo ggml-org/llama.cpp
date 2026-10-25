@@ -10,9 +10,10 @@
 		type ModelsTableGroup,
 		splitHiddenQuants
 	} from './utils';
+	import * as Drawer from '$lib/components/ui/drawer';
 	import { LOCAL_BACKEND_ID, type ModalityKey, MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
 	import { ModelCapability, ModelsTableGroupKind } from '$lib/enums';
-	import { conversationsStore, modelsStore, serverStore, uiStore } from '$lib/stores';
+	import { conversationsStore, deviceStore, modelsStore, serverStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { filterModelOptions } from '$lib/utils';
 	import { type Snippet, untrack } from 'svelte';
@@ -32,17 +33,34 @@
 	let capabilityFilter = $state<ModelCapability[]>([]);
 	let selectedId = $state<string | null>(null);
 
+	// tracked downloads get their own section, listed like any other model
+	let downloads = $derived(
+		downloadGroups(modelsStore.status.getDownloadEntries(), modelsStore.models, (repo) =>
+			modelsStore.status.getDraftSidecars(repo)
+		)
+	);
+
 	let allModels = $derived(modelsStore.models);
 
-	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
-	// The pane is laid out before it is ever opened, so the first open only slides a
-	// finished panel in. It renders the selection, else the model it last showed.
+	// the download groups stand in for rows the listing does not carry yet, so a
+	// click on them still finds its option and opens the pane
+	let selected = $derived(
+		allModels.find((option) => option.id === selectedId) ??
+			downloads.find((group) => group.base.id === selectedId)?.base ??
+			null
+	);
+	// The pane renders the selection, else the model it last showed, so its copy stays
+	// in place while it closes.
 	let lastPicked = $state<ModelOption | null>(null);
 	let target = $derived(selected ?? lastPicked ?? allModels[0] ?? null);
 	let shownId = $state<string | null>(null);
 	let isSwapping = $state(false);
 	let fade = $state<'open' | 'swap'>('open');
-	let shownOption = $derived(allModels.find((option) => option.id === shownId) ?? null);
+	let shownOption = $derived(
+		allModels.find((option) => option.id === shownId) ??
+			downloads.find((group) => group.base.id === shownId)?.base ??
+			null
+	);
 
 	$effect(() => {
 		const id = selectedId;
@@ -144,10 +162,6 @@
 		rank.size === 0 ? list : [...list].sort((a, b) => rankOf(a) - rankOf(b));
 	// one entry per repo, so a model with several quants takes a single table row
 	let entries = $derived(byRecency(groupModelQuants(matching)));
-	// tracked downloads get their own section, listed like any other model
-	let downloads = $derived(
-		downloadGroups(modelsStore.status.getDownloadEntries(), modelsStore.models)
-	);
 	let groups = $derived.by(() => {
 		// a loaded quant is a model of its own: its repo keeps the quants left behind
 		const isLoaded = (option: ModelOption) => modelsStore.isModelLoaded(option.model);
@@ -216,13 +230,16 @@
 		return ordered;
 	});
 
-	// a caller can ask for one model to be revealed, the download rows do
+	// a caller can ask for one model to be revealed, the download rows do; a
+	// tracked download is not in the listing yet, so its own rows are searched too
 	$effect(() => {
 		const focus = uiStore.manageModelFocus;
 
 		if (!focus) return;
 
-		const option = allModels.find((model) => model.id === focus || model.model === focus);
+		const matches = (candidate: ModelOption) => candidate.id === focus || candidate.model === focus;
+		const option =
+			allModels.find(matches) ?? downloads.find((group) => matches(group.base))?.base ?? null;
 
 		if (option) selectedId = option.id;
 
@@ -238,10 +255,31 @@
 		await modelsStore.status.load(option.model);
 	}
 
-	/** The chat sits behind the dialog, so the dialog closes and the composer takes focus. */
+	/** Leave the models page for the chat it was opened from, with the composer focused. */
 	function returnToChat(): void {
-		uiStore.manageModelsOpen = false;
 		uiStore.requestComposerFocus();
+		void uiStore.closeModelsManager();
+	}
+
+	/** Overlays that handle their own Escape, so the page leaves them alone. */
+	const OPEN_OVERLAY_SELECTOR = [
+		'[role="dialog"][data-state="open"]',
+		'[role="alertdialog"][data-state="open"]',
+		'[role="menu"][data-state="open"]',
+		'[role="listbox"][data-state="open"]'
+	].join(', ');
+
+	// Escape steps back the way the dialog's did: the pane's drawer closes itself, then
+	// the next Escape leaves the page
+	function handleKeydown(event: KeyboardEvent): void {
+		if (event.key !== 'Escape' || event.defaultPrevented) return;
+
+		if (document.querySelector(OPEN_OVERLAY_SELECTOR)) return;
+
+		// a typed filter is not thrown away by a stray Escape
+		if (event.target instanceof HTMLInputElement && event.target.value) return;
+
+		returnToChat();
 	}
 
 	/** Load the model when the server can take load requests, without waiting for it. */
@@ -276,6 +314,8 @@
 	}
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <div class={['relative flex min-h-0 flex-1', className]}>
 	<div class="min-h-0 min-w-0 flex-1">
 		<ModelsManagerModelsTable
@@ -290,16 +330,29 @@
 			{toolbarEnd}
 		/>
 	</div>
+</div>
 
-	<!-- on a phone the pane covers the whole dialog: the manager header would only
-	     repeat what the pane's own header says -->
-	<div
-		class="pane-drawer max-md:fixed max-md:inset-0 max-md:z-[60] shrink-0"
-		data-open={selected !== null}
+<!-- the pane is a drawer over the table, from the right on desktop and from the bottom
+     on a phone: Escape, the overlay and the pane's own close button clear the selection -->
+<Drawer.Root
+	direction={deviceStore.isMobile ? 'bottom' : 'right'}
+	onOpenChange={(open) => {
+		if (!open) selectedId = null;
+	}}
+	open={selected !== null}
+	shouldScaleBackground={false}
+>
+	<Drawer.Content
+		class="data-[vaul-drawer-direction=bottom]:h-[85dvh] data-[vaul-drawer-direction=bottom]:max-h-[85dvh] data-[vaul-drawer-direction=right]:w-[30rem] data-[vaul-drawer-direction=right]:max-w-[calc(100vw-2rem)] data-[vaul-drawer-direction=right]:sm:max-w-[30rem]"
 	>
-		<!-- the content box keeps the open width, so it never reflows with the drawer -->
+		<Drawer.Title class="sr-only">Model details</Drawer.Title>
+
+		<Drawer.Description class="sr-only">
+			Configuration, actions and metadata of the selected model.
+		</Drawer.Description>
+
 		<div
-			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 max-md:w-full max-md:max-w-none max-md:border-l-0 max-md:bg-background"
+			class="pane-content flex min-h-0 flex-1 flex-col"
 			data-fade={fade}
 			data-visible={selected !== null && !isSwapping}
 		>
@@ -315,33 +368,10 @@
 				{/key}
 			{/if}
 		</div>
-	</div>
-</div>
+	</Drawer.Content>
+</Drawer.Root>
 
 <style>
-	/*
-	 * The drawer moves by width because the table behind it gets that space back, so
-	 * the content box inside holds the open width and only the container changes.
-	 * Opening takes the iOS-like drawer curve; closing is the system responding, so
-	 * it snaps back on the stronger ease-out.
-	 */
-	.pane-drawer {
-		width: 0;
-		overflow: clip;
-		visibility: hidden;
-		transition:
-			width 120ms cubic-bezier(0.23, 1, 0.32, 1),
-			visibility 120ms;
-	}
-
-	.pane-drawer[data-open='true'] {
-		width: 30rem;
-		visibility: visible;
-		transition:
-			width 200ms cubic-bezier(0.32, 0.72, 0, 1),
-			visibility 200ms;
-	}
-
 	.pane-content {
 		opacity: 0;
 		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
@@ -359,12 +389,5 @@
 	/* swapping models: out, then in, with no pause */
 	.pane-content[data-visible='true'][data-fade='swap'] {
 		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
-	}
-
-	/* a phone has no room beside the table: the pane covers it instead */
-	@media (max-width: 767px) {
-		.pane-drawer[data-open='true'] {
-			width: auto;
-		}
 	}
 </style>

@@ -58,7 +58,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
             data.generation_prompt += THINK_END + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     // The generation prompt pre-opens the think block when thinking is on, so

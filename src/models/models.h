@@ -100,6 +100,26 @@ struct llm_build_delta_net_base : public llm_graph_context {
             int                  il);
 };
 
+struct llm_build_lfm_base : public llm_graph_context {
+    llm_build_lfm_base(const llm_graph_params & params);
+
+    virtual ~llm_build_lfm_base() = default;
+
+    ggml_tensor * build_lfm_shortconv(const llama_model & model,
+                                      const llama_memory_recurrent_context * mctx_recr,
+                                      llm_graph_input_rs * inp_recr,
+                                      ggml_tensor * cur,
+                                      int il);
+
+    ggml_tensor * build_lfm_dense_ffn(const llama_model & model,
+                                      ggml_tensor * cur,
+                                      int il);
+
+    ggml_tensor * build_lfm_moe_ffn(const llama_model & model,
+                                    ggml_tensor * cur,
+                                    int il);
+};
+
 struct llm_build_rwkv6_base : public llm_graph_context {
     const llama_model & model;
 
@@ -194,6 +214,19 @@ struct llama_model_llama_embed : public llama_model_llama {
 
 struct llama_model_maincoder : public llama_model_base {
     llama_model_maincoder(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+struct llama_model_maion_coder : public llama_model_base {
+    llama_model_maion_coder(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -462,6 +495,11 @@ struct llama_model_mellum : public llama_model_base {
         graph(const llama_model & model, const llm_graph_params & params);
     };
 
+    template <bool iswa>
+    struct graph_mtp : public llm_graph_context {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
@@ -585,8 +623,74 @@ struct llama_model_qwen2moe : public llama_model_base {
 };
 
 
+struct llama_model_sensenova_u1 : public llama_model_base {
+    llama_model_sensenova_u1(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    float rope_freq_base_spatial = 10000.0f;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model_sensenova_u1 & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_qwen3 : public llama_model_base {
     llama_model_qwen3(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+    protected:
+        // the helpers alone, a derived graph builds its own body
+        struct no_build {};
+        graph(const llm_graph_params & params, no_build) : llm_graph_context(params) {}
+
+        // the layers and the final norm: [n_embd, n_outputs]
+        ggml_tensor * build_backbone(const llama_model & model);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+// Qwen3 with the decision head of vllm-sr Decision 2.0: one score per option
+struct llama_model_vllm_decision2 : public llama_model_qwen3 {
+    llama_model_vllm_decision2(const struct llama_model_params & params) : llama_model_qwen3(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    ggml_tensor * option_norm     = nullptr;
+    ggml_tensor * option_norm_b   = nullptr;
+    ggml_tensor * query_norm      = nullptr;
+    ggml_tensor * query_norm_b    = nullptr;
+    ggml_tensor * key             = nullptr;
+    ggml_tensor * query           = nullptr;
+    ggml_tensor * option_mlp      = nullptr;
+    ggml_tensor * option_mlp_b    = nullptr;
+    ggml_tensor * query_mlp       = nullptr;
+    ggml_tensor * scorer_out      = nullptr;
+
+    class input_decision;
+
+    struct graph : public llama_model_qwen3::graph {
+        graph(const llama_model & model, const llm_graph_params & params);
+    private:
+        // hidden: [n_embd, n_outputs], returns one score per option: [1, n_options]
+        ggml_tensor * build_head(ggml_tensor * hidden, input_decision * inp);
+
+        const llama_model_vllm_decision2 & model;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+struct llama_model_qwen3moe : public llama_model_base {
+    llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -598,8 +702,8 @@ struct llama_model_qwen3 : public llama_model_base {
 };
 
 
-struct llama_model_qwen3moe : public llama_model_base {
-    llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
+struct llama_model_flint : public llama_model_base {
+    llama_model_flint(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1112,6 +1216,19 @@ struct llama_model_olmoe : public llama_model_base {
 };
 
 
+struct llama_model_muse_spark : public llama_model_base {
+    llama_model_muse_spark(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_muse_glimmer : public llama_model_base {
     llama_model_muse_glimmer(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -1223,6 +1340,15 @@ struct llama_model_dots3note : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+// YaRN attention factor that cancels ggml's rope mscale (the DeepSeek-V4 reference applies none)
+static inline float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
+    if (ext_factor == 0.0f) {
+        return 1.0f;
+    }
+
+    return 1.0f / (1.0f + 0.1f*logf(1.0f/freq_scale));
+}
+
 struct llama_model_deepseek4 : public llama_model_base {
     llama_model_deepseek4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -1249,6 +1375,17 @@ struct llama_model_deepseek4 : public llama_model_base {
                 ggml_tensor * hc_base,
                 ggml_tensor ** post,
                 ggml_tensor ** comb,
+                int il) const;
+
+        // returns the pre weights and fills post / comb
+        ggml_tensor * build_hc_mixes(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base,
+                ggml_tensor ** post,
+                ggml_tensor ** comb,
+                bool f32_src,
                 int il) const;
 
         ggml_tensor * build_hc_post(
@@ -1365,6 +1502,57 @@ struct llama_model_deepseek4 : public llama_model_base {
 };
 
 
+struct llama_model_deepseek41 : public llama_model_deepseek4 {
+    llama_model_deepseek41(const struct llama_model_params & params) : llama_model_deepseek4(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // Engram: the hash constants are hparams.ple_* (one module per Engram layer), hashed on the host (ggml has no
+    // int64 mul/xor/mod); the token map and its pad id are V4.1 only
+    uint32_t engram_pad_id = 0;
+    std::vector<int32_t> engram_token_map;
+
+    int engram_index(int il) const;
+
+    void engram_hash(int e, const llama_ubatch & ubatch, const std::vector<llama_token> & prev, std::vector<int32_t> & out) const;
+
+    struct graph : public llama_model_deepseek4::graph {
+        graph(const llama_model & model, const llm_graph_params & params);
+        // helpers only (no graph built): base of graph_dsv41
+        explicit graph(const llm_graph_params & params) : llama_model_deepseek4::graph(params) {}
+
+        ggml_tensor * build_engram(
+                const llama_model_deepseek41 & model,
+                ggml_tensor * x,
+                ggml_tensor * rows,
+                ggml_tensor * keep,
+                int il) const;
+
+        ggml_tensor * build_attention41(
+                const llama_model_deepseek41 & model,
+                llm_graph_input_dsv4 * inp_dsv4,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                ggml_tensor * cand_pin,
+                int il);
+
+        std::vector<ggml_tensor *> topk_of; // top-k of each index source layer
+        std::vector<ggml_tensor *> comp_row_of; // [n_layer] new compressed rows of each kv source (for mirrors)
+        ggml_tensor * cand_sel    = nullptr; // candidate blocks of the candidate source layer
+        int64_t       cand_n_comp = 0;       // compressed rows the candidate source scored
+
+        // sparse path (LLAMA_DSV41_SPARSE=0 disables): fused indexer, FA bounded to window + top-k, decode gather
+        bool sparse = true;
+        // gather path, shared by layers with the same top-k: selected K rows per (storage layer, top-k source),
+        // the sorted top-k and the mask per top-k source (one input copy per split)
+        std::map<std::pair<int32_t, int32_t>, ggml_tensor *> gather_k_of;
+        std::map<int32_t, ggml_tensor *> gather_sel_of;
+        std::map<int32_t, ggml_tensor *> gather_mask_of;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_deepseek2ocr : public llama_model_base {
     llama_model_deepseek2ocr(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -1422,6 +1610,11 @@ struct llama_model_dflash : public llama_model_base {
 
     struct graph_dsv4 : public llama_model_deepseek4::graph {
         graph_dsv4(const llama_model & model, const llm_graph_params & params);
+    };
+
+    // DeepSeek-V4.1 DSpark: single-pass mHC (lagged pre-mix, no hc_head), no per-head q norm
+    struct graph_dsv41 : public llama_model_deepseek41::graph {
+        graph_dsv41(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
@@ -1981,6 +2174,19 @@ struct llama_model_afmoe : public llama_model_base {
 };
 
 
+struct llama_model_beam : public llama_model_base {
+    llama_model_beam(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_laguna : public llama_model_base {
     llama_model_laguna(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -2191,7 +2397,7 @@ struct llama_model_lfm2 : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     template <bool iswa>
-    struct graph : public llm_graph_context {
+    struct graph : public llm_build_lfm_base {
         graph(const llama_model & model, const llm_graph_params & params);
     };
 
@@ -2689,6 +2895,8 @@ struct llama_model_mistral3 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    class input_t_cond; // voxtral realtime: time conditioning of the ada rms norm
+
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
     };
@@ -2895,6 +3103,19 @@ struct llama_model_k2_horizon : public llama_model_base {
         graph(const llama_model & model, const llm_graph_params & params);
 
         ggml_tensor * build_routed_value(const llama_layer & layer, ggml_tensor * cur, int il) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+struct llama_model_kolibri1 : public llama_model_base {
+    llama_model_kolibri1(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

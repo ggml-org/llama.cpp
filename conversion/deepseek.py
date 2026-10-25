@@ -243,7 +243,7 @@ class DeepseekV2Model(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        hparams: dict = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
+        hparams: dict = ModelBase.load_hparams(self.dir_model, is_mistral_format=self.is_mistral_format)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
         # special handling for Deepseek OCR

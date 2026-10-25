@@ -22,6 +22,7 @@ Identify what actually changed and which area checklists below apply. Run `git d
 - `ggml/` (any backend, op, or `ggml.h`) -> **ggml / backend**
 - `include/llama.h` and other public headers -> **Public API**
 - `tools/server/` -> **Server**
+- `tools/ui/` (or the legacy `tools/server/webui/`) -> **WebUI**
 - `tests/`, `tools/server/tests/`, or any other added/changed test -> **Tests**
 - anything else, plus all of the above -> **General** (always runs)
 
@@ -115,6 +116,87 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Security: don't trust client-supplied headers (e.g. `X-Forwarded-For`) or add footguns; things like IP allowlisting belong at a reverse proxy unless there's a trusted-proxy design.
 - Wire new behavior into the existing request/response and checkpoint paths correctly; watch for resource leaks across requests.
 
+## WebUI (`tools/ui/`)
+
+These apply only to changes under `tools/ui/` (formerly `tools/server/webui/`) - the SvelteKit + Svelte 5 frontend. They are frontend conventions, not repo-wide ones, so do not apply them to C++ or other tool code.
+
+The dominant review theme in this area is placement: most accepted nits are about putting a value, function, or piece of logic in the layer where it belongs.
+
+### Constants and enums - decision rules
+
+Trigger: a literal that is reused, domain-significant, or crosses a boundary (wire/persisted format, selector, key, shared UI text). One-off component-local values stay inline (see the boundary at the end of this section) - flagging those is noise. Before adding, grep `$lib/constants` / `$lib/enums` - reuse beats a new near-duplicate. What becomes what:
+
+- **String enum** (`$lib/enums`, `enum X { KEY = 'value' }`): a closed set of categorical values the code branches on, compares, or stores as a type discriminator - roles, statuses, kinds, types, actions, sort fields. Anything written as `x.type === 'some-string'` or a closed string union in a `.d.ts` is an enum. Keys are SCREAMING_SNAKE with a domain prefix (`ModelDownloadStopRequest.CANCEL`); values are lowercase by default and are the persisted/wire representation, so they may intentionally differ from the key (`TOOL_USE = 'tools'`, `MTP = 'mtp'`) or mirror an external API exactly - say so in the enum's JSDoc when they do (see `HfModelSort`). No numeric-valued enums.
+- **Constant object keyed by enum** (constants): a lookup/mapping - icon per file type, label per capability, HTTP code to message (`FILE_TYPE_ICONS`, `HTTP_CODE_TO_STRING`, `Record<Enum, string>`). The enum enumerates, the object maps.
+- **Declarative config array/object** (constants): a set of related items consumed by more than one renderer (e.g. dropdown + sheet) - menu items whose `action`/`id`/`enabledWhen` fields are enum values, not strings (`ATTACHMENT_FILE_ITEMS`). If two surfaces render the same menu, both must render from this one config.
+- **Grouped `as const` object** (constants): related literals that belong to one feature - error-message taxonomy (`ERROR_MESSAGES` with `HTTP`/`NETWORK` groups), UI copy shared across surfaces (`ATTACHMENT_MENU_TEXT`), a feature's prompt + fallback + patterns (`TITLE_GENERATION`). Prefer one grouped object over scattering same-feature constants.
+- **Scalar constants**:
+  - strings: CSS class strings, selectors, `data-*` attribute names, header names, storage keys, API routes/paths, file extensions.
+  - numbers: any threshold, timeout, size, limit, or count - suffixed with unit or context (`_MS`, `_PX`, `_BYTES`, `_CHARS`, `_MAX_LENGTH`).
+  - regexes: any non-trivial literal regex, `_REGEX` suffix, grouped in the feature's constants file.
+  - characters/separators: named by meaning in their domain, not by character - `PATH_SEPARATOR`, `ORG_SEPARATOR`, `SSE_RECORD_SEPARATOR`, `ISO_DATE_TIME_SEPARATOR`, `NEWLINE`. No universal `SLASH` constant.
+- **Key-name constants**: strings used as keys into another object or persisted config get an object constant mirroring the property names (`SETTINGS_KEYS.CUSTOM_CSS = 'customCss'`), so a rename breaks the build instead of silently missing.
+
+Placement and composition:
+
+- Shared across features -> `$lib/constants/<topic>.constants.ts` / `$lib/enums/<topic>.enums.ts`; feature-dedicated values may live in the feature folder, but only what is truly dedicated to it.
+- Compose, don't duplicate: constants may derive from other constants/enums (`SANDBOX_TOOL_NAME = BuiltInTool.BROWSER_RUN_JAVASCRIPT`, storage keys built from the `STORAGE_APP_NAME` prefix).
+- Tests and Storybook stories use the same constants/enums for structural assertions - they don't re-declare the literals they assert against. Exception: persisted/wire-contract assertions keep independent literals - there the literal value itself is the contract, and reusing the production constant would make the test tautological (change the constant, the expectation changes with it, the regression still passes).
+
+What stays inline: one-off user-facing copy inside a single component, console/log messages, and import specifiers. When inline copy gains a second consumer, it graduates into a grouped constant object.
+
+Adjacent data-shape rule: empty string is not a valid "unset" initial state - use `undefined`.
+
+### Placement and layering
+
+- Components render; they don't own business logic. Simple presentation-local derivation stays in the component as `$derived` from props and store values - what leaves is shared business logic, multi-store orchestration, and naming/parsing logic that a store method, `$lib/utils` function, or `$lib/hooks` hook should own. A component should call `store.doSomething()` rather than reimplement it.
+- Keep the layers deliberate: stores (`*.svelte.ts`, stateful), services (stateless clients), utils (pure functions), hooks (`*.svelte.ts`, reusable reactivity), `$lib/types` (types), `$lib/constants` (constants). If a new file blurs these, flag it and name the layer it belongs in.
+- A stateful "service" is misnamed - it's a store or belongs in the scope that uses it. Conversely, a one-off `.svelte.ts` module (which is effectively a store) for logic only one component uses is overkill; keep it in that component or a context.
+- Before introducing a new abstraction (store/service/hook/context), ask whether it will ever have a second consumer; if not, keep the logic in the existing scope. KISS first, iterate later.
+- Barrel files (`index.ts`) match the existing barrel style - file-level JSDoc plus per-export group comments for stores, plain re-export lists for constants/enums - and add JSDoc only where an export isn't self-explanatory; constants and types are not re-exported from store barrels.
+
+### DRY and dead code
+
+- Reuse before writing: grep for an existing helper, component, or store method before adding a new one (truncation, copy/download, file preview, sanitization, and formatting helpers all already exist).
+- Sibling variants (e.g. Dropdown vs Sheet versions of the same picker) must render from one shared config / single source of truth, not duplicate markup and logic.
+- Flag dead code, commented-out markup, and leftovers from renamed or removed features. Intentional-but-temporary leftovers get `@deprecated` JSDoc so they can be found and removed later.
+
+### Components and Svelte 5
+
+- Break bloated components into focused sub-components (plus dedicated `*Skeleton.svelte` loading states); use `{#snippet}` for repeated in-component markup.
+- Use the existing `$lib/components/ui` primitives instead of hand-rolling dialogs, tooltips, inputs, or dropdowns.
+- Rune syntax only: `$props()` deconstruction, `$derived` (reach for `$derived.by` only when a simple expression won't do), `$state`. Avoid `$effect` for things `$state`/`$derived` can express - a wall of `$effect` is a design smell.
+- Handle window/document events via `<svelte:window>` / `<svelte:document>`, not manual add/remove-listener plumbing.
+- Svelte 5 supports arrays in the `class` attribute - don't reach for `cn()` for simple conditional classes.
+- Use `SvelteMap`/`SvelteSet` for reactive collections.
+
+### Comments
+
+- Same bar as the General checklist, enforced harder here: no comments that restate the code, no verbose JSDoc on obvious functions, no commented-out code. Examples and edge-case enumerations live in unit tests, not prose; non-obvious why/rationale comments stay, because a test cannot carry that context at the code location.
+
+### Types, naming, and style
+
+- `===` over `==`, `includes()` over index checks, no redundant null-coalescing after an `Array.isArray` check.
+- One spelling per concept across the codebase (e.g. pick `cwd` vs `currentWorkingDirectory` and apply it everywhere); explicit, self-describing names over clever ones.
+
+### Performance (streaming UI)
+
+- Anything running per streamed chunk must be cheap: throttle before computing, not after; apply block-level regex passes globally and scan lines backwards with early exit; don't re-parse the whole message per update.
+- Smooth height/expand transitions consistent with the rest of the UI - animate auto-height via `interpolate-size: allow-keywords` with a `grid-template-rows: 0fr/1fr` fallback for browsers without it (see `CollapsibleRegion.svelte`).
+
+### Security (frontend side)
+
+- Sanitize anything rendered from model or remote data: the rehype/`{@html}` pipeline, SVG content, and URLs (use the `$lib/utils` URL sanitizer rather than ad-hoc checks or a third-party lib for trivial cases).
+- Proxy headers and agent/tool filesystem access are security boundaries - scope enforcement (e.g. browse-root sandboxing) must be validated end-to-end, not just in the UI; loop in server reviewers for the C++ side.
+
+### PR hygiene specific to `tools/ui`
+
+- Build artifacts are not committed - the UI is built by CI (`.github/workflows/ui-build.yml`) and downloaded/bundled at release time. `npm run build` must still succeed locally; a red UI build job is blocking.
+- `npm run lint && npm run check` (and `npm run format`) must pass; a failing Storybook test is blocking.
+- PRs with user-facing interactive or visual changes need a short video demo in the description showing the change working (screenshots are acceptable for pure-visual tweaks). Test-only, refactor, docs, and config PRs don't need a demo.
+- Scope discipline: changes that belong to another stacked PR don't ride along in this one - call them out and move them there. Flag unrelated edits to deprecated/legacy files and ask whether they're intentional.
+- New nontrivial utils and parsing logic get Vitest unit tests; reusable UI components get Storybook stories/tests when practical.
+
 ## Multimodal (`tools/mtmd/`)
 
 - Tensor names must be prefixed by `v.`, `a.`, `mm.` or `a.mm.` (legacy naming doesn't follow this convention - this is expected, but new code should follow it).
@@ -132,6 +214,7 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Only add tests that bring meaningful results. Too-trivial tests just bloat the suite and CI.
 - No time-sensitive tests (timing thresholds, sleeps, races against wall-clock); they are flaky on CI.
 - Think twice about tests that significantly increase CI run time (expensive computation, large inputs, or long sleep/wait delays) or download large amounts of data from the internet (big models, datasets). Flag them and ask whether a smaller model/input or an existing fixture would do.
+- Server: small tests of internal components (helpers, `server_tokens`, queues, format converters, ...) belong in `tests/test-server-component.cpp`. The end-to-end pytest suite in `tools/server/tests` is costly in CI time; only add to it when the test requires end-to-end behavior with a real model.
 
 ## General (always)
 
