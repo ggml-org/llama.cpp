@@ -205,6 +205,8 @@ private:
     // 1. Separable filtering: horizontal pass followed by vertical pass
     // 2. Pre-computes normalized filter coefficients for each output pixel
     // 3. Fixed-point integer arithmetic (22 fractional bits) for speed and determinism
+    //
+    // RESIZE_ALGO_FLAG_TORCH is the same, except for the int16 weights of torchvision (aten/src/ATen/native/cpu/UpSampleKernel.cpp)
     static bool resize_pillow(
             const clip_image_u8 & img,
             clip_image_u8 & dst,
@@ -215,6 +217,13 @@ private:
         // This allows encoding fractional weights as integers: weight * 2^22
         const int PRECISION_BITS = 32 - 8 - 2;
 
+        const bool int16_weights = algo & RESIZE_ALGO_FLAG_TORCH;
+        algo = static_cast<resize_algo>(algo & ~RESIZE_ALGO_FLAG_TORCH);
+
+        if (int16_weights && algo == RESIZE_ALGO_LANCZOS) {
+            GGML_ABORT("unsupported resize algo: torchvision has no lanczos");
+        }
+
         // Filter support radius
         double filter_support;
         switch (algo) {
@@ -222,11 +231,11 @@ private:
             case RESIZE_ALGO_BICUBIC:  filter_support = 2.0; break;
             case RESIZE_ALGO_LANCZOS:  filter_support = 3.0; break;
             default:
-                throw std::runtime_error("Unsupported resize algorithm");
+                GGML_ABORT("unsupported resize algo: %d", (int) algo);
         }
 
         // Returns filter weight for distance x from pixel center
-        // Note: for bicubic, Pillow uses a = -0.5 while GGML/PyTorch use a = -0.75
+        // Note: for bicubic, Pillow (and PyTorch with antialias) uses a = -0.5 while GGML (and PyTorch without antialias) uses a = -0.75
         auto resample_filter = [algo](double x) -> double {
             if (algo == RESIZE_ALGO_LANCZOS) {
                 if (-3.0 <= x && x < 3.0) {
@@ -351,12 +360,24 @@ private:
             // Formula: int32 = round(float * 2^PRECISION_BITS)
             weights.resize((size_t) outSize * ksize);
 
-            const double fxp_scale = std::ldexp(1.0, PRECISION_BITS); // 1.0 * 2^PRECISION_BITS
+            // torchvision rounds the weights to int16, with as many fractional bits as the largest weight allows;
+            // scaled back to PRECISION_BITS, they give the same output in the passes below
+            int precision = PRECISION_BITS;
+            if (int16_weights) {
+                const double weight_max = *std::max_element(pre_weights.begin(), pre_weights.end());
+                for (precision = 0; precision < PRECISION_BITS; precision++) {
+                    if (static_cast<int>(0.5 + weight_max * (1 << (precision + 1))) >= (1 << 15)) {
+                        break;
+                    }
+                }
+            }
+
+            const double fxp_scale = std::ldexp(1.0, precision); // 1.0 * 2^precision
 
             for (size_t i = 0; i < (size_t) outSize * ksize; i++) {
                 // Pillow adds +/- 0.5 then truncates toward zero; std::round would round twice
                 const double rounded = pre_weights[i] * fxp_scale + (pre_weights[i] < 0 ? -0.5 : 0.5);
-                weights[i] = static_cast<int32_t>(rounded);
+                weights[i] = static_cast<int32_t>(rounded) * (1 << (PRECISION_BITS - precision));
             }
 
             return ksize;
@@ -1430,6 +1451,100 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseek4v::preprocess(const clip
     }
 
     out.append(hparams, resized);
+    return out;
+}
+
+//
+// DeepSeek-V4.1-Flash (deepseek41v)
+//
+// port of plan_image_grid / load_image from inference/image_processor.py (V4.1)
+// differs from deepseek4v: block = h * (w + 1) + 2 tokens, no even-row rounding, a single solve, no stretch path
+//
+
+void mtmd_image_preprocessor_deepseek41v::plan_grid(int width, int height, int p, int r, int max_n_token, int min_pixels,
+                                                    int & best_width, int & best_height) {
+    auto n_tokens = [&](int bh, int bw) {
+        const int n_llm_h = ((bh / p) + r - 1) / r;
+        const int n_llm_w = ((bw / p) + r - 1) / r;
+        return n_llm_h * (n_llm_w + 1) + 2;
+    };
+    if (min_pixels > 0 && (int64_t) width * height > 0 && (int64_t) width * height < min_pixels) {
+        // python: ratio = (min_pixels / (w * h)) ** 0.5; int(w * ratio)
+        const double ratio = std::sqrt((double) min_pixels / ((double) width * (double) height));
+        width  = (int) (width  * ratio);
+        height = (int) (height * ratio);
+    }
+    best_width  = CLIP_ALIGN(width,  p);
+    best_height = CLIP_ALIGN(height, p);
+    if (n_tokens(best_height, best_width) > max_n_token) {
+        // solve_resize_ratio: largest aspect-preserving size whose token block fits
+        const double ratio   = (double) height / width;
+        const double max_w_f = std::sqrt((max_n_token - 2) / ratio + 0.25) - 0.5;
+        const double max_h_f = max_w_f * ratio;
+        const int cell = p * r;
+        if (max_w_f < 1.0) {
+            best_height = (max_n_token - 2) / 2 * cell;
+            best_width  = cell;
+        } else if (max_h_f < 1.0) {
+            best_height = cell;
+            best_width  = (max_n_token - 3) * cell;
+        } else {
+            const double beta = std::min(std::floor(max_w_f) * cell / width, std::floor(max_h_f) * cell / height);
+            best_height = (int) std::floor(height * beta / p) * p;
+            best_width  = (int) std::floor(width  * beta / p) * p;
+        }
+        GGML_ASSERT(n_tokens(best_height, best_width) <= max_n_token);
+    }
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_deepseek41v::preprocess(const clip_image_u8 & img) const {
+    mtmd_image_preproc_out out;
+
+    const int p = hparams.patch_size;
+    const clip_image_size orig = img.get_size();
+    int best_width = 0, best_height = 0;
+    plan_grid(orig.width, orig.height, p, hparams.n_merge, hparams.dsv4_max_n_token, hparams.image_min_pixels,
+              best_width, best_height);
+
+    // PIL ImageOps.pad(color=127): ImageOps.contain then a centered paste; python round is half to even
+    auto round_half_even = [](double x) { return (int) std::nearbyint(x); };
+    int new_w = best_width;
+    int new_h = best_height;
+    const double im_ratio   = (double) orig.width / orig.height;
+    const double dest_ratio = (double) best_width / best_height;
+    if (im_ratio != dest_ratio) {
+        if (im_ratio > dest_ratio) {
+            new_h = round_half_even((double) orig.height / orig.width * best_width);
+        } else {
+            new_w = round_half_even((double) orig.width / orig.height * best_height);
+        }
+    }
+    clip_image_u8 resized;
+    img_tool::resize(img, resized, {new_w, new_h}, hparams.image_resize_algo, PAD_NONE);
+
+    clip_image_u8 padded;
+    if (new_w == best_width && new_h == best_height) {
+        padded = std::move(resized);
+    } else {
+        padded.set_size({best_width, best_height}, img.is_placeholder());
+        if (!img.is_placeholder()) {
+            img_tool::fill(padded, hparams.image_pad_color);
+            const int off_x = round_half_even((best_width  - new_w) * 0.5);
+            const int off_y = round_half_even((best_height - new_h) * 0.5);
+            img_tool::composite(padded, resized, off_x, off_y);
+        }
+    }
+
+    out.append(hparams, padded);
+
+    // load_image rounds the normalized input to bf16 (round to nearest even)
+    for (auto & e : out.entries) {
+        std::vector<float> buf = e.get_ro_buf();
+        for (float & v : buf) {
+            v = ggml_bf16_to_fp32(ggml_fp32_to_bf16(v));
+        }
+        e.cpy_buf(buf);
+    }
     return out;
 }
 

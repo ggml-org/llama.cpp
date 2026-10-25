@@ -72,6 +72,8 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
                 case GGML_UNARY_OP_ABS:        return HTP_OP_UNARY_ABS;
                 case GGML_UNARY_OP_RELU:       return HTP_OP_UNARY_RELU;
                 case GGML_UNARY_OP_STEP:       return HTP_OP_UNARY_STEP;
+                case GGML_UNARY_OP_CEIL:       return HTP_OP_UNARY_CEIL;
+                case GGML_UNARY_OP_SGN:        return HTP_OP_UNARY_SGN;
                 default:                       break;
             }
             break;
@@ -395,8 +397,19 @@ static bool htp_kparams_solve_flash_attn(
     kparams->scale         = scale;
     kparams->max_bias      = max_bias;
     kparams->logit_softcap = logit_softcap;
-    kparams->head_split    = (opt_fa_head_split != 0) ? 1 : 0;
+    kparams->head_split    = (opt_fa_split != 0) ? 1 : 0;
+    kparams->flags         = 0;
     kparams->G             = G;
+
+    // team-split only when a team has >1 member (n_kv_heads < N_cores)
+    uint32_t fa_teams = 1, fa_team_size = 1;
+    const uint32_t mdev_count = htp_session_mdev_count(sess);
+    if (opt_fa_split && mdev_count > 1) {
+        htp_fa_mdev_teams(n_kv_heads, mdev_count, kparams->head_split != 0, &fa_teams, &fa_team_size);
+        if (fa_team_size > 1) {
+            kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
+        }
+    }
 
     const uint32_t n_head = q->ne[2];
     kparams->n_head_log2 = 1u << (uint32_t) std::floor(std::log2(n_head));
@@ -407,7 +420,7 @@ static bool htp_kparams_solve_flash_attn(
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
         size_t Br = 0, Bc = 0;
-        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head);
+        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
         if (ret == 0) {
             kparams->kernel_type = HTP_FA_KERNEL_HMX;
             if (logit_softcap == 0.0f) {
@@ -1391,6 +1404,52 @@ static bool htp_kparams_solve_binary(
     return true;
 }
 
+// collapse contiguous dims of elementwise ops so that rows fill at least one HVX vector
+static void htp_unary_collapse_dims(struct ggml_tensor * src, struct ggml_tensor * dst, size_t elem_size) {
+    if (src->nb[0] != elem_size || dst->nb[0] != elem_size) {
+        return;
+    }
+
+    while (src->ne[1] > 1 || src->ne[2] > 1 || src->ne[3] > 1) {
+        const size_t row_size    = (size_t) src->ne[0] * elem_size;
+        const bool   rows_contig = src->nb[1] == row_size && dst->nb[1] == (size_t) dst->ne[0] * elem_size;
+        const bool   can_merge   = (src->ne[1] == 1 && dst->ne[1] == 1) ||
+                                   (rows_contig && (src->ne[0] == 1 || (row_size < 128 && row_size * src->ne[1] <= 2048)));
+        if (!can_merge) {
+            break;
+        }
+        src->ne[0] *= src->ne[1];
+        src->ne[1]  = src->ne[2];
+        src->ne[2]  = src->ne[3];
+        src->ne[3]  = 1;
+        dst->ne[0] *= dst->ne[1];
+        dst->ne[1]  = dst->ne[2];
+        dst->ne[2]  = dst->ne[3];
+        dst->ne[3]  = 1;
+        src->nb[1]  = src->nb[2];
+        src->nb[2]  = src->nb[3];
+        dst->nb[1]  = dst->nb[2];
+        dst->nb[2]  = dst->nb[3];
+    }
+
+    // ne1 too big to merge in full: merge it in chunks of k rows (k divides ne1)
+    const size_t row_size = (size_t) src->ne[0] * elem_size;
+    if (src->ne[1] > 1 && row_size < 128 && src->nb[1] == row_size && dst->nb[1] == row_size) {
+        int64_t k = 2048 / row_size;
+        while (k > 1 && src->ne[1] % k != 0) {
+            k--;
+        }
+        if (k > 1) {
+            src->ne[0] *= k;
+            src->ne[1] /= k;
+            src->nb[1] *= k;
+            dst->ne[0] *= k;
+            dst->ne[1] /= k;
+            dst->nb[1] *= k;
+        }
+    }
+}
+
 static bool htp_kparams_solve_unary_impl(
     const struct ggml_hexagon_session * sess,
     uint32_t op,
@@ -1433,6 +1492,8 @@ static bool htp_kparams_solve_unary_impl(
                 case HTP_OP_UNARY_LOG:
                 case HTP_OP_UNARY_ABS:
                 case HTP_OP_UNARY_STEP:
+                case HTP_OP_UNARY_CEIL:
+                case HTP_OP_UNARY_SGN:
                     break;
                 default:
                     return false;
@@ -1449,9 +1510,14 @@ static bool htp_kparams_solve_unary_impl(
     struct ggml_tensor src0_c = *src0;
     struct ggml_tensor dst_c  = *dst;
     if (htp_unary_is_elementwise(op)) {
-        HTP_UNARY_COLLAPSE_DIMS(src0_c.ne, src0_c.nb, dst_c.ne, dst_c.nb, elem_size);
+        htp_unary_collapse_dims(&src0_c, &dst_c, elem_size);
         src0 = &src0_c;
         dst  = &dst_c;
+        for (int i = 0; i < HTP_OP_MAX_DIMS; i++) {
+            kparams->ne[i]      = (uint32_t) src0->ne[i];
+            kparams->src0_nb[i] = (uint32_t) src0->nb[i];
+            kparams->dst_nb[i]  = (uint32_t) dst->nb[i];
+        }
     }
 
     const size_t dst_data_row_size  = dst->ne[0]  * ggml_type_size(dst->type);

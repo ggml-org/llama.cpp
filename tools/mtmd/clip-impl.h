@@ -300,6 +300,12 @@
 #define TN_A_GEN_WAV_SEANET_RES_CONV2  "a.gen.wav.seanet.blk.%d.res_conv2.%s"
 #define TN_A_GEN_WAV_SEANET_SCALE_CONV "a.gen.wav.seanet.blk.%d.scale_conv.%s"
 
+// soprano: Vocos decoder, the ConvNeXt blocks use TN_A_GEN_WAV_UP_*
+#define TN_A_GEN_WAV_INPUT           "a.gen.wav.input.%s"
+#define TN_A_GEN_WAV_NORM            "a.gen.wav.norm.%s"
+#define TN_A_GEN_WAV_OUTPUT_NORM     "a.gen.wav.output_norm.%s"
+#define TN_A_GEN_WAV_OUTPUT          "a.gen.wav.output.%s"
+
 // cogvlm
 #define TN_MM_POST_FC_NORM "mm.post_fc_norm.%s"
 #define TN_MM_H_TO_4H      "mm.up.%s"
@@ -523,6 +529,7 @@ enum projector_type {
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_DEEPSEEKOCR2,
     PROJECTOR_TYPE_DEEPSEEK4V,
+    PROJECTOR_TYPE_DEEPSEEK41V,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_D1OMNI_A,
     PROJECTOR_TYPE_GLM4V,
@@ -547,6 +554,7 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN3TTS_GEN,
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
+    PROJECTOR_TYPE_SOPRANO,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
@@ -599,6 +607,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
     { PROJECTOR_TYPE_DEEPSEEK4V,        "deepseek4v"},
+    { PROJECTOR_TYPE_DEEPSEEK41V,       "deepseek41v"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
     { PROJECTOR_TYPE_D1OMNI_A,          "d1omni_a"},
     { PROJECTOR_TYPE_GLM4V,             "glm4v"},
@@ -623,6 +632,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
+    { PROJECTOR_TYPE_SOPRANO,           "soprano"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
@@ -869,6 +879,11 @@ static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_
         off_x = (cur_w - new_w) / 2;
         out_w = cur_w - 2 * off_x;
     }
+}
+
+// deepseek41v: [START] ([IMAGE]*n_llm_w [NEWLINE])*n_llm_h [END], ref: num_image_tokens() in image_processor.py
+static inline int dsv41_n_block_tokens(int n_llm_w, int n_llm_h) {
+    return n_llm_h * (n_llm_w + 1) + 2;
 }
 
 // deepseek4v: layout of the LLM token block built from the aligner grid

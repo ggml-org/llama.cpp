@@ -14,8 +14,6 @@
 #define N_MM_SIMD_GROUP_X 2
 #define N_MM_SIMD_GROUP_Y 2
 
-#define N_MM_NPART_AMAX 256
-
 #define N_ARGMAX_NPART_MAX 256
 #define N_ARGMAX_CHUNK 4096
 
@@ -573,12 +571,11 @@ typedef struct {
 } ggml_metal_kargs_mul_mm_id_map0;
 
 typedef struct {
-    int32_t  ne00;
-    int32_t  ne01;
-    int32_t  ne02;
-    uint64_t nb01;
-    uint64_t nb02;
-} ggml_metal_kargs_mul_mm_id_amax;
+    int32_t  ne0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb21;
+} ggml_metal_kargs_mul_mm_id_zero;
 
 typedef struct {
     int32_t  ne00;

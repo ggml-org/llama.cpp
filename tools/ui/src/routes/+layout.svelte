@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { SidebarNavigation } from '$lib/components/app';
@@ -11,6 +11,7 @@
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
+		MODELS_ROUTE_ID,
 		NEW_CHAT_TAB_ID,
 		ROUTES,
 		SETTINGS_KEYS,
@@ -28,6 +29,7 @@
 		serverStore,
 		settingsStore,
 		tabsStore,
+		uiStore,
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
@@ -137,6 +139,9 @@
 			untrack(() => tabsStore.removeTabs([NEW_CHAT_TAB_ID]));
 		}
 	});
+	// the models page returns to wherever it was reached from, by any kind of navigation
+	afterNavigate(() => uiStore.rememberModelsReturnRoute());
+
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
@@ -158,7 +163,9 @@
 
 		untrack(() => {
 			if (
-				(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+				(page.route.id === '/(chat)' ||
+					page.route.id === '/(chat)/chat/[id]' ||
+					page.route.id === MODELS_ROUTE_ID) &&
 				page.status !== 401 &&
 				page.status !== 403
 			) {
