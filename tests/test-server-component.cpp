@@ -2,6 +2,7 @@
 
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
+#include "../tools/server/server-schema.h"
 
 #include <cstdlib>
 #include <regex>
@@ -464,6 +465,94 @@ static void test_rerank_template(testing & t) {
     }
 }
 
+//
+// server_decision_context: the recursive functions stop at RECURSIVE_LIMIT
+//
+
+static void test_decision_depth(testing & t) {
+    const auto prepare = [](size_t depth) {
+        server_decision_context ctx;
+        ctx.type = COMMON_DECISION_TYPE_H2O_LIGHTNING; // the state goes through decision_py_dump
+        std::string error;
+        try {
+            ctx.prepare_state(json::parse(std::string(depth, '[') + std::string(depth, ']')));
+        } catch (const std::invalid_argument & e) {
+            error = e.what();
+        }
+        return error;
+    };
+    t.test("state at the limit", [&](testing & t) {
+        const std::string error = prepare(128);
+        t.assert_true("accepted: " + error, error.empty());
+    });
+    t.test("deep state", [&](testing & t) {
+        const std::string error = prepare(1000);
+        t.assert_true("rejected as nested: " + error, error.find("nested more than 128 levels deep") != std::string::npos);
+    });
+}
+
+// DRY sequence breakers
+//
+
+static void test_dry_sequence_breakers(testing & t) {
+    common_params params_base;
+
+    const auto eval = [&](const json & data) {
+        return server_schema::eval_llama_cmpl_schema(nullptr, params_base, {}, data);
+    };
+
+    {
+        json data;
+        data["dry_sequence_breakers"] = json::array({"ab", "ab", "cd", "ab"});
+        const auto params = eval(data);
+        const std::vector<std::string> expected = {"ab", "cd"};
+        t.assert_true("duplicates removed, order kept", params.sampling.dry_sequence_breakers == expected);
+    }
+
+    {
+        std::vector<std::string> many;
+        for (int i = 0; i <= LLAMA_DRY_MAX_SEQ_BREAKERS; ++i) {
+            many.push_back("b" + std::to_string(i));
+        }
+        json data;
+        data["dry_sequence_breakers"] = many;
+
+        bool thrown = false;
+        try {
+            eval(data);
+        } catch (const std::exception &) {
+            thrown = true;
+        }
+        t.assert_true("more than the cap is rejected", thrown);
+    }
+}
+
+//
+// glob_match
+//
+
+static void test_glob_match(testing & t) {
+    t.test("patterns", [](testing & t) {
+        t.assert_true("literal", glob_match("src/main.cpp", "src/main.cpp"));
+        t.assert_true("star", glob_match("src/*.cpp", "src/main.cpp"));
+        t.assert_true("star stops at /", !glob_match("*.cpp", "src/main.cpp"));
+        t.assert_true("double star", glob_match("**/*.cpp", "a/b/c/main.cpp"));
+        t.assert_true("double star at end", glob_match("src/**", "src/a/b"));
+        t.assert_true("question mark", glob_match("ma?n.cpp", "main.cpp"));
+        t.assert_true("question mark not /", !glob_match("a?b", "a/b"));
+        t.assert_true("class", glob_match("[a-c]x", "bx"));
+        t.assert_true("negated class", !glob_match("[!a-c]x", "bx"));
+        t.assert_true("unclosed class", glob_match("[ab", "[ab"));
+        t.assert_true("mismatch", !glob_match("main.cpp", "main.c"));
+    });
+    t.test("long input", [](testing & t) {
+        const std::string path(100000, 'a');
+        t.assert_true("long literal", glob_match(path, path));
+        t.assert_true("long path", glob_match("**", path));
+        t.assert_true("too many wildcards", !glob_match(std::string(1000, '*'), "a"));
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -484,6 +573,9 @@ int main(int argc, char ** argv) {
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
+    t.test("decision_depth",  test_decision_depth);
+    t.test("glob_match",      test_glob_match);
+    t.test("dry_sequence_breakers", test_dry_sequence_breakers);
 
     return t.summary();
 }

@@ -2397,7 +2397,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 }
             }
 
-            GGML_ASSERT(htp_kparams_solve(sess, node.node, node.kernel_params));
+            GGML_ASSERT(htp_kparams_solve(sess, node));
             if (node.opcode == HTP_OP_CPY && node.kparams<htp_copy_kernel_params>()->total_elems == 0) {
                 continue;
             }

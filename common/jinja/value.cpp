@@ -6,6 +6,7 @@
 #include "json.h"
 
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <cctype>
 #include <cfloat>
@@ -1439,7 +1440,8 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const common_json & j, bool mark_input) {
+// the runtime walks values with recursion, a deeper input overflows the stack
+static value from_json(const common_json & j, bool mark_input, int depth = 0) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1454,16 +1456,18 @@ static value from_json(const common_json & j, bool mark_input) {
             str->mark_input();
         }
         return str;
+    } else if ((j.is_array() || j.is_object()) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (j.is_array()) {
         auto arr = mk_val<value_array>();
         for (const auto & item : j) {
-            arr->push_back(from_json(item, mark_input));
+            arr->push_back(from_json(item, mark_input, depth + 1));
         }
         return arr;
     } else if (j.is_object()) {
         auto obj = mk_val<value_object>();
         for (auto it = j.begin(); it != j.end(); ++it) {
-            obj->insert(it.key(), from_json(it.value(), mark_input));
+            obj->insert(it.key(), from_json(it.value(), mark_input, depth + 1));
         }
         return obj;
     } else {
@@ -1658,6 +1662,8 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
             }
         }
         oss << "\"";
+    } else if ((is_val<value_array>(val) || is_val<value_object>(val)) && curr_lvl >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (is_val<value_array>(val)) {
         const auto & arr = val->as_array();
         oss << "[";
@@ -1723,17 +1729,20 @@ std::string value_to_string_repr(const value & val) {
 }
 
 // stats utility
-void value_t::stats_t::mark_used(value & val, bool deep) {
+void value_t::stats_t::mark_used(value & val, bool deep, int depth) {
     val->stats.used = true;
+    if (deep && (is_val<value_array>(val) || is_val<value_object>(val)) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+    }
     if (deep) {
         if (is_val<value_array>(val)) {
             for (auto & item : val->val_arr) {
-                mark_used(item, deep);
+                mark_used(item, deep, depth + 1);
             }
         } else if (is_val<value_object>(val)) {
             for (auto & pair : val->val_obj) {
-                mark_used(pair.first, deep);
-                mark_used(pair.second, deep);
+                mark_used(pair.first, deep, depth + 1);
+                mark_used(pair.second, deep, depth + 1);
             }
         }
     }
