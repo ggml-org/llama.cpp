@@ -803,9 +803,6 @@ class DeepseekV4Model(TextModel):
         self._dsv4_mxfp4_generated = True
         return ()
 
-    def _format_dsv4_tensor_name(self, key: gguf.MODEL_TENSOR, bid: int | None, suffix: str = ".weight") -> str:
-        return self.format_tensor_name(key, bid, suffix)
-
     def _map_dsv4_tensor_name(self, name: str, bid: int | None) -> tuple[gguf.MODEL_TENSOR, str]:
         root_map: dict[str, tuple[gguf.MODEL_TENSOR, str]] = {
             "embed.weight": (gguf.MODEL_TENSOR.TOKEN_EMBD, ".weight"),
@@ -889,7 +886,7 @@ class DeepseekV4Model(TextModel):
         if tensor_key == gguf.MODEL_TENSOR.FFN_GATE_TID2EID:
             return
 
-        yield self._format_dsv4_tensor_name(tensor_key, bid, suffix), data_torch
+        yield self.format_tensor_name(tensor_key, bid, suffix), data_torch
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del bid  # unused
