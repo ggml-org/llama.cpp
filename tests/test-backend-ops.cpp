@@ -12263,7 +12263,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // FLASH_ATTN_EXT: q4_0 / q8_0 K/V, decode and small batches
     for (ggml_type kvt : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0 }) {
-        for (int hs : { 64, 96, 128, 192, 256, 512 }) {
+        for (int hs : { 64, 96, 128, 256, 512 }) {
             for (int nr2 : { 1, 4, 6, 32 }) {
                 const int nh = nr2 == 32 ? 1 : 4;
                 for (int nb : { 1, 2, 5, 8, 31 }) {

@@ -26,7 +26,7 @@ static bool fattn_dpas_arch_ok(gpu_arch arch) {
 
 // head sizes with a compiled kernel (multiples of the 32-dim q4_0 / q8_0 block)
 static bool fattn_dpas_head_ok(int64_t d) {
-    return d == 64 || d == 96 || d == 128 || d == 192 || d == 256 || d == 512;
+    return d == 64 || d == 96 || d == 128 || d == 256 || d == 512;
 }
 
 bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst) {
@@ -688,7 +688,6 @@ template <bool Q8> static void fattn_dpas_dispatch(ggml_backend_sycl_context & c
         FATTN_DPAS_D( 64, 16)
         FATTN_DPAS_D( 96, 16)
         FATTN_DPAS_D(128, 16)
-        FATTN_DPAS_D(192, 16)
         FATTN_DPAS_D(256, 16)
         FATTN_DPAS_D(512, 8)
         default:
