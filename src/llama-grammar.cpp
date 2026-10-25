@@ -12,6 +12,7 @@
 #include <stdexcept>
 
 #define MAX_REPETITION_THRESHOLD 2000
+#define GRAMMAR_RECURSIVE_LIMIT 256
 //
 // helpers
 //
