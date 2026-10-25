@@ -118,7 +118,6 @@ OutputVector translate_unary_softplus(const NodeContext & context) {
         return translate_1to1_match_1_input<ov::op::v4::SoftPlus>(context);
     }
 
-    // TODO: CPU and CUDA use log1p(exp(x)), which is more accurate for x << 0
     auto input = process_view_input_new(context, 0);
     const auto element_type = input.get_element_type();
     auto one = ov::op::v0::Constant::create(element_type, ov::Shape{}, {1.0f});

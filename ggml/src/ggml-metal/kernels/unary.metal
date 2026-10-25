@@ -144,7 +144,6 @@ kernel void kernel_unary_impl(
         }
 
         if (FC_OP == OP_UNARY_NUM_SOFTPLUS) {
-            // TODO: CPU and CUDA use log1p(exp(x)), which is more accurate for x << 0
             dst_ptr[i0] = (T) select(log(1 + exp(x)), x, x > 20);
         }
 

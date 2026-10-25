@@ -418,7 +418,6 @@ static inline void vec_round(float * dst, const float * src, int32_t n) {
 // SOFTPLUS: log(1 + exp(x))
 // For large x (>20), softplus(x) ~ x.  For moderate x, use fexp + flog.
 // Scalar fallback since flog.ps computes log2, need conversion, and overflow guard
-// TODO: CPU and CUDA use log1p(exp(x)), which is more accurate for x << 0
 static inline void vec_softplus(float * dst, const float * src, int32_t n) {
     for (int32_t i = 0; i < n; i++) {
         float x = src[i];

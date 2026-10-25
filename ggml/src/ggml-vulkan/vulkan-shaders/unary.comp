@@ -116,7 +116,6 @@ float op_expm1(float x) {
 }
 
 float op_softplus(float x) {
-    // TODO: CPU and CUDA use log1p(exp(x)), which is more accurate for x << 0
     return (x > 20.0f) ? x : log(1.0f + exp(x));
 }
 

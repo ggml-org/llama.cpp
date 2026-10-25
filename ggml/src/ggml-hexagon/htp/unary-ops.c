@@ -724,7 +724,6 @@ static void tri_f32(const void * restrict src,
 
 // softplus(x) = log(1 + exp(x))
 // Match CPU reference: return x for x > 20 to avoid overflow.
-// TODO: CPU and CUDA use log1p(exp(x)), which is more accurate for x << 0
 static inline void hvx_softplus_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
