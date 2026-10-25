@@ -7,7 +7,7 @@
 	import ModelId from '../ModelId.svelte';
 	import ModelsManagerStatusCell from './ModelsManagerStatusCell.svelte';
 	import { modelRowActions } from './row-actions';
-	import { configuredContext, downloadProgressFor } from './utils';
+	import { configuredContext, downloadProgressFor, isRowControlClick } from './utils';
 	import { Heart, MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
@@ -55,13 +55,20 @@
 	}
 </script>
 
+<!-- the whole row opens the model for a pointer; keyboard users reach the same action
+     through the model's own button -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'group relative rounded-md px-2 py-3 transition max-md:px-3 max-md:py-4',
+		'group relative cursor-pointer rounded-md px-2 py-3 transition max-md:px-3 max-md:py-4',
 		isHidden && 'opacity-60',
 		selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 	]}
+	onclick={(event) => {
+		if (!isRowControlClick(event)) activate();
+	}}
 >
 	<div class="flex min-w-0 flex-col">
 		<!-- the row holds a load control and an actions menu, so only the model itself is

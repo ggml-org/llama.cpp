@@ -89,6 +89,9 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns(
     uint i11 = i20 % ne11;
 
     uint expert_id = src2[i20];
+    if ((int)expert_id == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
+        return;
+    }
     uint expert_offset = expert_id * ne00 * ne01 / 32;
 
     __private float sum = 0.0f; // each thread calculate partial sum of one output
@@ -188,6 +191,9 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns_wimg(
     uint i11 = i20 % ne11;
 
     uint expert_id = src2[i20];
+    if ((int)expert_id == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
+        return;
+    }
     uint expert_offset = expert_id * ne00 * ne01 / 32;
 
     __private float sum = 0.0f;

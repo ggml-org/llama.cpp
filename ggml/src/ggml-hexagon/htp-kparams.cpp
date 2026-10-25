@@ -397,8 +397,19 @@ static bool htp_kparams_solve_flash_attn(
     kparams->scale         = scale;
     kparams->max_bias      = max_bias;
     kparams->logit_softcap = logit_softcap;
-    kparams->head_split    = (opt_fa_head_split != 0) ? 1 : 0;
+    kparams->head_split    = (opt_fa_split != 0) ? 1 : 0;
+    kparams->flags         = 0;
     kparams->G             = G;
+
+    // team-split only when a team has >1 member (n_kv_heads < N_cores)
+    uint32_t fa_teams = 1, fa_team_size = 1;
+    const uint32_t mdev_count = htp_session_mdev_count(sess);
+    if (opt_fa_split && mdev_count > 1) {
+        htp_fa_mdev_teams(n_kv_heads, mdev_count, kparams->head_split != 0, &fa_teams, &fa_team_size);
+        if (fa_team_size > 1) {
+            kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
+        }
+    }
 
     const uint32_t n_head = q->ne[2];
     kparams->n_head_log2 = 1u << (uint32_t) std::floor(std::log2(n_head));
@@ -409,7 +420,7 @@ static bool htp_kparams_solve_flash_attn(
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
         size_t Br = 0, Bc = 0;
-        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head);
+        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
         if (ret == 0) {
             kparams->kernel_type = HTP_FA_KERNEL_HMX;
             if (logit_softcap == 0.0f) {
