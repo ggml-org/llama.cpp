@@ -30,11 +30,14 @@ static void ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size
 }
 
 static bool ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    if ((op->op == GGML_OP_ROPE || op->op == GGML_OP_ROPE_BACK) &&
+        !ggml_rope_get_truncate(op)) {
+        return false;
+    }
 #if USE_ALWAYS_TRUE_SUPPORTS_OP == 1
     /* ggml-rpc cheats it like this */
     /* with the current implementation of serialize_tensor, the src/view aren't properly passed */
     UNUSED(dev);
-    UNUSED(op);
 
     return true;
 #else

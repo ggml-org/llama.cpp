@@ -1822,6 +1822,10 @@ static bool htp_kparams_solve_rope(
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
+    if (!ggml_rope_get_truncate(op)) {
+        return false;
+    }
+
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }

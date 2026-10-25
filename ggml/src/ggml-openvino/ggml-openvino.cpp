@@ -1624,6 +1624,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_ROPE: {
+        if (!ggml_rope_get_truncate(op)) {
+            return {false, "ROPE without YaRN truncation is not supported"};
+        }
         if (op->view_src != nullptr && !ggml_is_contiguous(op->src[0])) {
             return {false, "ROPE on VIEW / non-contiguous input is not supported"};
         }
