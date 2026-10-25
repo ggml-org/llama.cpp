@@ -110,5 +110,10 @@ ggml_tensor * llm_build_lfm_base::build_lfm_moe_ffn(const llama_model & model,
             LLM_FFN_SILU, true,
             hparams.expert_weights_scale,
             static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
-            il);
+            il,
+            nullptr,
+            nullptr,
+            model.layers[il].ffn_up_exps_s,
+            model.layers[il].ffn_gate_exps_s,
+            model.layers[il].ffn_down_exps_s);
 }
