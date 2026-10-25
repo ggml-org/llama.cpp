@@ -80,6 +80,12 @@ void rms_norm(uint num_iters) {
 #endif
             FLOAT_TYPE sum = FLOAT_TYPE(0.0f); // partial sum for thread in warp
 
+#if RMS_NORM_ROPE_FUSION
+            for (uint col = tid; col < ncols; col += BLOCK_SIZE) {
+                const FLOAT_TYPE xi = FLOAT_TYPE(data_a[a_offset + col]);
+                sum += xi * xi;
+            }
+#else
             [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
                 FLOAT_TYPE xi = FLOAT_TYPE(0);
                 if (col < ncols) {
@@ -87,6 +93,7 @@ void rms_norm(uint num_iters) {
                 }
                 sum += xi * xi;
             }
+#endif
 
             sumsh[tid] = sum;
             // sum up partial sums and write back result
@@ -103,6 +110,15 @@ void rms_norm(uint num_iters) {
             const FLOAT_TYPE mean = sum / FLOAT_TYPE(ncols);
             const FLOAT_TYPE scale = inversesqrt(mean + FLOAT_TYPE(p.param1));
 
+#if RMS_NORM_ROPE_FUSION
+            for (uint col = tid; col < ncols; col += BLOCK_SIZE) {
+                FLOAT_TYPE value = scale * FLOAT_TYPE(data_a[a_offset + col]);
+                if (do_multiply) {
+                    value *= FLOAT_TYPE(data_b[b_offset + fastmod(col, p.ne10)]);
+                }
+                data_d[d_offset + col] = D_TYPE(value);
+            }
+#else
             if (do_multiply) {
                 if (ncols > p.ne10) {
                     [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
@@ -141,6 +157,7 @@ void rms_norm(uint num_iters) {
                     data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]));
                 }
             }
+#endif
 #if RMS_NORM_ROPE_FUSION
             barrier();
             rope_params rp = p.rope;
@@ -157,6 +174,10 @@ void rms_norm(uint num_iters) {
 }
 
 void main() {
+#if RMS_NORM_ROPE_FUSION
+    const uint num_blocks = (p.ne00 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    rms_norm(num_blocks);
+#else
     // instantiate the rms_norm function for several different
     // dimensions, to allow loop unrolling
     uint num_blocks = (p.ne00 + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -181,4 +202,5 @@ void main() {
     } else if (num_blocks == 1) {
         rms_norm(1);
     }
+#endif
 }
