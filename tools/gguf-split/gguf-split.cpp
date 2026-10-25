@@ -553,6 +553,10 @@ static void gguf_merge(const split_params & split_params) {
             auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor);
             f_input.seekg(offset);
             f_input.read((char *)read_data.data(), n_bytes);
+            if (!f_input) {
+                fprintf(stderr, "%s: failed to read %zu bytes at offset %zu, input file may be truncated\n", __func__, n_bytes, offset);
+                exit(EXIT_FAILURE);
+            }
             if (!split_params.dry_run) {
                 // write tensor data + padding
                 fout.write((const char *)read_data.data(), n_bytes);
