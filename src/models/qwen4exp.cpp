@@ -365,17 +365,15 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
         // one matmul for both: the hc_down rows, then the hc_inject rows
         const int64_t n_lo = w_down_inject->ne[1] - hc;
         ggml_tensor * lo_inject = build_lora_mm(w_down_inject, xn);
+        // scale the combined rows before the split; both lo and inject use 1/hc
+        lo_inject = ggml_scale(ctx0, lo_inject, 1.0f / (float) hc);
         lo      = ggml_view_2d(ctx0, lo_inject, n_lo, nt, lo_inject->nb[1], 0);
         *inject = ggml_view_2d(ctx0, lo_inject, hc, nt, lo_inject->nb[1], ggml_row_size(lo_inject->type, n_lo));
-        if (!ggml_is_contiguous(lo)) {
-            lo      = ggml_cont(ctx0, lo);
-            *inject = ggml_cont(ctx0, *inject);
-        }
         cb(*inject, "hc_inject", il);
     } else {
-        lo = build_lora_mm(w_down, xn);
+        lo = ggml_scale(ctx0, build_lora_mm(w_down, xn), 1.0f / (float) hc);
     }
-    lo = ggml_silu(ctx0, ggml_scale(ctx0, lo, 1.0f / (float) hc));
+    lo = ggml_silu(ctx0, lo);
     ggml_tensor * gate = build_lora_mm(w_up, lo);
     cb(gate, "hc_gate", il);
 
@@ -405,7 +403,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
     cb(mixed, "hc_mixed", il);
 
     if (inject && !w_down_inject) {
-        *inject = build_lora_mm(w_inject, xn);
+        *inject = ggml_scale(ctx0, build_lora_mm(w_inject, xn), 1.0f / (float) hc);
         cb(*inject, "hc_inject", il);
     }
 
@@ -421,7 +419,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_combine(
     const int64_t nt = residual->ne[2];
 
     // 2*sigmoid centres the scatter weights on 1, so a zero injection is a plain residual add
-    ggml_tensor * w = ggml_sigmoid(ctx0, ggml_scale(ctx0, inject, 1.0f / (float) hc));
+    ggml_tensor * w = ggml_sigmoid(ctx0, inject);
     w = ggml_scale(ctx0, w, 2.0f);
 
     ggml_tensor * cur = nullptr;
