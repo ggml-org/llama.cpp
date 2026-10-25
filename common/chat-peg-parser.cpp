@@ -966,8 +966,7 @@ void common_chat_peg_gemma4_mapper::from_ast(const common_peg_ast_arena & arena,
     }
 }
 
-// depth counts the arrays and the dicts
-static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, int depth = 0) {
+static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
 
     if (node.text.empty()) {
@@ -985,7 +984,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     if (node.rule == "gemma4-string") {
         std::string result = "\"";
         if (!node.children.empty()) {
-            result += gemma4_to_json(arena, node.children[0], depth);
+            result += gemma4_to_json(arena, node.children[0]);
             if (!node.is_partial) {
                 result += "\"";
             }
@@ -994,9 +993,6 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     }
 
     if (node.rule == "gemma4-array") {
-        if (depth >= COMMON_RECURSIVE_LIMIT) {
-            throw std::runtime_error("AST is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
-        }
         std::string result = "[";
 
         bool add_comma = false;
@@ -1005,7 +1001,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
                 result += ',';
             }
             add_comma = true;
-            result += gemma4_to_json(arena, child_id, depth + 1);
+            result += gemma4_to_json(arena, child_id);
         }
 
         if (!node.is_partial) {
@@ -1021,7 +1017,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     if (node.rule == "gemma4-dict-key") {
         std::string result = "\"";
         if (!node.children.empty()) {
-            result += escape_json_string_inner(gemma4_to_json(arena, node.children[0], depth));
+            result += escape_json_string_inner(gemma4_to_json(arena, node.children[0]));
         }
         if (!node.is_partial) {
             result += "\":";
@@ -1032,15 +1028,12 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     if (node.rule == "gemma4-dict-kv") {
         std::string result;
         for (auto child_id : node.children) {
-            result += gemma4_to_json(arena, child_id, depth);
+            result += gemma4_to_json(arena, child_id);
         }
         return result;
     }
 
     if (node.rule == "gemma4-dict") {
-        if (depth >= COMMON_RECURSIVE_LIMIT) {
-            throw std::runtime_error("AST is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
-        }
         std::string result = "{";
 
         bool add_comma = false;
@@ -1049,7 +1042,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
                 result += ',';
             }
             add_comma = true;
-            result += gemma4_to_json(arena, child_id, depth + 1);
+            result += gemma4_to_json(arena, child_id);
         }
 
         if (!node.is_partial) {
@@ -1060,7 +1053,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
 
     if (node.rule == "gemma4-value") {
         if (!node.children.empty()) {
-            return gemma4_to_json(arena, node.children[0], depth);
+            return gemma4_to_json(arena, node.children[0]);
         }
         return "";
     }
@@ -1068,10 +1061,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     return "";
 }
 
-void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id, int depth) {
-    if (depth >= COMMON_RECURSIVE_LIMIT) {
-        throw std::runtime_error("AST is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
-    }
+void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
 
     if (node.tag == "reasoning") {
@@ -1106,24 +1096,20 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
     }
 
     for (auto child_id : node.children) {
-        visit(arena, child_id, depth + 1);
+        visit(arena, child_id);
     }
 }
 
 static void minimax_m3_collect(const common_peg_ast_arena &     arena,
                                const common_peg_ast_node &      node,
                                const std::string &              tag,
-                               std::vector<common_peg_ast_id> & out,
-                               int                              depth = 0) {
-    if (depth >= COMMON_RECURSIVE_LIMIT) {
-        throw std::runtime_error("AST is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
-    }
+                               std::vector<common_peg_ast_id> & out) {
     for (auto child_id : node.children) {
         const auto & child = arena.get(child_id);
         if (child.tag == tag) {
             out.push_back(child_id);
         } else {
-            minimax_m3_collect(arena, child, tag, out, depth + 1);
+            minimax_m3_collect(arena, child, tag, out);
         }
     }
 }
@@ -1141,27 +1127,22 @@ static common_peg_ast_id minimax_m3_value_of(const common_peg_ast_arena & arena,
     return COMMON_PEG_INVALID_AST_ID;
 }
 
-// depth counts the objects and the arrays
-static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed, int depth);
+static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed);
 
-static std::string minimax_m3_member_to_json(const common_peg_ast_arena & arena, const common_peg_ast_node & node, int depth) {
+static std::string minimax_m3_member_to_json(const common_peg_ast_arena & arena, const common_peg_ast_node & node) {
     auto name_id = arena.find_by_tag(node, common_chat_peg_builder::TOOL_ARG_NAME);
     if (name_id == COMMON_PEG_INVALID_AST_ID) {
         return "";
     }
 
     return ordered_json(arena.get(name_id).text).dump() + ":" +
-           minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, node), !node.is_partial, depth);
+           minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, node), !node.is_partial);
 }
 
 static std::string minimax_m3_container_to_json(const common_peg_ast_arena & arena,
                                                 const common_peg_ast_node & node,
                                                 bool                        is_object,
-                                                bool                        closed,
-                                                int                         depth) {
-    if (depth >= COMMON_RECURSIVE_LIMIT) {
-        throw std::runtime_error("AST is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
-    }
+                                                bool                        closed) {
     const std::string tag = is_object ? common_chat_peg_builder::TOOL_ARG
                                       : common_chat_peg_minimax_m3_mapper::TOOL_ARG_ITEM;
 
@@ -1176,9 +1157,9 @@ static std::string minimax_m3_container_to_json(const common_peg_ast_arena & are
 
         std::string text;
         if (is_object) {
-            text = minimax_m3_member_to_json(arena, entry, depth + 1);
+            text = minimax_m3_member_to_json(arena, entry);
         } else {
-            text = minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, entry), !entry.is_partial, depth + 1);
+            text = minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, entry), !entry.is_partial);
         }
 
         if (text.empty()) {
@@ -1198,7 +1179,7 @@ static std::string minimax_m3_container_to_json(const common_peg_ast_arena & are
     return result;
 }
 
-static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed, int depth) {
+static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed) {
     if (id == COMMON_PEG_INVALID_AST_ID) {
         return "";
     }
@@ -1206,11 +1187,11 @@ static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, 
     const auto & node = arena.get(id);
 
     if (node.tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_OBJECT) {
-        return minimax_m3_container_to_json(arena, node, /* is_object = */ true, closed, depth);
+        return minimax_m3_container_to_json(arena, node, /* is_object = */ true, closed);
     }
 
     if (node.tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_ARRAY) {
-        return minimax_m3_container_to_json(arena, node, /* is_object = */ false, closed, depth);
+        return minimax_m3_container_to_json(arena, node, /* is_object = */ false, closed);
     }
 
     if (node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE) {
@@ -1228,10 +1209,7 @@ void common_chat_peg_minimax_m3_mapper::from_ast(const common_peg_ast_arena &   
     }
 }
 
-void common_chat_peg_minimax_m3_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id, int depth) {
-    if (depth >= COMMON_RECURSIVE_LIMIT) {
-        throw std::runtime_error("AST is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
-    }
+void common_chat_peg_minimax_m3_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
 
     if (node.tag == common_chat_peg_builder::REASONING) {
@@ -1249,13 +1227,13 @@ void common_chat_peg_minimax_m3_mapper::visit(const common_peg_ast_arena & arena
         if (name_id != COMMON_PEG_INVALID_AST_ID) {
             common_chat_tool_call call;
             call.name      = std::string(arena.get(name_id).text);
-            call.arguments = minimax_m3_container_to_json(arena, node, /* is_object = */ true, !node.is_partial, 0);
+            call.arguments = minimax_m3_container_to_json(arena, node, /* is_object = */ true, !node.is_partial);
             result.tool_calls.push_back(call);
         }
         return;
     }
 
     for (auto child_id : node.children) {
-        visit(arena, child_id, depth + 1);
+        visit(arena, child_id);
     }
 }
