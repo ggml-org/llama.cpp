@@ -171,6 +171,16 @@ int main(int argc, char ** argv) {
         t.assert_true(!llama_context_memory::create(f.sched.get(), f.backends, bad));
         t.assert_equal(size_t(0), ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get()));
     });
+    t.test("shared_reader_role_requires_a_cache_owning_serial_parent",[&](testing & t) {
+        fixture target(dev),reader(dev);
+        auto parent=llama_context_memory::create(target.sched.get(),target.backends,target.groups);
+        if (!t.assert_true(bool(parent))) return;
+        t.assert_true(!parent->register_shared_read_consumer());
+        auto child=llama_context_memory::borrow_workspace(reader.sched.get(),reader.backends,reader.groups,*parent);
+        if (!t.assert_true(bool(child))) return;
+        t.assert_true(!child->register_shared_read_consumer());
+        t.assert_true(parent->valid() && child->valid());
+    });
 
     t.test("workspace_creation_distinguishes_quota_allocation_and_capture_failure", [&](testing & t) {
         using status = llama_context_memory_create_status;
@@ -385,6 +395,31 @@ int main(int argc, char ** argv) {
         auto grant=parent->reserve_bounded_cache(layout);
         if (!t.assert_true(bool(grant))) return;
         t.assert_true(parent->has_bounded_cache() && parent->covers_workspace(plan));
+        const auto revision_before_quote=parent->graph_binding_revision();
+        const auto generation_before_quote=parent->shared_arena_generation();
+        const size_t alignment=ggml_backend_buft_get_alignment(f.groups[0].buft);
+        const size_t protected_bytes=layout.allocation.bytes+1024;
+        const size_t available=16384-protected_bytes;
+        for (const auto & loans : std::vector<std::vector<size_t>>{{available},{available-alignment,alignment}}) {
+            llama_context_memory_create_result quote;
+            t.assert_true(parent->quote_suspended_loans(loans,quote));
+            t.assert_true(quote.status==llama_context_memory_create_status::success);
+            t.assert_equal(size_t(16384),quote.available_bytes);
+            t.assert_equal(size_t(16384),quote.required_bytes);
+            t.assert_equal(size_t(0),quote.additional_bytes);
+        }
+        llama_context_memory_create_result short_quote;
+        t.assert_true(!parent->quote_suspended_loans({available+1},short_quote));
+        t.assert_true(short_quote.status==llama_context_memory_create_status::insufficient_budget);
+        t.assert_equal(size_t(16384)+alignment,short_quote.required_bytes);
+        t.assert_equal(alignment,short_quote.additional_bytes);
+        for (const auto & loans : std::vector<std::vector<size_t>>{{},{0},{SIZE_MAX,1}}) {
+            llama_context_memory_create_result invalid;
+            t.assert_true(!parent->quote_suspended_loans(loans,invalid));
+            t.assert_true(invalid.status!=llama_context_memory_create_status::success);
+        }
+        t.assert_equal(revision_before_quote,parent->graph_binding_revision());
+        t.assert_equal(generation_before_quote,parent->shared_arena_generation());
         auto oversized=plan;
         for (auto & group : oversized.groups) group.size*=2;
         for (auto & phase : oversized.phase_sizes) for (auto & bytes : phase) bytes*=2;

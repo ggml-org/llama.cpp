@@ -949,6 +949,8 @@ bool llama_context::prepare_compute_arenas(
             if (!compute_memory->prepare_serial_target())
                 throw std::runtime_error("failed to recapture the bound local-cache workspace");
         }
+        if (compute_memory && cparams.kv_shared_read && !compute_memory->register_shared_read_consumer())
+            throw std::runtime_error("failed to register shared read-only serial consumer");
         if (compute_memory) compute_memory_graph_revision = compute_memory->graph_binding_revision();
         return compute_memory != nullptr;
     }
@@ -1330,19 +1332,19 @@ bool llama_context_suspend_kv_device(llama_context * ctx) noexcept {
     const auto resources = ctx->get_kv_resources();
     auto * stream = resources.full ? resources.full->get_kv_stream() : nullptr;
     if (!owner || !stream || (!stream->complete() && !stream->device_suspended())) return false;
-    struct recurrent_completion : llama_memory_executor_backend {
+    struct context_completion : llama_memory_executor_backend {
         llama_context & ctx;
-        llama_memory_recurrent & recurrent;
-        recurrent_completion(llama_context & ctx,llama_memory_recurrent & recurrent) : ctx(ctx),recurrent(recurrent) {}
+        llama_memory_recurrent * recurrent;
+        context_completion(llama_context & ctx,llama_memory_recurrent * recurrent) : ctx(ctx),recurrent(recurrent) {}
         bool drain() override {
             ctx.synchronize();
-            return recurrent.complete_spill() && recurrent.complete_restore_spill();
+            return !recurrent || (recurrent->complete_spill() && recurrent->complete_restore_spill());
         }
     };
     try {
         auto * recurrent = resources.recurrent;
-        if (!recurrent) return false;
-        recurrent_completion completion(*ctx,*recurrent);
+        if (!recurrent && !resources.bounded) return false;
+        context_completion completion(*ctx,recurrent);
         return owner->suspend_kv(&completion);
     } catch (...) { return false; }
 }

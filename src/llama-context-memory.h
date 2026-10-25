@@ -121,6 +121,9 @@ public:
     LLAMA_API bool kv_device_suspended() const noexcept;
     // A failed reverse transition closes this owner permanently; recreate the context to recover.
     LLAMA_API bool valid() const noexcept;
+    // Metadata-only preflight preserves current fixed regions; the restart minimum repacks their suffix.
+    LLAMA_API bool quote_suspended_loans(const std::vector<size_t> & bytes,
+        llama_context_memory_create_result & result) const noexcept;
     // Loan disjoint regions of a suspended parent. Output owns lease handles; all must return before resume.
     LLAMA_API bool lend_suspended(const std::vector<size_t> & bytes,
         std::vector<ggml_backend_memory_lease_t> & output) noexcept;
@@ -136,7 +139,9 @@ public:
     LLAMA_API const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
     LLAMA_API bool shares_kv_memory() const noexcept;
     LLAMA_API bool has_speculative_consumer() const noexcept;
-    // Vision can suspend only the known host-backed auxiliary cache and its registered serial draft.
+    // Declare an existing serial child that only reads its parent's committed cache.
+    LLAMA_API bool register_shared_read_consumer() noexcept;
+    // Suspend only known auxiliary-cache writers or declared shared-cache readers.
     LLAMA_API bool can_suspend_for_vision() const noexcept;
     bool borrows_serial_parent() const noexcept;
     LLAMA_API ggml_backend_buffer_t shared_parent() const noexcept;
