@@ -316,6 +316,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
     quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
 
+    // Engram gate is an elementwise weight (ggml_mul), not a matmul operand
+    quantize &= name.find("engram_gate.weight") == std::string::npos;
+
     // these are very small (e.g. 4x4)
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;

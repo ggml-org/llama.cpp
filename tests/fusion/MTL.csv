@@ -49,6 +49,8 @@ deepseek32          ,0   ,any     ,NORM+MUL+ADD                ,      2
 deepseek32          ,0   ,any     ,RMS_NORM+MUL                ,      9
 deepseek4           ,0   ,any     ,MUL+ADD                     ,      8
 deepseek4           ,0   ,any     ,RMS_NORM+MUL                ,     20
+deepseek41          ,0   ,any     ,MUL+ADD                     ,     12
+deepseek41          ,0   ,any     ,RMS_NORM+MUL                ,     29
 dots1               ,0   ,any     ,ADD+ADD                     ,      1
 dots1               ,0   ,any     ,MUL+ADD                     ,      2
 dots1               ,0   ,any     ,RMS_NORM+MUL                ,      9

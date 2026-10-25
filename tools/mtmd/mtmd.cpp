@@ -903,6 +903,11 @@ struct mtmd_context {
                     // no vocab tokens are added; the start/end/newline markers are learned embeddings emitted by the encoder
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseek4v>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_DEEPSEEK41V:
+                {
+                    // as deepseek4v: markers come from the encoder, the block is decoded causally
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseek41v>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_DOTS_OCR:
             case PROJECTOR_TYPE_DOTS3NOTE_V:
                 {

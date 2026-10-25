@@ -605,6 +605,10 @@ struct llama_layer {
     struct ggml_tensor * indexer_kpool_gate = nullptr;
     struct ggml_tensor * indexer_kpool_ape  = nullptr;
 
+    // deepseek41
+    struct ggml_tensor * engram_kv   = nullptr;
+    struct ggml_tensor * engram_gate = nullptr; // q_weight*k_weight folded
+
     // MSA
     struct ggml_tensor * index_q_proj = nullptr;
     struct ggml_tensor * index_k_proj = nullptr;

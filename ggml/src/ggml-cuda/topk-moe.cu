@@ -76,7 +76,7 @@ __device__ void sqrt_softplus_warp_inplace(float (&vals)[experts_per_thread], co
     for (int i = 0; i < experts_per_thread; i++) {
         const int  idx    = lane + i * WARP_SIZE;
         const bool active = !use_limit || (idx < limit);
-        vals[i]           = active ? sqrtf(vals[i] > 20.0f ? vals[i] : logf(1.0f + expf(vals[i]))) : -INFINITY;
+        vals[i]           = active ? sqrtf(vals[i] > 20.0f ? vals[i] : log1pf(expf(vals[i]))) : -INFINITY;
     }
 }
 
