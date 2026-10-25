@@ -1,8 +1,10 @@
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -25,6 +27,14 @@ bool ggml_sycl_fattn_onednn_binds_kv(const ggml_tensor * K, const ggml_tensor * 
     return bindable(K) && bindable(V);
 }
 
+#if GGML_SYCL_DNNL
+// Set when a oneDNN SDPA primitive fails at execute time. _supported() only inspects static
+// tensor properties; it cannot see device/driver failures that first appear when the primitive
+// runs. Remember the failure per device so dispatch stops selecting oneDNN FA and the TILE/MKL
+// fallback happens once, instead of warning on every FA call.
+static std::atomic<bool> g_ggml_sycl_fa_onednn_disabled[GGML_SYCL_MAX_DEVICES] = {};
+#endif
+
 bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use_shape_limit) {
 #if !GGML_SYCL_DNNL
     GGML_UNUSED(dst);
@@ -32,6 +42,9 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
     return false;
 #else
     if (!g_ggml_sycl_fa_onednn) {
+        return false;
+    }
+    if (g_ggml_sycl_fa_onednn_disabled[ggml_sycl_get_device()].load(std::memory_order_relaxed)) {
         return false;
     }
     // without a fused SDPA kernel oneDNN falls back to the same matmul, so reuse the check
@@ -165,6 +178,12 @@ struct sdpa_partition {
     bool   ok = false;
 };
 
+// The cache is process-wide: in split modes more than one device backend thread can reach this
+// function concurrently. Guard the map itself; the compiled partitions for distinct keys are
+// independent and may execute concurrently.
+static std::mutex g_ggml_sycl_sdpa_cache_mutex;
+static std::unordered_map<std::string, sdpa_partition> g_ggml_sycl_sdpa_cache;
+
 // Build + compile the contiguous-input GQA SDPA graph (MatMul->Divide->Add->SoftMax->MatMul), f32 out.
 // Mirrors the hardware-verified scratch/onednn_sdpa_probe.cpp build_gqa (partitions=1, sdp_primitive_kernel_t).
 static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int seq, int d,
@@ -236,7 +255,10 @@ catch (const std::exception & e) {
     return {};
 }
 
-void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) try {
+void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    char keyb[256] = {};
+    sdpa_partition * E_ptr = nullptr;
+    try {
     const ggml_tensor * Q    = dst->src[0];
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
@@ -402,22 +424,26 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
 
     // compile once per (device, shape, KV strides), reuse across layers/calls. Stride 2 always
     // repeats stride 1 and stride 4 is always 1, so the key covers every entry that can differ.
-    static std::unordered_map<std::string, sdpa_partition> cache;
-    char keyb[256];
     snprintf(keyb, sizeof(keyb), "%d:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld", ggml_sycl_get_device(),
              (long long) H, (long long) Hkv, (long long) q, (long long) seq, (long long) d,
              (long long) k_str[0], (long long) k_str[1], (long long) k_str[3],
              (long long) v_str[0], (long long) v_str[1], (long long) v_str[3]);
-    auto it = cache.find(keyb);
-    if (it == cache.end()) {
-        it = cache.emplace(keyb, build_sdpa(eng, (int) H, (int) Hkv, (int) q, (int) seq, (int) d, k_str, v_str)).first;
+    bool E_ok = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ggml_sycl_sdpa_cache_mutex);
+        auto it = g_ggml_sycl_sdpa_cache.find(keyb);
+        if (it == g_ggml_sycl_sdpa_cache.end()) {
+            it = g_ggml_sycl_sdpa_cache.emplace(keyb, build_sdpa(eng, (int) H, (int) Hkv, (int) q, (int) seq, (int) d, k_str, v_str)).first;
+        }
+        E_ptr = &it->second;
+        E_ok = E_ptr->ok;
     }
-    sdpa_partition & E = it->second;
-    if (!E.ok) {
+    if (!E_ok) {
         // oneDNN can decline a shape or a stride set that _supported() never sees; build_sdpa warns per key.
         ggml_sycl_flash_attn_ext_tile(ctx, dst);
         return;
     }
+    sdpa_partition & E = *E_ptr;
 
     auto id2ptr = [&](size_t r) -> void * {
         if (r == E.id_q)     return Qf_ptr;
@@ -444,11 +470,22 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     if (ggml_sycl_info().device_count > 1) {
         stream->wait_and_throw();
     }
-}
-catch (const std::exception & e) {
-    // any oneDNN/SYCL failure is non-fatal: fall back to the existing kernel (strictly additive).
-    GGML_LOG_WARN("%s: oneDNN SDPA failed (%s); falling back to TILE kernel\n", __func__, e.what());
-    ggml_sycl_flash_attn_ext_tile(ctx, dst);
+    } catch (const std::exception & e) {
+        {
+            std::lock_guard<std::mutex> lock(g_ggml_sycl_sdpa_cache_mutex);
+            if (E_ptr) {
+                E_ptr->ok = false;
+            }
+        }
+        // _supported() is static and cannot predict a runtime execute failure. Once oneDNN SDPA
+        // fails on a device, stop selecting it there so the TILE/MKL fallback happens once
+        // instead of being retried and logged on every FA call.
+        const bool first_failure = !g_ggml_sycl_fa_onednn_disabled[ctx.device].exchange(true);
+        if (first_failure) {
+            GGML_LOG_WARN("%s: oneDNN SDPA failed (%s); falling back to TILE kernel\n", __func__, e.what());
+        }
+        ggml_sycl_flash_attn_ext_tile(ctx, dst);
+    }
 }
 
 #endif // GGML_SYCL_DNNL
