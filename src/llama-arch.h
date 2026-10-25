@@ -679,6 +679,10 @@ enum llm_tensor {
     LLM_TENSOR_HC_FFN_DOWN,    // qwen4exp
     LLM_TENSOR_HC_FFN_UP,      // qwen4exp
     LLM_TENSOR_HC_FFN_INJECT,  // qwen4exp
+    LLM_TENSOR_HC_ATTN_DOWN_INJECT, // qwen4exp
+    LLM_TENSOR_HC_FFN_DOWN_INJECT,  // qwen4exp
+    LLM_TENSOR_ATTN_QKV_GATE,       // qwen4exp
+    LLM_TENSOR_SSM_BETA_ALPHA_CAT,  // qwen4exp
     LLM_TENSOR_PLE_KEY,        // qwen4exp
     LLM_TENSOR_PLE_VALUE,      // qwen4exp
     LLM_TENSOR_PLE_NORM_KEY,   // qwen4exp

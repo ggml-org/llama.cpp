@@ -920,6 +920,10 @@ class MODEL_TENSOR(IntEnum):
     HC_FFN_DOWN          = auto() # qwen4exp
     HC_FFN_UP            = auto() # qwen4exp
     HC_FFN_INJECT        = auto() # qwen4exp
+    HC_ATTN_DOWN_INJECT  = auto() # qwen4exp, [hc_attn_down | hc_attn_inject]
+    HC_FFN_DOWN_INJECT   = auto() # qwen4exp, [hc_ffn_down | hc_ffn_inject]
+    ATTN_QKV_GATE        = auto() # qwen4exp, [attn_qkv | attn_gate]
+    SSM_BETA_ALPHA_CAT   = auto() # qwen4exp, [ssm_beta | ssm_alpha], unlike the grouped qwen3next ssm_ba
     PLE_KEY              = auto() # qwen4exp
     PLE_VALUE            = auto() # qwen4exp
     PLE_NORM_KEY         = auto() # qwen4exp
@@ -1746,6 +1750,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_FFN_DOWN:               "blk.{bid}.hc_ffn_down",          # qwen4exp
     MODEL_TENSOR.HC_FFN_UP:                 "blk.{bid}.hc_ffn_up",            # qwen4exp
     MODEL_TENSOR.HC_FFN_INJECT:             "blk.{bid}.hc_ffn_inject",        # qwen4exp
+    MODEL_TENSOR.HC_ATTN_DOWN_INJECT:       "blk.{bid}.hc_attn_down_inject",  # qwen4exp
+    MODEL_TENSOR.HC_FFN_DOWN_INJECT:        "blk.{bid}.hc_ffn_down_inject",   # qwen4exp
+    MODEL_TENSOR.ATTN_QKV_GATE:             "blk.{bid}.attn_qkv_gate",        # qwen4exp
+    MODEL_TENSOR.SSM_BETA_ALPHA_CAT:        "blk.{bid}.ssm_beta_alpha",       # qwen4exp
     MODEL_TENSOR.PLE_KEY:                   "blk.{bid}.ple_key",              # qwen4exp
     MODEL_TENSOR.PLE_VALUE:                 "blk.{bid}.ple_value",            # qwen4exp
     MODEL_TENSOR.PLE_NORM_KEY:              "blk.{bid}.ple_norm_key",         # qwen4exp
@@ -3309,6 +3317,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.HC_FFN_DOWN,
         MODEL_TENSOR.HC_FFN_UP,
         MODEL_TENSOR.HC_FFN_INJECT,
+        MODEL_TENSOR.HC_ATTN_DOWN_INJECT,
+        MODEL_TENSOR.HC_FFN_DOWN_INJECT,
+        MODEL_TENSOR.ATTN_QKV_GATE,
+        MODEL_TENSOR.SSM_BETA_ALPHA_CAT,
         # full attention layers: ATTN_Q holds [q|gate] interleaved per head
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_Q_NORM,
