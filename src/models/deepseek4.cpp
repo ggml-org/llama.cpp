@@ -350,7 +350,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor ** post,
         ggml_tensor ** comb,
         int il) const {
-    return build_hc_pre(x, build_hc_mixes(x, hc_fn, hc_scale, hc_base, post, comb, false, il), il);
+    return build_hc_pre(x, build_hc_mixes(x, hc_fn, hc_scale, hc_base, post, comb, il), il);
 }
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_mixes(
@@ -360,7 +360,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_mixes(
         ggml_tensor * hc_base,
         ggml_tensor ** post,
         ggml_tensor ** comb,
-        bool f32_src,
         int il) const {
     const int64_t hc         = hparams.dsv4_hc_mult;
     const int64_t hc_dim     = hc*n_embd;
@@ -373,10 +372,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_mixes(
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
     ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
-    if (f32_src && !ggml_is_quantized(hc_fn->type)) {
-        // F32 weights (model.py hc_pre runs in fp32): request F32 inputs, the mixes are near-tie sensitive
-        ggml_prec_set_src(mixes, GGML_PREC_F32, 1);
-    }
     cb(mixes, "hc_mixes", il);
 
     ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
