@@ -34,6 +34,7 @@
 
 bool        htp_rows_stride(const int64_t * ne, const size_t * nb, size_t * stride);
 bool        htp_matmul_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst);
+bool        htp_matmul_add_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * src2, const struct ggml_tensor * dst);
 ggml_tensor htp_tensor_collapse_rows(const struct ggml_tensor * t);
 
 template <typename... Args>
@@ -44,6 +45,18 @@ static inline bool htp_kparams_check(Args &&... args) {
     decltype(htp_kparams_type(SolveFn)) kparams;
     return SolveFn(std::forward<Args>(args)..., &kparams);
 }
+
+struct htp_opnode;
+
+bool htp_kparams_solve(
+    const struct ggml_hexagon_session * sess,
+    struct htp_opnode & node
+);
+
+void htp_opnode_collapse(
+    const struct ggml_hexagon_session * sess,
+    struct htp_opnode & node
+);
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,

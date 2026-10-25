@@ -192,15 +192,20 @@ static bool fuse_mul_mat_add(const ggml_hexagon_session * sess, htp_opnode & pre
     if (!htp_match_consumer(prev, cur, /*commutative=*/ true, &src2)) return false;
     if (src2->type != GGML_TYPE_F32) return false;
 
-    const ggml_tensor * src0 = prev.src0();
-    const ggml_tensor * src1 = prev.src1();
-    const ggml_tensor * dst  = cur.dst();
-    if (!ggml_are_same_shape(prev.dst(), dst)) return false;
+    const ggml_tensor * src0 = prev.node->src[0];
+    const ggml_tensor * src1 = prev.node->src[1];
+    const ggml_tensor * dst  = cur.node;
+    if (!ggml_are_same_shape(prev.node, dst)) return false;
+
+    const bool prev_collapsed = htp_matmul_can_collapse(src0, src1, prev.node);
+    const bool cur_collapsed  = htp_matmul_add_can_collapse(src0, src1, src2, dst);
+    if (prev_collapsed != cur_collapsed) {
+        return false;
+    }
 
     const auto * orig_kparams = prev.kparams<htp_mm_kernel_params>();
     struct htp_mm_kernel_params kparams;
-    if (!htp_kparams_solve_matmul_add(sess, src0, src1, src2, dst, &kparams) ||
-        orig_kparams->collapse != kparams.collapse) {
+    if (!htp_kparams_solve_matmul_add(sess, src0, src1, src2, dst, &kparams)) {
         return false;
     }
 
@@ -222,6 +227,7 @@ static bool fuse_mul_mat_add(const ggml_hexagon_session * sess, htp_opnode & pre
     prev.opcode  = HTP_OP_MUL_MAT_ADD;
     prev.inputs  = { src0, src1, src2 };
     prev.outputs = { dst };
+    htp_opnode_collapse(sess, prev);
     prev.fused.push_back(cur.node);
     prev.set_kparams(kparams);
     return true;
@@ -233,36 +239,31 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
     const uint32_t curr_n = (uint32_t) prev.outputs.size();
     if (curr_n >= HTP_OP_MAX_OUTPUTS || curr_n + 1 >= HTP_OP_MAX_INPUTS) return false;
 
-    const ggml_tensor * w0   = prev.inputs[0];
-    const ggml_tensor * x    = prev.inputs[curr_n];
-    const ggml_tensor * w_in = cur.src0();
-    const ggml_tensor * x_in = cur.src1();
-    const ggml_tensor * d_in = cur.dst();
+    const ggml_tensor * w0     = prev.inputs[0];
+    const ggml_tensor * x_orig = prev.node->src[1];
+    const ggml_tensor * w_in   = cur.node->src[0];
+    const ggml_tensor * x_in   = cur.node->src[1];
+    const ggml_tensor * d_in   = cur.node;
 
     auto * orig_kparams = prev.kparams<htp_mm_kernel_params>();
     const auto * cur_kparams = cur.kparams<htp_mm_kernel_params>();
 
-    if (x_in != x || w_in->type != w0->type || w_in->ne[0] != w0->ne[0] ||
+    if (x_in != x_orig || w_in->type != w0->type || w_in->ne[0] != w0->ne[0] ||
         w0->ne[2] != 1 || w0->ne[3] != 1 || w_in->ne[2] != 1 || w_in->ne[3] != 1 ||
         htp_tensor_is_tiled(w_in) != htp_tensor_is_tiled(w0) ||
         orig_kparams->n_hmx != cur_kparams->n_hmx) {
         return false;
     }
 
-    const bool collapse = orig_kparams->collapse && htp_matmul_can_collapse(w_in, x, d_in);
-    if ((x->ne[2] > 1 || x->ne[3] > 1) && !collapse) return false;
+    const bool collapse = htp_matmul_can_collapse(w0, x_orig, prev.node) && htp_matmul_can_collapse(w_in, x_in, d_in);
+    if ((x_orig->ne[2] > 1 || x_orig->ne[3] > 1) && !collapse) return false;
 
     if (prev.opcode == HTP_OP_MUL_MAT_NX) {
         orig_kparams->n_weights = curr_n + 1;
     } else {
         struct htp_mm_kernel_params kparams;
-        if (collapse) {
-            const ggml_tensor x_collapsed = htp_tensor_collapse_rows(x);
-            if (!htp_kparams_solve_mmnx(sess, w0, &x_collapsed, curr_n + 1, &kparams)) return false;
-            kparams.collapse = 1;
-        } else if (!htp_kparams_solve_mmnx(sess, w0, x, curr_n + 1, &kparams)) {
-            return false;
-        }
+        const ggml_tensor x_collapsed = collapse ? htp_tensor_collapse_rows(x_orig) : *x_orig;
+        if (!htp_kparams_solve_mmnx(sess, w0, &x_collapsed, curr_n + 1, &kparams)) return false;
         if (!is_supported_mul_mat_nx_kernel(w0, &kparams)) return false;
 
         prev.set_kparams(kparams);
@@ -270,7 +271,7 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
     }
 
     prev.inputs.insert(prev.inputs.begin() + curr_n, w_in);
-    prev.outputs.push_back(d_in);
+    prev.outputs.push_back(collapse ? prev.add_dummy(htp_tensor_collapse_rows(d_in)) : d_in);
     prev.fused.push_back(cur.node);
     return true;
 }
@@ -415,15 +416,13 @@ static bool fuse_unary_mul_glu(const ggml_hexagon_session * sess, htp_opnode & p
     const ggml_tensor * dst  = cur.dst();
     if (htp_inputs_overlap_unsafe(prev, dst, up)) return false;
 
-    struct htp_glu_kernel_params kparams;
-    if (!htp_kparams_solve_unary_mul_glu(sess, glu_op, gate, up, dst, &kparams)) return false;
-
     prev.opcode  = glu_op;
     prev.inputs  = { gate, up };
     prev.outputs = { dst };
+    if (!htp_kparams_solve(sess, prev)) return false;
+
     prev.fused.push_back(cur.node);
     memset(prev.params, 0, sizeof(prev.params));
-    prev.set_kparams(kparams);
     return true;
 }
 

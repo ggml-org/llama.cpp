@@ -3775,16 +3775,6 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
     return HTP_STATUS_OK;
 }
 
-static inline void htp_mm_tensor_collapse_rows(struct htp_tensor * c, const struct htp_tensor * t, uint32_t stride) {
-    *c = *t;
-    c->ne[1] = t->ne[1] * t->ne[2] * t->ne[3];
-    c->ne[2] = 1;
-    c->ne[3] = 1;
-    c->nb[1] = stride;
-    c->nb[2] = c->nb[1] * c->ne[1];
-    c->nb[3] = c->nb[2];
-}
-
 static int op_matmul_impl(struct htp_ops_context * octx) {
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
 
@@ -3801,36 +3791,6 @@ static int op_matmul_impl(struct htp_ops_context * octx) {
 }
 
 int op_matmul(struct htp_ops_context * octx) {
-    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
-
-    if (kparams->collapse) {
-        const struct htp_tensor * act  = octx->src[1];
-        const struct htp_tensor * dst  = octx->dst;
-        const uint32_t s_act = (act->ne[1] > 1) ? act->nb[1] : ((act->ne[2] > 1) ? act->nb[2] : act->nb[3]);
-        const uint32_t sd    = (dst->ne[1] > 1) ? dst->nb[1] : ((dst->ne[2] > 1) ? dst->nb[2] : dst->nb[3]);
-        struct htp_tensor act_collapsed, dst_collapsed;
-        htp_mm_tensor_collapse_rows(&act_collapsed, act, s_act);
-        htp_mm_tensor_collapse_rows(&dst_collapsed, dst, sd);
-        octx->src[1] = &act_collapsed;
-        octx->dst    = &dst_collapsed;
-
-        struct htp_tensor src2_collapsed;
-        const struct htp_tensor * src2 = octx->src[2];
-        if (src2 && (src2->ne[1] * src2->ne[2] * src2->ne[3] > 1)) {
-            const uint32_t s2 = (src2->ne[1] > 1) ? src2->nb[1] : ((src2->ne[2] > 1) ? src2->nb[2] : src2->nb[3]);
-            htp_mm_tensor_collapse_rows(&src2_collapsed, src2, s2);
-            octx->src[2] = &src2_collapsed;
-        }
-
-        const int status = op_matmul_impl(octx);
-        octx->src[1] = act;
-        octx->dst    = dst;
-        if (src2) {
-            octx->src[2] = src2;
-        }
-        return status;
-    }
-
     return op_matmul_impl(octx);
 }
 
@@ -4562,35 +4522,5 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
 }
 
 int op_matmul_nx(struct htp_ops_context * octx) {
-    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
-
-    if (kparams->collapse) {
-        const uint32_t n_weights = kparams->n_weights;
-        const struct htp_tensor * act = octx->src[n_weights];
-        const uint32_t s1 = (act->ne[1] > 1) ? act->nb[1] : ((act->ne[2] > 1) ? act->nb[2] : act->nb[3]);
-        struct htp_tensor act_collapsed;
-        struct htp_tensor dsts_collapsed[HTP_OP_MAX_OUTPUTS];
-        const struct htp_tensor * orig_dsts[HTP_OP_MAX_OUTPUTS];
-
-        htp_mm_tensor_collapse_rows(&act_collapsed, act, s1);
-        octx->src[n_weights] = &act_collapsed;
-
-        for (uint32_t p = 0; p < n_weights; p++) {
-            orig_dsts[p] = octx->dsts[p];
-            const struct htp_tensor * d = octx->dsts[p];
-            const uint32_t sd = (d->ne[1] > 1) ? d->nb[1] : ((d->ne[2] > 1) ? d->nb[2] : d->nb[3]);
-            htp_mm_tensor_collapse_rows(&dsts_collapsed[p], d, sd);
-            octx->dsts[p] = &dsts_collapsed[p];
-        }
-
-        const int status = op_matmul_nx_impl(octx);
-
-        octx->src[n_weights] = act;
-        for (uint32_t p = 0; p < n_weights; p++) {
-            octx->dsts[p] = orig_dsts[p];
-        }
-        return status;
-    }
-
     return op_matmul_nx_impl(octx);
 }

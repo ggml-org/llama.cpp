@@ -61,7 +61,7 @@ enum htp_mm_kernel_type {
 struct htp_mm_kernel_params {
     uint8_t  kernel_type;        // enum htp_mm_kernel_type
     uint8_t  pipeline;           // 1 = pipelined execution, 0 = standard
-    uint8_t  collapse;           // 1 = collapse outer dims into 2D, 0 = standard
+    uint8_t  unused;             // reserved
     uint8_t  n_hmx;              // 1 = use HMX, 0 = use HVX
 
     uint8_t  n_threads;          // Number of threads to spawn
