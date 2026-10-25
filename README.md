@@ -10,13 +10,13 @@ On an RTX 5070 Ti with IQ4_XS weights and Q8_0 K / Q4_0 V, stock llama.cpp with 
 
 ![IQ4_XS Q8/Q4 throughput: four V2 modes through 256 Ki and stock UVM without streaming through 128 Ki](media/adaptive-kv-four-mode-throughput.png)
 
-The colored lines are the 128-point V2 sweep with UVM disabled and independently maximum-fit arenas. The gray line is a fresh 16-point stock-UVM sweep, without KV streaming, an arena or speculation, ending at 128 Ki. Both use the same IQ4_XS model, Q8/Q4 KV, corpus, context-matched prompts, 256 output tokens and b/ub=256. These are separate recorded sweeps, not repeated statistical A/B trials; results depend on the workload and hardware. [V2 details](#q8q4-four-mode-context-scaling) · [V2 CSV](media/adaptive-kv-four-mode-comparison.csv) · [Stock-UVM CSV](media/stock-uvm-iq4-throughput.csv) · [V2 project discussion](https://www.reddit.com/r/LocalLLM/comments/1wt03zh/adaptive_kvcache_streaming_v2_full_context_mtp/).
+The colored lines are the 128-point V2 sweep with UVM disabled and independently maximum-fit arenas. The gray line is a fresh 16-point stock-UVM sweep, without KV streaming, an arena or speculation, ending at 128 Ki. Both use the same IQ4_XS model, Q8/Q4 KV, corpus, context-matched prompts, 256 output tokens and b/ub=256. These are separate recorded sweeps, not repeated statistical A/B trials; results depend on the workload and hardware. [V2 details](#qwen-measurements) · [V2 CSV](media/adaptive-kv-four-mode-comparison.csv) · [Stock-UVM CSV](media/stock-uvm-iq4-throughput.csv) · [V2 project discussion](https://www.reddit.com/r/LocalLLM/comments/1wt03zh/adaptive_kvcache_streaming_v2_full_context_mtp/).
 
-Gemma 4 31B now uses the same streaming infrastructure while keeping its sliding-window caches resident. In the new 60-point Q3_K_M/Q8-Q4 sweep, MTP=3 measures 91.2 tok/s at 8 Ki and 28.3 tok/s at 120 Ki, versus 39.6 and 10.3 target-only. These are separately fitted arenas, not equal-memory comparisons or a stock-UVM baseline.
+Gemma 4 31B now uses the same streaming infrastructure while keeping its sliding-window caches resident. In the 60-point Q3_K_M/Q8-Q4 sweep, MTP=3 measures 91.2 tok/s at 8 Ki and 28.3 tok/s at 120 Ki, versus 39.6 and 10.3 target-only. The separate post-D512 MTP3 sweep extends through 256 Ki, measuring 7.8 tok/s there. These are separately fitted arenas, not equal-memory comparisons or a stock-UVM baseline.
 
-![Gemma 4 target-only and MTP1-3 prefill/decode through 120 Ki](media/gemma4-120ki-throughput.png)
+![Gemma 4 measured prefill/decode: target-only and MTP1/2 through 120 Ki, post-D512 MTP3 through 256 Ki; both y-axes start at zero](media/gemma4-256ki-throughput.png)
 
-[Gemma measurements and scope](#gemma-4-through-120-ki) cover all four modes at every 8 Ki step. The shared prefill path also reuses bounded KV conversion and overlaps transfers with attention; [repeated A/B measurements](#common-prefill-improvements) separate those gains from the context sweeps.
+The chart shows the earlier target-only, MTP1 and MTP2 cohort through 120 Ki and the separate post-D512 MTP3 cohort through 256 Ki; no curves are extrapolated. Both throughput axes start at zero. [Chart CSV](media/gemma4-256ki-throughput.csv) / [cohort provenance](media/gemma4-256ki-throughput.json). The [original all-mode measurements](#gemma-4-measurements) remain available at every 8 Ki step through 120 Ki. The shared prefill path also reuses bounded KV conversion and overlaps transfers with attention; [repeated A/B measurements](#common-prefill-improvements) separate those gains from the context sweeps.
 
 The implementation supports **one serial Qwen3.8-27B or Gemma 4 31B request on one CUDA GPU**. Supported combinations and tested limits are listed below. Ordinary upstream modes remain available without adaptive execution. The Qwen figure above is its earlier recorded cohort, not a rerun with the newer prefill implementation.
 
@@ -43,103 +43,27 @@ Qwen embedded MTP needs a target GGUF containing its MTP tensors; its architectu
 
 Gemma's 120 Ki endpoint is the completed all-mode text sweep. The separate post-D512 MTP3-only sweep covers all 32 maximum-fit points through 256 Ki; it does not qualify other modes or image prefill there. Native controls are separate fitting cases: the 16 Ki native-MTP attempt ran out of VRAM while loading assistant weights, before inference. Long streamed lifecycle tests also cover a 98,304-token prompt and greater-than-4-GiB saved state; that is not long-context native numerical equivalence. See the [current Gemma ledger](GEMMA4_ADAPTIVE_KV_ROADMAP.md).
 
-### Gemma 4 image support
+### Vision support
 
-The qualified image profile uses the pinned 31B `Q3_K_S` target, a locally quantized matching `Q8_0` projector, and the matching external `Q8_0` assistant for MTP1-3. This is a separate memory profile from the historical `Q3_K_M` text sweeps; their rates and fitted arenas must not be substituted. See the [vision qualification manifest](benchmarks/data/gemma4-vision-qualification.json) and [GV0-GV9 design/evidence](GEMMA4_VISION_PHASE_ROADMAP.md).
+Both Qwen3.8-27B and Gemma 4 31B support still images and interleaved image/text prompts, target-only or with MTP lengths 1-3, on one CUDA GPU. Each requires a matching vision projector (`--mmproj`). Qwen uses its matching F16 projector; the qualified Gemma image profile uses a `Q3_K_S` target and matching local `Q8_0` projector, separate from the Q3_K_M text benchmarks above.
 
-| Resource | Recorded GPU allocation | Placement during image encoding |
-| --- | ---: | --- |
-| Q3_K_S target weights | 12,583.79 MiB | Outside the parent; remain on GPU |
-| Optional matching Q8 assistant | 475.81 MiB | Outside the parent; remain on GPU, no assistant execution |
-| Local Q8 projector weights | 807,838,208 bytes / 770.41 MiB | Temporary weight grant inside the parent |
-| Local/SWA KV | Depends on image microbatch; table below | Protected persistent suffix inside the same parent |
-| Encoder attention and other activations | Measured for the actual image batch | Temporary compute grant inside the parent; no decoder KV history |
-| Full-attention KV and completed image embeddings | Host allocations | Authoritative host history and owned outputs survive the handoff |
+Both models reuse the text phase arena for vision weights and encoder workspace; main-model and optional assistant weights stay outside it. Model-specific position/cache handling remains separate: Gemma preserves its resident SWA cache and uses shared-KV MTP, while Qwen retains its image-aware auxiliary MTP history. Image count, token budget and batch size need their own fit; this profile excludes audio/video, LoRA, parallel slots and DFlash.
 
-The Q8 file is 807,772,384 bytes, not a pure eight-bit encoding of every tensor. Shape-incompatible and sensitive tensors retain F16/F32. A smaller local Q4_0 candidate (599,140,576 file bytes) passed component/native-bit checks and the current synthetic fixture/F16-reference comparison, but is not the selected deployment artifact. These fixtures are not a general OCR, chart or visual-detail quality certificate. Native-versus-arena equality uses the same projector artifact; cross-precision outputs need not be identical.
-
-The recorded Q8 artifact was made directly from the pinned matching F16 projector with the existing quantizer, without overriding its sensitive-tensor exclusions or shape fallbacks:
-
-```sh
-cmake --build build-v2 --target llama-quantize --parallel 2
-build-v2/bin/llama-quantize /path/to/mmproj-F16.gguf \
-  /path/to/mmproj-gemma4-31B-Q8_0-local.gguf Q8_0 8
-```
-
-Verify the reference and resulting artifact hashes against the qualification manifest; an arbitrary publisher's Q8 filename is not proof of identical tensors or pairing. The smaller Q4 candidate was independently quantized from F16, not requantized from Q8.
-
-| Requested per-image budget | Square output rows | Tested b/ub | Protected SWA MiB | One-image encoder workspace MiB | Normal parent MiB |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 70 | 64 | 256/256 | 406.25 | 37.66 | 2048 |
-| 140 | 121 | 256/256 | 406.25 | 71.20 | 2048 |
-| 280 | 256 | 512/512 | 487.50 | 150.63 | 2048 |
-| 560 | 529 | 768/768 | 568.75 | 311.26 | 2048 |
-| 1120 | 1089 | 1280/1280 | 731.25 | 640.75 | 2143 |
-
-Budgets are limits, not guaranteed row counts. The Gemma4V preprocessor uses floor-aligned aspect-ratio geometry; at budget 1120 the portrait/landscape fixtures produce 1064 rows and the narrow fixture 945. Qwen retains its separate preprocessing. The image chunk must fit in one admitted microbatch. Wider image batches enlarge local rollback/headroom storage, so a text-only `--ubatch-size 256` fit does not qualify every image budget. Compatible images can share an encoder batch; the larger two-image fixtures split through the existing batch limits and retain prompt order.
-
-At ctx 4096, prefix 1333 and 16 outputs, modes 0-3 have exact per-scenario native API controls through budget 560; target-only also has them at 1120. Eager native MTP1-3 at 1120 runs out of VRAM allocating the 640.75 MiB encoder workspace after valid text controls. The arena's 1120 MTP profiles pass using staged native encoder/logit/hidden-vector oracles plus separate lifecycle self-consistency; **that is not full native API equivalence at 1120 MTP**. The recorded two-image 1120 workload has a 2143 MiB whole-MiB phase minimum and independent maximum-fit parents of 2812 MiB target-only / 2332 MiB MTP1-3, each with an actual rejected +1 MiB neighbor. These are measured configurations on one card, not portable minima/maxima or arbitrary-image guarantees.
-
-Long image lifecycle coverage is separately scoped to budget 70, capacity 131072 and a 98304-token text prefix at all four modes, including actual ring use, later images, save/restore and process restart. It is streamed-only self-consistency, not long native equivalence or full 256 Ki image-prefill qualification. The 4 Ki image tests also cover 1024-output generations and another image after decode. Failed requests use validated recovery or an explicit uncached reset; malformed state-file rejection does not promise that the prior in-memory cache survived unchanged.
-
-The joint public-vision and image-conditioned full-vector memory gates use the explicitly approved 1536 MiB sanitizer-only parent, unchanged model/projector/KV types and exact vector/API checks. Ordinary 2048/2143 MiB profiles remain unchanged. Encoder/component controls retain their separately recorded budgets; a largest-budget component pass is not a full joint 1120 MTP sanitizer run. Driver executables, host preprocessing and host KV are not bounded by the device arena.
-
-#### Launch Gemma image inference
-
-Use the [build instructions](#build) with the vision-enabled revision of this fork. Use the locally verified matching projector; do not substitute an arbitrary same-width GGUF. A budget 70 example matching the normal profile is:
-
-```bash
-GEMMA_IMAGE_MODEL=/path/to/gemma-4-31B-it-Q3_K_S.gguf
-GEMMA_IMAGE_PROJECTOR=/path/to/mmproj-gemma4-31B-Q8_0-local.gguf
-GEMMA_IMAGE_ASSISTANT=/path/to/mtp-gemma-4-31B-it-Q8_0.gguf
-GEMMA_IMAGE_ARGS=(--model "$GEMMA_IMAGE_MODEL" --mmproj "$GEMMA_IMAGE_PROJECTOR"
-                  --ctx-size 4096 --parallel 1 --batch-size 256 --ubatch-size 256
-                  --n-gpu-layers 999 --flash-attn on --fit off --offline --no-context-shift
-                  --cache-type-k q8_0 --cache-type-v q4_0 --shared-device-memory-mib 2048
-                  --image-min-tokens 70 --image-max-tokens 70)
-
-# Target-only: no assistant weights are loaded.
-./build-v2/bin/llama-server "${GEMMA_IMAGE_ARGS[@]}" --spec-type none
-
-# Run separately: matching shared-KV MTP, no draft cache overrides.
-./build-v2/bin/llama-server "${GEMMA_IMAGE_ARGS[@]}" \
-  --model-draft "$GEMMA_IMAGE_ASSISTANT" --spec-draft-ngl 999 \
-  --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-n-min 0 --spec-draft-p-min 0
-```
-
-For budget 1120 use the measured b/ub 1280/1280 profile and refit the parent for the actual images/context/mode. Do not enable full-SWA, LoRA, parallel slots, Gemma DFlash, audio/video or CPU/UVM fallbacks to work around an unsupported profile. Only the stated image/text Gemma 4 31B pairing is qualified on CUDA SM120; compile-only portability evidence does not extend this vision runtime qualification.
-
-An image-aware finder example using your own two images is:
-
-```sh
-python3 benchmarks/find-max-arena.py \
-  --server build-v2/bin/llama-server --model /path/to/gemma-4-31B-it-Q3_K_S.gguf \
-  --model-draft /path/to/mtp-gemma-4-31B-it-Q8_0.gguf \
-  --mmproj /path/to/mmproj-gemma4-31B-Q8_0-local.gguf \
-  --context-size 4096 --batch-size 1280 --ubatch-size 1280 \
-  --cache-type-k q8_0 --cache-type-v q4_0 --spec-mode mtp --draft-length 3 \
-  --image /path/to/first.png --image /path/to/second.png \
-  --prompt-file /path/to/image-request.txt --image-min-tokens 1120 --image-max-tokens 1120 \
-  --decode-tokens 16 --output benchmarks/results/fit-gemma-images
-```
-
-The prompt file needs one `<__media__>` marker per image. In the recorded two-pattern run, selected fields were `arena_mib=2332`, `next_mib_rejected=2333`, `vision_execution_validated=true`, `draft_length=3`, and `decode_tokens=16`. These are real measured values for those pinned fixtures, not predicted results for the example's arbitrary photos. `--initial-arena-mib` is optional and is not a required arena input. A `--mmproj` run without `--image` remains only a configured-projector text fit.
-
-![Gemma image phase memory inside the one device parent](media/gemma4-vision-phase-memory.png)
-![Gemma first-image latency and phase handoff measurements](media/gemma4-vision-phase-latency.png)
-
-[Measured points (CSV)](benchmarks/data/gemma4-vision-measurements.csv) / [metrics, scope and source hashes](benchmarks/data/gemma4-vision-measurements.json). Each point is one first image request with prompt-cache reuse disabled, not a cold-disk measurement or a repeated latency/speedup benchmark. Encoder wall time includes the owned host-output copy; reload is not pure PCIe bandwidth. CPU preprocessing and image/text-prefill portions are not independently isolated. Device samples can miss peaks. Native 1120 MTP OOMs are missing comparison points, never zero-duration data.
-
+See the shared [vision launch examples](#vision-launch-examples). The [Gemma vision report](docs/multimodal/gemma4-vision.md) contains its projector preparation, sizing tables, measurements, qualification limits and internal APIs; [vision tests](tools/server/tests/README.md#adaptive-kv-vision-qualification) document Qwen's separate controls.
 
 ### KV-cache formats
 
-| K and V choices | Combination support | Qualification / caveat |
-| --- | --- | --- |
-| `f32`, `f16`, `bf16`, `q8_0`, `q5_0`, `q5_1`, `q4_0`, `q4_1` | All 64 ordered pairs, subject to compiled path, geometry and memory admission | Qwen controls plus Gemma D512 span/tile/progressive native-bit oracles; this is not a full-model performance sweep of all 64 pairs |
-| Q8_0/Q4_0, Q8_0/Q8_0, Q5_1/Q5_1 | Qwen target-only/MTP3/DFlash7 and Gemma target-only/MTP1-3 | Qwen's 45-point capacity matrix; Gemma's fitting native/streamed server controls across all four modes |
-| Gemma long-context measurements | Q8_0 K / Q4_0 V | Full 60-point performance sweep through 120 Ki, plus lifecycle/recovery qualification; other pairs need their own long-context fit |
-| `iq4_nl` | Not admitted by current CUDA streamed attention | A writer exists, but the current stock CUDA Flash Attention selector has no reader; an all-quants build cannot add that missing reader |
-| Image requests | Q8_0 K / Q4_0 V is the all-budget Gemma reference | Fresh fitting Gemma image API controls additionally cover Q8/Q8 and Q5_1/Q5_1 at budget 70/all modes; all 64 reader pairs are not an all 64 whole-image benchmark |
+Gemma long-context text and image requests are not restricted to Q8_0 K / Q4_0 V. The pairs below are supported for text and vision on both models, subject to compiled kernels, geometry and memory fit. Request type does not select a different fixed KV precision.
+
+| K format | V format | Qwen3.8-27B | Gemma 4 31B |
+| --- | --- | --- | --- |
+| `q8_0` | `q4_0` | Supported | Supported |
+| `q8_0` | `q8_0` | Supported | Supported |
+| `q5_1` | `q5_1` | Supported | Supported |
+
+These three reference pairs have model-level controls for both targets; changing format still requires refitting the arena. Q8/Q4 is the reference setting for the published Gemma long-context sweeps and all-budget image measurements, **not a format restriction**. Q8/Q8 and Q5_1/Q5_1 are also supported; their measurement coverage is recorded separately in the [performance results](#performance-and-reproduction) and [vision report](docs/multimodal/gemma4-vision.md#kv-format-support-and-test-coverage).
+
+The common readers also admit all 64 ordered pairs from `f32`, `f16`, `bf16`, `q8_0`, `q5_0`, `q5_1`, `q4_0` and `q4_1`, subject to compiled kernels, geometry and memory admission. All-pair operator qualification is not an all-pair full-model or image benchmark. `iq4_nl` is not admitted by the current stock CUDA Flash Attention reader.
 
 Adaptive MTP and DFlash inherit the target's K/V formats. **Do not pass draft-cache overrides**, even identical values: `--spec-draft-type-k/v` and their aliases are rejected for adaptive execution. Native non-streaming drafting retains independent cache settings.
 
@@ -187,94 +111,80 @@ Set `-DCMAKE_CUDA_ARCHITECTURES=...` for your GPU if needed. Increase build para
 
 ### Find a usable arena size
 
-First free the GPU from competing workloads yourself. The [arena finder](benchmarks/find-max-arena.py) starts and stops only its own server children; it does not stop containers, download models or modify production.
+Make sufficient GPU memory available, supply local model files, and choose an unused port.
 
-A text-only Gemma MTP example (use your own model paths):
+These two examples use each GGUF's native 262,144-position capacity, MTP3, Q8_0 K / Q4_0 V and a configured matching projector. `--probe-mode preflight` searches with short runtime probes (2,048 prompt tokens plus 256 outputs here), not just startup admission. `--validate-selected` then checks the full requested text workload **once**, at the selected arena. A failed final check stops without publishing a successful fit.
+
+**Gemma 4 31B:** The example uses the Q3_K_S vision profile, local Q8 projector and matching external Q8 assistant. Substitute your own paths:
 
 ```sh
 python3 benchmarks/find-max-arena.py \
-  --server build-v2/bin/llama-server --model /path/to/gemma-4-31B-it-Q3_K_M.gguf \
+  --server build-v2/bin/llama-server --model /path/to/gemma-4-31B-it-Q3_K_S.gguf \
   --model-draft /path/to/mtp-gemma-4-31B-it-Q8_0.gguf \
-  --context-size 8192 --cache-type-k q8_0 --cache-type-v q4_0 \
-  --spec-mode mtp --draft-length 3 \
-  --output benchmarks/results/fit-gemma-mtp
+  --mmproj /path/to/mmproj-gemma4-31B-Q8_0-local.gguf \
+  --context-size 262144 --cache-type-k q8_0 --cache-type-v q4_0 \
+  --spec-mode mtp --draft-length 3 --batch-size 256 --ubatch-size 256 \
+  --image-min-tokens 70 --image-max-tokens 70 --decode-tokens 256 \
+  --probe-mode preflight --validate-selected \
+  --output benchmarks/results/fit-gemma-vision-mtp
 ```
 
-Selected fields from an [actual RTX 5070 Ti run](benchmarks/data/gemma4-finder-example.json) of this configuration are below. It completed all 7,921 prompt tokens and 256 outputs. This measured fit is not a portable recommendation; refit for your GPU, context and workload. No starting guess or image is required.
+Selected fields from the real Gemma `result.json` on the RTX 5070 Ti:
 
 ```json
 {
-  "arena_mib": 1032,
-  "initial_arena_mib": 2240,
-  "next_mib_rejected": 1033,
-  "context_size": 8192,
-  "cache_type_k": "q8_0",
-  "cache_type_v": "q4_0",
-  "spec_mode": "mtp",
+  "arena_mib": 2472,
+  "next_mib_rejected": 2473,
+  "context_size": 262144,
   "draft_length": 3,
-  "prompt_tokens": 7921,
+  "probe_mode": "preflight",
+  "prompt_tokens": 2048,
+  "requested_prompt_tokens": 261873,
   "decode_tokens": 256,
-  "projector_configured": false,
-  "vision_execution_validated": false,
-  "uvm": false,
-  "reserve_mib": 0
+  "runtime_probe_validated": true,
+  "full_workload_validated": true,
+  "projector_configured": true,
+  "vision_execution_validated": false
 }
 ```
 
-Here, `arena_mib` is the result to use when launching the server; `initial_arena_mib` was only the search's starting guess. `next_mib_rejected` records the tested 1 MiB-larger candidate that did not fit, or is `null` if no such neighbor was tested.
-
-| Fit configuration | Options to use |
-| --- | --- |
-| Target-only | `--spec-mode none` |
-| Qwen embedded MTP | `--spec-mode mtp --draft-length 1`, `2` or `3`; no separate assistant |
-| Gemma shared-KV MTP | The same MTP options plus `--model-draft /path/to/mtp-gemma-4-31B-it-Q8_0.gguf` |
-| DFlash2 | `--spec-mode dflash --draft-length 7 --model-draft /path/to/sidecar.gguf` |
-| Different K/V pair | `--cache-type-k q5_1 --cache-type-v q5_1` |
-| Different batching | `--batch-size 512 --ubatch-size 256` or the settings you intend to serve |
-| Deferred vision configuration, with or without MTP | `--mmproj /path/to/mmproj.gguf`; no image is required to find the arena allocation ceiling |
-| Optional image-workload validation | Add `--image /path/to/photo.png`; repeat `--image` for a batch |
-
-The largest allocatable parent is distinct from the minimum space needed by a vision batch. Projector weights and encoder workspace borrow regions inside that parent; they are not another full allocation added alongside it. With `--mmproj` alone, the finder configures the deferred projector and runs a text workload to find the allocation ceiling. It does not encode an image or qualify every possible vision batch.
-
-Optionally supply images to additionally validate their vision-phase footprint and handoff. A literal prompt file needs one `<__media__>` marker per image, in image order. Without that file, the finder uses a short image-description prompt:
+**Qwen3.8-27B:** The example uses IQ4_XS weights and the matching F16 projector. MTP is embedded in this model, so no separate assistant is supplied:
 
 ```sh
 python3 benchmarks/find-max-arena.py \
   --server build-v2/bin/llama-server --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
-  --context-size 262144 --cache-type-k q8_0 --cache-type-v q4_0 \
-  --spec-mode mtp --draft-length 3 \
   --mmproj /path/to/mmproj-Qwen3.8-27B-F16.gguf \
-  --image /path/to/first.png --image /path/to/second.png \
-  --prompt-file /path/to/image-request.txt --image-max-tokens 4096 \
-  --output benchmarks/results/fit-vision-mtp
+  --context-size 262144 --cache-type-k q8_0 --cache-type-v q4_0 \
+  --spec-mode mtp --draft-length 3 --batch-size 256 --ubatch-size 256 \
+  --image-min-tokens 64 --image-max-tokens 4096 --decode-tokens 256 \
+  --probe-mode preflight --validate-selected \
+  --output benchmarks/results/fit-qwen-vision-mtp
 ```
 
-For this optional Qwen image-validation example, `result.json` also records the supplied images and whether the vision path ran. Its vision-specific fields on success look like this (paths are schematic; no image-fit measurement is implied):
+Selected fields from the real Qwen `result.json` on the same card:
 
 ```json
 {
+  "arena_mib": 2324,
+  "next_mib_rejected": 2325,
   "context_size": 262144,
-  "spec_mode": "mtp",
   "draft_length": 3,
-  "projector_configured": true,
-  "vision_execution_validated": true,
-  "images": ["/path/to/first.png", "/path/to/second.png"],
-  "prompt_file": "/path/to/image-request.txt",
+  "probe_mode": "preflight",
+  "prompt_tokens": 2048,
+  "requested_prompt_tokens": 261873,
   "decode_tokens": 256,
-  "uvm": false
+  "runtime_probe_validated": true,
+  "full_workload_validated": true,
+  "projector_configured": true,
+  "vision_execution_validated": false
 }
 ```
 
-With `--mmproj` but no `--image`, `projector_configured` would be `true` and `vision_execution_validated` would be `false`.
+Both selected arenas completed the final **261,873-token prefill and all 256 outputs**, with actual MTP drafts. Each 1 MiB-larger neighbor was rejected during the short-probe search. These are real, workload-specific fits with UVM disabled and no arbitrary reserve, not portable arena recommendations. [Recorded outputs, artifact hashes and validation receipt](benchmarks/data/native-context-finder-examples.json). The Gemma Q3_K_S fit does not replace the Q3_K_M performance cohort.
 
-Both runs print the selected launch command at the end:
+With no `--image`, both runs configure the deferred projector but test text execution: `projector_configured=true`, `vision_execution_validated=false`. Image-dependent minimum grants are a separate check. Add `--image /path/to/photo.png` to execute that image workload; see the [image-aware fitting example](docs/multimodal/gemma4-vision.md#find-a-fit-for-your-images). A prompt file needs one `<__media__>` marker per image. Preflight never truncates a supplied image request.
 
-```text
-Selected command (POSIX shell):
-env ... /path/to/build-v2/bin/llama-server ... --shared-device-memory-mib 1032 ...
-```
-
-That display abbreviates the measured Gemma example; the actual output and `command.txt` contain the complete command, including environment cleanup. Each output directory contains:
+Use `arena_mib` to launch the server. The tool also prints the complete selected command and stores:
 
 | File | Contents |
 | --- | --- |
@@ -282,10 +192,11 @@ That display abbreviates the measured Gemma example; the actual output and `comm
 | `command.txt` | Complete POSIX-shell launch command, ready to copy |
 | `probes.jsonl` | Results of the arena search probes |
 | `arena-<MiB>.log` | Server output for each attempted arena size |
+| `selected-validation/` | Full selected-workload record and log when requested |
 
-Every probe disables UVM and runs inference, including the configured output length, instead of accepting startup alone. Without `--image`, it uses the checked-in corpus and fills context minus output tokens and 15 positions of headroom by default, including when `--mmproj` is configured. Use `--prompt-tokens N` or `--prefill-text FILE` for another text workload. With images, it additionally exercises the supplied image batch and prompt, **not every possible image or a full-length text history**. JSON distinguishes `projector_configured` from `vision_execution_validated`; image-dependent minimum grants and external driver allocations still need runtime admission.
+Omit `--validate-selected` for short-probe sizing alone; then the report does not claim full text-workload validation. The default `--probe-mode full` retains the older behavior of testing the full workload for every candidate. `--prompt-tokens N` and `--prefill-text FILE` select another text workload. `--initial-arena-mib` is optional (default starting guess 2240), not a required arena size or reserve. `next_mib_rejected` is `null` if no larger neighbor was tested.
 
-The tool determines the arena size for you. You do not need to pass `--initial-arena-mib`; its optional value only changes the initial search guess (default: 2,240 MiB), not the final size or a safety reserve. The tool searches in MiB steps without an arbitrary reserve, preserves probe logs, and writes `result.json`, `probes.jsonl` and a ready-to-run POSIX-shell command in `command.txt`. The command preserves the probe's removal of inherited `LLAMA_ARG_*` settings, UVM and graph/rollback debug overrides; JSON also records those environment changes for other shells. Unsupported kernels, incomplete responses and other non-OOM failures stop the search rather than being hidden as memory limits. A larger image batch or another process can change the result; there is no universal safe arena value. Fitting near full context can take considerable time.
+The finder removes inherited `LLAMA_ARG_*`, UVM and graph/rollback debug overrides. Unsupported kernels, incomplete responses, device faults and other non-OOM failures stop the search. Different images, prompt shapes, concurrent GPU users or driver allocations can change fit; there is no universal OOM guarantee. Even one full native-context validation can take several minutes.
 
 ### Launch examples
 
@@ -294,7 +205,6 @@ These examples use Bash. On Windows, adapt the argument grouping and executable 
 ```bash
 KV_SERVER=./build-v2/bin/llama-server
 KV_MODEL=/path/to/Qwen3.8-27B-UD-IQ4_XS.gguf
-KV_MMPROJ=/path/to/mmproj-Qwen3.8-27B-F16.gguf
 KV_DFLASH=/path/to/Qwen3.8-27B-DFlash2-Q4_K_M.gguf
 KV_ARENA=2240  # Example only; use your fit result.
 KV_COMMON=(--model "$KV_MODEL" --ctx-size 262144 --parallel 1
@@ -333,21 +243,6 @@ KV_COMMON=(--model "$KV_MODEL" --ctx-size 262144 --parallel 1
   --spec-type draft-dflash --spec-draft-n-max 7 --spec-draft-n-min 0 --spec-draft-p-min 0
 ```
 
-**Vision without speculation:**
-
-```bash
-"$KV_SERVER" "${KV_COMMON[@]}" --shared-device-memory-mib "$KV_ARENA" \
-  --cache-type-k q8_0 --cache-type-v q4_0 --mmproj "$KV_MMPROJ" --spec-type none
-```
-
-**Vision with embedded MTP:**
-
-```bash
-"$KV_SERVER" "${KV_COMMON[@]}" --shared-device-memory-mib "$KV_ARENA" \
-  --cache-type-k q8_0 --cache-type-v q4_0 --mmproj "$KV_MMPROJ" \
-  --spec-type draft-mtp --spec-draft-n-max 3
-```
-
 **Gemma target-only and separate shared-KV MTP:** use different fitted budgets for each mode. These 8 Ki sizes are measured examples on the reference card, not portable defaults.
 
 ```bash
@@ -367,7 +262,49 @@ GEMMA_COMMON=(--model "$GEMMA_MODEL" --ctx-size 8192 --parallel 1
   --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-n-min 0 --spec-draft-p-min 0
 ```
 
-For Gemma lengths 1 or 2, change `--spec-draft-n-max` and refit. For 120 Ki, use `--ctx-size 122880` and repeat the finder at that capacity; do not reuse the 8 Ki result blindly. Leave `--swa-full` off: the shared arena requires bounded SWA. Common startup derives target verification width automatically; Gemma does not use Qwen recurrent snapshots. Do not attach DFlash. For images use the separately fitted Q3_K_S/Q8-projector configuration in [Gemma image support](#gemma-4-image-support), not these text-only arena examples.
+For Gemma lengths 1 or 2, change `--spec-draft-n-max` and refit. For 120 Ki, use `--ctx-size 122880` and repeat the finder at that capacity; do not reuse the 8 Ki result blindly. Leave `--swa-full` off: the shared arena requires bounded SWA. Common startup derives target verification width automatically; Gemma does not use Qwen recurrent snapshots. Do not attach DFlash. For images use the separately fitted Q3_K_S/Q8-projector configuration in [vision support](#vision-support), not these text-only arena examples.
+
+#### Vision launch examples
+
+Qwen and Gemma use the same launch mechanism and image-request API: add a matching `--mmproj` and a shared device arena. Choose **one** of the following model profiles, then use the common launch commands below. The example arena/budget values are reference settings, not universal fits; use the [image-aware finder](docs/multimodal/gemma4-vision.md#find-a-fit-for-your-images) with your actual inputs when sizing another workload.
+
+Qwen profile, with its embedded MTP weights:
+
+```bash
+VISION_MODEL_ARGS=(--model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf
+                   --mmproj /path/to/mmproj-Qwen3.8-27B-F16.gguf --ctx-size 8192
+                   --image-min-tokens 64 --image-max-tokens 4096)
+VISION_DRAFT_ARGS=()
+VISION_ARENA=1024
+```
+
+Gemma profile, with a separate matching assistant when MTP is enabled:
+
+```bash
+VISION_MODEL_ARGS=(--model /path/to/gemma-4-31B-it-Q3_K_S.gguf
+                   --mmproj /path/to/mmproj-gemma4-31B-Q8_0-local.gguf --ctx-size 4096
+                   --image-min-tokens 70 --image-max-tokens 70)
+VISION_DRAFT_ARGS=(--model-draft /path/to/mtp-gemma-4-31B-it-Q8_0.gguf --spec-draft-ngl 999)
+VISION_ARENA=2048
+```
+
+Common launch commands for either profile; each starts its own local server:
+
+```bash
+VISION_COMMON=(--parallel 1 --batch-size 256 --ubatch-size 256 --n-gpu-layers 999
+               --flash-attn on --fit off --offline --no-context-shift
+               --cache-type-k q8_0 --cache-type-v q4_0
+               --shared-device-memory-mib "$VISION_ARENA" --host 127.0.0.1 --port 8080)
+
+# Target-only: no assistant is loaded.
+./build-v2/bin/llama-server "${VISION_MODEL_ARGS[@]}" "${VISION_COMMON[@]}" --spec-type none
+
+# Alternative: stop the first server with Ctrl-C, then launch with MTP3.
+./build-v2/bin/llama-server "${VISION_MODEL_ARGS[@]}" "${VISION_COMMON[@]}" "${VISION_DRAFT_ARGS[@]}" \
+  --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-n-min 0 --spec-draft-p-min 0
+```
+
+Once the server is ready, open `http://127.0.0.1:8080` and attach an image. No pre-existing server or container is required. The [vision report](docs/multimodal/gemma4-vision.md#running-an-image-request-locally) includes the same HTTP image-request shape for either model. Gemma's projector preparation, larger budgets and protected SWA details remain in that report rather than requiring a different client API.
 
 Only run one of these commands at a time. `--kv-stream-arena-mib` is an alias for `--shared-device-memory-mib`; the legacy fixed KV-pool option is not sufficient for shared vision/phase memory. The embedded auxiliary-layer count is derived from model metadata; do not add an auxiliary history for Gemma's borrowed caches or DFlash's independent sliding-window cache.
 
@@ -387,155 +324,35 @@ Only run one of these commands at a time. `--kv-stream-arena-mib` is an alias fo
 
 ## Performance and reproduction
 
-### Gemma 4 through 120 Ki
+The introduction shows the context-scaling charts. The [detailed performance report](docs/development/adaptive-kv-performance.md) keeps full plots, tables, qualification scope and benchmark commands, grouped by model rather than development order. Results are workload- and hardware-specific; independently fitted sweeps are not equal-memory comparisons or repeated statistical A/B studies.
 
-The final 60-point sweep covers every 8 Ki step from 8 to 120 Ki at target-only and MTP lengths 1-3. It uses the Q3_K_M target, matching Q8_0 assistant when enabled, Q8/Q4 KV, b/ub=256, UVM off and 256 outputs after a fresh capacity-minus-271-token prompt. Every point has its own full-workload maximum-fit arena and an actual rejected 1 MiB-larger neighbor.
+### Qwen measurements
 
-![Gemma 4 all-mode decode, prefill, physical arena and draft acceptance](media/gemma4-120ki-qualification.png)
+The IQ4_XS/Q8-Q4 reference sweep covers target-only, MTP3 and DFlash2 draft lengths 3 and 7 through 256 Ki, with 32 points per mode. A separate stock-UVM baseline ends at 128 Ki: target-only decode there is 26.15 tok/s streamed versus 2.48 tok/s stock+UVM. This earlier sweep is not a rerun with the newer prefill optimizations.
 
-[All 60 points (CSV)](media/gemma4-120ki.csv) · [Profile, hashes and qualification scope](media/gemma4-120ki.json)
+[Four-mode data](media/adaptive-kv-four-mode-comparison.csv) · [Stock-UVM data](media/stock-uvm-iq4-throughput.csv) · [Three-format comparison](docs/development/adaptive-kv-performance.md#full-context-comparison-kv-formats-and-drafting-modes)
 
-| Capacity | Target-only decode | MTP1 | MTP2 | MTP3 |
-| --- | ---: | ---: | ---: | ---: |
-| 8 Ki | 39.61 | 67.68 | 81.50 | 91.16 |
-| 64 Ki | 25.79 | 34.27 | 45.69 | 56.04 |
-| 120 Ki | 10.33 | 16.97 | 22.70 | 28.26 |
+### Gemma 4 measurements
 
-Rates are tokens/s for this corpus and machine, with one measurement per mode/capacity. Independent maximum-fit arenas are 1,502-1,510 MiB target-only and 1,024-1,032 MiB with the assistant; its weights reduce the space left for the arena. This is not an equal-memory comparison or a statistical speedup claim. All 15,360 output IDs and counters are checked for completeness; native equivalence is established separately at fitting contexts and by exact operator/model controls. A successful 120 Ki workload is not a full-256-Ki qualification. The earlier stopped 128 Ki cohort is preserved separately, not mixed into this graph.
+The Q3_K_M/Q8-Q4 records have two separate scopes: the earlier 60-point target-only/MTP1-3 sweep through 120 Ki, and a post-D512 MTP3-only 32-point sweep through 256 Ki. The overview chart keeps target-only/MTP1/2 at their measured 120 Ki endpoints. The Q3_K_S vision profile is a separate workload, not another point in these text curves.
+
+[All-mode 120 Ki data](media/gemma4-120ki.csv) / [profile](media/gemma4-120ki.json) · [Overview including 256 Ki MTP3](media/gemma4-256ki-throughput.csv) / [cohort provenance](media/gemma4-256ki-throughput.json) · [Detailed Gemma results](docs/development/adaptive-kv-performance.md#gemma-4-measurements)
 
 ### Common prefill improvements
 
-Two separate repeated A/B studies use fixed 1 GiB arenas, Q8/Q4, b/ub=256, UVM off and 256 outputs. Each has 52 fresh requests, three paired trials at 8/64 Ki for target-only/MTP3, plus single 120 Ki target-only controls. They compare successive adaptive implementations, **not stock UVM**; do not multiply different cohorts into an unmeasured combined speedup.
+These comparisons use fixed 1 GiB arenas and successive adaptive implementations, not stock UVM or the independently fitted context sweeps. The conversion and transfer studies use three paired trials; the D512 feature study is a single matched screen per point. Do not multiply gains from different cohorts into an unmeasured combined speedup.
 
-| Repeated 64 Ki prefill improvement | Gemma target-only / MTP3 | Qwen target-only / MTP3 |
+| 64 Ki prefill comparison | Gemma target-only / MTP3 | Qwen target-only / MTP3 |
 | --- | ---: | ---: |
-| Bounded conversion reuse vs pre-conversion adaptive | +32.44% / +32.12% | +5.14% / +5.23% |
-| Two-wave pipeline vs conversion-only | +3.64% / +3.65% | +1.25% / +1.82% |
+| Bounded conversion reuse vs pre-conversion | +32.44% / +32.12% | +5.14% / +5.23% |
+| Two-wave transfers vs conversion-only | +3.64% / +3.65% | +1.25% / +1.82% |
+| D512 feature pipeline vs earlier D512 | +7.34% / +7.38% | Target-only D256 control: less than 0.1% change |
 
-Paired prompts, output IDs and draft counts match; decode median differences stay within 0.17% for conversion and 0.15% for the pipeline. At 8 Ki, conversion gains are smaller and the incremental pipeline change is negligible. [Conversion CSV](benchmarks/data/prefill-conversion-v1.csv) / [profile](benchmarks/data/prefill-conversion-v1.json), [pipeline CSV](benchmarks/data/prefill-pipeline-v1.csv) / [profile](benchmarks/data/prefill-pipeline-v1.json).
-
-Matched Nsight windows confirm the mechanism: at 96 Ki, H2D time overlapping observed GPU kernels increases from 3.2% to 86.6% for Gemma and 2.9% to 62.1% for Qwen, with reader/converter GPU interval unions roughly stable. These are clipped time-interval intersections, not SM occupancy, bandwidth or hardware counters. Instrumented throughput is not the speedup measurement; these original captures did not include Nsight Compute counters.
-
-### D512 attention feature pipeline
-
-The SM120 D512 resumable 8-by-8 attention path now double-buffers K/V feature chunks inside the GPU. It preserves the native MMA, softmax, reduction and checkpoint order. Eligibility follows geometry and capabilities, not the model name; Gemma is the full-model reference and Qwen D256 is the regression control.
-
-The following fresh A/B screen compares the shipping conversion-plus-ring implementation with the D512 change. Both use a fixed 1 GiB arena, Q8/Q4 KV, b/ub=256, UVM off, uncached `capacity-271` prompts and 256 outputs. There is one pair per point, not a repeated statistical trial matrix.
-
-| Gemma capacity / mode | Baseline prefill tokens/s | D512 pipeline prefill tokens/s | Prefill change | Decode change |
-| --- | ---: | ---: | ---: | ---: |
-| 8 Ki, target-only | 1324.05 | 1342.56 | +1.40% | +0.34% |
-| 8 Ki, MTP3 | 1304.80 | 1322.29 | +1.34% | +0.14% |
-| 64 Ki, target-only | 834.46 | 895.73 | +7.34% | +0.07% |
-| 64 Ki, MTP3 | 826.07 | 887.00 | +7.38% | -0.16% |
-
-All paired prompt/output IDs, draft counts and decode-pool layouts match. Qwen target-only controls at 8/64 Ki change by less than 0.1% in prefill and 0.4% in decode. [Measurements (CSV)](benchmarks/data/d512-feature-pipeline-v1.csv) / [profile and qualification (JSON)](benchmarks/data/d512-feature-pipeline-v1.json). Do not combine these fixed-arena rates with the independently fitted 120 Ki sweep as if they were one cohort.
-
-The extra buffer is **16 KiB of on-chip shared memory**, not a device allocation or a larger arena minimum. Total user shared memory is 100,136 bytes against the measured 101,376-byte limit; exact-limit and one-byte-short admission are tested. The existing quantized prefill preparation still requires its separately documented 8/16 MiB arena stage. Dense-strided, encoded-direct, D256, other tiles and older architectures retain their previous paths.
-
-Qualification includes all 64 K/V pairs, native-bit and frozen-checkpoint oracles, 120 focused mask/tail/wrapped-wave profiles, 120 native-matched server records, ASan/UBSan and 17 zero-error CUDA memcheck/racecheck/synccheck gates. Only the wide sanitizer fixture uses the user-approved 769 MiB arena; ordinary model execution remains 1 GiB. Two representative affected CUDA units also pass functional compilation for SM61/70/75/86; that is not physical older-GPU runtime qualification. Further model admission is independent of generic D512 kernel support.
-
-The separate Gemma MTP3 follow-up completed all 32 points from 8 through 256 Ki, using `find-max-arena.py` independently at every point and retaining each rejected+1 MiB neighbor. Its local comparison with the historical120 Ki MTP3 series is audited in the [Gemma ledger](GEMMA4_ADAPTIVE_KV_ROADMAP.md). The historical all-mode120 Ki data and the image Q3_K_S cohort remain separate; this is not all-mode256 Ki or full-context vision qualification.
-
-### Stock UVM without KV streaming
-
-The introduction adds a measured stock baseline using the same IQ4_XS weights, Q8_0 K / Q4_0 V and article corpus as the four-mode V2 sweep. Stock is pristine upstream revision `10a60cf303566e10d6a7a2774c17d2085503d87b`, the upstream base used by this V2 implementation. UVM is enabled for stock; there is no adaptive KV pool, phase arena, MTP, DFlash or host-rollback override. This is not the older Q3-weight measurement.
-
-All 16 stock points from 8 through 128 Ki completed with 256 output tokens, one slot, b/ub=256, eight CPU threads and prompt length equal to context capacity minus 271. All stock output token IDs match the corresponding V2 target-only runs. The baseline ends at its last measured point; no stock performance is extrapolated to 256 Ki.
-
-| At 128 Ki capacity | Stock + UVM | V2 streamed target-only |
-| --- | ---: | ---: |
-| Prefill | 837.1 tok/s | 934.6 tok/s |
-| Decode | 2.48 tok/s | 26.15 tok/s |
-
-The measured decode ratio at that point is about 10.6x; it is not a general speedup claim. At short contexts, stock decode is roughly 2-3% faster in this sweep. UVM migration can make performance uneven under pressure, so the plotted points are kept as measured rather than smoothed. [Stock-UVM measurements and configuration (CSV)](media/stock-uvm-iq4-throughput.csv).
-
-### Q8/Q4 four-mode context scaling
-
-The completed four-mode sweep measures target-only, MTP=3, DFlash2=3 and DFlash2=7 at every 8 Ki capacity from 8 Ki through 256 Ki: 32 points per mode, 128 total. It uses IQ4_XS weights, Q8/Q4 KV, the checked-in article corpus, one slot, b/ub=256, 256 generated tokens and 15 positions of headroom. Each mode/context independently uses its maximum-fit arena, without UVM or a safety reserve.
-
-![Four-mode full-context comparison: decode, prefill, effective KV grant and draft acceptance](media/adaptive-kv-four-mode-comparison.png)
-
-[All 128 plot points (CSV)](media/adaptive-kv-four-mode-comparison.csv). This is the earlier completed Q8/Q4 sweep, recorded before cache-format generalization. The later five-capacity Q8/Q4 regression checks in the matrix below retain identical arenas and output IDs, with throughput differences below 0.7%. The figures use their own recorded measurements; datasets are not mixed to fill missing modes or context points.
-
-### Full-context comparison: KV formats and drafting modes
-
-The recorded Qwen 45-point matrix uses the same Unsloth IQ4_XS target on an RTX 5070 Ti, context capacities 8/64/128/192/256 Ki, b/ub=256, one slot, 256 generated tokens and the [checked-in Wikipedia corpus](benchmarks/data/online-articles-262144-words.txt). Prompt length is capacity minus 271 positions. Each format, mode and context independently uses its maximum-fit arena, with UVM disabled and no safety reserve. This is separate from Gemma's Q8/Q4 60-point sweep and the newer fixed-budget prefill A/B cohorts.
-
-![Decode/prefill, effective KV grant and draft acceptance](media/kv-quant-comparison.png)
-
-[All 45 plot points (CSV)](media/kv-quant-comparison.csv)
-
-| KV format at 256 Ki capacity | Target-only decode | MTP=3 decode | DFlash=7 decode |
-| --- | ---: | ---: | ---: |
-| Q8_0 / Q4_0 | 9.60 tok/s | 22.27 tok/s | 21.80 tok/s |
-| Q8_0 / Q8_0 | 6.66 tok/s | 14.53 tok/s | 18.04 tok/s |
-| Q5_1 / Q5_1 | 10.56 tok/s | 23.27 tok/s | 27.71 tok/s |
-
-These are single-run measurements for this model, prompt and machine. Acceptance and memory pressure both affect speculative speed; DFlash is not always faster than MTP. Different K/V formats can change outputs, and this graph does not evaluate model quality.
-
-All 15 Q8/Q4 comparisons with the pre-generalization build choose identical arenas and retain all 256 output token IDs. Decode differences are -0.67% to +0.57%; prefill differences are -0.11% to +0.20%. No material regression is observed; these small differences are not claimed as speed gains.
-
-### Draft-length comparison at a fixed budget
-
-This earlier experiment holds the parent at 2,240 MiB and compares embedded MTP lengths 0-3 with Q8/Q4. It is historical data, not another run of the maximum-fit matrix above.
-
-![Fixed-budget MTP draft-length prefill and decode comparison](media/adaptive-kv-stream-v2-throughput-combined.png)
-
-[Detailed plot: pool size and acceptance](media/adaptive-kv-stream-v2-mtp-sweep.png). Fixed-arena and independently maximum-fit curves answer different questions: the latter includes differences in available resident KV space. Neither equal arena size nor equal KV grant means equal total VRAM across different draft models.
+Paired inputs, output IDs and draft counts are checked. Decode is screened for regressions; profiler timelines explain mechanisms, not throughput speedups. [Methods, raw data links and D512 qualification](docs/development/adaptive-kv-performance.md#optimization-comparisons).
 
 ### Reproduce text sweeps
 
-Use a separate output directory for every run. The fixed-span script accepts a model path and configurable cache types:
-
-```sh
-python3 benchmarks/run-fixed-span-sweep.py \
-  --server build-v2/bin/llama-server --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
-  --contexts 8192,65536,131072,196608,262144 --prompt-headroom 15 \
-  --cache-type-k q8_0 --cache-type-v q4_0 --mtp-lengths 0,3 \
-  --decode-tokens 256 --arena-mib 2240 --auto-max-arena \
-  --no-manage-production --output benchmarks/results/text-q8-q4
-```
-
-For the completed Gemma grid, use the separate assistant and explicitly stop at 120 Ki:
-
-```sh
-python3 benchmarks/run-fixed-span-sweep.py \
-  --server build-v2/bin/llama-server --model /path/to/gemma-4-31B-it-Q3_K_M.gguf \
-  --model-draft /path/to/mtp-gemma-4-31B-it-Q8_0.gguf \
-  --min-context 8192 --max-context 122880 --context-step 8192 \
-  --mtp-lengths 0,1,2,3 --cache-type-k q8_0 --cache-type-v q4_0 \
-  --batch-size 256 --ubatch-size 256 --decode-tokens 256 --prompt-headroom 15 \
-  --auto-max-arena --request-timeout 3600 --no-manage-production \
-  --output benchmarks/results/gemma-final-120ki
-```
-
-The external assistant is not loaded for length 0. Omit `--auto-max-arena` to keep a supplied arena fixed. The general script's default endpoint is still 256 Ki, so **keep Gemma's explicit 120 Ki endpoint** for this qualification. `--no-manage-production` prevents the script from touching the local `llm-llmster` container; free the GPU yourself and use a fresh output directory.
-
-The DFlash control harness verifies the pinned target, sidecar and publisher config before running. It is deliberately an artifact-specific reproduction tool, unlike the general arena finder:
-
-```sh
-python3 benchmarks/run_dflash_controls.py \
-  --server build-v2/bin/llama-server \
-  --target /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
-  --draft /path/to/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \
-  --draft-config /path/to/DFlash2/config.json \
-  --contexts 8192,65536,131072,196608,262144 --depths 3,7 \
-  --prompt-tokens 262144 --prompt-headroom 15 --decode-tokens 256 \
-  --target-k q8_0 --target-v q4_0 --arena-mib 1500 --auto-max-arena \
-  --output benchmarks/results/dflash-q8-q4
-
-python3 benchmarks/plot_dflash_controls.py \
-  --series target-and-MTP benchmarks/results/text-q8-q4 \
-  --series DFlash2 benchmarks/results/dflash-q8-q4 \
-  --output benchmarks/results/speculation-comparison.png
-```
-
-For the dense four-mode sweep, pass all 32 capacities to both commands: in Bash, use `--contexts "$(seq -s, 8192 8192 262144)"`, retaining MTP lengths `0,3` and DFlash depths `3,7`. The plotting command combines both result directories without mixing in an earlier-build baseline.
-
-Repeat with the other cache pairs and label each series accordingly. The control harness also supports `--spec-mode none --depths 0` and `--spec-mode mtp --depths 3`. It does not manage production containers. Its `--lifecycle` checks are separate from throughput measurement. The corpus is Wikipedia text under CC BY-SA 4.0 with article attribution, separate from the code license.
-
-Correctness qualification compares matching formats and execution modes against native attention, including logits, hidden rows, KV bytes and recovery state. TG1 and multi-row stock kernels can themselves differ numerically; cross-mode output equality is not the numerical oracle. See [KV-format qualification](KV_QUANTIZATION_ROADMAP.md) and [the upstream attention port](UPSTREAM_ATTENTION_PORT_ROADMAP.md).
+Use the [benchmark commands](docs/development/adaptive-kv-performance.md#reproducing-text-sweeps) for Qwen, Gemma and DFlash, with explicit context ranges, cache pairs and a fresh output directory. They start their own test servers and use `--no-manage-production` where applicable, so no pre-existing service is required. The [arena finder](#find-a-usable-arena-size) is for sizing; a throughput sweep still executes complete measured workloads.
 
 ## How it works
 
@@ -787,7 +604,7 @@ Offsets, alignment, sizes and overflow are checked before access. Stateful graph
 
 ### Borrowing an arena region as graph workspace
 
-Representative setup for one backend; production consumers must also follow the phase lifecycle below:
+Representative setup for one backend; callers must also follow the phase lifecycle below:
 
 ```cpp
 bool attach_workspace(ggml_backend_sched_t scheduler, ggml_backend_t backend,
@@ -868,37 +685,11 @@ Qwen embedded MTP uses the logical-format, publication and complete-layer span c
 
 ### Gemma bounded storage and read-source contracts
 
-These are internal C++ contracts, not additional public CLI flags. Use common model/context startup for ordinary MTP so hidden outputs, warmup retirement, assistant loading and serial workspace measurement occur in the qualified order.
-
-| Operation | Contract |
-| --- | --- |
-| `llama_kv_cache_iswa::bounded_storage_requirements(...)` | Quote actual local roots, encoding, window/headroom, padding and buffer class before allocation; returns layout/identity, not storage or attention admission |
-| `llama_memory_params::defer_bounded_cache` | Construct allocation-free local metadata first; normal execution is closed until the persistent lease is bound |
-| `llama_kv_cache::bind_bounded_storage(lease)` | Validate exact physical quota/layout, materialize checked native tensors and retain storage. Same-lease binding preserves contents; no second persistent SWA allocation is needed |
-| `llama_memory_bounded_kv::read(identity)` | Acquire a retained physical read pin. `contains_layer` revalidates root/storage bounds; `bind_layer_views` creates caller-owned metadata without initializing or clearing source bytes |
-| `attach/arm/release_shared_bounded_reader(...)` | Own and validate native local-view metadata, then hold the source pin through all queued native readers. The caller completes readers before releasing it |
-| `attach/arm/release_shared_stream_reader(...)` | Own full-read proxy roots over a target session. Arm after preparing the parent's serial phase; release before target mutation. Writes reject; proxy clear does not erase source KV |
-| `session.read_source(...)`, `prefetch_read(...)`, `read_attention(...)` | Snapshot a completed source, validate its binding/revision/geometry, then queue/adopt or synchronously read progressive spans. No append or complete-layer residency requirement |
-| `llama_context_params::kv_stream_verify_max` | Optional target query bound 1-4 for serial streamed Gemma; zero keeps the inferred profile. Common MTP startup derives D+1. Do not derive this from `n_rs_seq`, which is zero for Gemma |
-| `model.sequence_stats(role)` / `runtime_diagnostics(...)` | Read-role transfer statistics stay separate; default runtime diagnostics align target append counts with target feedback timing |
-
-Keep the target context alive until its assistant, graphs and borrowed views are destroyed. The physical parent outlives the local roots, proxy views and every queued reader. Semantic generations/frontiers come from the actual target-owned source, not a clone counter; a pointer or unchanged length does not prove unchanged content. Release graph bindings before reusing their workspace, and complete pending copies/native reads before releasing their source pins. After failed work, retain cleanup ownership until drain succeeds; reconstruct from authoritative state before reopening admission. No removed G5c ordered-reader/event-bank API is part of this contract.
-
-For direct C API callers, select `swa_full=false` for bounded Gemma: the C API default is not the bounded profile. Full-SWA remains valid for ordinary native contexts, but shared bounded storage rejects it instead of shrinking it silently. Local metadata/cell state remains native; both cache groups must pass removal/history-availability prevalidation before either is mutated. See [Gemma qualification](GEMMA4_ADAPTIVE_KV_ROADMAP.md) for exact-fit/one-byte-short, rebind, window, state/restart and all-acceptance-count tests.
+Use common startup and keep the target, physical parent and source pins alive through every assistant read. Direct callers must select bounded SWA explicitly. The [detailed storage/read-source contracts](docs/multimodal/gemma4-vision.md#bounded-storage-and-read-sources) cover quoting, binding, generations, verification widths and recovery.
 
 ### Gemma vision lending and completion
 
-Use the existing MTMD session path rather than duplicating a server state machine. `mtmd_vision_phase_compatible` validates the loaded projector/target capabilities; it does not prove arbitrary artifacts are a matching or qualified pair. `mtmd_batch_measure_vision_phase` describes actual weight and device/host compute requirements. `llama_context_memory::quote_suspended_loans` performs a metadata-only aligned quota check before target suspension; report its required/available/additional bytes, not GGUF file-size estimates.
-
-`llama_context_suspend_kv_device` synchronizes the target and completes any recurrent publication when present. Gemma instead preserves the bounded native SWA lease and committed full-attention host history. `lend_suspended` uses the existing `PRESERVE_PERSISTENT` arena plan and materializes only disjoint temporary grants. Unknown regions, retained temporary loans or active serial work still reject unsafe transitions. Protected bytes are not counted again as borrowed vision bytes in diagnostics.
-
-The existing `mtmd_batch_encode_arena` / `mtmd_session_eval_chunks_arena` adapter reloads weights into a temporary grant, runs the measured encoder, retains complete owned host embeddings, drains users, retires bindings and unloads weights before returning the grants. `resume_kv` / `llama_context_resume_kv_device` explicitly remeasure/rebind the requested text phase; retained loans block resume. A failed reverse transition closes the owner, rather than executing stale tensor pointers. Lease lifetime is not GPU completion.
-
-`register_shared_read_consumer` declares only an already registered matching serial child with no independent KV writer. That permits the Gemma assistant to suspend with its target; it does not authorize an arbitrary draft model or multiple concurrent readers. Refresh actual target-owned source bindings and post-image hidden/carry state after resume. Gemma uses ordinary sequential decoder positions and its native SWA-only non-causal image mask; global attention stays causal. Qwen's decoder M-RoPE and auxiliary MTP image catch-up are separate adapters.
-
-For direct C/C++ setup, declare the outputs you will actually request via `common_speculative_get_output_limits`: image input rows are not all logit/hidden output rows. The tested target declares one normal / four verification outputs for MTP3; the TG1 assistant declares one. Do not reserve 1280 full-vocabulary outputs merely because an image has a 1280-row microbatch, or reduce real requested outputs to manufacture fit. The public server already derives these limits.
-
-Projector files/settings are immutable session inputs. Restore saved state only with the matching target, projector, preprocessing and speculation settings. Existing cache/checkpoint identities remain authoritative; no filename-only cache identity or new unvalidated persistence policy is added. The device parent bounds only its participating allocations, not decoded host image buffers, pinned full KV, output embeddings, driver memory or every future request.
+Use the existing MTMD session path to measure, lend and return temporary vision grants around the protected SWA region. The [vision lending/completion guide](docs/multimodal/gemma4-vision.md#vision-lending-and-completion) documents admission, lease lifetimes, output limits, assistant rebinding and failure handling.
 
 ### Porting and tests
 

@@ -1,0 +1,136 @@
+{
+  "qualified": true,
+  "date": "2026-10-24",
+  "description": "Two standalone native-context mmproj/MTP3/Q8Q4 finder examples: short runtime search and one full selected-workload check each.",
+  "gpu": "NVIDIA GeForce RTX 5070 Ti, 610.57.04, 16303 MiB",
+  "scope": "Measured physical fits on this card with UVM off and no arbitrary reserve. Both projectors are configured, but these are text workloads, not image-encoder validation or universal OOM guarantees. No new throughput, native-equivalence or cross-model performance claim.",
+  "native_capacities": {
+    "gemma": 262144,
+    "qwen": 262144
+  },
+  "examples": {
+    "gemma": {
+      "inputs": {
+        "model": {
+          "filename": "gemma-4-31B-it-Q3_K_S.gguf",
+          "bytes": 13210856384,
+          "sha256": "02cdd36af753d2a61832c3e71b621e6d6be65906bbee4adfcde9f62b42154d97"
+        },
+        "mmproj": {
+          "filename": "mmproj-gemma4-31B-Q8_0-local.gguf",
+          "bytes": 807772384,
+          "sha256": "ce5b38c7b9f22468acd0156c278cf8d70622d9b1669f34e23ea01f448d45448e"
+        },
+        "model-draft": {
+          "filename": "mtp-gemma-4-31B-it-Q8_0.gguf",
+          "bytes": 514687104,
+          "sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de"
+        }
+      },
+      "result": {
+        "arena_mib": 2472,
+        "initial_arena_mib": 2240,
+        "next_mib_rejected": 2473,
+        "context_size": 262144,
+        "cache_type_k": "q8_0",
+        "cache_type_v": "q4_0",
+        "spec_mode": "mtp",
+        "draft_length": 3,
+        "probe_mode": "preflight",
+        "runtime_probe_validated": true,
+        "full_workload_validated": true,
+        "prompt_tokens": 2048,
+        "requested_prompt_tokens": 261873,
+        "decode_tokens": 256,
+        "projector_configured": true,
+        "vision_execution_validated": false,
+        "uvm": false,
+        "reserve_mib": 0
+      },
+      "selected_full_workload": {
+        "prompt_n": 261873,
+        "predicted_n": 256,
+        "draft_n": 207,
+        "draft_n_accepted": 186
+      },
+      "raw_result": "benchmarks/results/readme-native-finders-20261024/preflight-v1/gemma/result.json",
+      "raw_result_sha256": "4d9ca9838b02344eb4e5f196ca4799117eb56a29d2005fda5f159fc851553b14",
+      "probe_journal_sha256": "6feeec50c468370f59e3c131eb9f5226f1428d06733d3fda4e5331cbb78834a6",
+      "full_response_sha256": "fb05f4c2c510e5a89f538466e957fcab232a7fd8d62003ecb40c96bde981fc34"
+    },
+    "qwen": {
+      "inputs": {
+        "model": {
+          "filename": "40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199",
+          "bytes": 14252845984,
+          "sha256": "40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199"
+        },
+        "mmproj": {
+          "filename": "mmproj-Qwen3.8-27B-F16.gguf",
+          "bytes": 927607488,
+          "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e"
+        }
+      },
+      "result": {
+        "arena_mib": 2324,
+        "initial_arena_mib": 2240,
+        "next_mib_rejected": 2325,
+        "context_size": 262144,
+        "cache_type_k": "q8_0",
+        "cache_type_v": "q4_0",
+        "spec_mode": "mtp",
+        "draft_length": 3,
+        "probe_mode": "preflight",
+        "runtime_probe_validated": true,
+        "full_workload_validated": true,
+        "prompt_tokens": 2048,
+        "requested_prompt_tokens": 261873,
+        "decode_tokens": 256,
+        "projector_configured": true,
+        "vision_execution_validated": false,
+        "uvm": false,
+        "reserve_mib": 0
+      },
+      "selected_full_workload": {
+        "prompt_n": 261873,
+        "predicted_n": 256,
+        "draft_n": 233,
+        "draft_n_accepted": 177
+      },
+      "raw_result": "benchmarks/results/readme-native-finders-20261024/preflight-v1/qwen/result.json",
+      "raw_result_sha256": "b06e15bb63567f184f8044d6c3f657894c35dd305846bfdb95b98818d62ebd16",
+      "probe_journal_sha256": "e934a762d821bfc5a6c1a0dc50f1a61192307a198bd2183d1855878cd05ad92a",
+      "full_response_sha256": "a187c7f0c05182ebfcdf64b9209b9bbb2ea8511b8a3286b5052044ac9e5d9526"
+    }
+  },
+  "audit": {
+    "preflight_probes": 22,
+    "capacity_rejections": 9,
+    "full_selected_requests": 2,
+    "host_benchmark_tests": 171,
+    "finder_tests_included": 27,
+    "server_harness_tests": 53,
+    "Python_type_check": "passed"
+  },
+  "source_commit": "9cac8b4f0159d51c52f4a9ad05cd3bcd4a9c17f4",
+  "sources": {
+    "benchmarks/results/readme-native-finders-20261024/run_preflight.py": "85a1a2e5996bbc9edc2165d68ec08d8eac44b43386733c0ea8d6be29bac75c38",
+    "benchmarks/results/gemma4-vision-20261023/run_vision_fit.py": "08c919c9aa951363660ae4c549c38553da04b0d60653d8d0fe94b398862128ac",
+    "benchmarks/find-max-arena.py": "b34976ea081ce3f8fa60417df267f46ddb3109d93f0fa087cd7b6ed74e14a5e3",
+    "benchmarks/run-fixed-span-sweep.py": "821e358ca2e0f4eb5d739ed0b6ad2caa00ab9b98c2973bf21c8f8c7c512c1b66",
+    "benchmarks/server-ab/tests/test_find_max_arena.py": "bff3c5833571df345821dc8abd20238e093a058e0796f49205143b596343bbf8"
+  },
+  "runtime9": {
+    "llama-server": "bfb1f2cb4e9b05375059dce7c90546778dc1245f6ac7d1c60778dfe86ff7514e",
+    "libllama.so.0": "b09747e29bb7e323c7483c2e631735c43f4e5a21e3d5ddcc242df68f8570b28f",
+    "libllama-common.so.0": "23c2513ab73eb5da6c428076ea4707d37565cedc582711dbe5478eb1499aff34",
+    "libllama-server-impl.so": "d33e9bcab4edf9e52e8077c00335c461962ed6ac5fe15b0404c6c471827a6805",
+    "libggml-cuda.so.0": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741",
+    "libggml-base.so.0": "76ea23b3b8d4e5da7f6238ec555acc74f561dfb81cabbdd4dd4e9505a6f71064",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libmtmd.so.0": "d6b1f5ed0115cb2fca4aa262ee89e0666211a41d8ee7a5ac63b0b9d679c810af"
+  },
+  "provenance_sha256": "4d6dc5a9205a210fe9c3bcbbe0915a14f8e603c1fff10447cd736a520f7d0606",
+  "accepted_gates_sha256": "17f6539b4aed213e5083e1f23df3ca640a72e25a1ce64582ba49c80d7b99d363"
+}

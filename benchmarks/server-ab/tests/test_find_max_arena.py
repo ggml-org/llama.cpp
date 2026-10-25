@@ -19,6 +19,164 @@ class ArenaFinderTests(unittest.TestCase):
     def args(self, *extra):
         return FINDER.arguments(["--model", "model.gguf", "--context-size", "8192", *extra])
 
+    def test_preflight_caps_history_but_keeps_native_capacity_and_requested_decode(self):
+        args = self.args("--context-size", "262144", "--probe-mode", "preflight",
+                         "--spec-mode", "mtp", "--model-draft", "assistant.gguf", "--mmproj", "vision.gguf")
+        self.assertEqual(FINDER.probe_text_tokens(args), 2048)
+        self.assertEqual(args.decode_tokens, 256)
+        command = FINDER.server_command(args, 1024)
+        self.assertEqual(command[command.index("--ctx-size") + 1], "262144")
+        self.assertIn("--model-draft", command)
+        self.assertIn("--mmproj", command)
+        self.assertNotIn("--probe-mode", command)
+        self.assertNotIn("--no-warmup", command)
+
+    def test_preflight_exercises_wide_batches_and_never_exceeds_requested_history(self):
+        for options, expected in [(("--batch-size", "1280", "--ubatch-size", "1280"), 2560),
+                                  (("--batch-size", "1280", "--ubatch-size", "0"), 2560),
+                                  (("--prompt-tokens", "17"), 17),
+                                  (("--context-size", "512", "--decode-tokens", "8"), 489)]:
+            with self.subTest(options=options):
+                self.assertEqual(FINDER.probe_text_tokens(self.args("--probe-mode", "preflight", *options)), expected)
+        self.assertEqual(FINDER.probe_text_tokens(self.args()), 7921)
+
+    def test_selected_validation_is_explicit_and_requires_preflight_search(self):
+        self.assertEqual(self.args().probe_mode, "full")
+        self.assertFalse(self.args().validate_selected)
+        self.assertTrue(self.args("--probe-mode", "preflight", "--validate-selected").validate_selected)
+        with self.assertRaises(SystemExit):
+            self.args("--validate-selected")
+
+    def test_preflight_executes_a_real_request_and_rejects_runtime_failures_after_ready(self):
+        args = self.args("--probe-mode", "preflight", "--context-size", "262144", "--decode-tokens", "8")
+        with tempfile.TemporaryDirectory() as temporary:
+            args.output = Path(temporary)
+            args.prefill_text = Path(temporary) / "corpus.txt"
+            args.prefill_text.write_text("corpus")
+            def request(url, body: dict | None = None, **kwargs):
+                if url.endswith("/tokenize"):
+                    return {"tokens": list(range(4096))}
+                assert body is not None
+                self.assertEqual(len(body["prompt"]), 2048)
+                self.assertEqual(body["n_predict"], 8)
+                return {"tokens": list(range(8)), "timings": {"prompt_n": 2048, "predicted_n": 8}}
+            with patch.object(FINDER.subprocess, "Popen") as popen, patch.object(FINDER.SWEEP, "wait_ready"), \
+                    patch.object(FINDER.SWEEP, "stop_process") as stop, patch.object(FINDER, "request_json", side_effect=request):
+                self.assertTrue(FINDER.probe(args, 1000)["fits"])
+                stop.assert_called_once_with(popen.return_value)
+            with patch.object(FINDER.subprocess, "Popen"), patch.object(FINDER.SWEEP, "wait_ready"), \
+                    patch.object(FINDER.SWEEP, "stop_process"), \
+                    patch.object(FINDER, "request_json", side_effect=RuntimeError("runtime kernel rejected")):
+                with self.assertRaisesRegex(RuntimeError, "runtime kernel rejected"):
+                    FINDER.probe(args, 1001)
+
+    def test_preflight_does_not_truncate_or_skip_an_explicit_image_request(self):
+        args = self.args("--probe-mode", "preflight", "--mmproj", "vision.gguf", "--image", "image.png", "--decode-tokens", "8")
+        with tempfile.TemporaryDirectory() as temporary:
+            args.output = Path(temporary)
+            args.image = [Path(temporary) / "image.png"]
+            args.image[0].write_bytes(b"fixture image")
+            def request(url, body: dict | None = None, **kwargs):
+                self.assertTrue(url.endswith("/completion"))
+                assert body is not None
+                self.assertEqual(len(body["prompt"]["multimodal_data"]), 1)
+                self.assertEqual(body["n_predict"], 8)
+                return {"tokens": list(range(8)), "timings": {"prompt_n": 70, "predicted_n": 8}}
+            with patch.object(FINDER.subprocess, "Popen"), patch.object(FINDER.SWEEP, "wait_ready"), \
+                    patch.object(FINDER.SWEEP, "stop_process"), patch.object(FINDER, "request_json", side_effect=request):
+                self.assertTrue(FINDER.probe(args, 1000)["fits"])
+
+    def test_preflight_report_cannot_claim_full_length_or_unexecuted_vision(self):
+        args = self.args("--probe-mode", "preflight", "--context-size", "262144", "--mmproj", "vision.gguf")
+        with tempfile.TemporaryDirectory() as temporary:
+            args.output = Path(temporary)
+            def probe(config, candidate):
+                return {"arena_mib": candidate, "fits": candidate <= 1000,
+                        "timings": {"prompt_n": 2048, "predicted_n": 256}}
+            with patch.object(FINDER, "probe", side_effect=probe):
+                report = FINDER.fit(args)
+        self.assertEqual(report["probe_mode"], "preflight")
+        self.assertEqual(report["prompt_tokens"], 2048)
+        self.assertEqual(report["requested_prompt_tokens"], 261873)
+        self.assertFalse(report["full_workload_validated"])
+        self.assertFalse(report["vision_execution_validated"])
+
+    def test_selected_full_validation_runs_once_in_separate_logs(self):
+        args = self.args("--probe-mode", "preflight", "--validate-selected", "--context-size", "262144")
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            args.output = Path(temporary)
+            def probe(config, candidate):
+                calls.append((config.probe_mode, candidate, config.output))
+                return {"arena_mib": candidate, "fits": candidate <= 1000,
+                        "timings": {"prompt_n": FINDER.probe_text_tokens(config), "predicted_n": 256}}
+            with patch.object(FINDER, "probe", side_effect=probe):
+                report = FINDER.fit(args)
+            self.assertTrue(report["full_workload_validated"])
+            self.assertEqual(report["selected_validation"]["timings"]["prompt_n"], 261873)
+            self.assertEqual([mode for mode, _, _ in calls].count("full"), 1)
+            self.assertEqual(calls[-1], ("full", 1000, args.output / "selected-validation"))
+            self.assertTrue((args.output / "selected-validation/record.json").is_file())
+
+    def test_selected_runtime_failure_never_publishes_a_successful_fit(self):
+        args = self.args("--probe-mode", "preflight", "--validate-selected")
+        with tempfile.TemporaryDirectory() as temporary:
+            args.output = Path(temporary)
+            def probe(config, candidate):
+                return {"arena_mib": candidate, "fits": config.probe_mode != "full" and candidate <= 1000}
+            with patch.object(FINDER, "probe", side_effect=probe):
+                with self.assertRaisesRegex(RuntimeError, "selected.*full"):
+                    FINDER.fit(args)
+            self.assertFalse((args.output / "result.json").exists())
+            self.assertTrue((args.output / "probes.jsonl").is_file())
+            self.assertTrue((args.output / "selected-validation/record.json").is_file())
+
+    def test_preflight_rejects_partial_or_non_speculative_runtime_responses(self):
+        args = self.args("--probe-mode", "preflight", "--spec-mode", "mtp", "--decode-tokens", "8")
+        for response in ({"tokens": [1], "timings": {"prompt_n": 2048, "predicted_n": 8, "draft_n": 3}},
+                         {"tokens": list(range(8)), "timings": {"prompt_n": 2047, "predicted_n": 8, "draft_n": 3}},
+                         {"tokens": list(range(8)), "timings": {"prompt_n": 2048, "predicted_n": 8, "draft_n": 0}}):
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as temporary:
+                args.output = Path(temporary)
+                args.prefill_text = args.output / "corpus.txt"
+                args.prefill_text.write_text("corpus")
+                def request(url, *unused, **kwargs):
+                    return {"tokens": list(range(2048))} if url.endswith("/tokenize") else response
+                with patch.object(FINDER.subprocess, "Popen"), patch.object(FINDER.SWEEP, "wait_ready"), \
+                        patch.object(FINDER.SWEEP, "stop_process"), patch.object(FINDER, "request_json", side_effect=request):
+                    with self.assertRaises(RuntimeError):
+                        FINDER.probe(args, 1000)
+
+    def test_preflight_never_classifies_a_device_fault_as_an_oom_capacity_boundary(self):
+        args = self.args("--probe-mode", "preflight")
+        for fault in ("an illegal memory access was encountered", "misaligned address", "device-side assert triggered", "unspecified launch failure"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                args.output = Path(temporary)
+                def launch(*unused, **kwargs):
+                    kwargs["stdout"].write("CUDA error: " + fault + "\ncudaMalloc failed: out of memory\n")
+                    return object()
+                with patch.object(FINDER.subprocess, "Popen", side_effect=launch), \
+                        patch.object(FINDER.SWEEP, "wait_ready", side_effect=RuntimeError("failed execution")), \
+                        patch.object(FINDER.SWEEP, "stop_process"):
+                    with self.assertRaisesRegex(RuntimeError, "device fault"):
+                        FINDER.probe(args, 1000)
+
+    def test_selected_runtime_exception_is_preserved_and_never_published(self):
+        args = self.args("--probe-mode", "preflight", "--validate-selected")
+        with tempfile.TemporaryDirectory() as temporary:
+            args.output = Path(temporary)
+            def probe(config, candidate):
+                if config.probe_mode == "full":
+                    raise RuntimeError("unsupported full-runtime kernel")
+                return {"arena_mib": candidate, "fits": candidate <= 1000}
+            with patch.object(FINDER, "probe", side_effect=probe):
+                with self.assertRaisesRegex(RuntimeError, "unsupported full-runtime kernel"):
+                    FINDER.fit(args)
+            self.assertFalse((args.output / "result.json").exists())
+            record = json.loads((args.output / "selected-validation/record.json").read_text())
+            self.assertFalse(record["fits"])
+            self.assertIn("unsupported full-runtime kernel", record["error"])
+
     @unittest.skipUnless(os.name == "posix", "POSIX listener restart contract")
     def test_completed_probe_socket_does_not_block_the_next_probe(self):
         with socket.socket() as listener, socket.socket() as client:

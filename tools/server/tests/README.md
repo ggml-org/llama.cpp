@@ -97,7 +97,7 @@ in the debugger terminal.
 
 ### Adaptive Gemma assistant qualification
 
-This offline harness compares native and adaptive execution in this binary with matching Gemma 4 target/assistant files and Q8_0/Q4_0 cache types. It uses Python's standard library and starts temporary loopback servers, without changing or stopping production services. Free the GPU first. UVM is disabled in both controls; native allocation must fit on the device. Assistant weights remain outside the arena.
+This offline harness compares native and adaptive execution in this binary with matching Gemma 4 target/assistant files and Q8_0/Q4_0 cache types. It uses Python's standard library and starts and cleans up its own temporary loopback servers; no existing server or container is required. Make sufficient GPU memory available first. UVM is disabled in both controls; native allocation must fit on the device. Assistant weights remain outside the arena.
 
 ```sh
 python3 tools/server/tests/test_adaptive_gemma.py \
@@ -112,7 +112,7 @@ Each depth checks fresh, cached and changed prompts, then disconnect cancellatio
 
 ### Gemma 4 vision and shared-KV MTP qualification
 
-Use `test_adaptive_gemma.py --mmproj` for Gemma, not the Qwen-specific `test_adaptive_vision.py` launch profile. The qualified artifacts are the pinned Q3_K_S 31B target, matching local Q8_0 projector and external Q8_0 assistant. Target-only depth 0 accepts the assistant path for a common test invocation but does not load its weights. Both controls use GPU execution with UVM disabled. The harness starts only its own loopback servers and does not stop production; free the GPU yourself first.
+Use `test_adaptive_gemma.py --mmproj` for Gemma, not the Qwen-specific `test_adaptive_vision.py` launch profile. The qualified artifacts are the pinned Q3_K_S 31B target, matching local Q8_0 projector and external Q8_0 assistant. Target-only depth 0 accepts the assistant path for a common test invocation but does not load its weights. Both controls use GPU execution with UVM disabled. The harness starts and cleans up its own loopback servers; no existing server or container is required. Make sufficient GPU memory available first.
 
 ```sh
 python3 tools/server/tests/test_adaptive_gemma.py \
@@ -144,11 +144,11 @@ python3 -B -m unittest discover -s tools/server/tests -p 'test_adaptive_*harness
 python3 -B tools/server/tests/test_adaptive_vision_measurements.py
 ```
 
-The [vision roadmap](../../../GEMMA4_VISION_PHASE_ROADMAP.md) and [published qualification manifest](../../../benchmarks/data/gemma4-vision-qualification.json) identify exact artifacts, measured image-fit examples, strict-memory scope, stage lineage and unsupported configurations. The device phase arena bounds its grants, not arbitrary host decoding, driver resources or every later image request.
+The [vision report](../../../docs/multimodal/gemma4-vision.md), [vision roadmap](../../../GEMMA4_VISION_PHASE_ROADMAP.md) and [published qualification manifest](../../../benchmarks/data/gemma4-vision-qualification.json) identify exact artifacts, measured image-fit examples, strict-memory scope, stage lineage and unsupported configurations. The device phase arena bounds its grants, not arbitrary host decoding, driver resources or every later image request.
 
 ### Adaptive KV vision qualification
 
-This standalone harness needs only Python's standard library and local model/projector files. It starts temporary loopback servers and stops them in cleanup, generates deterministic PNG inputs, and disables UVM in those test processes by default, including any inherited UVM setting. Free the GPU beforehand; it does not manage production containers.
+This standalone harness needs only Python's standard library and local model/projector files. It starts temporary loopback servers and stops them in cleanup, generates deterministic PNG inputs, and disables UVM in those test processes by default, including any inherited UVM setting. No existing server or container is required; make sufficient GPU memory available beforehand.
 
 ```sh
 python3 tools/server/tests/test_adaptive_vision.py \
@@ -182,7 +182,7 @@ This processed a 98,379-token initial image prompt with actual streaming, not a 
 
 For a shorter eager/arena MTP comparison, use the first command with `--batch-size 256 --ubatch-size 256 --mtp-length 3 --decode 64 --stock-uvm`. A separate arena run with `--arena-uvm` qualified all nine outputs against the no-UVM arena run. These are finite numerical/lifecycle cases, not cross-device bit-identity or driver-eviction guarantees. For compiled-kernel checks and hardware evidence limits, see the [CUDA qualification instructions](../../../docs/build.md#adaptive-kv-cuda-qualification-and-startup-errors).
 
-`--mode stock`/`--mode arena` run one side. `--cache-ram-mib` and `--decode` are configurable. Logs and accepted mode results are stored in the output directory; `--check-rejections` verifies unsupported startup settings without loading the target. No default production cache/checkpoint configuration is changed by this harness.
+`--mode stock`/`--mode arena` run one side. `--cache-ram-mib` and `--decode` are configurable. Logs and accepted mode results are stored in the output directory; `--check-rejections` verifies unsupported startup settings without loading the target. Settings apply only to the test processes launched by this harness.
 
 ### Vision memory and handoff measurements
 
@@ -204,7 +204,7 @@ Use `--mtp-length 1`, `2` or `3` for image-aware embedded MTP memory measurement
 
 The report includes raw samples, request/vision-window peaks, idle baselines, actual weight/compute grants, phase timings and the first KV refill after each vision phase. `vision_phase` and `KV_reload` records are available at server verbosity 3. The C++ diagnostics use backend-neutral ownership and existing synchronous-copy boundaries; only this external device sampler is NVIDIA/Linux-specific.
 
-The temporary servers use image-token limits 64-4096 to exercise different encoder sizes. These are test settings, not a visual-quality recommendation; Qwen recommends a higher minimum for grounding. Production image limits are not changed. Like the existing `memory_phase` diagnostics, these low-frequency backend records use warning-level visibility so the server's backend callback keeps them at verbosity 3; a record itself is not an inference failure.
+The temporary servers use image-token limits 64-4096 to exercise different encoder sizes. These are test settings, not a visual-quality recommendation; Qwen recommends a higher minimum for grounding. Other server launches are unaffected. Like the existing `memory_phase` diagnostics, these low-frequency backend records use warning-level visibility so the server's backend callback keeps them at verbosity 3; a record itself is not an inference failure.
 
 - `projector_reload_us` includes file access, host upload preparation and completed weight uploads; it is not pure PCIe DMA time.
 - `text_resume_us` rebuilds text grants and graph reservations; it does not upload the full KV history.

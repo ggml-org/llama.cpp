@@ -1,0 +1,62 @@
+{
+  "description": "README overview: 45 earlier target-only/MTP1/MTP2 points and 32 post-D512 MTP3 points; no extrapolated points.",
+  "target_only": {
+    "source": "media/gemma4-120ki.csv",
+    "source_sha256": "965f22de71f55a14e8e3849c10f0eda05b2022f1d23ac442d6f6e14d04f80adc",
+    "profile": "media/gemma4-120ki.json",
+    "profile_sha256": "0086f71a3864bde4ccd0512912675c0c0357be60e03726b16f24b5efe31c40e0",
+    "runtime_id": "ad1d8e468efe72a862296e827d2588762ea517f7dd8e940feb36bb46c9320269",
+    "mtp_length": 0,
+    "capacity_range": [
+      8192,
+      122880
+    ],
+    "points": 15
+  },
+  "mtp1": {
+    "source": "media/gemma4-120ki.csv",
+    "source_sha256": "965f22de71f55a14e8e3849c10f0eda05b2022f1d23ac442d6f6e14d04f80adc",
+    "profile": "media/gemma4-120ki.json",
+    "profile_sha256": "0086f71a3864bde4ccd0512912675c0c0357be60e03726b16f24b5efe31c40e0",
+    "runtime_id": "ad1d8e468efe72a862296e827d2588762ea517f7dd8e940feb36bb46c9320269",
+    "mtp_length": 1,
+    "capacity_range": [
+      8192,
+      122880
+    ],
+    "points": 15
+  },
+  "mtp2": {
+    "source": "media/gemma4-120ki.csv",
+    "source_sha256": "965f22de71f55a14e8e3849c10f0eda05b2022f1d23ac442d6f6e14d04f80adc",
+    "profile": "media/gemma4-120ki.json",
+    "profile_sha256": "0086f71a3864bde4ccd0512912675c0c0357be60e03726b16f24b5efe31c40e0",
+    "runtime_id": "ad1d8e468efe72a862296e827d2588762ea517f7dd8e940feb36bb46c9320269",
+    "mtp_length": 2,
+    "capacity_range": [
+      8192,
+      122880
+    ],
+    "points": 15
+  },
+  "mtp3": {
+    "source": "benchmarks/results/d512-attention-research-20261021/feature-hardening-20261022/sweep-mtp3-256ki/accepted.jsonl",
+    "source_sha256": "ec8e5593a0780d6f281ca5e318ad48317384808a19dd7633d71e7e35c2bc7118",
+    "provenance_sha256": "2b6174d86b04174c2453f1ef1cd90fe9688bbb3e6fd757124c0dcc1ac398b3bb",
+    "source_commit": "6612846ed4a30024e8c8dcb54c25df3600523cf6",
+    "runtime_id": "ca4939314b098c7037b1825455f2f98b19e0afd59a5b89ef47581fc2276af42d",
+    "capacity_range": [
+      8192,
+      262144
+    ],
+    "points": 32,
+    "audit": "Accepted artifact, execution-log and rejected+1MiB-neighbor hashes revalidated for every point."
+  },
+  "gpu": "NVIDIA GeForce RTX 5070 Ti, GPU-94db7ceb-31fc-464c-1ba7-7a0a2ca672a6, 610.57.04, 16303 MiB",
+  "scope": "Single measurements with independent maximum-fit arenas. Different runtime cohorts, not repeated trials, pure MTP attribution, long-context native equivalence or a new vision benchmark. Target-only and MTP1/2 retain their published 120 Ki endpoints; only MTP3 extends through 256 Ki.",
+  "plot": {
+    "y_axis_minimum": 0,
+    "csv_sha256": "0952b319776d26808df6ce90d6e65fb8ffb59f8d01fd4701f807f71755bb6953",
+    "png_sha256": "52b8437a428eb7c8f0011e120bcaab1e7893ad3807fe1001fd8d5adaeab3c39b"
+  }
+}
