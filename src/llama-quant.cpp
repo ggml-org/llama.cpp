@@ -7,8 +7,11 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cinttypes>
 #include <csignal>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <numeric>
@@ -959,25 +962,19 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         checkpoint_file += "-" + std::string(hex) + ".bpw_state";
 
         if (qs.params->state_file) {
-            const char * filename = qs.params->state_file;
-            bool is_valid = false;
-
-            if (filename[0] == '\0') { is_valid = true; }
-            else if (std::ifstream(filename, std::ios::binary).good()) { is_valid = true; }
-            else {
-                std::ofstream ofs(filename, std::ios::binary | std::ios::app);
-                if (ofs.is_open()) {
-                    is_valid = true;
-                    ofs.close();
-                    std::remove(filename);
-                }
-            }
-
-            if (is_valid) {
-                if (filename[0] != '\0') { checkpoint_file = filename; }
+            if (qs.params->state_file[0] != '\0') { checkpoint_file = qs.params->state_file; }
+            const char * fname = checkpoint_file.c_str();
+            FILE * f = std::fopen(fname, "rb");
+            if (!f && errno == ENOENT) {
+                f = std::fopen(fname, "wbx");
+                if (!f) { throw std::runtime_error(format("%s: failed to open %s: %s\n", func, fname, std::strerror(errno))); }
+                std::fclose(f);
+                if (std::remove(fname) != 0) { LLAMA_LOG_WARN("%s: failed to remove %s: %s\n", func, fname, std::strerror(errno)); }
             } else {
-                LLAMA_LOG_WARN("%s: '%s' is not a valid state file, ignoring\n", func, filename);
-                checkpoint_file = filename;
+                const bool readable = f && (std::fgetc(f) != EOF || !std::ferror(f));
+                const int err = errno;
+                if (f) { std::fclose(f); }
+                if (!readable) { throw std::runtime_error(format("%s: failed to open %s: %s\n", func, fname, std::strerror(err))); }
             }
         }
     }
@@ -986,7 +983,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto save_state = [&](const std::vector<type_choice> & all_tensors) {
         const std::string tmp = checkpoint_file + ".tmp";
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
-        if (!ofs) { return; }
+        if (!ofs) {
+            LLAMA_LOG_WARN("\n\t%s: failed to save progress to %s (open error)\n", func, tmp.c_str());
+            return;
+        }
         ofs.write((const char *)& STATE_MAGIC, sizeof(STATE_MAGIC));
         ofs.write((const char *)& model_id, sizeof(model_id));
         const uint64_t n = all_tensors.size();
@@ -1024,8 +1024,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         std::remove(checkpoint_file.c_str());
-        std::rename(tmp.c_str(), checkpoint_file.c_str());
-        LLAMA_LOG_INFO("\t%s: saved target progress for %lu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
+        if (std::rename(tmp.c_str(), checkpoint_file.c_str()) != 0) {
+            LLAMA_LOG_WARN("\n\t%s: failed to save progress to %s (rename error), kept in %s\n", func, checkpoint_file.c_str(), tmp.c_str());
+            return;
+        }
+
+        LLAMA_LOG_INFO("\t%s: saved target progress for %zu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
     };
 
     // Load vector<type_choice> state from disk
@@ -1064,8 +1068,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             type_choice si;
             uint64_t sz = 0;
             ifs.read((char *)& sz, sizeof(sz));
-            if (sz > std::size(quant_types)) {
-                LLAMA_LOG_WARN("%s: state file candidate size exceeds limits, ignoring\n", func);
+            if (!ifs.good()) { break; }
+            if (sz == 0 || sz > std::size(quant_types)) {
+                LLAMA_LOG_WARN("%s: candidate count out of range, ignoring state file\n", func);
                 return {};
             }
             ifs.read((char *)& si.choice, sizeof(si.choice));
@@ -1081,6 +1086,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 int32_t t = 0;
                 uint64_t b = 0;
                 ifs.read((char *)& t, sizeof(t));
+                if (!ifs.good()) { break; }
+                if (std::find(std::begin(quant_types), std::end(quant_types), t) == std::end(quant_types)) {
+                    LLAMA_LOG_WARN("%s: candidate type is not in the selection pool, ignoring state file \n", func);
+                    return {};
+                }
                 cd.type = (ggml_type)t;
                 ifs.read((char *)& cd.bpw, sizeof(cd.bpw));
                 ifs.read((char *)& b, sizeof(b));
@@ -1096,7 +1106,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             return {};
         }
 
-        LLAMA_LOG_INFO("\t%s: using %s (data for %lu tensors loaded)\n", func, checkpoint_file.c_str(), out.size());
+        LLAMA_LOG_INFO("\t%s: using %s (data for %zu tensors loaded)\n", func, checkpoint_file.c_str(), out.size());
         return out;
     };
 
@@ -1107,7 +1117,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 if (qs.has_ignored_types) {
                     LLAMA_LOG_WARN("\n\t%s: interrupted; state checkpoint is not written while --target-exclude is active\n", func);
                 } else {
-                    LLAMA_LOG_INFO("\n\t%s: interrupted, saving progress for %lu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
+                    LLAMA_LOG_INFO("\n\t%s: interrupted, saving progress for %zu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
                     save_state(all_tensors);
                 }
             } else {
