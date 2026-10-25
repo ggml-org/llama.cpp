@@ -742,50 +742,56 @@ static inline bool glob_class_match(const char c, const char * pattern, const ch
 }
 
 // simple glob: * matches non-/ chars, ** matches anything including /, [] matches character class
-static inline bool glob_match(const char * pattern, const char * str) {
-    if (*pattern == '\0') {
-        return *str == '\0';
-    }
-    if (pattern[0] == '*' && pattern[1] == '*') {
-        const char * p = pattern + 2;
-        if (glob_match(p, str)) return true;
-        if (*str != '\0') return glob_match(pattern, str + 1);
+// only wildcards recurse, too many wildcards: no match
+static bool glob_match(const char * pattern, const char * str, int depth = 0) {
+    if (depth >= COMMON_RECURSIVE_LIMIT) {
         return false;
     }
-    if (*pattern == '*') {
-        const char * p = pattern + 1;
-        for (; *str != '\0' && *str != '/'; str++) {
-            if (glob_match(p, str)) return true;
-        }
-        return glob_match(p, str);
-    }
-    if (*pattern == '?' && *str != '\0' && *str != '/') {
-        return glob_match(pattern + 1, str + 1);
-    }
-    if (*pattern == '[') {
-        const char * class_end = pattern + 1;
-        // If first character after '[' is ']' or '-', treat it as literal
-        if (*class_end == ']' || *class_end == '-') {
-            class_end++;
-        }
-        while (*class_end != '\0' && *class_end != ']') {
-            class_end++;
-        }
-        if (*class_end == ']') {
-            if (*str == '\0') return false;
-            bool matched = glob_class_match(*str, pattern + 1, class_end);
-            return matched && glob_match(class_end + 1, str + 1);
-        } else {
-            if (*str == '[') {
-                return glob_match(pattern + 1, str + 1);
+    while (*pattern != '\0') {
+        if (pattern[0] == '*' && pattern[1] == '*') {
+            const char * p = pattern + 2;
+            for (;; str++) {
+                if (glob_match(p, str, depth + 1)) return true;
+                if (*str == '\0') return false;
             }
-            return false;
         }
+        if (*pattern == '*') {
+            const char * p = pattern + 1;
+            for (; *str != '\0' && *str != '/'; str++) {
+                if (glob_match(p, str, depth + 1)) return true;
+            }
+            return glob_match(p, str, depth + 1);
+        }
+        if (*pattern == '?' && *str != '\0' && *str != '/') {
+            pattern++;
+            str++;
+            continue;
+        }
+        if (*pattern == '[') {
+            const char * class_end = pattern + 1;
+            // If first character after '[' is ']' or '-', treat it as literal
+            if (*class_end == ']' || *class_end == '-') {
+                class_end++;
+            }
+            while (*class_end != '\0' && *class_end != ']') {
+                class_end++;
+            }
+            if (*class_end == ']') {
+                if (*str == '\0' || !glob_class_match(*str, pattern + 1, class_end)) return false;
+                pattern = class_end + 1;
+                str++;
+                continue;
+            }
+            if (*str != '[') return false;
+            pattern++;
+            str++;
+            continue;
+        }
+        if (*pattern != *str) return false;
+        pattern++;
+        str++;
     }
-    if (*pattern == *str) {
-        return glob_match(pattern + 1, str + 1);
-    }
-    return false;
+    return *str == '\0';
 }
 
 bool glob_match(const std::string & pattern, const std::string & str) {

@@ -879,6 +879,18 @@ static void test_failure_left_recursion() {
         empty ::= "blah" | )""";
     assert(test_build_grammar_fails(hardest_str));
 
+    const auto chain = [](int n) {
+        std::string s = "root ::= r0\n";
+        for (int i = 0; i < n; i++) {
+            s += "r" + std::to_string(i) + " ::= r" + std::to_string(i + 1) + "\n";
+        }
+        return s + "r" + std::to_string(n) + " ::= \"a\"\n";
+    };
+    llama_grammar * grammar = build_grammar(chain(100));
+    assert(grammar != nullptr);
+    llama_grammar_free_impl(grammar);
+    assert(test_build_grammar_fails(chain(1000)));
+
     fprintf(stderr, "  ✅︎ Passed\n");
 }
 
@@ -1474,6 +1486,25 @@ static void test_json_schema() {
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "dimensions": {"length": 785, "width": 250.5, "height": -0.359}, "tags": ["home", "green"]})""", // Tags and dimensions are out of order
             // TODO: The following line should fail, but currently it passes. `uniqueItems` is not supported, as it would likely be too difficult to implement.
             // R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green", "home"]})""",
+        }
+    );
+
+    // the deepest schema of json_schema_to_grammar must give a valid grammar
+    std::string deep_schema;
+    for (int i = 0; i < 127; i++) {
+        deep_schema += R"({"type": "array", "items": )";
+    }
+    deep_schema += R"({"type": "string"})" + std::string(127, '}');
+    test_schema(
+        "127 nested arrays",
+        deep_schema,
+        // Passing strings
+        {
+            std::string(127, '[') + R"("a")" + std::string(127, ']'),
+        },
+        // Failing strings
+        {
+            std::string(126, '[') + R"("a")" + std::string(126, ']'),
         }
     );
 }

@@ -31,6 +31,8 @@
 #define DIRECTORY_SEPARATOR '/'
 #endif // _WIN32
 
+#define COMMON_RECURSIVE_LIMIT 128
+
 #define COM_DBG(fmt, ...) LOG_DBG("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define COM_TRC(fmt, ...) LOG_TRC("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define COM_INF(fmt, ...) LOG_INF("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
