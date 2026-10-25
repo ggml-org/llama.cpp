@@ -14,11 +14,14 @@ import {
 	ROUTES,
 	SETTINGS_KEYS,
 	SIDEBAR_EXPANDED_LOCALSTORAGE_KEY,
+	SIDEBAR_MAX_WIDTH,
+	SIDEBAR_MIN_WIDTH,
 	SIDEBAR_WIDTH_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { deviceStore } from '$lib/stores/device.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ModelOption } from '$lib/types/models';
+import { remToPx } from '$lib/utils/css';
 
 class UiStore {
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
@@ -132,7 +135,15 @@ class UiStore {
 
 		const width = Number(localStorage.getItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY));
 
-		return Number.isFinite(width) && width > 0 ? width : null;
+		if (!Number.isFinite(width) || width <= 0) return null;
+
+		// a width saved under older bounds is pulled back inside the current ones
+		const clamped = Math.min(
+			remToPx(SIDEBAR_MAX_WIDTH),
+			Math.max(remToPx(SIDEBAR_MIN_WIDTH), width)
+		);
+
+		return Math.round(clamped);
 	}
 }
 

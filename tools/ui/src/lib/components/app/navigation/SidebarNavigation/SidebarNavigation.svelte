@@ -391,7 +391,8 @@
 						? maxPx + stretch(pointerWidth - maxPx)
 						: pointerWidth;
 
-			uiStore.setSidebarWidth(Math.round(width));
+			// persisted once on release, not on every move
+			uiStore.sidebarWidth = Math.round(width);
 		}
 
 		function onPointerUp() {
@@ -403,20 +404,23 @@
 
 			// it reopens at its width from before the drag, without springing on the way out
 			if (willCollapse) {
-				uiStore.setSidebarWidth(startWidth);
+				uiStore.sidebarWidth = startWidth;
 				toggleExpandedMode();
 
 				return;
 			}
+
+			if (uiStore.sidebarWidth === startWidth) return;
 
 			const width = uiStore.sidebarWidth ?? minPx;
 			const clamped = Math.min(maxPx, Math.max(minPx, width));
 
 			if (clamped !== width) {
 				isSettling = true;
-				uiStore.setSidebarWidth(Math.round(clamped));
 				setTimeout(() => (isSettling = false), SIDEBAR_SETTLE_MS);
 			}
+
+			uiStore.setSidebarWidth(Math.round(clamped));
 		}
 
 		function onPointerCancel() {
