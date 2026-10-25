@@ -2,6 +2,7 @@
 
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
+#include "../tools/server/server-schema.h"
 
 #include <cstdlib>
 #include <regex>
@@ -490,6 +491,42 @@ static void test_decision_depth(testing & t) {
     });
 }
 
+// DRY sequence breakers
+//
+
+static void test_dry_sequence_breakers(testing & t) {
+    common_params params_base;
+
+    const auto eval = [&](const json & data) {
+        return server_schema::eval_llama_cmpl_schema(nullptr, params_base, {}, data);
+    };
+
+    {
+        json data;
+        data["dry_sequence_breakers"] = json::array({"ab", "ab", "cd", "ab"});
+        const auto params = eval(data);
+        const std::vector<std::string> expected = {"ab", "cd"};
+        t.assert_true("duplicates removed, order kept", params.sampling.dry_sequence_breakers == expected);
+    }
+
+    {
+        std::vector<std::string> many;
+        for (int i = 0; i <= LLAMA_DRY_MAX_SEQ_BREAKERS; ++i) {
+            many.push_back("b" + std::to_string(i));
+        }
+        json data;
+        data["dry_sequence_breakers"] = many;
+
+        bool thrown = false;
+        try {
+            eval(data);
+        } catch (const std::exception &) {
+            thrown = true;
+        }
+        t.assert_true("more than the cap is rejected", thrown);
+    }
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -511,6 +548,7 @@ int main(int argc, char ** argv) {
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
     t.test("decision_depth",  test_decision_depth);
+    t.test("dry_sequence_breakers", test_dry_sequence_breakers);
 
     return t.summary();
 }
