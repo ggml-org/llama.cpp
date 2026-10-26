@@ -2383,7 +2383,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             cpu_ids = ggml_reshape_2d(ctx0, cpu_ids, n_expert_used, n_tokens);
             sel2d   = ggml_reshape_2d(ctx0, sel, n_expert_used, n_tokens);
         } else {
-            moe_cache->set_cpu_part(lookup, n_expert_used, {}, nullptr);
+            moe_cache->set_cpu_part(lookup, n_expert_used, {});
         }
     }
 
@@ -2575,7 +2575,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             }
         }
 
-        moe_cache->set_cpu_part(lookup, n_expert_used, { lookup->src[1], cur }, experts_cpu);
+        moe_cache->set_cpu_part(lookup, n_expert_used, { lookup->src[1], cur });
 
         experts = ggml_add(ctx0, experts_dev, experts_cpu);
         ggml_backend_sched_set_tensor_backend(sched, experts, moe_cache->backend(il));

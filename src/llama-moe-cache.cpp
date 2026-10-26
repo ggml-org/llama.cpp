@@ -13,7 +13,6 @@
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -328,7 +327,6 @@ struct llama_moe_cache::impl {
         std::vector<const ggml_tensor *> inputs; // device tensors read by the CPU part
     };
     std::unordered_map<const ggml_tensor *, cpu_part> cpu_parts; // slot lookup -> CPU part, no inputs if there is no CPU part
-    std::unordered_set<const ggml_tensor *> cpu_outputs; // results of the CPU parts, copied to the device asynchronously
 
     // the device data read with the selected experts of the last slot lookup, in host memory that the device can copy to asynchronously
     std::vector<stash_entry> stash;
@@ -703,22 +701,8 @@ struct llama_moe_cache::impl {
         return false;
     }
 
-    void set_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs, const ggml_tensor * output) {
+    void set_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs) {
         cpu_parts[lookup] = { n_used, std::move(inputs) };
-        if (output != nullptr) {
-            cpu_outputs.insert(output);
-        }
-    }
-
-    // the result of a CPU part, the device copies it after the work queued on it, without waiting on the host
-    // the next CPU part runs after the next slot lookup, which synchronizes the device, so the result is not overwritten before it is copied
-    bool copy_cpu_output(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst) const {
-        if (cpu_outputs.count(src) == 0 || src->buffer == nullptr || !ggml_backend_buffer_is_host(src->buffer) ||
-            dst->buffer == nullptr || ggml_backend_buffer_is_host(dst->buffer)) {
-            return false;
-        }
-        ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
-        return true;
     }
 
     void begin() {
@@ -728,7 +712,7 @@ struct llama_moe_cache::impl {
     bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {
         const auto it = layer_of.find(src);
         if (it == layer_of.end()) {
-            return copy_cpu_input(src, dst) || copy_cpu_output(backend, src, dst);
+            return copy_cpu_input(src, dst);
         }
         const int32_t il = it->second;
         layer & l = layers[il];
@@ -897,8 +881,8 @@ ggml_tensor * llama_moe_cache::get_cpu_map(int32_t il) const {
     return il >= 0 && il < (int32_t) pimpl->layers.size() ? pimpl->layers[il].cpu_map : nullptr;
 }
 
-void llama_moe_cache::set_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs, const ggml_tensor * output) {
-    pimpl->set_cpu_part(lookup, n_used, std::move(inputs), output);
+void llama_moe_cache::set_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs) {
+    pimpl->set_cpu_part(lookup, n_used, std::move(inputs));
 }
 
 void llama_moe_cache::begin() {
