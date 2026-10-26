@@ -493,6 +493,7 @@ struct common_params {
     enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_AUTO; // how to load the model
 
     enum llama_lazy_mode lazy_mode = LLAMA_LAZY_MODE_AUTO; // on-demand reading of tensors marked by the arch
+    std::string ple_path; // separate GGUF with the per-layer embeddings
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
