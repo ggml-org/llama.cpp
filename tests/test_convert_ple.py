@@ -1,12 +1,9 @@
-from pathlib import Path
 import sys
 
 import numpy as np
 import pytest
 import torch
 from safetensors.torch import save_file
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import convert_hf_to_gguf as converter
 import gguf
@@ -54,7 +51,7 @@ def test_qwen_ple_exports(checkpoint, ftype, use_temp_file):
     for mode in ["full", "ple", "backbone"]:
         path = directory / f"{mode}.gguf"
         model = Qwen4ExpTextModel(directory, ftype, path, hparams=hparams,
-                                 ple_only=mode == "ple", no_ple=mode == "backbone", use_temp_file=use_temp_file)
+                                  ple_only=mode == "ple", no_ple=mode == "backbone", use_temp_file=use_temp_file)
         model.write()
         readers[mode] = gguf.GGUFReader(path)
 
@@ -83,7 +80,7 @@ def test_no_ple_skips_table_data(checkpoint, monkeypatch):
 
     monkeypatch.setattr(Qwen4ExpTextModel, "_load_ple_shard", lambda *args: load_shard)
     model = Qwen4ExpTextModel(directory, gguf.LlamaFileType.ALL_F32, directory / "backbone.gguf",
-                             hparams=hparams, no_ple=True)
+                              hparams=hparams, no_ple=True)
     model.write()
 
 
@@ -120,7 +117,7 @@ def test_converter_cli(checkpoint, monkeypatch, flag, expected):
     path = directory / "cli.gguf"
     monkeypatch.setattr(converter.ModelBase, "load_hparams", lambda *args, **kwargs: hparams)
     monkeypatch.setattr(sys, "argv", ["convert_hf_to_gguf.py", str(directory), flag, "--no-mtp",
-                                    "--outtype", "f32", "--outfile", str(path)])
+                                      "--outtype", "f32", "--outfile", str(path)])
     converter.main()
     assert [tensor.name for tensor in gguf.GGUFReader(path).tensors] == [expected]
 
@@ -133,7 +130,7 @@ def test_split_backbone_counts_exclude_ple(checkpoint):
     tensors["model.layers.0.ple.key_proj.weight"] = torch.zeros(512, 128)
     save_file(tensors, path)
     model = Qwen4ExpTextModel(directory, gguf.LlamaFileType.ALL_F32, directory / "split.gguf",
-                             hparams=hparams, no_ple=True, split_max_tensors=1)
+                              hparams=hparams, no_ple=True, split_max_tensors=1)
     model.write()
     shards = [gguf.GGUFReader(path) for path in sorted(directory.glob("split-*.gguf"))]
     assert len(shards) == 2
