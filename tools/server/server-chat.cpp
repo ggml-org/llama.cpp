@@ -721,3 +721,22 @@ json convert_transcriptions_to_chatcmpl(
 
     return chatcmpl_body;
 }
+
+llama_tokens server_chat_get_asr_prompt(const llama_model * model) {
+    const char * src = llama_model_chat_template(model, "asr");
+    if (src == nullptr) {
+        return {};
+    }
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const llama_token bos = llama_vocab_bos(vocab);
+    const common_chat_template tmpl(src, bos == LLAMA_TOKEN_NULL ? "" : common_token_to_piece(vocab, bos, true), "");
+    jinja::context ctx(tmpl.source());
+    jinja::global_from_json(ctx, json {
+        {"bos_token",             tmpl.bos_token()},
+        {"messages",              json::array()},
+        {"add_generation_prompt", true},
+    }, false);
+    jinja::runtime runtime(ctx);
+    const std::string prompt = jinja::runtime::gather_string_parts(runtime.execute(tmpl.prog))->as_string().str();
+    return common_tokenize(vocab, prompt, false, true);
+}

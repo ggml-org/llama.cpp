@@ -8,6 +8,7 @@
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
+#include "server-realtime.h"
 #include "server-schema.h"
 #include "server-stream.h"
 
@@ -402,6 +403,19 @@ struct server_slot {
     bool audio_wait = false; // the stream needs more audio before it can produce rows
     std::deque<int64_t> audio_commit_rows; // end row of each non-final commit not yet completed
 
+    // realtime conversation, see SERVER_TASK_TYPE_REALTIME: the session's controls run on the slot in order
+    struct rt_op {
+        server_control_action   action;
+        std::string             text;
+        std::vector<float>      audio;
+        server_control_response response;
+    };
+    std::deque<rt_op> rt_ops;
+    llama_pos rt_n_past     = 0;     // positions of the conversation in the slot's sequence
+    bool      rt_responding = false;
+    bool      rt_cancel     = false;
+    int32_t   rt_n_predict  = 0;
+
     server_slot_stats stats;
 
     // accepted tokens per draft position
@@ -460,6 +474,10 @@ struct server_slot {
         audio_wait = false;
         audio_commit_rows.clear();
         inp_embd.clear();
+        rt_ops.clear();
+        rt_n_past     = 0;
+        rt_responding = false;
+        rt_cancel     = false;
     }
 
     void init_sampler() const {
@@ -654,7 +672,7 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             // nor of the stateless slots - no task ever reuses it
-            if (task->is_child() || task->is_stateless() || audio_stream) {
+            if (task->is_child() || task->is_stateless() || audio_stream || task->type == SERVER_TASK_TYPE_REALTIME) {
                 prompt_clear();
             }
 
@@ -1016,6 +1034,9 @@ public:
     // note: video_params.ffmpeg_bin_dir points into params_base, which outlives this struct
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
     const llama_vocab * vocab = nullptr;
+
+    // prompt of the "asr" chat template, for live ASR
+    llama_tokens asr_prompt;
 
     bool has_cap_tts() const {
         return mtmd_cap.audio_gen;
@@ -1699,6 +1720,13 @@ private:
                 return false;
             }
 
+            try {
+                asr_prompt = server_chat_get_asr_prompt(model_tgt);
+            } catch (const std::exception & e) {
+                SRV_ERR("%s: \"asr\" chat template error: %s\n", __func__, e.what());
+                return false;
+            }
+
             // IMPORTANT: chat_params is reused across sleeping / resuming states,
             //            never store llama_context/llama_model pointers in chat_params,
             //            as they may be invalidated after sleeping
@@ -2014,6 +2042,23 @@ private:
             }
         }
 
+        // realtime transcription: the rows come from the audio stream, it may forbid some tokens
+        if (task.type == SERVER_TASK_TYPE_TRANSCRIBE_RT) {
+            auto sparams = mtmd_audio_stream_params_default();
+            sparams.prompt   = asr_prompt.data();
+            sparams.n_prompt = asr_prompt.size();
+            slot.audio_stream.reset(mtmd_audio_stream_init(mctx, sparams));
+            if (!slot.audio_stream) {
+                send_error(task, "failed to initialize the audio stream", ERROR_TYPE_SERVER);
+                return false;
+            }
+            size_t n_banned = 0;
+            const llama_token * banned = mtmd_audio_stream_get_banned_tokens(slot.audio_stream.get(), &n_banned);
+            for (size_t i = 0; i < n_banned; i++) {
+                task.params.sampling.logit_bias.push_back({banned[i], -INFINITY});
+            }
+        }
+
         // initialize samplers
         if (task.need_sampling()) {
             try {
@@ -2069,18 +2114,24 @@ private:
 
         // no prompt, the rows come from the audio stream, which audio controls reach from now on
         if (slot.task->type == SERVER_TASK_TYPE_TRANSCRIBE_RT) {
-            slot.audio_stream.reset(mtmd_audio_stream_init(mctx, mtmd_audio_stream_params_default()));
-            if (!slot.audio_stream) {
-                send_error(slot, "failed to initialize the audio stream", ERROR_TYPE_SERVER);
-                slot.release();
-                return false;
-            }
             slot.prompt_clear();
             slot.init_sampler();
             slot.sampled = LLAMA_TOKEN_NULL;
             slot.i_batch = -1;
             slot.stats.update_prompt_start();
             slot.state = SLOT_STATE_GENERATING;
+            send_partial_response(slot, {}, false, true);
+        }
+
+        // no prompt either, the session appends text and audio and asks for responses with its controls
+        if (slot.task->type == SERVER_TASK_TYPE_REALTIME) {
+            if (has_cap_tts() && !slot.tts.is_supported()) {
+                slot.tts.ctx.init(ctx_tgt, slot.mctx);
+            }
+            slot.prompt_clear();
+            slot.stats.update_prompt_start();
+            slot.state      = SLOT_STATE_GENERATING;
+            slot.audio_wait = true;
             send_partial_response(slot, {}, false, true);
         }
 
@@ -2966,6 +3017,7 @@ private:
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_TRANSCRIBE_RT:
+            case SERVER_TASK_TYPE_REALTIME:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
             case SERVER_TASK_TYPE_TTS:
@@ -3077,6 +3129,20 @@ private:
                         }
                         // act on the live slot mid generation, never defer
                         common_sampler_reasoning_budget_force(slot->smpl.get());
+                        res->success = true;
+                    } else if (slot->task->type == SERVER_TASK_TYPE_REALTIME) {
+                        // a cancel acts now, everything else runs after what is already queued
+                        if (task.params.control_action == SERVER_CONTROL_ACTION_RESPONSE_CANCEL) {
+                            slot->rt_cancel = slot->rt_responding;
+                        } else {
+                            slot->rt_ops.push_back({
+                                task.params.control_action,
+                                std::move(task.params.control_text),
+                                std::move(task.params.control_audio),
+                                task.params.control_response,
+                            });
+                        }
+                        slot->audio_wait = false;
                         res->success = true;
                     } else if (task.params.control_action == SERVER_CONTROL_ACTION_AUDIO_APPEND
                             || task.params.control_action == SERVER_CONTROL_ACTION_AUDIO_COMMIT
@@ -3443,6 +3509,18 @@ private:
         }
 
         if (n > 0) {
+            // new sequence (e.g. live ASR restart): drop the old one, the text goes on in a new line
+            if (mtmd_audio_stream_is_seq_start(slot.audio_stream.get())) {
+                slot.prompt_clear();
+                if (slot.n_sent_text > 0) {
+                    completion_token_output sep;
+                    sep.tok          = LLAMA_TOKEN_NULL;
+                    sep.text_to_send = "\n";
+                    slot.generated.append(common_chat_input(sep.text_to_send));
+                    slot.n_sent_text += sep.text_to_send.size();
+                    send_partial_response(slot, sep, false);
+                }
+            }
             const float * rows = mtmd_audio_stream_get_output_embd(slot.audio_stream.get());
             slot.inp_embd.assign(rows, rows + (size_t) n * batch.n_embd);
             slot.audio_wait = false;
@@ -3528,6 +3606,14 @@ private:
             abort_all_slots("process_tts_slots() failed: " + std::string(e.what()));
         }
 
+        // so do the realtime conversations
+        try {
+            process_realtime_slots();
+        } catch (const std::exception & e) {
+            SRV_ERR("process_realtime_slots() failed: %s\n", e.what());
+            abort_all_slots("process_realtime_slots() failed: " + std::string(e.what()));
+        }
+
         GGML_ASSERT(batch.slot_batched || batch.size() == 0);
 
         if (batch.slot_batched) {
@@ -3588,6 +3674,270 @@ private:
                 break; // stop any further processing
             }
         }
+    }
+
+    //
+    // realtime conversations (SERVER_TASK_TYPE_REALTIME)
+    //
+
+    void send_realtime_result(server_slot & slot, std::string text, std::vector<float> audio, bool response_done = false, bool cancelled = false) {
+        auto res = std::make_unique<server_task_result_realtime>();
+        res->id            = slot.task->id;
+        res->index         = slot.task->index;
+        res->text          = std::move(text);
+        res->audio         = std::move(audio);
+        res->response_done = response_done;
+        res->cancelled     = cancelled;
+        res->n_decoded     = slot.tts.n_decoded;
+        queue_results.send(std::move(res));
+    }
+
+    // appends tokens or embedding rows to the conversation, logits of the last one if asked
+    bool rt_decode(server_slot & slot, const llama_token * tokens, const float * rows, int32_t n, bool logits_last) {
+        const int32_t n_embd  = llama_model_n_embd_inp(model_tgt);
+        const int32_t n_batch = llama_n_batch(ctx_tgt);
+        if (slot.rt_n_past + n >= slot.n_ctx) {
+            send_error(slot, "the conversation does not fit in the context", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+            slot.release();
+            return false;
+        }
+        for (int32_t i0 = 0; i0 < n; i0 += n_batch) {
+            const int32_t n_cur = std::min(n_batch, n - i0);
+            llama_batch b = llama_batch_init(n_cur, rows ? n_embd : 0, 1);
+            for (int32_t i = 0; i < n_cur; i++) {
+                if (rows) {
+                    memcpy(b.embd + (size_t) i * n_embd, rows + (size_t) (i0 + i) * n_embd, n_embd * sizeof(float));
+                } else {
+                    b.token[i] = tokens[i0 + i];
+                }
+                b.pos[i]       = slot.rt_n_past + i0 + i;
+                b.n_seq_id[i]  = 1;
+                b.seq_id[i][0] = slot.id;
+                b.logits[i]    = logits_last && i0 + i == n - 1;
+            }
+            b.n_tokens = n_cur;
+            const int ret = llama_decode(ctx_tgt, b);
+            llama_batch_free(b);
+            if (ret != 0) {
+                send_error(slot, "failed to decode the conversation", ERROR_TYPE_SERVER);
+                slot.release();
+                return false;
+            }
+        }
+        slot.rt_n_past += n;
+        return true;
+    }
+
+    // decodes the rows the audio stream has ready; end: the stream has ended, drain it
+    bool rt_audio_rows(server_slot & slot, bool end) {
+        while (true) {
+            const int32_t n = mtmd_audio_stream_step(slot.audio_stream.get(), LLAMA_TOKEN_NULL);
+            if (n == -2) {
+                send_error(slot, "audio stream error", ERROR_TYPE_SERVER);
+                slot.release();
+                return false;
+            }
+            if (n == 0 && !end) {
+                return true;
+            }
+            if (n <= 0) {
+                return true;
+            }
+            if (!rt_decode(slot, nullptr, mtmd_audio_stream_get_output_embd(slot.audio_stream.get()), n, false)) {
+                return false;
+            }
+        }
+    }
+
+    bool rt_response_start(server_slot & slot, const server_slot::rt_op & op) {
+        auto sparams = slot.task->params.sampling;
+        for (llama_token t : op.response.banned) {
+            sparams.logit_bias.push_back({t, -INFINITY});
+        }
+        slot.smpl.reset(common_sampler_init(model_tgt, sparams));
+        slot.rt_n_predict   = op.response.n_predict;
+        slot.rt_cancel      = false;
+        slot.tts.n_decoded  = 0;
+        slot.tts.stop       = false;
+
+        if (slot.tts.is_supported()) {
+            // the LFM3 pipeline continues the conversation and follows the model's text/audio switching
+            mtmd_helper::gen_audio::inp inp;
+            inp.set_prompt(op.text);
+            inp.data.seq_id   = slot.id;
+            inp.data.n_past   = slot.rt_n_past;
+            inp.data.seed     = slot.task->params.sampling.seed;
+            inp.data.stream   = true;
+            inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+            if (slot.tts.ctx.set_input(inp.get()) != 0) {
+                send_error(slot, "failed to start the response", ERROR_TYPE_SERVER);
+                slot.release();
+                return false;
+            }
+            int32_t ret;
+            while ((ret = slot.tts.ctx.step_prompt(llama_n_batch(ctx_tgt))) > 0) {
+            }
+            if (ret < 0) {
+                send_error(slot, "failed to start the response", ERROR_TYPE_SERVER);
+                slot.release();
+                return false;
+            }
+            const float * h = llama_get_embeddings_ith(ctx_tgt, -1);
+            slot.tts.h_state_prompt.assign(h, h + llama_model_n_embd(model_tgt));
+            slot.tts.h_state = slot.tts.h_state_prompt.data();
+        } else {
+            const llama_tokens toks = common_tokenize(vocab, op.text, false, true);
+            if (toks.empty() || !rt_decode(slot, toks.data(), nullptr, (int32_t) toks.size(), true)) {
+                if (slot.is_processing()) {
+                    send_error(slot, "failed to start the response", ERROR_TYPE_SERVER);
+                    slot.release();
+                }
+                return false;
+            }
+        }
+        slot.rt_responding = true;
+        return true;
+    }
+
+    // one text token or audio frame of the response being generated
+    void rt_response_step(server_slot & slot) {
+        bool        stop = false;
+        std::string text;
+        std::vector<float> audio;
+
+        if (slot.tts.is_supported()) {
+            llama_token tok = LLAMA_TOKEN_NULL;
+            if (slot.tts.ctx.next_is_text()) {
+                tok = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
+                common_sampler_accept(slot.smpl.get(), tok, true);
+            }
+            const float * h_next = nullptr;
+            if (slot.tts.ctx.step_gen(tok, slot.tts.h_state, &h_next, &stop) != 0) {
+                send_error(slot, "response generation failed", ERROR_TYPE_SERVER);
+                slot.release();
+                return;
+            }
+            if (tok != LLAMA_TOKEN_NULL && !stop && !llama_vocab_is_control(vocab, tok)) {
+                text = common_token_to_piece(vocab, tok, false);
+            }
+            if (h_next) {
+                slot.tts.h_state_prompt.assign(h_next, h_next + llama_model_n_embd(model_tgt));
+                slot.tts.h_state = slot.tts.h_state_prompt.data();
+            }
+        } else {
+            const llama_token tok = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
+            common_sampler_accept(slot.smpl.get(), tok, true);
+            stop = llama_vocab_is_eog(vocab, tok);
+            if (!stop) {
+                if (!llama_vocab_is_control(vocab, tok)) {
+                    text = common_token_to_piece(vocab, tok, false);
+                }
+                if (!rt_decode(slot, &tok, nullptr, 1, true)) {
+                    return;
+                }
+            }
+        }
+        slot.tts.n_decoded++;
+
+        // the pipeline decodes on its own, the response ends before the context is full
+        const bool ctx_full = slot.tts.is_supported() ?
+            llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id) + 2 >= slot.n_ctx :
+            slot.rt_n_past + 1 >= slot.n_ctx;
+        const bool done = stop || slot.rt_cancel || ctx_full || (slot.rt_n_predict > 0 && slot.tts.n_decoded >= slot.rt_n_predict);
+        if (slot.tts.is_supported()) {
+            if (done) {
+                slot.tts.ctx.flush();
+            }
+            int32_t sample_rate = 0;
+            const char * data   = nullptr;
+            size_t data_len     = 0;
+            if (slot.tts.ctx.get_output(&sample_rate, &data, &data_len) == 0 && data_len > 0) {
+                audio.assign((const float *) data, (const float *) data + data_len / sizeof(float));
+            }
+        }
+        if (!text.empty() || !audio.empty()) {
+            send_realtime_result(slot, std::move(text), std::move(audio));
+        }
+        if (done) {
+            if (slot.tts.is_supported()) {
+                // the pipeline decoded the response, the sequence ends where it stopped
+                slot.rt_n_past = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id) + 1;
+            }
+            send_realtime_result(slot, {}, {}, true, slot.rt_cancel);
+            slot.rt_responding = false;
+            slot.rt_cancel     = false;
+        }
+    }
+
+    void process_realtime_slots() {
+        iterate(slots, [&](server_slot & slot) {
+            if (!slot.is_processing() || slot.task->type != SERVER_TASK_TYPE_REALTIME) {
+                return;
+            }
+
+            llama_set_embeddings(ctx_tgt, true);
+
+            if (slot.rt_responding) {
+                rt_response_step(slot);
+                return;
+            }
+
+            while (!slot.rt_ops.empty() && slot.is_processing() && !slot.rt_responding) {
+                auto op = std::move(slot.rt_ops.front());
+                slot.rt_ops.pop_front();
+                switch (op.action) {
+                    case SERVER_CONTROL_ACTION_TEXT_APPEND:
+                        {
+                            const llama_tokens toks = common_tokenize(vocab, op.text, false, true);
+                            if (!toks.empty() && !rt_decode(slot, toks.data(), nullptr, (int32_t) toks.size(), false)) {
+                                return;
+                            }
+                        } break;
+                    case SERVER_CONTROL_ACTION_AUDIO_APPEND:
+                        {
+                            if (!slot.audio_stream) {
+                                slot.audio_stream.reset(mtmd_audio_stream_init(mctx, mtmd_audio_stream_params_default()));
+                                if (!slot.audio_stream) {
+                                    send_error(slot, "failed to initialize the audio stream", ERROR_TYPE_SERVER);
+                                    slot.release();
+                                    return;
+                                }
+                            }
+                            mtmd_audio_stream_push(slot.audio_stream.get(), op.audio.data(), op.audio.size());
+                            if (!rt_audio_rows(slot, false)) {
+                                return;
+                            }
+                        } break;
+                    case SERVER_CONTROL_ACTION_AUDIO_COMMIT:
+                    case SERVER_CONTROL_ACTION_AUDIO_END:
+                        {
+                            // the end of the audio of a turn
+                            if (slot.audio_stream) {
+                                mtmd_audio_stream_flush(slot.audio_stream.get(), true);
+                                if (!rt_audio_rows(slot, true)) {
+                                    return;
+                                }
+                                slot.audio_stream.reset();
+                            }
+                        } break;
+                    case SERVER_CONTROL_ACTION_RESPONSE_CREATE:
+                        {
+                            if (!rt_response_start(slot, op)) {
+                                return;
+                            }
+                        } break;
+                    case SERVER_CONTROL_ACTION_CLEAR:
+                        {
+                            slot.prompt_clear();
+                            slot.audio_stream.reset();
+                            slot.rt_n_past = 0;
+                        } break;
+                    default:
+                        break;
+                }
+            }
+            slot.audio_wait = slot.rt_ops.empty() && !slot.rt_responding;
+        });
     }
 
     void process_tts_slots() {
@@ -3669,8 +4019,8 @@ private:
         // apply context-shift if needed
         // TODO: simplify and improve
         iterate(slots, [&](server_slot & slot) {
-            if (slot.task && slot.task->type == SERVER_TASK_TYPE_TTS) {
-                // TTS slots drive their own decode loop in process_tts_slots(), never enter the shared batch
+            if (slot.task && (slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME)) {
+                // TTS and realtime conversation slots drive their own decode loop, never enter the shared batch
                 return;
             }
             if (slot.state == SLOT_STATE_GENERATING && slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
@@ -3745,7 +4095,7 @@ private:
 
         // determine which slots are generating and drafting
         iterate(slots, [&](server_slot & slot) {
-            if (slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS) {
+            if (slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
                 return;
             }
 
@@ -3891,7 +4241,7 @@ private:
                     return; // batch is full, skip remaining slots
                 }
 
-                if (!slot.is_processing() || slot.task->type == SERVER_TASK_TYPE_TTS) {
+                if (!slot.is_processing() || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
                     return;
                 }
 
@@ -5143,8 +5493,7 @@ server_context_meta server_context::get_meta() const {
         /* has_inp_video           */ impl->chat_params.allow_video,
         /* has_cap_chat            */ impl->has_cap_chat(),
         /* has_cap_tts             */ impl->has_cap_tts(),
-        // only realtime transcription models (no chat) stream without a prompt
-        /* has_audio_stream        */ impl->mtmd_cap.audio_stream && !impl->mtmd_cap.chat,
+        /* has_audio_stream        */ impl->mtmd_cap.audio_stream,
         /* json_ui_settings        */ impl->json_ui_settings,
         /* slot_n_ctx              */ impl->n_ctx_slot(),
         /* pooling_type            */ llama_pooling_type(impl->ctx_tgt),
@@ -6018,7 +6367,7 @@ void server_routes::init_routes() {
     // realtime transcription over websocket, modeled after the OpenAI realtime API
     // audio is PCM16 mono at the model sample rate, sent as base64 in input_audio_buffer.append events
     // input_audio_buffer.commit with "final": true ends the input, closing the socket also ends it
-    this->ws_realtime = [this](const server_http_req &, server_http_context::ws_conn & conn) {
+    this->ws_realtime = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
         auto send_event = [&conn](json ev) {
             ev["event_id"] = "event_" + random_string();
             conn.send(safe_json_to_str(ev));
@@ -6034,6 +6383,14 @@ void server_routes::init_routes() {
                 }},
             });
         };
+
+        // models that answer after the audio hold a conversation, see server-realtime.h
+        // live transcription: Voxtral Realtime (no chat), or an "asr" model in a session opened with ?intent=transcription
+        const bool live_asr = !ctx_server.asr_prompt.empty() && req.get_param("intent") == "transcription";
+        if (ctx_server.mtmd_cap.audio_stream && ctx_server.mtmd_cap.chat && !live_asr) {
+            server_realtime_conversation({queue_tasks, queue_results, *meta, params.sampling, ctx_server.mctx, ctx_server.mtmd_cap, ctx_server.vocab}, conn);
+            return;
+        }
 
         if (!meta->has_audio_stream) {
             send_error_event("The current model does not support realtime transcription.", "invalid_request_error");

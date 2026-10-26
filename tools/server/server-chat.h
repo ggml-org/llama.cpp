@@ -21,4 +21,8 @@ json convert_transcriptions_to_chatcmpl(
     const std::map<std::string, uploaded_file> & in_files,
     std::vector<raw_buffer> & out_files);
 
+// prompt of the "asr" chat template, live ASR models (e.g. LFM3-Audio live ASR) transcribe with it
+// empty if the model has no such template, throws on a template error
+llama_tokens server_chat_get_asr_prompt(const llama_model * model);
+
 json server_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff);
