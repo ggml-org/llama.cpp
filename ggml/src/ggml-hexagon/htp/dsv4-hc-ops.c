@@ -19,6 +19,40 @@
 // DSV4_HC_PRE
 // ---------------------------------------------------------------------------
 
+// hvx_vec_fast_sigmoid_f32_guard_2it with fewer live constants and predicates:
+// log2(e)/2 folded into one multiply, input clamped to [min_exp, max_exp] instead of the 0/1 mux,
+// hw float to int conversion instead of hvx_vec_truncate_f32
+static inline HVX_Vector dsv4_hc_sigmoid_f32(HVX_Vector v, HVX_Vector max_exp, HVX_Vector min_exp) {
+    v = Q6_Vsf_vmin_VsfVsf(Q6_Vsf_vmax_VsfVsf(v, min_exp), max_exp);
+    v = Q6_Vqf32_vmpy_VsfVsf(v, hvx_vec_splat_f32(0.5f * 1.442695022f));
+
+    HVX_Vector in_int = Q6_Vw_equals_Vsf(Q6_Vsf_equals_Vqf32(v));
+    HVX_Vector x      = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
+    HVX_Vector xx     = Q6_Vqf32_vmpy_Vqf32Vqf32(x, x);
+
+    HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx), Q6_V_vsplat_R(FAST_SIGMOID_C2));
+    v1            = Q6_Vqf32_vadd_Vqf32Vsf(v1, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+
+    HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x), Q6_V_vsplat_R(FAST_SIGMOID_C1));
+    v2            = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx);
+    v2            = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x);
+
+    HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
+    v3            = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
+
+    HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
+    HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
+
+    // Newton-Raphson with 2 iterations, r' = (r + r) - r*(r*v5) needs no 2.0 constant
+    HVX_Vector r = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7EEEEBB3), v5);
+    for (int i = 0; i < 2; ++i) {
+        const HVX_Vector rv = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r, v5));
+        r = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(Q6_Vqf32_vadd_VsfVsf(r, r), Q6_Vqf32_vmpy_VsfVsf(r, rv)));
+    }
+
+    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v3, r));
+}
+
 struct dsv4_hc_pre_context {
     struct htp_ops_context * octx;
     const struct htp_dsv4_hc_pre_kernel_params * kparams;
@@ -193,7 +227,6 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
 
     const HVX_Vector scale_v = hvx_vec_splat_f32(dctx->scale);
-    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
     const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
     const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
 
@@ -228,10 +261,10 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
             const HVX_Vector x2 = *(const HVX_UVector *) (xb + 2*x->nb[1]);
             const HVX_Vector x3 = *(const HVX_UVector *) (xb + 3*x->nb[1]);
 
-            const HVX_Vector g0 = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) gb, one, max_exp, min_exp);
-            const HVX_Vector g1 = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) (gb + weights->nb[1]), one, max_exp, min_exp);
-            const HVX_Vector g2 = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) (gb + 2*weights->nb[1]), one, max_exp, min_exp);
-            const HVX_Vector g3 = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) (gb + 3*weights->nb[1]), one, max_exp, min_exp);
+            const HVX_Vector g0 = dsv4_hc_sigmoid_f32(*(const HVX_UVector *) gb, max_exp, min_exp);
+            const HVX_Vector g1 = dsv4_hc_sigmoid_f32(*(const HVX_UVector *) (gb + weights->nb[1]), max_exp, min_exp);
+            const HVX_Vector g2 = dsv4_hc_sigmoid_f32(*(const HVX_UVector *) (gb + 2*weights->nb[1]), max_exp, min_exp);
+            const HVX_Vector g3 = dsv4_hc_sigmoid_f32(*(const HVX_UVector *) (gb + 3*weights->nb[1]), max_exp, min_exp);
 
             HVX_Vector acc = hvx_vec_mul_f32_f32(x0, g0);
             acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(x1, g1));
@@ -326,16 +359,13 @@ static __attribute__((noinline)) void dsv4_hc_pre_gated_generic_chunk_f32(
         size_t g_nb1,
         uint32_t n_hc,
         float scale) {
-    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
     const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
     const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
 
-    HVX_Vector gv  = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) gb, one, max_exp, min_exp);
+    HVX_Vector gv  = dsv4_hc_sigmoid_f32(*(const HVX_UVector *) gb, max_exp, min_exp);
     HVX_Vector acc = hvx_vec_mul_f32_f32(*(const HVX_UVector *) xb, gv);
-    // pipelined loop spills a sigmoid constant on v81
-    #pragma clang loop pipeline(disable)
     for (uint32_t ih = 1; ih < n_hc; ++ih) {
-        gv  = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) (gb + ih*g_nb1), one, max_exp, min_exp);
+        gv  = dsv4_hc_sigmoid_f32(*(const HVX_UVector *) (gb + ih*g_nb1), max_exp, min_exp);
         acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(*(const HVX_UVector *) (xb + ih*x_nb1), gv));
     }
 
@@ -446,7 +476,6 @@ static __attribute__((noinline)) void dsv4_hc_pre_gated_dma_block_f32(
         uint8_t * d_spad) {
     const uint32_t row_stride = dctx->dma_row_stride;
     const HVX_Vector scale_v = hvx_vec_splat_f32(dctx->scale);
-    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
     const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
     const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
 
@@ -455,19 +484,19 @@ static __attribute__((noinline)) void dsv4_hc_pre_gated_dma_block_f32(
         const uint8_t * gb = g_spad + c*VLEN;
 
         HVX_Vector xv = *(const HVX_Vector *) xb;
-        HVX_Vector gv = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) gb, one, max_exp, min_exp);
+        HVX_Vector gv = dsv4_hc_sigmoid_f32(*(const HVX_Vector *) gb, max_exp, min_exp);
         HVX_Vector acc = hvx_vec_mul_f32_f32(xv, gv);
 
         xv = *(const HVX_Vector *) (xb + row_stride);
-        gv = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + row_stride), one, max_exp, min_exp);
+        gv = dsv4_hc_sigmoid_f32(*(const HVX_Vector *) (gb + row_stride), max_exp, min_exp);
         acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(xv, gv));
 
         xv = *(const HVX_Vector *) (xb + 2*row_stride);
-        gv = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 2*row_stride), one, max_exp, min_exp);
+        gv = dsv4_hc_sigmoid_f32(*(const HVX_Vector *) (gb + 2*row_stride), max_exp, min_exp);
         acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(xv, gv));
 
         xv = *(const HVX_Vector *) (xb + 3*row_stride);
-        gv = hvx_vec_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 3*row_stride), one, max_exp, min_exp);
+        gv = dsv4_hc_sigmoid_f32(*(const HVX_Vector *) (gb + 3*row_stride), max_exp, min_exp);
         acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(xv, gv));
 
         *(HVX_Vector *) (d_spad + c*VLEN) = hvx_vec_mul_f32_f32(acc, scale_v);
@@ -548,15 +577,8 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
     const struct htp_tensor * weights = octx->src[1];
     const struct htp_tensor * dst     = octx->dst;
 
-    if (htp_tensor_is_extended(x) || htp_tensor_is_extended(weights) || htp_tensor_is_extended(dst)) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    const uint32_t n_hc = x->ne[1];
-
     float scale;
     memcpy(&scale, &octx->op_params[0], sizeof(float));
-    const int gated = octx->op_params[1] != 0;
 
     uint32_t token_start = 0;
     uint32_t n_tokens    = x->ne[2];
@@ -579,17 +601,24 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
+    uint32_t kernel_type     = kparams->kernel_type;
     uint32_t total_jobs      = kparams->total_jobs;
     uint32_t jobs_per_thread = kparams->jobs_per_thread;
     if (octx->ctx->mdev.count > 1) {
         total_jobs      = n_tokens * kparams->n_chunks;
         jobs_per_thread = fastdiv(total_jobs + n_threads - 1, &kparams->div_n_threads);
+
+        // mdev split can leave too few jobs per thread for the dma pipeline
+        if (kernel_type == HTP_DSV4_HC_PRE_KERNEL_GATED_DMA && jobs_per_thread < 2*kparams->dma_block_chunks) {
+            kernel_type = HTP_DSV4_HC_PRE_KERNEL_GATED;
+        }
     }
 
-    // mdev split can leave too few jobs per thread for the dma pipeline
-    const bool use_dma = kparams->dma_eligible &&
-                         jobs_per_thread >= 2*kparams->dma_block_chunks &&
-                         kparams->dma_vtcm_size <= octx->ctx->vtcm_size;
+    // only the dma kernel accesses tensors through 64-bit dma addresses
+    if (kernel_type != HTP_DSV4_HC_PRE_KERNEL_GATED_DMA &&
+        (htp_tensor_is_extended(x) || htp_tensor_is_extended(weights) || htp_tensor_is_extended(dst))) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
 
     struct dsv4_hc_pre_context dctx = {
         .octx             = octx,
@@ -605,21 +634,22 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         .dma_buffer_size  = kparams->dma_buffer_size,
     };
 
-    FARF(HIGH, "dsv4-hc-pre: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : gated %d dma %d scale %.6f tokens %u:%u n-threads %u\n",
+    FARF(HIGH, "dsv4-hc-pre: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : kernel %u scale %.6f tokens %u:%u n-threads %u\n",
          x->ne[0], x->ne[1], x->ne[2], x->ne[3],
          weights->ne[0], weights->ne[1], weights->ne[2], weights->ne[3],
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         gated, use_dma, scale, token_start, token_start + n_tokens, n_threads);
+         kernel_type, scale, token_start, token_start + n_tokens, n_threads);
 
-    if (use_dma) {
-        work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_gated_dma_f32, &dctx, n_threads);
-    } else if (n_hc != 4) {
-        work_queue_run(octx->ctx->work_queue, gated ? dsv4_hc_pre_thread_gated_generic_f32 : dsv4_hc_pre_thread_plain_generic_f32, &dctx, n_threads);
-    } else if (gated) {
-        work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_gated_f32, &dctx, n_threads);
-    } else {
-        work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_plain_f32, &dctx, n_threads);
+    work_queue_func_t worker;
+    switch (kernel_type) {
+        case HTP_DSV4_HC_PRE_KERNEL_PLAIN:         worker = dsv4_hc_pre_thread_plain_f32;         break;
+        case HTP_DSV4_HC_PRE_KERNEL_GATED:         worker = dsv4_hc_pre_thread_gated_f32;         break;
+        case HTP_DSV4_HC_PRE_KERNEL_PLAIN_GENERIC: worker = dsv4_hc_pre_thread_plain_generic_f32; break;
+        case HTP_DSV4_HC_PRE_KERNEL_GATED_GENERIC: worker = dsv4_hc_pre_thread_gated_generic_f32; break;
+        case HTP_DSV4_HC_PRE_KERNEL_GATED_DMA:     worker = dsv4_hc_pre_thread_gated_dma_f32;     break;
+        default:                                   return HTP_STATUS_INVAL_PARAMS;
     }
+    work_queue_run(octx->ctx->work_queue, worker, &dctx, n_threads);
 
     return HTP_STATUS_OK;
 }
@@ -944,8 +974,8 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
     const struct htp_tensor * comb     = octx->src[3];
     const struct htp_tensor * dst      = octx->dst;
 
-    if (htp_tensor_is_extended(x) || htp_tensor_is_extended(residual) || htp_tensor_is_extended(post) ||
-        (comb && htp_tensor_is_extended(comb)) || htp_tensor_is_extended(dst)) {
+    // post and comb coefficients are always read through pointers
+    if (htp_tensor_is_extended(post) || htp_tensor_is_extended(comb)) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -970,17 +1000,25 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
+    uint32_t kernel_type     = kparams->kernel_type;
     uint32_t total_jobs      = kparams->total_jobs;
     uint32_t jobs_per_thread = kparams->jobs_per_thread;
     if (octx->ctx->mdev.count > 1) {
         total_jobs      = n_tokens * kparams->n_chunks;
         jobs_per_thread = fastdiv(total_jobs + n_threads - 1, &kparams->div_n_threads);
+
+        // mdev split can leave too few jobs per thread for the dma pipeline
+        if (kernel_type == HTP_DSV4_HC_POST_KERNEL_DMA && jobs_per_thread < 2*kparams->dma_block_chunks) {
+            kernel_type = HTP_DSV4_HC_POST_KERNEL_L2;
+        }
     }
 
-    // mdev split can leave too few jobs per thread for the dma pipeline
-    const bool use_dma = kparams->dma_eligible &&
-                         jobs_per_thread >= 2*kparams->dma_block_chunks &&
-                         kparams->dma_vtcm_size <= octx->ctx->vtcm_size;
+    const bool use_dma = kernel_type == HTP_DSV4_HC_POST_KERNEL_DMA;
+
+    // the dma kernel moves x, residual and dst through 64-bit dma addresses
+    if (!use_dma && (htp_tensor_is_extended(x) || htp_tensor_is_extended(residual) || htp_tensor_is_extended(dst))) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
 
     struct dsv4_hc_post_context dctx = {
         .octx            = octx,

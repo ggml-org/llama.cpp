@@ -188,12 +188,22 @@ static std::string format_kernel_params(const htp_opnode & node) {
                  (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_DSV4_HC_PRE) {
         const auto * kparams = node.kparams<htp_dsv4_hc_pre_kernel_params>();
-        snprintf(str, max_size, "%s nth %u vtcm %u", kparams->dma_eligible ? "dma" : "l2",
-                 (unsigned int) kparams->n_threads, (unsigned int) kparams->dma_vtcm_size);
+        const char * ktype_str = "unknown";
+        switch (kparams->kernel_type) {
+            case HTP_DSV4_HC_PRE_KERNEL_PLAIN:         ktype_str = "plain"; break;
+            case HTP_DSV4_HC_PRE_KERNEL_GATED:         ktype_str = "gated"; break;
+            case HTP_DSV4_HC_PRE_KERNEL_PLAIN_GENERIC: ktype_str = "plain-generic"; break;
+            case HTP_DSV4_HC_PRE_KERNEL_GATED_GENERIC: ktype_str = "gated-generic"; break;
+            case HTP_DSV4_HC_PRE_KERNEL_GATED_DMA:     ktype_str = "gated-dma"; break;
+        }
+        const bool dma = kparams->kernel_type == HTP_DSV4_HC_PRE_KERNEL_GATED_DMA;
+        snprintf(str, max_size, "%s nth %u vtcm %u", ktype_str,
+                 (unsigned int) kparams->n_threads, (unsigned int) (dma ? kparams->dma_vtcm_size : 0));
     } else if (node.opcode == HTP_OP_DSV4_HC_POST) {
         const auto * kparams = node.kparams<htp_dsv4_hc_post_kernel_params>();
+        const bool dma = kparams->kernel_type == HTP_DSV4_HC_POST_KERNEL_DMA;
         snprintf(str, max_size, "%s %s nth %u vtcm %u", kparams->has_comb ? "comb" : "identity",
-                 kparams->dma_eligible ? "dma" : "l2", (unsigned int) kparams->n_threads, (unsigned int) kparams->dma_vtcm_size);
+                 dma ? "dma" : "l2", (unsigned int) kparams->n_threads, (unsigned int) (dma ? kparams->dma_vtcm_size : 0));
     } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
         const auto * kparams = node.kparams<htp_binary_kernel_params>();

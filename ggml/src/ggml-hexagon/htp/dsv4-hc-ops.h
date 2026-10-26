@@ -8,7 +8,16 @@
 #define HTP_DSV4_HC_DMA_CHUNKS 128
 #define HTP_DSV4_HC_PRE_DMA_ROWS 9
 
+enum htp_dsv4_hc_pre_kernel_type {
+    HTP_DSV4_HC_PRE_KERNEL_PLAIN         = 0, // n_hc == 4, l2 prefetch
+    HTP_DSV4_HC_PRE_KERNEL_GATED         = 1, // n_hc == 4, l2 prefetch
+    HTP_DSV4_HC_PRE_KERNEL_PLAIN_GENERIC = 2, // any n_hc, l2 prefetch
+    HTP_DSV4_HC_PRE_KERNEL_GATED_GENERIC = 3, // any n_hc, l2 prefetch
+    HTP_DSV4_HC_PRE_KERNEL_GATED_DMA     = 4, // n_hc == 4, double-buffered dma
+};
+
 struct htp_dsv4_hc_pre_kernel_params {
+    uint32_t kernel_type;
     uint32_t n_threads;
     uint32_t n_chunks;
     uint32_t total_jobs;
@@ -18,7 +27,6 @@ struct htp_dsv4_hc_pre_kernel_params {
     uint32_t dma_row_stride;
     uint32_t dma_buffer_size;
     uint32_t dma_vtcm_size;
-    uint32_t dma_eligible;
 
     struct fastdiv_values div_n_chunks;
     struct fastdiv_values div_n_threads;
@@ -33,7 +41,13 @@ _Static_assert(sizeof(struct htp_dsv4_hc_pre_kernel_params) <= 128, "htp_dsv4_hc
 // dma buffer holds residual rows 0..3, x at row 4, dst rows 5..8
 #define HTP_DSV4_HC_POST_DMA_ROWS 9
 
+enum htp_dsv4_hc_post_kernel_type {
+    HTP_DSV4_HC_POST_KERNEL_L2  = 0, // l2 prefetch
+    HTP_DSV4_HC_POST_KERNEL_DMA = 1, // double-buffered dma
+};
+
 struct htp_dsv4_hc_post_kernel_params {
+    uint32_t kernel_type;
     uint32_t n_threads;
     uint32_t n_chunks;
     uint32_t total_jobs;
@@ -44,7 +58,6 @@ struct htp_dsv4_hc_post_kernel_params {
     uint32_t dma_row_stride;
     uint32_t dma_buffer_size;
     uint32_t dma_vtcm_size;
-    uint32_t dma_eligible;
 
     struct fastdiv_values div_n_chunks;
     struct fastdiv_values div_n_threads;

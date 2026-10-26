@@ -4182,6 +4182,13 @@ static bool htp_kparams_solve_dsv4_hc_pre(
     }
 
     const uint32_t n_tokens = (uint32_t) x->ne[2];
+    const bool     n_hc4    = x->ne[1] == 4;
+
+    if (gated) {
+        kparams->kernel_type = n_hc4 ? HTP_DSV4_HC_PRE_KERNEL_GATED : HTP_DSV4_HC_PRE_KERNEL_GATED_GENERIC;
+    } else {
+        kparams->kernel_type = n_hc4 ? HTP_DSV4_HC_PRE_KERNEL_PLAIN : HTP_DSV4_HC_PRE_KERNEL_PLAIN_GENERIC;
+    }
 
     kparams->n_chunks   = ((uint32_t) x->ne[0] + HTP_DSV4_HC_CHUNK_ELEMS - 1) / HTP_DSV4_HC_CHUNK_ELEMS;
     kparams->total_jobs = n_tokens * kparams->n_chunks;
@@ -4196,12 +4203,13 @@ static bool htp_kparams_solve_dsv4_hc_pre(
     kparams->dma_buffer_size  = HTP_DSV4_HC_PRE_DMA_ROWS * kparams->dma_row_stride;
     kparams->dma_vtcm_size    = 2 * kparams->dma_buffer_size * kparams->n_threads;
 
-    kparams->dma_eligible = gated &&
-                            x->ne[1] == 4 &&
-                            n_tokens > 1 &&
-                            x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS == 0 &&
-                            kparams->jobs_per_thread >= 2*kparams->dma_block_chunks &&
-                            kparams->dma_vtcm_size <= htp_session_vtcm_size(sess);
+    if (gated && n_hc4 &&
+        n_tokens > 1 &&
+        x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS == 0 &&
+        kparams->jobs_per_thread >= 2*kparams->dma_block_chunks &&
+        kparams->dma_vtcm_size <= htp_session_vtcm_size(sess)) {
+        kparams->kernel_type = HTP_DSV4_HC_PRE_KERNEL_GATED_DMA;
+    }
 
     kparams->div_n_chunks  = init_fastdiv_values(kparams->n_chunks);
     kparams->div_n_threads = init_fastdiv_values(kparams->n_threads);
@@ -4255,10 +4263,12 @@ static bool htp_kparams_solve_dsv4_hc_post(
     kparams->dma_vtcm_size    = 2*kparams->dma_buffer_size*kparams->n_threads;
 
     // decode uses l2 prefetch: per-thread data is too small to hide the dma latency
-    kparams->dma_eligible = n_tokens > 1 &&
-                            x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS == 0 &&
-                            kparams->jobs_per_thread >= 2*kparams->dma_block_chunks &&
-                            kparams->dma_vtcm_size <= htp_session_vtcm_size(sess);
+    if (n_tokens > 1 &&
+        x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS == 0 &&
+        kparams->jobs_per_thread >= 2*kparams->dma_block_chunks &&
+        kparams->dma_vtcm_size <= htp_session_vtcm_size(sess)) {
+        kparams->kernel_type = HTP_DSV4_HC_POST_KERNEL_DMA;
+    }
 
     kparams->div_n_chunks  = init_fastdiv_values(kparams->n_chunks);
     kparams->div_n_threads = init_fastdiv_values(kparams->n_threads);
