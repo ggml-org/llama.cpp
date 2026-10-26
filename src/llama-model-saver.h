@@ -21,6 +21,7 @@ struct llama_model_saver {
 
     void add_kv(enum llm_kv key, uint32_t     value);
     void add_kv(enum llm_kv key, int32_t      value);
+    void add_kv(enum llm_kv key, uint64_t     value);
     void add_kv(enum llm_kv key, float        value);
     void add_kv(enum llm_kv key, bool         value);
     void add_kv(enum llm_kv key, const char * value);

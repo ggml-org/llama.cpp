@@ -4,6 +4,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("PLMForCausalLM")
+@ModelBase.example("PLM-Team/PLM-1.8B-Instruct")
 class PLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PLM
 

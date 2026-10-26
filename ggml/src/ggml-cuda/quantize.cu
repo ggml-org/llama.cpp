@@ -8,7 +8,6 @@ struct __builtin_align__(32) float8 {
     float x; float y; float z; float w;
     float p; float q; float r; float s;
 };
-#endif
 
 #if CUDART_VERSION >= 12080
 static __device__ __forceinline__ float nvfp4_native_scale_error(
@@ -49,6 +48,7 @@ static __device__ __forceinline__ float nvfp4_native_scale_error(
     return err;
 }
 #endif // CUDART_VERSION >= 12080
+#endif // defined(BLACKWELL_MMA_AVAILABLE)
 
 __launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
 static __global__ void quantize_q8_1(
@@ -130,8 +130,6 @@ static __global__ void quantize_mmq_nvfp4(
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int64_t ne1, const int64_t ne2, const int n_expert_used) {
 #if defined(BLACKWELL_MMA_AVAILABLE)
-
-    const int64_t blocks_per_col = (ne0 + QK_FP4_MMQ - 1) / QK_FP4_MMQ;
 
     int64_t base_idx;
     if constexpr (scatter) {
@@ -317,7 +315,8 @@ static __global__ void quantize_mmq_nvfp4(
                 reinterpret_cast<uint8_t *>(yb->d4)[sub] = fp8_code;
             }
         } else {
-            block_fp4_mmq * yb = y + (blockIdx.y * ((int64_t) blocks_per_col * ne1) + k_block * ne1 + blockIdx.x);
+            const int64_t blocks_per_col = (ne0 + QK_FP4_MMQ - 1) / QK_FP4_MMQ;
+            block_fp4_mmq * yb = y + (blockIdx.y * (blocks_per_col * ne1) + k_block * ne1 + blockIdx.x);
             uint32_t * yqs = reinterpret_cast<uint32_t *>(yb->qs);
             yqs[2 * sub + 0] = q0;
             yqs[2 * sub + 1] = q1;
@@ -598,7 +597,6 @@ void quantize_mmq_q8_1_cuda(
             break;
         default:
             GGML_ABORT("fatal error");
-            break;
     }
 }
 
@@ -628,7 +626,6 @@ void quantize_scatter_mmq_q8_1_cuda(
             break;
         default:
             GGML_ABORT("fatal error");
-            break;
     }
 }
 

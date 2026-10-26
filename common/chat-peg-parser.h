@@ -40,8 +40,22 @@ class common_chat_peg_gemma4_mapper : public common_chat_peg_mapper {
     void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
 };
 
+class common_chat_peg_minimax_m3_mapper : public common_chat_peg_mapper {
+  public:
+    static constexpr const char * TOOL_ARG_OBJECT = "tool-arg-object";
+    static constexpr const char * TOOL_ARG_ARRAY  = "tool-arg-array";
+    static constexpr const char * TOOL_ARG_ITEM   = "tool-arg-item";
+
+    common_chat_peg_minimax_m3_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
+    virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
+  private:
+    void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
+};
+
 struct content_structure;
 struct tool_call_structure;
+
+constexpr size_t COMMON_CHAT_MAX_PERMUTE = 6;
 
 class common_chat_peg_builder : public common_peg_parser_builder {
   public:
@@ -93,6 +107,9 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
 
 
+    // Matches every parser exactly once, in any order.
+    common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
+
     // Return a parser that parses the prefix of a string, up to a given delimiter.
     common_peg_parser prefix(const std::string & s, const std::string & delimiter = {});
 
@@ -111,7 +128,7 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     // parameters_order: order in which JSON fields should be parsed
     common_peg_parser standard_json_tools(const std::string &              section_start,
                                           const std::string &              section_end,
-                                          const nlohmann::ordered_json &   tools,
+                                          const common_json &   tools,
                                           bool                             parallel_tool_calls,
                                           bool                             force_tool_calls,
                                           const std::string &              name_key = "",
@@ -126,13 +143,13 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     // Legacy-compatible helper for building XML/tagged style tool calls
     // Used by tests and manual parsers
     common_peg_parser standard_constructed_tools(const std::map<std::string, std::string> & markers,
-                                                 const nlohmann::ordered_json &             tools,
+                                                 const common_json &             tools,
                                                  bool                                       parallel_tool_calls,
                                                  bool                                       force_tool_calls);
 
     // Helper for Python-style function call format: name(arg1="value1", arg2=123)
     // Used by LFM2 and similar templates
-    common_peg_parser python_style_tool_calls(const nlohmann::ordered_json & tools,
+    common_peg_parser python_style_tool_calls(const common_json & tools,
                                               bool                           parallel_tool_calls,
                                               bool                           allow_json_literals);
 
@@ -141,19 +158,19 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser python_or_json_value();
 
     // Implementation helpers for standard_json_tools — one per JSON tool call layout mode
-    common_peg_parser build_json_tools_function_is_key(const nlohmann::ordered_json & tools,
+    common_peg_parser build_json_tools_function_is_key(const common_json & tools,
                                                        const std::string &            args_key,
                                                        const std::string &            effective_args_key,
                                                        const std::string &            call_id_key,
                                                        const std::string &            gen_call_id_key);
 
-    common_peg_parser build_json_tools_nested_keys(const nlohmann::ordered_json & tools,
+    common_peg_parser build_json_tools_nested_keys(const common_json & tools,
                                                    const std::string &            effective_name_key,
                                                    const std::string &            effective_args_key,
                                                    const std::string &            call_id_key,
                                                    const std::string &            gen_call_id_key);
 
-    common_peg_parser build_json_tools_flat_keys(const nlohmann::ordered_json &   tools,
+    common_peg_parser build_json_tools_flat_keys(const common_json &   tools,
                                                  const std::string &              effective_name_key,
                                                  const std::string &              effective_args_key,
                                                  const std::string &              call_id_key,

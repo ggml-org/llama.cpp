@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("PanguEmbeddedForCausalLM")
+@ModelBase.example("FreedomIntelligence/openPangu-Embedded-7B-V1.1")
 class PanguEmbeddedModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PANGU_EMBED
 

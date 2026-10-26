@@ -4,9 +4,10 @@
 #include "ggml.h"
 #include "peg-parser.h"
 
-#include <nlohmann/json.hpp>
+#include <cstdint>
+#include <functional>
 
-using ordered_json = nlohmann::ordered_json;
+using ordered_json = common_json;
 
 static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
     int count = 0;
@@ -235,6 +236,43 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
     return zero_or_more(choice({ p, content_chunk }));
 }
 
+common_peg_parser common_chat_peg_builder::permute(const std::string &                    rule_prefix,
+                                                   const std::vector<common_peg_parser> & parsers) {
+    if (parsers.empty()) {
+        return eps();
+    }
+
+    if (parsers.size() == 1 || parsers.size() > COMMON_CHAT_MAX_PERMUTE) {
+        return sequence(parsers);
+    }
+
+    std::map<uint32_t, common_peg_parser>      rules;
+    std::function<common_peg_parser(uint32_t)> remaining_of;
+
+    remaining_of = [&](uint32_t remaining) -> common_peg_parser {
+        if (remaining == 0) {
+            return eps();
+        }
+
+        auto cached = rules.find(remaining);
+        if (cached != rules.end()) {
+            return cached->second;
+        }
+
+        auto alternatives = choice();
+        for (size_t i = 0; i < parsers.size(); i++) {
+            const uint32_t bit = 1u << i;
+            if (remaining & bit) {
+                alternatives |= parsers[i] + remaining_of(remaining & ~bit);
+            }
+        }
+
+        return rules.emplace(remaining, rule(rule_prefix + "-" + std::to_string(remaining), alternatives)).first->second;
+    };
+
+    return remaining_of((1u << parsers.size()) - 1);
+}
+
 std::string & common_chat_peg_mapper::args_target() {
     return (current_tool && !current_tool->name.empty()) ? current_tool->arguments : args_buffer;
 }
@@ -280,13 +318,13 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     bool is_content   = node.tag == common_chat_peg_builder::CONTENT;
 
     if (is_reasoning) { // GPT OSS can have more than 1 reasoning block, so concatenate here
-        result.reasoning_content += std::string(node.text);
+        result.reasoning_content += node.sanitized_text();
     }
 
     if (is_content) {
         // Concatenate content from multiple content nodes (e.g., when reasoning markers
         // are preserved before content markers in reasoning_format=NONE mode)
-        result.content += std::string(node.text);
+        result.content += node.sanitized_text();
     }
 
     // Handle tool-related tags (supporting both JSON and tagged formats)
@@ -413,6 +451,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
                 result.tool_calls.push_back(pending_tool_call.value());
             }
             pending_tool_call.reset();
+            current_tool = nullptr;
         }
     }
 }
@@ -444,13 +483,15 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
     // Build tool choices for tagged format
     auto tool_choices = choice();
 
-    for (const auto & tool_def : tools) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool_def = tools[i];
+
         if (!tool_def.contains("function")) {
             continue;
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         // Build argument parsers
         auto args = eps();
@@ -474,7 +515,7 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
         auto tool_parser = tool(tool_open(literal(func_opener) + tool_name(literal(name)) + literal(func_name_suffix)) +
                                 space() + tool_args(args) + space() + tool_close(literal(func_closer)));
 
-        tool_choices |= rule("tool-" + name, tool_parser);
+        tool_choices |= rule("tool-" + std::to_string(i), tool_parser);
     }
 
     // Build the section with markers
@@ -521,13 +562,14 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
 
     auto tool_choices = choice();
 
-    for (const auto & tool_def : tools) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool_def = tools[i];
         if (!tool_def.contains("function")) {
             continue;
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto args = eps();
         if (params.contains("properties") && !params["properties"].empty()) {
@@ -554,9 +596,7 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
 
                 // Full argument: name="value" or name=value
                 auto arg_rule = tool_arg(
-                    tool_arg_open(eps()) +
-                    tool_arg_name(arg_name_parser) +
-                    literal("=") +
+                    tool_arg_open(tool_arg_name(arg_name_parser) + literal("=")) +
                     arg_value_parser +
                     tool_arg_close(eps())
                 );
@@ -570,7 +610,7 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
             space() + tool_args(args) + space() + tool_close(literal(")"))
         );
 
-        tool_choices |= rule("tool-" + name, tool_parser);
+        tool_choices |= rule("tool-" + std::to_string(i), tool_parser);
     }
 
     if (parallel_tool_calls) {
@@ -598,13 +638,14 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
 
     auto tool_choices = choice();
 
-    for (const auto & tool_def : tools) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool_def = tools[i];
         if (!tool_def.contains("function")) {
             continue;
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         // Build inner object fields
         std::vector<common_peg_parser> inner_fields;
@@ -631,10 +672,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         // Arguments — either wrapped in args_key or parsed directly
         common_peg_parser args_parser = eps();
         if (args_key.empty()) {
-            args_parser = tool_args(schema(json(), "tool-" + name + "-schema", params));
+            args_parser = tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
         } else {
             args_parser = literal("\"" + effective_args_key + "\"") + space() + literal(":") + space() +
-                          tool_args(schema(json(), "tool-" + name + "-schema", params));
+                          tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
         }
         inner_fields.push_back(args_parser);
 
@@ -661,7 +702,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
             space() + tool_close(literal("}"))
         );
 
-        tool_choices |= rule("tool-" + name, tool_parser);
+        tool_choices |= rule("tool-" + std::to_string(i), tool_parser);
     }
 
     return tool_choices;
@@ -684,18 +725,19 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
     std::string nested_name_field = !name_spec.first.empty() ? name_spec.second  : effective_name_key;
     std::string nested_args_field = !args_spec.first.empty() ? args_spec.second  : effective_args_key;
 
-    for (const auto & tool_def : tools) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool_def = tools[i];
         if (!tool_def.contains("function")) {
             continue;
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
         auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
-                          tool_args(schema(json(), "tool-" + name + "-schema", params));
+                          tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
 
         auto nested_object = literal("{") + space() +
                             nested_name + space() + literal(",") + space() +
@@ -733,7 +775,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
         auto nested_field = literal("\"" + nested_prefix + "\"") + space() + literal(":") + space() + nested_object;
         tool_parser_body = tool_parser_body + nested_field + space() + tool_close(literal("}"));
 
-        tool_choices |= rule("tool-" + name, tool(tool_parser_body));
+        tool_choices |= rule("tool-" + std::to_string(i), tool(tool_parser_body));
     }
 
     return tool_choices;
@@ -753,18 +795,19 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     auto name_key_parser = literal("\"" + effective_name_key + "\"");
     auto args_key_parser = literal("\"" + effective_args_key + "\"");
 
-    for (const auto & tool_def : tools) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool_def = tools[i];
         if (!tool_def.contains("function")) {
             continue;
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                          atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
         auto tool_args_ = args_key_parser + space() + literal(":") + space() +
-                         tool_args(schema(json(), "tool-" + name + "-schema", params));
+                         tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
 
         // Build ID parsers if keys are provided
         common_peg_parser id_parser = eps();
@@ -824,7 +867,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
         }
         ordered_body = ordered_body + space() + tool_close(literal("}"));
 
-        tool_choices |= rule("tool-" + name, tool(ordered_body));
+        tool_choices |= rule("tool-" + std::to_string(i), tool(ordered_body));
     }
 
     return tool_choices;
@@ -1022,12 +1065,12 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
     const auto & node = arena.get(id);
 
     if (node.tag == "reasoning") {
-        result.reasoning_content += std::string(node.text);
+        result.reasoning_content += node.sanitized_text();
         return;
     }
 
     if (node.tag == "content") {
-        result.content += std::string(node.text);
+        result.content += node.sanitized_text();
         return;
     }
 
@@ -1049,6 +1092,144 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
             }
         }
 
+        return;
+    }
+
+    for (auto child_id : node.children) {
+        visit(arena, child_id);
+    }
+}
+
+static void minimax_m3_collect(const common_peg_ast_arena &     arena,
+                               const common_peg_ast_node &      node,
+                               const std::string &              tag,
+                               std::vector<common_peg_ast_id> & out) {
+    for (auto child_id : node.children) {
+        const auto & child = arena.get(child_id);
+        if (child.tag == tag) {
+            out.push_back(child_id);
+        } else {
+            minimax_m3_collect(arena, child, tag, out);
+        }
+    }
+}
+
+static common_peg_ast_id minimax_m3_value_of(const common_peg_ast_arena & arena, const common_peg_ast_node & node) {
+    for (auto child_id : node.children) {
+        const auto & tag = arena.get(child_id).tag;
+        if (tag == common_chat_peg_builder::TOOL_ARG_VALUE ||
+            tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE ||
+            tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_OBJECT ||
+            tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_ARRAY) {
+            return child_id;
+        }
+    }
+    return COMMON_PEG_INVALID_AST_ID;
+}
+
+static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed);
+
+static std::string minimax_m3_member_to_json(const common_peg_ast_arena & arena, const common_peg_ast_node & node) {
+    auto name_id = arena.find_by_tag(node, common_chat_peg_builder::TOOL_ARG_NAME);
+    if (name_id == COMMON_PEG_INVALID_AST_ID) {
+        return "";
+    }
+
+    return ordered_json(arena.get(name_id).text).dump() + ":" +
+           minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, node), !node.is_partial);
+}
+
+static std::string minimax_m3_container_to_json(const common_peg_ast_arena & arena,
+                                                const common_peg_ast_node & node,
+                                                bool                        is_object,
+                                                bool                        closed) {
+    const std::string tag = is_object ? common_chat_peg_builder::TOOL_ARG
+                                      : common_chat_peg_minimax_m3_mapper::TOOL_ARG_ITEM;
+
+    std::vector<common_peg_ast_id> entries;
+    minimax_m3_collect(arena, node, tag, entries);
+
+    std::string result = is_object ? "{" : "[";
+
+    bool add_comma = false;
+    for (auto entry_id : entries) {
+        const auto & entry = arena.get(entry_id);
+
+        std::string text;
+        if (is_object) {
+            text = minimax_m3_member_to_json(arena, entry);
+        } else {
+            text = minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, entry), !entry.is_partial);
+        }
+
+        if (text.empty()) {
+            continue;
+        }
+
+        if (add_comma) {
+            result += ",";
+        }
+        add_comma = true;
+        result += text;
+    }
+
+    if (closed) {
+        result += is_object ? "}" : "]";
+    }
+    return result;
+}
+
+static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed) {
+    if (id == COMMON_PEG_INVALID_AST_ID) {
+        return "";
+    }
+
+    const auto & node = arena.get(id);
+
+    if (node.tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_OBJECT) {
+        return minimax_m3_container_to_json(arena, node, /* is_object = */ true, closed);
+    }
+
+    if (node.tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_ARRAY) {
+        return minimax_m3_container_to_json(arena, node, /* is_object = */ false, closed);
+    }
+
+    if (node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE) {
+        return "\"" + escape_json_string_inner(std::string(node.text)) + (closed ? "\"" : "");
+    }
+
+    // Numbers and booleans are written verbatim by the template
+    return std::string(node.text);
+}
+
+void common_chat_peg_minimax_m3_mapper::from_ast(const common_peg_ast_arena &    arena,
+                                                 const common_peg_parse_result & result) {
+    for (const auto & node : result.nodes) {
+        visit(arena, node);
+    }
+}
+
+void common_chat_peg_minimax_m3_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {
+    const auto & node = arena.get(id);
+
+    if (node.tag == common_chat_peg_builder::REASONING) {
+        result.reasoning_content += node.sanitized_text();
+        return;
+    }
+
+    if (node.tag == common_chat_peg_builder::CONTENT) {
+        result.content += node.sanitized_text();
+        return;
+    }
+
+    if (node.tag == common_chat_peg_builder::TOOL) {
+        auto name_id = arena.find_by_tag(node, common_chat_peg_builder::TOOL_NAME);
+        if (name_id != COMMON_PEG_INVALID_AST_ID) {
+            common_chat_tool_call call;
+            call.name      = std::string(arena.get(name_id).text);
+            call.arguments = minimax_m3_container_to_json(arena, node, /* is_object = */ true, !node.is_partial);
+            result.tool_calls.push_back(call);
+        }
         return;
     }
 

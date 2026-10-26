@@ -21,7 +21,6 @@ def create_server():
     global server
     server = ServerPreset.tinyllama2()
     server.model_alias = "tinyllama-2-anthropic"
-    server.server_port = 8082
     server.n_slots = 1
     server.n_ctx = 8192
     server.n_batch = 2048
@@ -34,7 +33,6 @@ def vision_server():
     server = ServerPreset.tinygemma3()
     server.offline = False  # Allow downloading the model
     server.model_alias = "tinygemma3-anthropic"
-    server.server_port = 8083  # Different port to avoid conflicts
     server.n_slots = 1
     return server
 
@@ -1015,7 +1013,6 @@ def test_anthropic_thinking_with_reasoning_model(stream):
     server.jinja = True
     server.n_ctx = 8192
     server.n_predict = 1024
-    server.server_port = 8084
     server.start(timeout_seconds=600)  # large model needs time to download
 
     if stream:

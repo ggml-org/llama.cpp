@@ -59,7 +59,11 @@ typedef AEEResult (*dspqueue_read_pfn_t)(dspqueue_t queue, uint32_t *flags,
                                          uint32_t max_message_length,
                                          uint32_t *message_length, uint8_t *message,
                                          uint32_t timeout_us);
-
+typedef AEEResult (*dspqueue_read_noblock_pfn_t)(dspqueue_t queue, uint32_t *flags,
+                                                 uint32_t max_buffers, uint32_t *num_buffers,
+                                                 struct dspqueue_buffer *buffers,
+                                                 uint32_t max_message_length,
+                                                 uint32_t *message_length, uint8_t *message);
 typedef int (*fastrpc_mmap_pfn_t)(int domain, int fd, void *addr, int offset, size_t length, enum fastrpc_map_flags flags);
 typedef int (*fastrpc_munmap_pfn_t)(int domain, int fd, void *addr, size_t length);
 
@@ -69,6 +73,7 @@ typedef int (*remote_handle64_close_pfn_t)(remote_handle h);
 typedef int (*remote_handle_control_pfn_t)(uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_handle64_control_pfn_t)(remote_handle64 h, uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_session_control_pfn_t)(uint32_t req, void *data, uint32_t datalen);
+typedef int (*remote_system_request_pfn_t)(system_req_payload * req);
 
 //
 // Driver API pfns
@@ -82,11 +87,12 @@ rpcmem_to_fd_pfn_t  rpcmem_to_fd_pfn  = nullptr;
 fastrpc_mmap_pfn_t   fastrpc_mmap_pfn   = nullptr;
 fastrpc_munmap_pfn_t fastrpc_munmap_pfn = nullptr;
 
-dspqueue_create_pfn_t dspqueue_create_pfn = nullptr;
-dspqueue_close_pfn_t  dspqueue_close_pfn  = nullptr;
-dspqueue_export_pfn_t dspqueue_export_pfn = nullptr;
-dspqueue_write_pfn_t  dspqueue_write_pfn  = nullptr;
-dspqueue_read_pfn_t   dspqueue_read_pfn   = nullptr;
+dspqueue_create_pfn_t       dspqueue_create_pfn       = nullptr;
+dspqueue_close_pfn_t        dspqueue_close_pfn        = nullptr;
+dspqueue_export_pfn_t       dspqueue_export_pfn       = nullptr;
+dspqueue_write_pfn_t        dspqueue_write_pfn        = nullptr;
+dspqueue_read_pfn_t         dspqueue_read_pfn         = nullptr;
+dspqueue_read_noblock_pfn_t dspqueue_read_noblock_pfn = nullptr;
 
 remote_handle64_open_pfn_t    remote_handle64_open_pfn    = nullptr;
 remote_handle64_invoke_pfn_t  remote_handle64_invoke_pfn  = nullptr;
@@ -94,6 +100,7 @@ remote_handle64_close_pfn_t   remote_handle64_close_pfn   = nullptr;
 remote_handle_control_pfn_t   remote_handle_control_pfn   = nullptr;
 remote_handle64_control_pfn_t remote_handle64_control_pfn = nullptr;
 remote_session_control_pfn_t  remote_session_control_pfn  = nullptr;
+remote_system_request_pfn_t   remote_system_request_pfn   = nullptr;
 
 //
 // Driver API
@@ -167,6 +174,12 @@ AEEResult dspqueue_read(dspqueue_t               queue,
                         uint32_t *               message_length,
                         uint8_t *                message,
                         uint32_t                 timeout_us) {
+#ifdef _WIN32
+    if (timeout_us == 0) {
+        return dspqueue_read_noblock_pfn(queue, flags, max_buffers, num_buffers, buffers, max_message_length,
+                                     message_length, message);
+    }
+#endif
     return dspqueue_read_pfn(queue, flags, max_buffers, num_buffers, buffers, max_message_length, message_length,
                              message, timeout_us);
 }
@@ -193,6 +206,13 @@ HTPDRV_API int remote_handle64_control(remote_handle64 h, uint32_t req, void * d
 
 HTPDRV_API int remote_session_control(uint32_t req, void * data, uint32_t datalen) {
     return remote_session_control_pfn(req, data, datalen);
+}
+
+HTPDRV_API int remote_system_request(system_req_payload * req) {
+    if (!remote_system_request_pfn) {
+        return AEE_EUNSUPPORTEDAPI;
+    }
+    return remote_system_request_pfn(req);
 }
 
 #ifdef _WIN32
@@ -349,12 +369,14 @@ int htpdrv_init() {
     dlsym(handle.get(), dspqueue_export_pfn_t, dspqueue_export_pfn, dspqueue_export, false);
     dlsym(handle.get(), dspqueue_write_pfn_t, dspqueue_write_pfn, dspqueue_write, false);
     dlsym(handle.get(), dspqueue_read_pfn_t, dspqueue_read_pfn, dspqueue_read, false);
+    dlsym(handle.get(), dspqueue_read_noblock_pfn_t, dspqueue_read_noblock_pfn, dspqueue_read_noblock, false);
     dlsym(handle.get(), remote_handle64_open_pfn_t, remote_handle64_open_pfn, remote_handle64_open, false);
     dlsym(handle.get(), remote_handle64_invoke_pfn_t, remote_handle64_invoke_pfn, remote_handle64_invoke, false);
     dlsym(handle.get(), remote_handle_control_pfn_t, remote_handle_control_pfn, remote_handle_control, false);
     dlsym(handle.get(), remote_handle64_control_pfn_t, remote_handle64_control_pfn, remote_handle64_control, false);
     dlsym(handle.get(), remote_session_control_pfn_t, remote_session_control_pfn, remote_session_control, false);
     dlsym(handle.get(), remote_handle64_close_pfn_t, remote_handle64_close_pfn, remote_handle64_close, false);
+    dlsym(handle.get(), remote_system_request_pfn_t, remote_system_request_pfn, remote_system_request, true);
 
     lib_cdsp_rpc_handle = std::move(handle);
     initialized         = true;

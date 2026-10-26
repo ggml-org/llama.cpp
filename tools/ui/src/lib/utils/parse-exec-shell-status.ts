@@ -15,21 +15,25 @@ export interface ExecShellExitStatus {
 }
 
 // Anchor to the absolute end so intermediate "[exit code: N]" string content
-// (e.g. a shell echo) doesn't false-positive.
+// (e.g. a shell echo) doesn't false-positive. The marker is at most ~50 chars
+// with the timed-out suffix, so matching a tail slice keeps the cost constant
+// for megabyte exec outputs instead of scanning the whole blob.
 const EXIT_CODE_TAIL_REGEX = /\[exit code: (-?\d+)\](?: \[exit due to timed out\])?\s*$/;
+const EXIT_CODE_TAIL_SCAN = 128;
 
 export function parseExecShellCommandExitStatus(
 	toolResultString: string | undefined
 ): ExecShellExitStatus | undefined {
 	if (!toolResultString) return undefined;
 
-	const match = toolResultString.match(EXIT_CODE_TAIL_REGEX);
+	const match = toolResultString.slice(-EXIT_CODE_TAIL_SCAN).match(EXIT_CODE_TAIL_REGEX);
+
 	if (!match) return undefined;
 
 	return {
 		code: Number.parseInt(match[1], 10),
-		timedOut: match[0].includes('exit due to timed out'),
-		rawText: match[0]
+		rawText: match[0],
+		timedOut: match[0].includes('exit due to timed out')
 	};
 }
 
@@ -43,5 +47,6 @@ export function isExitCodeSummaryLine(
 	status: ExecShellExitStatus | undefined
 ): boolean {
 	if (!status) return false;
+
 	return lineText.trim() === status.rawText.trim();
 }

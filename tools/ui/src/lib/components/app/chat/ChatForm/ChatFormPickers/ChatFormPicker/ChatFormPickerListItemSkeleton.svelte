@@ -4,7 +4,7 @@
 		showBadge?: boolean;
 	}
 
-	let { titleWidth = 'w-48', showBadge = false }: Props = $props();
+	let { showBadge = false, titleWidth = 'w-48' }: Props = $props();
 </script>
 
 <div class="flex w-full items-start gap-3 rounded-lg px-3 py-2">
@@ -12,6 +12,7 @@
 		<!-- Server label skeleton -->
 		<div class="mb-2 flex items-center gap-1.5">
 			<div class="h-3 w-3 shrink-0 animate-pulse rounded-sm bg-muted"></div>
+
 			<div class="h-3 w-24 animate-pulse rounded bg-muted"></div>
 		</div>
 

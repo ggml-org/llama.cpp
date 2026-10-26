@@ -18,22 +18,25 @@
 #include <qurt_memory.h>
 #include <remote.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "hex-utils.h"
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "hmx-queue.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "hex-bitmap.h"
 #include "htp-ctx.h"
+#include "htp-dcache.h"
 #include "htp-ops.h"
-#include "htp-tensor.h"
 #include "htp_iface.h"
 #include "work-queue.h"
 #include "hex-profile.h"
+#include "allreduce-ops.h"
+#include "htp-fence.h"
 
-#define HMX_QUEUE_CAPACITY     16
+#define HMX_QUEUE_CAPACITY     128
 #define HMX_QUEUE_STACK_SIZE   16384
 #define WORK_QUEUE_CAPACITY    16
 #define WORK_QUEUE_STACK_SIZE  16384
@@ -45,6 +48,77 @@ _Static_assert(WORK_QUEUE_MAX_N_THREADS >= HTP_MAX_NTHREADS,
 struct htp_handle {
     struct htp_context * ctx;
 };
+
+static inline uint64_t htp_mmap(uint32_t fd, uint64_t size, uint32_t flags) {
+#if __HVX_ARCH__ > 79
+    if (flags & HTP_BUF_EXTENDED) {
+        HAP_mem_req_payload_t payload;
+        memset(&payload, 0, sizeof(payload));
+        payload.request_id = HAP_MEM_MAP;
+        payload.mmap.len   = size;
+        payload.mmap.prot  = HAP_MEM_CACHE_NON_SHARED | HAP_PROT_READ;
+        payload.mmap.flags = HAP_MEM_FLAGS_EXTENDED_MAP;
+        payload.mmap.fd    = fd;
+
+        if (HAP_mem_request(&payload) != 0) {
+            FARF(ERROR, "extended mmap failed : fd %u size %llu", fd, (unsigned long long) size);
+            return 0;
+        }
+
+        return payload.mmap.dsp_va;
+    }
+#else
+    if (flags & HTP_BUF_EXTENDED) {
+        FARF(ERROR, "extended mmap is unsupported on v%d", __HVX_ARCH__);
+        return 0;
+    }
+#endif
+
+    if (size > UINT32_MAX) {
+        FARF(ERROR, "mmap failed : size %llu exceeds 32-bit limit", (unsigned long long) size);
+        return 0;
+    }
+
+    void * va = (void *)-1;
+    for (int retry = 0; retry < 2; retry++) {
+#if __HVX_ARCH__ > 73
+        va = HAP_mmap2(NULL, (size_t) size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+#else
+        if (size > HTP_MMAP_MAX_VMEM) {
+            FARF(ERROR, "mmap failed : size %llu exceeds 2GB limit for HAP_mmap", (unsigned long long) size);
+            abort();
+        }
+        va = HAP_mmap(NULL, (int) size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+#endif
+        if (va != (void *)-1 && va != NULL) {
+            return (uint64_t) (uintptr_t) va;
+        }
+        if (retry == 0) {
+            FARF(HIGH, "mmap failed first try (va %p fd %u size %llu), retrying...", va, fd, (unsigned long long) size);
+        }
+    }
+    return 0;
+}
+
+static inline void htp_munmap(uint64_t va, uint64_t size, uint32_t flags) {
+#if __HVX_ARCH__ > 79
+    if (flags & HTP_BUF_EXTENDED) {
+        HAP_mem_req_payload_t payload;
+        memset(&payload, 0, sizeof(payload));
+        payload.request_id   = HAP_MEM_UNMAP;
+        payload.munmap.dsp_va = va;
+        payload.munmap.len    = size;
+        HAP_mem_request(&payload);
+        return;
+    }
+#endif
+
+#if __HVX_ARCH__ > 73
+    HAP_munmap2((void *) (uintptr_t) va, (size_t) size);
+#else
+    HAP_munmap((void *) (uintptr_t) va, (int) size);
+#endif
+}
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
     (void) uri;
@@ -127,14 +201,11 @@ AEEResult htp_iface_close(remote_handle64 handle) {
         // release the mmaps (if any)
         for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
             if (ctx->mmap[i].size) {
-#if __HVX_ARCH__ > 73
-                HAP_munmap2((void *) ctx->mmap[i].base, ctx->mmap[i].size);
-#else
-                HAP_munmap((void *) ctx->mmap[i].base, ctx->mmap[i].size);
-#endif
+                htp_munmap(ctx->mmap[i].base, ctx->mmap[i].size, ctx->mmap[i].flags);
                 ctx->mmap[i].size = 0;
-                ctx->mmap[i].base = NULL;
+                ctx->mmap[i].base = 0;
                 ctx->mmap[i].fd   = -1;
+                ctx->mmap[i].flags = 0;
             }
         }
 
@@ -155,7 +226,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     return AEE_SUCCESS;
 }
 
-AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
+AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint64_t size) {
     struct htp_handle * h = (struct htp_handle *) handle;
     if (!h || !h->ctx) {
         return AEE_EBADPARM;
@@ -174,25 +245,17 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-            FARF(HIGH, "mmap : fd %u size %u", fd, size);
-#if __HVX_ARCH__ > 73
-            void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
-#else
-            if (size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
-                FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) size);
-                abort(); // can't do much else at this point
-            }
-
-            void *va = HAP_mmap(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
-#endif
-            if (va == (void*)-1) {
-                FARF(ERROR, "mmap failed : va %p fd %u size %u", va, fd, (uint32_t) size);
+            FARF(HIGH, "mmap : fd %u size %llu", fd, (unsigned long long) size);
+            uint64_t va = htp_mmap(fd, size, 0);
+            if (va == 0) {
+                FARF(ERROR, "mmap failed : fd %u size %llu", fd, (unsigned long long) size);
                 return AEE_EFAILED;
             }
 
-            m->base   = (uint64_t) va;
+            m->base   = va;
             m->fd     = fd;
             m->size   = size;
+            m->flags  = 0;
 
             return AEE_SUCCESS;
         }
@@ -211,15 +274,12 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (fd < 0 || m->fd == fd) {
-            FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
-#if __HVX_ARCH__ > 73
-            HAP_munmap2((void *) m->base, m->size);
-#else
-            HAP_munmap((void *) m->base, m->size);
-#endif
+            FARF(HIGH, "unmmap : base 0x%llx fd %u size %llu", (unsigned long long) m->base, m->fd, (unsigned long long) m->size);
+            htp_munmap(m->base, m->size, m->flags);
             m->size   = 0;
             m->base   = NULL;
             m->fd     = -1;
+            m->flags  = 0;
         }
     }
 
@@ -227,15 +287,15 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
 }
 
 static void vtcm_acquire(struct htp_context * ctx) {
-    if (!ctx->vtcm_valid) {
-        int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000u);
+    if (!atomic_load(&ctx->vtcm_valid)) {
+        int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 10000000u);
         if (err != 0) {
             FARF(ERROR, "ggml-hex: failed to acquire VTCM: 0x%08x", (unsigned)err);
             abort();
         }
 
-        ctx->vtcm_needs_release = false;
-        ctx->vtcm_valid = true;
+        atomic_store(&ctx->vtcm_needs_release, false);
+        atomic_store(&ctx->vtcm_valid, true);
 
         // Drop the priority to make sure we get the release callback from other GGML-HTP and QNN-HTP sessions
         HAP_compute_res_update_priority(ctx->vtcm_rctx, ctx->thread_prio + 10);
@@ -243,22 +303,30 @@ static void vtcm_acquire(struct htp_context * ctx) {
 }
 
 static void vtcm_release(struct htp_context * ctx) {
-    if (ctx->vtcm_valid) {
-        ctx->vtcm_valid         = false;
-        ctx->vtcm_needs_release = false;
+    if (atomic_load(&ctx->vtcm_valid)) {
+        atomic_store(&ctx->vtcm_valid, false);
+        atomic_store(&ctx->vtcm_needs_release, false);
         HAP_compute_res_release_cached(ctx->vtcm_rctx);
     }
 }
 
 static int vtcm_release_callback(unsigned int rctx, void * state) {
     struct htp_context * ctx = (struct htp_context *) state;
-    ctx->vtcm_needs_release = true;
+    atomic_store(&ctx->vtcm_needs_release, true);
     return 0;
 }
 
-static int vtcm_alloc(struct htp_context * ctx) {
+static unsigned int vtcm_query_size(void) {
     unsigned int vtcm_size = 8 * 1024 * 1024;  // 8MB default
-    HAP_compute_res_query_VTCM(0, &vtcm_size, NULL, NULL, NULL);
+    unsigned int vtcm_avail;
+    compute_res_vtcm_page_t total_layout, avail_layout;
+    // some images (e.g. FuSa cDSP) fail the query when the layout out-params are NULL
+    HAP_compute_res_query_VTCM(0, &vtcm_size, &total_layout, &vtcm_avail, &avail_layout);
+    return vtcm_size;
+}
+
+static int vtcm_alloc(struct htp_context * ctx) {
+    unsigned int vtcm_size = vtcm_query_size();
 
     compute_res_attr_t attr;
     HAP_compute_res_attr_init(&attr);
@@ -285,8 +353,8 @@ static int vtcm_alloc(struct htp_context * ctx) {
     ctx->vtcm_base          = (uint8_t *) vtcm_ptr;
     ctx->vtcm_size          = vtcm_size;
     ctx->vtcm_rctx          = rctx;
-    ctx->vtcm_valid         = false;
-    ctx->vtcm_needs_release = false;
+    atomic_store(&ctx->vtcm_valid, false);
+    atomic_store(&ctx->vtcm_needs_release, false);
 
     return 0;
 }
@@ -303,11 +371,90 @@ static void htp_main_thread(void * context);
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem) {
+// Non-BURST modes leave DCVS enabled and keep the HTP awake.
+// BURST pins all corners to MAX and disables DCVS.
+// Corner constants are from HAP_power.h (HAP_dcvs_voltage_corner_t / HAP_dcvs_exp_vcorner_t).
+struct htp_power_profile {
+    boolean  dcvs_enable;
+    uint32_t bus_min_corner;
+    uint32_t bus_max_corner;
+    uint32_t bus_target_corner;
+    uint32_t core_min_corner;
+    uint32_t core_max_corner;
+    uint32_t core_target_corner;
+    boolean  sleep_disable;
+    uint32_t hmx_min_corner;    // only used when __HVX_ARCH__ >= 75
+    uint32_t hmx_max_corner;
+    uint32_t hmx_target_corner;
+    uint32_t hmx_perf_mode;
+};
+
+#define HTP_POWER_PROFILE_ENTRY(min_c, max_c, hmx_c) \
+    { \
+        .dcvs_enable        = TRUE, \
+        .bus_min_corner     = (min_c), \
+        .bus_max_corner     = (max_c), \
+        .bus_target_corner  = (max_c), \
+        .core_min_corner    = (min_c), \
+        .core_max_corner    = (max_c), \
+        .core_target_corner = (max_c), \
+        .sleep_disable      = TRUE, \
+        .hmx_min_corner     = (hmx_c), \
+        .hmx_max_corner     = (hmx_c), \
+        .hmx_target_corner  = (hmx_c), \
+        .hmx_perf_mode      = HAP_CLK_PERF_HIGH, \
+    }
+
+static const struct htp_power_profile htp_power_profiles[HTP_POWER_MODE_COUNT] = {
+    [HTP_POWER_MODE_LOW_POWER_SAVER] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS2, HAP_DCVS_VCORNER_SVS2, HAP_DCVS_EXP_VCORNER_MIN_SVS),
+    [HTP_POWER_MODE_POWER_SAVER] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS, HAP_DCVS_VCORNER_SVS_PLUS, HAP_DCVS_EXP_VCORNER_SVS),
+    [HTP_POWER_MODE_HIGH_POWER_SAVER] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS_PLUS, HAP_DCVS_VCORNER_NOM, HAP_DCVS_EXP_VCORNER_SVS_L2),
+    [HTP_POWER_MODE_LOW_BALANCED] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM, HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_EXP_VCORNER_NOM),
+    [HTP_POWER_MODE_BALANCED] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_EXP_VCORNER_NOM_L1),
+    [HTP_POWER_MODE_HIGH_PERFORMANCE] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO_PLUS, HAP_DCVS_EXP_VCORNER_TUR_L2),
+    [HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_VCORNER_TURBO_PLUS, HAP_DCVS_EXP_VCORNER_TUR_L2),
+    [HTP_POWER_MODE_BURST] = {
+        .dcvs_enable        = FALSE,
+        .bus_min_corner     = HAP_DCVS_VCORNER_MAX,
+        .bus_max_corner     = HAP_DCVS_VCORNER_MAX,
+        .bus_target_corner  = HAP_DCVS_VCORNER_MAX,
+        .core_min_corner    = HAP_DCVS_VCORNER_MAX,
+        .core_max_corner    = HAP_DCVS_VCORNER_MAX,
+        .core_target_corner = HAP_DCVS_VCORNER_MAX,
+        .sleep_disable      = TRUE,
+        .hmx_min_corner     = HAP_DCVS_EXP_VCORNER_MAX,
+        .hmx_max_corner     = HAP_DCVS_EXP_VCORNER_MAX,
+        .hmx_target_corner  = HAP_DCVS_EXP_VCORNER_MAX,
+        .hmx_perf_mode      = HAP_CLK_PERF_HIGH,
+    },
+};
+
+#undef HTP_POWER_PROFILE_ENTRY
+
+AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem, uint32_t power_mode) {
     struct htp_handle * h = (struct htp_handle *) handle;
     if (!h) {
         return AEE_EBADPARM;
     }
+
+    if (power_mode >= HTP_POWER_MODE_COUNT) {
+        FARF(ERROR, "invalid power-mode %u, falling back to burst", (unsigned) power_mode);
+        power_mode = HTP_POWER_MODE_BURST;
+    }
+    const struct htp_power_profile * pwr = &htp_power_profiles[power_mode];
+    FARF(ALWAYS, "power-mode %u : dcvs-enable %d bus[%u,%u,%u] core[%u,%u,%u] sleep-disable %d hmx[%u,%u,%u]",
+         (unsigned) power_mode, (int) pwr->dcvs_enable,
+         (unsigned) pwr->bus_min_corner, (unsigned) pwr->bus_max_corner, (unsigned) pwr->bus_target_corner,
+         (unsigned) pwr->core_min_corner, (unsigned) pwr->core_max_corner, (unsigned) pwr->core_target_corner,
+         (int) pwr->sleep_disable,
+         (unsigned) pwr->hmx_min_corner, (unsigned) pwr->hmx_max_corner, (unsigned) pwr->hmx_target_corner);
 
     if (h->ctx) {
         FARF(ERROR, "Queue already open");
@@ -378,8 +525,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     for (uint32_t i = 0; i < n_hvx; i++) {
         size_dma  = hex_align_up(size_dma, dma_queue_alignof());
         size_dma += dma_queue_sizeof(256);
-        size_dma  = hex_align_up(size_dma, dma_queue_alignof());
-        size_dma += dma_queue_alias_sizeof();
     }
     offset = offset_dma + size_dma;
 
@@ -441,17 +586,17 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 
         request.type                              = HAP_power_set_DCVS_v3;
         request.dcvs_v3.set_dcvs_enable           = TRUE;
-        request.dcvs_v3.dcvs_enable               = FALSE;
+        request.dcvs_v3.dcvs_enable               = pwr->dcvs_enable;
         request.dcvs_v3.set_bus_params            = TRUE;
-        request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.bus_params.target_corner  = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.bus_params.min_corner     = pwr->bus_min_corner;
+        request.dcvs_v3.bus_params.max_corner     = pwr->bus_max_corner;
+        request.dcvs_v3.bus_params.target_corner  = pwr->bus_target_corner;
         request.dcvs_v3.set_core_params           = TRUE;
-        request.dcvs_v3.core_params.min_corner    = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.core_params.max_corner    = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.core_params.min_corner    = pwr->core_min_corner;
+        request.dcvs_v3.core_params.max_corner    = pwr->core_max_corner;
+        request.dcvs_v3.core_params.target_corner = pwr->core_target_corner;
         request.dcvs_v3.set_sleep_disable         = TRUE;
-        request.dcvs_v3.sleep_disable             = TRUE;
+        request.dcvs_v3.sleep_disable             = pwr->sleep_disable;
 
 #if (__HEXAGON_ARCH__ >= 79)
         HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
@@ -479,10 +624,10 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         request.hmx_v2.set_power     = TRUE;
         request.hmx_v2.power_up      = TRUE;
         request.hmx_v2.set_clock     = TRUE;
-        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
+        request.hmx_v2.target_corner = pwr->hmx_target_corner;
+        request.hmx_v2.min_corner    = pwr->hmx_min_corner;
+        request.hmx_v2.max_corner    = pwr->hmx_max_corner;
+        request.hmx_v2.perf_mode     = pwr->hmx_perf_mode;
         FARF(ALWAYS, "Setting HMX clock\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
@@ -522,16 +667,11 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     // Initialize DMA queues
     uint8_t * dma_ptr_curr = (uint8_t *) ((uintptr_t) block + offset_dma);
     size_t size_dma_q = dma_queue_sizeof(256);
-    size_t size_dma_alias = dma_queue_alias_sizeof();
 
     for (int i = 0; i < ctx->n_threads; i++) {
         dma_ptr_curr = (uint8_t *) hex_align_up((uintptr_t) dma_ptr_curr, dma_queue_alignof());
-        ctx->dma_cached[i] = dma_queue_init(dma_ptr_curr, 256, (uintptr_t) ctx->vtcm_base, ctx->vtcm_size, &ctx->trace[i]);
+        ctx->dma[i] = dma_queue_init(dma_ptr_curr, 256, &ctx->trace[i]);
         dma_ptr_curr += size_dma_q;
-
-        dma_ptr_curr = (uint8_t *) hex_align_up((uintptr_t) dma_ptr_curr, dma_queue_alignof());
-        ctx->dma[i] = dma_queue_alias_init(dma_ptr_curr, ctx->dma_cached[i], 1);
-        dma_ptr_curr += size_dma_alias;
     }
 
     ctx->ddr_spad_size = 512 * 1024; // 512 KB
@@ -592,8 +732,7 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     work_queue_free(ctx->work_queue);
 
     for (int i = 0; i < ctx->n_threads; i++) {
-        dma_queue_alias_free(ctx->dma[i]);
-        dma_queue_free(ctx->dma_cached[i]);
+        dma_queue_free(ctx->dma[i]);
     }
 
     if (ctx->hmx_queue) {
@@ -639,9 +778,7 @@ AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_
     *n_hvx     = n_hvx_val;
     *n_hmx     = 1;
 
-    uint32_t vtcm_sz = 8 * 1024 * 1024; // 8MB default fallback
-    HAP_compute_res_query_VTCM(0, (unsigned int *)&vtcm_sz, NULL, NULL, NULL);
-    *vtcm_size = vtcm_sz;
+    *vtcm_size = vtcm_query_size();
 
     return AEE_SUCCESS;
 }
@@ -692,8 +829,81 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
     }
 }
 
+static int op_fence(struct htp_ops_context * octx) {
+    struct htp_context *ctx = octx->ctx;
+    struct htp_thread_trace * tr = &ctx->trace[0];
+    const uint32_t seq  = (uint32_t) octx->op_params[0];
+    const uint32_t mode = (uint32_t) octx->op_params[1];
+
+    htp_trace_event_start(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
+
+    const struct htp_tensor * sync = octx->src[0];
+    atomic_uint * sync_fence = (atomic_uint *) (uintptr_t) sync->data;
+
+    if (mode == 1) {
+        htp_dcache_flush_dirty_ranges(ctx);
+
+        htp_mdev_group_barrier(octx);
+
+        if (ctx->mdev.idx == 0) {
+            htp_fence_write(sync_fence, seq, octx->status);
+        }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
+        FARF(HIGH, "ggml-hex: sync-signal : fence %p seq 0x%x status %d\n", sync_fence, seq, octx->status);
+        return octx->status;
+    }
+
+    int status = HTP_STATUS_OK;
+    uint64_t spins = 0;
+    while (1) {
+        uint32_t sync_seq;
+        uint32_t sync_status;
+        htp_fence_read(sync_fence, &sync_seq, &sync_status);
+        if ((int32_t)(sync_seq - seq) >= 0) {
+            if (sync_status > HTP_STATUS_OK) {
+                FARF(ERROR, "ggml-hex: sync-wait peer failed with status %u : fence %p seq 0x%x\n", sync_status, sync_fence, seq);
+                status = sync_status;
+            }
+            break;
+        }
+        if (++spins > HTP_FENCE_TIMEOUT) {
+            FARF(ERROR, "ggml-hex: sync-wait TIMEOUT : fence %p spins %llu seq 0x%x\n", sync_fence, spins, seq);
+            status = HTP_STATUS_INTERNAL_ERR;
+            break;
+        }
+        hex_pause();
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
+
+    FARF(HIGH, "ggml-hex: sync-done : fence %p spins %llu seq 0x%x\n", sync_fence, spins, seq);
+    return status;
+}
+
+static int op_mdev_group(struct htp_ops_context * octx) {
+    struct htp_context * ctx = octx->ctx;
+    const struct htp_tensor * sync = octx->src[0];
+    ctx->mdev.idx   = (uint16_t) octx->op_params[0];
+    ctx->mdev.count = (uint16_t) sync->ne[1];
+    if (ctx->mdev.count > 1) {
+        ctx->mdev.count_div = init_fastdiv_values(ctx->mdev.count);
+        ctx->mdev.fence_base = (uint8_t *) sync->data;
+    }
+    return HTP_STATUS_OK;
+}
+
 static int execute_op(struct htp_ops_context * octx) {
     switch (octx->op) {
+        case HTP_OP_MDEV_GROUP:
+            return op_mdev_group(octx);
+
+        case HTP_OP_FENCE:
+            return op_fence(octx);
+
+        case HTP_OP_ALLREDUCE:
+        case HTP_OP_ALLREDUCE_ADD:
+            return op_allreduce(octx);
+
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ADD:
             return op_matmul(octx);
@@ -701,11 +911,11 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_MUL_MAT_ID:
             return op_matmul_id(octx);
 
-        case HTP_OP_MUL_MAT_QKV:
-            return op_matmul_qkv(octx);
+        case HTP_OP_MUL_MAT_ID_NX:
+            return op_matmul_id_nx(octx);
 
-        case HTP_OP_MUL_MAT_FFN:
-            return op_matmul_ffn(octx);
+        case HTP_OP_MUL_MAT_NX:
+            return op_matmul_nx(octx);
 
         case HTP_OP_MUL:
         case HTP_OP_ADD:
@@ -719,22 +929,37 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_RMS_NORM_MUL:
         case HTP_OP_SCALE:
         case HTP_OP_CLAMP:
+        case HTP_OP_LEAKY_RELU:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
         case HTP_OP_UNARY_SOFTPLUS:
         case HTP_OP_UNARY_SIGMOID:
         case HTP_OP_UNARY_SILU:
         case HTP_OP_UNARY_GELU:
+        case HTP_OP_UNARY_GELU_QUICK:
+        case HTP_OP_UNARY_GELU_ERF:
         case HTP_OP_UNARY_NEG:
         case HTP_OP_UNARY_EXP:
         case HTP_OP_UNARY_TANH:
+        case HTP_OP_UNARY_ABS:
+        case HTP_OP_UNARY_LOG:
+        case HTP_OP_UNARY_RELU:
+        case HTP_OP_UNARY_STEP:
+        case HTP_OP_UNARY_CEIL:
+        case HTP_OP_UNARY_SGN:
         case HTP_OP_L2_NORM:
+        case HTP_OP_HADAMARD:
             return op_unary(octx);
 
         case HTP_OP_GLU_SWIGLU:
         case HTP_OP_GLU_SWIGLU_OAI:
+        case HTP_OP_GLU_SWIGLU_CLAMP:
         case HTP_OP_GLU_GEGLU:
-            return op_activations(octx);
+        case HTP_OP_GLU_GEGLU_QUICK:
+        case HTP_OP_GLU_GEGLU_ERF:
+        case HTP_OP_GLU_REGLU:
+        case HTP_OP_GLU_SIGMOID:
+            return op_glu(octx);
 
         case HTP_OP_SOFTMAX:
             return op_softmax(octx);
@@ -751,10 +976,14 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GET_ROWS:
             return op_get_rows(octx);
 
+        case HTP_OP_SUM:
+            return op_sum(octx);
+
         case HTP_OP_SUM_ROWS:
             return op_sum_rows(octx);
 
         case HTP_OP_CPY:
+        case HTP_OP_CPY_FENCE:
             return op_cpy(octx);
 
         case HTP_OP_REPEAT:
@@ -762,6 +991,12 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_ARGSORT:
             return op_argsort(octx);
+
+        case HTP_OP_TOP_K:
+            return op_top_k(octx);
+
+        case HTP_OP_ARGMAX:
+            return op_argmax(octx);
 
         case HTP_OP_SSM_CONV:
             return op_ssm_conv(octx);
@@ -781,6 +1016,21 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_PAD:
             return op_pad(octx);
 
+        case HTP_OP_IM2COL:
+            return op_im2col(octx);
+
+        case HTP_OP_IM2COL_3D:
+            return op_im2col_3d(octx);
+
+        case HTP_OP_ROLL:
+            return op_roll(octx);
+
+        case HTP_OP_POOL_2D:
+            return op_pool_2d(octx);
+
+        case HTP_OP_POOL_1D:
+            return op_pool_1d(octx);
+
         case HTP_OP_CONCAT:
             return op_concat(octx);
 
@@ -795,7 +1045,7 @@ static int execute_op(struct htp_ops_context * octx) {
     }
 
     FARF(ERROR, "Unknown Op %u", octx->op);
-    return -1;
+    return HTP_STATUS_NO_SUPPORT;
 }
 
 static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_buf_desc *b) {
@@ -803,7 +1053,7 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = ctx->mmap + i;
-        if (m->size && m->fd == b->fd) {
+        if (m->size && m->fd == b->fd && m->flags == b->flags) {
             b->base   = m->base;
             *m_reuse |= (1 << i);
             return true;
@@ -815,48 +1065,40 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 
 static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
     if (m->size) {
-        FARF(HIGH, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
-#if __HVX_ARCH__ > 73
-        HAP_munmap2((void *) m->base, m->size);
-#else
-        HAP_munmap((void *) m->base, m->size);
-#endif
+        FARF(ALWAYS, "unmap : fd %u base 0x%llx size %llu", m->fd, (unsigned long long) m->base, (unsigned long long) m->size);
+        htp_munmap(m->base, m->size, m->flags);
         m->size = 0;
         m->base = 0;
         m->fd   = -1;
+        m->flags = 0;
     }
 }
 
-static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
-    if (b->base) return; // already mapped
+static inline bool mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
+    if (b->base) return true; // already mapped
 
     // find unused mapping
     for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-#if __HVX_ARCH__ > 73
-            void *va = HAP_mmap2(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
-#else
-            if (b->size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
-                FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) b->size);
-                abort(); // can't do much else at this point
+            uint64_t va = htp_mmap(b->fd, b->size, b->flags);
+            if (va == 0) {
+                FARF(HIGH, "mmap failed (will attempt defrag) : fd %u size %llu", b->fd, (unsigned long long) b->size);
+                return false;
             }
 
-            void *va = HAP_mmap(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
-#endif
-            if (va == (void*)-1) {
-                FARF(ERROR, "mmap failed : va %p fd %u size %u", va, b->fd, (uint32_t) b->size);
-                abort(); // can't do much else at this point
-            }
-
-            m->base   = b->base = (uint64_t) va;
+            m->base   = b->base = va;
             m->fd     = b->fd;
             m->size   = b->size;
+            m->flags  = b->flags;
 
-            FARF(HIGH, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
-            return;
+            FARF(ALWAYS, "mmap : fd %u base 0x%llx size %llu flags 0x%x", m->fd, (unsigned long long) m->base, (unsigned long long) m->size, m->flags);
+            return true;
         }
     }
+
+    FARF(ERROR, "mmap failed : exceeded mapping capacity limit of %u", HTP_MAX_MMAPS);
+    return false;
 }
 
 static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t n_bufs) {
@@ -869,14 +1111,22 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     // See what we can reuse
     for (uint32_t i=0; i < n_bufs; i++) {
         struct htp_buf_desc *b = bufs + i;
-        if (reuse_buf(ctx, &m_reuse, b)) { b_reuse++; } else { e_vmem += b->size; }
-        FARF(HIGH, "prep-buf #%u : pass0 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+        if (reuse_buf(ctx, &m_reuse, b)) {
+            b_reuse++;
+        } else if (!(b->flags & HTP_BUF_EXTENDED)) {
+            e_vmem += b->size;
+        }
+        FARF(HIGH, "prep-buf #%u : pass0 fd %u base 0x%llx size %llu flags 0x%x", i, b->fd, (unsigned long long) b->base, (unsigned long long) b->size, b->flags);
     }
 
     if (b_reuse == n_bufs) return; // all bufs reuse existing mappings
 
     // See how much vmem we have mmaped right now
-    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) { m_vmem += ctx->mmap[i].size; }
+    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
+        if (!(ctx->mmap[i].flags & HTP_BUF_EXTENDED)) {
+            m_vmem += ctx->mmap[i].size;
+        }
+    }
 
     FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu max-vmem %zu : n-bufs %u b-reuse %u",
             (size_t) m_vmem, (size_t) e_vmem, (size_t) ctx->max_vmem, n_bufs, b_reuse);
@@ -885,29 +1135,54 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
         // Drop unused mappings
         for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
             bool used = m_reuse & (1<<i);
-            if (!used) { drop_mmap(ctx, ctx->mmap + i); }
+            if (!used && !(ctx->mmap[i].flags & HTP_BUF_EXTENDED)) {
+                drop_mmap(ctx, ctx->mmap + i);
+            }
         }
     }
 
-    // Create missing mappings
+    // Create missing mappings (pass 1)
+    bool mmap_ok = true;
     for (uint32_t i=0; i < n_bufs; i++) {
         struct htp_buf_desc *b = bufs + i;
-        mmap_buf(ctx, b);
-        FARF(HIGH, "prep-buf #%u : pass1 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+        if (!mmap_buf(ctx, b)) {
+            mmap_ok = false;
+            break;
+        }
+        FARF(HIGH, "prep-buf #%u : pass1 fd %u base 0x%llx size %llu flags 0x%x", i, b->fd, (unsigned long long) b->base, (unsigned long long) b->size, b->flags);
+    }
+
+    if (!mmap_ok) {
+        // Attempt defragmentation: drop 32-bit mappings and remap (pass 2)
+        FARF(HIGH, "prep-bufs : dropping 32-bit mappings to defragment address space");
+        for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
+            if (!(ctx->mmap[i].flags & HTP_BUF_EXTENDED)) {
+                drop_mmap(ctx, ctx->mmap + i);
+            }
+        }
+
+        for (uint32_t i=0; i < n_bufs; i++) {
+            struct htp_buf_desc *b = bufs + i;
+            if (!(b->flags & HTP_BUF_EXTENDED)) {
+                b->base = 0;
+            }
+            if (!mmap_buf(ctx, b)) {
+                FARF(ERROR, "prep-bufs : mmap failed after defragmentation (fd %u size %llu)", b->fd, (unsigned long long) b->size);
+                abort();
+            }
+            FARF(HIGH, "prep-buf #%u : pass2 fd %u base 0x%llx size %llu flags 0x%x", i, b->fd, (unsigned long long) b->base, (unsigned long long) b->size, b->flags);
+        }
     }
 }
 
 static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t idx, struct htp_tensor *t) {
-    uint32_t offset = t->data;
-    uint32_t size   = t->size;
+    uint64_t offset = t->data;
     uint32_t bi     = t->bi;
-    uint32_t alias  = t->alias;
 
-    t->data  = (uint32_t) (bufs[bi].base + offset);  // update data to the actual pointer
-    t->alias = (uint32_t) (tens + alias);            // update alias to the actual pointer
+    t->data  = bufs[bi].base + offset;  // update data to the actual pointer
 
-    FARF(HIGH, "prep-tensor #%u: bi %u offset %u size %u data %p : %u:%u:%u:%u", idx, t->bi, offset, t->size, (void*) t->data,
-        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
+    FARF(HIGH, "prep-tensor #%u: bi %u offset %llu size %u data 0x%llx : %u:%u:%u:%u", idx, t->bi, (unsigned long long) offset, t->size, (unsigned long long) t->data,
+        t->ne[0], t->ne[1], t->ne[2], t->ne[3]);
 }
 
 static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t n_tens) {
@@ -916,11 +1191,19 @@ static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, str
     }
 }
 
-static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
-    memcpy(octx->op_params, op->params, sizeof(octx->op_params));
+static void mdev_group_init(struct htp_context * ctx, const struct htp_opbatch_req * req) {
+    memset(&ctx->mdev, 0, sizeof(ctx->mdev));
+    ctx->mdev.fence_seq = (uint32_t)((req->seq & 0xfffff) << 12);
+}
+
+static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs, uint32_t n_bufs,
+                       struct htp_tensor * tens, uint32_t idx, struct htp_op_desc * op) {
+    memcpy(octx->op_params,     op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
-    octx->flags = op->flags;
-    octx->op    = op->opcode;
+    octx->flags         = op->flags;
+    octx->op            = op->opcode;
+    octx->n_threads     = octx->ctx->n_threads;
+    octx->n_threads_div = octx->ctx->n_threads_div;
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
@@ -929,47 +1212,45 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         uint16_t src_idx = op->src[i];
         if (src_idx == 0xffff) {
             octx->src[i]     = NULL;
-            octx->src_dma[i] = NULL;
             continue;
         }
 
         struct htp_tensor *src = tens + src_idx;
         octx->src[i]     = src;
-        octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
-            src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
+        FARF(HIGH, "prep-src #%u: data 0x%llx size %u : %u:%u:%u:%u", op->src[i], (unsigned long long) src->data, src->size,
+            src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
-    htp_tensor_flush_all(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
+    htp_dcache_flush_dirty_tensors(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
 
     // Prep output tensors
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
         uint16_t dst_idx = op->dst[i];
         if (dst_idx == 0xffff) {
             octx->dsts[i]    = NULL;
-            octx->dst_dma[i] = NULL;
             continue;
         }
         struct htp_tensor *dst = tens + dst_idx;
         octx->dsts[i]    = dst;
-        octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        htp_tensor_make_dirty(dst, octx->ctx->dirty_map);
-
-        FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
+        FARF(HIGH, "prep-dst[%u] #%u: data 0x%llx size %u : %u:%u:%u:%u", i, dst_idx, (unsigned long long) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
+    htp_dcache_mark_dirty_tensors(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
+
+    htp_mdev_group_barrier(octx);
+
     int status = execute_op(octx);
+
+    htp_ops_context_set_status(octx, status);
 
     octx->src0_spad.src = NULL;
     octx->src1_spad.src = NULL;
-    octx->src2_spad.src = NULL;
-    octx->src3_spad.src = NULL;
     octx->dst_spad.src  = NULL;
 
-    return status;
+    return octx->status;
 }
 
 static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_req * req, const struct dspqueue_buffer * dbuf) {
@@ -991,14 +1272,8 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
         return;
     }
 
-    FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req->id,
+    FARF(HIGH, "processing opbatch #%llu: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", (unsigned long long) req->seq,
             n_bufs, n_tens, n_ops, req->n_traces, dbuf->size, b_size, t_size, o_size);
-
-    // Clean cache at the start of the batch
-    // We cant trace this part because the trace buffer is setup later
-    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
-    hex_l2fetch_block(ctx, ctx->footprint);
-    bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
 
     // Setup descriptor pointers
     uint8_t * m_ptr = dbuf->ptr;
@@ -1007,13 +1282,8 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     struct htp_op_desc*   ops = (struct htp_op_desc*)   m_ptr; m_ptr += o_size;
     struct htp_prof_desc* pds = (struct htp_prof_desc*) m_ptr;
 
-    prep_op_bufs(ctx, bufs, n_bufs);
-    prep_tensors(ctx, bufs, tens, n_tens);
-
-    struct htp_ops_context *octx = &ctx->octx;
-    memset(octx, 0, sizeof(*octx));
-    octx->n_threads = ctx->n_threads;
-    octx->ctx       = ctx;
+    struct profile_data batch_prof;
+    profile_start(HTP_PROF_BASIC, &batch_prof);
 
     memset(ctx->trace, 0, sizeof(ctx->trace));
     if (ctx->profiler == HTP_PROF_TRACE) {
@@ -1024,20 +1294,41 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
         }
     }
 
+    // Clean cache at the start of the batch
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+    hex_l2fetch_block(ctx, ctx->footprint);
+    memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_BUFF, 0);
+    prep_op_bufs(ctx, bufs, n_bufs);
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_BUFF, 0);
+
+    prep_tensors(ctx, bufs, tens, n_tens);
+
+    struct htp_ops_context *octx = &ctx->octx;
+    htp_ops_context_reset(octx, ctx);
+
+    mdev_group_init(ctx, req);
+
     work_queue_wakeup(ctx->work_queue);
     if (ctx->hmx_queue) {
         hmx_queue_wakeup(ctx->hmx_queue);
     }
 
     int op_status = HTP_STATUS_OK;
-    for (uint32_t i = 0; i < n_ops && op_status == HTP_STATUS_OK; i++) {
+    octx->status  = HTP_STATUS_OK;
+    for (uint32_t i = 0; i < n_ops; i++) {
         struct profile_data prof;
 
         profile_start(ctx->profiler, &prof);
 
-        op_status = proc_op_req(octx, tens, i, &ops[i]);
+        op_status = proc_op_req(octx, bufs, n_bufs, tens, i, &ops[i]);
 
         profile_stop(ctx->profiler, &prof);
+
+        htp_ops_context_set_status(octx, op_status);
 
         if (ctx->profiler) {
             pds[i].opcode = ops[i].opcode;
@@ -1056,13 +1347,25 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     }
     work_queue_suspend(ctx->work_queue);
 
+    // Flush remaining dirty tensors at the end of the batch
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+
+    htp_mdev_group_barrier(octx);
+
+    profile_stop(HTP_PROF_BASIC, &batch_prof);
+
     struct htp_opbatch_rsp rsp;
     memset(&rsp, 0, sizeof(rsp));
-    rsp.id        = req->id;
-    rsp.status    = op_status;
-    rsp.n_bufs    = n_bufs;
-    rsp.n_tensors = n_tens;
-    rsp.n_ops     = n_ops;
+    rsp.seq          = req->seq;
+    rsp.status       = octx->status;
+    rsp.n_bufs       = n_bufs;
+    rsp.n_tensors    = n_tens;
+    rsp.n_ops        = n_ops;
+    rsp.usecs        = batch_prof.usecs;
+    rsp.cycles_start = batch_prof.cycles_start;
+    rsp.cycles_stop  = batch_prof.cycles_stop;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
         for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
@@ -1072,11 +1375,6 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
 
     struct dspqueue_buffer write_dbuf = *dbuf;
     write_dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
-
-    // Flush remaining dirty tensors at the end of the batch
-    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
-    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
-    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
 
     err = dspqueue_write(queue, 0, 1, &write_dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
     if (err != 0) {
@@ -1096,7 +1394,7 @@ static void process_ops(struct htp_context * ctx) {
 
     vtcm_acquire(ctx);
 
-    while (!ctx->vtcm_needs_release && !atomic_load(&ctx->killed)) {
+    while (!atomic_load(&ctx->vtcm_needs_release) && !atomic_load(&ctx->killed)) {
         struct htp_opbatch_req req;
         uint32_t r_size = sizeof(req);
 

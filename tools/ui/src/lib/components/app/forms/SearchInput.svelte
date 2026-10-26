@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Input } from '$lib/components/ui/input';
 	import { Search, X } from '@lucide/svelte';
+	import { Input } from '$lib/components/ui/input';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		autofocus?: boolean;
@@ -11,6 +11,8 @@
 		onClose?: () => void;
 		onKeyDown?: (event: KeyboardEvent) => void;
 		class?: string;
+		/** Input height, matching the small size of the other controls. */
+		size?: 'sm' | 'default';
 		id?: string;
 		ref?: HTMLInputElement | null;
 		isCancelAlwaysVisible?: boolean;
@@ -18,15 +20,16 @@
 
 	let {
 		autofocus,
-		value = $bindable(''),
-		placeholder = 'Search...',
-		onInput,
-		onClose,
-		onKeyDown,
 		class: className,
 		id,
+		isCancelAlwaysVisible = false,
+		onClose,
+		onInput,
+		onKeyDown,
+		placeholder = 'Search...',
 		ref = $bindable(null),
-		isCancelAlwaysVisible = false
+		size = 'default',
+		value = $bindable('')
 	}: Props = $props();
 
 	let showClearButton = $derived(isCancelAlwaysVisible || !!value || !!onClose);
@@ -55,11 +58,13 @@
 	/>
 
 	<Input
-		{autofocus}
-		{id}
-		bind:value
 		bind:ref
-		class="pl-9 {showClearButton ? 'pr-9' : ''}"
+		bind:value
+		{autofocus}
+		class="max-md:h-10 pl-9 {showClearButton ? 'pr-9' : ''} {size === 'sm'
+			? 'h-8'
+			: ''} [&::-webkit-search-cancel-button]:hidden"
+		{id}
 		oninput={handleInput}
 		onkeydown={onKeyDown}
 		{placeholder}
@@ -68,10 +73,10 @@
 
 	{#if showClearButton}
 		<button
-			type="button"
+			aria-label={value ? 'Clear search' : 'Close'}
 			class="absolute top-1/2 right-3 -translate-y-1/2 transform cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
 			onclick={handleClear}
-			aria-label={value ? 'Clear search' : 'Close'}
+			type="button"
 		>
 			<X class={ICON_CLASS_DEFAULT} />
 		</button>

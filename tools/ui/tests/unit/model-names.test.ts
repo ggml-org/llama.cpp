@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { isValidModelName, normalizeModelName } from '$lib/utils/model-names';
+import { describe, expect, it } from 'vitest';
 
 describe('normalizeModelName', () => {
 	it('preserves Hugging Face org/model format (single slash)', () => {

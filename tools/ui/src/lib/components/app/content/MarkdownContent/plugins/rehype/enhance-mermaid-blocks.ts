@@ -10,29 +10,29 @@
  * avoiding the need to stringify and re-parse HTML.
  */
 
-import type { Plugin } from 'unified';
-import type { Root, Element, ElementContent } from 'hast';
-import { visit } from 'unist-util-visit';
-import {
-	MERMAID_WRAPPER_CLASS,
-	MERMAID_SCROLL_CONTAINER_CLASS,
-	MERMAID_BLOCK_CLASS,
-	MERMAID_LANGUAGE,
-	MERMAID_SYNTAX_ATTR,
-	MERMAID_ID_ATTR,
-	DIAGRAM_VIEW_MODE_ATTR,
-	DIAGRAM_VIEW_RENDERED
-} from '$lib/constants';
-import type { DiagramPreData } from './pre-transform';
 import {
 	createBlockHeader,
 	createCopyButton,
 	createPreviewButton,
-	createToggleSourceButton,
 	createSourceView,
+	createToggleSourceButton,
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
+import type { DiagramPreData } from './pre-transform';
+import {
+	DIAGRAM_VIEW_MODE_ATTR,
+	DIAGRAM_VIEW_RENDERED,
+	MERMAID_BLOCK_CLASS,
+	MERMAID_ID_ATTR,
+	MERMAID_LANGUAGE,
+	MERMAID_SCROLL_CONTAINER_CLASS,
+	MERMAID_SYNTAX_ATTR,
+	MERMAID_WRAPPER_CLASS
+} from '$lib/constants';
+import type { Element, ElementContent, Root } from 'hast';
+import type { Plugin } from 'unified';
+import { visit } from 'unist-util-visit';
 
 declare global {
 	interface Window {
@@ -53,6 +53,7 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 			if (node.tagName !== 'pre' || !parent || index === undefined) return;
 
 			const className = node.properties?.className;
+
 			if (!Array.isArray(className)) return;
 
 			const isMermaid = className.some(
@@ -62,11 +63,11 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 			if (!isMermaid) return;
 
 			const mermaidId = generateBlockId(MERMAID_LANGUAGE, 'idxMermaidBlock');
-
 			// Extract the mermaid syntax (text content of the pre element)
 			const diagramText = node.children
 				.map((child) => {
 					if (child.type === 'text') return child.value;
+
 					return '';
 				})
 				.join('');
@@ -74,8 +75,8 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 			// Store the mermaid syntax in data attribute for copy functionality
 			node.properties = {
 				...node.properties,
-				[MERMAID_SYNTAX_ATTR]: diagramText,
-				[MERMAID_ID_ATTR]: mermaidId
+				[MERMAID_ID_ATTR]: mermaidId,
+				[MERMAID_SYNTAX_ATTR]: diagramText
 			};
 
 			const actions = [
@@ -83,7 +84,6 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 				createToggleSourceButton(mermaidId, MERMAID_ID_ATTR, 'Toggle mermaid source'),
 				createPreviewButton(mermaidId, MERMAID_ID_ATTR, 'Preview diagram')
 			];
-
 			const header = createBlockHeader(MERMAID_LANGUAGE, mermaidId, MERMAID_ID_ATTR, actions);
 			const preservedCode = (node.data as DiagramPreData | undefined)?.sourceCode;
 			const sourceView = createSourceView(preservedCode, diagramText, MERMAID_LANGUAGE);
@@ -93,8 +93,8 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 				MERMAID_WRAPPER_CLASS,
 				MERMAID_SCROLL_CONTAINER_CLASS,
 				{
-					[MERMAID_ID_ATTR]: mermaidId,
-					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED
+					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED,
+					[MERMAID_ID_ATTR]: mermaidId
 				},
 				[sourceView]
 			);

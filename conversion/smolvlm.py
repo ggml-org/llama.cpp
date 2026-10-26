@@ -9,6 +9,7 @@ from .base import MmprojModel, ModelBase, gguf
 
 
 @ModelBase.register("Idefics3ForConditionalGeneration", "SmolVLMForConditionalGeneration")
+@ModelBase.example("HuggingFaceTB/SmolVLM-Instruct", "HuggingFaceM4/Idefics3-8B-Llama3")
 class SmolVLMModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

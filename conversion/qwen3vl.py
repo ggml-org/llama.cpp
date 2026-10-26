@@ -13,7 +13,8 @@ from .qwen import Qwen3Model, Qwen3MoeModel
 from .qwenvl import Qwen25AudioModel
 
 
-@ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration")
+@ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "OpenJevModel")
+@ModelBase.example("Qwen/Qwen3-VL-4B-Instruct", "Qwen/Qwen3-VL-30B-A3B-Instruct", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-35B-A3B")
 class Qwen3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -144,6 +145,7 @@ class Qwen3VLVisionModel(MmprojModel):
 
 
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-Omni-30B-A3B-Instruct")
 class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
     has_audio_encoder = True
     has_vision_encoder = True
@@ -217,17 +219,21 @@ class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
 
 
 @ModelBase.register("Qwen3ASRForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-ASR-0.6B-hf")
 class Qwen3ASRMmprojModel(Qwen3OmniMmprojModel):
     has_audio_encoder = True
     has_vision_encoder = False
 
 
 @ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration", "GlmOcrForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-4.1V-9B-Thinking", "zai-org/GLM-4.5V")
 class Glm4VVisionModel(Qwen3VLVisionModel):
+    projector_type = gguf.VisionProjectorType.GLM4V
+
     def set_gguf_parameters(self):
         MmprojModel.set_gguf_parameters(self) # skip Qwen3VLVisionModel parameters
         assert self.hparams_vision is not None
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)
+        self.gguf_writer.add_clip_projector_type(self.projector_type)
 
         hidden_act = str(self.hparams_vision.get("hidden_act", "")).lower()
         if hidden_act == "gelu":
@@ -245,7 +251,34 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Glm5NextForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-5.3-Flash")
+class Glm5NextVisionModel(Glm4VVisionModel):
+    # GLM-5.3-Flash vision tower. glm4v layout with per-head qk-norm, no post-conv norm and no learned position embeddings.
+    # Images are placed on a ceil aligned canvas with padding.
+
+    projector_type = gguf.VisionProjectorType.GLM5V
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        self.gguf_writer.add_vision_spatial_merge_size(int(self.hparams_vision.get("spatial_merge_size", 2)))
+        if (limit := self.hparams_vision.get("swiglu_limit")) is not None:
+            self.gguf_writer.add_vision_swiglu_clamp(float(limit))
+
+        # image token budget from the processor, stored as single-frame pixel counts
+        pc = self.preprocessor_config
+        patch = int(pc.get("patch_size", 14))
+        merge = int(pc.get("merge_size", 2))
+        pixels_per_token = (patch * merge) ** 2
+        if (min_tok := pc.get("min_image_tokens")) is not None:
+            self.gguf_writer.add_vision_min_pixels(int(min_tok) * pixels_per_token)
+        if (max_tok := pc.get("max_image_tokens")) is not None:
+            self.gguf_writer.add_vision_max_pixels(int(max_tok) * pixels_per_token)
+
+
 @ModelBase.register("Qwen3VLForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-VL-4B-Instruct")
 class Qwen3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3VL
 
@@ -268,6 +301,7 @@ class Qwen3VLTextModel(Qwen3Model):
 
 
 @ModelBase.register("Qwen3VLMoeForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-VL-30B-A3B-Instruct")
 class Qwen3VLMoeTextModel(Qwen3MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3VLMOE
 
@@ -317,6 +351,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
 
 
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-Omni-30B-A3B-Instruct")
 class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
     model_arch = gguf.MODEL_ARCH.QWEN3VLMOE
 
@@ -338,6 +373,7 @@ class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
 
 
 @ModelBase.register("Qwen3ASRForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-ASR-0.6B-hf")
 class Qwen3ASRTextModel(Qwen3VLTextModel):
     model_arch = gguf.MODEL_ARCH.QWEN3VL
 

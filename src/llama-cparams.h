@@ -15,6 +15,7 @@ struct llama_cparams {
     uint32_t n_seq_max;
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
     uint32_t n_outputs_max;   // max outputs supported by the context
+    uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation
     int32_t  n_threads_batch; // number of threads to use for batch processing
 
@@ -47,15 +48,21 @@ struct llama_cparams {
     bool fused_dsv4_hc_comb;
     bool fused_dsv4_hc_post;
     bool auto_fhc;
+    bool fused_top_k_mask;   // use fused top-k sparse attention mask
+    bool auto_ftkm;
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
+    bool training;           // set by llama_opt_init()
+
+    size_t moe_cache_size;
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 
     enum llama_context_type ctx_type;
+    enum llama_rope_scaling_type rope_scaling_type;
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;

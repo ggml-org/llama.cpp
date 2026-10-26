@@ -371,8 +371,8 @@ static std::optional<gguf_remote_model> gguf_parse_meta(const std::vector<char> 
 }
 
 // cache handling for local download
-static std::string get_default_cache_dir() {
-    return fs_get_cache_directory() + "gguf-headers/";
+static std::filesystem::path get_default_cache_dir() {
+    return fs_get_cache_directory() / "gguf-headers";
 }
 
 static std::string sanitize_for_path(const std::string & s) {
@@ -385,7 +385,7 @@ static std::string sanitize_for_path(const std::string & s) {
     return out;
 }
 
-static bool read_file(const std::string & path, std::vector<char> & out) {
+static bool read_file(const std::filesystem::path & path, std::vector<char> & out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f.good()) {
         return false;
@@ -400,7 +400,7 @@ static bool read_file(const std::string & path, std::vector<char> & out) {
     return f.good();
 }
 
-static bool write_file(const std::string & path, const std::vector<char> & data) {
+static bool write_file(const std::filesystem::path & path, const std::vector<char> & data) {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f.good()) {
         return false;
@@ -516,7 +516,7 @@ static std::string detect_gguf_filename(const std::string & repo, const std::str
 static std::optional<gguf_remote_model> fetch_and_parse(
         const std::string & repo,
         const std::string & filename,
-        const std::string & cache_path,
+        const std::filesystem::path & cache_path,
         bool verbose) {
     std::string url = "https://huggingface.co/" + repo + "/resolve/main/" + filename;
 
@@ -564,19 +564,19 @@ static std::optional<gguf_remote_model> fetch_and_parse(
     return std::nullopt;
 }
 
-static std::string get_cache_file_path(const std::string& cdir, const std::string& repo_part, const std::string& filename) {
+static std::filesystem::path get_cache_file_path(const std::filesystem::path & cdir, const std::string & repo_part, const std::string & filename) {
     std::string fname_part = sanitize_for_path(filename);
-    return cdir + "/" + repo_part + "--" + fname_part + ".partial";
+    return cdir / std::filesystem::u8path(repo_part + "--" + fname_part + ".partial");
 }
 
 // Try cache first, then fetch and parse a single GGUF shard.
 static std::optional<gguf_remote_model> fetch_or_cached(
         const std::string & repo,
         const std::string & filename,
-        const std::string & cdir,
+        const std::filesystem::path & cdir,
         const std::string & repo_part,
         bool verbose) {
-    std::string cache_path = get_cache_file_path(cdir, repo_part, filename);
+    std::filesystem::path cache_path = get_cache_file_path(cdir, repo_part, filename);
 
     {
         std::vector<char> cached;
@@ -584,14 +584,15 @@ static std::optional<gguf_remote_model> fetch_or_cached(
             auto result = gguf_parse_meta(cached);
             if (result.has_value()) {
                 if (verbose) {
-                    fprintf(stderr, "gguf_fetch: loaded from cache: %s\n", cache_path.c_str());
+                    fprintf(stderr, "gguf_fetch: loaded from cache: %s\n", fs_path_to_utf8(cache_path).c_str());
                 }
                 return result;
             }
         }
     }
 
-    fs_create_directory_with_parents(cdir);
+    std::error_code ec;
+    std::filesystem::create_directories(cdir, ec);
     return fetch_and_parse(repo, filename, cache_path, verbose);
 }
 
@@ -600,7 +601,7 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
         const std::string & quant,
         const std::string & cache_dir,
         bool verbose) {
-    std::string cdir = cache_dir.empty() ? get_default_cache_dir() : cache_dir;
+    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::u8path(cache_dir);
     std::string repo_part = sanitize_for_path(repo);
 
     std::string split_prefix;
@@ -661,7 +662,7 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
         const std::string & quant,
         const std::string & cache_dir,
         bool verbose) {
-    std::string cdir = cache_dir.empty() ? get_default_cache_dir() : cache_dir;
+    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::u8path(cache_dir);
     std::string repo_part = sanitize_for_path(repo);
 
     std::string split_prefix;
@@ -679,12 +680,12 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
 
     auto & model = model_opt.value();
 
-    const std::string cache_path = get_cache_file_path(cdir, repo_part, filename);
+    const std::filesystem::path cache_path = get_cache_file_path(cdir, repo_part, filename);
 
     ggml_context_ptr ggml_ctx_ptr;
     ggml_context * ggml_ctx{};
     gguf_init_params params{true, &ggml_ctx};
-    gguf_context_ptr ctx{gguf_init_from_file(cache_path.c_str(), params)};
+    gguf_context_ptr ctx{gguf_init_from_file(fs_path_to_utf8(cache_path).c_str(), params)};
     ggml_ctx_ptr.reset(ggml_ctx);
 
     if (ctx == nullptr) {
@@ -718,11 +719,11 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
             }
 
             // Load tensors from shard and add to main gguf_context
-            const std::string shard_path = get_cache_file_path(cdir, repo_part, shard_name);
+            const std::filesystem::path shard_path = get_cache_file_path(cdir, repo_part, shard_name);
             ggml_context_ptr shard_ggml_ctx_ptr;
             ggml_context * shard_ggml_ctx{};
             gguf_init_params shard_params{true, &shard_ggml_ctx};
-            gguf_context_ptr shard_ctx{gguf_init_from_file(shard_path.c_str(), shard_params)};
+            gguf_context_ptr shard_ctx{gguf_init_from_file(fs_path_to_utf8(shard_path).c_str(), shard_params)};
             shard_ggml_ctx_ptr.reset(shard_ggml_ctx);
 
             if (shard_ctx == nullptr) {

@@ -13,12 +13,16 @@ add_library(${TARGET} STATIC
     server-queue.h
     server-common.cpp
     server-common.h
+    server-decision.cpp
+    server-decision.h
     server-context.cpp
     server-context.h
     server-stream.cpp
     server-stream.h
     server-tools.cpp
     server-tools.h
+    server-mcp.cpp
+    server-mcp.h
     server-schema.cpp
     server-schema.h
 )
@@ -28,7 +32,7 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
 # llama-server-impl: server logic, reusable by app
@@ -37,6 +41,8 @@ set(TARGET llama-server-impl)
 
 add_library(${TARGET}
     server.cpp
+    server-connect.cpp
+    server-connect.h
     server-http.cpp
     server-http.h
     server-models.cpp
@@ -45,8 +51,10 @@ add_library(${TARGET}
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ../mtmd ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+
+add_dependencies(${TARGET} llama-ui-assets)
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)

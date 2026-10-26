@@ -29,7 +29,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 60
+DEFAULT_HTTP_TIMEOUT = 600
 
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
@@ -65,6 +65,7 @@ class ServerProcess:
     model_url: str | None = None
     model_file: str | None = None
     model_draft: str | None = None
+    model_draft_hf_repo: str | None = None
     n_threads: int | None = None
     n_gpu_layer: int | None = None
     n_batch: int | None = None
@@ -80,12 +81,14 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
+    ctkd: str | None = None
     fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
     server_metrics: bool | None = False
     kv_unified: bool | None = False
+    swa_full: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
@@ -98,6 +101,9 @@ class ServerProcess:
     spec_type: str | None = None
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
+    spec_draft_n_ubatch: int | None = None
+    spec_synth_len: float | None = None
+    spec_synth_rates: List[float] | None = None
     no_ui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
@@ -106,16 +112,22 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    no_mmproj: bool | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
+    override_kv: str | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
+    server_tools_runtime: str | None = None
+    mcp_servers_config: str | None = None
+    mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    llama_cache: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -130,8 +142,13 @@ class ServerProcess:
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
     def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
-        env = {**os.environ}
-        if "LLAMA_CACHE" not in os.environ:
+        env = {
+            **os.environ,
+            "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
+        }
+        if self.llama_cache is not None:
+            env["LLAMA_CACHE"] = self.llama_cache
+        elif "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
@@ -145,8 +162,6 @@ class ServerProcess:
         else:
             server_path = "../../../build/bin/llama-server"
         server_args = [
-            "--host",
-            self.server_host,
             "--port",
             self.server_port,
             "--temp",
@@ -154,6 +169,7 @@ class ServerProcess:
             "--seed",
             self.seed,
         ]
+        server_args.extend(["--host", self.server_host])
         if self.offline:
             server_args.append("--offline")
         if self.model_file:
@@ -162,6 +178,8 @@ class ServerProcess:
             server_args.extend(["--model-url", self.model_url])
         if self.model_draft:
             server_args.extend(["--model-draft", self.model_draft])
+        if self.model_draft_hf_repo:
+            server_args.extend(["--hf-repo-draft", self.model_draft_hf_repo])
         if self.model_hf_repo:
             server_args.extend(["--hf-repo", self.model_hf_repo])
         if self.model_hf_file:
@@ -192,6 +210,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.kv_unified:
             server_args.append("--kv-unified")
+        if self.swa_full:
+            server_args.append("--swa-full")
         if self.server_slots:
             server_args.append("--slots")
         else:
@@ -210,6 +230,8 @@ class ServerProcess:
             server_args.extend(["-ctk", self.ctk])
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
+        if self.ctkd:
+            server_args.extend(["-ctkd", self.ctkd])
         if self.fa is not None:
             server_args.extend(["-fa", self.fa])
         if self.n_predict:
@@ -235,6 +257,13 @@ class ServerProcess:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
+        if self.spec_draft_n_ubatch:
+            server_args.extend(["--spec-draft-n-ubatch", self.spec_draft_n_ubatch])
+        if self.spec_synth_len is not None:
+            server_args.extend(["--spec-synth-len", self.spec_synth_len])
+        if self.spec_synth_rates is not None:
+            rates = ",".join(str(rate) for rate in self.spec_synth_rates)
+            server_args.extend(["--spec-synth-rates", rates])
         if self.no_ui:
             server_args.append("--no-ui")
         if self.no_models_autoload:
@@ -253,22 +282,33 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.no_mmproj:
+            server_args.append("--no-mmproj")
         if self.media_path:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
         if self.cache_ram is not None:
             server_args.extend(["--cache-ram", self.cache_ram])
+        if self.override_kv:
+            server_args.extend(["--override-kv", self.override_kv])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
+        if self.server_tools_runtime:
+            server_args.extend(["--tools-runtime", self.server_tools_runtime])
+        if self.mcp_servers_config:
+            server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
+        if self.mcp_servers_json:
+            server_args.extend(["--mcp-servers-json", self.mcp_servers_json])
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
             env["AIP_MODE"] = "PREDICTION"
+            env["AIP_HTTP_PORT"] = str(self.server_port)
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -297,6 +337,7 @@ class ServerProcess:
 
         # wait for server to start
         start_time = time.time()
+        last_print_time = start_time
         while time.time() - start_time < timeout_seconds:
             try:
                 response = self.make_request("GET", "/health", headers={
@@ -311,8 +352,10 @@ class ServerProcess:
             if self.process.poll() is not None:
                 raise RuntimeError(f"Server process died with return code {self.process.returncode}")
 
-            print(f"Waiting for server to start...")
-            time.sleep(0.5)
+            if time.time() - last_print_time >= 1.0:
+                print(f"Waiting for server to start...")
+                last_print_time = time.time()
+            time.sleep(0.01)
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
 
     def stop(self) -> None:
@@ -336,6 +379,11 @@ class ServerProcess:
         if hasattr(self, '_log') and self._log != sys.stdout:
             self._log.close()
 
+    def make_url(self, path: str, host: str | None = None) -> str:
+        if host is None:
+            host = self.server_host.split(",")[0].strip()
+        return f"http://{host}:{self.server_port}{path}"
+
     def make_request(
         self,
         method: str,
@@ -343,8 +391,9 @@ class ServerProcess:
         data: dict | Any | None = None,
         headers: dict | None = None,
         timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+        host: str | None = None,
     ) -> ServerResponse:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        url = self.make_url(path, host)
         parse_body = False
         if method == "GET":
             response = requests.get(url, headers=headers, timeout=timeout)
@@ -378,8 +427,9 @@ class ServerProcess:
         path: str,
         data: dict | None = None,
         headers: dict | None = None,
+        host: str | None = None,
     ) -> Iterator[dict]:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        url = self.make_url(path, host)
         if method == "POST":
             response = requests.post(url, headers=headers, json=data, stream=True)
         else:
@@ -594,6 +644,37 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def tinylaya() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        local_model = os.environ.get("TINYLAYA_LOCAL_MODEL")
+        server.model_hf_file = None
+        if local_model:
+            server.model_file = local_model
+            server.model_hf_repo = None
+        else:
+            server.model_hf_repo = "ggml-org/tinylaya-for-testing-gguf"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_ubatch = 512
+        server.n_slots = 2
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinyopenjev() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinyopenjev-for-testing-gguf:Q8_0"
+        server.n_ctx = 4096
+        server.n_batch = 512
+        server.n_slots = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
     def tinygemma3() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
@@ -602,7 +683,7 @@ class ServerPreset:
         server.model_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"
         server.model_alias = "tinygemma3"
         server.n_ctx = 1024
-        server.n_batch = 32
+        server.n_batch = 512
         server.n_slots = 2
         server.n_predict = 4
         server.seed = 42

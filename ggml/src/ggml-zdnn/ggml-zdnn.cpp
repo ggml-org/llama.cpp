@@ -3,7 +3,9 @@
 #include "ggml-backend-impl.h"
 
 #include "ggml-zdnn/common.hpp"
+#include "ggml-zdnn/fattn.hpp"
 #include "ggml-zdnn/mmf.hpp"
+#include "ggml-zdnn/mmq.hpp"
 #include "ggml-zdnn/utils.hpp"
 #include "ggml.h"
 
@@ -13,15 +15,17 @@
 #include <unistd.h>
 
 static void ggml_zdnn_compute_forward_mul_mat(
-    const ggml_backend_zdnn_context * ctx,
+    ggml_backend_zdnn_context * ctx,
           ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];  // weights
     const ggml_tensor * src1 = dst->src[1];  // inputs
 
-    // TODO: implement support for quantized types
-    // we currently only support f32, f16, and bf16
-    ggml_zdnn_mul_mat_f(ctx, src0, src1, dst);
+    if (ggml_is_quantized(src0->type)) {
+        ggml_zdnn_mul_mat_q(ctx, src0, src1, dst);
+    } else {
+        ggml_zdnn_mul_mat_f(ctx, src0, src1, dst);
+    }
 }
 
 static bool ggml_zdnn_compute_forward(
@@ -32,6 +36,11 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_MUL_MAT:
             {
                 ggml_zdnn_compute_forward_mul_mat(ctx, dst);
+            } break;
+
+        case GGML_OP_FLASH_ATTN_EXT:
+            {
+                ggml_zdnn_flash_attn_ext(ctx, dst);
             } break;
 
         default:
@@ -98,7 +107,7 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
                 if (!ggml_is_matrix(weights) || !ggml_is_matrix(inputs) ||
                     !ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs) ||
-                    weights->view_src != nullptr || inputs->view_src != nullptr ||
+                    weights->view_src != nullptr ||
                     ne0 > max_batch || ne1 > max_batch || ne10 > max_batch) {
                         return false;
                 }
@@ -107,11 +116,18 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_BF16:
-                        return true;
+                        // the inputs ztensor is used, and views have none
+                        return inputs->view_src == nullptr;
+                    case GGML_TYPE_Q8_0:
+                        // the inputs are quantized from their data, so views work as well
+                        return ctx_dev->has_parmblkformat_1 && inputs->type == GGML_TYPE_F32;
                     default:
                         return false;
                 }
             } break;
+
+        case GGML_OP_FLASH_ATTN_EXT:
+            return ggml_zdnn_supports_flash_attn_ext(ctx_dev, op);
 
         default:
             return false;
@@ -186,6 +202,7 @@ static ggml_backend_zdnn_context * ggml_zdnn_init(ggml_backend_dev_t dev) {
     GGML_LOG_INFO("%s: NNPA_PARMBLKFORMAT_0 = %s\n", __func__, ctx_dev->has_parmblkformat_0 ? "true" : "false");
     GGML_LOG_INFO("%s: NNPA_PARMBLKFORMAT_1 = %s\n", __func__, ctx_dev->has_parmblkformat_1 ? "true" : "false");
 
+    ctx->n_threads = GGML_DEFAULT_N_THREADS;
     ctx->gf = nullptr;
 
     return ctx;
@@ -193,6 +210,11 @@ static ggml_backend_zdnn_context * ggml_zdnn_init(ggml_backend_dev_t dev) {
 
 static void ggml_zdnn_free(ggml_backend_zdnn_context * ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
+
+    for (const auto & it : ctx->zero_bias) {
+        ZDNN_CHECK(zdnn_free_ztensor_buffer(&it.second->ztensor));
+    }
+
     delete ctx;
 }
 
@@ -211,6 +233,10 @@ static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
         if (buf->ztensor.buffer_size > 0) ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
     }
 
+    if (ctx->owned) {
+        ggml_aligned_free(ctx->all_data, ctx->all_size);
+    }
+
     delete ctx;
 }
 
@@ -222,6 +248,11 @@ static void * ggml_backend_zdnn_buffer_get_base(ggml_backend_buffer_t buffer) {
 static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     if (tensor->view_src != NULL) {
         assert(tensor->view_src->buffer->buft == buffer->buft);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    // reject empty tensors to avoid zDNN crash
+    if (ggml_is_empty(tensor)) {
         return GGML_STATUS_SUCCESS;
     }
 
@@ -284,11 +315,33 @@ static void ggml_backend_zdnn_buffer_memset_tensor(ggml_backend_buffer_t buffer,
 static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     memcpy((char *)tensor->data + offset, data, size);
 
+    // views share the ztensor of their source, which is now stale, and empty tensors have none
+    if (tensor->view_src != nullptr) {
+        ggml_backend_zdnn_buffer * src_extra = (ggml_backend_zdnn_buffer *)tensor->view_src->extra;
+        if (src_extra != nullptr && src_extra->ztensor.is_transformed) {
+            zdnn_reset_ztensor(&src_extra->ztensor);
+        }
+        return;
+    }
+
     ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
+    if (extra == nullptr) {
+        return;
+    }
+
+    if (ggml_is_quantized(tensor->type)) {
+        GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor));
+        ggml_zdnn_load_tensor_q(extra, tensor);
+        return;
+    }
 
     // Fixes the LLAMA_SET_ROWS bug
     // see: https://github.com/ggml-org/llama.cpp/issues/15414
-    if (tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE && extra->ztensor.is_transformed) zdnn_reset_ztensor(&extra->ztensor);
+    // only weights are transformed here, others on first use, as not every op reads the ztensor and some data (masks) is not finite
+    if (tensor->buffer->usage != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        zdnn_reset_ztensor(&extra->ztensor);
+        return;
+    }
     if (extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
 
     GGML_UNUSED(buffer);
@@ -306,6 +359,28 @@ static void ggml_backend_zdnn_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     memset(ctx->all_data, value, ctx->all_size);
 }
 
+static void ggml_backend_zdnn_buffer_reset(ggml_backend_buffer_t buffer) {
+    ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
+
+    for (const auto & buf_ptr : ctx->buffers) {
+        ggml_backend_zdnn_buffer * buf = buf_ptr.get();
+
+        if (buf->extra != nullptr) {
+            free(buf->extra->data);
+        }
+
+        if (buf->ztensor.buffer_size > 0) {
+            ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
+        }
+    }
+
+    if (ctx->buffers.size() > 1) {
+        ctx->buffers.resize(1);
+    }
+
+    ctx->n_buffers = 1;
+}
+
 static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .free_buffer   = */ ggml_backend_zdnn_buffer_free_buffer,
     /* .get_base      = */ ggml_backend_zdnn_buffer_get_base,
@@ -317,7 +392,7 @@ static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .get_tensor_2d = */ NULL,
     /* .cpy_tensor    = */ NULL,
     /* .clear         = */ ggml_backend_zdnn_buffer_clear,
-    /* .reset         = */ NULL,
+    /* .reset         = */ ggml_backend_zdnn_buffer_reset,
 };
 
 //
@@ -383,12 +458,14 @@ static bool ggml_backend_zdnn_buffer_type_is_host(ggml_backend_buffer_type_t buf
 ggml_backend_buffer_type_t ggml_backend_zdnn_buffer_type(void) {
     static ggml_backend_buffer_type ggml_backend_buffer_type_zdnn = {
         /* .iface   = */ {
-            /* .get_name       = */ ggml_backend_zdnn_buffer_type_get_name,
-            /* .alloc_buffer   = */ ggml_backend_zdnn_buffer_type_alloc_buffer,
-            /* .get_alignment  = */ ggml_backend_zdnn_buffer_type_get_alignment,
-            /* .get_max_size   = */ NULL,
-            /* .get_alloc_size = */ NULL,  // defaults to ggml_nbytes
-            /* .is_host        = */ ggml_backend_zdnn_buffer_type_is_host,
+            /* .get_name            = */ ggml_backend_zdnn_buffer_type_get_name,
+            /* .alloc_buffer        = */ ggml_backend_zdnn_buffer_type_alloc_buffer,
+            /* .alloc_buffer_n      = */ NULL,
+            /* .get_alignment       = */ ggml_backend_zdnn_buffer_type_get_alignment,
+            /* .get_max_size        = */ NULL,
+            /* .get_alloc_size      = */ NULL,  // defaults to ggml_nbytes
+            /* .get_alloc_size_n    = */ NULL,
+            /* .is_host             = */ ggml_backend_zdnn_buffer_type_is_host,
         },
         /* .device  = */ &g_ggml_backend_zdnn_device,
         /* .context = */ NULL,
@@ -438,15 +515,13 @@ static ggml_backend_i ggml_backend_zdnn_i = {
 };
 
 static ggml_guid_t ggml_backend_zdnn_guid(void) {
-    static const char * guid_str = "IBM-ZDNN-ACCELER";
-    return reinterpret_cast<ggml_guid_t>((void *)guid_str);
+    static char guid_str[] = "IBM-ZDNN-ACCELER";
+    return reinterpret_cast<ggml_guid_t>(guid_str);
 }
 
 bool ggml_backend_is_zdnn(ggml_backend_t backend) {
     return backend != NULL &&
            ggml_guid_matches(backend->guid, ggml_backend_zdnn_guid());
-
-    GGML_UNUSED(backend);
 }
 
 //
@@ -483,11 +558,12 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
     props->description = ggml_backend_zdnn_device_get_description(dev);
     props->type        = ggml_backend_zdnn_device_get_type(dev);
     ggml_backend_zdnn_device_get_memory(dev, &props->memory_free, &props->memory_total);
-    props->caps = (ggml_backend_dev_caps) {
+    props->caps = {
         /* .async                = */ false,
         /* .host_buffer          = */ false,
         /* .buffer_from_host_ptr = */ false,
-        /* .events               = */ false
+        /* .events               = */ false,
+        /* .mmap_support         = */ true,
     };
 }
 
@@ -499,7 +575,7 @@ static ggml_backend_t ggml_backend_zdnn_device_init(ggml_backend_dev_t dev, cons
     }
 
     ggml_backend_t backend = (ggml_backend *)malloc(sizeof(ggml_backend));
-    *backend = (ggml_backend) {
+    *backend = {
         /* .guid       = */ ggml_backend_zdnn_guid(),
         /* .iface      = */ ggml_backend_zdnn_i,
         /* .device     = */ dev,
@@ -589,9 +665,19 @@ static ggml_backend_feature * ggml_backend_zdnn_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+static void ggml_backend_zdnn_set_n_threads(ggml_backend_t backend, int n_threads) {
+    GGML_ASSERT(ggml_backend_is_zdnn(backend));
+
+    ggml_backend_zdnn_context * ctx = (ggml_backend_zdnn_context *)backend->context;
+    ctx->n_threads = n_threads;
+}
+
 static void * ggml_backend_zdnn_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *) ggml_backend_zdnn_get_features;
+    }
+    if (strcmp(name, "ggml_backend_set_n_threads") == 0) {
+        return (void *) ggml_backend_zdnn_set_n_threads;
     }
 
     return NULL;
@@ -618,13 +704,13 @@ ggml_backend_reg_t ggml_backend_zdnn_reg(void) {
     atexit(ggml_zdnn_cleanup);
 
     {
-        g_ggml_backend_zdnn_reg = (ggml_backend_reg) {
+        g_ggml_backend_zdnn_reg = {
             /* .api_version = */ GGML_ZDNN_VERSION,
             /* .iface       = */ ggml_backend_zdnn_reg_i,
             /* .context     = */ NULL
         };
 
-        g_ggml_backend_zdnn_device = (ggml_backend_device) {
+        g_ggml_backend_zdnn_device = {
             /* .iface       = */ ggml_backend_zdnn_device_i,
             /* .reg         = */ &g_ggml_backend_zdnn_reg,
             /* .context     = */ &g_ggml_ctx_dev_main

@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { Pin } from '@lucide/svelte';
-	import { buildConversationTree } from '$lib/stores/conversations.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import SidebarNavigationSearchResults from './SidebarNavigationSearchResults.svelte';
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
+	import { Pin } from '@lucide/svelte';
+	import { buildConversationTree } from '$lib/utils';
 
 	interface Props {
 		class: string;
@@ -34,31 +34,31 @@
 	}
 
 	let {
+		allSelectedArePinned,
+		allVisibleSelected,
 		class: className,
-		filteredConversations,
 		currentChatId,
+		filteredConversations,
 		isSearchModeActive,
-		searchQuery,
 		isSelectionMode = false,
-		selectedIds = new Set<string>(),
-		onSelect,
-		onEdit,
+		onBulkDelete,
+		onBulkExport,
+		onBulkPinToggle,
+		onCloseSelection,
 		onDelete,
+		onEdit,
+		onEnterSelectionMode,
+		onRowMouseDown,
+		onSelect,
+		onSelectAllToggle,
+		onSelectionClick,
 		onStop,
 		onToggleSelect,
-		onEnterSelectionMode,
-		onSelectionClick,
-		onRowMouseDown,
-		visibleCount,
-		allVisibleSelected,
-		someVisibleSelected,
-		allSelectedArePinned,
 		pinStateIsMixed,
-		onSelectAllToggle,
-		onBulkPinToggle,
-		onBulkExport,
-		onBulkDelete,
-		onCloseSelection
+		searchQuery,
+		selectedIds = new Set<string>(),
+		someVisibleSelected,
+		visibleCount
 	}: Props = $props();
 
 	let conversationTree = $derived(buildConversationTree(filteredConversations));
@@ -80,19 +80,19 @@
 	{#if isSearchModeActive}
 		<SidebarNavigationSearchResults
 			class={className}
-			{searchQuery}
-			{filteredConversations}
 			{currentChatId}
-			{onSelect}
-			{onEdit}
-			{onDelete}
-			{onStop}
+			{filteredConversations}
 			{isSelectionMode}
-			{selectedIds}
-			{onToggleSelect}
+			{onDelete}
+			{onEdit}
 			{onEnterSelectionMode}
-			{onSelectionClick}
 			{onRowMouseDown}
+			{onSelect}
+			{onSelectionClick}
+			{onStop}
+			{onToggleSelect}
+			{searchQuery}
+			{selectedIds}
 		/>
 	{:else}
 		{#if pinnedConversations.length > 0}
@@ -111,25 +111,25 @@
 					<li class="group/item relative mb-1 p-0">
 						<SidebarNavigationConversationItem
 							conversation={{
-								id: conversation.id,
-								name: conversation.name,
-								lastModified: conversation.lastModified,
 								currNode: conversation.currNode,
 								forkedFromConversationId: conversation.forkedFromConversationId,
+								id: conversation.id,
+								lastModified: conversation.lastModified,
+								name: conversation.name,
 								pinned: conversation.pinned
 							}}
 							{depth}
 							isActive={currentChatId === conversation.id}
-							{isSelectionMode}
 							isSelected={selectedIds.has(conversation.id)}
-							{onSelect}
-							{onEdit}
+							{isSelectionMode}
 							{onDelete}
+							{onEdit}
+							{onEnterSelectionMode}
+							{onRowMouseDown}
+							{onSelect}
+							{onSelectionClick}
 							{onStop}
 							{onToggleSelect}
-							{onEnterSelectionMode}
-							{onSelectionClick}
-							{onRowMouseDown}
 						/>
 					</li>
 				{/each}
@@ -151,25 +151,25 @@
 						<li class="group/item relative mb-1 p-0">
 							<SidebarNavigationConversationItem
 								conversation={{
-									id: conversation.id,
-									name: conversation.name,
-									lastModified: conversation.lastModified,
 									currNode: conversation.currNode,
 									forkedFromConversationId: conversation.forkedFromConversationId,
+									id: conversation.id,
+									lastModified: conversation.lastModified,
+									name: conversation.name,
 									pinned: conversation.pinned
 								}}
 								{depth}
 								isActive={currentChatId === conversation.id}
-								{isSelectionMode}
 								isSelected={selectedIds.has(conversation.id)}
-								{onSelect}
-								{onEdit}
+								{isSelectionMode}
 								{onDelete}
+								{onEdit}
+								{onEnterSelectionMode}
+								{onRowMouseDown}
+								{onSelect}
+								{onSelectionClick}
 								{onStop}
 								{onToggleSelect}
-								{onEnterSelectionMode}
-								{onSelectionClick}
-								{onRowMouseDown}
 							/>
 						</li>
 					{/each}
@@ -187,18 +187,18 @@
 
 		{#if isSelectionMode}
 			<SidebarNavigationSelectionBar
-				class="sticky top-0 z-10 m-2 mt-0"
-				selectedCount={selectedIds.size}
-				{visibleCount}
 				{allVisibleSelected}
-				{someVisibleSelected}
-				someSelectedPinned={allSelectedArePinned}
-				{pinStateIsMixed}
-				{onSelectAllToggle}
-				{onBulkPinToggle}
-				{onBulkExport}
+				class="sticky top-0 z-10 m-2 mt-0"
 				{onBulkDelete}
+				{onBulkExport}
+				{onBulkPinToggle}
 				onClose={onCloseSelection}
+				{onSelectAllToggle}
+				{pinStateIsMixed}
+				selectedCount={selectedIds.size}
+				someSelectedPinned={allSelectedArePinned}
+				{someVisibleSelected}
+				{visibleCount}
 			/>
 		{/if}
 	{/if}

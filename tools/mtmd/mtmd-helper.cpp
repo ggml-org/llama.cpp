@@ -9,7 +9,10 @@
 
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-helper-common.h"
 #include "llama.h"
+
+#include "hash/hash.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -39,55 +42,16 @@
 #ifdef MTMD_VIDEO
 #include "sheredom/subprocess.h"
 #include <thread>
+#ifndef _WIN32
+#include <csignal>
+#include <fcntl.h>
+#include <pthread.h>
+#endif
 #endif
 
 //
 // internal logging functions
 //
-
-struct mtmd_helper_logger {
-    ggml_log_callback default_callback = [](ggml_log_level level, const char * text, void * user_data) {
-        (void) level;
-        (void) user_data;
-        fputs(text, stderr);
-        fflush(stderr);
-    };
-
-    ggml_log_callback log_callback = default_callback;
-    void * log_callback_user_data;
-
-    void log_v(enum ggml_log_level level, const char * format, va_list args) {
-        if (format == NULL) {
-            return;
-        }
-        va_list args_copy;
-        va_copy(args_copy, args);
-        char buffer[128];
-        int len = vsnprintf(buffer, 128, format, args);
-        if (len < 128) {
-            log_callback(level, buffer, log_callback_user_data);
-        } else {
-            char * buffer2 = (char *) calloc(len + 1, sizeof(char));
-            vsnprintf(buffer2, len + 1, format, args_copy);
-            buffer2[len] = 0;
-            log_callback(level, buffer2, log_callback_user_data);
-            free(buffer2);
-        }
-        va_end(args_copy);
-    }
-
-    void log(enum ggml_log_level level, const char * format, ...) {
-        va_list args;
-        va_start(args, format);
-        log_v(level, format, args);
-        va_end(args);
-    }
-} g_logger;
-
-#define LOG_DBG(...) g_logger.log(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
-#define LOG_INF(...) g_logger.log(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
-#define LOG_WRN(...) g_logger.log(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
-#define LOG_ERR(...) g_logger.log(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
 
 void mtmd_helper_log_set(ggml_log_callback log_callback, void * user_data) {
     if (log_callback == nullptr) {
@@ -126,117 +90,6 @@ void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * chunks, llama_p
         out_pos[i] = mtmd_image_tokens_get_decoder_pos(chunks, pos_0, i);
     }
 }
-
-// helper struct to make working with embd batch easier
-// note: this will be removed after llama_batch_ext refactoring
-struct decode_embd_batch {
-    int n_pos_per_embd;
-    int n_mmproj_embd;
-    std::vector<llama_pos>      pos;
-    std::vector<llama_pos>      pos_view; // used by mrope
-    std::vector<int32_t>        n_seq_id;
-    std::vector<llama_seq_id>   seq_id_0;
-    std::vector<llama_seq_id *> seq_ids;
-    std::vector<int8_t>         logits;
-    llama_batch batch;
-    decode_embd_batch(float * embd, int32_t n_tokens, int n_pos_per_embd, int n_mmproj_embd) : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd) {
-        GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_mmproj_embd > 0);
-        pos     .resize(n_tokens * n_pos_per_embd);
-        n_seq_id.resize(n_tokens);
-        seq_ids .resize(n_tokens + 1);
-        logits  .resize(n_tokens);
-        seq_id_0.resize(1);
-        seq_ids [n_tokens] = nullptr;
-        batch = {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ nullptr,
-            /*embd           =*/ embd,
-            /*pos            =*/ pos.data(),
-            /*n_seq_id       =*/ n_seq_id.data(),
-            /*seq_id         =*/ seq_ids.data(),
-            /*logits         =*/ logits.data(),
-        };
-    }
-
-    void set_position_normal(llama_pos pos_0, llama_seq_id seq_id) {
-        seq_id_0[0] = seq_id;
-        for (int i = 0; i < batch.n_tokens; i++) {
-            batch.pos     [i] = pos_0 + i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
-        }
-    }
-
-    // M-RoPE for image
-    void set_position_mrope_2d(const std::vector<mtmd_decoder_pos> & rel_pos, llama_seq_id seq_id) {
-        GGML_ASSERT(n_pos_per_embd == 4);
-        GGML_ASSERT(!rel_pos.empty() && (int32_t)rel_pos.size() == batch.n_tokens);
-        seq_id_0[0] = seq_id;
-        for (int32_t i = 0; i < batch.n_tokens; i++) {
-            pos[i                     ] = rel_pos[i].t;
-            pos[i + batch.n_tokens    ] = rel_pos[i].y;
-            pos[i + batch.n_tokens * 2] = rel_pos[i].x;
-            pos[i + batch.n_tokens * 3] = rel_pos[i].z;
-        }
-        for (int i = 0; i < batch.n_tokens; i++) {
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
-        }
-    }
-
-    // M-RoPE for audio
-    void set_position_mrope_1d(llama_pos pos_0, llama_seq_id seq_id) {
-        GGML_ASSERT(n_pos_per_embd == 4);
-        seq_id_0[0] = seq_id;
-        for (int i = 0; i < batch.n_tokens; i++) {
-            pos[i                     ] = pos_0 + i;
-            pos[i + batch.n_tokens    ] = pos_0 + i;
-            pos[i + batch.n_tokens * 2] = pos_0 + i;
-            pos[i + batch.n_tokens * 3] = pos_0 + i;
-        }
-        for (int i = 0; i < batch.n_tokens; i++) {
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
-        }
-    }
-
-    llama_batch get_view(int offset, int n_tokens) {
-        GGML_ASSERT(offset >= 0 && n_tokens > 0 && offset + n_tokens <= batch.n_tokens);
-        llama_pos * pos_ptr;
-        pos_view.clear();
-        pos_view.reserve(n_tokens * n_pos_per_embd);
-        if (n_pos_per_embd > 1) {
-            // mrope
-            // for example, with layout of src: 1234...1234...1234...1234...
-            //       offset 2 will give us dst: 34...34...34...34...
-            for (int i = 0; i < n_pos_per_embd; i++) {
-                // assume n_tokens is less than or equal to batch.n_tokens
-                // batch.n_tokens is number of **total** tokens
-                // n_tokens is number of viewed token
-                size_t src_idx = i * batch.n_tokens + offset;
-                pos_view.insert(pos_view.end(),
-                    pos.data() + src_idx,
-                    pos.data() + src_idx + n_tokens);
-            }
-            pos_ptr = pos_view.data();
-        } else {
-            // normal
-            pos_ptr = pos.data() + offset;
-        }
-        return {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ nullptr,
-            /*embd           =*/ batch.embd     + offset * n_mmproj_embd,
-            /*pos            =*/ pos_ptr,
-            /*n_seq_id       =*/ batch.n_seq_id + offset,
-            /*seq_id         =*/ batch.seq_id   + offset,
-            /*logits         =*/ batch.logits   + offset,
-        };
-    }
-};
 
 // Helper class to set non-causal attention via RAII
 class scope_non_causal {
@@ -316,19 +169,19 @@ int32_t mtmd_helper_decode_image_chunk(
     while (i_batch < n_img_batches) { // split into batches
         int pos_offset = i_batch*n_batch;
         int n_tokens_batch = std::min(n_batch, n_tokens - pos_offset);
-        llama_batch batch_embd_view = batch_embd.get_view(pos_offset, n_tokens_batch);
 
         LOG_INF("decoding %s batch %d/%d, n_tokens_batch = %d\n", name, i_batch+1, n_img_batches, n_tokens_batch);
 
         int64_t t1 = ggml_time_ms();
-        int32_t ret = llama_decode(lctx, batch_embd_view);
+        int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch_embd.render(lctx, pos_offset, n_tokens_batch));
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             return ret;
         }
 
         if (callback != nullptr) {
-            ret = callback(batch_embd_view, user_data);
+            const mtmd_helper_embd_batch view = batch_embd.get_view(pos_offset, n_tokens_batch);
+            ret = callback(&view, user_data);
             if (ret != 0) {
                 LOG_ERR("post-decode callback failed\n");
                 return ret;
@@ -356,37 +209,35 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         llama_pos * new_n_past) {
     GGML_ASSERT(n_batch > 0);
     int32_t ret;
-    llama_batch text_batch = llama_batch_init(n_batch, 0, 1);
     auto chunk_type = mtmd_input_chunk_get_type(chunk);
 
     if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
         // LOG_INF("decoding text chunk, n_tokens = %zu\n", n_tokens);
+        llama_batch_ext_ptr text_batch(llama_batch_ext_init(lctx));
         size_t i = 0;
         while (i < n_tokens) { // split into batches
-            text_batch.n_tokens = 0; // clear the batch
-            for (; i < n_tokens && text_batch.n_tokens < n_batch; i++) {
-                int32_t j = text_batch.n_tokens;
-                text_batch.token   [j]    = tokens[i];
-                text_batch.pos     [j]    = n_past++;
-                text_batch.n_seq_id[j]    = 1;
-                text_batch.seq_id  [j][0] = seq_id;
-                text_batch.logits  [j]    = false;
-
-                text_batch.n_tokens++;
+            llama_batch_ext_clear(text_batch.get());
+            int32_t n_added = 0;
+            int32_t idx     = -1;
+            for (; i < n_tokens && n_added < n_batch; i++) {
+                idx = llama_batch_ext_add_token(text_batch.get(), seq_id, tokens[i]);
+                GGML_ASSERT(idx >= 0);
+                llama_pos pos = n_past++;
+                llama_batch_ext_set_pos(text_batch.get(), idx, &pos);
+                n_added++;
             }
             bool is_last_token = (i == n_tokens);
             if (logits_last && is_last_token) {
-                text_batch.logits[text_batch.n_tokens - 1] = true;
+                llama_batch_ext_set_output_logits(text_batch.get(), idx, true);
             }
-            ret = llama_decode(lctx, text_batch);
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, text_batch.get());
             if (ret != 0) {
                 LOG_ERR("failed to decode text\n");
-                llama_batch_free(text_batch);
                 return ret;
             }
-            *new_n_past += text_batch.n_tokens;
+            *new_n_past += n_added;
         }
 
     } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE || chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
@@ -398,7 +249,6 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         ret = mtmd_encode_chunk(ctx, chunk);
         if (ret != 0) {
             LOG_ERR("failed to encode %s slice\n", name);
-            llama_batch_free(text_batch);
             return ret;
         }
 
@@ -408,14 +258,12 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
-            llama_batch_free(text_batch);
             return ret;
         }
     } else {
         GGML_ABORT("chunk type not supported");
     }
 
-    llama_batch_free(text_batch);
     return 0;
 }
 
@@ -510,25 +358,28 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
+static bool is_webp_file(const unsigned char * buf, size_t len) {
+    // WEBP ref: https://developers.google.com/speed/webp/docs/riff_container
+    return len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0;
 }
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
+#ifdef MTMD_VIDEO
+static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
+                                             const mtmd_helper_video_init_params & params);
+static void mtmd_helper_video_set_id(mtmd_helper_video * vctx, const std::string & id);
+#endif
+
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(const mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder,
+                                                            mtmd_helper_init_opt opt) {
     // calculate the hash if needed
     std::string id;
     mtmd_bitmap * result = nullptr;
 
+    GGML_UNUSED(opt); // only used by video code paths
+
     if (!placeholder) {
-        id = fnv_hash(buf, len);
+        // use sha256 to prevent cache poisoning
+        id = hash_sha256_hex(buf, len);
     }
 
     if (audio_helpers::is_audio_file((const char *)buf, len)) {
@@ -560,15 +411,28 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
         // otherwise, fallthrough to video decoding (if supported)
     }
 
+#ifdef MTMD_VIDEO
+    // stb_image does not support webp; decode it with ffmpeg as a single frame
+    if (!result && is_webp_file(buf, len)) {
+        result = decode_webp_with_ffmpeg(ctx, buf, len, placeholder, opt.video_params);
+        if (!result) {
+            LOG_ERR("%s: failed to decode webp buffer\n", __func__);
+            return {nullptr, nullptr};
+        }
+        mtmd_bitmap_set_id(result, id.empty() ? nullptr : id.c_str());
+        return {result, nullptr};
+    }
+#endif
+
     // last try: load as video
 #ifdef MTMD_VIDEO
     if (!result) {
-        auto params = mtmd_helper_video_init_params_default();
-        auto video_ctx = mtmd_helper_video_init_from_buf(ctx, buf, len, params);
+        auto video_ctx = mtmd_helper_video_init_from_buf(ctx, buf, len, opt.video_params);
         if (!video_ctx) {
             LOG_ERR("%s: failed to decode buffer as either image/audio/video\n", __func__);
             return {nullptr, nullptr};
         }
+        mtmd_helper_video_set_id(video_ctx, id); // propagate the hash to the frames
         result = mtmd_bitmap_init_lazy(ctx,
             id.empty() ? nullptr : id.c_str(),
             video_ctx,
@@ -592,7 +456,8 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
     return {nullptr, nullptr};
 }
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(const mtmd_context * ctx, const char * fname, bool placeholder,
+                                                             mtmd_helper_init_opt opt) {
 #ifdef _WIN32
     int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
     if (!wlen) {
@@ -633,13 +498,14 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx,
         return {nullptr, nullptr};
     }
 
-    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder);
+    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder, opt);
 }
 
-bool mtmd_helper_support_video(mtmd_context * ctx) {
+bool mtmd_helper_support_video(const mtmd_context * ctx) {
 #ifdef MTMD_VIDEO
     return mtmd_support_vision(ctx);
 #else
+    GGML_UNUSED(ctx);
     return false;
 #endif
 }
@@ -650,19 +516,31 @@ bool mtmd_helper_support_video(mtmd_context * ctx) {
 
 #ifdef MTMD_VIDEO
 
+// MSVC deprecates strdup(), use a std::string version directly
+static char * mtmd_strdup(const std::string & s) {
+    size_t n = s.size() + 1;
+    char * p = (char *) malloc(n);
+    if (p) {
+        memcpy(p, s.c_str(), n);
+    }
+    return p;
+}
+
 struct mtmd_helper_video {
-    mtmd_context * mctx;
+    const mtmd_context * mctx;
     std::string path;
     std::vector<uint8_t> input_buf; // non-empty when initialized from buffer
     std::string ffmpeg_bin;
     std::string ffprobe_bin;
     float fps_target = 0.0f;
     mtmd_helper_video_info info = {};
+    std::string id; // hash of the input video
 
     // RAII wrapper for managing subprocess
     struct subprocess_handle {
         struct subprocess_s proc = {};
-        bool alive = false;
+        bool created = false; // process exists and must be cleaned up
+        bool alive   = false; // process can still give us data
         std::thread feeder;
 
         subprocess_handle() = default;
@@ -671,18 +549,27 @@ struct mtmd_helper_video {
         ~subprocess_handle() { stop(); }
 
         void stop() {
-            if (alive) {
-                subprocess_terminate(&proc);
+            // note: alive becomes false on stdout EOF, but the process still needs cleanup
+            if (!created) {
+                return;
             }
+            subprocess_terminate(&proc);
+#ifdef _WIN32
+            // no SIGPIPE on windows: a blocked feeder only gets a broken pipe once we close our read end of the child stdin
+            if (proc.hStdInput) {
+                CloseHandle(proc.hStdInput);
+                proc.hStdInput = nullptr;
+            }
+#endif
             // join before destroy: feeder holds a FILE* from subprocess_stdin;
             // subprocess_destroy closes it, so the thread must finish first
             if (feeder.joinable()) {
                 feeder.join();
             }
-            if (alive) {
-                subprocess_destroy(&proc);
-                alive = false;
-            }
+            subprocess_join(&proc, nullptr); // reap the child, or else it stays a zombie
+            subprocess_destroy(&proc);
+            created = false;
+            alive   = false;
         }
 
         FILE * stdout_pipe() {
@@ -692,10 +579,21 @@ struct mtmd_helper_video {
         // buf is tied to lifetime of mtmd_helper_video, so it's guaranteed to outlive the feeder thread
         void start_feeder(const std::vector<uint8_t> & buf) {
             feeder = std::thread([this, &buf]() {
+#ifndef _WIN32
+                // ffmpeg can exit before it reads all the input, for example when ffprobe already got the metadata.
+                // the write below must then fail with EPIPE, instead of killing the process with SIGPIPE
+                sigset_t sigpipe_set;
+                sigemptyset(&sigpipe_set);
+                sigaddset(&sigpipe_set, SIGPIPE);
+                pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux sends the signal to the writing thread
+#endif
                 FILE * f = subprocess_stdin(&proc);
                 if (!f) {
                     return;
                 }
+#ifdef F_SETNOSIGPIPE
+                fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macos/bsd send it to the process, so turn it off per fd
+#endif
                 fwrite(buf.data(), 1, buf.size(), f);
                 fclose(f);
                 proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
@@ -741,7 +639,8 @@ struct mtmd_helper_video {
             LOG_ERR("%s: failed to launch ffprobe\n", __func__);
             return false;
         }
-        probe_sp.alive = true;
+        probe_sp.created = true;
+        probe_sp.alive   = true;
 
         if (is_buf_input()) {
             probe_sp.start_feeder(input_buf);
@@ -813,6 +712,11 @@ struct mtmd_helper_video {
         }
 
         cmd.push_back("-nostdin");
+        if (is_buf_input()) {
+            // remove the 64KB read-ahead limit of cache:, or else ffmpeg cannot reach a moov atom at end of file
+            cmd.push_back("-read_ahead_limit");
+            cmd.push_back("-1");
+        }
         cmd.push_back("-i");
         // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
         // backwards for container headers (e.g. MP4 moov atom at end of file)
@@ -851,7 +755,8 @@ struct mtmd_helper_video {
             subprocess_option_search_user_path | subprocess_option_inherit_environment,
             &sp.proc);
 
-        sp.alive = (ret == 0);
+        sp.created = (ret == 0);
+        sp.alive   = (ret == 0);
         LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
 
         if (sp.alive && is_buf_input()) {
@@ -888,8 +793,15 @@ struct mtmd_helper_video {
         }
 
         LOG_DBG("%s: frame %d read OK\n", __func__, current_frame);
+        mtmd_bitmap * frame = mtmd_bitmap_init(info.width, info.height, frame_buf.data());
+        mtmd_bitmap_set_mergeable(frame, true);
+        if (!id.empty()) {
+            // each frame gets a unique id in the form of {hash}+{frame}, so that it can be identified in cache
+            std::string frame_id = id + "+" + std::to_string(current_frame);
+            mtmd_bitmap_set_id(frame, frame_id.c_str());
+        }
         current_frame++;
-        return mtmd_bitmap_init(info.width, info.height, frame_buf.data());
+        return frame;
     }
 
     int32_t read_next(mtmd_bitmap ** out_bitmap, char ** out_text) {
@@ -897,7 +809,7 @@ struct mtmd_helper_video {
         *out_text   = nullptr;
 
         if (!pending_text.empty()) {
-            *out_text = strdup(pending_text.c_str());
+            *out_text = mtmd_strdup(pending_text);
             pending_text.clear();
             return *out_text ? 0 : -2;
         }
@@ -912,7 +824,7 @@ struct mtmd_helper_video {
         if (!start_emitted) {
             start_emitted = true;
             if (!prompt_start.empty()) {
-                *out_text = strdup(prompt_start.c_str());
+                *out_text = mtmd_strdup(prompt_start);
                 return *out_text ? 0 : -2;
             }
         }
@@ -960,6 +872,12 @@ mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
     };
 }
 
+mtmd_helper_init_opt mtmd_helper_init_opt_default() {
+    return {
+        /* video_params */ mtmd_helper_video_init_params_default(),
+    };
+}
+
 static std::string video_resolve_bin(const char * bin_dir, const char * name) {
     if (!bin_dir || bin_dir[0] == '\0') {
         return name; // rely on PATH
@@ -980,8 +898,39 @@ static std::string video_resolve_bin(const char * bin_dir, const char * name) {
     return result;
 }
 
+#ifdef MTMD_VIDEO
+static void mtmd_helper_video_set_id(mtmd_helper_video * vctx, const std::string & id) {
+    vctx->id = id;
+}
+
+static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
+                                             const mtmd_helper_video_init_params & params) {
+    mtmd_helper_video vctx;
+    vctx.mctx        = mctx;
+    vctx.input_buf.assign(buf, buf + len);
+    vctx.ffmpeg_bin  = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
+    vctx.ffprobe_bin = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    if (!vctx.probe(0.0f)) {
+        return nullptr;
+    }
+    if (placeholder) {
+        return mtmd_bitmap_init(vctx.info.width, vctx.info.height, nullptr);
+    }
+    // still image: the fps filter would output no frame, so disable it
+    vctx.fps_target = 0.0f;
+    if (!vctx.start_ffmpeg(0.0f)) {
+        return nullptr;
+    }
+    mtmd_bitmap * frame = vctx.read_next_frame();
+    if (frame) {
+        mtmd_bitmap_set_mergeable(frame, false);
+    }
+    return frame;
+}
+#endif
+
 mtmd_helper_video * mtmd_helper_video_init(
-        mtmd_context * mctx,
+        const mtmd_context * mctx,
         const char * path,
         mtmd_helper_video_init_params params) {
 #ifdef MTMD_VIDEO
@@ -1007,13 +956,16 @@ mtmd_helper_video * mtmd_helper_video_init(
 
     return ctx;
 #else
+    GGML_UNUSED(mctx);
+    GGML_UNUSED(path);
+    GGML_UNUSED(params);
     LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
     return nullptr;
 #endif
 }
 
 mtmd_helper_video * mtmd_helper_video_init_from_buf(
-        mtmd_context * mctx,
+        const mtmd_context * mctx,
         const unsigned char * buf, size_t len,
         mtmd_helper_video_init_params params) {
 #ifdef MTMD_VIDEO
@@ -1039,6 +991,10 @@ mtmd_helper_video * mtmd_helper_video_init_from_buf(
 
     return ctx;
 #else
+    GGML_UNUSED(mctx);
+    GGML_UNUSED(buf);
+    GGML_UNUSED(len);
+    GGML_UNUSED(params);
     LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
     return nullptr;
 #endif
@@ -1050,6 +1006,7 @@ void mtmd_helper_video_free(mtmd_helper_video * ctx) {
     ctx->stop_ffmpeg();
     delete ctx;
 #else
+    GGML_UNUSED(ctx);
     LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
 #endif
 }
@@ -1058,6 +1015,7 @@ mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video * ctx)
 #ifdef MTMD_VIDEO
     return ctx->info;
 #else
+    GGML_UNUSED(ctx);
     GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
 #endif
 }
@@ -1068,6 +1026,24 @@ int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
     if (!ctx) return -2;
     return ctx->read_next(out_bitmap, out_text);
 #else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(out_bitmap);
+    GGML_UNUSED(out_text);
     GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
 #endif
+}
+
+bool mtmd_helper_model_can_chat(const llama_context * lctx, const mtmd_context * mctx) {
+    if (!mctx) {
+        return true;
+    }
+
+    auto * model = llama_get_model(lctx);
+    auto * tmpl = llama_model_chat_template(model, nullptr);
+    auto info = mtmd_gen_audio_get_info(mctx);
+
+    // tts-only model cannot be used for chat (no chat template)
+    bool is_tts_only = info.type != MTMD_GEN_AUDIO_TYPE_NONE && tmpl == nullptr;
+
+    return !is_tts_only;
 }

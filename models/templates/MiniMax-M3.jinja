@@ -1,0 +1,247 @@
+{# ---------- special token variables ---------- #}
+{%- set ns_token               = ']<]minimax[>['                  -%}
+{%- set bod_token              = ']~!b['                          -%}
+{%- set bos_token              = ']~b]'                           -%}
+{%- set eos_token              = '[e~['                           -%}
+{%- set toolcall_begin_token   = ns_token ~ '<tool_call>'         -%}
+{%- set toolcall_end_token     = ns_token ~ '</tool_call>'        -%}
+{%- set think_begin_token      = '<mm:think>'                     -%}
+{%- set think_end_token        = '</mm:think>'                    -%}
+{%- set image_token            = ']<]image[>['                    -%}
+{%- set video_token            = ']<]video[>['                    -%}
+{#- Thinking mode: "enabled" / "disabled" / "adaptive" / not defined -#}
+{#- Recursive XML renderer for tool_call arguments ======================== -#}
+{#- None values are intentionally skipped in mapping iteration so that
+    `<key>null</key>` (which would round-trip to the literal string "null")
+    never appears in the rendered tool_call. The convention is: omit the
+    field entirely. The top-level `_args` loop applies the same rule.
+    The `val is none` branch below is a safety net only — upstream cleaning
+    (drop_none_in_tool_arguments) should ensure no None ever reaches here. -#}
+{%- macro to_xml(val, ns) -%}
+{%- if val is mapping -%}
+{%- for k, v in val.items() if v is not none -%}
+{{ ns }}<{{ k }}>{{ to_xml(v, ns) }}{{ ns }}</{{ k }}>
+{%- endfor -%}
+{%- elif val is iterable and val is not string -%}
+{%- for item in val -%}
+{{ ns }}<item>{{ to_xml(item, ns) }}{{ ns }}</item>
+{%- endfor -%}
+{%- elif val is none -%}
+{#- Should be unreachable when upstream cleaning is applied. -#}
+{%- elif val is boolean -%}
+{{ val | tojson }}
+{%- else -%}
+{{ val }}
+{%- endif -%}
+{%- endmacro -%}
+{#- Tool Rendering Functions ============================================== -#}
+{%- macro render_tool_namespace(namespace_name, tool_list) -%}
+{%- for tool in tool_list -%}
+<tool>{{ tool.function | tojson(ensure_ascii=False) }}</tool>
+{% endfor -%}
+{%- endmacro -%}
+{%- macro visible_text(content) -%}
+    {%- if content is string -%}
+        {{ content }}
+    {%- elif content is iterable and content is not mapping -%}
+        {%- for item in content -%}
+            {%- if item is mapping and item.type == 'text' -%}
+                {{- item.text }}
+            {%- elif item is mapping and item.type == 'image' -%}
+                {{- image_token }}
+            {%- elif item is mapping and item.type == 'video' -%}
+                {{- video_token}}
+            {%- elif item is string -%}
+                {{- item }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- elif content is none -%}
+        {{- '' }}
+    {%- else -%}
+        {{- content }}
+    {%- endif -%}
+{%- endmacro -%}
+{#- System Message Construction ============================================ -#}
+{%- macro build_system_message(system_message) -%}
+    {%- if system_message and system_message.content -%}
+        {{- visible_text(system_message.content) }}
+    {%- else -%}
+        {{- 'Your model version is MiniMax-M3, developed by MiniMax. Knowledge cutoff: January 2026. Founded in early 2022, MiniMax is a global AI foundation model company committed to advancing the frontiers of AI towards AGI.' }}
+    {%- endif -%}
+
+    {#- Thinking mode instructions -#}
+    {{- '\n\n<thinking_instructions>\n' }}
+    {{- 'You have a thinking capability that allows you to reason step by step before responding. When thinking is enabled, wrap your reasoning in ' ~ think_begin_token ~ think_end_token ~ ' tags before your response. When thinking is disabled, begin your response directly after the ' ~ think_end_token ~ ' prefix. When thinking is adaptive, decide on your own whether to think for the current turn.\n' }}
+    {%- if thinking_mode is defined -%}
+        {%- if thinking_mode == "enabled" -%}
+            {{- 'Current thinking mode: enabled. You MUST think step by step before every response, including after receiving function/tool results.\n' }}
+        {%- elif thinking_mode == "disabled" -%}
+            {{- 'Current thinking mode: disabled. Do not output any thinking process.\n' }}
+        {%- elif thinking_mode == "adaptive" -%}
+            {{- 'Current thinking mode: adaptive. You are encouraged to think for complex decision-making, multi-step reasoning, or when analyzing function/tool results.\n' }}
+        {%- endif -%}
+    {%- else -%}
+        {{- 'Current thinking mode: adaptive. You are encouraged to think for complex decision-making, multi-step reasoning, or when analyzing function/tool results.\n' }}
+    {%- endif -%}
+    {{- '</thinking_instructions>' }}
+{%- endmacro -%}
+{%- macro build_developer_message(developer_message) -%}
+    {%- if developer_message and developer_message.content -%}
+        {{- visible_text(developer_message.content) }}
+    {%- else -%}
+        {%- if model_identity is not defined -%}
+            {%- set model_identity = "You are a helpful assistant." -%}
+        {%- endif -%}
+        {{- model_identity }}
+    {%- endif -%}
+{%- endmacro -%}
+{#- Main Template Logic ================================================= -#}
+{#- Role mapping: root -> system sp (high priority), system/developer -> developer sp (low priority) -#}
+{%- set system_message = none -%}
+{%- set developer_message = none -%}
+{%- set conversation_messages = messages -%}
+{%- if messages and messages[0].role == "root" -%}
+    {%- set system_message = messages[0] -%}
+    {%- set conversation_messages = messages[1:] -%}
+    {%- if conversation_messages and conversation_messages[0].role in ["system", "developer"] -%}
+        {%- set developer_message = conversation_messages[0] -%}
+        {%- set conversation_messages = conversation_messages[1:] -%}
+    {%- endif -%}
+{%- elif messages and messages[0].role in ["system", "developer"] -%}
+    {%- set developer_message = messages[0] -%}
+    {%- set conversation_messages = messages[1:] -%}
+{%- endif -%}
+{#- Render system sp (higher priority, root role only) -#}
+{{- bod_token ~ bos_token ~ 'system' ~ '\n' }}
+{{- build_system_message(system_message) }}
+{{- eos_token ~ '\n' }}
+
+{#- Render developer sp (lower priority: system/developer role + tools) -#}
+{{- bos_token ~ 'developer' ~ '\n' }}
+{{- build_developer_message(developer_message) }}
+{%- if tools -%}
+    {{- '\n\n' ~ '# Tools' ~ '\n' ~ 'You may call one or more tools to assist with the user query.\nHere are the tools available in JSONSchema format:' ~ '\n' }}
+    {{- '\n' ~ '<tools>' ~ '\n' }}
+    {{- render_tool_namespace("functions", tools) }}
+    {{- '</tools>' ~ '\n\n' }}
+    {{- 'To call tools, wrap all invocations in a single ' ~ toolcall_begin_token ~ toolcall_end_token ~ ' block. Parameter values containing nested objects or arrays are recursively expanded into XML elements. Example:\n' }}
+    {{- '\n' ~ toolcall_begin_token ~ '\n' }}
+    {{- ns_token + '<invoke name="tool-name-1">' }}
+    {{- ns_token + '<param-1>value-1' + ns_token + '</param-1>' }}
+    {{- ns_token + '<param-2>' }}
+    {{- ns_token + '<item>' }}
+    {{- ns_token + '<key-a>val-a' + ns_token + '</key-a>' }}
+    {{- ns_token + '<key-b>val-b' + ns_token + '</key-b>' }}
+    {{- ns_token + '</item>' }}
+    {{- ns_token + '</param-2>' }}
+    {{- ns_token + '</invoke>\n' }}
+    {{- ns_token + '<invoke name="tool-name-2">' }}
+    {{- ns_token + '<param-1>value-1' + ns_token + '</param-1>' }}
+    {{- ns_token + '</invoke>\n' }}
+    {{- toolcall_end_token }}
+{%- endif -%}
+{{- eos_token ~ '\n' }}
+
+{#- Render messages -#}
+{%- set last_tool_call = namespace(name=none) -%}
+{%- for message in conversation_messages -%}
+    {%- if message.role == 'assistant' -%}
+        {{- bos_token ~ 'ai' ~ '\n' }}
+
+        {%- set reasoning_content = '' %}
+        {%- set content = visible_text(message.content) %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- if think_end_token in content %}
+                {%- set reasoning_content = content.split(think_end_token)[0].strip('\n').split(think_begin_token)[-1].strip('\n') %}
+                {%- set content = content.split(think_end_token)[-1].strip('\n') %}
+            {%- endif %}
+        {%- endif %}
+
+        {%- if reasoning_content -%}
+            {#- Render thinking for every assistant turn (all-turn visible) -#}
+            {{- think_begin_token ~ reasoning_content ~ think_end_token }}
+        {%- else -%}
+            {#- No thinking rendered → prefix with think_end_token -#}
+            {{- think_end_token }}
+        {%- endif -%}
+
+        {%- if content -%}
+            {{- content }}
+        {%- endif -%}
+        {%- if message.tool_calls -%}
+            {{- toolcall_begin_token ~ '\n' }}
+
+            {%- for tool_call in message.tool_calls -%}
+                {%- if tool_call.function -%}
+                    {%- set tool_call = tool_call.function -%}
+                {%- endif -%}
+{{- ns_token + '<invoke name="' + tool_call.name + '">' }}
+{%- set _args = tool_call.arguments -%}
+{%- for k, v in _args.items() if v is not none %}
+{{- ns_token + '<' + k + '>' -}}
+{{- to_xml(v, ns_token) -}}
+{{- ns_token + '</' + k + '>' }}
+{%- endfor -%}
+{{- ns_token + '</invoke>' ~ '\n' }}
+            {%- endfor -%}
+
+            {{- toolcall_end_token }}
+            {%- if message.tool_calls[-1].function -%}
+                {%- set last_tool_call.name = message.tool_calls[-1].function.name -%}
+            {%- else -%}
+                {%- set last_tool_call.name = message.tool_calls[-1].name -%}
+            {%- endif -%}
+        {%- else -%}
+            {%- set last_tool_call.name = none -%}
+        {%- endif -%}
+        {{- eos_token ~ '\n' }}
+
+    {%- elif message.role == 'tool' -%}
+        {%- if last_tool_call.name is none -%}
+            {{- raise_exception("Message has tool role, but there was no previous assistant message with a tool call!") }}
+        {%- endif -%}
+        {%- if loop.first or (conversation_messages[loop.index0 - 1].role != 'tool') -%}
+            {{- bos_token ~ 'tool' }}
+        {%- endif -%}
+        {{- '\n<response>' }}
+        {%- if message.content is string -%}
+            {{- message.content }}
+        {%- else -%}
+            {%- for tr in message.content -%}
+                {%- if tr is mapping and tr.type is defined and tr.type == 'image' -%}
+                    {{- image_token }}
+                {%- elif tr is mapping and tr.type is defined and tr.type == 'video' -%}
+                    {{- video_token }}
+                {%- else -%}
+                    {{- tr.output if tr.output is defined else (tr.text if tr.type == 'text' and tr.text is defined else tr) }}
+                {%- endif -%}
+            {%- endfor -%}
+        {%- endif -%}
+        {{- '</response>' }}
+        {%- if loop.last or (conversation_messages[loop.index0 + 1].role != 'tool') -%}
+            {{- eos_token ~ '\n' -}}
+        {%- endif -%}
+
+    {%- elif message.role == 'user' -%}
+        {{- bos_token ~ 'user' ~ '\n' }}
+        {{- visible_text(message.content) }}
+        {{- eos_token ~ '\n' }}
+    {%- endif -%}
+{%- endfor -%}
+
+{#- Generation prompt -#}
+{%- if add_generation_prompt -%}
+{{- bos_token ~ 'ai' ~ '\n' }}
+{%- if thinking_mode is defined and thinking_mode == "disabled" -%}
+    {{- think_end_token }}
+{%- elif thinking_mode is defined and thinking_mode == "adaptive" -%}
+    {#- adaptive: no prefix, let model decide -#}
+{%- elif thinking_mode is defined and thinking_mode == "enabled" -%}
+    {#- enabled or not defined: default to think -#}
+    {{- think_begin_token }}
+{%- else -%}
+    {#- adaptive: no prefix, let model decide -#}
+{%- endif -%}
+{%- endif -%}

@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+#
+# Build llama.cpp for Snapdragon (via Docker or natively) and push to device.
+#
+
+import sys
+import os
+import argparse
+import subprocess
+import platform
+import shutil
+import logging
+import glob
+import shlex
+import tarfile
+import tempfile
+
+from sdk import validate_windows_sdks
+
+logger = logging.getLogger("build")
+
+
+def parse_target(target_str):
+    if not target_str:
+        return None, None, None
+
+    parts = target_str.split(":")
+    target_name = parts[0]
+
+    if target_name in ("adb", "android"):
+        serial = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "android", serial, "adb"
+    elif target_name in ("lnx", "linux", "ubuntu"):
+        if len(parts) > 1 and parts[1] == "adb":
+            serial = ":".join(parts[2:]) if len(parts) > 2 else None
+            return "linux", serial, "adb"
+        host = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "linux", host, "ssh"
+    elif target_str in ("wos", "windows"):
+        return "windows", None, None
+    else:
+        return None, None, None
+
+
+def default_target_dir(target_type, target_transport, home_dir):
+    if target_type == "android":
+        return "/data/local/tmp/llama.cpp"
+    if target_type == "linux":
+        if home_dir:
+            return home_dir.rstrip("/") + "/llama.cpp"
+        if target_transport == "adb":
+            return "/home/llama.cpp"
+        return "~/llama.cpp"
+    return "~/llama.cpp"
+
+
+def normalize_target_dir(target_dir):
+    target_dir = target_dir.rstrip("/")
+    if not target_dir or target_dir == "/":
+        raise RuntimeError("target directory must not be the filesystem root")
+    return target_dir
+
+
+def adb_root(adb_cmd):
+    root_cmd = adb_cmd + ["root"]
+    logger.info(f"+ {' '.join(root_cmd)}")
+    res = subprocess.run(root_cmd)
+    if res.returncode != 0:
+        logger.error("ADB root failed.")
+        sys.exit(res.returncode)
+
+    wait_cmd = adb_cmd + ["wait-for-device"]
+    logger.info(f"+ {' '.join(wait_cmd)}")
+    res = subprocess.run(wait_cmd)
+    if res.returncode != 0:
+        logger.error("ADB wait-for-device failed.")
+        sys.exit(res.returncode)
+
+
+def make_package_archive(src_path):
+    fd, archive_path = tempfile.mkstemp(prefix="llama-cpp-", suffix=".tar.gz")
+    os.close(fd)
+    with tarfile.open(archive_path, "w:gz", dereference=False) as tar:
+        for item in os.listdir(src_path):
+            if item.startswith("."):
+                continue
+            tar.add(os.path.join(src_path, item), arcname=item, recursive=True)
+    return archive_path
+
+
+def get_uid_gid():
+    if platform.system() != "Windows":
+        return [f"{os.getuid()}:{os.getgid()}"]
+    return []
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    parser = argparse.ArgumentParser(
+        description="Build llama.cpp for Snapdragon using cross-compilation docker containers or natively."
+    )
+    parser.add_argument("--target", default="android", help="Compilation target and deployment definition (e.g. android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, windows/wos) (default: android)")
+    parser.add_argument("--build-dir", help="Build directory name (defaults to build-TARGET[-dbg], e.g. build-android)")
+    parser.add_argument("--install-dir", help="Install directory name (defaults to pkg-TARGET[-dbg], e.g. pkg-android)")
+    parser.add_argument("--jobs", "-j", type=int, help="Number of build jobs (defaults to CPU thread count)")
+    parser.add_argument("--no-docker", action="store_true", help="Build natively on the host instead of in a docker container")
+    parser.add_argument("--preset", help="Override the CMake preset to use")
+    parser.add_argument("--debug", action="store_true", help="Build in debug mode (uses -debug presets instead of -release)")
+    parser.add_argument("--hex-only", "--hexagon-only", action="store_true", help="Only build and push ggml-hexagon and libggml-htp libraries")
+    parser.add_argument("--hex-arch", choices=["v73", "v75", "v79", "v81", "v85", "73", "75", "79", "81", "85"], help="Specific Hexagon DSP architecture to build with --hex-only (default: all)")
+
+    # Push options
+    parser.add_argument("--push", action="store_true", help="Push built package to the target device via ADB or SSH/SCP")
+    parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux, /home/llama.cpp for Linux via ADB)")
+    parser.add_argument("--home-dir", help="Home directory for Linux targets when deriving the default target directory")
+
+    # Toolchain options
+    parser.add_argument("--toolchain-version", default="v0.8", help="Docker toolchain image version/tag (default: v0.8)")
+    parser.add_argument("--toolchain-url", default="ghcr.io/snapdragon-toolchain", help="Docker toolchain registry URL/namespace (default: ghcr.io/snapdragon-toolchain)")
+
+    args = parser.parse_args()
+
+    target_type, target_val, target_transport = parse_target(args.target)
+    if not target_type:
+        logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
+        sys.exit(1)
+
+    if target_type == "windows":
+        logger.info("Windows target selected. Forcing native compilation...")
+        args.no_docker = True
+        if platform.system() != "Windows":
+            logger.warning("Warning: Windows compilation is intended to run on Windows arm64 hosts.")
+        validate_windows_sdks()
+
+    # Determine preset and check if it's debug
+    preset = args.preset
+    if preset:
+        is_debug = args.debug or ("debug" in preset.lower())
+    else:
+        is_debug = args.debug
+        config_type = "debug" if is_debug else "release"
+        if args.no_docker:
+            if target_type == "windows" or platform.system() == "Windows":
+                preset = f"arm64-windows-snapdragon-{config_type}"
+            elif target_type == "linux":
+                preset = f"arm64-linux-snapdragon-{config_type}"
+            else:
+                preset = f"arm64-android-snapdragon-{config_type}"
+        else:
+            preset = f"arm64-linux-snapdragon-{config_type}" if target_type == "linux" else f"arm64-android-snapdragon-{config_type}"
+
+    target_prefix = args.target.split(":", 1)[0]
+    suffix = "-dbg" if is_debug else ""
+
+    build_dir = args.build_dir
+    if not build_dir:
+        build_dir = f"build-{target_prefix}{suffix}"
+
+    install_dir = args.install_dir
+    if not install_dir:
+        install_dir = f"pkg-{target_prefix}{suffix}"
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    # Ensure CMakeUserPresets.json is in the workspace root, update if docs version is newer
+    preset_src = os.path.join(repo_root, "docs", "backend", "snapdragon", "CMakeUserPresets.json")
+    preset_dst = os.path.join(repo_root, "CMakeUserPresets.json")
+    if os.path.exists(preset_src):
+        should_copy = False
+        if not os.path.exists(preset_dst):
+            should_copy = True
+        else:
+            # Check modification times
+            src_mtime = os.path.getmtime(preset_src)
+            dst_mtime = os.path.getmtime(preset_dst)
+            if src_mtime > dst_mtime:
+                preset_bak = preset_dst + ".bak"
+                logger.info(f"Docs CMakeUserPresets.json is newer. Backing up existing {preset_dst} to {preset_bak}")
+                shutil.copy2(preset_dst, preset_bak)
+                should_copy = True
+
+        if should_copy:
+            logger.info(f"Copying CMakeUserPresets.json from {preset_src} to {preset_dst}")
+            shutil.copy2(preset_src, preset_dst)
+    else:
+        logger.warning("Warning: CMakeUserPresets.json not found in docs/backend/snapdragon/.")
+
+    jobs = args.jobs if args.jobs else os.cpu_count() or 4
+
+    hex_arch = None
+    if args.hex_arch:
+        hex_arch = args.hex_arch if args.hex_arch.startswith("v") else f"v{args.hex_arch}"
+
+    if args.hex_only:
+        if hex_arch:
+            hex_targets = ["ggml-hexagon", f"htp-{hex_arch}"]
+        else:
+            hex_targets = ["ggml-hexagon", "htp-v73", "htp-v75", "htp-v79", "htp-v81", "htp-v85"]
+
+    if args.no_docker:
+        # Native/local host build
+        logger.info("Running native/local CMake build...")
+        install_prefix = os.path.join(repo_root, install_dir, "llama.cpp")
+
+        # Configure
+        configure_cmd = ["cmake", f"--preset={preset}", "-B", build_dir]
+        logger.info(f"+ {' '.join(configure_cmd)}")
+        res = subprocess.run(configure_cmd, cwd=repo_root)
+        if res.returncode != 0:
+            logger.error("CMake configuration failed.")
+            sys.exit(res.returncode)
+
+        # Build
+        build_cmd = ["cmake", "--build", build_dir]
+        if args.hex_only:
+            build_cmd += ["--target"] + hex_targets
+        build_cmd += ["-j", str(jobs)]
+        logger.info(f"+ {' '.join(build_cmd)}")
+        res = subprocess.run(build_cmd, cwd=repo_root)
+        if res.returncode != 0:
+            logger.error("CMake build failed.")
+            sys.exit(res.returncode)
+
+        # Install
+        install_cmd = ["cmake", "--install", build_dir, "--prefix", install_prefix]
+        logger.info(f"+ {' '.join(install_cmd)}")
+        res = subprocess.run(install_cmd, cwd=repo_root)
+        if res.returncode != 0:
+            logger.error("CMake install failed.")
+            sys.exit(res.returncode)
+    else:
+        # Docker-based build
+        logger.info("Running Docker-based cross-compilation build...")
+        image_name = "arm64-linux" if target_type == "linux" else "arm64-android"
+        image = f"{args.toolchain_url}/{image_name}:{args.toolchain_version}"
+
+        install_prefix_container = f"/workspace/{install_dir}/llama.cpp"
+
+        target_args = f"--target {' '.join(hex_targets)} " if args.hex_only else ""
+        build_sh_cmd = (
+            f"cmake --preset {preset} -B /workspace/{build_dir} && "
+            f"cmake --build /workspace/{build_dir} {target_args}-j {jobs} && "
+            f"cmake --install /workspace/{build_dir} --prefix {install_prefix_container}"
+        )
+
+        docker_cmd = [
+            "docker", "run", "--rm",
+            "--volume", f"{repo_root}:/workspace",
+            "--workdir", "/workspace",
+            "--platform", "linux/amd64"
+        ]
+        uid_gid = get_uid_gid()
+        if uid_gid:
+            docker_cmd += ["-u", uid_gid[0]]
+
+        docker_cmd += [image, "bash", "-c", build_sh_cmd]
+
+        logger.info(f"+ {' '.join(docker_cmd)}")
+        res = subprocess.run(docker_cmd, cwd=repo_root)
+        if res.returncode != 0:
+            logger.error("Docker-based build failed.")
+            sys.exit(res.returncode)
+
+    logger.info("\nBuild and installation completed successfully!")
+
+    # Push/deploy if requested
+    if args.push:
+        src_path = os.path.join(repo_root, install_dir, "llama.cpp")
+        if not os.path.exists(src_path):
+            logger.error(f"Error: installation directory {src_path} does not exist. Cannot deploy.")
+            sys.exit(1)
+
+        # Resolve target directory on device
+        target_dir = args.target_dir
+        if not target_dir:
+            target_dir = default_target_dir(target_type, target_transport, args.home_dir)
+        target_dir = normalize_target_dir(target_dir)
+
+        sub_items = [item for item in os.listdir(src_path) if not item.startswith(".")]
+
+        if args.hex_only:
+            lib_dir = os.path.join(src_path, "lib")
+            hex_libs = glob.glob(os.path.join(lib_dir, "libggml-hexagon*"))
+            if hex_arch:
+                hex_libs += glob.glob(os.path.join(lib_dir, f"libggml-htp-{hex_arch}*"))
+            else:
+                hex_libs += glob.glob(os.path.join(lib_dir, "libggml-htp*"))
+
+            if not hex_libs:
+                logger.error(f"Error: no hexagon libraries found in {lib_dir} to push.")
+                sys.exit(1)
+
+        if target_transport == "adb":
+            adb_cmd = ["adb"]
+            if target_val: # serial
+                adb_cmd += ["-s", target_val]
+
+            if target_type == "linux":
+                adb_root(adb_cmd)
+
+            if args.hex_only:
+                logger.info("\nPushing Hexagon libraries to target device via ADB...")
+                target_lib_dir = f"{target_dir}/lib"
+                mkdir_cmd = adb_cmd + ["shell", f"mkdir -p {shlex.quote(target_lib_dir)}"]
+                logger.info(f"+ {' '.join(mkdir_cmd)}")
+                res = subprocess.run(mkdir_cmd)
+                if res.returncode != 0:
+                    logger.error("ADB mkdir failed.")
+                    sys.exit(res.returncode)
+                for lib in hex_libs:
+                    push_cmd = adb_cmd + ["push", lib, f"{target_lib_dir}/"]
+                    logger.info(f"+ {' '.join(push_cmd)}")
+                    res = subprocess.run(push_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB push failed.")
+                        sys.exit(res.returncode)
+                logger.info("Hexagon libraries deployed successfully!")
+            elif target_type == "linux":
+                logger.info("\nDeploying Linux package to target device via ADB tar...")
+                remote_archive = f"/tmp/llama.cpp-package-{os.getpid()}.tar.gz"
+                archive_path = make_package_archive(src_path)
+                try:
+                    mkdir_cmd = adb_cmd + ["shell", f"mkdir -p {shlex.quote(target_dir)}"]
+                    logger.info(f"+ {' '.join(mkdir_cmd)}")
+                    res = subprocess.run(mkdir_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB mkdir failed.")
+                        sys.exit(res.returncode)
+
+                    if sub_items:
+                        clean_paths = " ".join(shlex.quote(f"{target_dir}/{item}") for item in sub_items)
+                        clean_cmd = adb_cmd + ["shell", f"rm -rf {clean_paths}"]
+                        logger.info(f"+ {' '.join(clean_cmd)}")
+                        subprocess.run(clean_cmd)
+
+                    push_cmd = adb_cmd + ["push", archive_path, remote_archive]
+                    logger.info(f"+ {' '.join(push_cmd)}")
+                    res = subprocess.run(push_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB push failed.")
+                        sys.exit(res.returncode)
+
+                    extract_cmd = adb_cmd + ["shell", f"tar -xzf {shlex.quote(remote_archive)} -C {shlex.quote(target_dir)} && rm -f {shlex.quote(remote_archive)}"]
+                    logger.info(f"+ {' '.join(extract_cmd)}")
+                    res = subprocess.run(extract_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB untar failed.")
+                        sys.exit(res.returncode)
+
+                    chmod_cmd = adb_cmd + ["shell", f"chmod -R 755 {shlex.quote(target_dir)}/bin 2>/dev/null || true"]
+                    logger.info(f"+ {' '.join(chmod_cmd)}")
+                    subprocess.run(chmod_cmd)
+                finally:
+                    os.unlink(archive_path)
+                logger.info("ADB tar deploy completed successfully!")
+            else:
+                # Clean stale package files on device
+                if sub_items:
+                    clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
+                    clean_cmd = adb_cmd + ["shell", f"rm -rf {clean_paths}"]
+                    logger.info(f"+ {' '.join(clean_cmd)}")
+                    subprocess.run(clean_cmd)
+
+                # Android destination directory is target_dir
+                push_cmd = adb_cmd + ["push", os.path.join(src_path, "."), target_dir]
+                logger.info(f"+ {' '.join(push_cmd)}")
+                res = subprocess.run(push_cmd)
+                if res.returncode != 0:
+                    logger.error("ADB push failed.")
+                    sys.exit(res.returncode)
+
+                chmod_cmd = adb_cmd + ["shell", f"chmod -R 755 {target_dir}/bin 2>/dev/null || true"]
+                logger.info(f"+ {' '.join(chmod_cmd)}")
+                subprocess.run(chmod_cmd)
+                logger.info("ADB push completed successfully!")
+
+        elif target_type == "linux":
+            ssh_host = target_val
+            if not ssh_host:
+                logger.error("Error: SSH host not specified in target (e.g. use linux:user@host, lnx:user@host, or ubuntu:user@host). Cannot deploy.")
+                sys.exit(1)
+
+            if args.hex_only:
+                logger.info(f"\nDeploying Hexagon libraries to Linux device {ssh_host} via SCP...")
+                target_lib_dir = f"{target_dir}/lib"
+                deploy_cmd = ["scp"] + hex_libs + [f"{ssh_host}:{target_lib_dir}/"]
+                logger.info(f"+ {' '.join(deploy_cmd)}")
+                res = subprocess.run(deploy_cmd)
+                if res.returncode != 0:
+                    logger.error("SCP deploy failed.")
+                    sys.exit(res.returncode)
+                logger.info("Hexagon libraries deployed successfully!")
+            else:
+                # Clean stale package files on remote host
+                if sub_items:
+                    clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
+                    clean_cmd = ["ssh", ssh_host, f"rm -rf {clean_paths}"]
+                    logger.info(f"+ {' '.join(clean_cmd)}")
+                    subprocess.run(clean_cmd)
+
+                # Deploy to target_dir
+                deploy_cmd = ["scp", "-r", os.path.join(src_path, "."), f"{ssh_host}:{target_dir}"]
+                logger.info(f"+ {' '.join(deploy_cmd)}")
+                res = subprocess.run(deploy_cmd)
+                if res.returncode != 0:
+                    logger.error("SSH/SCP deploy failed.")
+                    sys.exit(res.returncode)
+
+                chmod_cmd = ["ssh", ssh_host, f"chmod -R 755 {target_dir}/bin 2>/dev/null || true"]
+                logger.info(f"+ {' '.join(chmod_cmd)}")
+                subprocess.run(chmod_cmd)
+                logger.info("SSH/SCP deploy completed successfully!")
+
+        elif target_type == "windows":
+            logger.info("\nPush for Windows on Snapdragon (windows) target is currently a stub.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("\nInterrupted by user.")
+        sys.exit(130)
+    except RuntimeError as err:
+        logger.error("Error: %s", err)
+        sys.exit(1)

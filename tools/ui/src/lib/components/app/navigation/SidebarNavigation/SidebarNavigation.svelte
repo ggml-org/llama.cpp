@@ -1,32 +1,36 @@
 <script lang="ts">
+	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		DialogConversationRename,
+		DialogDiscoverModels,
+		DialogMcpServers,
+		DialogModelInformation,
+		DialogSettingsChat,
 		Logo,
-		SidebarNavigationConversationList,
-		SidebarNavigationActions
+		SidebarNavigationActions,
+		SidebarNavigationConversationList
 	} from '$lib/components/app';
-	import { ROUTES } from '$lib/constants';
-	import { fade } from 'svelte/transition';
-	import { SvelteSet } from 'svelte/reactivity';
-	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
-
-	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
-		buildConversationTree,
-		conversationsStore,
-		conversations
-	} from '$lib/stores/conversations.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { RouterService } from '$lib/services/router.service';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+		ROUTES,
+		SIDEBAR_COLLAPSE_WIDTH,
+		SIDEBAR_COLLAPSED_WIDTH,
+		SIDEBAR_MAX_WIDTH,
+		SIDEBAR_MIN_WIDTH,
+		SIDEBAR_OVERSTRETCH_PX,
+		SIDEBAR_SETTLE_MS
+	} from '$lib/constants';
 	import { TooltipSide } from '$lib/enums';
-	import { device } from '$lib/stores/device.svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
+	import { RouterService } from '$lib/services/router.service';
+	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
+	import { buildConversationTree, remToPx } from '$lib/utils';
 	import { circIn } from 'svelte/easing';
+	import { SvelteSet } from 'svelte/reactivity';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		onSearchClick?: () => void;
@@ -39,39 +43,41 @@
 		toggleSidebar: () => toggleExpandedMode()
 	});
 
-	let isExpandedMode = $state(false);
 	let hoveredTooltip = $state<string | null>(null);
 	let logoHovered = $state(false);
 
-	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
-	const isOnMobile = $derived(isMobile.current);
-	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
+	const isStripExpanded = $derived(uiStore.isSidebarExpanded || hoveredTooltip !== null);
+	const isOnMobile = $derived(deviceStore.isMobile);
+	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {
-			isExpandedMode = true;
+			uiStore.isSidebarExpanded = true;
 		}
 	});
 
 	function toggleExpandedMode() {
-		isExpandedMode = !isExpandedMode;
-		if (!isExpandedMode) {
+		uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
+
+		if (!uiStore.isSidebarExpanded) {
 			hoveredTooltip = null;
 		}
 	}
 
 	$effect(() => {
-		if (!isExpandedMode) {
+		if (!uiStore.isSidebarExpanded) {
 			isSearchModeActive = false;
 			searchQuery = '';
+
 			if (isSelectionMode) exitSelectionMode();
+
 			cancelMobileCollapse();
 		}
 	});
 
 	$effect(() => {
-		if (isMobile.current && page.url.hash.includes(ROUTES.SEARCH)) {
-			isExpandedMode = false;
+		if (deviceStore.isMobile && page.url.hash.includes(ROUTES.SEARCH)) {
+			uiStore.isSidebarExpanded = false;
 		}
 	});
 
@@ -82,7 +88,7 @@
 	let filteredConversations = $derived.by(() => {
 		if (isSearchModeActive) {
 			if (searchQuery.trim().length > 0) {
-				return conversations().filter((conversation: { name: string }) =>
+				return conversationsStore.conversations.filter((conversation: { name: string }) =>
 					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
 				);
 			}
@@ -90,13 +96,15 @@
 			return [];
 		}
 
-		return conversations();
+		return conversationsStore.conversations;
 	});
 
 	let isSelectionMode = $state(false);
 	let selectedIds = new SvelteSet<string>();
 
 	let renameDialogOpen = $state(false);
+	let settingsDialogOpen = $state(false);
+	let mcpDialogOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -107,43 +115,58 @@
 
 	const allSelectedArePinned = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
-		const convs = conversations();
+
+		const convs = conversationsStore.conversations;
+
 		for (const id of selectedIds) {
 			const c = convs.find((conv) => conv.id === id);
+
 			if (c && !c.pinned) return false;
 		}
+
 		return true;
 	});
 
 	const pinStateIsMixed = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
-		const convs = conversations();
+
+		const convs = conversationsStore.conversations;
+
 		let anyPinned = false;
 		let anyUnpinned = false;
+
 		for (const id of selectedIds) {
 			const c = convs.find((conv) => conv.id === id);
+
 			if (!c) continue;
+
 			if (c.pinned) anyPinned = true;
 			else anyUnpinned = true;
+
 			if (anyPinned && anyUnpinned) return true;
 		}
+
 		return false;
 	});
 
 	const visibleSelectionStats = $derived.by(() => {
 		const visibleIds = filteredConversations.map((c) => c.id);
+
 		let selectedVisible = 0;
+
 		for (const id of visibleIds) {
 			if (selectedIds.has(id)) selectedVisible++;
 		}
+
 		return {
-			visibleCount: visibleIds.length,
-			selectedVisibleCount: selectedVisible
+			selectedVisibleCount: selectedVisible,
+			visibleCount: visibleIds.length
 		};
 	});
 
 	function enterSelectionMode(id?: string) {
 		isSelectionMode = true;
+
 		if (id !== undefined) {
 			selectedIds.add(id);
 		}
@@ -175,48 +198,58 @@
 
 	async function handleBulkDelete() {
 		const ids = Array.from(selectedIds);
+
 		if (ids.length === 0) return;
+
 		await conversationsStore.bulkDeleteConversations(ids);
 		exitSelectionMode();
 	}
 
 	async function handleBulkPinToggle() {
 		const ids = Array.from(selectedIds);
+
 		if (ids.length === 0) return;
+
 		await conversationsStore.bulkToggleConversationPin(ids);
 	}
 
 	async function handleBulkExport() {
 		const ids = Array.from(selectedIds);
+
 		if (ids.length === 0) return;
+
 		await conversationsStore.bulkExportConversations(ids);
 	}
 
 	const marquee = useMarqueeSelection({
-		selectedIds: () => selectedIds,
+		enabled: () => isSelectionMode,
 		orderedIds: () => renderedOrderIds,
-		enabled: () => isSelectionMode
+		selectedIds: () => selectedIds
 	});
 
 	function handleRowMouseDown(id: string, event: MouseEvent) {
 		if (!isSelectionMode) return;
+
 		marquee.rowMouseDown(id, event);
 	}
 
 	function handleSelectionClick(id: string, options: { shiftKey: boolean }): void {
 		if (!isSelectionMode) return;
+
 		marquee.rowClick(id, options.shiftKey);
 	}
 
 	async function selectConversation(id: string) {
-		if (isMobile.current) {
+		if (deviceStore.isMobile) {
 			scheduleMobileCollapse();
 		}
+
 		await goto(RouterService.chat(id));
 	}
 
 	async function handleEditConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
+
 		if (!conversation) return;
 
 		renameTargetConversationId = id;
@@ -227,9 +260,11 @@
 
 	async function handleRenameConfirm() {
 		const id = renameTargetConversationId;
+
 		if (!id) return;
 
 		const nextName = renameDraft.trim();
+
 		if (!nextName || nextName === renameOriginalTitle.trim()) return;
 
 		await conversationsStore.updateConversationName(id, nextName);
@@ -246,12 +281,14 @@
 	}
 
 	async function handleDeleteConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
+
 		if (!conversation) return;
 
 		const confirmed = window.confirm(
 			`Delete "${conversation.name}"? This action cannot be undone.`
 		);
+
 		if (!confirmed) return;
 
 		await conversationsStore.deleteConversation(id, { deleteWithForks: false });
@@ -268,8 +305,9 @@
 		if (pendingCollapse) {
 			clearTimeout(pendingCollapse);
 		}
+
 		pendingCollapse = setTimeout(() => {
-			isExpandedMode = false;
+			uiStore.isSidebarExpanded = false;
 			pendingCollapse = null;
 		}, 100);
 	}
@@ -280,146 +318,312 @@
 			pendingCollapse = null;
 		}
 	}
+
+	let asideEl = $state<HTMLElement | null>(null);
+	/** Set briefly after a drag ends past a bound, while the width springs back to it. */
+	let isSettling = $state(false);
+
+	// the tab bar sits outside the sidebar, so the width lives on the root
+	$effect(() => {
+		const width = uiStore.sidebarWidth;
+
+		if (width === null) {
+			document.documentElement.style.removeProperty('--sidebar-width');
+		} else {
+			document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
+		}
+	});
+
+	// labels and the conversation list fade with the live width, so they follow
+	// both the toggle's width transition and a drag below the minimum width
+	$effect(() => {
+		const el = asideEl;
+
+		if (!el) return;
+
+		const collapsedPx = remToPx(SIDEBAR_COLLAPSED_WIDTH);
+		const minPx = remToPx(SIDEBAR_MIN_WIDTH);
+		const observer = new ResizeObserver(([entry]) => {
+			const fade = (entry.contentRect.width - collapsedPx) / (minPx - collapsedPx);
+
+			el.style.setProperty('--sidebar-fade', String(Math.min(1, Math.max(0, fade))));
+		});
+
+		observer.observe(el);
+
+		return () => observer.disconnect();
+	});
+
+	function handleResizePointerDown(event: PointerEvent) {
+		if (!asideEl || isOnMobile) return;
+
+		event.preventDefault();
+
+		const handle = event.currentTarget as HTMLElement;
+		const left = asideEl.getBoundingClientRect().left;
+		const minPx = remToPx(SIDEBAR_MIN_WIDTH);
+		const maxPx = remToPx(SIDEBAR_MAX_WIDTH);
+		const collapsePx = remToPx(SIDEBAR_COLLAPSE_WIDTH);
+		const startWidth = uiStore.sidebarWidth;
+
+		let willCollapse = false;
+
+		handle.setPointerCapture(event.pointerId);
+		uiStore.isSidebarResizing = true;
+
+		/** Rubber-band offset: grows with the distance, ever slower, never past the overstretch. */
+		function stretch(distance: number): number {
+			return SIDEBAR_OVERSTRETCH_PX * (1 - 1 / (distance / SIDEBAR_OVERSTRETCH_PX + 1));
+		}
+
+		function onPointerMove(moveEvent: PointerEvent) {
+			const pointerWidth = moveEvent.clientX - left;
+
+			// past either bound the edge resists harder the further it is pulled,
+			// until a pull below the collapse width snaps it to the pointer
+			willCollapse = pointerWidth < collapsePx;
+
+			const width = willCollapse
+				? Math.max(0, pointerWidth)
+				: pointerWidth < minPx
+					? minPx - stretch(minPx - pointerWidth)
+					: pointerWidth > maxPx
+						? maxPx + stretch(pointerWidth - maxPx)
+						: pointerWidth;
+
+			// persisted once on release, not on every move
+			uiStore.sidebarWidth = Math.round(width);
+		}
+
+		function onPointerUp() {
+			handle.removeEventListener('pointermove', onPointerMove);
+			handle.removeEventListener('pointerup', onPointerUp);
+			handle.removeEventListener('pointercancel', onPointerCancel);
+
+			uiStore.isSidebarResizing = false;
+
+			// it reopens at its width from before the drag, without springing on the way out
+			if (willCollapse) {
+				uiStore.sidebarWidth = startWidth;
+				toggleExpandedMode();
+
+				return;
+			}
+
+			if (uiStore.sidebarWidth === startWidth) return;
+
+			const width = uiStore.sidebarWidth ?? minPx;
+			const clamped = Math.min(maxPx, Math.max(minPx, width));
+
+			if (clamped !== width) {
+				isSettling = true;
+				setTimeout(() => (isSettling = false), SIDEBAR_SETTLE_MS);
+			}
+
+			uiStore.setSidebarWidth(Math.round(clamped));
+		}
+
+		function onPointerCancel() {
+			willCollapse = false;
+			onPointerUp();
+		}
+
+		handle.addEventListener('pointermove', onPointerMove);
+		handle.addEventListener('pointerup', onPointerUp);
+		handle.addEventListener('pointercancel', onPointerCancel);
+	}
+
+	/** A dialog owns the screen on a phone, so the expanded list steps aside for it. */
+	function openDialog(open: () => void): void {
+		if (deviceStore.isMobile) {
+			scheduleMobileCollapse();
+		}
+
+		open();
+	}
 </script>
 
-<svelte:window onkeydown={handleKeydown} bind:innerWidth />
+<svelte:window bind:innerWidth onkeydown={handleKeydown} />
 
-{#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
+{#if innerWidth > 768 || !page.url.hash.includes(ROUTES.SEARCH)}
 	<aside
+		bind:this={asideEl}
 		class={[
 			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
 			'md:h-[calc(100dvh-1.125rem)]',
-			isExpandedMode &&
-				(device.isStandalone
+			uiStore.isSidebarExpanded &&
+				(deviceStore.isStandalone
 					? 'h-[calc(100dvh-2rem)]'
-					: device.isIOSDevice
+					: deviceStore.isIOSDevice
 						? 'h-[calc(100dvh-0.5rem)]'
 						: 'h-[calc(100dvh-1rem)]'),
 			'rounded-3xl md:rounded-2xl',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding] duration-200 ease-out',
-			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
+			uiStore.isSidebarResizing && 'md:duration-0',
+			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
+			isStripExpanded && 'md:w-(--sidebar-width) md:bg-muted/60 md:backdrop-blur-xl shadow-md',
 			!isStripExpanded && 'md:w-12',
-			isExpandedMode && 'is-expanded'
+			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
 	>
 		<div class="px-2 flex items-center justify-between">
 			<div
-				role="button"
-				tabindex="0"
 				class="relative"
 				onmouseenter={() => (logoHovered = true)}
 				onmouseleave={() => (logoHovered = false)}
+				role="button"
+				tabindex="0"
 			>
 				<ActionIcon
-					icon={!isExpandedMode && logoHovered && innerWidth > 768 ? PanelLeftOpen : Logo}
-					size="lg"
-					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-					class="{isExpandedMode
+					ariaLabel={uiStore.isSidebarExpanded ? 'Go to start' : 'Expand navigation'}
+					class="{uiStore.isSidebarExpanded
 						? 'bg-muted! md:bg-foreground/5!'
 						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
-					href={isExpandedMode ? ROUTES.START : undefined}
-					onclick={isExpandedMode ? undefined : toggleExpandedMode}
-					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
+					href={uiStore.isSidebarExpanded ? ROUTES.START : undefined}
+					icon={!uiStore.isSidebarExpanded && logoHovered && innerWidth > 768
+						? PanelLeftOpen
+						: Logo}
+					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+					onclick={uiStore.isSidebarExpanded ? undefined : toggleExpandedMode}
+					size="lg"
+					tooltip={uiStore.isSidebarExpanded ? undefined : 'Open Sidebar'}
 					tooltipSide={TooltipSide.RIGHT}
-					ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
 				/>
 			</div>
 
-			{#if isOnMobile || (isExpandedMode && !alwaysShowOnDesktop)}
+			{#if isOnMobile || (uiStore.isSidebarExpanded && !alwaysShowOnDesktop)}
 				<div
-					class="flex items-center transition-all duration-150 ease-out {isMobile.current &&
-					!isExpandedMode
+					in:fade={{ delay: 50, duration: 150, easing: circIn }}
+					out:fade={{ duration: 100 }}
+					class="flex items-center transition-all duration-150 ease-out {deviceStore.isMobile &&
+					!uiStore.isSidebarExpanded
 						? 'opacity-0 h-0!'
 						: ''}"
-					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
-					out:fade={{ duration: 100 }}
 				>
 					<ActionIcon
-						icon={isMobile.current ? X : PanelLeftClose}
-						size="lg"
-						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
+						ariaLabel="Collapse navigation"
+						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 max-md:-mr-1 max-md:-mt-1 hover:bg-accent!"
+						icon={deviceStore.isMobile ? X : PanelLeftClose}
+						iconSize="h-4 w-4"
 						onclick={toggleExpandedMode}
+						size="lg"
 						tooltip="Close Sidebar"
 						tooltipSide={TooltipSide.LEFT}
-						ariaLabel="Collapse navigation"
 					/>
 				</div>
 			{/if}
 		</div>
 
 		<div
-			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {isMobile.current
-				? 'transition-[opacity,height] duration-200 ease-out'
-				: ''} {isMobile.current && !isExpandedMode ? 'opacity-0 !h-0' : ''}"
 			in:fade={{ duration: 200 }}
 			out:fade={{ duration: 200 }}
+			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {deviceStore.isMobile
+				? 'transition-[opacity,height] duration-200 ease-out'
+				: ''} {deviceStore.isMobile && !uiStore.isSidebarExpanded ? 'opacity-0 !h-0' : ''}"
 		>
 			<SidebarNavigationActions
-				isExpandedMode={innerWidth > 768 ? isExpandedMode : true}
-				class="px-2"
 				bind:isSearchModeActive
 				bind:searchQuery
+				class="px-2"
+				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
+				onManageModelsClick={() => openDialog(() => uiStore.openModelsManager())}
+				onMcpClick={() => openDialog(() => (mcpDialogOpen = true))}
+				onNewChat={() => {
+					if (deviceStore.isMobile) {
+						scheduleMobileCollapse();
+					}
+				}}
+				onSearchClick={() => {
+					uiStore.isSidebarExpanded = true;
+					isSearchModeActive = true;
+				}}
 				onSearchDeactivated={() => {
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
-				onSearchClick={() => {
-					isExpandedMode = true;
-					isSearchModeActive = true;
-				}}
-				onNewChat={() => {
-					if (isMobile.current) {
-						scheduleMobileCollapse();
-					}
-				}}
+				onSettingsClick={() => openDialog(() => (settingsDialogOpen = true))}
 			/>
 
-			{#if isExpandedMode || isOnMobile}
-				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+			{#if uiStore.isSidebarExpanded || isOnMobile}
+				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade)">
 					<SidebarNavigationConversationList
-						class="px-2"
-						{filteredConversations}
-						{currentChatId}
-						{isSearchModeActive}
-						{searchQuery}
-						{isSelectionMode}
-						{selectedIds}
-						onSelect={selectConversation}
-						onEdit={handleEditConversation}
-						onDelete={handleDeleteConversation}
-						onStop={handleStopGeneration}
-						onToggleSelect={toggleSelected}
-						onEnterSelectionMode={enterSelectionMode}
-						onSelectionClick={handleSelectionClick}
-						onRowMouseDown={handleRowMouseDown}
-						visibleCount={visibleSelectionStats.visibleCount}
+						{allSelectedArePinned}
 						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
 							visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
+						class="px-2"
+						{currentChatId}
+						{filteredConversations}
+						{isSearchModeActive}
+						{isSelectionMode}
+						onBulkDelete={handleBulkDelete}
+						onBulkExport={handleBulkExport}
+						onBulkPinToggle={handleBulkPinToggle}
+						onCloseSelection={exitSelectionMode}
+						onDelete={handleDeleteConversation}
+						onEdit={handleEditConversation}
+						onEnterSelectionMode={enterSelectionMode}
+						onRowMouseDown={handleRowMouseDown}
+						onSelect={selectConversation}
+						onSelectAllToggle={toggleSelectAllVisible}
+						onSelectionClick={handleSelectionClick}
+						onStop={handleStopGeneration}
+						onToggleSelect={toggleSelected}
+						{pinStateIsMixed}
+						{searchQuery}
+						{selectedIds}
 						someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
 							visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
-						{allSelectedArePinned}
-						{pinStateIsMixed}
-						onSelectAllToggle={toggleSelectAllVisible}
-						onBulkPinToggle={handleBulkPinToggle}
-						onBulkExport={handleBulkExport}
-						onBulkDelete={handleBulkDelete}
-						onCloseSelection={exitSelectionMode}
+						visibleCount={visibleSelectionStats.visibleCount}
 					/>
 				</div>
 			{/if}
 		</div>
+
+		{#if uiStore.isSidebarExpanded && !isOnMobile}
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div
+				class="peer absolute inset-y-3 -right-1 z-20 hidden w-2 cursor-ew-resize touch-none select-none md:block"
+				data-slot="sidebar-resize-handle"
+				ondblclick={() => uiStore.setSidebarWidth(null)}
+				onpointerdown={handleResizePointerDown}
+				title="Drag to resize or hide, double-click to reset"
+			></div>
+
+			<!-- the edge strip is clipped to the sidebar's rounded corners without
+			     clipping the sidebar itself; faint on hover, solid while dragging -->
+			<div
+				class={[
+					'pointer-events-none absolute inset-0 hidden overflow-hidden rounded-[inherit] transition-opacity duration-150 md:block',
+					uiStore.isSidebarResizing ? 'opacity-100' : 'opacity-0 peer-hover:opacity-100'
+				]}
+			>
+				<div
+					class={[
+						'absolute inset-y-0 right-0 w-1.5',
+						uiStore.isSidebarResizing ? 'bg-foreground/15' : 'bg-foreground/6'
+					]}
+				></div>
+			</div>
+		{/if}
 	</aside>
 {/if}
 
 <DialogConversationRename
 	bind:open={renameDialogOpen}
-	currentTitle={renameOriginalTitle}
 	bind:value={renameDraft}
-	onConfirm={handleRenameConfirm}
+	currentTitle={renameOriginalTitle}
 	onCancel={handleRenameCancel}
+	onConfirm={handleRenameConfirm}
 />
+
+<DialogSettingsChat bind:open={settingsDialogOpen} />
+
+<DialogMcpServers bind:open={mcpDialogOpen} />
+
+<DialogDiscoverModels bind:open={uiStore.discoverModelsOpen} />
+
+<DialogModelInformation />
 
 <style>
 	aside {

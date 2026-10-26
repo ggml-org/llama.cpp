@@ -33,7 +33,11 @@ void argsort(bool needs_bounds_check, const uint row) {
     const uint row_offset = row * p.ncols;
 
     // initialize indices
-    dst_row[col] = ivec2(col, floatBitsToInt(data_a[row_offset + col]));
+    ivec2 value = ivec2(col, 0);
+    if (!needs_bounds_check || col < p.ncols) {
+        value.y = floatBitsToInt(data_a[row_offset + col]);
+    }
+    dst_row[col] = value;
     barrier();
 
     uint num_outer_loop_iters = NCOLS_PADDED_LOG2;
@@ -42,18 +46,20 @@ void argsort(bool needs_bounds_check, const uint row) {
         [[unroll]] for (uint j = k / 2, inner_idx = 0; inner_idx < num_inner_loop_iters; j /= 2, inner_idx++) {
             const int ixj = int(col ^ j);
 
-            int idx_0 = (col & k) == 0 ? col : ixj;
-            int idx_1 = (col & k) == 0 ? ixj : col;
+            if (ixj > col) {
+                int idx_0 = (col & k) == 0 ? col : ixj;
+                int idx_1 = (col & k) == 0 ? ixj : col;
 
-            ivec2 sh_idx_0 = dst_row[idx_0];
-            ivec2 sh_idx_1 = dst_row[idx_1];
-            bool idx_0_oob = needs_bounds_check ? sh_idx_0.x >= p.ncols : false;
-            bool idx_1_oob = needs_bounds_check ? sh_idx_1.x >= p.ncols : false;
+                ivec2 sh_idx_0 = dst_row[idx_0];
+                ivec2 sh_idx_1 = dst_row[idx_1];
+                bool idx_0_oob = needs_bounds_check ? sh_idx_0.x >= p.ncols : false;
+                bool idx_1_oob = needs_bounds_check ? sh_idx_1.x >= p.ncols : false;
 
-            if ((idx_0_oob ||
-                (!idx_1_oob && intBitsToFloat(sh_idx_0.y) > intBitsToFloat(sh_idx_1.y))) && (ixj > col)) {
-                dst_row[idx_0] = sh_idx_1;
-                dst_row[idx_1] = sh_idx_0;
+                if (idx_0_oob ||
+                    (!idx_1_oob && intBitsToFloat(sh_idx_0.y) > intBitsToFloat(sh_idx_1.y))) {
+                    dst_row[idx_0] = sh_idx_1;
+                    dst_row[idx_1] = sh_idx_0;
+                }
             }
 
             barrier();

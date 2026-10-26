@@ -29,11 +29,11 @@ Example for PHI-2
 ```
 
 #### Start the server
-The server must answer OAI Chat completion requests on `http://localhost:8080/v1` or according to the environment variable `SERVER_BENCH_URL`.
+The server must answer OAI Chat completion requests on `http://localhost:9931/v1` or according to the environment variable `SERVER_BENCH_URL`.
 
 Example:
 ```shell
-llama-server --host localhost --port 8080 \
+llama-server --host localhost --port 9931 \
   --model ggml-model-q4_0.gguf \
   --cont-batching \
   --metrics \
@@ -51,7 +51,7 @@ For 500 chat completions request with 8 concurrent users during maximum 10 minut
 ```
 
 The benchmark values can be overridden with:
-- `SERVER_BENCH_URL` server url prefix for chat completions, default `http://localhost:8080/v1`
+- `SERVER_BENCH_URL` server url prefix for chat completions, default `http://localhost:9931/v1`
 - `SERVER_BENCH_N_PROMPTS` total prompts to randomly select in the benchmark, default `480`
 - `SERVER_BENCH_MODEL_ALIAS` model alias to pass in the completion request, default `my-model`
 - `SERVER_BENCH_MAX_TOKENS` max tokens to predict, default: `512`
@@ -85,7 +85,7 @@ The script will fail if too many completions are truncated, see `llamacpp_comple
 K6 metrics might be compared against [server metrics](../README.md), with:
 
 ```shell
-curl http://localhost:8080/metrics
+curl http://localhost:9931/metrics
 ```
 
 ### Using the CI python script

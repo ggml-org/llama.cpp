@@ -218,7 +218,8 @@ struct ggml_et_ssm_scan_params {
     ggml_tensor src4;  // B:   [d_state, n_group, n_seq_tokens, n_seqs]
     ggml_tensor src5;  // C:   [d_state, n_group, n_seq_tokens, n_seqs]
     ggml_tensor src6;  // ids: [n_seqs] i32
-    ggml_tensor dst;   // [y, final_state] packed output from ggml_ssm_scan()
+    ggml_tensor dst;   // [y, states] packed output from ggml_ssm_scan()
+    int32_t     K;
 };
 
 struct ggml_et_rwkv_wkv6_params {

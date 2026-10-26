@@ -9,6 +9,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("BaichuanForCausalLM", "BaiChuanForCausalLM")
+@ModelBase.example("baichuan-inc/Baichuan2-7B-Chat", "baichuan-inc/Baichuan-7B")
 class BaichuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BAICHUAN
 

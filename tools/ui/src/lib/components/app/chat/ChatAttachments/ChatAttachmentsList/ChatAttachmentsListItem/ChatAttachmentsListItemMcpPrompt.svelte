@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ChatMessageMcpPromptContent, ActionIcon } from '$lib/components/app';
 	import { X } from '@lucide/svelte';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { ActionIcon, ChatMessageMcpPromptContent } from '$lib/components/app';
 	import { McpPromptVariant } from '$lib/enums';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -35,7 +35,7 @@
 		<div
 			class="absolute top-10 right-2 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
 		>
-			<ActionIcon icon={X} tooltip="Remove" stopPropagationOnClick onclick={() => onRemove?.()} />
+			<ActionIcon icon={X} onclick={() => onRemove?.()} stopPropagationOnClick tooltip="Remove" />
 		</div>
 	{/if}
 </div>

@@ -153,6 +153,67 @@ int main()
         root ::= "a"{,10}"
     )""");
 
+    verify_failure(R"""(
+        root ::= "a"{5000}
+    )""");
+
+    verify_failure(R"""(
+        root ::= "a"{5000,}
+    )""");
+
+    verify_failure(R"""(
+        root ::= "a"{5000,6000}
+    )""");
+
+    // Recursion depth limit exceeded (Issue #29495)
+    {
+        std::string deep_grammar = "root ::= ";
+        int n_depth = 300;
+        for (int i = 0; i < n_depth; ++i) {
+            deep_grammar += "(";
+        }
+        deep_grammar += "\"x\"";
+        for (int i = 0; i < n_depth; ++i) {
+            deep_grammar += ")";
+        }
+        verify_failure(deep_grammar.c_str());
+    }
+
+    verify_parsing(R"""(
+        root ::= "a"{0,5000}
+    )""", {
+        {"root", 0},
+        {"root_1", 1},
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
+        {LLAMA_GRETYPE_END, 0},
+        // root_1 (index 1)
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
+        {LLAMA_GRETYPE_ALT, 0},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
+    verify_parsing(R"""(
+        root ::= "a"{3,5000}
+    )""", {
+        {"root", 0},
+        {"root_1", 1},
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
+        {LLAMA_GRETYPE_END, 0},
+        // root_1 (index 1)
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
+        {LLAMA_GRETYPE_ALT, 0},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
     verify_parsing(R"""(
         root  ::= "a"
     )""", {

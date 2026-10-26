@@ -1,9 +1,9 @@
 import {
+	MEDIUM_DURATION_THRESHOLD,
 	MS_PER_SECOND,
-	SECONDS_PER_MINUTE,
 	SECONDS_PER_HOUR,
-	SHORT_DURATION_THRESHOLD,
-	MEDIUM_DURATION_THRESHOLD
+	SECONDS_PER_MINUTE,
+	SHORT_DURATION_THRESHOLD
 } from '$lib/constants';
 
 /**
@@ -15,6 +15,7 @@ import {
  */
 export function formatFileSize(bytes: number | unknown): string {
 	if (typeof bytes !== 'number') return 'Unknown';
+
 	if (bytes === 0) return '0 Bytes';
 
 	const k = 1024;
@@ -27,6 +28,9 @@ export function formatFileSize(bytes: number | unknown): string {
 /**
  * Format parameter count to human-readable format (B, M, K)
  *
+ * Billions keep one decimal for hub counts (`15.2B`) and none for whole
+ * values (id-parsed counts are integers anyway, e.g. `8B`).
+ *
  * @param params - Parameter count
  * @returns Human-readable parameter count
  */
@@ -34,7 +38,9 @@ export function formatParameters(params: number | unknown): string {
 	if (typeof params !== 'number') return 'Unknown';
 
 	if (params >= 1e9) {
-		return `${(params / 1e9).toFixed(2)}B`;
+		const billions = params / 1e9;
+
+		return `${Number.isInteger(billions) ? billions : billions.toFixed(1)}B`;
 	}
 
 	if (params >= 1e6) {
@@ -46,6 +52,25 @@ export function formatParameters(params: number | unknown): string {
 	}
 
 	return params.toString();
+}
+
+/** Separator between the context values shown for one model, e.g. `8192 / 4096`. */
+const CONTEXT_VALUE_SEPARATOR = ' / ';
+/** Unit the context values are shown in. */
+const CONTEXT_UNIT = 'tokens';
+/** Shown where a value is unknown. */
+const UNKNOWN_VALUE = '-';
+
+/**
+ * Context window of a model: `configured / supported tokens`, or whichever is known.
+ * Equal values collapse to one, `131 072 tokens` instead of `131 072 / 131 072 tokens`.
+ */
+export function formatContextLength(values: number[]): string {
+	const unique = [...new Set(values)];
+
+	return unique.length
+		? `${unique.map((value) => formatNumber(value)).join(CONTEXT_VALUE_SEPARATOR)} ${CONTEXT_UNIT}`
+		: UNKNOWN_VALUE;
 }
 
 /**
@@ -70,6 +95,7 @@ export function formatNumber(num: number | unknown): string {
 export function formatJsonPretty(jsonString: string): string {
 	try {
 		const parsed = JSON.parse(jsonString);
+
 		return JSON.stringify(parsed, null, 2);
 	} catch {
 		return jsonString;
@@ -84,8 +110,8 @@ export function formatJsonPretty(jsonString: string): string {
  */
 export function formatTime(date: Date): string {
 	return date.toLocaleTimeString('en-US', {
-		hour12: false,
 		hour: '2-digit',
+		hour12: false,
 		minute: '2-digit',
 		second: '2-digit'
 	});
@@ -114,7 +140,6 @@ export function formatPerformanceTime(ms: number): string {
 	const hours = Math.floor(totalSeconds / SECONDS_PER_HOUR);
 	const minutes = Math.floor((totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
 	const seconds = Math.floor(totalSeconds % SECONDS_PER_MINUTE);
-
 	const parts: string[] = [];
 
 	if (hours > 0) {
@@ -149,5 +174,6 @@ export function formatAttachmentText(
 	extra?: string
 ): string {
 	const header = extra ? `${name} (${extra})` : name;
+
 	return `\n\n--- ${label}: ${header} ---\n${content}`;
 }

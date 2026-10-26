@@ -5,15 +5,25 @@
 #include "llama.h"
 #include "chat.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
+#include "subproc.h"
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cinttypes>
+#include <cstdio>
+#include <filesystem>
+#include <functional>
+#include <mutex>
+#include <thread>
+#include <queue>
 #include <string>
 #include <vector>
-#include <cinttypes>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 #define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_TRC(slot, fmt, ...) LOG_TRC("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
@@ -36,9 +46,9 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     // Fallback null to default value
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
-            return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
+            return body.at(key).get<T>();
+        } catch (const common_json_error & err) {
+            LOG_WRN("Wrong type supplied for parameter '%s', using default value: %s\n", key.c_str(), err.what());
             return default_value;
         }
     } else {
@@ -86,6 +96,9 @@ struct server_grammar_trigger {
 
 json format_error_response(const std::string & message, const enum error_type type);
 
+// path of the running llama-server binary, used to spawn siblings. throws on failure
+std::filesystem::path get_server_exec_path();
+
 //
 // random string / id
 //
@@ -96,6 +109,23 @@ std::string gen_tool_call_id();
 
 // get a random marker; note: each time the server restarts, the marker will be different
 const char * get_media_marker();
+
+//
+// model output modalities
+//
+
+// output modalities for architecture.output_modalities in GET /models
+// has_cap_chat: false for a tts-only model, has_cap_tts: the model can generate audio
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type, bool has_cap_chat, bool has_cap_tts);
+// same, with the decision type read from a loaded model
+std::vector<std::string> server_model_output_modalities(const llama_model * model, bool has_cap_chat, bool has_cap_tts);
+
+// architecture object of GET /models; shared by the direct server and the router
+json server_model_architecture_json(
+        bool inp_image,
+        bool inp_audio,
+        bool inp_video,
+        const std::vector<std::string> & output_modalities);
 
 //
 // lora utils
@@ -189,16 +219,23 @@ public:
     // will create a copy of the chunk if it contains non-text data
     void push_back(const mtmd_input_chunk * chunk);
 
+    // same as push_back, but media chunks are stored as placeholders (no image/audio data)
+    // only use this if the chunk will never be encoded again (e.g. it is already in the KV cache)
+    void push_back_placeholder(const mtmd_input_chunk * chunk);
+
     // appends server tokens, updates the media map. copies media chunks.
     void push_back(server_tokens & tokens);
 
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens);
 
-    // for compatibility with speculative decoding, ctx shift, slot save/load
+    // for compatibility with speculative decoding, ctx shift
     const llama_tokens & get_tokens() const;
 
     llama_tokens get_text_tokens() const;
+
+    std::vector<char> serialize() const;
+    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
@@ -206,9 +243,6 @@ public:
     size_t size() const { return tokens.size(); }
 
     bool empty() const { return tokens.empty(); }
-
-    // true if the sequence actually contains image/audio chunks.
-    bool has_media() const { return !map_idx_to_media.empty(); }
 
     void clear() {
         map_idx_to_media.clear();
@@ -224,7 +258,7 @@ public:
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
 
-    // make sure all text tokens are within the vocab range
+    // check text token IDs and the mapping between media chunks and token ranges
     bool validate(const struct llama_context * ctx) const;
 
     server_tokens clone() const;
@@ -258,9 +292,23 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
+// load a media file from an URL (http, file, data) or from raw base64 data
+void handle_media(
+        std::vector<raw_buffer> & out_files,
+        const std::string & url,
+        const std::string & media_path);
+
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
+server_tokens process_mtmd_prompt(
+                                        mtmd_context * mctx,
+                                        const std::string & prompt,
+                                        const std::vector<raw_buffer> & files,
+                                         const mtmd_helper_init_opt & init_opt,
+                                          bool is_placeholder = false);
+
+// decode one media url (http/file/data-uri) into out_files; throws on failure
+void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -280,7 +328,17 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         mtmd_context * mctx,
                                         const json & json_prompt,
                                         bool add_special,
-                                        bool parse_special);
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
+
+// tokenize a single prompt, see tokenize_input_prompts() for the supported shapes
+server_tokens tokenize_input_subprompt(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & json_prompt,
+                                        bool add_special,
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
 
 //
 // OAI utils
@@ -308,9 +366,21 @@ json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
+    const llama_vocab * vocab,
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    common_chat_session & out_session);
+
+// used by /embeddings endpoint, content has the same format as a chat message content array
+server_tokens tokenize_oai_content_array(
+    const llama_vocab * vocab,
+    mtmd_context * mctx,
+    const server_chat_params & opt,
+    json content,
+    bool add_special,
+    bool parse_special,
+    const mtmd_helper_init_opt & init_opt);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
@@ -327,6 +397,160 @@ json format_response_rerank(
         bool is_tei_format,
         std::vector<std::string> & texts,
         int top_n);
+
+//
+// stats and metrics
+//
+
+// shared between server_slot and server_task_result_*
+struct server_slot_stats {
+    uint64_t n_prompt_cached    = 0;
+    uint64_t n_prompt_processed = 0;
+    uint64_t n_gen              = 0;
+
+    // speculative decoding stats
+    // note: the per-position breakdown lives in server_slot, it is not needed in a task result
+    uint64_t n_draft_tokens      = 0;
+    uint64_t n_draft_accepted    = 0;
+    uint64_t n_draft_verif_steps = 0;
+
+    // these are absolute timestamps (in us)
+    // note: must be signed - they are subtracted before the later ones are set
+    int64_t t_start       = 0;
+    int64_t t_prompt_last = 0;
+    int64_t t_gen_last    = 0;
+
+    // can only move one direction: start -> prompt -> gen
+    void update_prompt_start() {
+        GGML_ASSERT(t_start == 0);
+        t_start = ggml_time_us();
+    }
+    void set_prompt_last(int64_t t_us) {
+        GGML_ASSERT(t_start > 0);
+        t_prompt_last = t_us;
+    }
+    void update_prompt_last() {
+        set_prompt_last(ggml_time_us());
+    }
+    void update_gen_last() {
+        GGML_ASSERT(t_prompt_last > 0);
+        t_gen_last = ggml_time_us();
+    }
+
+    // these are time durations
+    int64_t t_elapsed_us() const {
+        return ggml_time_us() - t_start;
+    }
+    double t_prompt_ms() const {
+        if (t_prompt_last == 0) {
+            return 0.0; // the prompt is not processed yet
+        }
+        return (t_prompt_last - t_start) / 1000.0;
+    }
+    int64_t t_gen_us() const {
+        if (t_gen_last == 0) {
+            return 0; // the generation is not started yet
+        }
+        // clamp to 1 us, the first token can land in the same us as t_prompt_last
+        return std::max<int64_t>(1, t_gen_last - t_prompt_last);
+    }
+    double t_gen_ms() const {
+        return t_gen_us() / 1000.0;
+    }
+
+    // number of decode steps spent on generation
+    // the first token is free, it comes from the logits of the last prompt batch
+    uint64_t n_gen_steps() const {
+        return n_gen > 0 ? n_gen - 1 : 0;
+    }
+
+    // other derived metrics
+    // note: all of them return 0.0 if the divisor is not known yet
+    double t_prompt_per_token_ms() const {
+        return n_prompt_processed > 0 ? t_prompt_ms() / n_prompt_processed : 0.0;
+    }
+    double t_gen_per_token_ms() const {
+        return n_gen_steps() > 0 ? t_gen_ms() / n_gen_steps() : 0.0;
+    }
+    double n_prompt_tps() const {
+        const double t_ms = t_prompt_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_processed : 0.0;
+    }
+    double n_gen_tps() const {
+        const double t_ms = t_gen_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_gen_steps() : 0.0;
+    }
+
+    // false if the slot never started, i.e. the task result carries no stats
+    bool is_set() const {
+        return t_start > 0;
+    }
+
+    json to_json() const;
+};
+
+// shared between server_context_impl and server_task_result_*
+// unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
+struct server_metrics {
+    int64_t t_start = 0;
+
+    struct bucket {
+        uint64_t count = 0; // number of tokens
+        uint64_t steps = 0; // number of decode steps,
+                            // this excludes first generated token (logits from prompt batch)
+        uint64_t time  = 0; // in microseconds
+
+        // the rate uses the decode steps, so that "free" tokens do not inflate it
+        double n_per_second() const {
+            return time > 0 ? (double) steps / (double) time * 1e6 : 0.0;
+        }
+
+        void add(uint64_t n, uint64_t n_steps, uint64_t t_us) {
+            count += n;
+            steps += n_steps;
+            time  += t_us;
+        }
+    };
+
+    // these are reset by reset_bucket(), only the rate is read from them
+    bucket prompt_bucket;
+    bucket predict_bucket;
+
+    // metrics below are cumulative since the server started
+    bucket prompt; // only processed tokens, cached ones are counted separately below
+    bucket predict;
+
+    // tokens reused from the cache need no decode, so they only have a count
+    uint64_t n_prompt_cached = 0;
+
+    uint64_t n_tokens_max = 0;
+
+    uint64_t n_decode     = 0;
+    uint64_t n_busy_slots = 0;
+
+    uint64_t n_draft_tokens      = 0; // Total draft tokens generated
+    uint64_t n_draft_accepted    = 0; // Draft tokens actually accepted
+    uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
+    std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
+
+    void init() {
+        t_start = ggml_time_us();
+    }
+
+    void reset_bucket() {
+        prompt_bucket  = {};
+        predict_bucket = {};
+    }
+
+    void add_prompt(uint64_t n_tokens, uint64_t t_us) {
+        prompt       .add(n_tokens, n_tokens, t_us);
+        prompt_bucket.add(n_tokens, n_tokens, t_us);
+    }
+
+    void add_prompt_cached(uint64_t n_tokens) {
+        n_prompt_cached += n_tokens;
+    }
+};
 
 //
 // other utils
@@ -369,10 +593,230 @@ llama_tokens format_prompt_infill(
         const bool spm_infill,
         const llama_tokens & tokens_prompt);
 
+std::string format_rerank_template(
+        const std::string & tmpl,
+        const std::string & query,
+        const std::string & doc);
+
 // format rerank task: [BOS]query[EOS][SEP]doc[EOS].
+// query_files/doc_files carry decoded media for multimodal (Qwen) inputs; when non-empty the
+// prompt is built with get_media_marker() sentinels and spliced via process_mtmd_prompt.
 server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc);
+        const std::string & doc,
+        const std::vector<raw_buffer> & query_files,
+        const std::vector<raw_buffer> & doc_files,
+        const mtmd_helper_init_opt & init_opt);
+
+// simple implementation of a pipe
+// used for streaming data between threads
+template<typename T>
+struct server_pipe {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<T> queue;
+    std::atomic<bool> writer_closed{false};
+    std::atomic<bool> reader_closed{false};
+
+    // 0 = unbounded (default)
+    // > 0, write() drops the oldest item once the queue is full
+    size_t max_size = 0;
+
+    void close_write() {
+        writer_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    void close_read() {
+        reader_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
+    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
+    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
+        std::unique_lock<std::mutex> lk(mutex);
+        constexpr auto poll_interval = std::chrono::milliseconds(500);
+        while (true) {
+            if (!queue.empty()) {
+                output = std::move(queue.front());
+                queue.pop();
+                return true;
+            }
+            if (writer_closed.load()) {
+                return false; // clean EOF
+            }
+            if (should_stop && should_stop()) { // a null should_stop means "never stop"
+                if (close_on_stop) {
+                    close_read(); // signal broken pipe to writer
+                }
+                return false; // cancelled / deadline reached
+            }
+            cv.wait_for(lk, poll_interval);
+        }
+    }
+
+    bool write(T && data) {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (reader_closed.load()) {
+            return false; // broken pipe
+        }
+        if (max_size > 0) {
+            while (queue.size() >= max_size) {
+                queue.pop(); // drop oldest to stay bounded
+            }
+        }
+        queue.push(std::move(data));
+        cv.notify_one();
+        return true;
+    }
+};
+
+// a child server writes its state commands to stdout and its logs to stderr
+enum server_subproc_stream {
+    SERVER_SUBPROC_STDOUT,
+    SERVER_SUBPROC_STDERR,
+    SERVER_SUBPROC_STREAMS,
+};
+
+// gives the current stdout to the caller as a stream of its own, and sends everything else written to stdout to stderr
+FILE * server_reserve_stdout();
+
+// wrapper around common_subproc to manage a child server process
+// mainly used by router mode
+struct server_subproc {
+    common_subproc sproc;
+    std::atomic<bool> stopped{false}; // set by the monitor once the process exited and was reaped
+
+    bool is_alive() { return sproc.alive(); }
+    void terminate() { sproc.terminate(); }
+    int  join() { return sproc.join(); }
+
+    // true if both output pipes of the child are available (call after create())
+    bool has_output();
+
+    // true once both output pipes are closed
+    bool output_closed() const;
+
+    // non-blocking read from one output pipe
+    // returns the number of bytes read, 0 when nothing is available, -1 when the pipe is closed or broken
+    int read_output(server_subproc_stream stream, char * buf, size_t len);
+
+    // wait until one of a set of children has output, wake() is called, or a timeout passes
+    struct waiter {
+        waiter();
+        ~waiter();
+
+        // thread-safe; on Windows this is a no-op, wait() returns within 50 ms anyway
+        void wake();
+
+        // timeout_ms < 0 waits until data or wake(); ready[i] is set for each child with data on an open pipe (or a broken pipe)
+        void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
+
+    private:
+#ifndef _WIN32
+        intptr_t wake_fd[2] = { -1, -1 }; // POSIX self-pipe
+#endif
+    };
+
+private:
+    intptr_t out_handles[SERVER_SUBPROC_STREAMS] = { -1, -1 }; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
+    bool     out_closed [SERVER_SUBPROC_STREAMS] = { false, false };
+};
+
+//
+// router <-> child protocol
+//
+
+// what this llama-server process does. a router spawns the other roles as child processes
+// and talks to them over their stdin/stdout
+enum server_role_type {
+    SERVER_ROLE_ROUTER,   // no model: lists the models, spawns instances on demand and proxies requests to them
+    SERVER_ROLE_INSTANCE, // serves one model, standalone or as a child of a router
+    SERVER_ROLE_DOWNLOAD, // child of a router: download a model, report the progress, exit
+};
+
+static inline const char * server_role_type_to_str(server_role_type role) {
+    switch (role) {
+        case SERVER_ROLE_ROUTER:   return "router";
+        case SERVER_ROLE_INSTANCE: return "instance";
+        case SERVER_ROLE_DOWNLOAD: return "download";
+        default: GGML_ASSERT(false && "invalid server_role_type");
+    }
+}
+
+// the role a router asks of a child; anything it does not name is an instance
+static inline server_role_type server_role_type_from_str(const std::string & str) {
+    if (str == "download") {
+        return SERVER_ROLE_DOWNLOAD;
+    }
+    return SERVER_ROLE_INSTANCE;
+}
+
+// set by the router in the environment of every child
+#define SERVER_ENV_ROUTER_PORT "LLAMA_SERVER_ROUTER_PORT" // its presence makes the process a child
+#define SERVER_ENV_CHILD_ROLE  "LLAMA_SERVER_CHILD_ROLE"  // server_role_type_to_str(), an instance when unset
+
+// lines on the child's stdin (router -> child) and stdout (child -> router),
+// see server_role::setup() and server_role::notify_to_router()
+#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
+
+// address a child binds to: the router may listen on 0.0.0.0, but reaches its children locally
+// ref: https://github.com/ggml-org/llama.cpp/issues/17862
+#define CHILD_ADDR "127.0.0.1"
+
+// the states a child reports to the router
+enum server_state {
+    SERVER_STATE_DOWNLOADING,
+    SERVER_STATE_LOADING,
+    SERVER_STATE_READY,
+    SERVER_STATE_SLEEPING,
+};
+
+static inline std::string server_state_to_str(server_state state) {
+    switch (state) {
+        case SERVER_STATE_DOWNLOADING: return "downloading";
+        case SERVER_STATE_LOADING:     return "loading";
+        case SERVER_STATE_READY:       return "ready";
+        case SERVER_STATE_SLEEPING:    return "sleeping";
+        default: GGML_ASSERT(false && "invalid server_state");
+    }
+}
+
+static inline server_state server_state_from_str(const std::string & str) {
+    if (str == "downloading") return SERVER_STATE_DOWNLOADING;
+    if (str == "loading")     return SERVER_STATE_LOADING;
+    if (str == "ready")       return SERVER_STATE_READY;
+    if (str == "sleeping")    return SERVER_STATE_SLEEPING;
+    GGML_ASSERT(false && "invalid server_state string");
+}
+
+// the role of this process and, when it is a child of a router, its side of the protocol
+struct server_role {
+    // serializes the notify_to_router writes
+    std::mutex mtx_stdout;
+
+    // in a child, keeps stdout for the commands to the router, so it is created before anything is written;
+    // everything else written to stdout goes to stderr with the logs
+    server_role();
+    ~server_role();
+
+    // true if the current process was spawned by a router
+    bool is_managed_by_router();
+    server_role_type get_role();
+
+    // register the shutdown_handler to be called by the router
+    // return the monitoring thread (to be joined by the caller)
+    std::thread setup(const std::function<void(int)> & shutdown_handler);
+
+    // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
+    // message will be handled by server_models::handle_child_state() on the router side
+    void notify_to_router(const std::string & state_name, const json & payload);
+
+private:
+    FILE * cmd_out = nullptr; // the stdout the router reads the commands from
+};

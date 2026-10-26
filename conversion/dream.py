@@ -9,6 +9,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("DreamModel")
+@ModelBase.example("Dream-org/Dream-v0-Instruct-7B")
 class DreamModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DREAM
 

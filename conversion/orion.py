@@ -4,6 +4,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("OrionForCausalLM")
+@ModelBase.example("OrionStarAI/Orion-14B-Base")
 class OrionModel(TextModel):
     model_arch = gguf.MODEL_ARCH.ORION
 

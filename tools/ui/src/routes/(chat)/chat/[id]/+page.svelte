@@ -1,24 +1,22 @@
 <script lang="ts">
 	import { goto, replaceState } from '$app/navigation';
-	import { page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
-	import { APP_NAME, ROUTES } from '$lib/constants';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
-	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
+	import { APP_NAME, ROUTES, URL_PARAMS } from '$lib/constants';
+	import { chatStore, conversationsStore, modelsStore } from '$lib/stores';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
 
 	// URL parameters for prompt and model selection
-	let qParam = $derived(page.url.searchParams.get('q'));
-	let modelParam = $derived(page.url.searchParams.get('model'));
+	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
+	let modelParam = $derived(page.url.searchParams.get(URL_PARAMS.MODEL));
 
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
 	let requestedModelName = $state('');
-	let availableModelNames = $derived(modelOptions().map((m) => m.model));
+	let availableModelNames = $derived(modelsStore.models.map((m) => m.model));
 
 	// Track if URL params have been processed for this chat
 	let urlParamsProcessed = $state(false);
@@ -28,8 +26,9 @@
 	 */
 	function clearUrlParams() {
 		const url = new URL(page.url);
-		url.searchParams.delete('q');
-		url.searchParams.delete('model');
+
+		url.searchParams.delete(URL_PARAMS.QUERY);
+		url.searchParams.delete(URL_PARAMS.MODEL);
 		replaceState(url.toString(), {});
 	}
 
@@ -40,6 +39,7 @@
 		// Handle model parameter - select model if provided
 		if (modelParam) {
 			const model = modelsStore.findModelByName(modelParam);
+
 			if (model) {
 				try {
 					await modelsStore.selectModelById(model.id);
@@ -47,12 +47,14 @@
 					console.error('Failed to select model:', error);
 					requestedModelName = modelParam;
 					showModelNotAvailable = true;
+
 					return;
 				}
 			} else {
 				// Model not found - show error dialog
 				requestedModelName = modelParam;
 				showModelNotAvailable = true;
+
 				return;
 			}
 		}
@@ -82,20 +84,25 @@
 			urlParamsProcessed = false; // Reset for new chat
 
 			// Skip loading if this conversation is already active (e.g., just created)
-			if (activeConversation()?.id === chatId) {
+			if (conversationsStore.activeConversation?.id === chatId) {
 				void chatStore.discoverActiveStream(chatId);
+
 				if ((qParam !== null || modelParam !== null) && !urlParamsProcessed) {
 					handleUrlParams();
 				}
+
 				return;
 			}
 
 			(async () => {
 				const success = await conversationsStore.loadConversation(chatId);
+
 				if (!success) {
 					await goto(ROUTES.START);
+
 					return;
 				}
+
 				chatStore.syncLoadingStateForChat(chatId);
 				// server probe (with localStorage fallback) and attach
 				await chatStore.discoverActiveStream(chatId);
@@ -114,20 +121,24 @@
 		// where the initial mount probe missed an active session
 		const onVisibility = () => {
 			if (document.visibilityState !== 'visible') return;
+
 			if (!chatId) return;
+
 			void chatStore.discoverActiveStream(chatId);
 		};
+
 		document.addEventListener('visibilitychange', onVisibility);
+
 		return () => document.removeEventListener('visibilitychange', onVisibility);
 	});
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - {APP_NAME}</title>
+	<title>{conversationsStore.activeConversation?.name || 'Chat'} - {APP_NAME}</title>
 </svelte:head>
 
 <DialogModelNotAvailable
 	bind:open={showModelNotAvailable}
-	modelName={requestedModelName}
 	availableModels={availableModelNames}
+	modelName={requestedModelName}
 />

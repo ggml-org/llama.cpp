@@ -211,7 +211,30 @@ __kernel void FA_TILE_NAME(
 
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
+#ifdef FA_K_LDS_T
+    // K tile transposed: [dk vec][kv row] instead of [kv row][dk vec].
+    //
+    // The QK loop walks 2 or 4 KV rows at a time against the same dk element. Row-major
+    // those are DK_VEC half4s apart, so each is its own 64-bit local read. Transposed they
+    // are adjacent, so a pair is one 128-bit read -- half the LDS issues for the same bytes,
+    // no extra registers, arithmetic untouched.
+    //
+    // This kernel looked like it should be FMA-bound (a half4 mad does ~4 ALU ops per LDS
+    // read, unlike the 1:1 of the dp4a loop), but it is NOT: a wrong-math probe that kept
+    // every FMA and removed the LDS reads ran it 38.6% faster (18.92 -> 11.62 ms/op).
+    // Explicitly 16-byte aligned: FA_LK_PAIR below reads two adjacent half4 as one float4,
+    // and the element type only obliges the compiler to align this array to 8. The indices
+    // are even so the offset is a multiple of 16, but the base has to be too, and relying
+    // on the compiler to over-align it is relying on luck.
+    __local KV_DATA_TYPE4 l_k[DK_VEC][BLOCK_N] __attribute__((aligned(16)));
+#define FA_LK(ROW, C) l_k[C][ROW]
+    // Two adjacent KV rows as one 128-bit local read (half4 pair == 16 B). j is even and
+    // BLOCK_N is even, so &l_k[c][j] is 16 B past a 16 B-aligned base.
+#define FA_LK_PAIR(C, J) as_half8(*(__local const float4 *)(&l_k[C][J]))
+#else
     __local KV_DATA_TYPE4 l_k[BLOCK_N][DK_VEC];
+#define FA_LK(ROW, C) l_k[ROW][C]
+#endif
     __local KV_DATA_TYPE4 l_v[BLOCK_N][DV_VEC];
 
 #if N_SPLIT > 1 && !defined(HAS_SUBGROUP_SHUFFLE)
@@ -254,17 +277,17 @@ __kernel void FA_TILE_NAME(
 #ifdef FA_K_IMG
                 if (use_kv_pad) {
                     const ulong k_row_offset = batch_idx * k_tile_nb3 + head_kv_idx * k_tile_nb2 + k_row_idx * k_nb1;
-                    l_k[row][col] = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
+                    FA_LK(row, col) = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
                 } else {
                     const int k_row_px = batch_idx * k_pitch_px_batch + head_kv_idx * k_pitch_px_head + k_row_idx * k_pitch_px_row;
-                    l_k[row][col] = read_imageh(k_img, k_row_px + col);
+                    FA_LK(row, col) = read_imageh(k_img, k_row_px + col);
                 }
 #else
                 const ulong k_row_offset = batch_idx * k_tile_nb3 + head_kv_idx * k_tile_nb2 + k_row_idx * k_nb1;
-                l_k[row][col] = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
+                FA_LK(row, col) = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
 #endif
             } else {
-                l_k[row][col] = (KV_DATA_TYPE4)(0.0h);
+                FA_LK(row, col) = (KV_DATA_TYPE4)(0.0h);
             }
         }
         for (int i = tid; i < BLOCK_N * DV_VEC; i += WG_SIZE) {
@@ -292,8 +315,15 @@ __kernel void FA_TILE_NAME(
                 FA_UNROLL
                 for (int k = 0; k < SPLIT_DK_VEC; k++) {
                     const ACC_TYPE4 qk = q_priv[k];
+#if defined(FA_K_LDS_T)
+                    // 2 KV rows adjacent in the transposed tile: one 128-bit local read.
+                    const half8 kk = FA_LK_PAIR(dk_off + k, j);
+                    ACC_TYPE4 dot0 = qk * CONVERT_KV_ACC4(kk.lo);
+                    ACC_TYPE4 dot1 = qk * CONVERT_KV_ACC4(kk.hi);
+#else
                     ACC_TYPE4 dot0 = qk * CONVERT_KV_ACC4(l_k[j  ][dk_off + k]);
                     ACC_TYPE4 dot1 = qk * CONVERT_KV_ACC4(l_k[j+1][dk_off + k]);
+#endif
                     partial0 += dot0.s0 + dot0.s1 + dot0.s2 + dot0.s3;
                     partial1 += dot1.s0 + dot1.s1 + dot1.s2 + dot1.s3;
                 }
@@ -306,6 +336,10 @@ __kernel void FA_TILE_NAME(
 
                 ACC_TYPE score0 = partial0 * scale;
                 ACC_TYPE score1 = partial1 * scale;
+                if (logit_softcap > 0.0f) {
+                    score0 = logit_softcap * tanh(score0 / logit_softcap);
+                    score1 = logit_softcap * tanh(score1 / logit_softcap);
+                }
 
                 if (!query_valid) { score0 = FA_M_INIT; score1 = FA_M_INIT; }
                 if (is_causal) {
@@ -327,11 +361,6 @@ __kernel void FA_TILE_NAME(
                         if (k_row0 < n_kv) score0 += slope * (ACC_TYPE)mask_ptr[k_row0];
                         if (k_row1 < n_kv) score1 += slope * (ACC_TYPE)mask_ptr[k_row1];
                     }
-                }
-
-                if (logit_softcap > 0.0f) {
-                    score0 = logit_softcap * tanh(score0 / logit_softcap);
-                    score1 = logit_softcap * tanh(score1 / logit_softcap);
                 }
 
                 const ACC_TYPE m_new = max(m_i, max(score0, score1));
@@ -359,7 +388,7 @@ __kernel void FA_TILE_NAME(
             ACC_TYPE4 dot_acc = (ACC_TYPE4)(0.0f);
             FA_UNROLL
             for (int k = 0; k < SPLIT_DK_VEC; k++) {
-                dot_acc = mad(q_priv[k], CONVERT_KV_ACC4(l_k[j][dk_off + k]), dot_acc);
+                dot_acc = mad(q_priv[k], CONVERT_KV_ACC4(FA_LK(j, dk_off + k)), dot_acc);
             }
             local_partial[j][tid] =
                 dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3;
@@ -378,6 +407,9 @@ __kernel void FA_TILE_NAME(
                         score += local_partial[j][q_lane * N_SPLIT + s];
                     }
                     score *= scale;
+                    if (logit_softcap > 0.0f) {
+                        score = logit_softcap * tanh(score / logit_softcap);
+                    }
 
                     if (is_causal && k_row > (n_kv - n_q + my_query_row)) score = FA_M_INIT;
                     if (k_row >= n_kv) score = FA_M_INIT;
@@ -392,10 +424,6 @@ __kernel void FA_TILE_NAME(
                                 (const global MASK_DATA_TYPE*)(mask_base + my_query_row * mask_nb1);
                             if (k_row < n_kv) score += slope * (ACC_TYPE)mask_ptr[k_row];
                         }
-                    }
-
-                    if (logit_softcap > 0.0f) {
-                        score = logit_softcap * tanh(score / logit_softcap);
                     }
 
                     m_new = max(m_new, score);
@@ -452,15 +480,32 @@ __kernel void FA_TILE_NAME(
                 FA_UNROLL
                 for (int k = 0; k < DK_VEC; k++) {
                     const ACC_TYPE4 qk = q_priv[k];
+#if defined(FA_K_LDS_T)
+                    // 4 KV rows adjacent in the transposed tile: two 128-bit local reads
+                    // instead of four 64-bit ones.
+                    const half8 kk01 = FA_LK_PAIR(k, j);
+                    const half8 kk23 = FA_LK_PAIR(k, j + 2);
+                    dot_acc0 = mad(qk, CONVERT_KV_ACC4(kk01.lo), dot_acc0);
+                    dot_acc1 = mad(qk, CONVERT_KV_ACC4(kk01.hi), dot_acc1);
+                    dot_acc2 = mad(qk, CONVERT_KV_ACC4(kk23.lo), dot_acc2);
+                    dot_acc3 = mad(qk, CONVERT_KV_ACC4(kk23.hi), dot_acc3);
+#else
                     dot_acc0 = mad(qk, CONVERT_KV_ACC4(l_k[j][k]),   dot_acc0);
                     dot_acc1 = mad(qk, CONVERT_KV_ACC4(l_k[j+1][k]), dot_acc1);
                     dot_acc2 = mad(qk, CONVERT_KV_ACC4(l_k[j+2][k]), dot_acc2);
                     dot_acc3 = mad(qk, CONVERT_KV_ACC4(l_k[j+3][k]), dot_acc3);
+#endif
                 }
                 ACC_TYPE s0 = (dot_acc0.s0 + dot_acc0.s1 + dot_acc0.s2 + dot_acc0.s3) * scale;
                 ACC_TYPE s1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
                 ACC_TYPE s2 = (dot_acc2.s0 + dot_acc2.s1 + dot_acc2.s2 + dot_acc2.s3) * scale;
                 ACC_TYPE s3 = (dot_acc3.s0 + dot_acc3.s1 + dot_acc3.s2 + dot_acc3.s3) * scale;
+                if (logit_softcap > 0.0f) {
+                    s0 = logit_softcap * tanh(s0 / logit_softcap);
+                    s1 = logit_softcap * tanh(s1 / logit_softcap);
+                    s2 = logit_softcap * tanh(s2 / logit_softcap);
+                    s3 = logit_softcap * tanh(s3 / logit_softcap);
+                }
 
                 if (is_causal) {
                     const int causal_limit = n_kv - n_q + my_query_row;
@@ -488,13 +533,6 @@ __kernel void FA_TILE_NAME(
                         if (k_row2 < n_kv) s2 += slope * (ACC_TYPE)mask_ptr[k_row2];
                         if (k_row3 < n_kv) s3 += slope * (ACC_TYPE)mask_ptr[k_row3];
                     }
-                }
-
-                if (logit_softcap > 0.0f) {
-                    s0 = logit_softcap * tanh(s0 / logit_softcap);
-                    s1 = logit_softcap * tanh(s1 / logit_softcap);
-                    s2 = logit_softcap * tanh(s2 / logit_softcap);
-                    s3 = logit_softcap * tanh(s3 / logit_softcap);
                 }
 
                 const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));
@@ -624,7 +662,7 @@ __kernel void FA_TILE_NAME(
 
 // allow bypassing decode kernels to avoid compiler crash for DK=512 on Adreno GPUs
 #ifndef FA_PREFILL_ONLY
-#ifndef FA_MQ_ONLY  // q1 excluded from the MQ-only (g8) program
+#if !defined(FA_MQ_ONLY) && !defined(FA_VEC_ONLY)
 REQD_FA_SG
 __kernel void flash_attn_f32_f16_q1(
     const global void * q_void, ulong q_offset,
@@ -707,12 +745,12 @@ __kernel void flash_attn_f32_f16_q1(
             dot_acc = mad(q_shared[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         m_i = max(m_i, score);
     }
@@ -735,12 +773,12 @@ __kernel void flash_attn_f32_f16_q1(
             dot_acc = mad(q_shared[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         const ACC_TYPE p = exp(score - m_final);
         l_i += p;
@@ -891,13 +929,13 @@ __kernel void flash_attn_f32_f16_q1_vec(
         }
         ACC_TYPE dot_partial = dot4.s0 + dot4.s1 + dot4.s2 + dot4.s3;
         ACC_TYPE score = sub_group_reduce_add(dot_partial) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
 
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base;
             score += slope * (ACC_TYPE) mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
 
         // FA-2 online update. All threads in the subgroup see the same score,
@@ -1081,12 +1119,12 @@ __kernel void flash_attn_f32_f16_q1_local_tile(
 
             if (tid == 0) {
                 float s = red[0] * scale;
+                if (logit_softcap > 0.0f) {
+                    s = logit_softcap * tanh(s / logit_softcap);
+                }
                 if (mask_base != NULL) {
                     const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base;
                     s += slope * (float) mask_ptr[kv_idx];
-                }
-                if (logit_softcap > 0.0f) {
-                    s = logit_softcap * tanh(s / logit_softcap);
                 }
                 score_shared = s;
             }
@@ -1282,12 +1320,12 @@ __kernel void flash_attn_f32_f16_q1_local_mq_split(
                     contrib += q_shared[h * DK + d] * (float) k_tile[j * DK + d];
                 }
                 float s = sub_group_reduce_add(contrib) * scale;
+                if (logit_softcap > 0.0f) {
+                    s = logit_softcap * tanh(s / logit_softcap);
+                }
                 if (mask_base[h] != NULL) {
                     const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                     s += slope[h] * (float) mask_ptr[kv_idx];
-                }
-                if (logit_softcap > 0.0f) {
-                    s = logit_softcap * tanh(s / logit_softcap);
                 }
                 score[h] = s;
             }
@@ -1344,6 +1382,7 @@ __kernel void flash_attn_f32_f16_q1_local_mq_split(
 #endif
 #define MQ_WG_SIZE (Q1_WG_SIZE * MQ_NSG)
 
+#ifndef FA_MQ_SPLIT_ONLY
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_vec_mq(
     const global void * q_void, ulong q_offset,
@@ -1468,12 +1507,12 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
         for (int h = 0; h < MQ_GQA; ++h) {
             const ACC_TYPE dot_partial = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
             ACC_TYPE s = sub_group_reduce_add(dot_partial) * scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_idx];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = s;
         }
@@ -1565,6 +1604,8 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
     }
 }
 
+#endif  // !FA_MQ_SPLIT_ONLY
+
 #ifndef MQ_NSG_SPLIT
 #define MQ_NSG_SPLIT 4
 #endif
@@ -1572,6 +1613,10 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
 
 #ifndef FA_PARTIAL_FLOATS
 #define FA_PARTIAL_FLOATS (2 + DV)
+#endif
+
+#ifndef FA_HEAD_SUB
+#define FA_HEAD_SUB 1
 #endif
 
 REQD_SUBGROUP_SIZE_64
@@ -1611,8 +1656,12 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
     const int split_idx        = split_q_idx % n_splits;
     const int q_idx            = split_q_idx / n_splits;
 
-    const int batch_idx   = kvhead_batch_idx / n_head_kv;
-    const int head_kv_idx = kvhead_batch_idx % n_head_kv;
+    const int hgroups     = n_head_kv * FA_HEAD_SUB;
+    const int batch_idx   = kvhead_batch_idx / hgroups;
+    const int hg          = kvhead_batch_idx % hgroups;
+    const int head_kv_idx = hg / FA_HEAD_SUB;
+    const int head_sub    = hg % FA_HEAD_SUB;
+#define FA_MQS_HEAD_IDX(h) (head_kv_idx * (MQ_GQA * FA_HEAD_SUB) + head_sub * MQ_GQA + (h))
 
     const int kv_start = split_idx * kv_per_split;
     const int kv_end   = min(kv_start + kv_per_split, n_kv);
@@ -1625,7 +1674,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
         if (tid == 0) {
             #pragma unroll
             for (int h = 0; h < MQ_GQA; ++h) {
-                const int head_idx = head_kv_idx * MQ_GQA + h;
+                const int head_idx = FA_MQS_HEAD_IDX(h);
                 const ulong rec_idx = ((((ulong) batch_idx * n_head + head_idx) * n_q + q_idx)
                                        * n_splits + split_idx);
                 global float * rec = partial_void + rec_idx * record_stride;
@@ -1640,22 +1689,33 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
     const global char * k_base = (const global char *) k_void + k_offset;
     const global char * v_base = (const global char *) v_void + v_offset;
 
+#ifdef FA_Q1_Q_REG
+    ACC_TYPE4 q_reg[MQ_GQA];
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        const int head_idx = FA_MQS_HEAD_IDX(h);
+        const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + (ulong) q_idx * q_nb1;
+        const global Q_DATA_TYPE4 * q_ptr = (const global Q_DATA_TYPE4 *) (q_base + q_row_offset);
+        q_reg[h] = (tid_sg < DK_VEC) ? CONVERT_Q_ACC4(q_ptr[tid_sg]) : (ACC_TYPE4)(0.0f);
+    }
+#else
     // stage MQ_GQA Q rows in __local once (uniform across WG)
     __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
     for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_SPLIT_WG_SIZE) {
         const int h        = i / DK_VEC;
         const int k        = i % DK_VEC;
-        const int head_idx = head_kv_idx * MQ_GQA + h;
+        const int head_idx = FA_MQS_HEAD_IDX(h);
         const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + (ulong) q_idx * q_nb1;
         const global Q_DATA_TYPE4 * q_ptr = (const global Q_DATA_TYPE4 *) (q_base + q_row_offset);
         q_shared[h * DK_VEC + k] = CONVERT_Q_ACC4(q_ptr[k]);
     }
     barrier(CLK_LOCAL_MEM_FENCE);
+#endif
 
     float slope[MQ_GQA];
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
-        slope[h] = get_alibi_slope(max_bias, head_kv_idx * MQ_GQA + h, n_head_log2, m0, m1);
+        slope[h] = get_alibi_slope(max_bias, FA_MQS_HEAD_IDX(h), n_head_log2, m0, m1);
     }
 
     const global char * mask_base[MQ_GQA];
@@ -1666,7 +1726,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
                                           (ulong) q_idx * mask_nb1;
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) {
-            const int head_idx      = head_kv_idx * MQ_GQA + h;
+            const int head_idx      = FA_MQS_HEAD_IDX(h);
             const int mask_head_idx = head_idx % mask_ne2;
             mask_base[h] = mask_base_b + mask_head_idx * mask_nb2;
         }
@@ -1701,6 +1761,15 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
         ACC_TYPE4 dot4[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) dot4[h] = (ACC_TYPE4)(0.0f);
+#ifdef FA_Q1_Q_REG
+        if (tid_sg < DK_VEC) {
+            const ACC_TYPE4 k_vec = CONVERT_KV_ACC4(k_ptr[tid_sg]);
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                dot4[h] = mad(q_reg[h], k_vec, dot4[h]);
+            }
+        }
+#else
         for (int k = tid_sg; k < DK_VEC; k += Q1_WG_SIZE) {
             const ACC_TYPE4 k_vec = CONVERT_KV_ACC4(k_ptr[k]);
             #pragma unroll
@@ -1708,18 +1777,19 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
                 dot4[h] = mad(q_shared[h * DK_VEC + k], k_vec, dot4[h]);
             }
         }
+#endif
 
         ACC_TYPE score[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) {
             const ACC_TYPE dot_partial = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
             ACC_TYPE s = sub_group_reduce_add(dot_partial) * scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_idx];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = s;
         }
@@ -1769,7 +1839,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
         barrier(CLK_LOCAL_MEM_FENCE);
 
         if (sgid == 0) {
-            const int head_idx = head_kv_idx * MQ_GQA + h;
+            const int head_idx = FA_MQS_HEAD_IDX(h);
 
             // fold per-subgroup (m, l) into split-level (m_c, l_c)
             ACC_TYPE m_c = sg_m[h][0];
@@ -1807,6 +1877,9 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
     }
 }
 
+#undef FA_MQS_HEAD_IDX
+
+#ifndef FA_MQ_SPLIT_ONLY
 // Cluster-parallel variant of _q1_vec_mq_split
 //
 // Tthe baseline keeps one 256B K row in flight per subgroup (32 lanes cooperate
@@ -1895,8 +1968,12 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
     const int split_idx        = split_q_idx % n_splits;
     const int q_idx            = split_q_idx / n_splits;
 
-    const int batch_idx   = kvhead_batch_idx / n_head_kv;
-    const int head_kv_idx = kvhead_batch_idx % n_head_kv;
+    const int hgroups     = n_head_kv * FA_HEAD_SUB;
+    const int batch_idx   = kvhead_batch_idx / hgroups;
+    const int hg          = kvhead_batch_idx % hgroups;
+    const int head_kv_idx = hg / FA_HEAD_SUB;
+    const int head_sub    = hg % FA_HEAD_SUB;
+#define FA_HEAD_IDX(h) (head_kv_idx * (MQ_GQA * FA_HEAD_SUB) + head_sub * MQ_GQA + (h))
 
     const int kv_start = split_idx * kv_per_split;
     const int kv_end   = min(kv_start + kv_per_split, n_kv);
@@ -1907,7 +1984,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
         if (tid == 0) {
             #pragma unroll
             for (int h = 0; h < MQ_GQA; ++h) {
-                const int head_idx = head_kv_idx * MQ_GQA + h;
+                const int head_idx = FA_HEAD_IDX(h);
                 const ulong rec_idx = ((((ulong) batch_idx * n_head + head_idx) * n_q + q_idx)
                                        * n_splits + split_idx);
                 global float * rec = partial_void + rec_idx * record_stride;
@@ -1927,7 +2004,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
     for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_SPLIT_WG_SIZE) {
         const int h        = i / DK_VEC;
         const int k        = i % DK_VEC;
-        const int head_idx = head_kv_idx * MQ_GQA + h;
+        const int head_idx = FA_HEAD_IDX(h);
         const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + (ulong) q_idx * q_nb1;
         const global Q_DATA_TYPE4 * q_ptr = (const global Q_DATA_TYPE4 *) (q_base + q_row_offset);
         q_shared[h * DK_VEC + k] = CONVERT_Q_ACC4(q_ptr[k]);
@@ -1937,9 +2014,17 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
     float slope[MQ_GQA];
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
-        slope[h] = get_alibi_slope(max_bias, head_kv_idx * MQ_GQA + h, n_head_log2, m0, m1);
+        slope[h] = get_alibi_slope(max_bias, FA_HEAD_IDX(h), n_head_log2, m0, m1);
     }
 
+#ifdef FA_CL_MASK_BCAST
+    const global char * mask_base_b = NULL;
+    if (mask_void != NULL) {
+        mask_base_b = (const global char *) mask_void + mask_offset +
+                      (batch_idx % mask_ne3) * mask_nb3 + (ulong) q_idx * mask_nb1;
+    }
+    const int mask_bcast = mask_base_b != NULL && mask_ne2 == 1;
+#else
     const global char * mask_base[MQ_GQA];
     if (mask_void != NULL) {
         const int mask_batch_idx = batch_idx % mask_ne3;
@@ -1948,7 +2033,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
                                           (ulong) q_idx * mask_nb1;
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) {
-            const int head_idx      = head_kv_idx * MQ_GQA + h;
+            const int head_idx      = FA_HEAD_IDX(h);
             const int mask_head_idx = head_idx % mask_ne2;
             mask_base[h] = mask_base_b + mask_head_idx * mask_nb2;
         }
@@ -1956,6 +2041,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) mask_base[h] = NULL;
     }
+#endif
 
     // Per-CLUSTER online-softmax state (uniform across the cluster's lanes);
     // o_acc holds this lane's DV slice {lic + FA_CL_C*i}.
@@ -1990,6 +2076,73 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
         const global KV_DATA_TYPE4 * k_ptr = (const global KV_DATA_TYPE4 *) (k_base + kv_row_base + (ulong) k_safe * k_nb1);
         const global KV_DATA_TYPE4 * v_ptr = (const global KV_DATA_TYPE4 *) (v_base + v_row_base  + (ulong) k_safe * v_nb1);
 
+#if defined(FA_CL_MHRED) && MQ_GQA == 4 && FA_CL_C == 16 && FA_CL_DK == 1 && FA_CL_DV == 1
+        ACC_TYPE mask_val = 0.0f;
+        if (mask_bcast) {
+            mask_val = (ACC_TYPE) ((const global MASK_DATA_TYPE *) mask_base_b)[k_safe];
+        }
+        const ACC_TYPE4 k_vec_1 = CONVERT_KV_ACC4(k_ptr[lic]);
+        const ACC_TYPE4 v_vec_1 = CONVERT_KV_ACC4(v_ptr[lic]);
+
+        // Reduce four heads with eight shuffles and keep each head's summation order.
+        const int mh_b0 = lic & 1;
+        const int mh_b1 = lic & 2;
+
+        ACC_TYPE mh_p[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            const ACC_TYPE4 d4 = mad(q_shared[h * DK_VEC + lic], k_vec_1, (ACC_TYPE4)(0.0f));
+            mh_p[h] = d4.s0 + d4.s1 + d4.s2 + d4.s3;
+        }
+
+        ACC_TYPE mh_r2[2];
+        #pragma unroll
+        for (int j = 0; j < 2; ++j) {
+            const ACC_TYPE keep = mh_b0 ? mh_p[j + 2] : mh_p[j];
+            const ACC_TYPE send = mh_b0 ? mh_p[j]     : mh_p[j + 2];
+            mh_r2[j] = keep + sub_group_shuffle_xor(send, 1);
+        }
+        ACC_TYPE mh_r1 = (mh_b1 ? mh_r2[1] : mh_r2[0]) +
+                         sub_group_shuffle_xor(mh_b1 ? mh_r2[0] : mh_r2[1], 2);
+        mh_r1 += sub_group_shuffle_xor(mh_r1, 4);
+        mh_r1 += sub_group_shuffle_xor(mh_r1, 8);
+
+        ACC_TYPE mh_e2[2];
+        {
+            const ACC_TYPE other = sub_group_shuffle_xor(mh_r1, 2);
+            mh_e2[0] = mh_b1 ? other  : mh_r1;
+            mh_e2[1] = mh_b1 ? mh_r1  : other;
+        }
+        ACC_TYPE mh_s[MQ_GQA];
+        #pragma unroll
+        for (int j = 0; j < 2; ++j) {
+            const ACC_TYPE other = sub_group_shuffle_xor(mh_e2[j], 1);
+            mh_s[j]     = mh_b0 ? other     : mh_e2[j];
+            mh_s[j + 2] = mh_b0 ? mh_e2[j]  : other;
+        }
+
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            ACC_TYPE s = mh_s[h] * scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
+            if (mask_bcast) {
+                s += slope[h] * mask_val;
+            } else if (mask_base_b != NULL) {
+                const int mask_head_idx = FA_HEAD_IDX(h) % mask_ne2;
+                const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) (mask_base_b + mask_head_idx * mask_nb2);
+                s += slope[h] * (ACC_TYPE) mask_ptr[k_safe];
+            }
+            const ACC_TYPE sc    = valid ? s : FA_M_INIT;
+            const ACC_TYPE m_new = max(m_i[h], sc);
+            const ACC_TYPE sp    = native_exp(m_i[h] - m_new);
+            const ACC_TYPE p     = native_exp(sc - m_new);
+            l_i[h] = l_i[h] * sp + p;
+            m_i[h] = m_new;
+            o_acc[h][0] = mad(p, v_vec_1, o_acc[h][0] * sp);
+        }
+#else
         // Dot: this lane covers DK elements {lic + FA_CL_C*i} of the cluster's row.
         ACC_TYPE4 dot4[MQ_GQA];
         #pragma unroll
@@ -2014,12 +2167,12 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
                 s += sub_group_shuffle_xor(s, step);
             }
             s *= scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_safe];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = valid ? s : FA_M_INIT;
         }
@@ -2046,6 +2199,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
                 o_acc[h][i] = mad(p_h[h], v_vec, o_acc[h][i] * sp_h[h]);
             }
         }
+#endif
     }
 
     // Merge stage 1: fold the FA_CL_NCL cluster partials inside the subgroup.
@@ -2107,7 +2261,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
         barrier(CLK_LOCAL_MEM_FENCE);
 
         if (sgid == 0) {
-            const int head_idx = head_kv_idx * MQ_GQA + h;
+            const int head_idx = FA_HEAD_IDX(h);
 
             ACC_TYPE m_c = sg_m[h][0];
             #pragma unroll
@@ -2142,6 +2296,8 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 }
+
+#undef FA_HEAD_IDX
 
 #endif  // DK_VEC/DV_VEC divisible by FA_CL_C
 #endif  // HAS_SUBGROUP_SHUFFLE (q1_vec_mq_split_c8)
@@ -2289,12 +2445,12 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
         for (int h = 0; h < MQ_GQA; ++h) {
             const ACC_TYPE dot_partial = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
             ACC_TYPE s = sub_group_reduce_add(dot_partial) * scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_idx];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = s;
         }
@@ -2378,9 +2534,11 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 }
+#endif  // !FA_MQ_SPLIT_ONLY
 #endif  // !FA_DECODE_ONLY
 
 #ifndef FA_MQ_ONLY  // q1_split + merge excluded from the MQ-only (g8) program
+#ifndef FA_VEC_ONLY
 __kernel void flash_attn_f32_f16_q1_split(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -2472,12 +2630,12 @@ __kernel void flash_attn_f32_f16_q1_split(
             dot_acc = mad(q_shared[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) (mask_base);
             score += slope * (ACC_TYPE) mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         m_i = max(m_i, score);
     }
@@ -2501,12 +2659,12 @@ __kernel void flash_attn_f32_f16_q1_split(
             dot_acc = mad(q_shared[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) (mask_base);
             score += slope * (ACC_TYPE) mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         const ACC_TYPE p = exp(score - m_c);
         l_i += p;
@@ -2536,6 +2694,8 @@ __kernel void flash_attn_f32_f16_q1_split(
         }
     }
 }
+
+#endif  // !FA_VEC_ONLY
 
 // FD Pass 2: merge per-split partials into final O
 // empty splits drop via exp(-INF)=0.

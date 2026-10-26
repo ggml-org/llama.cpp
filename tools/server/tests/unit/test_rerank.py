@@ -41,6 +41,31 @@ def test_rerank():
     assert least_relevant["index"] == 3
 
 
+@pytest.mark.parametrize("kv_unified", [False, True])
+def test_rerank_skips_prompt_cache(kv_unified, tmp_path):
+    global server
+    server.n_slots = 2
+    server.cache_ram = 100
+    server.kv_unified = kv_unified
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    for i in range(4):
+        res = server.make_request("POST", "/rerank", data={
+            "query": f"query {i}",
+            "documents": TEST_DOCUMENTS[i:],
+        })
+        assert res.status_code == 200
+
+    server.stop()
+
+    with open(server.log_path) as f:
+        log = f.read()
+    assert "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__" in log
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log
+
+
 def test_rerank_tei_format():
     global server
     server.start()

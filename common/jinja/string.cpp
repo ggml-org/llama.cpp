@@ -103,7 +103,7 @@ void string::mark_input_based_on(const string & other) {
     }
 }
 
-string string::append(const string & other) {
+string & string::append(const string & other) {
     for (const auto & part : other.parts) {
         parts.push_back(part);
     }

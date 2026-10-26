@@ -6,24 +6,23 @@
 	// The scroll-to-bottom auto-scroll logic mirrors what was here
 	// before extraction.
 
-	import { Check, Loader2, XCircle, AlertTriangle } from '@lucide/svelte';
+	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
+	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { config } from '$lib/stores/settings.svelte';
-	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
+	import { AgenticSectionType, AttachmentType } from '$lib/enums';
+	import { settingsStore, toolsStore } from '$lib/stores';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
 	import {
+		abbreviateHome,
+		type ExecShellExitStatus,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
-		parseToolResultWithImages,
-		type AgenticSection,
-		type ExecShellExitStatus,
-		type ToolResultLine
+		parseToolResultWithMedia
 	} from '$lib/utils';
-	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;
@@ -33,16 +32,39 @@
 		 *  tool call. Drives max-height + auto-scroll while true; releases
 		 *  them when the loop reports this call as done. */
 		isExecuting?: boolean;
+		/** Working directory of the conversation this call belongs to; stands
+		 *  in for `section.toolCwd` until the result message persists the
+		 *  real one. */
+		conversationCwd?: string;
 		attachments?: DatabaseMessageExtra[];
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, isExecuting = false, attachments, onToggle }: Props = $props();
+	let {
+		attachments,
+		conversationCwd,
+		isExecuting = false,
+		isStreaming,
+		onToggle,
+		open,
+		section
+	}: Props = $props();
 
 	// `isLive` covers all in-flight phases: pre-chunk spinner and
 	// streaming itself. Frozen output (tool done while agent continues)
 	// is not live.
 	const isLive = $derived(isExecuting);
+
+	const isPreResult = $derived(
+		section.type === AgenticSectionType.TOOL_CALL_PENDING ||
+			section.type === AgenticSectionType.TOOL_CALL_STREAMING
+	);
+
+	// The model is still typing the call while the args JSON doesn't parse;
+	// the title keeps a terminal cursor until it does.
+	const commandStreaming = $derived(
+		isStreaming && isPreResult && !isParsableJson(section.toolArgs)
+	);
 
 	const execShellMeta = $derived(parseExecShellCommandMeta(section));
 	const execShellError = $derived(parseExecShellCommandError(section.toolResult));
@@ -51,7 +73,7 @@
 	);
 
 	const parsedLines: ToolResultLine[] = $derived(
-		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
+		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
 	);
 
 	// Drop the trailing "[exit code: N]" line - rendered as a colored
@@ -75,6 +97,16 @@
 		execShellMeta ? highlightCode(execShellMeta.command, 'bash') : ''
 	);
 
+	// The working directory the command ran with, persisted per call on the
+	// tool result message (it travels via the x-tool-cwd header, not the tool
+	// args). Until that message exists, the conversation cwd is the best known
+	// value - it is what the agentic loop passes when executing the call.
+	const cwd = $derived(
+		section.toolCwd ?? (isStreaming && isPreResult ? conversationCwd : undefined)
+	);
+	const home = $derived(toolsStore.serverHome);
+	const wdDisplay = $derived(abbreviateHome(cwd ?? '', home));
+
 	const exitBadgeClass = $derived(
 		execShellExitStatus?.timedOut
 			? 'exit-badge warning'
@@ -84,7 +116,7 @@
 	);
 
 	const useFullHeightCodeBlocks = $derived(
-		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
+		Boolean(settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
 	);
 
 	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
@@ -98,14 +130,28 @@
 
 	function isAtBottom(): boolean {
 		if (!scrollEl) return false;
+
 		return (
 			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
 			SCROLL_BOTTOM_THRESHOLD_PX
 		);
 	}
 
+	function isParsableJson(value: string | undefined): boolean {
+		if (!value) return false;
+
+		try {
+			JSON.parse(value);
+
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	function scrollToBottomOnFrame() {
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
 
@@ -118,18 +164,23 @@
 
 	function handleScrollEvent() {
 		if (!scrollEl) return;
+
 		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+
 		if (isScrollingUp && !isAtBottom()) {
 			userScrolledUp = true;
 		} else if (isAtBottom()) {
 			userScrolledUp = false;
 		}
+
 		lastScrollTop = scrollEl.scrollTop;
 	}
 
 	$effect(() => {
 		void section.toolResult;
+
 		if (!scrollEl || !autoScroll) return;
+
 		scrollToBottomOnFrame();
 	});
 
@@ -139,10 +190,11 @@
 		if (!scrollEl || !autoScroll) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();
@@ -159,53 +211,65 @@
 </script>
 
 {#snippet execShellTitle()}
+	{#if cwd}
+		<span class="exec-wd" title={cwd}>{wdDisplay}</span>
+
+		<span class="exec-prompt">$</span>
+	{/if}
+
 	{#if highlightedCommandHtml}
 		<span class="font-mono">{@html highlightedCommandHtml}</span>
 	{:else}
 		<span class="font-mono">{execShellMeta?.command}</span>
 	{/if}
+
+	{#if commandStreaming}
+		<span class="exec-cursor"></span>
+	{/if}
 {/snippet}
 
 <ToolCallBlock
-	{section}
-	{open}
+	extraLiveStreaming={isLive}
 	{isStreaming}
 	meta={execShellMeta ? { errorMessage: execShellError } : null}
-	wrapper={CollapsibleTerminalBlock}
-	extraLiveStreaming={isLive}
-	spinIconWhenActive={true}
 	{onToggle}
+	{open}
+	{section}
+	spinIconWhenActive={true}
+	wrapper={CollapsibleTerminalBlock}
 >
 	{#snippet titleSnippet()}
 		{@render execShellTitle()}
 	{/snippet}
 
 	{#snippet children(_meta, ctx)}
-		{#if ctx.isPending}
+		{#if (ctx.isPending && !commandStreaming) || (isLive && !section.toolResult)}
 			<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
 				<Loader2 class="h-3 w-3 animate-spin" />
-				Running...
+				Executing command...
 			</div>
 		{:else if execShellError}
 			<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
 				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+
 				<span>{execShellError}</span>
 			</div>
 		{:else if section.toolResult}
 			<div
 				bind:this={scrollEl}
-				class="terminal-output"
 				class:is-clamped={!useFullHeightCodeBlocks}
+				class="terminal-output"
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.image}
+
+					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
-							src={line.image.base64Url}
-							alt={line.image.name}
+							alt={line.media.name}
 							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
 							loading="lazy"
+							src={line.media.base64Url}
 						/>
 					{/if}
 				{/each}
@@ -214,14 +278,19 @@
 					<div class={exitBadgeClass}>
 						{#if execShellExitStatus.timedOut}
 							<AlertTriangle class="h-3 w-3" />
+
 							<span>timed out</span>
+
 							<span class="exit-sep">&middot;</span>
+
 							<span>exit {execShellExitStatus.code}</span>
 						{:else if execShellExitStatus.code === 0}
 							<Check class="h-3 w-3" />
+
 							<span>exit 0</span>
 						{:else}
 							<XCircle class="h-3 w-3" />
+
 							<span>exit {execShellExitStatus.code}</span>
 						{/if}
 					</div>
@@ -232,6 +301,39 @@
 </ToolCallBlock>
 
 <style>
+	:root {
+		--exec-wd-margin: 0.4rem;
+	}
+
+	.exec-wd {
+		font-family: var(--font-mono);
+		color: var(--muted-foreground);
+		margin-right: var(--exec-wd-margin);
+	}
+
+	.exec-prompt {
+		font-family: var(--font-mono);
+		color: var(--muted-foreground);
+		opacity: 0.55;
+		margin-right: var(--exec-wd-margin);
+	}
+
+	.exec-cursor {
+		display: inline-block;
+		width: 0.5em;
+		height: 1.05em;
+		margin-left: 0.15rem;
+		vertical-align: text-bottom;
+		background: var(--foreground);
+		animation: exec-cursor-blink 1.1s steps(1) infinite;
+	}
+
+	@keyframes exec-cursor-blink {
+		50% {
+			opacity: 0;
+		}
+	}
+
 	.terminal-output {
 		overscroll-behavior: contain;
 	}

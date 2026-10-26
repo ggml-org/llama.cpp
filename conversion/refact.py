@@ -9,6 +9,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("GPTRefactForCausalLM")
+@ModelBase.example("smallcloudai/Refact-1_6-base")
 class RefactModel(TextModel):
     model_arch = gguf.MODEL_ARCH.REFACT
 

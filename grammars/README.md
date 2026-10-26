@@ -146,8 +146,6 @@ You can use GBNF grammars:
     - For any completion endpoints, passed as the `json_schema` body field
     - For the `/chat/completions` endpoint, passed inside the `response_format` body field (e.g. `{"type", "json_object", "schema": {"items": {}}}` or `{ type: "json_schema", json_schema: {"schema": ...} }`)
 - In [llama-cli](../tools/cli) and [llama-completion](../tools/completion), passed as the `--json` / `-j` flag
-- To convert to a grammar ahead of time:
-    - in CLI, with [examples/json_schema_to_grammar.py](../examples/json_schema_to_grammar.py)
 
 > [!NOTE]
 > The JSON schema is only used to constrain the model output and is not injected into the prompt. The model has no visibility into the schema, so if you want it to understand the expected structure, describe it explicitly in your prompt. This does not apply to tool calling, where schemas are injected into the prompt.
@@ -187,11 +185,7 @@ llama-cli \
 
 <summary>Show grammar</summary>
 
-You can convert any schema in command-line with:
-
-```bash
-examples/json_schema_to_grammar.py name-age-schema.json
-```
+The schema above converts to:
 
 ```
 char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})

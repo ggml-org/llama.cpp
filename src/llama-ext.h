@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <map>
+#include <vector>
 
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
@@ -90,6 +91,13 @@ LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * m
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
 
+// the backend buffers that a state write of this memory would touch - empty caches report none
+LLAMA_API std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem);
+
+// Turn the KV cache attention rotation on or off for the contexts created from this model.
+// Useful for testing purposes.
+LLAMA_API void llama_model_set_attn_rot(struct llama_model * model, bool value);
+
 // Set whether the context outputs nextn embeddings or not
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
@@ -99,6 +107,23 @@ LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value
 // the trunk: il = n_layer() + offset). Used by the speculative NextN driver to
 // chain multiple trained NextN heads. Default 0 (first head).
 LLAMA_API void llama_set_nextn_layer_offset(struct llama_context * ctx, int32_t offset);
+
+// Marks the entries that a decision head (clef, vllm-decision2) reads, the default is 0
+// See https://github.com/ggml-org/llama.cpp/pull/29831 for details
+// A run of entries with the same value is one span, spans must be separated by entries with value 0
+// An option belongs to the last question before it
+enum llama_decision_order {
+    LLAMA_DECISION_ORDER_NONE            = 0, // not read by the head
+    LLAMA_DECISION_ORDER_QUESTION_NOUL   = 1, // text of a question
+    LLAMA_DECISION_ORDER_QUESTION_CHOICE = 2,
+    LLAMA_DECISION_ORDER_QUESTION_SCORE  = 3,
+    LLAMA_DECISION_ORDER_OPTION          = 4, // text of an option
+};
+// The embeddings output has one value per entry: row i is the score of option i
+LLAMA_API bool llama_batch_ext_set_decision_order(struct llama_batch_ext * batch, int32_t idx, enum llama_decision_order order);
+
+// Label of option i of a decision model ("<arch>.decision.labels"), nullptr past the last one
+LLAMA_API const char * llama_model_decision_label(const struct llama_model * model, uint32_t i);
 
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
@@ -120,7 +145,22 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 // model/context data extraction
 //
 
+LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
+
 // returns pointer to the target-model layer indices
 LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
 // returns the number of extracted layers from target model
 LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
+
+// retrieves the whole token embedding matrix in F32 format (n_embd * n_vocab)
+// returns total number of elements or 0 on error
+// if out is nullptr, returns the number of tokens without writing to out
+// caller must allocate enough memory for out before calling
+LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);
+
+// same as above, but only the rows of the given tokens, in order (n_tokens * n_embd elements)
+// returns the number of elements written or 0 on error
+LLAMA_API uint32_t llama_model_get_tok_embd_rows(const struct llama_model * model, const llama_token * tokens, uint32_t n_tokens, float * out);
+
+// realtime models: number of tokens the output lags behind the audio input, used by mtmd; 0 if not applicable
+LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);

@@ -9,6 +9,8 @@ from .base import MmprojModel, ModelBase, gguf
 
 
 @ModelBase.register("Llama4ForConditionalGeneration")
+# [TAG_HF_EXAMPLE_GATED] meta-llama/Llama-4-Scout-17B-16E-Instruct is gated
+@ModelBase.example("unsloth/Llama-4-Scout-17B-16E-Instruct")
 class Llama4VisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()

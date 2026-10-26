@@ -3,9 +3,8 @@
 
 import 'vite-plugin-pwa/pwa-assets';
 import 'vite-plugin-pwa/svelte';
-
+import { ModelModality, ServerModelStatus, ServerRole } from '$lib/enums';
 // Import chat types from dedicated module
-
 import type {
 	// API types
 	ApiChatCompletionRequest,
@@ -13,58 +12,52 @@ import type {
 	ApiChatCompletionStreamChunk,
 	ApiChatCompletionToolCall,
 	ApiChatCompletionToolCallDelta,
-	ApiChatMessageData,
 	ApiChatMessageContentPart,
+	ApiChatMessageData,
 	ApiContextSizeError,
 	ApiErrorResponse,
 	ApiLlamaCppServerProps,
 	ApiModelDataEntry,
 	ApiModelLoadStage,
-	ApiModelsSseProgress,
+	ApiModelsDownloadRequest,
+	ApiModelsDownloadResponse,
+	ApiModelsListResponse,
+	ApiModelsLoadResponse,
 	ApiModelsSseData,
 	ApiModelsSseEvent,
-	ApiModelListResponse,
+	ApiModelsSseProgress,
+	ApiModelsUnloadResponse,
 	ApiProcessingState,
-	ApiRouterModelMeta,
-	ApiRouterModelsLoadRequest,
-	ApiRouterModelsLoadResponse,
-	ApiRouterModelsStatusRequest,
-	ApiRouterModelsStatusResponse,
-	ApiRouterModelsListResponse,
-	ApiRouterModelsUnloadRequest,
-	ApiRouterModelsUnloadResponse,
-	// Chat types
 	ChatAttachmentDisplayItem,
+	// Chat types
+	ChatMessagePromptProgress,
+	ChatMessageSiblingInfo,
+	ChatMessageTimings,
 	ChatMessageType,
 	ChatRole,
 	ChatUploadedFile,
-	ChatMessageSiblingInfo,
-	ChatMessagePromptProgress,
-	ChatMessageTimings,
 	// Database types
 	DatabaseConversation,
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraVideoFile,
 	DatabaseMessageExtraImageFile,
-	DatabaseMessageExtraTextFile,
-	DatabaseMessageExtraPdfFile,
 	DatabaseMessageExtraLegacyContext,
+	DatabaseMessageExtraPdfFile,
+	DatabaseMessageExtraTextFile,
+	DatabaseMessageExtraVideoFile,
 	ExportedConversation,
 	ExportedConversations,
+	ModelLoadProgress,
 	// Model types
 	ModelModalities,
 	ModelOption,
-	ModelLoadProgress,
 	// Settings types
 	SettingsChatServiceOptions,
+	SettingsConfigType,
 	SettingsConfigValue,
-	SettingsFieldConfig,
-	SettingsConfigType
+	SettingsFieldConfig
 } from '$lib/types';
-
-import { ServerRole, ServerModelStatus, ModelModality } from '$lib/enums';
 
 declare global {
 	// namespace App {
@@ -89,19 +82,17 @@ declare global {
 		ApiLlamaCppServerProps,
 		ApiModelDataEntry,
 		ApiModelLoadStage,
+		ModelDownloadProgress,
 		ApiModelsSseProgress,
 		ApiModelsSseData,
+		ApiModelsSseDownloadProgressData,
 		ApiModelsSseEvent,
-		ApiModelListResponse,
+		ApiModelsListResponse,
+		ApiModelsLoadResponse,
+		ApiModelsDownloadRequest,
+		ApiModelsDownloadResponse,
+		ApiModelsUnloadResponse,
 		ApiProcessingState,
-		ApiRouterModelMeta,
-		ApiRouterModelsLoadRequest,
-		ApiRouterModelsLoadResponse,
-		ApiRouterModelsStatusRequest,
-		ApiRouterModelsStatusResponse,
-		ApiRouterModelsListResponse,
-		ApiRouterModelsUnloadRequest,
-		ApiRouterModelsUnloadResponse,
 		// Chat types
 		ChatAttachmentDisplayItem,
 		ChatMessagePromptProgress,
@@ -140,7 +131,13 @@ declare global {
 
 declare global {
 	interface Window {
-		idxThemeStyle?: number;
 		idxCodeBlock?: number;
+
+		// File System Access API - not in the DOM lib and unavailable in some browsers
+		showDirectoryPicker?: (options?: {
+			id?: string;
+			mode?: 'read' | 'readwrite';
+			startIn?: FileSystemHandle | string;
+		}) => Promise<FileSystemDirectoryHandle>;
 	}
 }

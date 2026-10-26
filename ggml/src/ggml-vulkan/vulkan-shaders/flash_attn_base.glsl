@@ -24,6 +24,8 @@ const bool USE_MASK_OPT    = (Flags & 1) != 0;
 const bool MASK_ENABLE     = (Flags & 2) != 0;
 const bool LOGIT_SOFTCAP   = (Flags & 4) != 0;
 const bool OLD_AMD_WINDOWS = (Flags & 8) != 0;
+// Sparse: gather binding-7 indices instead of scanning [0,KV); p.split_kv = n_kv_max.
+const bool USE_SPARSE      = (Flags & 16) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -82,23 +84,15 @@ layout (binding = 5) writeonly buffer OV4 {D_TYPEV4 data_ov4[];};
 
 layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
+layout (binding = 7) readonly buffer SP {int32_t data_sparse[];};
+
 #define MASK_OPT_ALL_NEG_INF 1
 #define MASK_OPT_ALL_ZERO 2
 
 #define BINDING_IDX_K 0
 #define BINDING_IDX_V 1
 
-// FaTypeK / FaTypeV spec constant values. These mirror enum ggml_type so the
-// host can pass the type directly. Keep in sync with ggml.h.
-#define FA_TYPE_F32   0u
-#define FA_TYPE_F16   1u
-#define FA_TYPE_Q4_0  2u
-#define FA_TYPE_Q4_1  3u
-#define FA_TYPE_Q5_0  6u
-#define FA_TYPE_Q5_1  7u
-#define FA_TYPE_Q8_0  8u
-#define FA_TYPE_BF16 30u
-#define FA_TYPE_Q1_0 41u
+#include "fa_types.glsl"
 
 #if defined(BFLOAT16)
 #define O_TYPE float
@@ -108,38 +102,6 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define O_TYPEV4 FLOAT_TYPEV4
 #endif
 
-// Number of matrix elements per buffer block, derived from the K/V type spec
-// constant. F32 is treated as a vec4 "block" of 4 floats. F16 uses block size 1
-// and bypasses the dequant path entirely. Quants follow their ggml block sizes.
-uint fa_block_elems(uint ty) {
-    switch (ty) {
-        case FA_TYPE_F32:  return 4u;
-        case FA_TYPE_F16:  return 1u;
-        case FA_TYPE_Q4_0: return uint(QUANT_K_Q4_0);
-        case FA_TYPE_Q4_1: return uint(QUANT_K_Q4_1);
-        case FA_TYPE_Q5_0: return uint(QUANT_K_Q5_0);
-        case FA_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
-        case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
-        case FA_TYPE_BF16: return 1u;
-        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
-        default:           return 1u;
-    }
-}
-
-// QUANT_R_MMQ for FA-eligible K types. Q4_*/Q5_* store two nibbles per byte
-// (R==2); Q8_0 stores one byte per element (R==1). Used to derive the number
-// of int32s per 32-element block on the MMQ K path: ints_per_block == 8 / R.
-uint fa_quant_r_mmq(uint ty) {
-    switch (ty) {
-        case FA_TYPE_Q4_0: return uint(QUANT_R_Q4_0);
-        case FA_TYPE_Q4_1: return uint(QUANT_R_Q4_1);
-        case FA_TYPE_Q5_0: return uint(QUANT_R_Q5_0);
-        case FA_TYPE_Q5_1: return uint(QUANT_R_Q5_1);
-        case FA_TYPE_Q8_0: return uint(QUANT_R_Q8_0);
-        default:           return 1u;
-    }
-}
-
 // These can't be `const` globals because GLSL forbids function calls in global
 // const initializers, even when the spec constants would let the driver fold
 // them. Macros expand at the use site and fold after specialization.
@@ -147,8 +109,8 @@ uint fa_quant_r_mmq(uint ty) {
 #define BLOCK_SIZE_V fa_block_elems(FaTypeV)
 // F16 reads f16 elements directly from the binding; everything else routes
 // through dequantize4 / the MMQ helpers to unpack from the packed block layout.
-#define USE_DECODE_K (FaTypeK != FA_TYPE_F16)
-#define USE_DECODE_V (FaTypeV != FA_TYPE_F16)
+#define USE_DECODE_K (FaTypeK != GGML_TYPE_F16)
+#define USE_DECODE_V (FaTypeV != GGML_TYPE_F16)
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
@@ -186,7 +148,7 @@ ACC_TYPE perElemOpGetSink(const in uint32_t r, const in uint32_t c, const in ACC
 
 uint32_t i, N, KV, split_k_index, Tr, start_j, end_j,
          gqa_iq1, iq2, iq3, rk2, rk3, rv2, rv3, ik2, ik3, iv2, iv3,
-         q_stride, k_stride, v_stride, m_stride;
+         q_stride, k_stride, v_stride, m_stride, sparse_base;
 
 void init_indices()
 {
@@ -250,6 +212,33 @@ void init_indices()
     // that prevents the compiler from folding the "&" through the select
     // and breaking the alignment detection.
     m_stride = (p.gqa_ratio > 1) ? (p.gqa_ratio >> 16) : KV;
+
+    // Sparse: the tile shares one mask row (gqa heads, or Br==1). split_k
+    // partitions the n_kv_max blocks.
+    if (USE_SPARSE) {
+        uint32_t qrow = (p.gqa_ratio > 1) ? gqa_iq1 : (i * Br);
+        sparse_base = (((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 + qrow) * p.split_kv;
+
+        uint32_t total_blocks = CEIL_DIV(p.split_kv, Bc);
+        uint32_t per_blocks   = CEIL_DIV(total_blocks, p.k_num);
+        start_j = min(split_k_index * per_blocks, total_blocks);
+        end_j   = min((split_k_index + 1) * per_blocks, total_blocks);
+    }
+}
+
+// Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
+bool fa_kv_index(uint lin, out uint kv_col) {
+    if (USE_SPARSE) {
+        if (lin >= p.split_kv) {
+            kv_col = 0;
+            return false;
+        }
+        int idx = data_sparse[sparse_base + lin];
+        kv_col = idx >= 0 ? uint(idx) : 0;
+        return idx >= 0;
+    }
+    kv_col = lin;
+    return !KV_bounds_check || lin < KV;
 }
 
 // Bias applied to softmax to stay in fp16 range.
