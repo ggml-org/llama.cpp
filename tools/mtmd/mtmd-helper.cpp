@@ -1044,3 +1044,16 @@ mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mt
 
     return cap;
 }
+
+bool mtmd_helper_model_can_chat(const llama_context * lctx, const mtmd_context * mctx) {
+    return mtmd_helper_get_capabilities(llama_get_model(lctx), mctx).chat;
+}
+
+bool mtmd_helper_support_video(const mtmd_context * ctx) {
+#ifdef MTMD_VIDEO
+    return mtmd_support_vision(ctx);
+#else
+    GGML_UNUSED(ctx);
+    return false;
+#endif
+}

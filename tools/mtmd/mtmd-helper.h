@@ -202,6 +202,11 @@ typedef struct mtmd_helper_cap mtmd_helper_cap;
 // mctx can be NULL (text-only model)
 MTMD_API struct mtmd_helper_cap mtmd_helper_get_capabilities(const struct llama_model * model, const struct mtmd_context * mctx);
 
+DEPRECATED(MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx),
+           "use mtmd_helper_get_capabilities() instead");
+DEPRECATED(MTMD_API bool mtmd_helper_support_video(const struct mtmd_context * ctx),
+           "use mtmd_helper_get_capabilities() instead");
+
 //
 // Audio generation helpers
 // (early-stage experimental, subjected to breaking changes)
