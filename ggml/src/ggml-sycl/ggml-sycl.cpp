@@ -6964,10 +6964,7 @@ static bool node_is_device_local(ggml_backend_buffer_type_t device_buft, const g
     return true;
 }
 
-// recheck is set when the result can change without the cgraph changing, so it must not be cached
-static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgraph * cgraph, bool & recheck) {
-    recheck = false;
-
+static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgraph * cgraph) {
     if (ggml_sycl_info().active_device_count > 1) {
         // A sycl_ex::command_graph object can only be created for a single device
         GGML_LOG_DEBUG("%s: disabling SYCL graphs due to multiple devices\n", __func__);
@@ -6992,17 +6989,10 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
             return false;
         }
 
-        // Reorder weights before recording, as allocation during recording can hang.
-        const ggml_tensor * src0 = node->src[0];
+        // Reorder expert weights before recording, so the reorder state that
+        // mul_mat_id_runs_on_device() sees is the one the recorded graph runs with.
         if (node_op == GGML_OP_MUL_MAT_ID && mul_mat_id_reorders_src0(node)) {
-            opt_for_reorder_id(ctx, src0);
-        } else if (src0 && should_reorder_tensor(*ctx, node)) {
-            // ggml_sycl_mul_mat() reorders lazily: run without a graph until it has
-            const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-            if (extra && !extra->optimized_feature.reorder) {
-                recheck = true;
-                return false;
-            }
+            opt_for_reorder_id(ctx, node->src[0]);
         }
 
         switch (node_op) {
@@ -7090,9 +7080,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             // The nodes of a cgraph do not change while its uid does not, so the compatibility scan
             // runs again only when the uid changes. A uid of 0 means it is not set.
             if (cgraph->uid == 0 || cgraph->uid != graph->compatible_uid) {
-                bool recheck          = false;
-                graph->compatible     = check_graph_compatibility(sycl_ctx, cgraph, recheck);
-                graph->compatible_uid = recheck ? 0 : cgraph->uid;
+                graph->compatible_uid = cgraph->uid;
+                graph->compatible     = check_graph_compatibility(sycl_ctx, cgraph);
 
                 if (sycl_ctx->graph_compatible != graph->compatible) {
                     if (graph->compatible) {
