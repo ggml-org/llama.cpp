@@ -46,7 +46,6 @@
 	let mobileScrollDownHint = $state(false);
 	let mobileScrollDownHintLockedUntil = $state(0);
 	let emptyFileNames = $state<string[]>([]);
-	let initialMessage = $state('');
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
@@ -385,7 +384,6 @@
 				bind:uploadedFiles={fileUpload.uploadedFiles}
 				class="pointer-events-auto conversation-chat-form"
 				disabled={hasPropsError || chatStore.isEditing()}
-				{initialMessage}
 				isLoading={isCurrentConversationLoading}
 				onFileRemove={fileUpload.handleFileRemove}
 				onFileUpload={fileUpload.handleFileUpload}
