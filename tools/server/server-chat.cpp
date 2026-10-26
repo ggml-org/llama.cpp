@@ -464,7 +464,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                         // Single-pass: build both text and content_parts, decide format at the end
                         std::string result_text;
                         json content_parts = json::array();
-                        bool has_images = false;
+                        bool keep_parts = false; // images or tool references
 
                         for (const auto & c : result_content) {
                             std::string c_type = json_value(c, "type", std::string());
@@ -476,7 +476,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                                     {"text", text}
                                 });
                             } else if (c_type == "image") {
-                                has_images = true;
+                                keep_parts = true;
                                 json source = json_value(c, "source", json::object());
                                 std::string source_type = json_value(source, "type", std::string());
                                 if (source_type == "base64") {
@@ -493,10 +493,17 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                                         {"image_url", {{"url", json_value(source, "url", std::string())}}}
                                     });
                                 }
+                            } else if (c_type == "tool_reference") {
+                                // tool search result naming a deferred tool
+                                keep_parts = true;
+                                content_parts.push_back({
+                                    {"type", "tool_reference"},
+                                    {"name", json_value(c, "tool_name", std::string())}
+                                });
                             }
                         }
 
-                        if (!has_images) {
+                        if (!keep_parts) {
                             // Text-only: collapse to a plain string for maximum compatibility
                             tool_results.push_back({
                                 {"role", "tool"},
@@ -504,7 +511,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                                 {"content", result_text}
                             });
                         } else {
-                            // Mixed or image-only: use array content parts (OpenAI multimodal tool format)
+                            // images or tool references: keep array content parts
                             tool_results.push_back({
                                 {"role", "tool"},
                                 {"tool_call_id", tool_use_id},
@@ -559,6 +566,9 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                         {"parameters", tool.contains("input_schema") ? tool.at("input_schema") : json::object()}
                     }}
                 });
+                if (tool.contains("defer_loading")) {
+                    oai_tools.back()["defer_loading"] = tool.at("defer_loading");
+                }
             }
             oai_body["tools"] = oai_tools;
         }
