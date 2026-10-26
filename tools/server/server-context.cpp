@@ -1012,16 +1012,17 @@ public:
     llama_model * model_tgt = nullptr;
 
     mtmd_context * mctx = nullptr;
+    mtmd_helper_cap mtmd_cap = {};
     // note: video_params.ffmpeg_bin_dir points into params_base, which outlives this struct
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
     const llama_vocab * vocab = nullptr;
 
     bool has_cap_tts() const {
-        return mctx != nullptr && mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE;
+        return mtmd_cap.audio_gen;
     }
 
     bool has_cap_chat() const {
-        return mctx == nullptr || mtmd_helper_model_can_chat(ctx_tgt, mctx);
+        return mtmd_cap.chat;
     }
 
     server_decision_context decision;
@@ -1397,6 +1398,8 @@ private:
             }
         }
 
+        mtmd_cap = mtmd_helper_get_capabilities(model_tgt, mctx);
+
         if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
             if (params_base.ctx_shift) {
                 params_base.ctx_shift = false;
@@ -1705,9 +1708,9 @@ private:
                 /* reasoning_format      */ params_base.reasoning_format,
                 /* chat_template_kwargs  */ params_base.default_template_kwargs,
                 /* tmpls                 */ std::move(chat_templates),
-                /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
-                /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
-                /* allow_video           */ mctx ? mtmd_helper_support_video(mctx) : false,
+                /* allow_image           */ mtmd_cap.vision,
+                /* allow_audio           */ mtmd_cap.audio,
+                /* allow_video           */ mtmd_cap.video,
                 /* enable_thinking       */ enable_thinking,
                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
