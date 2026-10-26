@@ -145,12 +145,6 @@ class DeepseekV41Model(DeepseekV4Model):
         # num_hidden_layers lives in text_config, which is merged only after indexing; MTP stages are skipped anyway
         return TextModel.index_tensors(self, remote_hf_model_id=remote_hf_model_id)
 
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        if item[0].startswith("vision."):
-            return None
-        return super().filter_tensors(item)
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hp = self.hparams
@@ -282,12 +276,13 @@ class DeepseekV41Model(DeepseekV4Model):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(".engram.k_weight"):
-            return []  # folded into engram_gate
+            return  # folded into engram_gate
         if name.endswith(".engram.q_weight"):
             # Engram gate weight = q_weight * k_weight (bf16 * bf16 is exact in f32)
             k = self.model_tensors[name.removesuffix("q_weight") + "k_weight"]
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ENGRAM_GATE, bid), data_torch.float() * k().float())]
-        return super().modify_tensors(data_torch, name, bid)
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ENGRAM_GATE, bid), data_torch.float() * k().float()
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         if new_name.endswith((".engram_gate.weight", ".ffn_gate_inp.weight")) or name in self._dsv4_f32_tensors:
@@ -411,13 +406,15 @@ class DeepseekV41DSparkModel(DeepseekV41Model):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(".ffn.gate.bias_vl"):
-            return []
+            return
         if name in self._DSPARK_ROOT:
-            return [(self.format_tensor_name(self._DSPARK_ROOT[name], None), data_torch)]
+            yield self.format_tensor_name(self._DSPARK_ROOT[name], None), data_torch
+            return
         m = re.match(r"layers\.\d+\.(main_proj\.weight|main_norm\.weight|norm\.weight)$", name)
         if m is not None:
-            return [(self.format_tensor_name(self._DSPARK_ROOT[m.group(1)], None), data_torch)]
-        return super().modify_tensors(data_torch, name, bid)
+            yield self.format_tensor_name(self._DSPARK_ROOT[m.group(1)], None), data_torch
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         if new_name == "conf_proj.weight":

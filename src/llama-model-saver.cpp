@@ -8,7 +8,6 @@
 #include "llama-hparams.h"
 #include "llama-model.h"
 #include "llama-vocab.h"
-#include "models/models.h"
 
 #include <cstdint>
 #include <string>
@@ -342,8 +341,6 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK,             hparams.hc_low_rank);
 
     if (model->arch == LLM_ARCH_DEEPSEEK41) {
-        const auto * m41 = dynamic_cast<const llama_model_deepseek41 *>(model);
-        GGML_ASSERT(m41 != nullptr);
         std::vector<uint32_t> kv_src;
         std::vector<uint32_t> idx_src;
         for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
@@ -362,8 +359,8 @@ void llama_model_saver::add_kv_from_model() {
             add_kv(LLM_KV_ATTENTION_INDEXER_CANDIDATE_BLOCK_SIZE,   hparams.dsv41_cand_block_size);
         }
         if (hparams.ple_n_heads > 0) {
-            add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID, m41->engram_pad_id);
-            add_kv(LLM_KV_ENGRAM_TOKEN_MAP,    m41->engram_token_map);
+            add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID, hparams.engram_pad_id);
+            add_kv(LLM_KV_ENGRAM_TOKEN_MAP,    model->engram_token_map);
         }
     }
 
