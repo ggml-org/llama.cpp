@@ -57,7 +57,7 @@ int main(int argc, char ** argv) {
     {
         common_params params_dft = common_base_params_to_speculative(params);
 
-        spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+        spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt, &llama_init_tgt->threadpools());
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
         params.speculative.draft.ctx_dft = spec_init->context();

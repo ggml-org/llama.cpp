@@ -111,6 +111,51 @@ static void test(void) {
         }
     }
 
+    {
+        auto assert_cpu_params = [](const common_cpu_params & actual, const common_cpu_params & expected) {
+            assert(actual.n_threads == expected.n_threads);
+            assert(actual.mask_valid == expected.mask_valid);
+            assert(actual.priority == expected.priority);
+            assert(actual.strict_cpu == expected.strict_cpu);
+            assert(actual.poll == expected.poll);
+            for (int i = 0; i < GGML_MAX_N_THREADS; ++i) {
+                assert(actual.cpumask[i] == expected.cpumask[i]);
+            }
+        };
+
+        // without draft CPU params the draft context inherits the target ones
+        common_params base;
+        base.cpuparams.n_threads = 4;
+        base.cpuparams_batch.n_threads = 6;
+        base.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        const auto inherited = common_base_params_to_speculative(base);
+        assert_cpu_params(inherited.cpuparams, base.cpuparams);
+        assert_cpu_params(inherited.cpuparams_batch, base.cpuparams_batch);
+
+        auto & cpu = base.speculative.draft.cpuparams;
+        cpu.n_threads = 2;
+        cpu.mask_valid = true;
+        cpu.cpumask[1] = true;
+        cpu.cpumask[3] = true;
+        cpu.strict_cpu = true;
+        cpu.priority = GGML_SCHED_PRIO_MEDIUM;
+        cpu.poll = 1;
+        auto & batch = base.speculative.draft.cpuparams_batch;
+        batch = cpu;
+        batch.n_threads = 1;
+        batch.cpumask[3] = false;
+        batch.poll = 7;
+        batch.priority = GGML_SCHED_PRIO_HIGH;
+
+        // the complete draft CPU params reach the draft context, for MTP and for a separate draft model
+        for (bool external : {false, true}) {
+            base.speculative.draft.mparams.path = external ? "draft.gguf" : "";
+            const auto draft = common_base_params_to_speculative(base);
+            assert_cpu_params(draft.cpuparams, cpu);
+            assert_cpu_params(draft.cpuparams_batch, batch);
+        }
+    }
+
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
         try {

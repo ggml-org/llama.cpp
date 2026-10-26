@@ -1405,6 +1405,10 @@ llama_context * common_init_result::context() {
     return pimpl->context.get();
 }
 
+common_threadpools & common_init_result::threadpools() {
+    return pimpl->threadpools;
+}
+
 common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
     if (seq_id < 0 || seq_id >= (int) pimpl->samplers.size()) {
         return nullptr;
@@ -1807,10 +1811,8 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
     free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
 
-    struct ggml_threadpool_params tpp_batch =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
-    struct ggml_threadpool_params tpp =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams);
+    tpp_batch = ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
+    tpp       = ggml_threadpool_params_from_cpu_params(params.cpuparams);
 
     // each pool needs to match the respective n_threads exactly
     // see: https://github.com/ggml-org/llama.cpp/pull/27138#issuecomment-5332307332
@@ -1834,6 +1836,24 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     }
 
     llama_attach_threadpool(ctx, threadpool, threadpool_batch);
+}
+
+bool common_threadpools::attach_if_same(llama_context * ctx, const common_params & params) const {
+    if (!threadpool) {
+        return false;
+    }
+
+    const auto other       = ggml_threadpool_params_from_cpu_params(params.cpuparams);
+    const auto other_batch = ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
+    if (!ggml_threadpool_params_match(&tpp, &other) || !ggml_threadpool_params_match(&tpp_batch, &other_batch)) {
+        return false;
+    }
+
+    COM_INF("%s", "llama threadpool shared with another context\n");
+
+    llama_attach_threadpool(ctx, threadpool, threadpool_batch);
+
+    return true;
 }
 
 //

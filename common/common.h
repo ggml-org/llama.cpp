@@ -992,6 +992,8 @@ struct common_gguf_info {
 
 common_gguf_info common_get_gguf_info(const std::string & fname);
 
+struct common_threadpools;
+
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
     common_init_result(common_params & params, bool model_only = false);
@@ -999,6 +1001,7 @@ struct common_init_result {
 
     llama_model * model();
     llama_context * context();
+    common_threadpools & threadpools();
 
     common_sampler * sampler(llama_seq_id seq_id);
     void reset_samplers();
@@ -1041,9 +1044,15 @@ struct common_threadpools {
 
     void init(llama_context * ctx, const common_params & params);
 
+    // attach these pools to another context if its CPU params are the same, returns false otherwise
+    bool attach_if_same(llama_context * ctx, const common_params & params) const;
+
 private:
     ggml_threadpool * threadpool       = nullptr;
     ggml_threadpool * threadpool_batch = nullptr;
+
+    ggml_threadpool_params tpp       = {};
+    ggml_threadpool_params tpp_batch = {};
 
     decltype(ggml_threadpool_free) * free_fn = nullptr;
 };

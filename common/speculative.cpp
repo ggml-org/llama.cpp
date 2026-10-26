@@ -2653,11 +2653,12 @@ common_params common_base_params_to_speculative(const common_params & params) {
         if (n_devs == 1) {
             result.split_mode = LLAMA_SPLIT_MODE_LAYER;
         }
+    }
 
-        if (params_spec.cpuparams.n_threads > 0) {
-            result.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
-            result.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
-        }
+    // the draft context takes the complete draft CPU params (also for MTP), they decide whether it shares the target pools
+    if (params_spec.cpuparams.n_threads > 0) {
+        result.cpuparams       = params_spec.cpuparams;
+        result.cpuparams_batch = params_spec.cpuparams_batch;
     }
 
     result.cache_type_k  = params_spec.cache_type_k;
@@ -2697,6 +2698,9 @@ struct common_speculative_init_result::impl {
     ~impl() = default;
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
+
+    common_threadpools threadpools;
+
     llama_model_ptr   model;
     llama_context_ptr context;
 };
@@ -2704,7 +2708,8 @@ struct common_speculative_init_result::impl {
 common_speculative_init_result::common_speculative_init_result(
     common_params & params,
       llama_model * model_tgt,
-    llama_context * ctx_tgt) :
+    llama_context * ctx_tgt,
+    const common_threadpools * threadpools_tgt) :
     pimpl(new impl{}) {
     const bool has_draft = params.speculative.has_dft();
     const bool spec_mtp = std::find(params.speculative.types.begin(),
@@ -2759,6 +2764,13 @@ common_speculative_init_result::common_speculative_init_result(
 
         pimpl->context.reset(ctx_dft);
     }
+
+    if (pimpl->context) {
+        // draft and target never compute at the same time, so the draft can share the target's pools
+        if (!threadpools_tgt || !threadpools_tgt->attach_if_same(pimpl->context.get(), params)) {
+            pimpl->threadpools.init(pimpl->context.get(), params);
+        }
+    }
 }
 
 common_speculative_init_result::~common_speculative_init_result() = default;
@@ -2771,8 +2783,9 @@ llama_context * common_speculative_init_result::context() {
     return pimpl->context.get();
 }
 
-common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
-    return std::make_unique<common_speculative_init_result>(params, model_tgt, ctx_tgt);
+common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt,
+        const common_threadpools * threadpools_tgt) {
+    return std::make_unique<common_speculative_init_result>(params, model_tgt, ctx_tgt, threadpools_tgt);
 }
 
 common_speculative_output_limits common_speculative_get_output_limits(

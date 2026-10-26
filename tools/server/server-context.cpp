@@ -1328,7 +1328,7 @@ private:
                 params_dft.load_progress_callback           = load_progress_callback;
                 params_dft.load_progress_callback_user_data = &load_progress_spec;
 
-                spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+                spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt, &llama_init->threadpools());
                 model_dft = spec_init->model();
                 ctx_dft   = spec_init->context();
 

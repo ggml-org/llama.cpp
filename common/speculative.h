@@ -109,7 +109,8 @@ struct common_speculative_deleter {
 typedef std::unique_ptr<common_speculative, common_speculative_deleter> common_speculative_ptr;
 
 struct common_speculative_init_result {
-    common_speculative_init_result(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
+    common_speculative_init_result(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt,
+            const common_threadpools * threadpools_tgt = nullptr);
     ~common_speculative_init_result();
 
     llama_model   * model();
@@ -122,4 +123,6 @@ private:
 
 using common_speculative_init_result_ptr = std::unique_ptr<common_speculative_init_result>;
 
-common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
+// threadpools_tgt: the target's pools, reused by the draft context when its CPU params are the same (must outlive the result)
+common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt,
+        const common_threadpools * threadpools_tgt = nullptr);
