@@ -86,7 +86,7 @@ export function resolveTabView(
 		activeId,
 		fallbackHref: ROUTES.START,
 		hrefFor: (id) => (id === NEW_CHAT_TAB_ID ? ROUTES.START : RouterService.chat(id)),
-		// a project's new-chat tab lives in its project view only
-		ids: openTabs.filter((id) => !projectOfNewChatTab(id))
+		// project chats and new-chat tabs live in their project's view only
+		ids: openTabs.filter((id) => !projectOf(id))
 	};
 }

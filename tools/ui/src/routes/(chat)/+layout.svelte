@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatScreen,
@@ -10,6 +11,7 @@
 		ProjectPanels
 	} from '$lib/components/app';
 	import { NEW_CHAT_TAB_ID, PROJECT_HOME_TAB_ID } from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
 	import { conversationsStore, projectsStore, settingsStore, tabsStore } from '$lib/stores';
 	import { resolveTabTarget, resolveTabView } from '$lib/utils';
 
@@ -52,6 +54,27 @@
 	// the tab bar of a project view leads with the way back to the project; on
 	// the project home it names the current page instead of the page header
 	let tabsProject = $derived(viewProject ?? (showTabs ? project : undefined));
+
+	// a conversation has one home: its project's view when it is in a project,
+	// the regular view otherwise. Any other way in (an old link, the back
+	// button, a chat moved in or out of a project while open) lands there,
+	// without a history entry of its own
+	$effect(() => {
+		const id = page.params.id;
+
+		if (!id) return;
+
+		const conversation = conversationsStore.conversations.find((c) => c.id === id);
+
+		if (!conversation) return;
+
+		const home = RouterService.conversation(conversation);
+		const onHome = conversation.projectId
+			? page.params.projectId === conversation.projectId
+			: !page.params.projectId;
+
+		if (!onHome) void goto(home + page.url.search, { replaceState: true });
+	});
 
 	$effect(() => {
 		if (tabTarget && tabsEnabled) {

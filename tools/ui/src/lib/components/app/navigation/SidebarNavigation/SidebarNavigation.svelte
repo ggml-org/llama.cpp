@@ -305,7 +305,11 @@
 	}
 
 	function selectConversation(id: string) {
-		navigateBehind(() => goto(RouterService.chat(id)));
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
+
+		navigateBehind(() =>
+			goto(conversation ? RouterService.conversation(conversation) : RouterService.chat(id))
+		);
 	}
 
 	async function handleEditConversation(id: string) {

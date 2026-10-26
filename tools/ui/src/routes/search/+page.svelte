@@ -33,7 +33,9 @@
 	});
 
 	async function selectConversation(id: string) {
-		await goto(RouterService.chat(id));
+		const conversation = conversationsStore.conversations.find((c) => c.id === id);
+
+		await goto(conversation ? RouterService.conversation(conversation) : RouterService.chat(id));
 	}
 
 	async function handleEditConversation(id: string) {

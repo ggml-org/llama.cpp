@@ -11,6 +11,16 @@ export class RouterService {
 		return `${ROUTES.CHAT}/${id}`;
 	}
 
+	/**
+	 * Where a conversation opens: inside its project when it is in one, so a
+	 * project chat always has its project's tabs and breadcrumb around it.
+	 */
+	static conversation(conversation: { id: string; projectId?: string | null }): string {
+		return conversation.projectId
+			? RouterService.projectChat(conversation.projectId, conversation.id)
+			: RouterService.chat(conversation.id);
+	}
+
 	static project(id: string): string {
 		return `${ROUTES.PROJECTS}/${id}`;
 	}

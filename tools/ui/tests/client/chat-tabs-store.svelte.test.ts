@@ -164,15 +164,15 @@ describe('tab views', () => {
 		expect(view.hrefFor('x')).toBe('#/projects/p1/chat/x');
 	});
 
-	it('keeps project new-chat tabs out of the regular view', () => {
+	it("keeps a project's chats and new-chat tab out of the regular view", () => {
 		const view = resolveTabView(
 			{ params: { id: 'g' }, route: { id: '/(chat)/chat/[id]' } },
 			open,
 			conversations
 		);
 
-		expect(view.ids).toEqual(['g', 'x', 'y']);
-		expect(view.hrefFor('x')).toBe('#/chat/x');
+		expect(view.ids).toEqual(['g']);
+		expect(view.hrefFor('g')).toBe('#/chat/g');
 	});
 
 	it('closes to a neighbour inside the project, then to the project page', async () => {
