@@ -1093,7 +1093,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         arch != LLM_ARCH_CLIP &&
         arch != LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_EMBEDDING_LENGTH,     hparams.n_embd,          false);
-        ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,  hparams.n_embd_out_impl, false);
+        ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT, hparams.n_embd_out_impl, false);
     }
 
     // everything past this point is not vocab-related
