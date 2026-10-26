@@ -67,6 +67,8 @@ shared ACC_TYPE slope[Br];
 const bool PV_IN_SFSH = Br > MatBr;
 const uint32_t osh_stride = row_split * MatBr / 4;
 shared O_TYPEV4 pvsh[PV_IN_SFSH ? 2 : Br * osh_stride];
+
+shared vec4 occupancy_limiter[LIMIT_OCCUPANCY_SHMEM > 0 ? LIMIT_OCCUPANCY_SHMEM : 1];
 #if defined(FLOAT16) && !defined(ACC_TYPE_MAX)
 const uint32_t pv_per_acc = 2;
 O_TYPEV4 pvsh_load(const uint32_t i) {
@@ -101,6 +103,17 @@ void main() {
     const uint32_t d_per_thread = (HSV/4 + threads_per_rowgroup - 1) / threads_per_rowgroup;
     const uint32_t row_tid = gl_LocalInvocationIndex / threads_per_rowgroup;
     const uint32_t col_tid = gl_LocalInvocationIndex % threads_per_rowgroup;
+
+    if (LIMIT_OCCUPANCY_SHMEM > 0) {
+        // Runtime-dependent index, otherwise RADV forwards the store and drops the array
+        const uint32_t li = (gl_WorkGroupID.x * gl_WorkGroupSize.x + tid) % LIMIT_OCCUPANCY_SHMEM;
+        occupancy_limiter[li] = vec4(tid);
+        barrier();
+        const uint32_t lr = (li + 1) % LIMIT_OCCUPANCY_SHMEM;
+        if (occupancy_limiter[lr] == vec4(99999.0)) {
+            data_ov4[0] = D_TYPEV4(occupancy_limiter[lr]);
+        }
+    }
 
 #define tile_row(r) (row_tid * rows_per_thread + (r))
 

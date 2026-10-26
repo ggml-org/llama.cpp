@@ -1329,6 +1329,11 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
         result.shmem_staging = 0;
     }
 
+    // q_in_regs LDS lands in the 12-wave band, ACO caps VGPRs at 128 and serializes K loads; pad into the 8-wave band
+    if (device->architecture == AMD_RDNA4 && result.q_in_regs && hsk > 256) {
+        result.limit_occupancy_shmem = 14 * 1024 / 16;
+    }
+
     return result;
 }
 
@@ -8162,7 +8167,7 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
         pvsh = Br * osh_stride * pvsh_elem_size;
     }
 
-    uint32_t total_size = tmpsh + iq_shmem + Qf + Psh + sfsh + ksh + pvsh + slope;
+    uint32_t total_size = tmpsh + iq_shmem + Qf + Psh + sfsh + ksh + pvsh + slope + params.limit_occupancy_shmem * 16;
 
     if (params.flip) {
         const uint32_t d_pad = std::max(hsk_pad, hsv_pad);
