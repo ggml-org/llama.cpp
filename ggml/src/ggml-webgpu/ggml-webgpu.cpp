@@ -87,6 +87,8 @@ static inline uint32_t ggml_webgpu_u32_from_f32(float value) {
 /* Constants */
 
 #define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 64u
+// Keep prefill command buffers short enough for the browser compositor to keep servicing frames.
+#define WEBGPU_PREFILL_COMMAND_SUBMIT_BATCH_SIZE 8u
 #define WEBGPU_PREFILL_MIN_TOKENS                32
 #define WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN      10u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           30000u
@@ -257,8 +259,9 @@ struct webgpu_context_struct {
     wgpu::ComputePassEncoder active_compute_pass;
     bool                     batch_compute_passes = true;
 
-    // Per-graph submission limit, set in ggml_backend_webgpu_graph_compute().
-    uint32_t graph_max_inflight_batches = UINT32_MAX;
+    // Per-graph submission settings, set in ggml_backend_webgpu_graph_compute().
+    uint32_t graph_max_inflight_batches      = UINT32_MAX;
+    uint32_t graph_command_submit_batch_size = WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE;
 
     size_t memset_bytes_per_thread;
 
@@ -3585,8 +3588,10 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     ggml_backend_webgpu_context * backend_ctx = (ggml_backend_webgpu_context *) backend->context;
     webgpu_context                ctx         = backend_ctx->webgpu_ctx;
 
-    ctx->graph_max_inflight_batches =
-        ggml_backend_webgpu_graph_should_throttle(cgraph) ? 1 : ctx->global_ctx->max_inflight_batches;
+    const bool throttle             = ggml_backend_webgpu_graph_should_throttle(cgraph);
+    ctx->graph_max_inflight_batches = throttle ? 1 : ctx->global_ctx->max_inflight_batches;
+    ctx->graph_command_submit_batch_size =
+        throttle ? WEBGPU_PREFILL_COMMAND_SUBMIT_BATCH_SIZE : ctx->global_ctx->command_submit_batch_size;
 
     WEBGPU_CPU_PROFILE_TOTAL_START(graph_compute);
 
@@ -3621,7 +3626,7 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 #endif
         }
 
-        if (num_batched_kernels >= ctx->global_ctx->command_submit_batch_size) {
+        if (num_batched_kernels >= ctx->graph_command_submit_batch_size) {
             if (ctx->active_compute_pass) {
                 ctx->active_compute_pass.End();
             }
@@ -3638,7 +3643,7 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
             commands.clear();
 #ifdef GGML_WEBGPU_GPU_PROFILE
             // flush before the next batch can overflow the QuerySet
-            if (ctx->profile_timestamp_query_count + 2 * ctx->global_ctx->command_submit_batch_size >=
+            if (ctx->profile_timestamp_query_count + 2 * ctx->graph_command_submit_batch_size >=
                 WEBGPU_MAX_PROFILE_QUERY_COUNT) {
                 ggml_backend_webgpu_collect_profile_results(ctx, profile_pipeline_names, num_inflight_batches);
                 // reset profile timestamp state
