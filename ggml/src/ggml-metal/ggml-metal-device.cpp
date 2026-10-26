@@ -507,6 +507,47 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_lightning_indexe
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_mask(
+        ggml_metal_library_t lib,
+        const ggml_tensor * op,
+        bool    fill,
+        bool    has_score,
+        bool    has_blocks,
+        bool    has_extra,
+        bool    vec) {
+    GGML_ASSERT(op->op == GGML_OP_TOP_K_MASK);
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_top_k_mask%s_%s", fill ? "_fill" : "", ggml_type_name(op->type));
+
+    ggml_metal_pipeline_with_params res;
+
+    ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+    if (fill) {
+        snprintf(name, 256, "%s_vec=%d", base, vec ? 1 : 0);
+
+        ggml_metal_cv_set_bool(cv, vec, FC_TOP_K_MASK + 3);
+    } else {
+        snprintf(name, 256, "%s_sc=%d_bl=%d_ex=%d", base, has_score ? 1 : 0, has_blocks ? 1 : 0, has_extra ? 1 : 0);
+
+        ggml_metal_cv_set_bool(cv, has_score,  FC_TOP_K_MASK + 0);
+        ggml_metal_cv_set_bool(cv, has_blocks, FC_TOP_K_MASK + 1);
+        ggml_metal_cv_set_bool(cv, has_extra,  FC_TOP_K_MASK + 2);
+    }
+
+    res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+    }
+
+    ggml_metal_cv_free(cv);
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_dsv4_hc(ggml_metal_library_t lib, const ggml_tensor * op) {
     char name[256];
     const char * base = nullptr;
