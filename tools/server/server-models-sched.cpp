@@ -146,6 +146,10 @@ bool server_models_sched::try_claim(std::unique_lock<std::mutex> & lk, const std
     if (!has_capacity(lk)) {
         return false;
     }
+    // over the memory margin with every running model busy: wait for one to go idle
+    if (memory_enabled() && limits_exceeded(lk, model_id, /* verbose */ false) && pick_victim(lk).empty()) {
+        return false;
+    }
     queue.front().loading = true;
     return true;
 }
@@ -517,9 +521,11 @@ void server_models_sched::calibrate(const server_model_memory & mem, const std::
                 tracked += (int64_t) h->second;
             }
         }
+        // a measure child allocates nothing, its free does not include self
+        const int64_t self = reporter.empty() ? 0 : (int64_t) d.self();
         auto & dm = device_memory[d.name];
         dm.total    = (int64_t) d.total;
-        dm.external = std::max<int64_t>(0, dm.total - (int64_t) d.free - (int64_t) d.self() - tracked);
+        dm.external = std::max<int64_t>(0, dm.total - (int64_t) d.free - self - tracked);
         SRV_DBG("device %s: total=%" PRId64 " MiB, external=%" PRId64 " MiB, available=%" PRId64 " MiB\n",
             d.name.c_str(), dm.total / (1024 * 1024), dm.external / (1024 * 1024), available(d.name) / (1024 * 1024));
     }
