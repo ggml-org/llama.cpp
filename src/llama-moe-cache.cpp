@@ -48,10 +48,21 @@ struct moe_cache_slru {
     uint32_t seen_gen = 0;
     std::vector<int32_t> uniq;
 
-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, int32_t max_protected) {
+    int32_t n_sample = 0;      // slots to sample for the least used victim, zero to evict the least recently used
+    std::vector<uint32_t> use; // [n_layer*n_expert] times each expert was selected, empty if n_sample is zero
+    uint32_t rng = 1;
+    int64_t n_fills   = 0;
+    int64_t age_every = 0;     // halve the use counters after this many fills, so old popularity is forgotten
+
+    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, int32_t max_protected, int32_t n_sample) {
         this->n_expert = n_expert;
         this->n_slots  = n_slots;
         this->max_protected = max_protected;
+        this->n_sample = n_sample;
+        if (n_sample > 0) {
+            use.assign((size_t) n_layer*n_expert, 0);
+            age_every = 8*(int64_t) n_slots;
+        }
         slot_map.assign(n_layer, nullptr);
         key_of.assign(n_slots, -1);
         prev.resize(n_slots);
@@ -102,7 +113,43 @@ struct moe_cache_slru {
         }
     }
 
-    int32_t victim(int32_t il) const {
+    // the least used of n_sample random slots, -1 if none of them can be evicted
+    // a cache below one token's experts thrashes under LRU: the sweep over the layers evicts every expert before the next token reads it again
+    int32_t victim_sampled(int32_t il) {
+        if (++n_fills % age_every == 0) {
+            for (uint32_t & u : use) {
+                u >>= 1;
+            }
+        }
+
+        int32_t  best     = -1;
+        uint32_t best_use = 0;
+        for (int32_t i = 0, n = 0; i < 4*n_sample && n < n_sample; ++i) {
+            rng = rng*1664525u + 1013904223u;
+            const int32_t s   = (int32_t) (rng % (uint32_t) n_slots);
+            const int32_t key = key_of[s];
+            if (key >= 0 && key / n_expert == il && seen[key % n_expert] == seen_gen) {
+                continue;
+            }
+            if (key < 0) {
+                return s;
+            }
+            if (best < 0 || use[key] < best_use) {
+                best     = s;
+                best_use = use[key];
+            }
+            n++;
+        }
+        return best;
+    }
+
+    int32_t victim(int32_t il) {
+        if (n_sample > 0) {
+            const int32_t s = victim_sampled(il);
+            if (s >= 0) {
+                return s;
+            }
+        }
         for (int segment = 0; segment < 2; ++segment) {
             for (int32_t s = head[segment]; s >= 0; s = next[s]) {
                 const int32_t key = key_of[s];
@@ -136,6 +183,9 @@ struct moe_cache_slru {
             if (seen[ids[i]] != seen_gen) {
                 seen[ids[i]] = seen_gen;
                 uniq.push_back(ids[i]);
+                if (!use.empty()) {
+                    use[(size_t) il*n_expert + ids[i]]++;
+                }
             }
         }
         if (uniq.size() > (size_t) n_slots) {
@@ -415,8 +465,15 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
+            // under one token's experts LRU thrashes, so evict the least used of a few random slots
+            int32_t n_sample = 0;
             if (g.n_slots < n_expert_token) {
                 LLAMA_LOG_WARN("%s: MoE cache is too small to hold the experts of one token for %zu layers, performance may suffer\n", __func__, g.layers.size());
+                n_sample = 16;
+            }
+            // LLAMA_MOE_CACHE_SAMPLE sets the number of slots sampled, 0 restores plain LRU eviction
+            if (const char * env = getenv("LLAMA_MOE_CACHE_SAMPLE")) {
+                n_sample = std::clamp(atoi(env), 0, g.n_slots);
             }
             // grow the protected fraction from zero at 1x to one half at 1.8x the experts used by one token
             const double cache_ratio = (double) g.n_slots/n_expert_token;
@@ -428,7 +485,7 @@ struct llama_moe_cache::impl {
                     max_protected = g.n_slots/2;
                 }
             }
-            g.slru.init(model.layers.size(), n_expert, g.n_slots, max_protected);
+            g.slru.init(model.layers.size(), n_expert, g.n_slots, max_protected, n_sample);
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
             n_tensors_host  += g.layers.size();
         }
