@@ -11,42 +11,30 @@
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
+#include "cpy-ops.h"
+#include "dma-copy.h"
 #include "htp-ctx.h"
-#include "htp-ops.h"
-#include "htp-ops.h"
-#include "hvx-utils.h"
-#include "htp-tensor.h"
 #include "htp-fence.h"
+#include "htp-ops.h"
+#include "htp-tensor.h"
+#include "hvx-utils.h"
+#include "gather-rows.h"
 
 struct htp_copy_context {
-    struct htp_ops_context * octx;
+    struct htp_ops_context *              octx;
+    const struct htp_copy_kernel_params * kparams;
 
-    uint32_t          src0_type_size;
-    uint32_t          src0_block_size;
+    uint32_t row_start;
+    uint32_t nrows;
+    uint32_t src0_nrows_per_thread;
 
-    uint32_t          dst_type_size;
-    uint32_t          dst_block_size;
+    uint32_t elem_start;
+    uint32_t nelem;
+    uint32_t elem_per_thread;
 
-    uint32_t          src0_blocks_per_row;
-    uint32_t          dst_blocks_per_row;
-
-    uint32_t          elem_start;
-    uint32_t          nelem;
-    uint32_t          elem_per_thread;
-
-    uint32_t          src0_nrows_per_thread;
-    uint32_t          row_start;
-    uint32_t          nrows;
-
-    struct fastdiv_values div_ne01;
-    struct fastdiv_values div_ne02_ne01;
-
-    struct fastdiv_values div_ne0;
-    struct fastdiv_values div_ne1_ne0;
-    struct fastdiv_values div_ne2_ne1_ne0;
-    struct fastdiv_values div_ne00;
-    struct fastdiv_values div_ne01_ne00;
-    struct fastdiv_values div_ne02_ne01_ne00;
+    struct htp_copy_convert_vtcm_layout layout;
+    uint8_t * vtcm_src0;
+    uint8_t * vtcm_dst;
 };
 
 #define cpy_preamble                              \
@@ -73,391 +61,418 @@ struct htp_copy_context {
     const uint32_t  nb2 = dst->nb[2];             \
     const uint32_t  nb3 = dst->nb[3];
 
-#define DEFINE_CPY_SAMESHAPE(NAME, ELEM_TYPE, ELEM_SIZE)                                       \
-static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, void * data) {   \
-    struct htp_copy_context * ct = (struct htp_copy_context *) data;                           \
-    struct htp_ops_context * octx = ct->octx;                                                  \
-    cpy_preamble;                                                                              \
-    const uint32_t dr  = ct->src0_nrows_per_thread;                                            \
-    const uint32_t ir0 = ct->row_start + dr * ith;                                             \
-    const uint32_t ir1 = MIN(ir0 + dr, ct->row_start + ct->nrows);                             \
-    if (ir0 >= ir1) return;                                                                    \
-    const bool contiguous = (nb01 == ne00 * ELEM_SIZE) && (nb1 == nb01) &&                     \
-                            (nb02 == ne01 * nb01)      && (nb2 == nb02) &&                     \
-                            (nb03 == ne02 * nb02)      && (nb3 == nb03);                       \
-    const uint32_t ne02_ne01 = ne02 * ne01;                                                    \
-    uint32_t i03 = fastdiv(ir0, &ct->div_ne02_ne01);                                           \
-    uint32_t rem = ir0 - i03 * ne02_ne01;                                                      \
-    uint32_t i02 = fastdiv(rem, &ct->div_ne01);                                                \
-    uint32_t i01 = rem - i02 * ne01;                                                           \
-    uint8_t * dst_ptr  = (uint8_t *) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;               \
-    uint8_t * src0_ptr = (uint8_t *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;              \
-    if (contiguous) {                                                                          \
-        hvx_copy_uu(dst_ptr, src0_ptr, (ir1 - ir0) * ne00, ELEM_SIZE);                         \
-        return;                                                                                \
-    }                                                                                          \
-    for (uint32_t r = ir0; r < ir1; r++) {                                                     \
-        hex_l2fetch(src0_ptr, ne00 * ELEM_SIZE, nb01, 2);                                      \
-        hvx_copy_uu(dst_ptr, src0_ptr, ne00, ELEM_SIZE);                                       \
-        dst_ptr  += nb1;                                                                       \
-        src0_ptr += nb01;                                                                      \
-        if (++i01 == ne01) {                                                                   \
-            i01 = 0;                                                                           \
-            if (++i02 == ne02) {                                                               \
-                i02 = 0;                                                                       \
-                i03++;                                                                         \
-            }                                                                                  \
-            dst_ptr  = (uint8_t *) dst->data  + i02*nb2  + i03*nb3;                            \
-            src0_ptr = (uint8_t *) src0->data + i02*nb02 + i03*nb03;                           \
-        }                                                                                      \
-    }                                                                                          \
-}
-
-DEFINE_CPY_SAMESHAPE(f32,  float, 4)
-DEFINE_CPY_SAMESHAPE(f16, __fp16, 2)
-
-#define DEFINE_CPY_RESHAPE(NAME, ELEM_TYPE, ELEM_SIZE)                                               \
-static void cpy_thread_##NAME##_reshape(unsigned int nth, unsigned int ith, void * data) {           \
-    struct htp_copy_context * ct = (struct htp_copy_context *) data;                                 \
-    struct htp_ops_context * octx = ct->octx;                                                        \
-    cpy_preamble;                                                                                    \
-    const uint32_t th_nelem = ct->elem_per_thread;                                                   \
-    const uint32_t th_start = ct->elem_start + ith * th_nelem;                                       \
-    const uint32_t th_end   = MIN(th_start + th_nelem, ct->elem_start + ct->nelem);                  \
-    if (th_start >= th_end) return;                                                                  \
-                                                                                                     \
-    if (htp_tensor_is_contiguous(src0, ELEM_SIZE) && htp_tensor_is_contiguous(dst, ELEM_SIZE)) {     \
-        hvx_copy_uu((uint8_t *) dst->data + (size_t) th_start * ELEM_SIZE,                           \
-                    (const uint8_t *) src0->data + (size_t) th_start * ELEM_SIZE,                    \
-                    th_end - th_start, ELEM_SIZE);                                                   \
-        return;                                                                                      \
-    }                                                                                                \
-                                                                                                     \
-    const uint32_t ne01_ne00      = ne01 * ne00;                                                     \
-    const uint32_t ne02_ne01_ne00 = ne02 * ne01_ne00;                                                \
-    const uint32_t ne1_ne0        = ne1 * ne0;                                                       \
-    const uint32_t ne2_ne1_ne0    = ne2 * ne1_ne0;                                                   \
-                                                                                                     \
-    uint32_t e = th_start;                                                                           \
-    uint32_t i13 = fastdiv(e, &ct->div_ne2_ne1_ne0);                                                 \
-    uint32_t rem = e - i13 * ne2_ne1_ne0;                                                            \
-    uint32_t i12 = fastdiv(rem, &ct->div_ne1_ne0);                                                   \
-    uint32_t rem2 = rem - i12 * ne1_ne0;                                                             \
-    uint32_t i11 = fastdiv(rem2, &ct->div_ne0);                                                      \
-    uint32_t i10 = rem2 - i11 * ne0;                                                                 \
-                                                                                                     \
-    uint32_t i03 = fastdiv(e, &ct->div_ne02_ne01_ne00);                                              \
-    uint32_t rem_s = e - i03 * ne02_ne01_ne00;                                                       \
-    uint32_t i02 = fastdiv(rem_s, &ct->div_ne01_ne00);                                               \
-    uint32_t rem2_s = rem_s - i02 * ne01_ne00;                                                       \
-    uint32_t i01 = fastdiv(rem2_s, &ct->div_ne00);                                                   \
-    uint32_t i00 = rem2_s - i01 * ne00;                                                              \
-                                                                                                     \
-    char * dst_ptr        = (char *)       dst->data  + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3;    \
-    const char * src0_ptr = (const char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03;   \
-                                                                                                     \
-    const bool rows_contig = (nb00 == ELEM_SIZE) && (nb0 == ELEM_SIZE);                              \
-                                                                                                     \
-    while (e < th_end) {                                                                             \
-        uint32_t run = 1;                                                                            \
-        if (rows_contig) {                                                                           \
-            run = MIN(MIN(ne00 - i00, ne0 - i10), th_end - e);                                       \
-            hvx_copy_uu((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, run, ELEM_SIZE);            \
-        } else {                                                                                     \
-            *((ELEM_TYPE *) dst_ptr) = *((const ELEM_TYPE *) src0_ptr);                              \
-        }                                                                                            \
-        e += run;                                                                                    \
-                                                                                                     \
-        dst_ptr += run * nb0;                                                                        \
-        i10     += run;                                                                              \
-        if (i10 == ne0) {                                                                            \
-            i10 = 0;                                                                                 \
-            if (++i11 == ne1) {                                                                      \
-                i11 = 0;                                                                             \
-                if (++i12 == ne2) {                                                                  \
-                    i12 = 0;                                                                         \
-                    i13++;                                                                           \
-                }                                                                                    \
-            }                                                                                        \
-            dst_ptr = (char *) dst->data + i11*nb1 + i12*nb2 + i13*nb3;                              \
-        }                                                                                            \
-                                                                                                     \
-        src0_ptr += run * nb00;                                                                      \
-        i00      += run;                                                                             \
-        if (i00 == ne00) {                                                                           \
-            i00 = 0;                                                                                 \
-            if (++i01 == ne01) {                                                                     \
-                i01 = 0;                                                                             \
-                if (++i02 == ne02) {                                                                 \
-                    i02 = 0;                                                                         \
-                    i03++;                                                                           \
-                }                                                                                    \
-            }                                                                                        \
-            src0_ptr = (const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;                   \
-        }                                                                                            \
-    }                                                                                                \
+#define DEFINE_CPY_RESHAPE(NAME, ELEM_TYPE, ELEM_SIZE)                                                \
+static void cpy_thread_##NAME##_reshape(unsigned int nth, unsigned int ith, void * data) {            \
+    struct htp_copy_context * ct = (struct htp_copy_context *) data;                                  \
+    struct htp_ops_context * octx = ct->octx;                                                         \
+    cpy_preamble;                                                                                     \
+    const uint32_t th_nelem = ct->elem_per_thread;                                                    \
+    const uint32_t th_start = ct->elem_start + ith * th_nelem;                                        \
+    const uint32_t th_end   = MIN(th_start + th_nelem, ct->elem_start + ct->nelem);                   \
+    if (th_start >= th_end) return;                                                                   \
+                                                                                                      \
+    dma_queue * dma_q = octx->ctx->dma[ith];                                                          \
+                                                                                                      \
+    const uint32_t ne01_ne00      = ne01 * ne00;                                                      \
+    const uint32_t ne02_ne01_ne00 = ne02 * ne01_ne00;                                                 \
+    const uint32_t ne1_ne0        = ne1 * ne0;                                                        \
+    const uint32_t ne2_ne1_ne0    = ne2 * ne1_ne0;                                                    \
+                                                                                                      \
+    const struct htp_copy_reshape_params * rsh = &ct->kparams->u.reshape;                             \
+    uint32_t e = th_start;                                                                            \
+    uint32_t i13 = fastdiv(e, &rsh->div_ne2_ne1_ne0);                                                 \
+    uint32_t rem = e - i13 * ne2_ne1_ne0;                                                             \
+    uint32_t i12 = fastdiv(rem, &rsh->div_ne1_ne0);                                                   \
+    uint32_t rem2 = rem - i12 * ne1_ne0;                                                              \
+    uint32_t i11 = fastdiv(rem2, &rsh->div_ne0);                                                      \
+    uint32_t i10 = rem2 - i11 * ne0;                                                                  \
+                                                                                                      \
+    uint32_t i03 = fastdiv(e, &rsh->div_ne02_ne01_ne00);                                              \
+    uint32_t rem_s = e - i03 * ne02_ne01_ne00;                                                        \
+    uint32_t i02 = fastdiv(rem_s, &rsh->div_ne01_ne00);                                               \
+    uint32_t rem2_s = rem_s - i02 * ne01_ne00;                                                        \
+    uint32_t i01 = fastdiv(rem2_s, &rsh->div_ne00);                                                   \
+    uint32_t i00 = rem2_s - i01 * ne00;                                                               \
+                                                                                                      \
+    dma_addr_t dst_addr  = dst->data  + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3;                     \
+    dma_addr_t src0_addr = src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03;                    \
+                                                                                                      \
+    const bool rows_contig = (nb00 == ELEM_SIZE) && (nb0 == ELEM_SIZE);                               \
+                                                                                                      \
+    while (e < th_end) {                                                                              \
+        const uint32_t run = MIN(MIN(ne00 - i00, ne0 - i10), th_end - e);                             \
+        if (rows_contig) {                                                                            \
+            dma_cpy_sametype_reshape_contig(dma_q, dst_addr, src0_addr, run * ELEM_SIZE);             \
+        } else {                                                                                      \
+            dma_cpy_push_2d_chunked(dma_q, dst_addr, src0_addr, nb0, nb00, ELEM_SIZE, run);           \
+        }                                                                                             \
+        e += run;                                                                                     \
+                                                                                                      \
+        dst_addr += run * nb0;                                                                        \
+        i10      += run;                                                                              \
+        if (i10 == ne0) {                                                                             \
+            i10 = 0;                                                                                  \
+            if (++i11 == ne1) {                                                                       \
+                i11 = 0;                                                                              \
+                if (++i12 == ne2) {                                                                   \
+                    i12 = 0;                                                                          \
+                    i13++;                                                                            \
+                }                                                                                     \
+            }                                                                                         \
+            dst_addr = dst->data + i11*nb1 + i12*nb2 + i13*nb3;                                       \
+        }                                                                                             \
+                                                                                                      \
+        src0_addr += run * nb00;                                                                      \
+        i00       += run;                                                                             \
+        if (i00 == ne00) {                                                                            \
+            i00 = 0;                                                                                  \
+            if (++i01 == ne01) {                                                                      \
+                i01 = 0;                                                                              \
+                if (++i02 == ne02) {                                                                  \
+                    i02 = 0;                                                                          \
+                    i03++;                                                                            \
+                }                                                                                     \
+            }                                                                                         \
+            src0_addr = src0->data + i01*nb01 + i02*nb02 + i03*nb03;                                  \
+        }                                                                                             \
+    }                                                                                                 \
+    dma_queue_flush(dma_q);                                                                           \
 }
 
 DEFINE_CPY_RESHAPE(f32,  float, 4)
 DEFINE_CPY_RESHAPE(f16, __fp16, 2)
+DEFINE_CPY_RESHAPE(i32, int32_t, 4)
 
-static void cpy_thread_f16_f32_sameshape(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_copy_context * ct = (struct htp_copy_context *) data;
-    struct htp_ops_context * octx = ct->octx;
-    cpy_preamble;
+struct cpy_row_cursor {
+    uint32_t r;
+    uint32_t i01;
+    uint32_t i02;
+    uint32_t i03;
+};
 
-    const uint32_t dr  = ct->src0_nrows_per_thread;
-    const uint32_t ir0 = ct->row_start + dr * ith;
-    const uint32_t ir1 = MIN(ir0 + dr, ct->row_start + ct->nrows);
-    if (ir0 >= ir1) return;
-
-    const uint32_t ne02_ne01 = ne02 * ne01;
-    uint32_t i03 = fastdiv(ir0, &ct->div_ne02_ne01);
-    uint32_t rem = ir0 - i03 * ne02_ne01;
-    uint32_t i02 = fastdiv(rem, &ct->div_ne01);
-    uint32_t i01 = rem - i02 * ne01;
-
-    uint8_t* dst_ptr  = (uint8_t*) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;
-    uint8_t* src0_ptr = (uint8_t*) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
-
-    for (uint32_t r = ir0; r < ir1; r++) {
-        hex_l2fetch(src0_ptr, ne00 * sizeof(float), nb01, 2);
-        hvx_copy_f16_f32_uu(dst_ptr, src0_ptr, ne00);
-        dst_ptr  += nb1;
-        src0_ptr += nb01;
-        if (++i01 == ne01) {
-            i01 = 0;
-            if (++i02 == ne02) {
-                i02 = 0;
-                i03++;
-            }
-            dst_ptr  = (uint8_t*) dst->data  + i02*nb2  + i03*nb3;
-            src0_ptr = (uint8_t*) src0->data + i02*nb02 + i03*nb03;
+static inline void cpy_cursor_advance(struct cpy_row_cursor * c, uint32_t n, uint32_t ne01, uint32_t ne02) {
+    c->r   += n;
+    c->i01 += n;
+    if (c->i01 == ne01) {
+        c->i01 = 0;
+        if (++c->i02 == ne02) {
+            c->i02 = 0;
+            c->i03++;
         }
     }
 }
 
-static void cpy_thread_f32_f16_sameshape(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_copy_context * ct = (struct htp_copy_context *) data;
-    struct htp_ops_context * octx = ct->octx;
-    cpy_preamble;
-
-    const uint32_t dr  = ct->src0_nrows_per_thread;
-    const uint32_t ir0 = ct->row_start + dr * ith;
-    const uint32_t ir1 = MIN(ir0 + dr, ct->row_start + ct->nrows);
-    if (ir0 >= ir1) return;
-
-    const uint32_t ne02_ne01 = ne02 * ne01;
-    uint32_t i03 = fastdiv(ir0, &ct->div_ne02_ne01);
-    uint32_t rem = ir0 - i03 * ne02_ne01;
-    uint32_t i02 = fastdiv(rem, &ct->div_ne01);
-    uint32_t i01 = rem - i02 * ne01;
-
-    uint8_t* dst_ptr  = (uint8_t*) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;
-    uint8_t* src0_ptr = (uint8_t*) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
-
-    for (uint32_t r = ir0; r < ir1; r++) {
-        hex_l2fetch(src0_ptr, ne00 * sizeof(__fp16), nb01, 2);
-        hvx_copy_f32_f16_uu(dst_ptr, src0_ptr, ne00);
-        dst_ptr  += nb1;
-        src0_ptr += nb01;
-        if (++i01 == ne01) {
-            i01 = 0;
-            if (++i02 == ne02) {
-                i02 = 0;
-                i03++;
-            }
-            dst_ptr  = (uint8_t*) dst->data  + i02*nb2  + i03*nb3;
-            src0_ptr = (uint8_t*) src0->data + i02*nb02 + i03*nb03;
-        }
-    }
+#define DEFINE_CPY_CONVERT_SAMESHAPE(NAME, CONV_FUNC)                                        \
+static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, void * data) { \
+    struct htp_copy_context * ct = (struct htp_copy_context *) data;                         \
+    struct htp_ops_context * octx = ct->octx;                                                \
+    cpy_preamble;                                                                            \
+                                                                                             \
+    const uint32_t dr  = ct->src0_nrows_per_thread;                                          \
+    const uint32_t ir0 = ct->row_start + dr * ith;                                           \
+    const uint32_t ir1 = MIN(ir0 + dr, ct->row_start + ct->nrows);                           \
+    if (ir0 >= ir1) return;                                                                  \
+                                                                                             \
+    dma_queue * dma_q = octx->ctx->dma[ith];                                                 \
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                   \
+                                                                                             \
+    const struct htp_copy_convert_params * cvt = &ct->kparams->u.convert;                    \
+    const struct htp_copy_convert_vtcm_layout * L = &ct->layout;                             \
+    const uint32_t src0_buf_size   = L->src0_buf_size;                                       \
+    const uint32_t dst_buf_size    = L->dst_buf_size;                                        \
+    const uint32_t src0_row_stride = L->src0_row_stride;                                     \
+    const uint32_t dst_row_stride  = L->dst_row_stride;                                      \
+    const uint32_t blk_rows        = L->blk_rows;                                            \
+    uint8_t * vtcm_src0_base = ct->vtcm_src0 + ith * L->spad0_size_per_thread;               \
+    uint8_t * vtcm_dst_base  = ct->vtcm_dst  + ith * L->spad1_size_per_thread;               \
+    const uint32_t src0_row_size = ne00 * ct->kparams->src0_type_size;                       \
+    const uint32_t dst_row_size  = ne00 * ct->kparams->dst_type_size;                        \
+                                                                                             \
+    const uint32_t ne02_ne01 = ne02 * ne01;                                                  \
+    uint32_t i03 = fastdiv(ir0, &cvt->div_ne02_ne01);                                        \
+    uint32_t rem = ir0 - i03 * ne02_ne01;                                                    \
+    uint32_t i02 = fastdiv(rem, &cvt->div_ne01);                                             \
+    uint32_t i01 = rem - i02 * ne01;                                                         \
+                                                                                             \
+    struct cpy_row_cursor f = { ir0, i01, i02, i03 };                                        \
+    struct cpy_row_cursor c = f;                                                             \
+                                                                                             \
+    for (uint32_t b = 0; b < 2 && f.r < ir1; ++b) {                                          \
+        uint8_t * src_spad = vtcm_src0_base + b * src0_buf_size;                             \
+        uint8_t * dst_spad = vtcm_dst_base  + b * dst_buf_size;                              \
+        const uint32_t nr = MIN(blk_rows, MIN(ne01 - f.i01, ir1 - f.r));                     \
+        dma_addr_t f_src0_addr = src0->data + f.i01*nb01 + f.i02*nb02 + f.i03*nb03;          \
+        dma_queue_push(dma_q, dma_make_data(dst->data, dst_spad),                            \
+                       dst_row_size, dst_buf_size, dst_row_size, 0);                         \
+        dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                          \
+                       src0_row_stride, nb01, src0_row_size, nr);                            \
+        cpy_cursor_advance(&f, nr, ne01, ne02);                                              \
+    }                                                                                        \
+                                                                                             \
+    for (uint32_t blk = 0; c.r < ir1; ++blk) {                                               \
+        const uint32_t nr = MIN(blk_rows, MIN(ne01 - c.i01, ir1 - c.r));                     \
+        uint8_t * dst_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).src;               \
+        uint8_t * src_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;               \
+                                                                                             \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                   \
+        for (uint32_t r = 0; r < nr; ++r) {                                                  \
+            CONV_FUNC(dst_spad + r * dst_row_stride, src_spad + r * src0_row_stride, ne00);  \
+        }                                                                                    \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                    \
+                                                                                             \
+        dma_addr_t c_dst_addr = dst->data + c.i01*nb1 + c.i02*nb2 + c.i03*nb3;               \
+        dma_queue_push(dma_q, dma_make_data(c_dst_addr, dst_spad),                           \
+                       nb1, dst_row_stride, dst_row_size, nr);                               \
+        cpy_cursor_advance(&c, nr, ne01, ne02);                                              \
+                                                                                             \
+        if (f.r < ir1) {                                                                     \
+            const uint32_t fnr = MIN(blk_rows, MIN(ne01 - f.i01, ir1 - f.r));                \
+            dma_addr_t f_src0_addr = src0->data + f.i01*nb01 + f.i02*nb02 + f.i03*nb03;      \
+            dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                      \
+                           src0_row_stride, nb01, src0_row_size, fnr);                       \
+            cpy_cursor_advance(&f, fnr, ne01, ne02);                                         \
+        }                                                                                    \
+    }                                                                                        \
+    dma_queue_flush(dma_q);                                                                  \
 }
 
-static inline void cpy_dma_sametype_sameshape(
-    struct htp_ops_context * octx,
-    const struct htp_tensor * dst,
-    const struct htp_tensor * src0,
-    uint32_t elem_size,
-    uint32_t ne00, uint32_t ne01, uint32_t ne02, uint32_t ne03,
-    uint32_t nb01, uint32_t nb02, uint32_t nb03,
-    uint32_t  nb1, uint32_t  nb2, uint32_t nb3
-) {
-    const bool contiguous_outer =
-        (ne02 == 1 || (nb02 == ne01 * nb01 && nb2 == ne01 * nb1)) &&
-        (ne03 == 1 || (nb03 == ne02 * nb02 && nb3 == ne02 * nb2));
+DEFINE_CPY_CONVERT_SAMESHAPE(f16_f32, hvx_copy_f16_f32_aa)
+DEFINE_CPY_CONVERT_SAMESHAPE(f32_f16, hvx_copy_f32_f16_aa)
+DEFINE_CPY_CONVERT_SAMESHAPE(i32_f32, hvx_copy_i32_f32_aa)
+DEFINE_CPY_CONVERT_SAMESHAPE(f32_i32, hvx_copy_f32_i32_aa)
 
-    dma_queue * q = octx->ctx->dma[0];
-
-    if (contiguous_outer) {
-        if (!dma_queue_push(q, dma_make_ptr((void *) dst->data, (const void *) src0->data), nb1, nb01, ne00 * elem_size, ne01 * ne02 * ne03)) {
-            dma_queue_flush(q);
-            dma_queue_push(q, dma_make_ptr((void *) dst->data, (const void *) src0->data), nb1, nb01, ne00 * elem_size, ne01 * ne02 * ne03);
-        }
-        dma_queue_flush(q);
-        return;
-    }
-
-    for (uint32_t i03 = 0; i03 < ne03; i03++) {
-        for (uint32_t i02 = 0; i02 < ne02; i02++) {
-            uint8_t * dst_ptr  = (uint8_t *) dst->data  + i02 * nb2  + i03 * nb3;
-            uint8_t * src0_ptr = (uint8_t *) src0->data + i02 * nb02 + i03 * nb03;
-
-            if (!dma_queue_push(q, dma_make_ptr(dst_ptr, src0_ptr), nb1, nb01, ne00 * elem_size, ne01)) {
-                dma_queue_flush(q);
-                dma_queue_push(q, dma_make_ptr(dst_ptr, src0_ptr), nb1, nb01, ne00 * elem_size, ne01);
-            }
-        }
-    }
-
-    dma_queue_flush(q);
-}
-
-static inline void cpy_dma_sametype_reshape_contig(
-    struct htp_ops_context * octx,
-    const struct htp_tensor * dst,
-    const struct htp_tensor * src0,
-    uint32_t total_bytes
-) {
-    dma_queue * q = octx->ctx->dma[0];
-    dma_queue_push(q, dma_make_ptr((void *) dst->data, (const void *) src0->data),
-                   total_bytes, total_bytes, total_bytes, /*nrows=*/ 1);
-    dma_queue_pop(q);
-}
-
-static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
-    cpy_preamble;
-    *use_dma = false;
-
-    struct htp_copy_context ct;
-    ct.octx = octx;
-
-    switch (src0->type) {
-    case HTP_TYPE_F32: ct.src0_type_size = 4; ct.src0_block_size = 1; ct.src0_blocks_per_row = ne00 / 1; break;
-    case HTP_TYPE_F16: ct.src0_type_size = 2; ct.src0_block_size = 1; ct.src0_blocks_per_row = ne00 / 1; break;
-    default:
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    switch (dst->type) {
-    case HTP_TYPE_F32: ct.dst_type_size = 4; ct.dst_block_size = 1; ct.dst_blocks_per_row = ne0 / 1; break;
-    case HTP_TYPE_F16: ct.dst_type_size = 2; ct.dst_block_size = 1; ct.dst_blocks_per_row = ne0 / 1; break;
-    default:
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
+static int cpy_scalar(struct htp_ops_context * octx, const struct htp_copy_kernel_params * kparams) {
+    if (octx->ctx->mdev.count > 1 && octx->ctx->mdev.idx > 0) {
         return HTP_STATUS_OK;
     }
 
-    const bool sametype   = (src0->type == dst->type);
-    const bool transposed = (nb00 > nb01) || (nb0 > nb1) ||
-                            (nb00 != ct.src0_type_size) || (nb0 != ct.dst_type_size) ||
-                            (nb01 < ne00 * ct.src0_type_size) || (nb1 < ne0 * ct.dst_type_size);
-    const bool sameshape  = !transposed && (ne00 == ne0 && ne01 == ne1 && ne02 == ne2 && ne03 == ne3);
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
 
-    const uint32_t n_threads = octx->n_threads;
+    if (src0->type == dst->type) {
+        dma_cpy_sametype_reshape_contig(octx->ctx->dma[0], dst->data, src0->data, kparams->src0_type_size);
+        dma_queue_flush(octx->ctx->dma[0]);
+        return HTP_STATUS_OK;
+    }
 
-    const bool src_is_contiguous = htp_tensor_is_contiguous(src0, ct.src0_type_size);
-    const bool dst_is_contiguous = htp_tensor_is_contiguous(dst, ct.dst_type_size);
+    dma_queue * dma_q = octx->ctx->dma[0];
+    uint8_t * s_ptr = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, 0);
+    uint8_t * d_ptr = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, VLEN);
+    dma_addr_t s_vtcm = (dma_addr_t)(uintptr_t) s_ptr;
+    dma_addr_t d_vtcm = (dma_addr_t)(uintptr_t) d_ptr;
+    const uint32_t s_size = kparams->src0_type_size;
+    const uint32_t d_size = kparams->dst_type_size;
 
-    if (sameshape) {
-        const uint32_t total_rows = ne01 * ne02 * ne03;
-        const uint32_t row_size   = ne00 * ct.dst_type_size;
+    dma_queue_push(dma_q, dma_make_data(s_vtcm, src0->data), s_size, s_size, s_size, 1);
+    dma_queue_pop(dma_q);
 
-        ct.div_ne01      = init_fastdiv_values(ne01);
-        ct.div_ne02_ne01 = init_fastdiv_values(ne02 * ne01);
+    const HVX_Vector v_src = hvx_vmem(s_ptr);
+    HVX_Vector v_dst;
 
-        uint32_t row_start = 0;
-        uint32_t nrows     = total_rows;
-
-        if (octx->ctx->mdev.count > 1) {
-            const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
-            const bool can_split = htp_tensor_mdev_data_aligned(dst) && dst_is_contiguous;
-            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_rows, can_split ? rows_per_chunk : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
-            row_start = range.start;
-            nrows     = range.count;
-        }
-
-        if (nrows == 0) {
-            return HTP_STATUS_OK;
-        }
-
-        ct.row_start = row_start;
-        ct.nrows     = nrows;
-        ct.src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
-
-        if (sametype && octx->ctx->mdev.count <= 1) {
-            *use_dma = true;
-            cpy_dma_sametype_sameshape(octx, dst, src0, ct.src0_type_size, ne00, ne01, ne02, ne03, nb01, nb02, nb03, nb1, nb2, nb3);
-        } else {
-            work_queue_func_t copy_fun = NULL;
-            if (sametype) {
-                copy_fun = (src0->type == HTP_TYPE_F32) ? cpy_thread_f32_sameshape : cpy_thread_f16_sameshape;
-            } else if (dst->type == HTP_TYPE_F16 && src0->type == HTP_TYPE_F32) {
-                copy_fun = cpy_thread_f16_f32_sameshape;
-            } else if (dst->type == HTP_TYPE_F32 && src0->type == HTP_TYPE_F16) {
-                copy_fun = cpy_thread_f32_f16_sameshape;
-            } else {
-                return HTP_STATUS_NO_SUPPORT;
-            }
-            work_queue_run(octx->ctx->work_queue, copy_fun, &ct, n_threads);
-        }
-    } else if (sametype) {
-        const uint32_t total_elems = ne0 * ne1 * ne2 * ne3;
-        const uint32_t elems_per_line = (ct.dst_type_size == 4) ? 32 : 64;
-
-        if (octx->ctx->mdev.count <= 1 && dst_is_contiguous && src_is_contiguous) {
-            *use_dma = true;
-            cpy_dma_sametype_reshape_contig(octx, dst, src0, total_elems * ct.dst_type_size);
-            return HTP_STATUS_OK;
-        }
-
-        ct.div_ne0            = init_fastdiv_values(ne0);
-        ct.div_ne1_ne0        = init_fastdiv_values(ne1 * ne0);
-        ct.div_ne2_ne1_ne0    = init_fastdiv_values(ne2 * ne1 * ne0);
-        ct.div_ne00           = init_fastdiv_values(ne00);
-        ct.div_ne01_ne00      = init_fastdiv_values(ne01 * ne00);
-        ct.div_ne02_ne01_ne00 = init_fastdiv_values(ne02 * ne01 * ne00);
-
-        uint32_t elem_start = 0;
-        uint32_t nelem      = total_elems;
-
-        if (octx->ctx->mdev.count > 1) {
-            const bool can_split = htp_tensor_mdev_data_aligned(dst) && dst_is_contiguous;
-            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_elems, can_split ? elems_per_line : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
-            elem_start = range.start;
-            nelem      = range.count;
-        }
-
-        if (nelem == 0) {
-            return HTP_STATUS_OK;
-        }
-
-        ct.elem_start      = elem_start;
-        ct.nelem           = nelem;
-        ct.elem_per_thread = fastdiv(nelem + n_threads - 1, &octx->n_threads_div);
-
-        work_queue_func_t copy_fun = (src0->type == HTP_TYPE_F32) ? cpy_thread_f32_reshape : cpy_thread_f16_reshape;
-        work_queue_run(octx->ctx->work_queue, copy_fun, &ct, n_threads);
+    if (src0->type == HTP_TYPE_F32 && dst->type == HTP_TYPE_I32) {
+        v_dst = Q6_Vw_equals_Vsf(v_src);
+    } else if (src0->type == HTP_TYPE_I32 && dst->type == HTP_TYPE_F32) {
+        v_dst = Q6_Vsf_equals_Vw(v_src);
+    } else if (src0->type == HTP_TYPE_F32 && dst->type == HTP_TYPE_F16) {
+        v_dst = hvx_vec_f32_to_f16(v_src, v_src);
+    } else if (src0->type == HTP_TYPE_F16 && dst->type == HTP_TYPE_F32) {
+        v_dst = Q6_V_lo_W(hvx_vec_f16_to_f32(v_src));
     } else {
         return HTP_STATUS_NO_SUPPORT;
+    }
+
+    hvx_vmem(d_ptr) = v_dst;
+
+    dma_queue_push(dma_q, dma_make_data(dst->data, d_vtcm), d_size, d_size, d_size, 1);
+    dma_queue_flush(dma_q);
+    return HTP_STATUS_OK;
+}
+
+static int cpy_1d_contig(struct htp_ops_context * octx, const struct htp_copy_kernel_params * kparams) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
+
+    uint32_t elem_start = 0;
+    uint32_t nelem      = kparams->total_elems;
+
+    if (octx->ctx->mdev.count > 1) {
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            kparams->total_elems, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        elem_start = range.start;
+        nelem      = range.count;
+    }
+
+    if (nelem > 0) {
+        dma_queue * q = octx->ctx->dma[0];
+        const uint32_t type_size = kparams->src0_type_size;
+        dma_addr_t dst_addr  = dst->data  + elem_start * type_size;
+        dma_addr_t src0_addr = src0->data + elem_start * type_size;
+        dma_cpy_sametype_reshape_contig(q, dst_addr, src0_addr, nelem * type_size);
+        dma_queue_flush(q);
     }
 
     return HTP_STATUS_OK;
 }
 
+static int cpy_sameshape_sametype(struct htp_ops_context * octx, const struct htp_copy_kernel_params * kparams) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
+
+    uint32_t row_start = 0;
+    uint32_t nrows     = kparams->total_rows;
+
+    if (octx->ctx->mdev.count > 1) {
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            kparams->total_rows, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows > 0) {
+        dma_queue * q = octx->ctx->dma[0];
+        dma_cpy_sametype_sameshape_range(q, dst, src0, kparams->src0_type_size, row_start, nrows);
+        dma_queue_flush(q);
+    }
+
+    return HTP_STATUS_OK;
+}
+
+static int cpy_sameshape_convert(struct htp_ops_context * octx, const struct htp_copy_kernel_params * kparams) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
+
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    uint32_t row_start = 0;
+    uint32_t nrows     = kparams->total_rows;
+
+    if (octx->ctx->mdev.count > 1) {
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            kparams->total_rows, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    if (kparams->vtcm_size > octx->ctx->vtcm_size) {
+        return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+
+    const uint32_t n_threads = octx->n_threads;
+    const struct htp_copy_convert_params * cvt = &kparams->u.convert;
+
+    struct htp_copy_context ct;
+    htp_copy_convert_vtcm_layout_build(&ct.layout, src0->ne[0], kparams->src0_type_size, kparams->dst_type_size, cvt->blk_rows, n_threads);
+
+    ct.octx                  = octx;
+    ct.kparams               = kparams;
+    ct.row_start             = row_start;
+    ct.nrows                 = nrows;
+    ct.src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+
+    uint8_t * vtcm_base = (uint8_t *) octx->ctx->vtcm_base;
+    ct.vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, ct.layout.off_src0);
+    ct.vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, ct.layout.off_dst);
+
+    work_queue_func_t copy_fun = NULL;
+    if (dst->type == HTP_TYPE_F16 && src0->type == HTP_TYPE_F32) {
+        copy_fun = cpy_thread_f16_f32_sameshape;
+    } else if (dst->type == HTP_TYPE_F32 && src0->type == HTP_TYPE_F16) {
+        copy_fun = cpy_thread_f32_f16_sameshape;
+    } else if (dst->type == HTP_TYPE_I32 && src0->type == HTP_TYPE_F32) {
+        copy_fun = cpy_thread_i32_f32_sameshape;
+    } else if (dst->type == HTP_TYPE_F32 && src0->type == HTP_TYPE_I32) {
+        copy_fun = cpy_thread_f32_i32_sameshape;
+    } else {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    work_queue_run(octx->ctx->work_queue, copy_fun, &ct, n_threads);
+    return HTP_STATUS_OK;
+}
+
+static int cpy_reshape(struct htp_ops_context * octx, const struct htp_copy_kernel_params * kparams) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
+
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    uint32_t elem_start = 0;
+    uint32_t nelem      = kparams->total_elems;
+
+    if (octx->ctx->mdev.count > 1) {
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            kparams->total_elems, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        elem_start = range.start;
+        nelem      = range.count;
+    }
+
+    if (nelem == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_threads = octx->n_threads;
+
+    struct htp_copy_context ct;
+    ct.octx            = octx;
+    ct.kparams         = kparams;
+    ct.elem_start      = elem_start;
+    ct.nelem           = nelem;
+    ct.elem_per_thread = fastdiv(nelem + n_threads - 1, &octx->n_threads_div);
+
+    work_queue_func_t copy_fun = NULL;
+    switch (src0->type) {
+        case HTP_TYPE_F32: copy_fun = cpy_thread_f32_reshape; break;
+        case HTP_TYPE_F16: copy_fun = cpy_thread_f16_reshape; break;
+        case HTP_TYPE_I32: copy_fun = cpy_thread_i32_reshape; break;
+        default: return HTP_STATUS_NO_SUPPORT;
+    }
+
+    work_queue_run(octx->ctx->work_queue, copy_fun, &ct, n_threads);
+    return HTP_STATUS_OK;
+}
+
 int op_cpy(struct htp_ops_context * octx) {
-    bool use_dma = false;
-    int status = exec_cpy(octx, &use_dma);
+    const struct htp_copy_kernel_params * kparams = (const struct htp_copy_kernel_params *) octx->kernel_params;
+    int status = HTP_STATUS_OK;
+
+    switch (kparams->kernel_type) {
+        case HTP_COPY_KERNEL_SCALAR:
+            status = cpy_scalar(octx, kparams);
+            break;
+        case HTP_COPY_KERNEL_1D_CONTIG:
+            status = cpy_1d_contig(octx, kparams);
+            break;
+        case HTP_COPY_KERNEL_SAMESHAPE_SAMETYPE:
+            status = cpy_sameshape_sametype(octx, kparams);
+            break;
+        case HTP_COPY_KERNEL_SAMESHAPE_CONVERT:
+            status = cpy_sameshape_convert(octx, kparams);
+            break;
+        case HTP_COPY_KERNEL_RESHAPE:
+            status = cpy_reshape(octx, kparams);
+            break;
+        case HTP_COPY_KERNEL_GATHER_ROWS:
+            status = htp_gather_rows(octx, octx->src[0], NULL, &kparams->u.gather, kparams->n_threads);
+            break;
+        default:
+            status = HTP_STATUS_NO_SUPPORT;
+            break;
+    }
 
     htp_ops_context_set_status(octx, status);
 
     if (octx->op == HTP_OP_CPY_FENCE) {
-        if (!use_dma) {
-            htp_flush_dirty_ranges(octx->ctx);
+        if (octx->ctx->mdev.count > 1) {
+            htp_mdev_group_barrier(octx);
         }
-
-        htp_mdev_group_barrier(octx);
 
         if (octx->ctx->mdev.idx == 0) {
             const struct htp_tensor * sync = octx->src[1];

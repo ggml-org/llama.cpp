@@ -1,13 +1,22 @@
 <script lang="ts">
-	import { Loader2, Square, SquarePen, X } from '@lucide/svelte';
+	import { Loader2, Square, X } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
-	import { ICON_CLASS_SM, ICON_CLASS_XS, ROUTES, UI_DATA_ATTRS } from '$lib/constants';
-	import { RouterService } from '$lib/services/router.service';
+	import {
+		ICON_CLASS_SM,
+		ICON_CLASS_XS,
+		TAB_SURFACE_ACTIVE_CLASS,
+		TAB_SURFACE_CLASS,
+		TAB_SURFACE_IDLE_CLASS,
+		UI_DATA_ATTRS
+	} from '$lib/constants';
+	import type { Component } from 'svelte';
 
 	interface Tab {
+		href: string;
+		/** Marks the new-chat tab. */
+		icon?: Component;
 		id: string;
-		isNewChat: boolean;
 		name: string;
 	}
 
@@ -33,8 +42,6 @@
 
 	let contentOpacity = $derived(isActive ? '' : 'opacity-45 group-hover:opacity-75');
 
-	let href = $derived(tab.isNewChat ? ROUTES.START : RouterService.chat(tab.id));
-
 	function handleActivate(event: MouseEvent) {
 		// let cmd/ctrl/middle-click fall through so the browser keeps its own
 		// behavior (open in a new window); route the plain click ourselves so the
@@ -59,18 +66,17 @@
 <div
 	{...{ [UI_DATA_ATTRS.ACTIVE_TAB]: isActive ? 'true' : undefined }}
 	class={cn(
-		'relative flex h-8 max-w-52 min-w-0 shrink-0 items-center gap-1 rounded-lg pr-1 text-sm whitespace-nowrap border backdrop-blur-xl first:ml-2',
+		TAB_SURFACE_CLASS,
+		'relative max-w-52 min-w-0 shrink-0 gap-1 pr-1 first:ml-2',
 		isLoading ? 'pl-1' : 'pl-3',
-		isActive
-			? 'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15'
-			: 'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm'
+		isActive ? TAB_SURFACE_ACTIVE_CLASS : TAB_SURFACE_IDLE_CLASS
 	)}
 >
 	<a
 		aria-current={isActive ? 'page' : undefined}
 		aria-label={tab.name}
 		class="absolute inset-0 z-0 rounded-lg"
-		{href}
+		href={tab.href}
 		onauxclick={(e) => onAuxClick?.(tab.id, e)}
 		onclick={handleActivate}
 	></a>
@@ -102,8 +108,8 @@
 		</Tooltip.Root>
 	{/if}
 
-	{#if tab.isNewChat}
-		<SquarePen
+	{#if tab.icon}
+		<tab.icon
 			class="pointer-events-none {ICON_CLASS_SM} shrink-0 transition-opacity {contentOpacity}"
 		/>
 	{/if}

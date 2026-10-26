@@ -24,6 +24,10 @@ on:
       'ggml/src/ggml-vulkan/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -31,6 +35,7 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
@@ -55,7 +60,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: vulkan-ubuntu-24.04-arm
+          restore: false
           variant: ccache
           save: false
 
@@ -124,7 +129,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: vulkan-ubuntu-24.04-llvmpipe
+          restore: false
           save: false
 
       - name: ccache-buckets-restore
@@ -167,7 +172,19 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   windows:
+    name: windows / ${{ matrix.arch }}
     runs-on: windows-2025
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
+
+    strategy:
+      matrix:
+        include:
+          - arch: 'x64'
+          - arch: 'arm64'
 
     env:
       VULKAN_VERSION: 1.4.357.0
@@ -180,7 +197,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: cpu-windows-2025-x64-vulkan
+          key: cpu-windows-2025-${{ matrix.arch }}-vulkan
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -189,7 +206,7 @@ jobs:
         id: get_vulkan
         run: |
           curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
-          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install ${{ matrix.arch == 'arm64' && 'com.lunarg.vulkan.arm64' || '' }}
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
@@ -202,18 +219,19 @@ jobs:
         id: cmake_build
         run: |
           cmake -S . -B build -G "Ninja Multi-Config" `
-            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake `
+            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_NATIVE=OFF `
             -DLLAMA_BUILD_SERVER=ON `
             -DGGML_RPC=ON `
             -DGGML_BACKEND_DL=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} `
             -DGGML_VULKAN=ON `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: Test
+        if: ${{ matrix.arch == 'x64' }}
         id: cmake_test
         run: |
           cd build
@@ -224,7 +242,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         with:
-          key: cpu-windows-2025-x64-vulkan
+          key: cpu-windows-2025-${{ matrix.arch }}-vulkan
           older: 5m
           min: 1
           dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

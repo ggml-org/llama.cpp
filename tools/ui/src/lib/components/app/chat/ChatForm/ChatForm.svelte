@@ -8,8 +8,7 @@
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
-		DialogMcpResourcesBrowser,
-		DialogMcpServers
+		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
@@ -34,7 +33,8 @@
 		modelsStore,
 		serverStore,
 		settingsStore,
-		toolsStore
+		toolsStore,
+		uiStore
 	} from '$lib/stores';
 	import type {
 		FileMentionEntry,
@@ -193,7 +193,6 @@
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
 	// MCP Servers Dialog State
-	let isMcpServersDialogOpen = $state(false);
 
 	let currentConfig = $derived(settingsStore.config);
 
@@ -478,6 +477,16 @@
 		queueMicrotask(() => inputRef?.focus());
 	}
 
+	// A flow outside the chat, e.g. the models page returning to it, asks for the
+	// composer back. Focus on a frame of its own, once the route has settled.
+	$effect(() => {
+		if (!uiStore.composerFocusRequested) return;
+
+		uiStore.composerFocusRequested = false;
+
+		setTimeout(() => inputRef?.focus(), 0);
+	});
+
 	// Splice the mention link in place of the `@<query>` token. Uses the
 	// live cursor, not a stale snapshot - the token may have been edited.
 	function handleMentionSelect(entry: FileMentionEntry) {
@@ -628,7 +637,6 @@
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
 				onFileUpload={handleFileUpload}
-				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
@@ -667,5 +675,3 @@
 	}}
 	preSelectedUri={preSelectedResourceUri}
 />
-
-<DialogMcpServers bind:open={isMcpServersDialogOpen} />

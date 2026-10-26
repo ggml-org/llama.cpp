@@ -83,6 +83,8 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -184,6 +186,4 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

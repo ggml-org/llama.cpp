@@ -596,6 +596,4 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

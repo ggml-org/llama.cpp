@@ -10,6 +10,7 @@ import bisect
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
+logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger("ggml-hexagon-trace")
 
 op_pattern = re.compile(
@@ -513,7 +514,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         tm = time_mappers[dev]
         e['ts_ns'] = tm.cycle_to_ns(e['start_cyc'])
         dur_ns = tm.dur_cycles_to_ns(e['start_cyc'], e['end_cyc'] - e['start_cyc'])
-        e['dur_ns'] = max(dur_ns, 100)
+        e['dur_ns'] = max(dur_ns, 1)
 
     # Allocate slots (sub-tracks) to prevent overlaps on same virtual track
     active_slots = defaultdict(list)
@@ -732,7 +733,7 @@ def main():
     group.add_argument("--tail", type=int, help="Limit to last N ops")
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     op_filter_re = None
     if args.filter:

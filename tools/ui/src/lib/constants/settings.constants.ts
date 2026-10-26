@@ -1,3 +1,4 @@
+import { DEFAULT_AGENTIC_CONFIG } from './agentic.constants';
 import { CLI_FLAGS } from './cli-flags.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
@@ -126,6 +127,20 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: false,
+				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Turns the Hugging Face Hub API on while it is enabled. Only available in router mode.',
+				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
+				label: 'Enable Discover Models',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Fetch model display data (avatars, context length, chat template) and everything in the Discover Models view from the Hugging Face Hub API. Locked on while Discover Models is enabled; can be turned on alone for just the display data.',
+				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
+				label: 'Use the Hugging Face Hub API',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: true,
 				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
@@ -213,8 +228,15 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: true,
+				help: 'Expand tool call details while the call is being generated and executed, and collapse them again once its result is in. Mirrors "Show thought in progress". Tool calls you expand or collapse by hand keep your choice.',
+				key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+				label: 'Show tool call in progress',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: false,
-				help: 'Automatically expand tool call details while executing and keep them expanded after completion.',
+				help: 'Keep tool call details expanded after completion. Takes precedence over "Show tool call in progress", which only covers the in-flight phases.',
 				key: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
 				label: 'Always show tool call content',
 				type: SettingsFieldType.CHECKBOX
@@ -284,9 +306,16 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Display the organization name in the model selector trigger button.',
-				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER,
-				label: 'Show organization name in model selector trigger',
+				help: 'Show the modality and capability icons (vision, audio, reasoning, tools) on the models selector rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_CAPABILITIES_IN_SELECTOR,
+				label: 'Show model modalities & capabilities in models selector',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Display the organization name alongside model names in the model selector, in the trigger and in the model rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME,
+				label: 'Show organization name in model selector',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -301,6 +330,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Display the full file system path inside file and folder @-mention badges instead of just the file or folder name.',
 				key: SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS,
 				label: 'Show full path in mentions',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Group models into families (e.g. "Qwen") in the model picker and the models manager. Turn it off to list every model on its own.',
+				key: SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY,
+				label: 'Group models by family',
 				type: SettingsFieldType.CHECKBOX
 			}
 		],
@@ -328,7 +364,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		icon: ListRestart,
 		settings: [
 			{
-				defaultValue: 10,
+				defaultValue: DEFAULT_AGENTIC_CONFIG.maxTurns,
 				help: 'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
 				isPositiveInteger: true,
 				key: SETTINGS_KEYS.AGENTIC_MAX_TURNS,

@@ -323,8 +323,11 @@ struct llama_file::impl {
         off_t offset_from_alignment = offset - aligned_offset;
         size_t bytes_to_read = (offset_from_alignment + size + alignment - 1) & ~(alignment - 1);
 
+        // stage through a bounded buffer, so that a large tensor is not held in memory twice while it loads
+        const size_t buffer_size = std::min<size_t>(bytes_to_read, LLAMA_DIRECT_IO_BUFFER_SIZE);
+
         void * raw_buffer = nullptr;
-        int ret = posix_memalign(&raw_buffer, alignment, bytes_to_read);
+        int ret = posix_memalign(&raw_buffer, alignment, buffer_size);
         if (ret != 0) {
             throw std::runtime_error(format("posix_memalign failed with error %d", ret));
         }
@@ -335,10 +338,20 @@ struct llama_file::impl {
         std::unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
 
         seek(aligned_offset, SEEK_SET);
-        read_raw_unsafe(buffer.get(), bytes_to_read);
 
-        uintptr_t actual_data = reinterpret_cast<uintptr_t>(buffer.get()) + offset_from_alignment;
-        memcpy(dest, reinterpret_cast<void *>(actual_data), size);
+        size_t skip   = offset_from_alignment;
+        size_t copied = 0;
+        for (size_t done = 0; done < bytes_to_read; ) {
+            const size_t n = std::min(buffer_size, bytes_to_read - done);
+            read_raw_unsafe(buffer.get(), n);
+
+            const size_t count = std::min(n - skip, size - copied);
+            memcpy(reinterpret_cast<char *>(dest) + copied, reinterpret_cast<char *>(buffer.get()) + skip, count);
+
+            copied += count;
+            skip    = 0;
+            done   += n;
+        }
     }
 
     void read_raw(void * ptr, size_t len) {
@@ -820,6 +833,83 @@ const bool llama_mlock::SUPPORTED = true;
 #else
 const bool llama_mlock::SUPPORTED = false;
 #endif
+
+void llama_prefetch(llama_memory_ranges mr) {
+#if defined(__linux__) || defined(__APPLE__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
+    if (mr.empty()) {
+        return;
+    }
+
+#if defined(_WIN32)
+    using prefetch_virtual_memory_t = BOOL (WINAPI *)(HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+    static const auto pPrefetchVirtualMemory = (prefetch_virtual_memory_t) (void *) GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "PrefetchVirtualMemory");
+    if (!pPrefetchVirtualMemory) {
+        return;
+    }
+
+    static const long page_size = [] {
+        SYSTEM_INFO info;
+        GetSystemInfo(&info);
+        return (long) info.dwPageSize;
+    }();
+#else
+    static const long page_size = sysconf(_SC_PAGESIZE);
+#endif
+    if (page_size <= 0) {
+        return;
+    }
+
+    const size_t page = (size_t) page_size;
+    std::sort(mr.begin(), mr.end(), [](const llama_memory_range & a, const llama_memory_range & b) {
+        return (uintptr_t) a.addr < (uintptr_t) b.addr;
+    });
+
+    uintptr_t begin = 0, end = 0;
+    size_t n_ranges = 0;
+    for (const auto & range : mr) {
+        if (!range.addr || range.size == 0) {
+            continue;
+        }
+        const uintptr_t pointer = (uintptr_t) range.addr;
+        const uintptr_t first = pointer / page * page;
+        const uintptr_t last = (pointer + range.size + page - 1) / page * page;
+        if (end && first > end) {
+            mr[n_ranges++] = { (const void *) begin, end - begin };
+            end = 0;
+        }
+        if (!end) {
+            begin = first;
+        }
+        end = std::max(end, last);
+    }
+    if (end) {
+        mr[n_ranges++] = { (const void *) begin, end - begin };
+    }
+    mr.resize(n_ranges);
+#if defined(_WIN32)
+    // prefetch the merged ranges in one call, so the reads can be issued concurrently
+    std::vector<WIN32_MEMORY_RANGE_ENTRY> entries;
+    entries.reserve(mr.size());
+    for (const auto & range : mr) {
+        entries.push_back({ const_cast<PVOID>(range.addr), (SIZE_T) range.size });
+    }
+    if (!entries.empty() && !pPrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
+        LLAMA_LOG_WARN("llama_prefetch: PrefetchVirtualMemory failed: %s\n",
+                llama_format_win_err(GetLastError()).c_str());
+    }
+#else
+    for (const auto & range : mr) {
+        // TODO: in a follow-up, use posix_madvise(.., POSIX_MADV_WILLNEED) to match the rest of this file
+        if (madvise(const_cast<void *>(range.addr), range.size, MADV_WILLNEED) != 0) {
+            LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
+            return;
+        }
+    }
+#endif
+#else
+    GGML_UNUSED(mr);
+#endif
+}
 
 size_t llama_path_max() {
     return PATH_MAX;

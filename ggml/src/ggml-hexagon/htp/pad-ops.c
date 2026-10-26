@@ -7,7 +7,7 @@
 
 #include <string.h>
 
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
@@ -17,18 +17,28 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
+#include "htp-vtcm.h"
+#include "pad-ops.h"
 
 /* Circular wrap: maps any integer x into [0, n) */
-static inline uint32_t wrap_around(int32_t x, uint32_t n) {
-    return (uint32_t)(((x % (int32_t)n) + (int32_t)n) % (int32_t)n);
+static inline uint32_t wrap_around(int32_t x, uint32_t n, const struct fastdiv_values * div_n) {
+    if (x >= 0) {
+        const uint32_t ux = (uint32_t) x;
+        return ux < n ? ux : fastmodulo(ux, n, div_n);
+    }
+    const uint32_t ux  = (uint32_t) (-x);
+    const uint32_t rem = ux < n ? ux : fastmodulo(ux, n, div_n);
+    return rem ? (n - rem) : 0;
 }
 
 /* Decompose a flat dst row index into (i1, i2, i3) */
 static inline void pad_decompose_row(uint32_t ir, uint32_t ne1, uint32_t ne2,
+                                     const struct htp_pad_kernel_params * kparams,
                                      uint32_t *i1, uint32_t *i2, uint32_t *i3) {
-    *i1 = ir % ne1;
-    *i2 = (ir / ne1) % ne2;
-    *i3 = ir / (ne1 * ne2);
+    *i3 = fastdiv(ir, &kparams->div_ne1_ne2);
+    const uint32_t rem = ir - (*i3) * (ne1 * ne2);
+    *i2 = fastdiv(rem, &kparams->div_ne1);
+    *i1 = rem - (*i2) * ne1;
 }
 
 /* Return non-zero if row (i1,i2,i3) falls in the non-padded interior */
@@ -51,18 +61,39 @@ static inline const uint8_t * pad_src_row_ptr(const struct htp_tensor * src,
         + (i3 - (uint32_t)lp3) * src->nb[3];
 }
 
+static inline dma_addr_t pad_src_row_data(const struct htp_tensor * src,
+                                          uint32_t i1, uint32_t i2, uint32_t i3,
+                                          int32_t lp1, int32_t lp2, int32_t lp3) {
+    return src->data
+        + (i1 - (uint32_t)lp1) * src->nb[1]
+        + (i2 - (uint32_t)lp2) * src->nb[2]
+        + (i3 - (uint32_t)lp3) * src->nb[3];
+}
+
 /* Compute the DDR src row pointer for a circular row (wrap-around indexing) */
 static inline const uint8_t * pad_circ_src_row_ptr(const struct htp_tensor * src,
+                                                    const struct htp_pad_kernel_params * kparams,
                                                     uint32_t i1, uint32_t i2, uint32_t i3,
                                                     int32_t lp1, int32_t lp2, int32_t lp3) {
     return (const uint8_t *) src->data
-        + wrap_around((int32_t)i1 - lp1, src->ne[1]) * src->nb[1]
-        + wrap_around((int32_t)i2 - lp2, src->ne[2]) * src->nb[2]
-        + wrap_around((int32_t)i3 - lp3, src->ne[3]) * src->nb[3];
+        + wrap_around((int32_t)i1 - lp1, src->ne[1], &kparams->div_ne01) * src->nb[1]
+        + wrap_around((int32_t)i2 - lp2, src->ne[2], &kparams->div_ne02) * src->nb[2]
+        + wrap_around((int32_t)i3 - lp3, src->ne[3], &kparams->div_ne03) * src->nb[3];
+}
+
+static inline dma_addr_t pad_circ_src_row_data(const struct htp_tensor * src,
+                                               const struct htp_pad_kernel_params * kparams,
+                                               uint32_t i1, uint32_t i2, uint32_t i3,
+                                               int32_t lp1, int32_t lp2, int32_t lp3) {
+    return src->data
+        + wrap_around((int32_t)i1 - lp1, src->ne[1], &kparams->div_ne01) * src->nb[1]
+        + wrap_around((int32_t)i2 - lp2, src->ne[2], &kparams->div_ne02) * src->nb[2]
+        + wrap_around((int32_t)i3 - lp3, src->ne[3], &kparams->div_ne03) * src->nb[3];
 }
 
 struct htp_pad_context {
     struct htp_ops_context * octx;
+    const struct htp_pad_kernel_params * kparams;
 
     int32_t  lp0, rp0;
     int32_t  lp1, rp1;
@@ -118,7 +149,7 @@ struct htp_pad_context {
     uint8_t * src_spad_base = octx->src0_spad.data + ith * octx->src0_spad.size_per_thread; \
     uint8_t * dst_spad_base = octx->dst_spad.data  + ith * octx->dst_spad.size_per_thread;  \
                                                                                             \
-    dma_queue * dma = octx->ctx->dma[ith];
+    dma_queue * dma_q = octx->ctx->dma[ith];
 
 // ---------------------------------------------------------------------------
 // HVX vectorized PAD kernel
@@ -134,7 +165,7 @@ static void pad_job_per_thread_hvx(unsigned int nth, unsigned int ith, void * da
 
     for (uint32_t dst_row = row_start; dst_row < row_end; dst_row++) {
         uint32_t i1, i2, i3;
-        pad_decompose_row(dst_row, ne1, ne2, &i1, &i2, &i3);
+        pad_decompose_row(dst_row, ne1, ne2, pctx->kparams, &i1, &i2, &i3);
 
         uint8_t * dst_ptr = (uint8_t *) dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
 
@@ -196,26 +227,25 @@ static void pad_job_per_thread_hvx_dma(unsigned int nth, unsigned int ith, void 
         uint8_t * src_spad_cur = src_spad_base + spad_idx * src_row_size_aligned;
         uint8_t * dst_spad_cur = dst_spad_base + spad_idx * dst_row_size_aligned;
 
-        dma_queue_push_vtcm_to_ddr(dma,
-            dma_make_ptr((uint8_t *)dst->data, dst_spad_cur),
-            dst_row_size, dst_row_size_aligned, 0);
+        dma_queue_push(dma_q,
+            dma_make_data(dst->data, dst_spad_cur),
+            dst_row_size, dst_row_size_aligned, dst_row_size, 0);
 
         uint32_t i1, i2, i3;
-        pad_decompose_row(ir, ne1, ne2, &i1, &i2, &i3);
+        pad_decompose_row(ir, ne1, ne2, pctx->kparams, &i1, &i2, &i3);
         const int interior = pad_is_interior(i1, i2, i3,
                                              lp1, rp1, ne1,
                                              lp2, rp2, ne2,
                                              lp3, rp3, ne3);
 
-        const uint8_t * src_ptr = interior
-            ? pad_src_row_ptr(src, i1, i2, i3, lp1, lp2, lp3) : NULL;
+        const dma_addr_t src_data = interior
+            ? pad_src_row_data(src, i1, i2, i3, lp1, lp2, lp3) : src->data;
 
         // Interior row: real DMA (1 row) from DDR to VTCM.
         // Border row: null DMA (nrows=0)
-        dma_queue_push_ddr_to_vtcm(dma,
-            dma_make_ptr(src_spad_cur,
-                         src_ptr ? src_ptr : (const uint8_t *)src_spad_cur),
-            src_row_size_aligned, src_row_size, src_ptr ? 1 : 0);
+        dma_queue_push(dma_q,
+            dma_make_data(src_spad_cur, src_data),
+            src_row_size_aligned, src_row_size, src_row_size, interior ? 1 : 0);
     }
 
     // -----------------------------------------------------------------------
@@ -225,13 +255,13 @@ static void pad_job_per_thread_hvx_dma(unsigned int nth, unsigned int ith, void 
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];
 
     for (uint32_t ir = row_start; ir < row_end; ir++) {
-        uint8_t * dst_spad_cur = (uint8_t *) dma_queue_pop(dma).src;
-        uint8_t * src_spad_cur = (uint8_t *) dma_queue_pop(dma).dst;
+        uint8_t * dst_spad_cur = (uint8_t *) dma_queue_pop(dma_q).src;
+        uint8_t * src_spad_cur = (uint8_t *) dma_queue_pop(dma_q).dst;
 
         uint32_t i1, i2, i3;
-        pad_decompose_row(ir, ne1, ne2, &i1, &i2, &i3);
+        pad_decompose_row(ir, ne1, ne2, pctx->kparams, &i1, &i2, &i3);
 
-        uint8_t * dst_ptr = (uint8_t *) dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
+        const dma_addr_t dst_data = dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
 
         const int interior = pad_is_interior(i1, i2, i3,
                                              lp1, rp1, ne1,
@@ -254,29 +284,28 @@ static void pad_job_per_thread_hvx_dma(unsigned int nth, unsigned int ith, void 
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
-        dma_queue_push_vtcm_to_ddr(dma,
-            dma_make_ptr(dst_ptr, dst_spad_cur),
-            dst_row_size, dst_row_size_aligned, 1);
+        dma_queue_push(dma_q,
+            dma_make_data(dst_data, dst_spad_cur),
+            dst_row_size, dst_row_size_aligned, dst_row_size, 1);
 
         const uint32_t next_row = ir + 2;
         if (next_row < row_end) {
             uint32_t ni1, ni2, ni3;
-            pad_decompose_row(next_row, ne1, ne2, &ni1, &ni2, &ni3);
+            pad_decompose_row(next_row, ne1, ne2, pctx->kparams, &ni1, &ni2, &ni3);
             const int next_interior = pad_is_interior(ni1, ni2, ni3,
                                                       lp1, rp1, ne1,
                                                       lp2, rp2, ne2,
                                                       lp3, rp3, ne3);
-            const uint8_t * next_src_ptr = next_interior
-                ? pad_src_row_ptr(src, ni1, ni2, ni3, lp1, lp2, lp3) : NULL;
+            const dma_addr_t next_src_data = next_interior
+                ? pad_src_row_data(src, ni1, ni2, ni3, lp1, lp2, lp3) : src->data;
 
-            dma_queue_push_ddr_to_vtcm(dma,
-                dma_make_ptr(src_spad_cur,
-                             next_src_ptr ? next_src_ptr : (const uint8_t *)src_spad_cur),
-                src_row_size_aligned, src_row_size, next_src_ptr ? 1 : 0);
+            dma_queue_push(dma_q,
+                dma_make_data(src_spad_cur, next_src_data),
+                src_row_size_aligned, src_row_size, src_row_size, next_interior ? 1 : 0);
         }
     }
 
-    dma_queue_flush(dma);
+    dma_queue_flush(dma_q);
 
     FARF(HIGH, "pad-hvx-dma %d/%d: (%ux%ux%ux%u) -> (%ux%ux%ux%u) rows %u:%u\n",
          ith, nth,
@@ -299,10 +328,10 @@ static void pad_job_per_thread_hvx_circular(unsigned int nth, unsigned int ith, 
 
     for (uint32_t dst_row = row_start; dst_row < row_end; dst_row++) {
         uint32_t i1, i2, i3;
-        pad_decompose_row(dst_row, ne1, ne2, &i1, &i2, &i3);
+        pad_decompose_row(dst_row, ne1, ne2, pctx->kparams, &i1, &i2, &i3);
 
         uint8_t       * dst_ptr = (uint8_t *) dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
-        const uint8_t * src_row = pad_circ_src_row_ptr(src, i1, i2, i3, lp1, lp2, lp3);
+        const uint8_t * src_row = pad_circ_src_row_ptr(src, pctx->kparams, i1, i2, i3, lp1, lp2, lp3);
 
         if (nb00 == type_size) {
 
@@ -372,15 +401,16 @@ static void pad_job_per_thread_hvx_circular_dma(unsigned int nth, unsigned int i
         uint8_t * src_spad_cur = src_spad_base + spad_idx * src_row_size_aligned;
         uint8_t * dst_spad_cur = dst_spad_base + spad_idx * dst_row_size_aligned;
 
-        dma_queue_push_vtcm_to_ddr(dma,
-            dma_make_ptr((uint8_t *)dst->data, dst_spad_cur),
-            dst_row_size, dst_row_size_aligned, 0);
+        dma_queue_push(dma_q,
+            dma_make_data(dst->data, dst_spad_cur),
+            dst_row_size, dst_row_size_aligned, dst_row_size, 0);
 
         uint32_t pi1, pi2, pi3;
-        pad_decompose_row(ir, ne1, ne2, &pi1, &pi2, &pi3);
-        dma_queue_push_ddr_to_vtcm(dma,
-            dma_make_ptr(src_spad_cur, pad_circ_src_row_ptr(src, pi1, pi2, pi3, lp1, lp2, lp3)),
-            src_row_size_aligned, src_row_size, 1);
+        pad_decompose_row(ir, ne1, ne2, pctx->kparams, &pi1, &pi2, &pi3);
+        const dma_addr_t src_data = pad_circ_src_row_data(src, pctx->kparams, pi1, pi2, pi3, lp1, lp2, lp3);
+        dma_queue_push(dma_q,
+            dma_make_data(src_spad_cur, src_data),
+            src_row_size_aligned, src_row_size, src_row_size, 1);
     }
 
     // -----------------------------------------------------------------------
@@ -390,12 +420,12 @@ static void pad_job_per_thread_hvx_circular_dma(unsigned int nth, unsigned int i
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];
 
     for (uint32_t ir = row_start; ir < row_end; ir++) {
-        uint8_t * dst_spad_cur = (uint8_t *) dma_queue_pop(dma).src;
-        uint8_t * src_spad_cur = (uint8_t *) dma_queue_pop(dma).dst;
+        uint8_t * dst_spad_cur = (uint8_t *) dma_queue_pop(dma_q).src;
+        uint8_t * src_spad_cur = (uint8_t *) dma_queue_pop(dma_q).dst;
 
         uint32_t i1, i2, i3;
-        pad_decompose_row(ir, ne1, ne2, &i1, &i2, &i3);
-        uint8_t * dst_ptr = (uint8_t *) dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
+        pad_decompose_row(ir, ne1, ne2, pctx->kparams, &i1, &i2, &i3);
+        const dma_addr_t dst_data = dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         if (lp0 > 0) {
@@ -431,22 +461,22 @@ static void pad_job_per_thread_hvx_circular_dma(unsigned int nth, unsigned int i
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
-        dma_queue_push_vtcm_to_ddr(dma,
-            dma_make_ptr(dst_ptr, dst_spad_cur),
-            dst_row_size, dst_row_size_aligned, 1);
+        dma_queue_push(dma_q,
+            dma_make_data(dst_data, dst_spad_cur),
+            dst_row_size, dst_row_size_aligned, dst_row_size, 1);
 
         const uint32_t next_row = ir + 2;
         if (next_row < row_end) {
             uint32_t nri1, nri2, nri3;
-            pad_decompose_row(next_row, ne1, ne2, &nri1, &nri2, &nri3);
-            dma_queue_push_ddr_to_vtcm(dma,
-                dma_make_ptr(src_spad_cur,
-                             pad_circ_src_row_ptr(src, nri1, nri2, nri3, lp1, lp2, lp3)),
-                src_row_size_aligned, src_row_size, 1);
+            pad_decompose_row(next_row, ne1, ne2, pctx->kparams, &nri1, &nri2, &nri3);
+            const dma_addr_t next_src_data = pad_circ_src_row_data(src, pctx->kparams, nri1, nri2, nri3, lp1, lp2, lp3);
+            dma_queue_push(dma_q,
+                dma_make_data(src_spad_cur, next_src_data),
+                src_row_size_aligned, src_row_size, src_row_size, 1);
         }
     }
 
-    dma_queue_flush(dma);
+    dma_queue_flush(dma_q);
 
     FARF(HIGH, "pad-hvx-circ-dma %d/%d: (%ux%ux%ux%u) -> (%ux%ux%ux%u) rows %u:%u\n",
          ith, nth,
@@ -458,19 +488,8 @@ static void pad_job_per_thread_hvx_circular_dma(unsigned int nth, unsigned int i
 int op_pad(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * dst  = octx->dst;
-
-    // Only F32 supported
-    size_t type_size;
-    switch (src0->type) {
-        case HTP_TYPE_F32: type_size = 4; break;
-        default:
-            FARF(ERROR, "pad-hvx: unsupported type %u\n", src0->type);
-            return HTP_STATUS_NO_SUPPORT;
-    }
-
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
-    }
+    const struct htp_pad_kernel_params * kparams =
+        (const struct htp_pad_kernel_params *) octx->kernel_params;
 
     const int32_t lp0 = octx->op_params[0];
     const int32_t rp0 = octx->op_params[1];
@@ -482,11 +501,10 @@ int op_pad(struct htp_ops_context * octx) {
     const int32_t rp3 = octx->op_params[7];
     const int32_t circular = octx->op_params[8];
 
-    const uint32_t ne0  = dst->ne[0];
-    const uint32_t ne00 = src0->ne[0];
-
-    const uint32_t total_dst_rows = dst->ne[1] * dst->ne[2] * dst->ne[3];
-    const size_t dst_row_size     = (size_t)ne0 * type_size;
+    const uint32_t total_dst_rows = kparams->total_rows;
+    const size_t   type_size      = kparams->elem_size;
+    const size_t   src_row_size   = src0->ne[0] * type_size;
+    const size_t   dst_row_size   = dst->ne[0] * type_size;
 
     uint32_t row_start = 0;
     uint32_t nrows     = total_dst_rows;
@@ -503,56 +521,68 @@ int op_pad(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
+    if (!htp_ops_context_set_n_threads(octx, MIN(kparams->n_threads, nrows))) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
     const uint32_t n_threads = octx->n_threads;
 
-    const size_t src_row_size         = (size_t)ne00 * type_size;
-    const size_t src_row_size_aligned = hex_round_up(src_row_size, VLEN);
-    const size_t dst_row_size_aligned = hex_round_up(dst_row_size, VLEN);
+    if (!kparams->use_dma && (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst))) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
 
-    // Total VTCM needed: 2 buffers (ping+pong) for src and dst, per thread
-    const size_t vtcm_needed = (size_t)n_threads * 2 * (src_row_size_aligned + dst_row_size_aligned);
+    struct htp_pad_vtcm_layout layout = { 0 };
+    if (kparams->use_dma) {
+        htp_pad_vtcm_layout_build(&layout, src_row_size, dst_row_size, n_threads);
 
-    const int use_dma = (src0->nb[0] == (uint32_t)type_size) && (ne00 >= 512) &&
-                        (octx->ctx->vtcm_size >= vtcm_needed);
-
-    if (use_dma) {
-        octx->src0_spad.size_per_thread = 2 * src_row_size_aligned;
-        octx->dst_spad.size_per_thread  = 2 * dst_row_size_aligned;
-        octx->src0_spad.size = n_threads * octx->src0_spad.size_per_thread;
-        octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
-        octx->src0_spad.data = octx->ctx->vtcm_base;
-        octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
+        octx->src0_spad.size_per_thread = layout.src0_bytes_per_thread;
+        octx->dst_spad.size_per_thread  = layout.dst_bytes_per_thread;
+        octx->src0_spad.size = n_threads * layout.src0_bytes_per_thread;
+        octx->dst_spad.size  = n_threads * layout.dst_bytes_per_thread;
+        octx->src0_spad.data = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, layout.off_src0);
+        octx->dst_spad.data  = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, layout.off_dst);
         octx->src0_spad.src  = NULL;
         octx->dst_spad.src   = NULL;
     }
 
     struct htp_pad_context pctx = {
-        .octx             = octx,
+        .octx                 = octx,
+        .kparams              = kparams,
         .lp0 = lp0, .rp0 = rp0,
         .lp1 = lp1, .rp1 = rp1,
         .lp2 = lp2, .rp2 = rp2,
         .lp3 = lp3, .rp3 = rp3,
-        .nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
-        .total_dst_rows   = nrows,
-        .row_start        = row_start,
-        .type_size        = type_size,
+        .nrows_per_thread     = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
+        .total_dst_rows       = nrows,
+        .row_start            = row_start,
+        .type_size            = type_size,
         .src_row_size         = src_row_size,
-        .src_row_size_aligned = src_row_size_aligned,
+        .src_row_size_aligned = layout.src_row_size_aligned,
         .dst_row_size         = dst_row_size,
-        .dst_row_size_aligned = dst_row_size_aligned,
+        .dst_row_size_aligned = layout.dst_row_size_aligned,
     };
 
     FARF(HIGH, "pad-hvx%s%s: (%ux%ux%ux%u) -> (%ux%ux%ux%u) pads=(%d,%d,%d,%d,%d,%d,%d,%d)\n",
-         circular ? "-circ" : "",
-         use_dma   ? "-dma"  : "",
+         circular         ? "-circ" : "",
+         kparams->use_dma ? "-dma"  : "",
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
          dst->ne[0],  dst->ne[1],  dst->ne[2],  dst->ne[3],
          lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
 
-    if      (circular && use_dma) { work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx_circular_dma, &pctx, n_threads); }
-    else if (circular)            { work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx_circular,     &pctx, n_threads); }
-    else if (use_dma)             { work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx_dma,          &pctx, n_threads); }
-    else                          { work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx,              &pctx, n_threads); }
+    switch (kparams->kernel_type) {
+        case HTP_PAD_KERNEL_HVX_CIRCULAR_DMA:
+            work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx_circular_dma, &pctx, n_threads);
+            break;
+        case HTP_PAD_KERNEL_HVX_CIRCULAR:
+            work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx_circular,     &pctx, n_threads);
+            break;
+        case HTP_PAD_KERNEL_HVX_DMA:
+            work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx_dma,          &pctx, n_threads);
+            break;
+        default:
+            work_queue_run(octx->ctx->work_queue, pad_job_per_thread_hvx,              &pctx, n_threads);
+            break;
+    }
 
     return HTP_STATUS_OK;
 }

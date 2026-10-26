@@ -149,6 +149,7 @@ public:
 // K dim-0 is +gain for an adapter token, -gain otherwise; the causal softmax then
 // lets a single visible adapter token dominate so the readback recovers its slot.
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
+    ASSERT_EMBD_OR_TOKEN(*ubatch);
     if (!ubatch->token) {
         return;
     }
@@ -226,6 +227,7 @@ llama_model_granite_switch::graph::graph(
     const auto & smodel = static_cast<const llama_model_granite_switch &>(model);
 
     // TODO: support raw embedding input (multimodal / pre-embedded tokens) when needed
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     GGML_ASSERT(ubatch.token && "granite-switch requires token input");
 
     const int64_t n_embd_head = hparams.n_embd_head_v();
@@ -291,6 +293,8 @@ llama_model_granite_switch::graph::graph(
     ggml_tensor * cur;
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
@@ -324,8 +328,6 @@ llama_model_granite_switch::graph::graph(
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(

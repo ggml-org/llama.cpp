@@ -3,6 +3,11 @@ name: UI Build (self-hosted)
 on:
   workflow_call:
 
+cache-mode: none
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   build:
     runs-on: [self-hosted, fast]

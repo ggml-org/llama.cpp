@@ -16,14 +16,11 @@
 #include "hex-profile.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
+#include "repeat-ops.h"
 
 struct htp_repeat_context {
-    struct htp_ops_context * octx;
-
-    uint32_t nr0;
-    uint32_t nr1;
-    uint32_t nr2;
-    uint32_t nr3;
+    struct htp_ops_context *               octx;
+    const struct htp_repeat_kernel_params * kparams;
 
     uint32_t nrows_per_thread;
     uint32_t total_dst_rows;  // ne1 * ne2 * ne3
@@ -35,6 +32,7 @@ struct htp_repeat_context {
 static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_repeat_context * rctx = (const struct htp_repeat_context *) data;
     struct htp_ops_context * octx = rctx->octx;
+    const struct htp_repeat_kernel_params * kparams = rctx->kparams;
     const struct htp_tensor * src = octx->src[0];
     const struct htp_tensor * dst = octx->dst;
 
@@ -58,29 +56,30 @@ static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * dat
     const uint32_t nb2 = dst->nb[2];
     const uint32_t nb3 = dst->nb[3];
 
-    const uint32_t nr0 = rctx->nr0;
-    const uint32_t nr1 = rctx->nr1;
-    const uint32_t nr2 = rctx->nr2;
-    const uint32_t nr3 = rctx->nr3;
+    const uint32_t nr0 = kparams->nr0;
 
     const size_t row_bytes = ne00 * rctx->type_size;
 
     const uint32_t row_start = rctx->row_start + rctx->nrows_per_thread * ith;
     const uint32_t row_end   = MIN(row_start + rctx->nrows_per_thread, rctx->row_start + rctx->total_dst_rows);
+    if (row_start >= row_end) {
+        return;
+    }
 
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row_start);
 
     for (uint32_t dst_row = row_start; dst_row < row_end; dst_row++) {
         // Decompose flat dst row index into (i1, i2, i3)
-        const uint32_t i1 = dst_row % ne1;
-        const uint32_t i2 = (dst_row / ne1) % ne2;
-        const uint32_t i3 = dst_row / (ne1 * ne2);
+        const uint32_t dst_row_div_ne1 = fastdiv(dst_row, &kparams->div_ne1);
+        const uint32_t i1              = dst_row - dst_row_div_ne1 * ne1;
+        const uint32_t i3              = fastdiv(dst_row, &kparams->div_ne12);
+        const uint32_t i2              = dst_row_div_ne1 - i3 * ne2;
 
         // Map to source indices (tiling)
-        const uint32_t k1 = i1 % ne01;
-        const uint32_t k2 = i2 % ne02;
-        const uint32_t k3 = i3 % ne03;
+        const uint32_t k1 = fastmodulo(i1, ne01, &kparams->div_ne01);
+        const uint32_t k2 = fastmodulo(i2, ne02, &kparams->div_ne02);
+        const uint32_t k3 = fastmodulo(i3, ne03, &kparams->div_ne03);
 
         const uint8_t * src_row = (const uint8_t *) src->data + k1 * nb01 + k2 * nb02 + k3 * nb03;
         uint8_t * dst_base      = (uint8_t *) dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
@@ -104,15 +103,6 @@ int op_repeat(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * dst  = octx->dst;
 
-    // Validate that dst dims are multiples of src dims
-    if (dst->ne[0] % src0->ne[0] != 0 ||
-        dst->ne[1] % src0->ne[1] != 0 ||
-        dst->ne[2] % src0->ne[2] != 0 ||
-        dst->ne[3] % src0->ne[3] != 0) {
-        FARF(ERROR, "repeat: dst dims must be multiples of src dims\n");
-        return HTP_STATUS_INVAL_PARAMS;
-    }
-
     size_t type_size;
     switch (src0->type) {
         case HTP_TYPE_F32: type_size = 4; break;
@@ -122,8 +112,15 @@ int op_repeat(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
+    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const struct htp_repeat_kernel_params * kparams =
+        (const struct htp_repeat_kernel_params *) octx->kernel_params;
+
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
     }
 
     const uint32_t total_dst_rows  = dst->ne[1] * dst->ne[2] * dst->ne[3];
@@ -148,10 +145,7 @@ int op_repeat(struct htp_ops_context * octx) {
 
     struct htp_repeat_context rctx = {
         .octx             = octx,
-        .nr0              = dst->ne[0] / src0->ne[0],
-        .nr1              = dst->ne[1] / src0->ne[1],
-        .nr2              = dst->ne[2] / src0->ne[2],
-        .nr3              = dst->ne[3] / src0->ne[3],
+        .kparams          = kparams,
         .nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
         .total_dst_rows   = nrows,
         .row_start        = row_start,
@@ -161,7 +155,7 @@ int op_repeat(struct htp_ops_context * octx) {
     FARF(HIGH, "repeat: (%ux%ux%ux%u) -> (%ux%ux%ux%u) nr=(%u,%u,%u,%u)\n",
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         rctx.nr0, rctx.nr1, rctx.nr2, rctx.nr3);
+         kparams->nr0, kparams->nr1, kparams->nr2, kparams->nr3);
 
     work_queue_run(octx->ctx->work_queue, repeat_job_per_thread, &rctx, n_threads);
 

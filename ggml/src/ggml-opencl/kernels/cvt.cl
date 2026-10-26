@@ -2661,3 +2661,115 @@ kernel void kernel_moe_expand_scale_q5_K(
         dst_min[((long)e*ne01 + row)*nblk32 + sub] = (half)(dm * (float)mn);
     }
 }
+
+struct block_q2_K {
+    uint8_t scales[QK_K/16]; // low nibble scale, high nibble min, one per 16 weights
+    uint8_t qs[QK_K/4];      // quants, 2 bits each
+    half d;                  // super-block scale for the quantized scales
+    half dmin;               // super-block scale for the quantized mins
+};
+
+kernel void kernel_convert_block_q2_K(
+    global struct block_q2_K * src0,
+    global uchar * dst_qs,
+    global uchar * dst_sc,
+    global half * dst_dm,
+    ulong n_blk
+) {
+    const ulong i = get_global_id(0);
+    if (i >= n_blk) {
+        return;
+    }
+    global struct block_q2_K * b = src0 + i;
+    for (int j = 0; j < 64; ++j) {
+        dst_qs[64*i + j] = b->qs[j];
+    }
+    for (int j = 0; j < 16; ++j) {
+        dst_sc[16*i + j] = b->scales[j];
+    }
+    dst_dm[2*i + 0] = b->d;
+    dst_dm[2*i + 1] = b->dmin;
+}
+
+kernel void kernel_restore_block_q2_K(
+    global uchar * src_qs,
+    global uchar * src_sc,
+    global half * src_dm,
+    global struct block_q2_K * dst,
+    ulong n_blk
+) {
+    const ulong i = get_global_id(0);
+    if (i >= n_blk) {
+        return;
+    }
+    global struct block_q2_K * b = dst + i;
+    for (int j = 0; j < 64; ++j) {
+        b->qs[j] = src_qs[64*i + j];
+    }
+    for (int j = 0; j < 16; ++j) {
+        b->scales[j] = src_sc[16*i + j];
+    }
+    b->d = src_dm[2*i + 0];
+    b->dmin = src_dm[2*i + 1];
+}
+
+kernel void kernel_convert_block_q2_k_noshuffle(
+    global struct block_q2_K * src0,
+    global uchar * dst_qs,      // QK_K/4 per block
+    global uchar * dst_sc,      // QK_K/16 per block
+    global half  * dst_dm,      // 2 per block (d, dmin)
+    ulong          n_blk
+) {
+    const ulong i = get_global_id(0);
+    if (i >= n_blk) {
+        return;
+    }
+    global struct block_q2_K * b = (global struct block_q2_K *) src0 + i;
+
+    dst_dm[2*i + 0] = b->d;
+    dst_dm[2*i + 1] = b->dmin;
+
+    for (int j = 0; j < QK_K/16; ++j) { dst_sc[(QK_K/16) * i + j] = b->scales[j]; }
+
+    for (int g = 0; g < QK_K/4; ++g) {
+        uint pk = 0;
+        for (int t = 0; t < 4; ++t) {
+            const int e  = 4*g + t;
+            const int sb = e >> 5;
+            const int ee = e & 31;
+            pk |= (uint)(((b->qs[32*(sb >> 2) + ee] >> (2*(sb & 3))) & 3) << (2*t));
+        }
+        dst_qs[(QK_K/4) * i + g] = (uchar)pk;
+    }
+}
+
+kernel void kernel_restore_block_q2_k_noshuffle(
+    global uchar * src_qs,
+    global uchar * src_sc,
+    global half  * src_dm,
+    global struct block_q2_K * dst,
+    ulong          n_blk
+) {
+    const ulong i = get_global_id(0);
+    if (i >= n_blk) {
+        return;
+    }
+    global struct block_q2_K * b = (global struct block_q2_K *) dst + i;
+
+    b->d    = src_dm[2*i + 0];
+    b->dmin = src_dm[2*i + 1];
+
+    for (int j = 0; j < QK_K/16; ++j) { b->scales[j] = src_sc[(QK_K/16) * i + j]; }
+
+    for (int n2 = 0; n2 < 2; ++n2) {
+        for (int ee = 0; ee < 32; ++ee) {
+            uint v = 0;
+            for (int j = 0; j < 4; ++j) {
+                const int sb = 4*n2 + j;
+                const int e  = 32*sb + ee;
+                v |= ((uint)(src_qs[(QK_K/4) * i + (e >> 2)] >> (2*(e & 3))) & 3u) << (2*j);
+            }
+            b->qs[32*n2 + ee] = (uchar)v;
+        }
+    }
+}

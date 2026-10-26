@@ -45,21 +45,17 @@ const uint BNover2 = BN / 2;
 const uint BNover4 = enable_smaller_matrices ? (BN / 4) : (BN / 2);
 layout (constant_id = 5) const uint ALIGNED = 0;
 layout (constant_id = 6) const uint subgroup_size = 32;
+#define GROUP_A_BUDGET (8u * 1024u * 1024u)
 
 #ifdef MULMAT_QUANT
 
 uint mm_quant_k() {
-    switch (MmTypeA) {
-    case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1: case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1:
-    case GGML_TYPE_Q8_0:
-        return 32u;
-    case GGML_TYPE_Q1_0:
-        return 128u;
-    case GGML_TYPE_Q2_0:
-        return 64u;
-    default:
-        return 256u;
-    }
+    // Use ternary expressions instead of a switch to keep qk as a specialization-constant expression.
+    return (MmTypeA == GGML_TYPE_Q1_0) ? 128u :
+           (MmTypeA == GGML_TYPE_Q2_0) ?  64u :
+          ((MmTypeA == GGML_TYPE_Q4_0 || MmTypeA == GGML_TYPE_Q4_1 ||
+            MmTypeA == GGML_TYPE_Q5_0 || MmTypeA == GGML_TYPE_Q5_1 ||
+            MmTypeA == GGML_TYPE_Q8_0) ? 32u : 256u);
 }
 #endif
 
@@ -82,7 +78,7 @@ layout (push_constant) uniform parameter
     uint nbi1;
     uint ne11;
     uint n_experts;
-    uint hoist_row_ids;
+    uint row_ids_offset;
 #else
     uint base_work_group_z;
     uint num_batches;
@@ -182,7 +178,7 @@ f16vec4 mmDecodeA_v(const in decodeBufA bl_in, const in uint blockCoords[2], con
 
 #ifdef MUL_MAT_ID
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
-layout (binding = 4) readonly buffer Counts {int data_expert_count[];};
+layout (binding = 4) readonly buffer RowMap {uint data_row_map[];};
 
 shared u16vec4 row_ids[BN];
 
@@ -191,7 +187,6 @@ layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufB {
 };
 
 uint _ne1;
-shared uvec4 ballots_sh[BLOCK_SIZE / subgroup_size];
 
 B_TYPE decodeFuncB(const in decodeBufB bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
@@ -238,82 +233,9 @@ D_TYPE perElemOpD(const in uint32_t r, const in uint32_t c, const in D_TYPE elem
     return elem;
 }
 
-void load_row_ids(uint expert_idx, bool nei0_is_pow2, uint ic) {
-    _ne1 = 0;
-    uint num_elements = p.nei1 * p.nei0;
-    uint nei0shift = findLSB(p.nei0);
-
-    uint ids[16];
-    uint iter = 0;
-
-    uint expert_count = data_expert_count[expert_idx];
-
-    for (uint j = 0; j < num_elements; j += BLOCK_SIZE) {
-        // prefetch up to 16 elements
-        if (iter == 0) {
-            [[unroll]] for (uint k = 0; k < 16; ++k) {
-                uint i = j + gl_LocalInvocationIndex + k*BLOCK_SIZE;
-                bool in_range = i < num_elements;
-                uint ii1;
-                if (nei0_is_pow2) {
-                    ii1 = i >> nei0shift;
-                } else {
-                    ii1 = i / p.nei0;
-                }
-                uint ii0 = i - ii1 * p.nei0;
-                ids[k] = in_range ? data_ids[ii1*p.nbi1 + ii0] : 0;
-            }
-        }
-        uint i = j + gl_LocalInvocationIndex;
-        bool in_range = i < num_elements;
-        uint ii1;
-        if (nei0_is_pow2) {
-            ii1 = i >> nei0shift;
-        } else {
-            ii1 = i / p.nei0;
-        }
-        uint ii0 = i - ii1 * p.nei0;
-        uint id = ids[iter++];
-        uvec4 ballot = subgroupBallot(in_range && id == expert_idx);
-
-        if (gl_SubgroupInvocationID == 0) {
-            ballots_sh[gl_SubgroupID] = ballot;
-        }
-        barrier();
-
-        uint subgroup_base = 0;
-        uint total = 0;
-        for (uint k = 0; k < gl_NumSubgroups; ++k) {
-            if (k == gl_SubgroupID) {
-                subgroup_base = total;
-            }
-            total += subgroupBallotBitCount(ballots_sh[k]);
-        }
-        barrier();
-
-        uint idx = subgroup_base + subgroupBallotExclusiveBitCount(ballot);
-        if (in_range && id == expert_idx && _ne1 + idx >= ic * BN && _ne1 + idx < (ic + 1) * BN) {
-            row_ids[_ne1 + idx - ic * BN] = u16vec4(fastmod(ii0, p.ne11), ii1, ii0, 0);
-        }
-        _ne1 += total;
-        iter &= 15;
-        if (_ne1 >= (ic + 1) * BN || _ne1 == expert_count) {
-            break;
-        }
-    }
-    barrier();
-}
-
-void load_row_ids_hoisted(uint expert_idx, uint ic) {
-    _ne1 = uint(data_expert_count[expert_idx]);
-
-    const uint tile_begin = ic * BN;
-    const uint tile_count = tile_begin < _ne1 ? min(BN, _ne1 - tile_begin) : 0;
-    const uint expert_offset = uint(data_expert_count[p.n_experts + expert_idx]);
-    const uint row_ids_offset = 2 * p.n_experts + 1 + expert_offset + tile_begin;
-
-    for (uint i = gl_LocalInvocationIndex; i < tile_count; i += BLOCK_SIZE) {
-        const uint packed_row_id = uint(data_expert_count[row_ids_offset + i]);
+void load_row_ids(uint row_begin) {
+    for (uint i = gl_LocalInvocationIndex; i < _ne1; i += BLOCK_SIZE) {
+        const uint packed_row_id = data_row_map[p.row_ids_offset + row_begin + i];
         const uint ii0 = packed_row_id & 0xffffu;
         const uint ii1 = packed_row_id >> 16;
         row_ids[i] = u16vec4(fastmod(ii0, p.ne11), ii1, ii0, 0);
@@ -328,13 +250,18 @@ void load_row_ids_hoisted(uint expert_idx, uint ic) {
 
 void main() {
     const uint tid = gl_LocalInvocationIndex;
-    const uint ic = gl_WorkGroupID.y;
-
 #ifdef MUL_MAT_ID
-    const uint expert_idx = gl_WorkGroupID.z;
-    if (ic * BN >= data_expert_count[expert_idx]) {
+    const uint tile_idx = gl_WorkGroupID.y + gl_WorkGroupID.z * gl_NumWorkGroups.y;
+    if (tile_idx >= data_row_map[0]) {
         return;
     }
+    const uint expert_idx = data_row_map[1 + 2 * tile_idx];
+    const uint row_begin = tile_idx * BN;
+    _ne1 = data_row_map[2 + 2 * tile_idx];
+    const uint ic = 0;
+#endif
+
+#ifdef MUL_MAT_ID
     // initialize to row 0 so we don't need to bounds check
     if (tid < BN) {
         row_ids[tid] = u16vec4(0);
@@ -361,20 +288,35 @@ void main() {
 #endif
 
     const uint blocks_m = (p.M + BM - 1) / BM;
-    const uint ir = gl_WorkGroupID.x % blocks_m;
     const uint ik = gl_WorkGroupID.x / blocks_m;
 
 #ifdef MUL_MAT_ID
-    if (p.hoist_row_ids != 0) {
-        load_row_ids_hoisted(expert_idx, ic);
-    } else if (bitCount(p.nei0) == 1) {
-        load_row_ids(expert_idx, true, ic);
-    } else {
-        load_row_ids(expert_idx, false, ic);
-    }
+    const uint ir = gl_WorkGroupID.x % blocks_m;
+#else
+    // L2-friendly workgroup scheduling
+    const uint blocks_n = (p.N + BN - 1) / BN;
+#if defined(MULMAT_QUANT)
+    const uint a_panel_bytes = (BM * p.K / mm_quant_k()) * MmABlockBytes;
+#elif defined(DATA_A_F32)
+    const uint a_panel_bytes = BM * p.K * 4;
+#elif QUANT_K == 1
+    const uint a_panel_bytes = BM * p.K * 2;
+#else
+    const uint a_panel_bytes = (BM * p.K) / 2 + (BM * p.K) / 16;
+#endif
+    const uint group_m = clamp(GROUP_A_BUDGET / max(a_panel_bytes, 1u), 1u, min(blocks_m, 32u));
+    const uint tiles_per_group = group_m * blocks_n;
+    const uint lin = gl_WorkGroupID.y * blocks_m + (gl_WorkGroupID.x % blocks_m);
+    const uint group_id = lin / tiles_per_group;
+    const uint first_m = group_id * group_m;
+    const uint gsize = min(blocks_m - first_m, group_m);
+    const uint in_group = lin - group_id * tiles_per_group;
+    const uint ir = first_m + in_group % gsize;
+    const uint ic = in_group / gsize;
+#endif
 
-    // Workgroup has no work
-    if (ic * BN >= _ne1) return;
+#ifdef MUL_MAT_ID
+    load_row_ids(row_begin);
 #endif
 
 #ifdef MUL_MAT_ID

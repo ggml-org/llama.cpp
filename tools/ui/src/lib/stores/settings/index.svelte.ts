@@ -201,6 +201,8 @@ class SettingsStore {
 		// Restore user overrides (derived state — may be stale if server defaults differ)
 		this.userOverrides = new Set(data.userOverrides ?? []);
 
+		this.enforceDiscoverCoupling();
+
 		// Persist to localStorage
 		this.saveConfig();
 
@@ -212,7 +214,7 @@ class SettingsStore {
 
 	/**
 	 * Initialize the settings store by loading from localStorage.
-	 * Called by initStores() after migrations have run.
+	 * Called by hydrateStores() after migrations have run.
 	 */
 	initialize() {
 		if (!browser) return;
@@ -220,6 +222,7 @@ class SettingsStore {
 		try {
 			this.loadConfig();
 			this.migrateLegacyTheme();
+			this.enforceDiscoverCoupling();
 			// Apply the persisted theme from config on initial load
 			setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
 			this.isInitialized = true;
@@ -243,6 +246,7 @@ class SettingsStore {
 	resetConfig() {
 		this.config = { ...SETTING_CONFIG_DEFAULT };
 
+		this.enforceDiscoverCoupling();
 		this.saveConfig();
 	}
 
@@ -283,10 +287,12 @@ class SettingsStore {
 	 */
 	syncWithServerDefaults(): void {
 		const propsDefaults = this.getServerDefaults();
-
-		if (Object.keys(propsDefaults).length === 0) return;
-
 		const uiSettings = serverStore.uiSettings;
+
+		// a router main instance reports no sampling defaults, but its
+		// ui_settings still need the first visit pass below
+		if (Object.keys(propsDefaults).length === 0 && !(uiSettings && this.isFirstVisit)) return;
+
 		const uiSettingsKeys = new Set(uiSettings ? Object.keys(uiSettings) : []);
 
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
@@ -361,14 +367,6 @@ class SettingsStore {
 	}
 
 	/**
-	 *
-	 *
-	 * Import / Export
-	 *
-	 *
-	 */
-
-	/**
 	 * Update multiple configuration settings at once
 	 * @param updates - Object containing the configuration updates
 	 */
@@ -398,6 +396,14 @@ class SettingsStore {
 	}
 
 	/**
+	 *
+	 *
+	 * Import / Export
+	 *
+	 *
+	 */
+
+	/**
 	 * Update the theme setting.
 	 * @param newTheme - The new theme value
 	 */
@@ -405,6 +411,20 @@ class SettingsStore {
 		this.updateConfig(SETTINGS_KEYS.THEME, newTheme);
 
 		setMode(newTheme as ColorMode);
+	}
+
+	/**
+	 * Discover needs the hub metadata reads, so a checked Discover Models keeps
+	 * the hub setting on; call wherever stored or reset state may disagree.
+	 */
+	private enforceDiscoverCoupling(): void {
+		if (
+			this.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS] &&
+			!this.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB]
+		) {
+			setConfigValue(this.config, SETTINGS_KEYS.USE_HUGGING_FACE_HUB, true);
+			this.saveConfig();
+		}
 	}
 
 	/**

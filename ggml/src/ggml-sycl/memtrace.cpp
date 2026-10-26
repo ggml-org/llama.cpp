@@ -15,7 +15,6 @@ static const char * mem_type_name(ggml_sycl_mem_type type) {
         case GGML_SYCL_MEM_POOL_LEG: return "pool_leg";
         case GGML_SYCL_MEM_POOL_VMM: return "pool_vmm";
         case GGML_SYCL_MEM_ASYNC:    return "async";
-        case GGML_SYCL_MEM_FATTN_KV: return "fattn_kv";
         case GGML_SYCL_MEM_DIRECT:   return "direct";
         default:                     GGML_ABORT("[%s] The type value %d is not supported\n", __func__, (int) type);
     }

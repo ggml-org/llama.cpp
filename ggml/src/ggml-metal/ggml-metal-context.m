@@ -30,7 +30,8 @@ struct ggml_metal {
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
 
-    ggml_metal_event_t ev_cpy; // for async copies
+    ggml_metal_event_t ev_cpy;  // for async copies
+    ggml_metal_event_t ev_sync; // destination completion signal
 
     dispatch_queue_t d_queue;
 
@@ -129,7 +130,8 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             }
         }
 
-        res->ev_cpy = ggml_metal_device_event_init(dev);
+        res->ev_cpy  = ggml_metal_device_event_init(dev);
+        res->ev_sync = ggml_metal_device_event_init(dev);
 
         const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
@@ -240,6 +242,7 @@ void ggml_metal_free(ggml_metal_t ctx) {
     dispatch_release(ctx->d_queue);
 
     ggml_metal_device_event_free(ctx->dev, ctx->ev_cpy);
+    ggml_metal_device_event_free(ctx->dev, ctx->ev_sync);
 
     free(ctx);
 }
@@ -421,10 +424,23 @@ bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, con
             return false;
         }
 
+        id<MTLCommandQueue> dst_queue = ggml_metal_device_get_queue(ctx_dst->dev);
+        id<MTLCommandBuffer> sync_cmd_buf = [dst_queue commandBuffer];
+
+        ggml_metal_event_encode_signal(ctx_dst->ev_sync, sync_cmd_buf);
+
+        [sync_cmd_buf commit];
+
+        [ctx_dst->cmd_bufs_ext addObject:sync_cmd_buf];
+        ctx_dst->cmd_buf_last = sync_cmd_buf;
+
+        [sync_cmd_buf retain];
+
         // queue the copy operation into the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx_src->dev);
         id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+        ggml_metal_event_encode_wait(ctx_dst->ev_sync, cmd_buf);
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:bid_src.metal
@@ -459,6 +475,10 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     if (ctx->has_error) {
         GGML_LOG_ERROR("%s: backend is in error state from a previous command buffer failure - recreate the backend to recover\n", __func__);
         return GGML_STATUS_FAILED;
+    }
+
+    if (gf->n_nodes == 0) {
+        return GGML_STATUS_SUCCESS;
     }
 
     // number of nodes encoded by the main thread (empirically determined)
@@ -498,8 +518,6 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
         const bool use_capture = ctx->capture_compute == 0;
         if (use_capture) {
-            ctx->capture_compute = -1;
-
             // make sure all previous computations have finished before starting the capture
             if (ctx->cmd_buf_last) {
                 [ctx->cmd_buf_last waitUntilCompleted];
@@ -521,8 +539,14 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                 descriptor.outputURL = [NSURL fileURLWithPath:path];
 
                 NSError * error = nil;
-                if (![[MTLCaptureManager sharedCaptureManager] startCaptureWithDescriptor:descriptor error:&error]) {
-                    GGML_LOG_ERROR("%s: error: unable to start capture '%s'\n", __func__, [[error localizedDescription] UTF8String]);
+                const bool ok = [[MTLCaptureManager sharedCaptureManager] startCaptureWithDescriptor:descriptor error:&error];
+
+                [descriptor release];
+
+                if (!ok) {
+                    GGML_LOG_ERROR("%s: error: unable to start capture '%s' (did you set METAL_CAPTURE_ENABLED=1 ?)\n", __func__, [[error localizedDescription] UTF8String]);
+                    [ctx->capture_scope release];
+                    ctx->capture_scope = nil;
                 } else {
                     [ctx->capture_scope beginScope];
                     ctx->capture_started = true;
@@ -582,6 +606,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
         // enter here only when capturing in order to wait for all computation to finish
         // otherwise, we leave the graph to compute asynchronously
         if (use_capture && ctx->capture_started) {
+            enum ggml_status res = GGML_STATUS_SUCCESS;
+
             // wait for completion and check status of each command buffer
             // needed to detect if the device ran out-of-memory for example (#1881)
             {
@@ -595,11 +621,11 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                         GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                     }
 
-                    return GGML_STATUS_FAILED;
+                    res = GGML_STATUS_FAILED;
                 }
             }
 
-            for (int i = 0; i < n_cb; ++i) {
+            for (int i = 0; i < n_cb && res == GGML_STATUS_SUCCESS; ++i) {
                 id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
                 [cmd_buf waitUntilCompleted];
 
@@ -609,8 +635,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                     if (status == MTLCommandBufferStatusError) {
                         GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                     }
-
-                    return GGML_STATUS_FAILED;
+                    res = GGML_STATUS_FAILED;
+                    break;
                 }
 
                 id<MTLCommandBuffer> next_buffer = (i + 1 < n_cb ? ctx->cmd_bufs[i + 1].obj : nil);
@@ -625,7 +651,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
                 if (ctx->abort_callback && ctx->abort_callback(ctx->abort_callback_data)) {
                     GGML_LOG_INFO("%s: command buffer %d aborted", __func__, i);
-                    return GGML_STATUS_ABORTED;
+                    res = GGML_STATUS_ABORTED;
+                    break;
                 }
 
                 [next_buffer commit];
@@ -634,7 +661,14 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
             [ctx->capture_scope endScope];
             [[MTLCaptureManager sharedCaptureManager] stopCapture];
 
+            [ctx->capture_scope release];
+            ctx->capture_scope = nil;
+
             ctx->capture_started = false;
+
+            if (res != GGML_STATUS_SUCCESS) {
+                return res;
+            }
         }
     }
 
@@ -733,7 +767,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             idx_start,
             idx_end,
             ctx->use_concurrency,
-            ctx->capture_compute,
+            ctx->capture_compute == 0,
             ctx->debug_graph);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {

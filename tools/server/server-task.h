@@ -10,13 +10,16 @@
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
+#include "mtmd-helper.h"
 
 
 enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
+    SERVER_TASK_TYPE_DECISION,
     SERVER_TASK_TYPE_INFILL,
+    SERVER_TASK_TYPE_TRANSCRIBE_RT,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
@@ -27,6 +30,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_TTS,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -45,6 +49,14 @@ enum stop_type {
     STOP_TYPE_EOS,
     STOP_TYPE_WORD,
     STOP_TYPE_LIMIT,
+};
+
+enum server_control_action {
+    SERVER_CONTROL_ACTION_NONE,
+    SERVER_CONTROL_ACTION_REASONING_END,
+    SERVER_CONTROL_ACTION_AUDIO_APPEND, // push control_audio into the slot's audio stream
+    SERVER_CONTROL_ACTION_AUDIO_COMMIT, // flush the audio stream, more audio can follow
+    SERVER_CONTROL_ACTION_AUDIO_END,    // flush the audio stream and end it
 };
 
 struct task_params {
@@ -85,11 +97,13 @@ struct task_params {
     std::string        oaicompat_cmpl_id;
 
     // realtime control (SERVER_TASK_TYPE_CONTROL)
-    std::string        control_action;
-    std::string        control_cmpl_id;
+    server_control_action control_action = SERVER_CONTROL_ACTION_NONE;
+    std::string           control_cmpl_id;
+    std::vector<float>    control_audio; // PCM F32 samples for SERVER_CONTROL_ACTION_AUDIO_APPEND
 
-    // per-request parameters for chat parsing
-    common_chat_parser_params chat_parser_params;
+    // reported in generation_settings, parsing itself is owned by the chat session
+    common_chat_format      chat_format      = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
 
     // message spans for checkpointing
     common_chat_msg_spans message_spans;
@@ -105,9 +119,8 @@ struct task_params {
 struct task_result_state {
     // tracking diffs for partial tool calls
     std::vector<common_chat_msg_diff> diffs;
-    common_chat_parser_params chat_parser_params;
+    common_chat_session chat_session; // owns all parsing for this generation
     common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
 
@@ -128,11 +141,11 @@ struct task_result_state {
 
     uint64_t oai_seq_num = 0;
 
-    task_result_state(const common_chat_parser_params & chat_parser_params);
+    task_result_state(common_chat_session session = {});
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
-        const std::string & text_added,
+        const common_chat_input & added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls = false);
@@ -153,6 +166,8 @@ struct server_task {
     // temporary store of child tasks for scheduling
     // note: accessing to elements is invalid after the task is moved to server_slot
     std::vector<server_task> child_tasks;
+    // if set on a parent, the children have their own prompt and only share its first n_tokens_shared tokens
+    int32_t n_tokens_shared = 0;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
@@ -177,8 +192,42 @@ struct server_task {
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
 
+    // used by SERVER_TASK_TYPE_DECISION
+    // where to read the model output of each option, exactly one of the two lists is used
+    struct decision {
+        std::vector<llama_token> labels;       // logits of these tokens, at the last prompt token
+        std::vector<int32_t>     label_groups; // if set, number of labels per output, the output is their max
+        std::vector<int32_t>     markers;      // embeddings[column] at these prompt positions
+        int32_t                  column = 0;
+        // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
+        int32_t                  pointer = -1;
+
+        // first prompt position that is read, -1 if none
+        int32_t pos_first() const {
+            int32_t pos = pointer;
+            for (const int32_t marker : markers) {
+                pos = pos < 0 ? marker : std::min(pos, marker);
+            }
+            for (size_t i = 0; i < order.size(); i++) {
+                if (order[i] != 0) {
+                    return pos < 0 ? (int32_t) i : std::min(pos, (int32_t) i);
+                }
+            }
+            return pos;
+        }
+
+        // for a joint head: one value per prompt token, see llama_batch_ext_set_decision_order()
+        // the scores are the first n_scores rows of the embeddings
+        std::vector<int32_t> order;
+        int32_t              n_scores = 0;
+    };
+    decision decision;
+
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
+
+    // used by SERVER_TASK_TYPE_TTS
+    mtmd_helper::gen_audio::inp tts_inp;
 
     server_task() = default;
 
@@ -193,6 +242,8 @@ struct server_task {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
                 return true;
+            case SERVER_TASK_TYPE_DECISION:
+                return !decision.markers.empty() || !decision.order.empty();
             default:
                 return false;
         }
@@ -202,7 +253,10 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_TRANSCRIBE_RT:
                 return true;
+            case SERVER_TASK_TYPE_DECISION:
+                return !decision.labels.empty();
             default:
                 return false;
         }
@@ -212,6 +266,8 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_TTS:
+            case SERVER_TASK_TYPE_TRANSCRIBE_RT:
                 return true;
             default:
                 return false;
@@ -228,6 +284,17 @@ struct server_task {
             }
         }
         return ids;
+    }
+
+    void apply_chat_session(const common_chat_session & session) {
+        if (!session.has_template()) {
+            return;
+        }
+
+        session.apply_sampling(params.sampling);
+        params.chat_format = session.format();
+        params.antiprompt.insert(params.antiprompt.end(), session.additional_stops().begin(), session.additional_stops().end());
+        params.message_spans = tokens.find_message_spans(session.message_delimiters());
     }
 
     void add_child(int id_parent, int id_child) {
@@ -249,18 +316,17 @@ struct server_task {
         child_tasks.push_back(std::move(copy));
     }
 
-    // the task will be moved into queue, then onto slots
-    // however, the state must be kept by caller (e.g., HTTP thread)
-    task_result_state create_state() const {
-        return task_result_state(params.chat_parser_params);
-    }
-
     bool is_parent() const {
         return child_tasks.size() > 0;
     }
 
     bool is_child() const {
         return id_parent != -1;
+    }
+
+    // embedding and rerank tasks always process their whole prompt, their state is never reused
+    bool is_stateless() const {
+        return type == SERVER_TASK_TYPE_EMBEDDING || type == SERVER_TASK_TYPE_RERANK;
     }
 };
 
@@ -323,7 +389,7 @@ struct completion_token_output {
 };
 
 struct server_task_result_cmpl_final : server_task_result {
-    std::string content;
+    common_chat_input content;
     llama_tokens tokens;
 
     bool stream;
@@ -403,8 +469,8 @@ struct server_task_result_cmpl_final : server_task_result {
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
-    std::string  content;
-    llama_tokens tokens;
+    common_chat_input content;
+    llama_tokens      tokens;
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
@@ -414,6 +480,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool is_progress = false;
     bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
                            // ref: https://github.com/ggml-org/llama.cpp/pull/23884
+    bool audio_commit_drained = false; // realtime: non-final commit has fully decoded
     completion_token_output prob_output;
     server_slot_stats stats;
     result_prompt_progress progress;
@@ -480,8 +547,26 @@ struct server_task_result_embd : server_task_result {
     json to_json_oaicompat();
 };
 
+struct server_task_result_tts : server_task_result {
+    std::string audio; // raw bytes for this chunk (WAV or PCM, per request's out_type)
+    int32_t     sample_rate = 0;
+    bool        final = false; // true for the last chunk of a request
+
+    virtual bool is_stop() override { return final; }
+
+    virtual json to_json() override;
+};
+
 struct server_task_result_rerank : server_task_result {
     float score = -1e6;
+
+    int32_t n_tokens;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_decision : server_task_result {
+    std::vector<float> scores; // one raw model output per option
 
     int32_t n_tokens;
 

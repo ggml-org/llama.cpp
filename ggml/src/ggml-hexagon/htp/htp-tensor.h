@@ -8,21 +8,38 @@
 #include "hex-common.h"
 #include "hex-fastdiv.h"
 
-enum {
-    HTP_TENSOR_MDEV_LINE_SIZE = 128,
-};
+#define HTP_TENSOR_MDEV_LINE_SIZE   128
+
+// Currently HMX requires 32x32 tile formats (do not change)
+#define HTP_TENSOR_TILE_N_COLS      32
+#define HTP_TENSOR_TILE_N_ROWS      32
+
+#define HTP_TENSOR_TILE_SIZE_F16    2048
+#define HTP_TENSOR_TILE_SIZE_Q4_0   576
+#define HTP_TENSOR_TILE_SIZE_Q4_1   640
+#define HTP_TENSOR_TILE_SIZE_Q8_0   1088
+#define HTP_TENSOR_TILE_SIZE_IQ4_NL 576
+#define HTP_TENSOR_TILE_SIZE_MXFP4  544
+#define HTP_TENSOR_TILE_SIZE_Q4_K   640
+#define HTP_TENSOR_TILE_SIZE_Q5_K   768
+#define HTP_TENSOR_TILE_SIZE_Q6_K   896
+#define HTP_TENSOR_TILE_SIZE_Q3_K   512
+#define HTP_TENSOR_TILE_SIZE_Q2_K   336
+#define HTP_TENSOR_TILE_K_Q1_0      128
+#define HTP_TENSOR_TILE_SIZE_Q1_0   576
+#define HTP_TENSOR_TILE_K_Q2_0      64
+#define HTP_TENSOR_TILE_SIZE_Q2_0   576
+
+// Tiled weight tensor layouts (Q4_0, Q8_0, IQ4_NL, MXFP4, Q1_0, Q2_0, K-quants):
+// See docs/backend/snapdragon/developer.md ("Tiled Weight Formats").
 
 struct htp_tensor_mdev_range {
     uint32_t start;
     uint32_t count;
 };
 
-static inline void * htp_tensor_data(const struct htp_tensor * t) {
-    return (void *) (uintptr_t) t->data;
-}
-
-static inline uint32_t * htp_tensor_flags(const struct htp_tensor * t) {
-    return (uint32_t *) &t->flags;
+static inline bool htp_tensor_is_extended(const struct htp_tensor * t) {
+    return t && (t->data >> 32) != 0;
 }
 
 static inline bool htp_tensor_is_contiguous(const struct htp_tensor * t, uint32_t type_size) {
@@ -121,18 +138,62 @@ static inline struct htp_tensor_mdev_range htp_tensor_mdev_partition(uint32_t to
     return range;
 }
 
-static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
+static inline uint32_t htp_tensor_get_tile_size(int type) {
     switch (type) {
-        case HTP_TYPE_F32:  return ne00 * 4;
-        case HTP_TYPE_F16:  return ne00 * 2;
-        case HTP_TYPE_Q8_0: return (ne00 / 32) * 34;
-        default:            return 0;
+        case HTP_TYPE_Q4_0:   return HTP_TENSOR_TILE_SIZE_Q4_0;
+        case HTP_TYPE_IQ4_NL: return HTP_TENSOR_TILE_SIZE_IQ4_NL;
+        case HTP_TYPE_Q4_1:   return HTP_TENSOR_TILE_SIZE_Q4_1;
+        case HTP_TYPE_Q4_K:   return HTP_TENSOR_TILE_SIZE_Q4_K;
+        case HTP_TYPE_Q8_0:   return HTP_TENSOR_TILE_SIZE_Q8_0;
+        case HTP_TYPE_Q5_K:   return HTP_TENSOR_TILE_SIZE_Q5_K;
+        case HTP_TYPE_Q6_K:   return HTP_TENSOR_TILE_SIZE_Q6_K;
+        case HTP_TYPE_Q3_K:   return HTP_TENSOR_TILE_SIZE_Q3_K;
+        case HTP_TYPE_Q2_K:   return HTP_TENSOR_TILE_SIZE_Q2_K;
+        case HTP_TYPE_Q1_0:   return HTP_TENSOR_TILE_SIZE_Q1_0;
+        case HTP_TYPE_Q2_0:   return HTP_TENSOR_TILE_SIZE_Q2_0;
+        case HTP_TYPE_MXFP4:  return HTP_TENSOR_TILE_SIZE_MXFP4;
+        case HTP_TYPE_F16:    return HTP_TENSOR_TILE_SIZE_F16;
+        default:              return 0;
     }
 }
 
-struct htp_context;
-void htp_flush_dirty_ranges(struct htp_context * ctx);
-void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n);
-void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n);
+static inline uint32_t htp_tensor_get_tile_k(int type) {
+    switch (type) {
+        case HTP_TYPE_Q1_0: return HTP_TENSOR_TILE_K_Q1_0;
+        case HTP_TYPE_Q2_0: return HTP_TENSOR_TILE_K_Q2_0;
+        default:            return 32;
+    }
+}
+
+static inline uint32_t htp_tensor_get_tile_padded_size(int type) {
+    return (htp_tensor_get_tile_size(type) + 127u) & ~127u;
+}
+
+static inline bool htp_tensor_is_tiled(const struct htp_tensor * t) {
+    return t && (t->flags & HTP_TENSOR_TILED) != 0;
+}
+
+static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
+    switch (type) {
+        case HTP_TYPE_F32:    return ne00 * 4;
+        case HTP_TYPE_F16:
+        case HTP_TYPE_BF16:   return ne00 * 2;
+        case HTP_TYPE_Q8_0:   return (ne00 / 32) * 34;
+        case HTP_TYPE_Q4_0:
+        case HTP_TYPE_IQ4_NL: return (ne00 / 32) * 18;
+        case HTP_TYPE_Q4_1:   return (ne00 / 32) * 20;
+        case HTP_TYPE_MXFP4:  return (ne00 / 32) * 17;
+        case HTP_TYPE_Q2_K:   return (ne00 / 256) * 84;
+        case HTP_TYPE_Q2_0:   return (ne00 / 64) * 18;
+        case HTP_TYPE_Q3_K:   return (ne00 / 256) * 110;
+        case HTP_TYPE_Q4_K:   return (ne00 / 256) * 144;
+        case HTP_TYPE_Q5_K:   return (ne00 / 256) * 176;
+        case HTP_TYPE_Q6_K:   return (ne00 / 256) * 210;
+        case HTP_TYPE_Q1_0:   return (ne00 / HTP_TENSOR_TILE_K_Q1_0) * 18;
+        case HTP_TYPE_I32:    return ne00 * 4;
+        case HTP_TYPE_I64:    return ne00 * 8;
+        default:              return 0;
+    }
+}
 
 #endif // HTP_TENSOR_H

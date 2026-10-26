@@ -504,6 +504,5 @@ void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     default:
         fprintf(stderr, "%s: unsupported types: dst: %s\n", __func__, ggml_type_name(dst->type));
         GGML_ASSERT(false);
-    break;
     }
 }

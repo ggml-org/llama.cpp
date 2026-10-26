@@ -5,6 +5,9 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
+#include "pass/fuse_argsort_topk.h"
+#include "pass/fuse_moe_router.h"
+#include "pass/align_eltwise_ranks.h"
 #include "pass/fuse_moe_compressed.h"
 #include "pass/fuse_to_conv.h"
 #include "pass/kv_state_seq_axis.h"
@@ -117,7 +120,7 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
     return pairs;
 }
 
-void add_sliced_mask_stateful(TensorMap & tensor_map) {
+void add_sliced_mask_stateful(TensorMap & tensor_map, bool imrope) {
     auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name) {
         if ((tensor_map.find(mask_name) != tensor_map.end()) &&
             (tensor_map.find("token_len_per_seq") != tensor_map.end()) &&
@@ -134,7 +137,12 @@ void add_sliced_mask_stateful(TensorMap & tensor_map) {
             auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
 
             auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-            auto last_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one, three);
+            // IMROPE's fourth position plane is zero for text; use the token's first plane.
+            ov::Output<ov::Node> last_index = neg_one;
+            if (imrope) {
+                last_index = std::make_shared<ov::op::v1::Add>(token_len_per_seq, neg_one);
+            }
+            auto last_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, last_index, three);
             auto last_inp_pos_1d = std::make_shared<ov::op::v1::Reshape>(
                 last_inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}), false);
             auto last_inp_pos_cvt = std::make_shared<ov::op::v0::Convert>(last_inp_pos_1d, ov::element::i64);
@@ -242,7 +250,7 @@ void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) 
 // Create common patterns
 void preprocess(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     if (ggml_model_decoder.is_stateful()) {
-        add_sliced_mask_stateful(tensor_map);
+        add_sliced_mask_stateful(tensor_map, ggml_model_decoder.get_rope_params()[2] == GGML_ROPE_TYPE_IMROPE);
         add_position_mask_stateful_swa(tensor_map);
     }
     // This optimization is error-prone
@@ -300,13 +308,22 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
             return ov::OutputVector{};
         }
 
+        const auto & node_output_names = decoder->get_output_names(node_idx);
+        if (operation_type == "GGML_OP_VIEW" && decoder->get_op_case(node_idx) == 2 && node_output_names.size() == 1) {
+            auto direct_output = tensor_map->find(node_output_names[0]);
+            if (direct_output != tensor_map->end()) {
+                // GDN publishes its native attention/state outputs under the two GGML VIEW names.
+                // Keep those mappings instead of rebuilding slices of a packed temporary.
+                return ov::OutputVector{direct_output->second};
+            }
+        }
+
         auto it = m_translator_map.find(operation_type);
         FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(), "Translation for operation type ", operation_type,
                                       " is not implemented.");
         NodeContext node_context(decoder, tensor_map, node_idx, this);
         ov::OutputVector converted_outputs = it->second(node_context);
 
-        const auto & node_output_names = decoder->get_output_names(node_idx);
         FRONT_END_OP_CONVERSION_CHECK(node_output_names.size() == converted_outputs.size(), "Number of ",
                                       operation_type, " outputs greater than number of converted outputs, which are ",
                                       node_output_names.size(), " and ", converted_outputs.size(), " respectively.");
@@ -468,11 +485,29 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         manager.register_pass<ov::pass::MarkDequantization>(
             std::vector<ov::element::Type>{ov::element::u8, ov::element::i8, ov::element::u4, ov::element::i4});
         manager.register_pass<pass::FuseToConv>();
+        manager.register_pass<pass::FuseArgsortTopK>();
 
-        // MOECompressed has no CPU plugin implementation, so keep the GatherMatmul path
-        // everywhere else. Opt-in while the fused path is being brought up.
-        if (ggml_openvino_get_device_name() == "GPU" && getenv("GGML_OPENVINO_MOE_OP")) {
+        // MOECompressed has no CPU plugin implementation, so enable it by default only on GPU.
+        // GGML_OPENVINO_MOE_OP=0 keeps the unfused GatherMatmul path for fallback/debugging.
+        if (ggml_openvino_is_gpu() &&
+            ggml_openvino_getenv_int("GGML_OPENVINO_MOE_OP", 1) != 0) {
+            manager.register_pass<pass::FuseMoeRouter>();
             manager.register_pass<pass::FuseMoeCompressed>();
+            // Same fusion for models whose gate and up projections share one fused expert
+            // weight (gemma-4). It only matches that shape and only when the experts carry an
+            // integer zero point, so it is a no-op on the separate-gate/up models above.
+            manager.register_pass<pass::FuseMoeCompressedFusedGateUp>();
+        }
+
+        // Workaround for an OpenVINO GPU-plugin defect: an eltwise op whose operands differ in
+        // rank is computed wrongly once the plugin fuses it as a post-op into `rms`. gemma-4
+        // dense under stateful execution adds a rank-3 residual to the rank-4 norm output and
+        // decodes garbage on GPU while CPU is correct. Equalising the ranks is a no-op for
+        // NUMPY broadcasting and makes the fused path correct.
+        // Remove once the plugin guards that fusion. Opt out with
+        // GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN=1.
+        if (ggml_openvino_is_gpu() && !ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN")) {
+            manager.register_pass<pass::AlignEltwiseOperandRanks>();
         }
 
         if (ggml_model_decoder->is_stateful()) {

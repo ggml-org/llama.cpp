@@ -272,14 +272,11 @@ static bool is_reserved_name(const std::string & name) {
     return RESERVED_NAMES.find(name) != RESERVED_NAMES.end();
 }
 
-static std::regex INVALID_RULE_CHARS_RE("[^a-zA-Z0-9-]+");
 static std::regex GRAMMAR_LITERAL_ESCAPE_RE("[\r\n\"\\\\]");
 static std::regex GRAMMAR_RANGE_LITERAL_ESCAPE_RE("[\r\n\"\\]\\-\\\\]");
 static std::unordered_map<char, std::string> GRAMMAR_LITERAL_ESCAPES = {
     {'\r', "\\r"}, {'\n', "\\n"}, {'"', "\\\""}, {'-', "\\-"}, {']', "\\]"}, {'\\', "\\\\"}
 };
-
-static const int MAX_PATTERN_DEPTH = 100;
 
 static std::unordered_set<char> NON_LITERAL_SET = {'|', '.', '(', ')', '[', ']', '{', '}', '*', '+', '?', '^', '$'};
 static std::unordered_set<char> ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = {'^', '$', '.', '[', ']', '(', ')', '|', '{', '}', '*', '+', '?'};
@@ -312,6 +309,22 @@ static std::string format_literal(const std::string & literal) {
 
 std::string gbnf_format_literal(const std::string & literal) { return format_literal(literal); }
 
+// same as std::regex_replace with [^a-zA-Z0-9-]+ -> "-", no std::regex: libstdc++ recurses per char
+std::string gbnf_format_rule_name(const std::string & name) {
+    std::string out;
+    bool in_invalid = false;
+    for (char c : name) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+            out += c;
+            in_invalid = false;
+        } else if (!in_invalid) {
+            out += '-';
+            in_invalid = true;
+        }
+    }
+    return out;
+}
+
 static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
     if (pos + 1 >= pattern.length() || pattern[pos] != '\\') {
         return 0;
@@ -321,7 +334,8 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
         case 'x': n_hex = 2; break;
         case 'u': n_hex = 4; break;
         case 'U': n_hex = 8; break;
-        case 't': case 'r': case 'n': case '\\': case '"': case '[': case ']':
+        // keep in sync with parse_char() in src/llama-grammar.cpp
+        case 't': case 'r': case 'n': case '\\': case '"': case '[': case ']': case '-':
             return 2;
         default:
             return 0;
@@ -346,6 +360,17 @@ private:
     std::unordered_set<std::string> _refs_being_resolved;
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
+    int _depth = 0;
+
+    struct depth_guard {
+        int & depth;
+        depth_guard(int & depth) : depth(depth) {
+            if (++depth > COMMON_RECURSIVE_LIMIT) {
+                throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+            }
+        }
+        ~depth_guard() { depth--; }
+    };
 
     template <typename T>
     static const T & as(const common_chat_schema & node) {
@@ -353,7 +378,7 @@ private:
     }
 
     std::string _add_rule(const std::string & name, const std::string & rule) {
-        std::string esc_name = regex_replace(name, INVALID_RULE_CHARS_RE, "-");
+        std::string esc_name = gbnf_format_rule_name(name);
         if (_rules.find(esc_name) == _rules.end() || _rules[esc_name] == rule) {
             _rules[esc_name] = rule;
             return esc_name;
@@ -481,7 +506,7 @@ private:
                         }
                     }
                     paren_depth++;
-                    if (paren_depth > MAX_PATTERN_DEPTH) {
+                    if (paren_depth > COMMON_RECURSIVE_LIMIT) {
                         throw unsupported_pattern("pattern nesting too deep");
                     }
                     seq.emplace_back("(" + to_rule(transform()) + ")", false);
@@ -643,7 +668,11 @@ private:
         std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
         std::ostringstream out;
         out << "[\"] ( ";
-        std::function<void(size_t)> visit = [&](size_t idx) {
+        // one level per char of the longest name
+        std::function<void(size_t, int)> visit = [&](size_t idx, int depth) {
+            if (depth >= COMMON_RECURSIVE_LIMIT) {
+                throw std::invalid_argument("JSON schema property name is longer than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " chars");
+            }
             const auto & node = trie.nodes[idx];
             std::string rejects;
             auto first = true;
@@ -658,7 +687,7 @@ private:
                 out << "[" << c << "]";
                 if (!trie.nodes[child].children.empty()) {
                     out << " (";
-                    visit(child);
+                    visit(child, depth + 1);
                     out << ")";
                 } else {
                     out << " " << char_rule << "+";
@@ -668,7 +697,7 @@ private:
                 out << " | [^\"" << rejects << "] " << char_rule << "*";
             }
         };
-        visit(0);
+        visit(0, 0);
 
         out << " )";
         if (trie.nodes[0].pattern < 0) {
@@ -681,8 +710,7 @@ private:
     std::string _resolve_ref(const common_chat_schema_ref & schema) {
         auto it = schema.ref.find('#');
         std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
-        static const std::regex nonalphanumeric_regex(R"([^a-zA-Z0-9-]+)");
-        std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-");
+        std::string ref_name = "ref" + gbnf_format_rule_name(ref_fragment);
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
             if (!schema.target) {
                 _errors.push_back("Unresolved $ref " + schema.ref);
@@ -832,10 +860,13 @@ public:
         std::unordered_set<std::string> required;
         std::vector<std::pair<std::string, const common_chat_schema *>> properties;
         std::map<std::string, size_t> enum_values;
-        std::function<void(const common_chat_schema &, bool)> add_component = [&](const common_chat_schema & comp, bool is_required) {
+        std::function<void(const common_chat_schema &, bool, int)> add_component = [&](const common_chat_schema & comp, bool is_required, int depth) {
+            if (depth >= COMMON_RECURSIVE_LIMIT) {
+                throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+            }
             if (comp.kind() == common_chat_schema::KIND_REF) {
                 if (const auto * target = as<common_chat_schema_ref>(comp).target) {
-                    add_component(*target, is_required);
+                    add_component(*target, is_required, depth + 1);
                 }
             } else if (comp.kind() == common_chat_schema::KIND_OBJECT) {
                 for (const auto & prop : as<common_chat_schema_object>(comp).properties) {
@@ -853,10 +884,10 @@ public:
         for (const auto & child : schema.children) {
             if (child->kind() == common_chat_schema::KIND_ANY_OF) {
                 for (const auto & alt : as<common_chat_schema_any_of>(*child).children) {
-                    add_component(*alt, false);
+                    add_component(*alt, false, 0);
                 }
             } else {
-                add_component(*child, true);
+                add_component(*child, true, 0);
             }
         }
         if (!enum_values.empty()) {
@@ -874,6 +905,8 @@ public:
     }
 
     std::string visit(const common_chat_schema & schema, const std::string & name) {
+        // the $ref targets are visited too, a $ref chain is not bounded by the builder
+        depth_guard guard(_depth);
         std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : name;
         std::string sub_name  = name + (name.empty() ? "" : "-");
 

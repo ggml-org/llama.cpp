@@ -28,7 +28,7 @@ export interface UseToolsPanelReturn {
  * Shared reactive state and helpers for the tools panel UI.
  *
  * Used by both the desktop dropdown (`ChatFormActionAddToolsSubmenu`)
- * and the mobile sheet (`ChatFormActionAddSheet`) to avoid
+ * and the mobile drawer (`ChatFormActionAddDrawer`) to avoid
  * duplicating group filtering, checked-state derivation, and favicon logic.
  *
  * All toggle state routes through `conversationsStore.preferences`: with an

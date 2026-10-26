@@ -36,7 +36,6 @@ size_t ggml_metal_op_mul_mat_id_extra_tpe(const struct ggml_tensor * op);
 
 // id map [n_tokens, n_expert]
 size_t ggml_metal_op_mul_mat_id_extra_ids(const struct ggml_tensor * op);
-size_t ggml_metal_op_mul_mat_id_extra_amax(const struct ggml_tensor * op);
 
 // return true if we should use the FA vector kernel for this op
 bool ggml_metal_op_flash_attn_ext_use_vec(const struct ggml_tensor * op);
@@ -46,6 +45,8 @@ size_t ggml_metal_op_flash_attn_ext_extra_blk(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_tmp(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_kv_f16(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_idx(const struct ggml_tensor * op);
+
+size_t ggml_metal_op_argmax_extra(const struct ggml_tensor * op);
 
 int ggml_metal_op_concat            (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_repeat            (ggml_metal_op_t ctx, int idx);
@@ -98,6 +99,8 @@ int ggml_metal_op_timestep_embedding(ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_argmax            (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_argsort           (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_top_k             (ggml_metal_op_t ctx, int idx);
+int ggml_metal_op_topk_moe          (ggml_metal_op_t ctx, int idx);
+int ggml_metal_op_moe_reduce        (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_tri               (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_opt_step_adamw    (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_opt_step_sgd      (ggml_metal_op_t ctx, int idx);

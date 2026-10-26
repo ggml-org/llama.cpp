@@ -43,6 +43,10 @@ on:
       'tools/server/**.*'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 env:
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
@@ -82,7 +86,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: server-ubuntu-24.04-arm
+          restore: false
           save: false
 
       - name: ccache-buckets-restore
@@ -150,6 +154,11 @@ jobs:
 
   windows:
     runs-on: windows-2025
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - name: Clone

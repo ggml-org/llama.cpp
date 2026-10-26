@@ -23,7 +23,12 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,         hparams.indexer_top_k);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    hparams.indexer_block_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,  hparams.indexer_local_blocks);
-    msa_p = { (int) hparams.indexer_block_size, (int) hparams.indexer_top_k, (int) hparams.indexer_local_blocks };
+
+    msa_p = {
+        /*.blk          =*/ (int) hparams.indexer_block_size,
+        /*.topk_blocks  =*/ (int) hparams.indexer_top_k,
+        /*.local        =*/ (int) hparams.indexer_local_blocks,
+    };
 
     GGML_ASSERT(hparams.indexer_block_size > 0); // avoid div by zero
 
@@ -545,9 +550,9 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             // leading dense FFN (swigluoai)
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
+                    model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+                    model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
                     NULL,
                     LLM_FFN_SWIGLU_OAI_MOE, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -563,14 +568,17 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     LLM_FFN_SWIGLU_OAI_MOE, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
-                    il);
+                    il, nullptr, nullptr,
+                    model.layers[il].ffn_up_exps_s,
+                    model.layers[il].ffn_gate_exps_s,
+                    model.layers[il].ffn_down_exps_s);
             cb(moe_out, "ffn_moe_out", il);
 
             // shared expert (swigluoai)
             ggml_tensor * ffn_shexp = build_ffn(cur,
-                    model.layers[il].ffn_up_shexp,   NULL, NULL,
-                    model.layers[il].ffn_gate_shexp, NULL, NULL,
-                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    model.layers[il].ffn_up_shexp,   NULL, model.layers[il].ffn_up_shexp_s,
+                    model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
+                    model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
                     NULL,
                     LLM_FFN_SWIGLU_OAI_MOE, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
@@ -598,6 +606,4 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

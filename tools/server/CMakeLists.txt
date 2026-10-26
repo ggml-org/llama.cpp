@@ -13,6 +13,8 @@ add_library(${TARGET} STATIC
     server-queue.h
     server-common.cpp
     server-common.h
+    server-decision.cpp
+    server-decision.h
     server-context.cpp
     server-context.h
     server-stream.cpp
@@ -39,6 +41,8 @@ set(TARGET llama-server-impl)
 
 add_library(${TARGET}
     server.cpp
+    server-connect.cpp
+    server-connect.h
     server-http.cpp
     server-http.h
     server-models.cpp

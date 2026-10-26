@@ -165,7 +165,7 @@ export { default as ChatForm } from './ChatForm/ChatForm.svelte';
 /**
  * Wrapper component for the "add to chat" button (Plus icon).
  * Exposes a `button` snippet that can be used inside DropdownMenu.Trigger (desktop)
- * or Sheet.Root (mobile) to maintain consistent styling while allowing
+ * or Drawer.Root (mobile) to maintain consistent styling while allowing
  * platform-specific trigger wrappers.
  */
 export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionsAdd.svelte';
@@ -192,11 +192,11 @@ export { default as ChatFormActions } from './ChatForm/ChatFormActions/ChatFormA
 export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 
 /**
- * Model selector component for the chat form action bar. Renders either a dropdown
- * (desktop) or bottom sheet (mobile) for selecting the conversation model in router mode.
+ * Model selector component for the chat form action bar and the assistant message
+ * model badge. Renders a dropdown on desktop and a bottom drawer on a phone.
  * Exposes an `open` method for programmatically opening the selector.
  */
-export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels.svelte';
+export { default as ChatFormActionReasoning } from './ChatForm/ChatFormActions/ChatFormActionReasoning.svelte';
 
 /**
  * Dropdown submenu for managing tool permissions in the chat form.
@@ -219,15 +219,6 @@ export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/Chat
  * ```
  */
 export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
-
-/**
- * Dropdown submenu for selecting reasoning effort level.
- *
- * Shows a "Reasoning" sub-menu item with a lightbulb icon indicating
- * thinking status, and a nested list of effort levels.
- * Only visible when the current model supports thinking.
- */
-export { default as ChatFormActionAddReasoningSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddReasoningSubmenu.svelte';
 
 /**
  * Compact context-usage gauge with per-turn and cumulative breakdown in the tooltip.

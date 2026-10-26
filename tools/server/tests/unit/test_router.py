@@ -1,3 +1,4 @@
+import shutil
 import threading
 import pytest
 from utils import *
@@ -433,12 +434,14 @@ def test_router_dedup_cache_models():
     global server
 
     preset_path = os.path.join(TMP_DIR, "test_dedup.ini")
-    cache_id = "ggml-org/test-model-stories260K:F32"
+    main_cache_id = "ggml-org/test-model-stories260K:F32"
+    draft_cache_id = "ggml-org/test-model-stories260K-infill:F32"
 
     with open(preset_path, "w") as f:
         f.write(
             "[model-dedup]\n"
             "hf-repo = ggml-org/test-model-stories260K\n"
+            "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
             "dedup-cache-models = 1\n"
         )
 
@@ -448,12 +451,13 @@ def test_router_dedup_cache_models():
     try:
         ids = _get_model_ids(is_reload=False)
         assert "model-dedup" in ids
-        assert cache_id not in ids, "cache model should be hidden by dedup"
+        assert main_cache_id not in ids, "main cache model should be hidden by dedup"
+        assert draft_cache_id not in ids, "draft cache model should be hidden by dedup"
         # other cache models are unaffected
         assert "ggml-org/tinygemma3-GGUF:Q8_0" in ids
 
         # the hidden model is only hidden from the listing, it can still be used
-        res = server.make_request("POST", "/tokenize", data={"model": cache_id, "content": "hello"})
+        res = server.make_request("POST", "/tokenize", data={"model": main_cache_id, "content": "hello"})
         assert res.status_code == 200
 
         # disabling the flag brings the cache entry back on reload
@@ -461,9 +465,11 @@ def test_router_dedup_cache_models():
             f.write(
                 "[model-dedup]\n"
                 "hf-repo = ggml-org/test-model-stories260K\n"
+                "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
             )
         ids = _get_model_ids(is_reload=True)
-        assert cache_id in ids
+        assert main_cache_id in ids
+        assert draft_cache_id in ids
 
         # the flag also works from the global section
         with open(preset_path, "w") as f:
@@ -473,10 +479,12 @@ def test_router_dedup_cache_models():
                 "\n"
                 "[model-dedup]\n"
                 "hf-repo = ggml-org/test-model-stories260K\n"
+                "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
             )
         ids = _get_model_ids(is_reload=True)
         assert "model-dedup" in ids
-        assert cache_id not in ids, "cache model should be hidden by global dedup"
+        assert main_cache_id not in ids, "main cache model should be hidden by global dedup"
+        assert draft_cache_id not in ids, "draft cache model should be hidden by global dedup"
     finally:
         os.remove(preset_path)
 
@@ -537,6 +545,15 @@ def _wait_for_sse_event(collected: list, event_type: str, model: str, timeout: i
             return True
         time.sleep(0.01)
     return False
+
+
+def _own_cache(name: str) -> str:
+    """An empty model cache for one test: the workers run in parallel, and a download
+    test must not see the files or the record another test writes in the shared cache."""
+    path = os.path.join(TMP_DIR, name)
+    shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path)
+    return path
 
 
 def test_router_download_model():
@@ -619,3 +636,230 @@ def test_router_delete_model():
     # Model should no longer appear in GET /models
     ids = _get_model_ids(is_reload=False)
     assert MODEL_DOWNLOAD_ID not in ids, f"{MODEL_DOWNLOAD_ID} still present after deletion"
+
+
+def test_router_download_sidecars():
+    """Case 3: sidecars are a parameter of the download, never models of their own."""
+    global server
+    server.llama_cache = _own_cache("cache_download_sidecars")
+    server.start()
+
+    server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+    # an unknown sidecar kind is rejected before anything starts
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID, "sidecars": ["lora"]})
+    assert res.status_code == 400
+    assert MODEL_DOWNLOAD_ID not in _get_model_ids(is_reload=False)
+
+    sse_events: list = []
+    stop = threading.Event()
+    sse_ready = threading.Event()
+    threading.Thread(
+        target=_listen_sse, args=(server, sse_events, stop, sse_ready), daemon=True
+    ).start()
+    assert sse_ready.wait(10), "SSE client failed to connect"
+
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID, "sidecars": []})
+    assert res.status_code == 200
+    finished = _wait_for_sse_event(
+        sse_events, "download_finished", MODEL_DOWNLOAD_ID, MODEL_DOWNLOAD_TIMEOUT
+    )
+    stop.set()
+    assert finished, "Never received download_finished SSE event"
+
+    # the model lists the sidecars it has on disk, and no sidecar is listed as a model
+    res = server.make_request("GET", "/models")
+    assert res.status_code == 200
+    entries = {item["id"]: item for item in res.body.get("data", [])}
+    assert entries[MODEL_DOWNLOAD_ID]["sidecars"] == []
+    for kind in ("mmproj", "mtp", "dflash", "eagle3", "dspark"):
+        assert not any(i.endswith("-" + kind) for i in entries), f"a {kind} sidecar is listed as a model"
+
+    server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+
+def test_router_download_conflicts():
+    """A download is refused over one on its way, and over a model that is running."""
+    global server
+    server.models_max = 2
+    server.llama_cache = _own_cache("cache_download_conflicts")
+    server.start()
+
+    server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+    # a download on its way is not started again; the entry reports the state before
+    # the child fetches anything, so the probe lands inside the download
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+    assert res.status_code == 200
+    _wait_for_model_status(MODEL_DOWNLOAD_ID, {"downloading"}, timeout=30)
+
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+    assert res.status_code == 400
+    assert "is already downloading" in res.body["error"]["message"]
+
+    # a loaded model holds its files, so it goes only once it is unloaded; the
+    # reload that follows the download parks the entry as unloaded
+    _wait_for_model_status(MODEL_DOWNLOAD_ID, {"downloaded", "unloaded"}, timeout=MODEL_DOWNLOAD_TIMEOUT)
+    _load_model_and_wait(MODEL_DOWNLOAD_ID, timeout=120)
+
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+    assert res.status_code == 400
+    assert "is running, unload it first" in res.body["error"]["message"]
+
+
+def test_router_delete_unknown_name():
+    """A name that is neither a model nor a recorded download is not found, and the
+    cached tags of its repo keep their files."""
+    global server
+    server.llama_cache = _own_cache("cache_delete_unknown_name")
+    server.start()
+
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID, "sidecars": []})
+    assert res.status_code == 200
+    _wait_for_model_status(MODEL_DOWNLOAD_ID, {"downloaded", "unloaded"}, timeout=MODEL_DOWNLOAD_TIMEOUT)
+
+    repo = MODEL_DOWNLOAD_ID.split(":")[0]
+    res = server.make_request("DELETE", f"/models?model={repo}")
+    assert res.status_code != 200
+    assert "is not found" in res.body["error"]["message"]
+    assert MODEL_DOWNLOAD_ID in _get_model_ids(is_reload=True)
+
+    server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+
+def test_router_incomplete_sidecars():
+    """A cached model lists the sidecars its unfinished download has not written yet, until
+    they are dropped."""
+    global server
+    cache_dir = _own_cache("cache_incomplete_sidecars")
+    server.llama_cache = cache_dir
+    server.start()
+
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID, "sidecars": []})
+    assert res.status_code == 200
+    _wait_for_model_status(MODEL_DOWNLOAD_ID, {"downloaded", "unloaded"}, timeout=MODEL_DOWNLOAD_TIMEOUT)
+    server.stop()
+
+    # a paused mtp of the cached model, as the record of an earlier run holds it
+    partial_path = os.path.abspath(os.path.join(cache_dir, "test-mtp.gguf.downloadInProgress"))
+    with open(partial_path, "w") as f:
+        f.write("partial")
+    with open(os.path.join(cache_dir, "unfinished-downloads.json"), "w") as f:
+        json.dump({"downloads": [{
+            "model":    MODEL_DOWNLOAD_ID,
+            "sidecars": ["mtp"],
+            "partials": [{"kind": "mtp", "path": partial_path}],
+        }]}, f)
+
+    server.start()
+
+    def entry() -> dict:
+        res = server.make_request("GET", "/models")
+        assert res.status_code == 200
+        return {item["id"]: item for item in res.body.get("data", [])}[MODEL_DOWNLOAD_ID]
+
+    assert entry()["sidecars"] == []
+    assert entry()["incomplete_sidecars"] == ["mtp"]
+
+    res = server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}&sidecar=mtp")
+    assert res.status_code == 200
+    assert res.body.get("success") is True
+    assert not os.path.exists(partial_path)
+    assert "incomplete_sidecars" not in entry()
+
+    server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+
+def test_router_preset_model_sidecars():
+    """A preset model reports the sidecars its files have on disk, like a cached one."""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_preset_sidecars.ini")
+
+    with open(preset_path, "w") as f:
+        f.write("[preset-sidecars]\nhf-repo = ggml-org/tinygemma3-GGUF:Q8_0\n")
+
+    server.models_preset = preset_path
+    server.start()
+
+    try:
+        # the mmproj of that repo lands next to the model, as -hf would pull it
+        res = server.make_request("POST", "/models", data={"model": MODEL_A, "sidecars": ["mmproj"]})
+        assert res.status_code == 200
+        _wait_for_model_status(MODEL_A, {"downloaded", "unloaded"}, timeout=MODEL_DOWNLOAD_TIMEOUT)
+
+        res = server.make_request("GET", "/models")
+        assert res.status_code == 200
+        entries = {item["id"]: item for item in res.body.get("data", [])}
+
+        assert entries["preset-sidecars"]["source"] == "preset"
+        assert entries["preset-sidecars"]["sidecars"] == ["mmproj"]
+    finally:
+        os.remove(preset_path)
+
+
+def test_router_local_preset_listing():
+    """A preset on a local file resolves from no HF repo: it lists without sidecars."""
+    global server
+
+    model_path = os.path.join(TMP_DIR, "test_local_preset.gguf")
+    preset_path = os.path.join(TMP_DIR, "test_local_preset.ini")
+
+    with open(model_path, "w") as f:
+        f.write("GGUF")
+    with open(preset_path, "w") as f:
+        f.write(f"[local]\nmodel = {model_path}\n")
+
+    server.models_preset = preset_path
+    server.start()
+
+    try:
+        res = server.make_request("GET", "/models")
+        assert res.status_code == 200
+        entries = {item["id"]: item for item in res.body.get("data", [])}
+
+        assert entries["local"]["source"] == "preset"
+        assert "sidecars" not in entries["local"]
+    finally:
+        os.remove(preset_path)
+        os.remove(model_path)
+
+
+def test_router_download_unresolved_tag():
+    """A tag that resolves no file of the repo is refused before anything starts."""
+    global server
+    server.start()
+
+    model = MODEL_DOWNLOAD_ID.split(":")[0] + ":Q9_Z"
+    res = server.make_request("POST", "/models", data={"model": model})
+    assert res.status_code == 400
+    assert "resolves no file to download" in res.body["error"]["message"]
+    assert model not in _get_model_ids(is_reload=False)
+
+
+def test_router_download_drops_stale_partials():
+    """Posting a recorded download again deletes the partials its new plan no longer writes."""
+    global server
+
+    cache_dir = _own_cache("cache_download_drops_stale_partials")
+    stale_path = os.path.abspath(os.path.join(cache_dir, "test-stale.gguf.downloadInProgress"))
+    record_path = os.path.join(cache_dir, "unfinished-downloads.json")
+
+    with open(stale_path, "w") as f:
+        f.write("stale")
+    with open(record_path, "w") as f:
+        json.dump({"downloads": [{
+            "model":    MODEL_DOWNLOAD_ID,
+            "sidecars": ["mtp"],
+            "partials": [{"kind": "mtp", "path": stale_path}],
+        }]}, f)
+
+    server.llama_cache = cache_dir
+    server.start()
+
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID, "sidecars": []})
+    assert res.status_code == 200
+    assert not os.path.exists(stale_path), "the stale partial survived the new record"
+
+    _wait_for_model_status(MODEL_DOWNLOAD_ID, {"downloaded", "unloaded"}, timeout=MODEL_DOWNLOAD_TIMEOUT)
+    server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")

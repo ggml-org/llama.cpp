@@ -6,6 +6,20 @@
 
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
+    ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
+    ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false);
+    ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, hparams.f_attn_value_scale, false);
+
+    hparams.llm_ffn_op = LLM_FFN_SILU;
+    std::string hidden_act;
+    if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
+        if (hidden_act == "gelu" || hidden_act == "gelu_pytorch_tanh") {
+            hparams.llm_ffn_op = LLM_FFN_GELU;
+        } else if (hidden_act != "silu") {
+            throw std::runtime_error("unsupported DFlash hidden activation: " + hidden_act);
+        }
+    }
+
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale, false);
     hparams.f_final_logit_softcapping = 0.0f;
@@ -19,6 +33,19 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_DFLASH_CONV_GROUP_SIZE,  hparams.dflash_conv_group_size,  false);
     ml.get_key(LLM_KV_DFLASH_SELECTOR_RANK,    hparams.dflash_selector_rank,    false);
     ml.get_key(LLM_KV_DFLASH_SELECTOR_TOP_K,   hparams.dflash_selector_top_k,   false);
+    const bool has_lilicorr = ml.get_key(LLM_KV_LILICORR_HIDDEN_SIZE, hparams.lilicorr_hidden_size, false);
+    ml.get_key(LLM_KV_LILICORR_CANDIDATE_TOPK, hparams.lilicorr_candidate_topk, has_lilicorr);
+    ml.get_key(LLM_KV_LILICORR_NUM_HEADS,      hparams.lilicorr_num_heads,      has_lilicorr);
+    ml.get_key(LLM_KV_LILICORR_NUM_LAYERS,     hparams.lilicorr_layers,         has_lilicorr);
+    ml.get_key(LLM_KV_LILICORR_VECTOR_EPS,     hparams.lilicorr_vector_eps,     has_lilicorr);
+    ml.get_key(LLM_KV_LILICORR_LOGIT_SCALE,    hparams.lilicorr_logit_scale,    has_lilicorr);
+    if (has_lilicorr && (hparams.dflash_block_size < 2 || hparams.lilicorr_hidden_size == 0 ||
+            hparams.lilicorr_num_heads == 0 || hparams.lilicorr_hidden_size % hparams.lilicorr_num_heads ||
+            hparams.lilicorr_candidate_topk == 0 || hparams.lilicorr_layers == 0 ||
+            hparams.dflash_selector_top_k > 0 ||
+            (uint64_t) hparams.lilicorr_candidate_topk * (hparams.lilicorr_candidate_topk + 1) > hparams.n_embd)) {
+        throw std::runtime_error("invalid LiLiCorr DFlash metadata");
+    }
 
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
@@ -54,6 +81,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
         ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
         ml.get_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS,            hparams.dsv4_compress_ratios, false);
+        ml.get_key(LLM_KV_HYPER_CONNECTION_SINGLE_PASS,         hparams.dsv4_hc_single_pass, false);
 
         GGML_ASSERT(hparams.dsv4_o_group_count > 0); // avoid div by zero
 
@@ -67,6 +95,11 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         }
 
         GGML_ASSERT(hparams.n_swa > 0);
+        if (hparams.dsv4_hc_single_pass) {
+            // DeepSeek-V4.1 DSpark: block queries see the main-KV ring plus the block via the mask row of the
+            // first query, so that row's SWA window must reach window_size positions before the anchor
+            hparams.n_swa += 1;
+        }
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         hparams.set_swa_pattern(0);
         for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
@@ -108,9 +141,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     // DSpark = DFlash + a semi-autoregressive Markov head and Confidence head
-    //
-    // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
-    //       need their own conversion path and graph tweaks
     const struct ggml_tensor * markov_meta = ml->get_tensor_meta("markov_w1.weight");
     if (markov_meta) {
         const int64_t dspark_markov_rank = markov_meta->ne[0];
@@ -126,6 +156,10 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     const struct ggml_tensor * selector_meta = ml->get_tensor_meta("selector_hidden.weight");
+    const bool conv_meta = hparams.dflash_conv_kernel_size > 0 && hparams.dflash_conv_group_size > 0;
+    if (conv_meta && n_embd % hparams.dflash_conv_group_size != 0) {
+        throw std::runtime_error("DFlash hidden size must be divisible by conv_group_size");
+    }
     if (selector_meta) {
         const int64_t rank = hparams.dflash_selector_rank;
         if (rank <= 0 || hparams.dflash_block_size <= 0 || hparams.dflash_selector_top_k <= 0 ||
@@ -148,8 +182,69 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
                 hparams.dflash_selector_rank, hparams.dflash_selector_top_k);
     }
 
+    if (hparams.lilicorr_layers > 0) {
+        const int64_t hidden = hparams.lilicorr_hidden_size;
+        const int64_t top_k  = hparams.lilicorr_candidate_topk;
+        const int64_t heads  = hparams.lilicorr_num_heads;
+        uint32_t factor = 0, mlp = 0;
+        ml->get_key(LLM_KV_LILICORR_FACTOR_DIM, factor);
+        ml->get_key(LLM_KV_LILICORR_MLP_HIDDEN_SIZE, mlp);
+        const int64_t slots = hparams.dflash_block_size - 1;
+        const int feature_bid = n_layer_all + hparams.lilicorr_layers;
+        if (factor == 0 || mlp == 0 || hparams.lilicorr_layers > layers.size()) {
+            throw std::runtime_error("invalid LiLiCorr head dimensions");
+        }
+        if (hidden != n_embd) {
+            lilicorr_token_proj         = create_tensor(tn(LLM_TENSOR_LILICORR_TOKEN_PROJ, "weight"), { n_embd, hidden }, 0);
+            lilicorr_token_proj_b       = create_tensor(tn(LLM_TENSOR_LILICORR_TOKEN_PROJ, "bias"),   { hidden },         0);
+            lilicorr_token_proj_s       = create_tensor(tn(LLM_TENSOR_LILICORR_TOKEN_PROJ, "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
+        }
+        lilicorr_pass_hidden_proj       = create_tensor(tn(LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ, "weight"), { hparams.n_embd, hidden }, 0);
+        lilicorr_pass_hidden_proj_b     = create_tensor(tn(LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ, "bias"),   { hidden },                 0);
+        lilicorr_pass_hidden_proj_s     = create_tensor(tn(LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ, "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
+        lilicorr_feature_norm           = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", feature_bid), { 5 }, 0);
+        lilicorr_feature_norm_b         = create_tensor(tn(LLM_TENSOR_FFN_NORM, "bias", feature_bid),   { 5 }, 0);
+        lilicorr_feature_mlp_1          = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", feature_bid), { 5, hidden }, 0);
+        lilicorr_feature_mlp_1_b        = create_tensor(tn(LLM_TENSOR_FFN_UP, "bias", feature_bid),   { hidden },    0);
+        lilicorr_feature_mlp_3          = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", feature_bid), { hidden, hidden }, 0);
+        lilicorr_feature_mlp_3_b        = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", feature_bid),   { hidden },         0);
+        lilicorr_slot_embedding         = create_tensor(tn(LLM_TENSOR_LILICORR_SLOT_EMBD, "weight"), { hidden, slots }, 0);
+        lilicorr_rank_embedding         = create_tensor(tn(LLM_TENSOR_LILICORR_RANK_EMBD, "weight"), { hidden, top_k }, 0);
+        lilicorr_attention_bias         = create_tensor(tn(LLM_TENSOR_LILICORR_ATTN_BIAS, "bias"), { slots * top_k, slots * top_k, heads }, 0);
+        lilicorr_context_proj           = create_tensor(tn(LLM_TENSOR_LILICORR_CONTEXT_PROJ, "weight"), { n_embd, hidden }, 0);
+        lilicorr_context_proj_b         = create_tensor(tn(LLM_TENSOR_LILICORR_CONTEXT_PROJ, "bias"),   { hidden },         0);
+        lilicorr_context_proj_s         = create_tensor(tn(LLM_TENSOR_LILICORR_CONTEXT_PROJ, "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
+        for (uint32_t i = 0; i < hparams.lilicorr_layers; ++i) {
+            const int bid = n_layer_all + i;
+            layers[i].lilicorr_attn_norm       = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", bid), { hidden }, 0);
+            layers[i].lilicorr_mlp_norm        = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", bid), { hidden },  0);
+            layers[i].lilicorr_attn_in_proj    = create_tensor(tn(LLM_TENSOR_LILICORR_ATTN_IN_PROJ, "weight", i), { hidden, 3 * hidden }, 0);
+            layers[i].lilicorr_attn_in_proj_b  = create_tensor(tn(LLM_TENSOR_LILICORR_ATTN_IN_PROJ, "bias", i), { 3 * hidden },           0);
+            layers[i].lilicorr_attn_out_proj   = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", bid), { hidden, hidden }, 0);
+            layers[i].lilicorr_attn_out_proj_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", bid), { hidden },           0);
+            layers[i].lilicorr_attn_out_proj_s = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "scale", bid), { 1 }, TENSOR_NOT_REQUIRED);
+            layers[i].lilicorr_mlp_0           = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", bid), { hidden, mlp }, 0);
+            layers[i].lilicorr_mlp_0_b         = create_tensor(tn(LLM_TENSOR_FFN_UP, "bias", bid), { mlp },           0);
+            layers[i].lilicorr_mlp_0_s         = create_tensor(tn(LLM_TENSOR_FFN_UP, "scale", bid), { 1 }, TENSOR_NOT_REQUIRED);
+            layers[i].lilicorr_mlp_2           = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", bid), { mlp, hidden }, 0);
+            layers[i].lilicorr_mlp_2_b         = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", bid), { hidden },        0);
+            layers[i].lilicorr_mlp_2_s         = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "scale", bid), { 1 }, TENSOR_NOT_REQUIRED);
+        }
+        lilicorr_output_norm            = create_tensor(tn(LLM_TENSOR_LILICORR_OUTPUT_NORM, "weight"), { hidden }, 0);
+        lilicorr_anchor_norm            = create_tensor(tn(LLM_TENSOR_LILICORR_ANCHOR_NORM, "weight"), { hidden }, 0);
+        lilicorr_factor_input_proj      = create_tensor(tn(LLM_TENSOR_LILICORR_FACTOR_INPUT_PROJ, "weight"), { 3 * hidden, hidden }, 0);
+        lilicorr_factor_input_proj_b    = create_tensor(tn(LLM_TENSOR_LILICORR_FACTOR_INPUT_PROJ, "bias"), { hidden },               0);
+        lilicorr_out_head               = create_tensor(tn(LLM_TENSOR_LILICORR_OUT_HEAD, "weight"), { hidden, factor }, 0);
+        lilicorr_out_head_b             = create_tensor(tn(LLM_TENSOR_LILICORR_OUT_HEAD, "bias"), { factor },           0);
+        lilicorr_in_head                = create_tensor(tn(LLM_TENSOR_LILICORR_IN_HEAD, "weight"), { hidden, factor }, 0);
+        lilicorr_in_head_b              = create_tensor(tn(LLM_TENSOR_LILICORR_IN_HEAD, "bias"), { factor },           0);
+        lilicorr_anchor_out_head        = create_tensor(tn(LLM_TENSOR_LILICORR_ANCHOR_OUT_HEAD, "weight"), { hidden, factor }, 0);
+        lilicorr_anchor_out_head_b      = create_tensor(tn(LLM_TENSOR_LILICORR_ANCHOR_OUT_HEAD, "bias"), { factor },           0);
+    }
+
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     fc_s            = create_tensor(tn(LLM_TENSOR_FC,              "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
+    fc_in_s         = create_tensor(tn(LLM_TENSOR_FC,              "input_scale"), { 1 }, TENSOR_NOT_REQUIRED);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
     output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
 
@@ -168,9 +263,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         const int64_t hc_dim          = hc_mult * n_embd;
         const int64_t hc_mix_dim      = (2 + hc_mult) * hc_mult;
 
-        hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN,    "weight"), {hc_dim, hc_mult}, 0);
-        hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE,  "weight"), {hc_mult}, 0);
-        hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
+        // single-pass mHC: collapse with the last FFN pre-mix, no hc_head
+        if (!hparams.dsv4_hc_single_pass) {
+            hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN,    "weight"), {hc_dim, hc_mult}, 0);
+            hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE,  "weight"), {hc_mult}, 0);
+            hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
+        }
 
         for (int i = 0; i < n_layer; ++i) {
             auto & layer = layers[i];
@@ -214,11 +312,16 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, 0);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, 0);
+        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, TENSOR_NOT_REQUIRED);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.out_scale      = create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), { 1 }, TENSOR_NOT_REQUIRED);
+        layer.rope_freqs     = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), { n_embd_head_k/2 }, TENSOR_NOT_REQUIRED | (i > 0 ? TENSOR_DUPLICATED : 0));
 
         // optional per-head attention sinks (e.g. Nemotron DSpark)
         layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, "weight", i), { n_head }, TENSOR_NOT_REQUIRED);
@@ -228,7 +331,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, 0);
 
-        if (selector_meta) {
+        if (conv_meta) {
             const int64_t kernel = hparams.dflash_conv_kernel_size;
             const int64_t groups = n_embd / hparams.dflash_conv_group_size;
             const int64_t projected = 2 * kernel * groups;
@@ -321,7 +424,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
         // bonus anchor slot: pass the logits through unbiased, pad the (unread) confidence column
         cat = ggml_cont(ctx0, ggml_view_2d(ctx0, base, n_vocab, n_blocks, base_stride, 0));
         if (has_conf) {
-            cat_conf = ggml_sigmoid(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0)));
+            cat_conf = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0));
         }
     }
 
@@ -428,19 +531,16 @@ static ggml_tensor * build_dflash2_conv(
 
     ggml_tensor * weight_all = ggml_add(ctx0, coeff_all, base_side);
 
+    // taps at or past block_size only read the left padding and add nothing
+    const int64_t n_taps = std::min(kernel_size, block_size);
+
     ggml_tensor * result = nullptr;
-    for (int64_t tap = 0; tap < kernel_size; ++tap) {
+    for (int64_t tap = 0; tap < n_taps; ++tap) {
         ggml_tensor * values = blocks;
         if (tap > 0) {
-            ggml_tensor * zeros = ggml_fill(ctx0,
-                    ggml_new_tensor_3d(ctx0, hidden->type, hidden_size, std::min(tap, block_size), n_blocks), 0.0f);
-            if (tap < block_size) {
-                ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
-                        blocks->nb[1], blocks->nb[2], 0);
-                values = ggml_concat(ctx0, zeros, previous, 1);
-            } else {
-                values = zeros;
-            }
+            ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
+                    blocks->nb[1], blocks->nb[2], 0);
+            values = ggml_pad_ext(ctx0, previous, 0, 0, tap, 0, 0, 0, 0, 0);
         }
         values = ggml_reshape_2d(ctx0, values, hidden_size, n_tokens);
 
@@ -548,6 +648,168 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
     ggml_build_forward_expand(g.gf, packed);
 }
 
+static void build_lilicorr_scores(llm_graph_context & g, const llama_model & model,
+        ggml_tensor * tok_embd, ggml_tensor * anchors) {
+    ggml_context * ctx0 = g.ctx0;
+    auto         & res  = g.res;
+
+    const auto & hparams = g.hparams;
+    const int64_t n_tokens = g.n_tokens;
+    const int64_t n_embd   = g.n_embd;
+
+    const int64_t hidden   = hparams.lilicorr_hidden_size;
+    const int64_t top_k    = hparams.lilicorr_candidate_topk;
+    const int64_t heads    = hparams.lilicorr_num_heads;
+    const int64_t n_blocks = g.ubatch.n_seqs_unq;
+    GGML_ASSERT(n_blocks > 0 && n_tokens % n_blocks == 0);
+    GGML_ASSERT(res->t_logits->ne[1] == n_tokens);
+    GGML_ASSERT(anchors && tok_embd);
+
+    const int64_t tokens_per_block = n_tokens / n_blocks;
+    const int64_t block_size = hparams.dflash_block_size;
+    const int64_t row_used   = top_k + top_k * top_k;
+    const int64_t slots  = block_size - 1;
+    const int64_t nodes  = slots * top_k;
+    const int64_t factor_dim = model.lilicorr_out_head->ne[1];
+    GGML_ASSERT(tokens_per_block == block_size);
+
+    ggml_tensor * candidates = ggml_top_k(ctx0, res->t_logits, top_k);
+    ggml_tensor * logits_rows = ggml_reshape_3d(ctx0, res->t_logits, 1, res->t_logits->ne[0], n_tokens);
+    ggml_tensor * candidate_logits = ggml_reshape_2d(ctx0,
+            ggml_get_rows(ctx0, logits_rows, candidates), top_k, n_tokens);
+    // Rank features and embeddings require candidates in descending logit order.
+    ggml_tensor * order = ggml_argsort(ctx0, candidate_logits, GGML_SORT_ORDER_DESC);
+    ggml_tensor * candidate_rows = ggml_reshape_3d(ctx0, candidates, 1, top_k, n_tokens);
+    candidates = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, candidate_rows, order), top_k, n_tokens);
+    ggml_tensor * prob_rows   = ggml_reshape_3d(ctx0, ggml_soft_max(ctx0, res->t_logits), 1, res->t_logits->ne[0], n_tokens);
+    ggml_tensor * probs       = ggml_reshape_2d(ctx0,
+            ggml_get_rows(ctx0, prob_rows, candidates), top_k, n_tokens);
+
+    ggml_tensor * cand_run  = ggml_reshape_3d(ctx0, candidates, top_k, n_tokens / n_blocks, n_blocks);
+    ggml_tensor * probs_run = ggml_reshape_3d(ctx0, probs,      top_k, n_tokens / n_blocks, n_blocks);
+    cand_run = ggml_cont(ctx0, ggml_view_3d(ctx0, cand_run, top_k, slots, n_blocks,
+            cand_run->nb[1], cand_run->nb[2], cand_run->nb[1]));
+    probs_run = ggml_cont(ctx0, ggml_view_3d(ctx0, probs_run, top_k, slots, n_blocks,
+            probs_run->nb[1], probs_run->nb[2], probs_run->nb[1]));
+
+    ggml_tensor * lp = ggml_log(ctx0, probs_run);
+    ggml_tensor * lp_blk = ggml_reshape_3d(ctx0, lp, top_k, slots, n_blocks);
+    ggml_tensor * top_lp = ggml_view_3d(ctx0, lp_blk, 1, slots, n_blocks,
+            lp_blk->nb[1], lp_blk->nb[2], 0);
+    ggml_tensor * relative = ggml_sub(ctx0, lp_blk, top_lp);
+    ggml_tensor * feature = ggml_reshape_4d(ctx0, lp_blk, 1, top_k, slots, n_blocks);
+
+    ggml_tensor * rank = ggml_arange(ctx0, 0, top_k, 1);
+    rank = ggml_repeat(ctx0, ggml_reshape_3d(ctx0, rank, top_k, 1, 1), lp_blk);
+    ggml_tensor * first = ggml_scale_bias(ctx0, ggml_step(ctx0, rank), -1.0f, 1.0f);
+
+    for (ggml_tensor * item : { probs_run, relative,
+            ggml_scale(ctx0, rank, top_k == 1 ? 0.0f : 1.0f / (top_k - 1)), first }) {
+        feature = ggml_concat(ctx0, feature, ggml_reshape_4d(ctx0, item, 1, top_k, slots, n_blocks), 0);
+    }
+    feature = ggml_reshape_2d(ctx0, feature, 5, nodes * n_blocks);
+
+    ggml_tensor * embeds = ggml_get_rows(ctx0, tok_embd, ggml_reshape_1d(ctx0, cand_run, nodes * n_blocks));
+    ggml_tensor * token_states = n_embd == hidden ? embeds : ggml_add(ctx0, g.build_lora_mm(model.lilicorr_token_proj, embeds, model.lilicorr_token_proj_s), model.lilicorr_token_proj_b);
+
+    ggml_tensor * pass_blk = ggml_reshape_3d(ctx0, res->t_embd, n_embd, block_size, n_blocks);
+    ggml_tensor * passes = ggml_reshape_2d(ctx0, ggml_cont(ctx0, ggml_view_3d(ctx0, pass_blk, n_embd, slots, n_blocks,
+                pass_blk->nb[1], pass_blk->nb[2], pass_blk->nb[1])),
+            n_embd, slots * n_blocks);
+
+    ggml_tensor * pass_states = ggml_add(ctx0, g.build_lora_mm(model.lilicorr_pass_hidden_proj, passes, model.lilicorr_pass_hidden_proj_s), model.lilicorr_pass_hidden_proj_b);
+
+    pass_states = ggml_reshape_4d(ctx0, pass_states, hidden, 1, slots, n_blocks);
+    pass_states = ggml_reshape_2d(ctx0, ggml_repeat_4d(ctx0, pass_states, hidden, top_k, slots, n_blocks), hidden, nodes * n_blocks);
+
+    ggml_tensor * feature_states = ggml_norm(ctx0, feature, 1.0e-5f);
+    feature_states = ggml_add(ctx0, ggml_mul(ctx0, feature_states, model.lilicorr_feature_norm), model.lilicorr_feature_norm_b);
+    feature_states = ggml_silu(ctx0, ggml_add(ctx0, g.build_lora_mm(model.lilicorr_feature_mlp_1, feature_states), model.lilicorr_feature_mlp_1_b));
+    feature_states = ggml_add(ctx0, g.build_lora_mm(model.lilicorr_feature_mlp_3, feature_states), model.lilicorr_feature_mlp_3_b);
+
+    ggml_tensor * slot = ggml_reshape_4d(ctx0, model.lilicorr_slot_embedding, hidden, 1, slots, 1);
+    ggml_tensor * rank_embd = ggml_reshape_4d(ctx0, model.lilicorr_rank_embedding, hidden, top_k, 1, 1);
+    ggml_tensor * pos = ggml_add(ctx0, ggml_repeat_4d(ctx0, slot, hidden, top_k, slots, n_blocks), ggml_repeat_4d(ctx0, rank_embd, hidden, top_k, slots, n_blocks));
+    pos = ggml_reshape_2d(ctx0, pos, hidden, nodes * n_blocks);
+
+    ggml_tensor * x = ggml_add(ctx0, ggml_add(ctx0, token_states, pass_states), feature_states);
+    x = ggml_add(ctx0, x, pos);
+    ggml_tensor * anchor_blk = ggml_reshape_3d(ctx0, anchors, n_embd, block_size, n_blocks);
+    ggml_tensor * anchor = ggml_reshape_2d(ctx0,
+            ggml_cont(ctx0, ggml_view_3d(ctx0, anchor_blk, n_embd, 1, n_blocks,
+                    anchor_blk->nb[1], anchor_blk->nb[2], 0)), n_embd, n_blocks);
+    ggml_tensor * anchor_state = ggml_add(ctx0, g.build_lora_mm(model.lilicorr_context_proj, anchor, model.lilicorr_context_proj_s), model.lilicorr_context_proj_b);
+
+    const int64_t head_dim = hidden / heads;
+    for (uint32_t layer = 0; layer < hparams.lilicorr_layers; ++layer) {
+        const auto & weights = model.layers[layer];
+        ggml_tensor * attn_input = ggml_mul(ctx0, ggml_rms_norm(ctx0, x, hparams.f_norm_rms_eps), weights.lilicorr_attn_norm);
+        ggml_tensor * qkv = ggml_add(ctx0, g.build_lora_mm(weights.lilicorr_attn_in_proj, attn_input), weights.lilicorr_attn_in_proj_b);
+        qkv = ggml_reshape_3d(ctx0, qkv, 3 * hidden, nodes, n_blocks);
+        ggml_tensor * q = ggml_cont(ctx0, ggml_view_4d(ctx0, qkv, head_dim, nodes, heads, n_blocks,
+                qkv->nb[1], head_dim * qkv->nb[0], qkv->nb[2], 0));
+        ggml_tensor * k = ggml_cont(ctx0, ggml_view_4d(ctx0, qkv, head_dim, nodes, heads, n_blocks,
+                qkv->nb[1], head_dim * qkv->nb[0], qkv->nb[2], hidden * qkv->nb[0]));
+        ggml_tensor * v = ggml_view_4d(ctx0, qkv, head_dim, nodes, heads, n_blocks,
+                qkv->nb[1], head_dim * qkv->nb[0], qkv->nb[2], 2 * hidden * qkv->nb[0]);
+        ggml_tensor * attn = ggml_soft_max_ext(ctx0, ggml_mul_mat(ctx0, k, q), model.lilicorr_attention_bias,
+                1.0f / std::sqrt(static_cast<float>(head_dim)), 0.0f);
+        ggml_tensor * joined = ggml_out_prod(ctx0, v, ggml_transpose(ctx0, attn));
+        joined = ggml_permute(ctx0, joined, 0, 2, 1, 3);
+        ggml_tensor * attn_output = ggml_cont_2d(ctx0, joined, hidden, nodes * n_blocks);
+        attn_output = ggml_add(ctx0, g.build_lora_mm(weights.lilicorr_attn_out_proj, attn_output, weights.lilicorr_attn_out_proj_s), weights.lilicorr_attn_out_proj_b);
+        x = ggml_add(ctx0, x, attn_output);
+        ggml_tensor * mlp = ggml_mul(ctx0, ggml_rms_norm(ctx0, x, hparams.f_norm_rms_eps), weights.lilicorr_mlp_norm);
+        mlp = ggml_silu(ctx0, ggml_add(ctx0, g.build_lora_mm(weights.lilicorr_mlp_0, mlp, weights.lilicorr_mlp_0_s), weights.lilicorr_mlp_0_b));
+        mlp = ggml_add(ctx0, g.build_lora_mm(weights.lilicorr_mlp_2, mlp, weights.lilicorr_mlp_2_s), weights.lilicorr_mlp_2_b);
+        x = ggml_add(ctx0, x, mlp);
+    }
+
+    x = ggml_mul(ctx0, ggml_rms_norm(ctx0, x, hparams.f_norm_rms_eps), model.lilicorr_output_norm);
+    anchor_state = ggml_mul(ctx0, ggml_rms_norm(ctx0, anchor_state, hparams.f_norm_rms_eps), model.lilicorr_anchor_norm);
+    ggml_tensor * anchor_nodes = ggml_reshape_3d(ctx0, anchor_state, hidden, 1, n_blocks);
+    anchor_nodes = ggml_reshape_2d(ctx0, ggml_repeat_4d(ctx0, anchor_nodes, hidden, nodes, n_blocks, 1), hidden, nodes * n_blocks);
+    ggml_tensor * factor_in = ggml_concat(ctx0, x, anchor_nodes, 0);
+    factor_in = ggml_concat(ctx0, factor_in, ggml_mul(ctx0, x, anchor_nodes), 0);
+    ggml_tensor * factors = ggml_add(ctx0, g.build_lora_mm(model.lilicorr_factor_input_proj, factor_in), model.lilicorr_factor_input_proj_b);
+    factors = ggml_silu(ctx0, factors);
+
+    ggml_tensor * out = ggml_add(ctx0, g.build_lora_mm(model.lilicorr_out_head, factors), model.lilicorr_out_head_b);
+    out = ggml_reshape_4d(ctx0, ggml_l2_norm(ctx0, out, hparams.lilicorr_vector_eps), factor_dim, top_k, slots, n_blocks);
+
+    ggml_tensor * in = ggml_add(ctx0, g.build_lora_mm(model.lilicorr_in_head, factors), model.lilicorr_in_head_b);
+    in = ggml_reshape_4d(ctx0, ggml_l2_norm(ctx0, in, hparams.lilicorr_vector_eps), factor_dim, top_k, slots, n_blocks);
+
+    ggml_tensor * anchor_out = ggml_add(ctx0, g.build_lora_mm(model.lilicorr_anchor_out_head, anchor_state), model.lilicorr_anchor_out_head_b);
+    anchor_out = ggml_l2_norm(ctx0, anchor_out, hparams.lilicorr_vector_eps);
+    anchor_out = ggml_reshape_3d(ctx0, anchor_out, factor_dim, 1, n_blocks);
+
+    ggml_tensor * first_in = ggml_cont(ctx0, ggml_view_4d(ctx0, in, factor_dim, top_k, 1, n_blocks,
+            in->nb[1], in->nb[2], in->nb[3], 0));
+    ggml_tensor * first_score = ggml_scale(ctx0,
+            ggml_mul_mat(ctx0, first_in, ggml_reshape_4d(ctx0, anchor_out, factor_dim, 1, 1, n_blocks)),
+            hparams.lilicorr_logit_scale);
+    ggml_tensor * scores = ggml_pad(ctx0,
+            ggml_reshape_3d(ctx0, first_score, top_k, 1, n_blocks), top_k * top_k - top_k, 0, 0, 0);
+    if (slots > 1) {
+        ggml_tensor * next = ggml_cont(ctx0, ggml_view_4d(ctx0, in, factor_dim, top_k, slots - 1, n_blocks,
+                in->nb[1], in->nb[2], in->nb[3], in->nb[2]));
+        ggml_tensor * previous = ggml_cont(ctx0, ggml_view_4d(ctx0, out, factor_dim, top_k, slots - 1, n_blocks,
+                out->nb[1], out->nb[2], out->nb[3], 0));
+        ggml_tensor * score = ggml_scale(ctx0, ggml_mul_mat(ctx0, next, previous), hparams.lilicorr_logit_scale);
+        scores = ggml_concat(ctx0, scores,
+                ggml_reshape_3d(ctx0, score, top_k * top_k, slots - 1, n_blocks), 1);
+    }
+
+    ggml_tensor * row = ggml_concat(ctx0, ggml_cast(ctx0, ggml_reshape_3d(ctx0, cand_run, top_k, slots, n_blocks),
+            GGML_TYPE_F32), scores, 0);
+    ggml_tensor * packed = ggml_pad_ext(ctx0, row, 0, n_embd - row_used, 1, 0, 0, 0, 0, 0);
+    packed = ggml_reshape_2d(ctx0, packed, n_embd, n_tokens);
+    g.cb(packed, "lilicorr_lattice", -1);
+    res->t_h_nextn = packed;
+    ggml_build_forward_expand(g.gf, packed);
+}
+
 // DFlash decoder, dual-mode by batch type:
 //   * embd batch  -> fused target features: project + inject K/V into the cache.
 //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
@@ -571,7 +833,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         inp_attn = build_attn_inp_kv();
     }
 
-    const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
+    const float kq_scale = hparams.f_attention_scale != 0.0f ? hparams.f_attention_scale : 1.0f/sqrtf(float(n_embd_head));
 
     // drafts for M-RoPE targets use degenerate sections (temporal dim only)
     int sections[4];
@@ -582,12 +844,13 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             ? ggml_rope_multi(ctx0, cur, pos, nullptr,
                     n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow)
-            : ggml_rope_ext(ctx0, cur, pos, nullptr,
+            : ggml_rope_ext(ctx0, cur, pos, model.layers[0].rope_freqs,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow);
     };
 
     // KV cache injection
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
@@ -608,12 +871,16 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             const auto & layer = model.layers[il];
 
             ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g, layer.wk_s);
-            ggml_tensor * Vcur = build_lora_mm(layer.wv, inp_g, layer.wv_s);
+            const bool shared_kv = layer.wv == nullptr;
+            ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, inp_g, layer.wv_s);
 
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+            if (shared_kv) {
+                Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+            }
             Kcur = build_rope(Kcur, inp_pos);
             cb(Kcur, "Kcur_injected", il);
             cb(Vcur, "Vcur_injected", il);
@@ -649,6 +916,10 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         }
 
         res->t_embd = inp_g;
+        if (model.lilicorr_pass_hidden_proj) {
+            // Expose context features for retrieval by LiliCorr
+            res->t_h_nextn = inp_g;
+        }
 
         ggml_build_forward_expand(gf, inp_g);
         return;
@@ -664,18 +935,30 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         tok_embd = model_other->tok_embd;
     }
 
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    ggml_tensor * inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp_tokens);
+    res->t_inp_tokens = inp_tokens;
 
-    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-    ggml_set_input(inp->tokens);
-    res->t_inp_tokens = inp->tokens;
+    ggml_tensor * inp_anchor = nullptr;
+    if (model.lilicorr_pass_hidden_proj && ubatch.embd_state && n_tokens == (int64_t) hparams.dflash_block_size * ubatch.n_seqs_unq) {
+        // LiliCorr sets inp_anchor to pass the context features to the lattice scorer
+        auto inp = std::make_unique<llm_graph_input_embd_h>(n_embd, n_embd);
+        inp->tokens = inp_tokens;
+        inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+        ggml_set_input(inp->h);
+        inp_anchor = inp->h;
+        res->add_input(std::move(inp));
+    } else {
+        auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+        inp->tokens = inp_tokens;
+        res->add_input(std::move(inp));
+    }
 
-    ggml_tensor * inp_tokens = inp->tokens;
-
-    ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+    ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp_tokens);
+    if (hparams.f_embedding_scale != 0.0f) {
+        inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
+    }
     cb(inpL, "inp_noise_embd", -1);
-
-    res->add_input(std::move(inp));
 
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
@@ -692,7 +975,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
         ggml_tensor * Qcur = build_lora_mm(layer.wq, noise_norm, layer.wq_s);
         ggml_tensor * Kcur = build_lora_mm(layer.wk, noise_norm, layer.wk_s);
-        ggml_tensor * Vcur = build_lora_mm(layer.wv, noise_norm, layer.wv_s);
+        const bool shared_kv = layer.wv == nullptr;
+        ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, noise_norm, layer.wv_s);
 
         Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -700,6 +984,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
         Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
         Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        if (shared_kv) {
+            Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+        }
 
         Qcur = build_rope(Qcur, inp_pos);
         Kcur = build_rope(Kcur, inp_pos);
@@ -712,9 +999,19 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             ? build_attn(inp_attn_iswa, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
             : build_attn(inp_attn,      layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
 
+        if (hparams.f_attn_value_scale != 0.0f) {
+            cur = ggml_scale(ctx0, cur, hparams.f_attn_value_scale);
+            cb(cur, "attn_out_scaled", il);
+        }
+
         if (attn_dynamic) {
             cur = build_dflash2_conv(*this, cur, attn_dynamic, layer.dflash_attn_conv_base, 1);
             cb(cur, "attn_conv_out", il);
+        }
+
+        if (layer.attn_post_norm) {
+            cur = build_norm(cur, layer.attn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_post_norm", il);
         }
 
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
@@ -735,7 +1032,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
                 layer.ffn_gate, NULL, layer.ffn_gate_s,
                 layer.ffn_down, NULL, layer.ffn_down_s,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
+                hparams.llm_ffn_op, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
         if (ffn_dynamic) {
@@ -743,7 +1040,15 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             cb(cur, "ffn_conv_out", il);
         }
 
+        if (layer.ffn_post_norm) {
+            cur = build_norm(cur, layer.ffn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "ffn_post_norm", il);
+        }
+
         cur = ggml_add(ctx0, cur, ffn_inp);
+        if (layer.out_scale) {
+            cur = ggml_mul(ctx0, cur, layer.out_scale);
+        }
         cb(cur, "l_out", il);
 
         inpL = cur;
@@ -798,8 +1103,6 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
-
     // DSpark: bias the draft logits with the Markov head
     if (model.dspark_markov_w1) {
         build_dspark_markov_head(*this, model, inp_tokens);
@@ -807,6 +1110,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     if (model.dflash_selector_hidden) {
         build_dflash2_selector(*this, model, inp_tokens);
+    } else if (model.lilicorr_pass_hidden_proj && ubatch.embd_state && n_tokens == (int64_t) hparams.dflash_block_size * ubatch.n_seqs_unq) {
+        build_lilicorr_scores(*this, model, tok_embd, inp_anchor);
     }
 }
 
@@ -825,6 +1130,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
 
     // KV cache injection: fused target features from the encoder
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
@@ -978,7 +1284,250 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    if (model.dspark_markov_w1) {
+        build_dspark_markov_head(*this, model, inp_tokens);
+    }
+}
+
+// DeepSeek-V4.1 DSpark decoder (mtp.0..2), dual-mode by batch type like graph_dsv4:
+//   * embd batch  -> writes every stage's kv_norm(wkv(main_proj(target features))) into its window ring
+//   * token batch -> [anchor, noise...] block through the stages, single-pass mHC, no per-head q norm
+llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const llm_graph_params & params) :
+    llama_model_deepseek41::graph(params) {
+    const int64_t n_embd_inp       = hparams.n_embd_inp_enc();
+    const int64_t n_embd_head      = hparams.n_embd_head_k();
+    const int64_t n_embd_head_rope = hparams.n_rot();
+    const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+
+    GGML_ASSERT(hparams.dsv4_hc_single_pass);
+
+    ggml_tensor * inp_pos = build_inp_pos();
+
+    llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
+
+    // ratio-0 layers: plain rope at rope_theta, no YaRN (original_seq_len 0)
+    const auto rope = [&](ggml_tensor * t) {
+        t = ggml_rope_ext(ctx0, t, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+                freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        return ggml_rope_set_offset(t, n_embd_head_nope);
+    };
+
+    ASSERT_EMBD_OR_TOKEN(ubatch);
+    if (ubatch.embd) {
+        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
+
+        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
+        ggml_set_input(inp->embd);
+
+        ggml_tensor * inp_target = inp->embd;
+        cb(inp_target, "inp_target_features", -1);
+
+        res->add_input(std::move(inp));
+
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
+        inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
+        cb(inp_g, "main_x", -1);
+
+        for (int il = 0; il < n_layer; ++il) {
+            const auto & layer = model.layers[il];
+
+            ggml_tensor * kv = build_lora_mm(layer.wkv, inp_g);
+            kv = build_norm(kv, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, il);
+            kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
+            kv = rope(kv);
+            cb(kv, "kv_injected", il);
+
+            if (inp_attn->self_k_rot_swa) {
+                kv = llama_mul_mat_hadamard(ctx0, kv, inp_attn->self_k_rot_swa);
+            }
+            ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, kv, inp_attn->get_k_idxs_swa(), il));
+        }
+
+        res->t_embd = inp_g;
+
+        ggml_build_forward_expand(gf, inp_g);
+        return;
+    }
+
+    auto * tok_embd = model.tok_embd;
+    if (tok_embd == nullptr) {
+        GGML_ASSERT(cparams.ctx_other != nullptr);
+        const auto * model_other = llama_get_model(cparams.ctx_other);
+        GGML_ASSERT(model_other->tok_embd != nullptr && "DSpark decoder requires the target model's token embeddings");
+        tok_embd = model_other->tok_embd;
+    }
+
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+
+    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp->tokens);
+
+    ggml_tensor * inp_tokens = inp->tokens;
+
+    ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+    cb(inpL, "inp_noise_embd", -1);
+
+    res->add_input(std::move(inp));
+
+    const int64_t hc            = hparams.dsv4_hc_mult;
+    const int64_t n_groups      = hparams.dsv4_o_group_count;
+    const int64_t n_heads_group = n_head / n_groups;
+    const int64_t o_lora_rank   = hparams.dsv4_o_lora_rank;
+    const int64_t o_group_dim   = n_heads_group*n_embd_head;
+    const float   kq_scale      = 1.0f/sqrtf(float(n_embd_head));
+
+    GGML_ASSERT(n_embd_head == n_embd_head_v);
+    GGML_ASSERT(n_head % n_groups == 0);
+
+    inpL = ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens);
+    inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
+    cb(inpL, "hc_init", -1);
+
+    // window of a block = window of its first query, see n_swa
+    {
+        ggml_tensor * m = inp_attn->self_kq_mask_swa_cnv;
+        const int64_t n_blocks = ubatch.n_seqs_unq;
+        const int64_t bd       = n_blocks > 0 ? n_tokens / n_blocks : 0;
+        if (m && bd > 1 && n_tokens % n_blocks == 0 && m->ne[2] == 1 && m->ne[1] % bd == 0 && ggml_is_contiguous(m)) {
+            ggml_tensor * m4 = ggml_reshape_4d(ctx0, m, m->ne[0], bd, m->ne[1]/bd, m->ne[3]);
+            ggml_tensor * r0 = ggml_view_4d(ctx0, m4, m4->ne[0], 1, m4->ne[2], m4->ne[3], m4->nb[1], m4->nb[2], m4->nb[3], 0);
+            m4 = ggml_repeat(ctx0, r0, m4);
+            inp_attn->self_kq_mask_swa_cnv = ggml_reshape_4d(ctx0, m4, m->ne[0], m->ne[1], 1, m->ne[3]);
+            cb(inp_attn->self_kq_mask_swa_cnv, "dspark_block_mask", -1);
+        }
+    }
+
+    ggml_tensor * pre_prev = nullptr;
+
+    for (int il = 0; il < n_layer; ++il) {
+        const auto & layer = model.layers[il];
+
+        ggml_tensor * residual = inpL;
+        ggml_tensor * post = nullptr;
+        ggml_tensor * comb = nullptr;
+
+        ggml_tensor * attn_pre = build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, il);
+
+        ggml_tensor * cur;
+        if (pre_prev == nullptr) {
+            // identity pre-mix of the first stage: copy 0
+            cur = ggml_cont(ctx0, ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[2], 0));
+        } else {
+            cur = build_hc_pre(inpL, pre_prev, il);
+        }
+        cb(cur, "hc_attn_pre", il);
+
+        cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "attn_norm", il);
+
+        // non-causal draft context: block queries see the main-KV ring plus every block key
+        {
+            ggml_tensor * qr = build_lora_mm(layer.wq_a, cur);
+            qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+            cb(qr, "qr_norm", il);
+
+            ggml_tensor * q = build_lora_mm(layer.wq_b, qr);
+            q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
+            q = rope(q);
+            cb(q, "q", il);
+
+            ggml_tensor * kv = build_lora_mm(layer.wkv, cur);
+            kv = build_norm(kv, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, il);
+            kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
+            kv = rope(kv);
+            cb(kv, "kv", il);
+
+            ggml_tensor * out = build_attn(inp_attn,
+                    nullptr, nullptr, nullptr,
+                    q, kv, kv,
+                    nullptr, layer.attn_sinks, nullptr,
+                    kq_scale, il);
+            cb(out, "attn_raw", il);
+
+            out = ggml_reshape_3d(ctx0, out, n_embd_head, n_head, n_tokens);
+            out = ggml_rope_ext_back(ctx0, out, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+                    freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            out = ggml_rope_set_offset(out, n_embd_head_nope);
+            cb(out, "attn_derope", il);
+
+            out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, n_tokens);
+            out = ggml_permute(ctx0, out, 0, 2, 1, 3);
+            ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
+            cb(oa, "attn_wo_a", il);
+            oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
+            oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, n_tokens);
+
+            cur = build_lora_mm(layer.wo_b, oa);
+            cb(cur, "attn_out", il);
+        }
+
+        inpL = build_hc_post(cur, residual, post, comb, il);
+        cb(inpL, "hc_attn_post", il);
+
+        residual = inpL;
+        ggml_tensor * ffn_pre = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, il);
+
+        cur = build_hc_pre(inpL, attn_pre, il);
+        cb(cur, "hc_ffn_pre", il);
+
+        cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "ffn_norm", il);
+
+        ggml_tensor * moe_out = build_moe_ffn(cur,
+                layer.ffn_gate_inp,
+                layer.ffn_up_exps,
+                layer.ffn_gate_exps,
+                layer.ffn_down_exps,
+                layer.ffn_exp_probs_b,
+                n_expert, hparams.n_expert_used(),
+                LLM_FFN_SILU, hparams.expert_weights_norm,
+                hparams.expert_weights_scale,
+                (llama_expert_gating_func_type) hparams.expert_gating_func,
+                il);
+        cb(moe_out, "ffn_moe_out", il);
+
+        ggml_tensor * ffn_shexp = build_ffn(cur,
+                layer.ffn_up_shexp, nullptr, nullptr,
+                layer.ffn_gate_shexp, nullptr, nullptr,
+                layer.ffn_down_shexp, nullptr, nullptr,
+                nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(ffn_shexp, "ffn_shexp", il);
+
+        cur = ggml_add(ctx0, moe_out, ffn_shexp);
+        cb(cur, "ffn_out", il);
+
+        inpL = build_hc_post(cur, residual, post, comb, il);
+
+        ggml_tensor * l_out = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
+        cb(l_out, "l_out", il);
+        ggml_build_forward_expand(gf, l_out);
+
+        pre_prev = ffn_pre;
+    }
+
+    // no hc_head: collapse with the last FFN's pre-mix
+    ggml_tensor * cur = build_hc_pre(inpL, pre_prev, -1);
+    cb(cur, "hc_out", -1);
+
+    // confidence head takes the un-normed collapsed state
+    res->t_embd = cur;
+
+    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+    cb(cur, "result_norm", -1);
+
+    auto * output   = model.output;
+    auto * output_s = model.output_s;
+    if (output == nullptr) {
+        GGML_ASSERT(cparams.ctx_other != nullptr);
+        const auto * model_other = llama_get_model(cparams.ctx_other);
+        GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
+        output   = model_other->output;
+        output_s = model_other->output_s;
+    }
+
+    cur = build_lora_mm(output, cur, output_s);
+    cb(cur, "result_output", -1);
+    res->t_logits = cur;
 
     if (model.dspark_markov_w1) {
         build_dspark_markov_head(*this, model, inp_tokens);
@@ -991,6 +1540,9 @@ std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const ll
             return std::make_unique<graph<true>>(*this, params);
         case LLM_GRAPH_TYPE_DEFAULT:
         case LLM_GRAPH_TYPE_DECODER:
+            if (hparams.dsv4_hc_mult > 0 && hparams.dsv4_hc_single_pass) {
+                return std::make_unique<graph_dsv41>(*this, params);
+            }
             if (hparams.dsv4_hc_mult > 0) {
                 return std::make_unique<graph_dsv4>(*this, params);
             }

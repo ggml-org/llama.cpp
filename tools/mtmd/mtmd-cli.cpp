@@ -81,7 +81,7 @@ struct mtmd_cli_context {
     llama_context     * lctx;
     const llama_vocab * vocab;
     common_sampler    * smpl;
-    llama_batch         batch;
+    common_batch        batch;
     int                 n_batch;
 
     mtmd::bitmaps bitmaps;
@@ -115,7 +115,7 @@ struct mtmd_cli_context {
         vocab = llama_model_get_vocab(model);
         smpl = common_sampler_init(model, params.sampling);
         n_threads = params.cpuparams.n_threads;
-        batch = llama_batch_init(1, 0, 1); // batch for next token generation
+        batch = common_batch(lctx); // batch for next token generation
         n_batch = params.n_batch;
 
         init_vision_context(params);
@@ -148,7 +148,6 @@ struct mtmd_cli_context {
     }
 
     ~mtmd_cli_context() {
-        llama_batch_free(batch);
         common_sampler_free(smpl);
     }
 
@@ -163,6 +162,17 @@ struct mtmd_cli_context {
         mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
+        {
+            // non-causal models need the whole image in one ubatch
+            const int n_ubatch = llama_n_ubatch(lctx);
+            auto mem = mtmd_get_memory_usage(clip_path, mparams);
+            if (mem.use_non_causal && mem.image_max_tokens > n_ubatch) {
+                LOG_WRN("%s: cap image_max_tokens (original=%d) to n_ubatch (%d) because model needs non-causal attention on image\n", __func__, mem.image_max_tokens, n_ubatch);
+                LOG_WRN("%s: increase n_ubatch (-ub) to increase vision token budget\n", __func__);
+                mparams.image_max_tokens = n_ubatch;
+                mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_ubatch);
+            }
+        }
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
@@ -230,9 +240,9 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         }
 
         // eval the token
-        common_batch_clear(ctx.batch);
-        common_batch_add(ctx.batch, token_id, ctx.n_past++, {0}, true);
-        if (llama_decode(ctx.lctx, ctx.batch)) {
+        ctx.batch.clear();
+        ctx.batch.add(token_id, ctx.n_past++, 0, true);
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
             LOG_ERR("failed to decode token\n");
             return 1;
         }
@@ -243,6 +253,99 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     msg.role    = "assistant";
     msg.content = generated_text;
     ctx.chat_history.push_back(std::move(msg));
+
+    return 0;
+}
+
+// feed an audio file to a realtime model chunk by chunk, printing the transcript as it is produced
+static int run_audio_stream(mtmd_cli_context & ctx, const std::string & fname, int n_predict) {
+    auto res = mtmd_helper_bitmap_init_from_file(ctx.ctx_vision.get(), fname.c_str(), false, ctx.init_opt);
+    if (!res.bitmap) {
+        return 1; // error is already printed by libmtmd
+    }
+    mtmd::bitmap bmp(res.bitmap);
+    if (!mtmd_bitmap_is_audio(bmp.ptr.get())) {
+        LOG_ERR("%s: %s is not an audio file\n", __func__, fname.c_str());
+        return 1;
+    }
+    const float * samples   = (const float *) bmp.data();
+    const size_t  n_samples = bmp.n_bytes() / sizeof(float);
+    const int     rate      = mtmd_get_audio_sample_rate(ctx.ctx_vision.get());
+
+    const auto sparams = mtmd_audio_stream_params_default();
+    mtmd::audio_stream_ptr stream(mtmd_audio_stream_init(ctx.ctx_vision.get(), sparams));
+    if (!stream) {
+        return 1;
+    }
+
+    const size_t n_chunk = (size_t) rate * sparams.step_ms / 1000;
+    const int    n_embd  = llama_model_n_embd_inp(ctx.model);
+
+    LOG("Transcribing %.1f s of audio, fed in chunks of %d ms\n\n", (double) n_samples / rate, sparams.step_ms);
+
+    size_t      n_fed  = 0;
+    int         n_gen  = 0;
+    llama_token tok    = LLAMA_TOKEN_NULL;
+    const int64_t t_start = ggml_time_us();
+    int64_t       t_enc   = 0; // time spent in the stream (mel + encoder)
+    int64_t       t_dec   = 0; // time spent in the decoder
+    while (!g_is_interrupted) {
+        const int64_t t0 = ggml_time_us();
+        const int32_t n = mtmd_audio_stream_step(stream.get(), tok);
+        t_enc += ggml_time_us() - t0;
+        if (n < 0) {
+            if (n == -2) {
+                LOG_ERR("%s: stream error\n", __func__);
+                return 1;
+            }
+            break; // end of stream
+        }
+        if (n == 0) {
+            if (n_fed < n_samples) {
+                const size_t cnt = std::min(n_chunk, n_samples - n_fed);
+                mtmd_audio_stream_push(stream.get(), samples + n_fed, cnt);
+                n_fed += cnt;
+            } else if (mtmd_audio_stream_flush(stream.get(), true) != 0) {
+                break; // already ended
+            }
+            continue;
+        }
+
+        const int64_t t1 = ggml_time_us();
+        const float * rows = mtmd_audio_stream_get_output_embd(stream.get());
+        ctx.batch.clear();
+        for (int32_t i = 0; i < n; i++) {
+            const llama_pos pos[GGML_MROPE_SECTIONS] = { ctx.n_past, ctx.n_past, ctx.n_past, 0 };
+            ctx.n_past++;
+            ctx.batch.add_embd({ rows + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, 0, i == n - 1);
+        }
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
+            LOG_ERR("%s: failed to decode\n", __func__);
+            return 1;
+        }
+
+        tok = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
+        common_sampler_accept(ctx.smpl, tok, true);
+        t_dec += ggml_time_us() - t1;
+        if (llama_vocab_is_eog(ctx.vocab, tok)) {
+            break;
+        }
+        // the model emits pad and word-boundary tokens between words
+        if (!llama_vocab_is_control(ctx.vocab, tok)) {
+            LOG("%s", common_token_to_piece(ctx.lctx, tok).c_str());
+            fflush(stdout);
+        }
+        if (++n_gen >= n_predict) {
+            break;
+        }
+    }
+
+    const double t_total = (ggml_time_us() - t_start) / 1e6;
+    LOG("\n\n%s: %d tokens, %.2f s audio in %.2f s (%.2fx realtime)\n", __func__,
+        n_gen, (double) n_samples / rate, t_total, (double) n_samples / rate / t_total);
+    LOG("%s: encoder %.2f s, decoder %.2f s, %.1f ms per 80 ms step\n", __func__,
+        t_enc / 1e6, t_dec / 1e6, (t_enc + t_dec) / 1e3 / std::max(n_gen, 1));
+    llama_perf_context_print(ctx.lctx);
 
     return 0;
 }
@@ -462,6 +565,14 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
+    if (mtmd_support_audio_stream(ctx.ctx_vision.get())) {
+        if (params.image.size() != 1) {
+            LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
+            return 1;
+        }
+        return run_audio_stream(ctx, params.image[0], n_predict);
+    }
+
     auto eval_system_prompt_if_present = [&] {
         if (params.system_prompt.empty()) {
             return 0;
@@ -530,6 +641,10 @@ int main(int argc, char ** argv) {
             console::readline(line, false);
             if (g_is_interrupted) break;
             console::set_display(DISPLAY_TYPE_RESET);
+            // a submitted line always ends with a newline, an empty read is EOF
+            if (line.empty()) {
+                break;
+            }
             line = string_strip(line);
             if (line.empty()) {
                 continue;

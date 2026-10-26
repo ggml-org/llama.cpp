@@ -37,38 +37,57 @@ static void caps_try_execute(jinja::program & prog,
                              const caps_ctx_fn & ctx_fn,
                              const caps_json_fn & tools_fn,
                              const caps_analyze_fn & analyze_fn) {
-    context ctx;
-    ctx.is_get_stats = true;
-    jinja::global_from_json(ctx, json{
-        {"messages", messages_fn()},
-        {"tools", tools_fn ? tools_fn() : json::array()},
-        {"bos_token", ""},
-        {"eos_token", ""},
-        {"add_generation_prompt", true}
-    }, true);
+    json msgs = messages_fn();
+    for (int attempt = 0; attempt < 2; attempt++) {
+        context ctx;
+        ctx.is_get_stats = true;
+        jinja::global_from_json(ctx, json{
+            {"messages", msgs},
+            {"tools", tools_fn ? tools_fn() : json::array()},
+            {"bos_token", ""},
+            {"eos_token", ""},
+            {"add_generation_prompt", true}
+        }, true);
 
-    if (ctx_fn) {
-        ctx_fn(ctx);
+        if (ctx_fn) {
+            ctx_fn(ctx);
+        }
+
+        auto messages = ctx.get_val("messages");
+        auto tools = ctx.get_val("tools");
+
+        bool success = false;
+        std::string result;
+        try {
+            jinja::runtime runtime(ctx);
+            auto results = runtime.execute(prog);
+            auto parts = jinja::runtime::gather_string_parts(results);
+            result = parts->as_string().str();
+            success = true;
+        } catch (const std::exception & e) {
+            JJ_DEBUG("Exception during execution: %s", e.what());
+            result = "";
+            // ignore exceptions during capability analysis
+        }
+
+        // some templates require a thinking field on every assistant turn (e.g. K2 Horizon):
+        // retry once with an empty reasoning_content on the assistant turns that lack one
+        if (!success && attempt == 0) {
+            bool added = false;
+            for (auto & msg : msgs) {
+                if (msg.is_object() && msg.value("role", "") == "assistant" && !msg.contains("reasoning_content")) {
+                    msg["reasoning_content"] = "";
+                    added = true;
+                }
+            }
+            if (added) {
+                continue;
+            }
+        }
+
+        analyze_fn(ctx, success, messages, tools, result);
+        return;
     }
-
-    auto messages = ctx.get_val("messages");
-    auto tools = ctx.get_val("tools");
-
-    bool success = false;
-    std::string result;
-    try {
-        jinja::runtime runtime(ctx);
-        auto results = runtime.execute(prog);
-        auto parts = jinja::runtime::gather_string_parts(results);
-        result = parts->as_string().str();
-        success = true;
-    } catch (const std::exception & e) {
-        JJ_DEBUG("Exception during execution: %s", e.what());
-        result = "";
-        // ignore exceptions during capability analysis
-    }
-
-    analyze_fn(ctx, success, messages, tools, result);
 }
 
 // for debugging only

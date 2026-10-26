@@ -22,28 +22,21 @@ enum htp_data_type {
     HTP_TYPE_Q4_0   = 2,
     HTP_TYPE_Q4_1   = 3,
     HTP_TYPE_Q8_0   = 8,
+    HTP_TYPE_Q2_K   = 10,
+    HTP_TYPE_Q3_K   = 11,
     HTP_TYPE_Q4_K   = 12,
+    HTP_TYPE_Q5_K   = 13,
     HTP_TYPE_Q6_K   = 14,
     HTP_TYPE_IQ4_NL = 20,
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
+    HTP_TYPE_BF16   = 30,
     HTP_TYPE_MXFP4  = 39,
-
-    // types used internally for repack, dyn.quant, etc
-    HTP_TYPE_Q4_0_TILED = 200,
-    HTP_TYPE_Q4_1_TILED,
-    HTP_TYPE_Q8_0_TILED,
-    HTP_TYPE_MXFP4_TILED,
+    HTP_TYPE_Q1_0   = 41,
+    HTP_TYPE_Q2_0   = 42,
 
     HTP_TYPE_INVALID
 };
-
-// Constats for internal types
-#define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
-#define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
-#define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
-
-
 
 // Do not reorder first 4 (used as an index)
 enum htp_op_code {
@@ -68,9 +61,11 @@ enum htp_op_code {
     HTP_OP_UNARY_ABS,
     HTP_OP_UNARY_LOG,
     HTP_OP_UNARY_RELU,
+    HTP_OP_UNARY_STEP,
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
+    HTP_OP_GLU_GEGLU_QUICK,
     HTP_OP_SOFTMAX,
     HTP_OP_ADD_ID,
     HTP_OP_ROPE,
@@ -81,8 +76,10 @@ enum htp_op_code {
     HTP_OP_CPY,
     HTP_OP_CPY_FENCE,
     HTP_OP_ARGSORT,
+    HTP_OP_TOP_K,
     HTP_OP_SQR,
     HTP_OP_SQRT,
+    HTP_OP_SUM,
     HTP_OP_SUM_ROWS,
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,
@@ -105,6 +102,18 @@ enum htp_op_code {
     HTP_OP_GLU_SWIGLU_CLAMP,
     HTP_OP_MDEV_GROUP,
     HTP_OP_ROLL,
+    HTP_OP_ARGMAX,
+    HTP_OP_UNARY_GELU_ERF,
+    HTP_OP_GLU_GEGLU_ERF,
+    HTP_OP_POOL_2D,
+    HTP_OP_POOL_1D,
+    HTP_OP_UNARY_GELU_QUICK,
+    HTP_OP_IM2COL_3D,
+    HTP_OP_HADAMARD,
+    HTP_OP_GLU_REGLU,
+    HTP_OP_GLU_SIGMOID,
+    HTP_OP_UNARY_CEIL,
+    HTP_OP_UNARY_SGN,
 
     HTP_OP_INVALID
 };
@@ -115,8 +124,8 @@ enum htp_op_code {
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
 #define HTP_OP_MAX_KERN_PARAMS 32
 
-#define HTP_OP_MAX_BUFS    16
-#define HTP_OP_MAX_TENSORS 8192 // must stay under 64K (uint16)
+#define HTP_OP_MAX_BUFS    64
+#define HTP_OP_MAX_TENSORS 65534 // must stay under 64K (uint16)
 
 #define HTP_FENCE_TIMEOUT  (1000000000ULL)
 #define HTP_FENCE_SLOT_SIZE 128
@@ -126,15 +135,19 @@ enum htp_op_code {
 #define HTP_MMAP_MAX_VMEM  (2147483648u)
 
 enum htp_tensor_flags {
-    HTP_TENSOR_WEIGHT  = (1U << 0), // Tensor buffer model weight data (not compute)
-    HTP_TENSOR_REPACK  = (1U << 1), // Tensor is in repacked tiled format
-    HTP_TENSOR_FENCE   = (1U << 2)  // Tensor is synchronization fence (explicitly managed)
+    HTP_TENSOR_WEIGHT   = (1U << 0), // Tensor buffer model weight data (not compute)
+    HTP_TENSOR_TILED    = (1U << 1), // Tensor is in tiled format
+    HTP_TENSOR_FENCE    = (1U << 2), // Tensor is synchronization fence (explicitly managed)
+    HTP_TENSOR_FUSEABLE = (1U << 3), // Tensor can be fused (host-only)
+};
+
+enum htp_buf_flags {
+    HTP_BUF_EXTENDED = (1U << 0),
 };
 
 // Tensor descriptor
 struct htp_tensor {
-    uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
-    uint32_t reserved;             // Reserved for alignment padding (must be multiple of 8)
+    uint64_t data;                 // Buffer offset in the messages, and data pointer on the NPU
     uint32_t size;                 // Data size in bytes
     uint32_t flags;                // Buffer / tensor flags
     uint32_t type;                 // Data type
@@ -148,12 +161,12 @@ struct htp_tensor {
 struct htp_buf_desc {
     uint64_t base;     // base address
     uint64_t size;     // total size
-    uint32_t flags;    // buffer flags (unused)
+    uint32_t flags;    // HTP_BUF_*
     uint32_t fd;       // file descriptor
 };
 
 enum htp_op_flags {
-    HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 0), // Skip actual computation (used for profiling)
+    HTP_OPFLAGS_STUB  = (1U << 0),
 };
 
 // Op descriptor
@@ -180,6 +193,20 @@ enum htp_profiler_mode {
     HTP_PROF_TRACE    = 3,
 };
 
+// DCVS/HMX power profile requested for the session.
+enum htp_power_mode {
+    HTP_POWER_MODE_LOW_POWER_SAVER            = 0,
+    HTP_POWER_MODE_POWER_SAVER                = 1,
+    HTP_POWER_MODE_HIGH_POWER_SAVER           = 2,
+    HTP_POWER_MODE_LOW_BALANCED               = 3,
+    HTP_POWER_MODE_BALANCED                   = 4,
+    HTP_POWER_MODE_HIGH_PERFORMANCE           = 5,
+    HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE = 6,
+    HTP_POWER_MODE_BURST                      = 7,
+
+    HTP_POWER_MODE_COUNT
+};
+
 enum htp_trace_event_id {
     HTP_TRACE_EVT_DMA                 = 0,
     HTP_TRACE_EVT_L2FLUSH             = 1,
@@ -198,6 +225,14 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_FA_Q_PREP       = 28,
     HTP_TRACE_EVT_HVX_FA_K_PREP       = 29,
     HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
+
+    HTP_TRACE_EVT_HVX_GDN_PREP        = 31,
+    HTP_TRACE_EVT_HVX_GDN_SOLVE       = 32,
+    HTP_TRACE_EVT_HVX_GDN_V_PREP      = 33,
+    HTP_TRACE_EVT_HVX_GDN_D_PREP      = 34,
+    HTP_TRACE_EVT_HVX_GDN_OUT         = 35,
+    HTP_TRACE_EVT_HVX_GDN_STATE       = 36,
+    HTP_TRACE_EVT_HVX_GDN_REM         = 37,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
 };

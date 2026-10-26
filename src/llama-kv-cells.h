@@ -318,6 +318,14 @@ public:
         return seq[i].test(seq_id);
     }
 
+    // the (pos, cell) pairs of sequence seq_id, ordered by position
+    const std::set<std::pair<llama_pos, uint32_t>> & seq_pos_get(llama_seq_id seq_id) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_SEQ);
+
+        return seq_pos[seq_id];
+    }
+
     // the token of the cell of sequence seq_id at the largest position <= p
     // when several cells share that position, the one with the highest index wins
     // return LLAMA_TOKEN_NULL if the sequence has no cell at or before p

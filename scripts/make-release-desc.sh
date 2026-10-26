@@ -39,6 +39,15 @@ if ! git fetch --tags origin 2>/dev/null; then
     echo "Warning: could not fetch tags from origin (local run?)"
 fi
 
+# Canonical https URL of this repository (from the origin remote), used to link the previous release.
+# Left empty on local runs without an origin remote.
+if ORIGIN_URL="$(git remote get-url origin 2>/dev/null)"; then
+    REPO_URL="https://$(printf '%s' "${ORIGIN_URL}" \
+        | sed -E -e 's#^git@([^:]+):#https://\1/#' -e 's#^https?://##' -e 's#\.git$##')"
+else
+    REPO_URL=""
+fi
+
 # Release commit: the commit <version> points at when the tag exists, HEAD otherwise.
 if ! RELEASE_COMMIT="$(git rev-parse -q --verify "refs/tags/${VERSION}^{commit}" 2>/dev/null)"; then
     RELEASE_COMMIT="$(git rev-parse HEAD)"
@@ -53,7 +62,11 @@ PREV="$( { git tag --list; echo "${VERSION}"; } \
 
 if [[ -n "${PREV}" ]]; then
     CHANGELOG="$(git log --oneline "${PREV}..${RELEASE_COMMIT}")"
-    CHANGELOG_TITLE="Changelog since ${PREV}"
+    if [[ -n "${REPO_URL}" ]]; then
+        CHANGELOG_TITLE="Changelog since [${PREV}](${REPO_URL}/releases/tag/${PREV})"
+    else
+        CHANGELOG_TITLE="Changelog since ${PREV}"
+    fi
 else
     CHANGELOG="(no previous release tag found)"
     CHANGELOG_TITLE="Changelog"

@@ -25,7 +25,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
     GGML_ASSERT(tok_embd_w != nullptr && "NEMOTRON_H_MOE MTP requires token embeddings");
 
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
@@ -34,6 +34,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     ggml_set_input(inp->embd);
 
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
     } else {
@@ -50,11 +51,6 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     res->add_input(std::move(inp));
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
-
-    // attention fills KV over all tokens, but the MoE is position-wise: gather output rows before
-    // it to save FFN compute (unless unmasked embeddings_nextn needs the full-length hidden state)
-    const bool emit_h_nextn    = cparams.embeddings_nextn;
-    const bool crop_before_ffn = inp_out_ids && (!emit_h_nextn || cparams.embeddings_nextn_masked);
 
     auto * inp_attn = build_attn_inp_kv();
 
@@ -87,7 +83,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     cb(cur, "mtp_attn_residual", il);
 
     // gather the output rows here so the MoE FFN below only runs on the positions we keep
-    if (crop_before_ffn) {
+    if (crop_before_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -148,7 +144,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!crop_before_ffn && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -160,5 +156,4 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

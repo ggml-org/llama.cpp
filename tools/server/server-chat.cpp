@@ -203,10 +203,24 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 } else {
                     json chatcmpl_outputs = item.at("output");
                     for (json & chatcmpl_output : chatcmpl_outputs) {
-                        if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
-                            throw std::invalid_argument("Output of tool call should be 'Input text'");
+                        if (!chatcmpl_output.contains("type")) {
+                            throw std::invalid_argument("Output of tool call missing 'type' field");
                         }
-                        chatcmpl_output["type"] = "text";
+                        const auto type = chatcmpl_output.at("type");
+                        if (type != "input_text" && type != "input_image") {
+                            throw std::invalid_argument("Output of tool call should be 'Input text' or 'Input image'");
+                        }
+                        if (type == "input_text") {
+                            chatcmpl_output["type"] = "text";
+                        } else if (type == "input_image") {
+                            if (!chatcmpl_output.contains("image_url")) {
+                                throw std::invalid_argument("'image_url' is required");
+                            }
+                            chatcmpl_output["type"] = "image_url";
+                            chatcmpl_output["image_url"] = json {
+                                {"url", chatcmpl_output.at("image_url")}
+                            };
+                        }
                     }
                     chatcmpl_messages.push_back(json {
                         {"content",      chatcmpl_outputs},
@@ -612,7 +626,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
     }
 
     // Pass through common params
-    for (const auto & key : {"temperature", "top_p", "top_k", "stream", "chat_template_kwargs"}) {
+    for (const auto & key : {"temperature", "top_p", "top_k", "stream", "chat_template_kwargs", "id_slot"}) {
         if (body.contains(key)) {
             oai_body[key] = body.at(key);
         }
@@ -634,6 +648,13 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         std::string user_id = json_value(metadata, "user_id", std::string());
         if (!user_id.empty()) {
             oai_body["__metadata_user_id"] = user_id;
+        }
+    }
+
+    // llama.cpp params (e.g. seed, min_p) go under extra_params and are merged into the converted body
+    if (body.contains("extra_params") && body.at("extra_params").is_object()) {
+        for (const auto & [key, value] : body.at("extra_params").items()) {
+            oai_body[key] = value;
         }
     }
 

@@ -1,6 +1,12 @@
-import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { MODEL_ICON } from './icons.constants';
+import { MODELS_ROUTE_ID } from './routes.constants';
+import { Search, Settings, SquarePen } from '@lucide/svelte';
+import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
+
+/** Delay before a copied affordance resets from its check to the copy icon. */
+export const COPY_FEEDBACK_RESET_MS = 1500;
 
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
@@ -44,11 +50,35 @@ export const STATS_UNITS = {
 
 export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
-/** Icon used for the model selector and the `/model` slash command. */
-export const MODEL_SELECTOR_ICON = Package;
+/** Models listed per remote provider before the "+ X more" line; search covers the rest. */
+export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
+
+/** Orgs whose avatar is dark and needs inverting in dark mode. */
+export const DARK_INVERT_AVATAR_ORGS = ['openai'];
+
+/** Model rows mounted before the list scrolls; a local catalog can hold hundreds. */
+export const MODEL_ROW_WINDOW = 50;
+
+/** Models of one family shown before the rest fold behind a "show more" row. */
+export const FAMILY_ROW_WINDOW = 6;
+
+/** Recently used models kept per browser, most recent first. */
+export const RECENT_MODEL_LIMIT = 20;
 
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
+
+/** Collapsed desktop sidebar strip width, matching its `md:w-12`. */
+export const SIDEBAR_COLLAPSED_WIDTH = '3rem';
+/** Bounds the expanded desktop sidebar can be dragged between. */
+export const SIDEBAR_MIN_WIDTH = '18rem';
+export const SIDEBAR_MAX_WIDTH = '32rem';
+/** Dragging the sidebar edge narrower than this snaps it to the pointer; letting go hides it. */
+export const SIDEBAR_COLLAPSE_WIDTH = '9rem';
+/** How far past its min or max width a drag can stretch the sidebar before it resists fully. */
+export const SIDEBAR_OVERSTRETCH_PX = 80;
+/** Spring-back duration when a drag ends outside the width bounds. */
+export const SIDEBAR_SETTLE_MS = 300;
 
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
@@ -61,6 +91,17 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'New chat'
 	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
+	{
+		action: SidebarAction.MANAGE_MODELS,
+		activeRouteId: MODELS_ROUTE_ID,
+		icon: MODEL_ICON,
+		tooltip: 'Models'
+	},
+	{
+		action: SidebarAction.MCP,
+		icon: McpLogo,
+		tooltip: 'MCP'
+	},
 	{
 		action: SidebarAction.SETTINGS,
 		icon: Settings,
