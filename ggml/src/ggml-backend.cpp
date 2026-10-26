@@ -2098,7 +2098,7 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
     }
 
     // without events, the copy callback runs before the split backend is synchronized
-    // a copy done by the callback must then be ordered after the work queued on the split backend, e.g. an async copy on it
+    // a copy done by the callback must then be ordered after the work queued on the split backend, e.g. by waiting on an event recorded on it
     const bool has_event = sched->events[split_backend_id][sched->cur_copy] != NULL;
     if (!has_event && sched->callback_copy != NULL &&
         sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
