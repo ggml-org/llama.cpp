@@ -20,7 +20,6 @@ import {
 } from '$lib/constants';
 import { deviceStore } from '$lib/stores/device.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
-import type { ModelOption } from '$lib/types/models';
 import { remToPx } from '$lib/utils/css';
 
 class UiStore {
@@ -35,10 +34,8 @@ class UiStore {
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);
 
-	/** Model the manager reveals when it opens, a qualified id or a raw model name. */
-	manageModelFocus = $state<string | null>(null);
-	/** Model the information dialog shows; a phone opens it instead of the manager. */
-	modelInformation = $state<ModelOption | null>(null);
+	/** Model the details drawer shows, a qualified id or a raw model name. */
+	modelDetailsFocus = $state<string | null>(null);
 	/** Route the models page returns to: the last page visited before it. */
 	modelsReturnRoute: string = ROUTES.START;
 	/** Expanded desktop sidebar width in px; null keeps the stylesheet default. */
@@ -70,6 +67,11 @@ class UiStore {
 		localStorage.setItem(SIDEBAR_EXPANDED_LOCALSTORAGE_KEY, String(expanded));
 	}
 
+	/** Close the model details drawer. */
+	closeModelDetails(): void {
+		this.modelDetailsFocus = null;
+	}
+
 	/** Leave the models page for the route it was opened from. */
 	async closeModelsManager(): Promise<void> {
 		if (!this.isModelsPageOpen) return;
@@ -77,9 +79,9 @@ class UiStore {
 		await goto(this.modelsReturnRoute);
 	}
 
-	/** Open the model information dialog, a phone's stand-in for the manager pane. */
-	openModelInformation(option: ModelOption): void {
-		this.modelInformation = option;
+	/** Open the model details drawer over the current page, without leaving it. */
+	openModelDetails(focus: string): void {
+		this.modelDetailsFocus = focus;
 	}
 
 	/** Open the Discover dialog, focused on one repo; a no-op while Discover is off. */
@@ -90,10 +92,8 @@ class UiStore {
 		this.discoverModelsOpen = true;
 	}
 
-	/** Navigate to the models manager, optionally focused on one model. */
-	openModelsManager(focus?: string): void {
-		this.manageModelFocus = focus ?? null;
-
+	/** Navigate to the models manager. */
+	openModelsManager(): void {
 		if (this.isModelsPageOpen) return;
 
 		void goto(ROUTES.MODELS);

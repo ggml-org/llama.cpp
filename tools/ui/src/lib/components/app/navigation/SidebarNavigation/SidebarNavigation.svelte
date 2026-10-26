@@ -7,12 +7,12 @@
 		DialogConversationRename,
 		DialogDiscoverModels,
 		DialogMcpServers,
-		DialogModelInformation,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
 		SidebarNavigationConversationList
 	} from '$lib/components/app';
+	import ModelsManagerModelDrawer from '$lib/components/app/models/ModelsManager/ModelsManagerModelDrawer.svelte';
 	import {
 		ROUTES,
 		SIDEBAR_COLLAPSE_WIDTH,
@@ -623,7 +623,7 @@
 
 <DialogDiscoverModels bind:open={uiStore.discoverModelsOpen} />
 
-<DialogModelInformation />
+<ModelsManagerModelDrawer />
 
 <style>
 	aside {

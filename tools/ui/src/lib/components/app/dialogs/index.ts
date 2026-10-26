@@ -404,17 +404,6 @@ export { default as DialogModelNotAvailable } from './DialogModelNotAvailable.sv
 export { default as DialogConversationSelection } from './DialogConversationSelection.svelte';
 
 /**
- *
- * MODEL INFORMATION DIALOGS
- *
- * Dialogs for displaying model and server information.
- *
- */
-
-/** **DialogModelInformation** - model details a phone opens instead of the manager pane. */
-export { default as DialogModelInformation } from './DialogModelInformation.svelte';
-
-/**
  * **DialogMcpResourcesBrowser** - MCP resources browser dialog
  *
  * Dialog for browsing and attaching MCP resources to chat context.

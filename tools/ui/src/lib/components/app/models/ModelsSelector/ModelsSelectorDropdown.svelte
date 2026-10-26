@@ -49,6 +49,7 @@
 	}: Props = $props();
 
 	const selectedOption = $derived(ms.getDisplayOption());
+	const isDetailsOpen = $derived(uiStore.modelDetailsFocus !== null);
 	const triggerModel = $derived(selectedOption?.model ?? null);
 
 	let triggerStatus = $derived(
@@ -175,9 +176,23 @@
 		{/if}
 	</Tooltip.Root>
 
+	<!-- the details drawer opens over the menu and leaves it open: the menu steps under
+	     the drawer's backdrop and ignores the clicks and focus that land in the drawer -->
 	<DropdownMenu.Content
 		align="end"
 		class="w-full md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
+		data-under-details={isDetailsOpen || undefined}
+		onCloseAutoFocus={(event) => {
+			// the details drawer opening or closing re-runs the menu's focus scope while
+			// the menu stays open: handing focus to the trigger would pop its tooltip
+			if (open) event.preventDefault();
+		}}
+		onFocusOutside={(event) => {
+			if (isDetailsOpen) event.preventDefault();
+		}}
+		onInteractOutside={(event) => {
+			if (isDetailsOpen) event.preventDefault();
+		}}
 		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
 		<DropdownMenuSearchable
@@ -246,3 +261,11 @@
 		/>
 	</div>
 {/snippet}
+
+<style>
+	/* bits-ui copies the content's z-index onto its wrapper once, on mount, so the
+	   wrapper itself steps under the details drawer's backdrop (z-50) */
+	:global([data-bits-floating-content-wrapper]:has(> [data-under-details])) {
+		z-index: 40 !important;
+	}
+</style>
