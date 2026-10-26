@@ -452,6 +452,14 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         }
         break;
     }
+    case GGML_OP_SET_ROWS: {
+        // `-fa off` writes the V cache transposed, through a [1, n] reshape of the cache: one element per row
+        if (node->src[2] != nullptr && node->src[2]->op == GGML_OP_RESHAPE && node->src[2]->ne[0] == 1 &&
+            is_kvcache(node->src[2]->src[0], nullptr)) {
+            op_case = 1;
+        }
+        break;
+    }
     case GGML_OP_MUL_MAT: {
         if (node->src[1]->op == GGML_OP_SOFT_MAX) {
             // In the case of `-fa off`, softmax is used, v_trans=true, the dynamic dim is ne[0] for cache_v

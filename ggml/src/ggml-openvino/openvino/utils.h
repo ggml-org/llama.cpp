@@ -86,6 +86,9 @@ inline bool is_kvcache_4d_shape(const ov::PartialShape & shape) {
 // stacked per B matrix
 constexpr const char * GGML_OV_GROUPED_ROWS = "ggml_ov_grouped_rows";
 
+// rt_info key on the stateful V cache read with `-fa off` (permute): V is [.., kv, head_size], not transposed
+constexpr const char * GGML_OV_V_TOKEN_MAJOR = "ggml_ov_v_token_major";
+
 namespace op {
 template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeContext & context) {
     num_inputs_check(context, 2, 2);

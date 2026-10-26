@@ -31,6 +31,8 @@ OutputVector translate_mulmat(const NodeContext & context) {
 
     ov::Output<ov::Node> B = process_view_input_new(context, 0);
     ov::Output<ov::Node> A = process_view_input_new(context, 1);
+    // the stateful V cache with `-fa off` is not transposed (see permute)
+    const bool transpose_b = B.get_node()->get_rt_info().count(GGML_OV_V_TOKEN_MAJOR) == 0;
 
     if (A.get_element_type() != B.get_element_type()) {
         B = std::make_shared<ov::op::v0::Convert>(B, context.get_input_type(1));
@@ -55,9 +57,19 @@ OutputVector translate_mulmat(const NodeContext & context) {
         //   A [n, batch_large, rows, k] -> [n, batch_small, factor * rows, k] (a pure reshape: the group is adjacent)
         //   A x B^T [n, batch_small, factor * rows, cols] -> [n, batch_large, rows, cols]
         // The zeros copy the input dimensions (special_zero), which may be dynamic.
-        auto A_grouped = std::make_shared<ov::op::v1::Reshape>(
+        ov::Output<Node> A_grouped = std::make_shared<ov::op::v1::Reshape>(
             A, ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, batch_small, -1, 0}), true);
-        ov::Output<Node> res = std::make_shared<ov::op::v0::MatMul>(A_grouped, B, false, true);
+        // A is often a Reshape of the grouped scores (see softmax): take them directly. With one Reshape less, the
+        // OpenVINO SDPAFusion can match the attention
+        const auto * A_reshape = ov::as_type<ov::op::v1::Reshape>(A.get_node());
+        const auto * A_target =
+            A_reshape != nullptr ? ov::as_type<ov::op::v0::Constant>(A_reshape->get_input_node_ptr(1)) : nullptr;
+        if (A_target != nullptr && A_reshape->get_special_zero() &&
+            A_target->cast_vector<int64_t>() == std::vector<int64_t>{0, batch_large, -1, 0} &&
+            A_reshape->get_input_partial_shape(0)[1] == batch_small) {
+            A_grouped = A_reshape->input_value(0);
+        }
+        ov::Output<Node> res = std::make_shared<ov::op::v0::MatMul>(A_grouped, B, false, transpose_b);
         res = std::make_shared<ov::op::v1::Reshape>(
             res, ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, batch_large, -1, 0}),
             true);
@@ -96,7 +108,6 @@ OutputVector translate_mulmat(const NodeContext & context) {
         A = Z;
     }
 
-    bool transpose_b = true;
     ov::Output<Node> res = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
 
     const auto output_type = context.get_output_type();

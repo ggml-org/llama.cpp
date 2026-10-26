@@ -55,11 +55,13 @@ OutputVector translate_set_rows(const NodeContext & context) {
     Output<Node> res;
     if (context.is_stateful()) {
         int concat_axis = 1;
-        // the stateful cache appends whole tokens; with `-fa off` llama.cpp writes the V cache transposed,
-        // one element per row
+        if (context.get_op_case() == 1) {
+            // `-fa off` writes V transposed through a [1, n] reshape of the cache. The state keeps V token-major
+            // like K, and the new values are already in token order, so append them to the state itself
+            dst = dst.get_node()->input_value(0);
+        }
         FRONT_END_OP_CONVERSION_CHECK(dst.get_partial_shape()[2].is_static() && dst.get_partial_shape()[3].is_static(),
-                                      "Stateful execution needs flash attention (-fa on): with -fa off the V cache "
-                                      "is written transposed");
+                                      "Unsupported KV cache layout for stateful execution");
         int64_t dim2 = dst.get_partial_shape()[2].get_length();
         int64_t dim3 = dst.get_partial_shape()[3].get_length();
         data = std::make_shared<ov::op::v1::Reshape>(
