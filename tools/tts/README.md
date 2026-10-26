@@ -84,3 +84,27 @@ Both [Soprano-80M](https://huggingface.co/ekwek/Soprano-80M) and [Soprano-1.1-80
 python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --outtype f32 --outfile soprano.gguf
 python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --outtype f16 --outfile mmproj-soprano.gguf
 ```
+
+## LFM3-Audio
+
+Available params:
+- `--tts-lang` can be `ar`, `da`, `de`, `el`, `en`, `en-gb`, `es`, `fi`, `fr`, `he`, `it`, `ja`, `ko`, `nl`, `pl`, `pt`, `sv`, `tr`, `zh` (default: `en`), other values are used as the language name
+- Note: `--tts-speaker-file` is not used, the model has a single voice
+- Note: `--top-k` and `--top-p` are not used, audio frames are sampled with the settings of the model card (LFM3-Audio: temperature 1.0, top-k 128, repetition penalty 1.1 over 4096 frames; LFM3-Omni: temperature 0.4, repetition penalty 1.2 over 64 frames), the `audio_*` keys of `generation_config.json` override them at conversion
+- Each frame is 80 ms, generation stops at the end-of-audio frame
+
+Example usage:
+
+```sh
+llama-tts -m lfm3-audio.gguf \
+    -mm mmproj-lfm3-audio.gguf \
+    -p "Hello world" \
+    --output out.wav
+```
+
+The mmproj holds the audio encoder (for ASR), the depthformer and the codec decoder, the latter two are exported when the checkpoint has an `audio_tokenizer` directory:
+
+```sh
+python convert_hf_to_gguf.py path/to/lfm3-audio --outfile lfm3-audio.gguf
+python convert_hf_to_gguf.py path/to/lfm3-audio --mmproj --outfile mmproj-lfm3-audio.gguf
+```

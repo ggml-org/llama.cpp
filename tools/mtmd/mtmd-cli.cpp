@@ -103,6 +103,10 @@ struct mtmd_cli_context {
     int n_threads    = 1;
     llama_pos n_past = 0;
 
+    // speech output (-o): the response goes through the gen-audio pipeline, its speech is written to this file
+    std::string speech_out;
+    uint32_t    seed = LLAMA_DEFAULT_SEED;
+
     common_debug_cb_user_data cb_data;
 
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
@@ -120,7 +124,8 @@ struct mtmd_cli_context {
         init_vision_context(params);
 
         mtmd_cap = mtmd_helper_get_capabilities(model, ctx_vision.get());
-        if (!mtmd_cap.chat) {
+        // a realtime transcription model has no chat, it streams the audio below
+        if (!mtmd_cap.chat && !mtmd_cap.audio_stream) {
             LOG_ERR("Model does not support chat mode\n");
             LOG_ERR("Hint: for TTS models, please use llama-tts\n");
             exit(1);
@@ -132,6 +137,15 @@ struct mtmd_cli_context {
             LOG_ERR("  For MobileVLM models, use '--chat-template deepseek'\n");
             LOG_ERR("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
             exit(1);
+        }
+
+        if (!params.out_file.empty()) {
+            if (!mtmd_cap.audio_gen || !mtmd_cap.chat) {
+                LOG_ERR("-o: the model has no speech output in chat\n");
+                exit(1);
+            }
+            speech_out = params.out_file;
+            seed       = params.sampling.seed;
         }
 
         tmpls = common_chat_templates_init(model, params.chat_template);
@@ -214,7 +228,96 @@ struct mtmd_cli_context {
     }
 };
 
+// the gen-audio pipeline (e.g. LFM3-Audio) continues the conversation from the opening of the assistant turn and
+// follows the model's own switching between text and speech; the text is printed, the speech written to speech_out
+static int generate_response_speech(mtmd_cli_context & ctx, int n_predict) {
+    common_chat_templates_inputs inputs;
+    inputs.use_jinja       = ctx.use_jinja;
+    inputs.messages        = ctx.chat_history;
+    inputs.enable_thinking = false; // the pipeline does not parse reasoning
+    inputs.add_generation_prompt = false;
+    const std::string past = common_chat_templates_apply(ctx.tmpls.get(), inputs).prompt.str();
+    inputs.add_generation_prompt = true;
+    const std::string full = common_chat_templates_apply(ctx.tmpls.get(), inputs).prompt.str();
+
+    mtmd_helper::gen_audio gen;
+    gen.init(ctx.lctx, ctx.ctx_vision.get());
+    mtmd_helper::gen_audio::inp inp;
+    inp.set_prompt(full.substr(past.size()));
+    inp.data.n_past = ctx.n_past;
+    inp.data.seed   = ctx.seed;
+    llama_set_embeddings(ctx.lctx, true);
+    if (!gen.valid() || gen.set_input(inp.get()) != 0) {
+        LOG_ERR("failed to start the speech response\n");
+        return 1;
+    }
+    int32_t ret;
+    while ((ret = gen.step_prompt(ctx.n_batch)) > 0) {
+    }
+    if (ret < 0) {
+        return 1;
+    }
+
+    const int n_embd = llama_model_n_embd(ctx.model);
+    const float * h  = llama_get_embeddings_ith(ctx.lctx, -1);
+    std::vector<float> h_state(h, h + n_embd);
+    std::string text;
+    for (int i = 0; i < n_predict && g_is_generating && !g_is_interrupted; i++) {
+        llama_token tok = LLAMA_TOKEN_NULL;
+        if (gen.next_is_text()) {
+            tok = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
+            common_sampler_accept(ctx.smpl, tok, true);
+        }
+        bool stop = false;
+        const float * h_next = nullptr;
+        if (gen.step_gen(tok, h_state.data(), &h_next, &stop) != 0) {
+            LOG_ERR("failed to generate the speech response\n");
+            return 1;
+        }
+        if (stop) {
+            break;
+        }
+        if (tok != LLAMA_TOKEN_NULL && !llama_vocab_is_control(ctx.vocab, tok)) {
+            const std::string piece = common_token_to_piece(ctx.lctx, tok);
+            LOG("%s", piece.c_str());
+            fflush(stdout);
+            text += piece;
+        }
+        if (h_next) {
+            h_state.assign(h_next, h_next + n_embd);
+        }
+    }
+    LOG("\n");
+    llama_set_embeddings(ctx.lctx, false);
+    ctx.n_past = llama_memory_seq_pos_max(llama_get_memory(ctx.lctx), 0) + 1;
+
+    int32_t      sample_rate = 0;
+    const char * data        = nullptr;
+    size_t       data_len    = 0;
+    int64_t      n_samples   = 0;
+    if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
+        return 1;
+    }
+    FILE * f = fopen(ctx.speech_out.c_str(), "wb");
+    if (!f) {
+        LOG_ERR("failed to open %s\n", ctx.speech_out.c_str());
+        return 1;
+    }
+    fwrite(data, 1, data_len, f);
+    fclose(f);
+    LOG_INF("%.2f s of speech written to %s\n", sample_rate > 0 ? (double) n_samples / sample_rate : 0.0, ctx.speech_out.c_str());
+
+    common_chat_msg msg;
+    msg.role    = "assistant";
+    msg.content = text;
+    ctx.chat_history.push_back(std::move(msg));
+    return 0;
+}
+
 static int generate_response(mtmd_cli_context & ctx, int n_predict) {
+    if (!ctx.speech_out.empty()) {
+        return generate_response_speech(ctx, n_predict);
+    }
     llama_tokens generated_tokens;
     for (int i = 0; i < n_predict; i++) {
         if (i > n_predict || !g_is_generating || g_is_interrupted) {
@@ -353,8 +456,9 @@ static int run_audio_stream(mtmd_cli_context & ctx, const std::string & fname, i
 static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
     LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
         new_msg.role.c_str(), new_msg.content.c_str());
+    // with speech output, the pipeline opens the assistant turn itself
     auto formatted = common_chat_format_single(ctx.tmpls.get(), ctx.chat_history,
-        new_msg, new_msg.role == "user",
+        new_msg, new_msg.role == "user" && ctx.speech_out.empty(),
         ctx.use_jinja);
     ctx.chat_history.push_back(new_msg);
     return formatted;
@@ -567,7 +671,10 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
-    if (ctx.mtmd_cap.audio_stream) {
+    // realtime transcription models (no chat) transcribe while they listen, the others answer after the audio
+    const bool transcribes = ctx.mtmd_cap.audio_stream && !ctx.mtmd_cap.chat;
+
+    if (transcribes) {
         if (params.image.size() != 1) {
             LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
             return 1;

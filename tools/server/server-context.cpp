@@ -3424,7 +3424,9 @@ private:
             return true; // rows from a previous step, not decoded yet
         }
 
-        // every produced row is decoded and its delta queued, the commits ending there are complete
+        const int32_t n = mtmd_audio_stream_step(slot.audio_stream.get(), slot.sampled);
+
+        // complete the commits whose rows have their text sampled, before the new rows: their text goes to the next item
         const int64_t n_rows = mtmd_audio_stream_get_n_rows(slot.audio_stream.get());
         while (!slot.audio_commit_rows.empty() && slot.audio_commit_rows.front() <= n_rows) {
             slot.audio_commit_rows.pop_front();
@@ -3440,7 +3442,6 @@ private:
             queue_results.send(std::move(res));
         }
 
-        const int32_t n = mtmd_audio_stream_step(slot.audio_stream.get(), slot.sampled);
         if (n > 0) {
             const float * rows = mtmd_audio_stream_get_output_embd(slot.audio_stream.get());
             slot.inp_embd.assign(rows, rows + (size_t) n * batch.n_embd);
@@ -5142,7 +5143,8 @@ server_context_meta server_context::get_meta() const {
         /* has_inp_video           */ impl->chat_params.allow_video,
         /* has_cap_chat            */ impl->has_cap_chat(),
         /* has_cap_tts             */ impl->has_cap_tts(),
-        /* has_audio_stream        */ impl->mtmd_cap.audio_stream,
+        // only realtime transcription models (no chat) stream without a prompt
+        /* has_audio_stream        */ impl->mtmd_cap.audio_stream && !impl->mtmd_cap.chat,
         /* json_ui_settings        */ impl->json_ui_settings,
         /* slot_n_ctx              */ impl->n_ctx_slot(),
         /* pooling_type            */ llama_pooling_type(impl->ctx_tgt),

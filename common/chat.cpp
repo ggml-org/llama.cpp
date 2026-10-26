@@ -779,14 +779,44 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
     return tmpls->has_explicit_template;
 }
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates) {
+// LFM3 format detection: template renders deferred tools inside <additional_tools>...</additional_tools>
+static bool is_lfm3_template(const std::string & src) {
+    return src.find("<additional_tools>") != std::string::npos;
+}
+
+// LFM3-Audio names the language in the system prompt: a code of the model card languages is looked up, anything
+// else is taken as the name of the language; without one the model detects it
+static std::string lfm3_asr_system_prompt(const std::string & language) {
+    static const std::map<std::string, std::string> names = {
+        { "ar", "Arabic" }, { "da", "Danish" }, { "de", "German" }, { "el", "Greek" }, { "en", "English" },
+        { "es", "Spanish" }, { "fi", "Finnish" }, { "fr", "French" }, { "he", "Hebrew" }, { "it", "Italian" },
+        { "ja", "Japanese" }, { "ko", "Korean" }, { "nl", "Dutch" }, { "pl", "Polish" }, { "pt", "Portuguese" },
+        { "sv", "Swedish" }, { "tr", "Turkish" }, { "zh", "Chinese" },
+    };
+    if (language.empty()) {
+        return "Perform ASR.";
+    }
+    std::string code = language;
+    std::transform(code.begin(), code.end(), code.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    const auto it = names.find(code);
+    return "Perform ASR in " + (it != names.end() ? it->second : language) + ".";
+}
+
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language) {
     common_chat_prompt_preset asr_preset;
     asr_preset.system = "";
     asr_preset.user   = "Transcribe audio to text";
 
-    if (chat_templates && chat_templates->template_default && is_lfm2_template(chat_templates->template_default->source())) {
-        asr_preset.system = "Perform ASR.";
-        asr_preset.user   = "";
+    if (chat_templates && chat_templates->template_default) {
+        const std::string src = chat_templates->template_default->source();
+        if (is_lfm2_template(src)) {
+            asr_preset.system = "Perform ASR.";
+            asr_preset.user   = "";
+        } else if (is_lfm3_template(src)) {
+            asr_preset.system = lfm3_asr_system_prompt(language);
+            asr_preset.user   = "";
+            asr_preset.has_language = true;
+        }
     }
 
     return asr_preset;

@@ -184,7 +184,7 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
             char ** out_text);
 
 struct mtmd_helper_cap {
-    bool chat; // false for tts-only model (no chat template)
+    bool chat; // false for tts-only models (no chat template) and realtime transcription models (token delay)
 
     // input capabilities
     bool vision;
@@ -195,7 +195,7 @@ struct mtmd_helper_cap {
     bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
 
     // output capabilities
-    bool text_gen; // always true for now
+    bool text_gen; // false for an audio-only model (tts-only, no chat template)
     bool audio_gen;
     bool audio_gen_spk_ref; // accepts a speaker reference audio for voice cloning
 };
@@ -229,6 +229,10 @@ struct mtmd_helper_gen_audio_inp {
 
     const char * prompt;
     size_t       prompt_len;
+
+    // > 0: the sequence already holds n_past positions (e.g. a conversation), the prompt is raw text appended
+    // after them and the response follows the model's own text/audio switching (LFM3-Audio only)
+    int32_t n_past;
 
     mtmd_bitmap * speaker_ref; // optional, can be NULL
     const char * lang; // optional, can be NULL
@@ -270,6 +274,10 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
                         const float *  h_state_in,
                         const float ** h_state_out,
                         bool * out_stop);
+
+// true if the next step_gen() takes a text token: the caller samples it from the logits and passes it as sampled
+// false if the next step generates an audio frame from h_state_in
+MTMD_API bool mtmd_helper_gen_audio_next_is_text(mtmd_helper_gen_audio * ctx);
 
 // out_data valid until next get_output() or reset() call
 // out_n_samples (optional, can be NULL) receives the number of generated PCM samples
@@ -358,6 +366,9 @@ struct gen_audio {
     }
     int32_t step_gen(llama_token sampled, const float * h_state, const float ** h_state_out, bool * out_stop = nullptr) {
         return mtmd_helper_gen_audio_step_gen(ctx.get(), sampled, h_state, h_state_out, out_stop);
+    }
+    bool next_is_text() {
+        return mtmd_helper_gen_audio_next_is_text(ctx.get());
     }
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples = nullptr) {
         return mtmd_helper_gen_audio_get_output(ctx.get(), out_sample_rate, out_data, out_data_len, out_n_samples);
