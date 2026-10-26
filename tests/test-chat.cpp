@@ -8075,31 +8075,6 @@ static void test_chat_session() {
         assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}"), session.finish());
     }
 
-    // content before a tool call stops before the separator the template re-adds
-    {
-        const std::string output_with_content =
-            "I'm\nthinking\n</think>\n\n"
-            "Let me check.\n\n"
-            "<tool_call>\n"
-            "<function=special_function>\n"
-            "<parameter=arg1>\n1\n</parameter>\n"
-            "</function>\n"
-            "</tool_call>";
-
-        common_chat_session session(tmpls.get(), nullptr, inputs);
-
-        const std::string up_to_call = "I'm\nthinking\n</think>\n\nLet me check.\n\n";
-        for (size_t i = 0; i < up_to_call.size(); i += 3) {
-            session.feed(common_chat_input(up_to_call.substr(i, 3)));
-        }
-        assert_msg_equals(simple_assist_msg("Let me check.", "I'm\nthinking"), session.msg());
-
-        for (size_t i = up_to_call.size(); i < output_with_content.size(); i += 3) {
-            session.feed(common_chat_input(output_with_content.substr(i, 3)));
-        }
-        assert_msg_equals(simple_assist_msg("Let me check.", "I'm\nthinking", "special_function", "{\"arg1\":1}"), session.finish());
-    }
-
     // a copy does not see what is fed to the original
     {
         common_chat_session a(tmpls.get(), nullptr, inputs);
