@@ -1305,6 +1305,30 @@ int64_t ggml_nrows(const struct ggml_tensor * tensor) {
     return tensor->ne[1]*tensor->ne[2]*tensor->ne[3];
 }
 
+// Adds `a * b` to `*nbytes_inout`, in place. Returns true (and sets
+// *nbytes_inout to SIZE_MAX) if either the multiplication or the addition
+// overflows size_t. Written with plain division/subtraction checks rather
+// than __builtin_mul_overflow/__builtin_add_overflow so it also compiles
+// under MSVC, which has no equivalent builtins (matches the
+// SIZE_MAX/divisor idiom already used elsewhere in this codebase, e.g.
+// gguf.cpp).
+static bool ggml_nbytes_add_term_overflows(size_t * nbytes_inout, size_t a, size_t b) {
+    if (a != 0 && b > SIZE_MAX / a) {
+        return true;
+    }
+    const size_t term = a * b;
+    if (*nbytes_inout > SIZE_MAX - term) {
+        return true;
+    }
+    *nbytes_inout += term;
+    return false;
+}
+
+// Returns SIZE_MAX if the byte-size calculation overflows size_t. ne[]/nb[] are
+// not always safe to trust blindly (e.g. ggml-rpc deserializes them from a raw
+// network message), so this function must fail loudly (SIZE_MAX) rather than
+// silently wrap around -- callers that use the result for a bounds check (see
+// rpc_server::deserialize_tensor, rpc_server::copy_tensor) must reject SIZE_MAX.
 size_t ggml_nbytes(const struct ggml_tensor * tensor) {
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         if (tensor->ne[i] <= 0) {
@@ -1317,13 +1341,21 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
     if (blck_size == 1) {
         nbytes = ggml_type_size(tensor->type);
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-            nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
+            if (ggml_nbytes_add_term_overflows(&nbytes, (size_t) (tensor->ne[i] - 1), tensor->nb[i])) {
+                return SIZE_MAX;
+            }
         }
     }
     else {
-        nbytes = tensor->ne[0]*tensor->nb[0]/blck_size;
+        if ((size_t) tensor->ne[0] != 0 && tensor->nb[0] > SIZE_MAX / (size_t) tensor->ne[0]) {
+            return SIZE_MAX;
+        }
+        const size_t t0 = (size_t) tensor->ne[0] * tensor->nb[0];
+        nbytes = t0 / blck_size;
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-            nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
+            if (ggml_nbytes_add_term_overflows(&nbytes, (size_t) (tensor->ne[i] - 1), tensor->nb[i])) {
+                return SIZE_MAX;
+            }
         }
     }
 
@@ -1331,7 +1363,13 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
 }
 
 size_t ggml_nbytes_pad(const struct ggml_tensor * tensor) {
-    return GGML_PAD(ggml_nbytes(tensor), GGML_MEM_ALIGN);
+    const size_t nbytes = ggml_nbytes(tensor);
+    if (nbytes == SIZE_MAX) {
+        // don't let GGML_PAD's own overflow (SIZE_MAX + alignment wraps around,
+        // e.g. to 0) silently turn an invalid/overflowed size into a tiny one
+        return SIZE_MAX;
+    }
+    return GGML_PAD(nbytes, GGML_MEM_ALIGN);
 }
 
 int64_t ggml_blck_size(enum ggml_type type) {

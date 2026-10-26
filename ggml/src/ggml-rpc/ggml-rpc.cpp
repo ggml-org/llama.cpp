@@ -1671,9 +1671,14 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
     if (result->buffer && ggml_nelements(result) > 0) {
         // require that the tensor data does not go beyond the buffer end
         uint64_t tensor_size = (uint64_t) ggml_nbytes(result);
+        // ne[]/nb[] above were just overwritten with raw, unvalidated wire data;
+        // ggml_nbytes() now reports SIZE_MAX if that overflowed the size
+        // calculation (rather than silently wrapping to something that could look
+        // "in bounds" below) -- treat that as an out-of-bounds tensor explicitly.
         uint64_t buffer_start = (uint64_t) ggml_backend_buffer_get_base(result->buffer);
         uint64_t buffer_size = (uint64_t) ggml_backend_buffer_get_size(result->buffer);
-        if (tensor->data + tensor_size < tensor->data ||
+        if (tensor_size == SIZE_MAX ||
+            tensor->data + tensor_size < tensor->data ||
             tensor->data < buffer_start || tensor->data + tensor_size > buffer_start + buffer_size) {
             LOG_ERROR("[%s] tensor '%s' (op %s, type %s, ne [%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 "]) "
                       "data [0x%" PRIx64 ", 0x%" PRIx64 ") out of buffer bounds [0x%" PRIx64 ", 0x%" PRIx64 ")\n",
@@ -2029,7 +2034,13 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
     uint64_t dst_base   = (uint64_t) ggml_backend_buffer_get_base(dst->buffer);
     uint64_t dst_buf_sz = (uint64_t) ggml_backend_buffer_get_size(dst->buffer);
 
-    if (dst_data + src_size > dst_base + dst_buf_sz) {
+    // Defense in depth: src/dst are already individually bounds-checked in
+    // deserialize_tensor() (which now rejects ggml_nbytes()==SIZE_MAX outright),
+    // so src_size can't legitimately be huge here -- but check explicitly for the
+    // SIZE_MAX sentinel and for wraparound anyway, for the same reason
+    // deserialize_tensor() does: this calculation should not depend on an
+    // invariant enforced only by its caller.
+    if (src_size == SIZE_MAX || dst_data + src_size < dst_data || dst_data + src_size > dst_base + dst_buf_sz) {
         LOG_ERROR("[%s] out-of-bounds write in rpc_server::copy_tensor:\n"
                          "    write range : [0x%" PRIx64 ", 0x%" PRIx64 "]\n"
                          "    buffer base: [0x%" PRIx64 ", 0x%" PRIx64 "]\n",

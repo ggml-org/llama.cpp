@@ -1099,6 +1099,39 @@ static void test_buft_get_alloc_size_n_does_not_allocate() {
     GGML_ASSERT(x[1]->data == nullptr);
 }
 
+// ggml_nbytes()/ggml_nbytes_pad() must reject a stride overflow instead of wrapping,
+// since callers like rpc_server::deserialize_tensor() overwrite nb[] with values that
+// come straight off the wire and rely on ggml_nbytes() to bound-check them.
+static ggml_tensor * make_poisoned_overflow_tensor(ggml_context * ctx) {
+    ggml_tensor * t = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 4294967295LL, 2147483647LL, 1, 1);
+    t->nb[0] = 4294967295ULL;
+    t->nb[1] = 7ULL;
+    return t;
+}
+
+static void test_nbytes_overflow_rejected() {
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * t = make_poisoned_overflow_tensor(ctx);
+    GGML_ASSERT(ggml_nbytes(t) == SIZE_MAX);
+}
+
+static void test_nbytes_pad_propagates_overflow() {
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * t = make_poisoned_overflow_tensor(ctx);
+    GGML_ASSERT(ggml_nbytes_pad(t) == SIZE_MAX);
+}
+
+static void test_nbytes_valid_sizes_unaffected() {
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * f32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4096, 4096);
+    GGML_ASSERT(ggml_nbytes(f32) == (size_t) 4096 * 4096 * sizeof(float));
+
+    ggml_tensor * q4_0 = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_0, 4096, 4096);
+    GGML_ASSERT(ggml_nbytes(q4_0) == ggml_row_size(GGML_TYPE_Q4_0, 4096) * 4096);
+    GGML_ASSERT(ggml_nbytes_pad(q4_0) == GGML_PAD(ggml_nbytes(q4_0), GGML_MEM_ALIGN));
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1107,6 +1140,9 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_nbytes_overflow_rejected", test_nbytes_overflow_rejected);
+    run("test_nbytes_pad_propagates_overflow", test_nbytes_pad_propagates_overflow);
+    run("test_nbytes_valid_sizes_unaffected", test_nbytes_valid_sizes_unaffected);
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
