@@ -352,6 +352,220 @@ static int run_audio_stream(mtmd_cli_context & ctx, const std::string & fname, i
     return 0;
 }
 
+// resolve a single-token piece (a special token spelled out literally) to its id
+static llama_token token_from_piece(llama_context * lctx, const std::string & piece) {
+    const auto toks = common_tokenize(lctx, piece, false, true);
+    return toks.size() == 1 ? toks[0] : LLAMA_TOKEN_NULL;
+}
+
+// Turn-based audio feeding.
+//
+// The model hears one chunk of audio, answers it, and only then hears the next
+// one. That is how it was trained: 1600 ms of audio first, then 800 ms per turn,
+// and every turn is answered before the next chunk arrives. Feeding the whole
+// file behind one marker throws that away -- the model answers the first turn
+// and then has nothing left to say.
+//
+// Each turn is tokenized by libmtmd, so the audio markers come from the
+// projector instead of being hardcoded here:
+//     [<|hy_User|>] <audio-beg> <N audio embeddings> <audio-end> <post>
+// <post> is whatever -p carried after the media marker (the assistant header),
+// replayed at the head of every turn. Text tokens are *not* summed into the
+// audio rows: unlike the realtime path, they occupy their own positions.
+//
+// The audio encoder is stateless, so this is exact and not an approximation:
+// the reference restarts its attention mask on every item boundary and one turn
+// is far shorter than one block, which makes encoding a turn on its own
+// identical to encoding it inside the full sequence.
+static int run_turn_stream(mtmd_cli_context &    ctx,
+                           const common_params & params,
+                           const std::string &   fname,
+                           int                   n_predict) {
+    // the schedule this model family was trained with
+    // TODO: keep this next to the preprocessor, which cuts the mel on the same grid
+    const int first_ms = 1600;
+    const int step_ms  = 800;
+
+    // reserved tokens, resolved from the vocab so a different checkpoint (or a
+    // re-trained vocab) keeps working
+    const llama_token t_user = token_from_piece(ctx.lctx, "<｜hy_User｜>");
+    // printed: it separates the source branch from the target branch
+    const llama_token t_tgt  = token_from_piece(ctx.lctx, "<｜hy_place▁holder▁no▁791｜>");
+
+    if (t_user == LLAMA_TOKEN_NULL) {
+        LOG_ERR("%s: the tokenizer has no user-turn token\n", __func__);
+        return 1;
+    }
+
+    auto res = mtmd_helper_bitmap_init_from_file(ctx.ctx_vision.get(), fname.c_str(), false, ctx.init_opt);
+    if (!res.bitmap) {
+        return 1;  // error is already printed by libmtmd
+    }
+    mtmd::bitmap bmp(res.bitmap);
+    if (!mtmd_bitmap_is_audio(bmp.ptr.get())) {
+        LOG_ERR("%s: %s is not an audio file\n", __func__, fname.c_str());
+        return 1;
+    }
+    const float * all    = (const float *) bmp.data();
+    const size_t  n_all  = bmp.n_bytes() / sizeof(float);
+    const int     rate   = mtmd_get_audio_sample_rate(ctx.ctx_vision.get());
+    const int     n_embd = llama_model_n_embd_inp(ctx.model);
+
+    // -p must carry the media marker; everything before it is the user prompt,
+    // everything after it is the assistant header replayed on every turn
+    const std::string marker = mtmd_default_marker();
+    std::string       pre;
+    std::string       post;
+    {
+        const size_t pos = params.prompt.find(marker);
+        if (pos == std::string::npos) {
+            LOG_ERR("%s: -p must contain the media marker %s\n", __func__, marker.c_str());
+            return 1;
+        }
+        pre  = params.prompt.substr(0, pos);
+        post = params.prompt.substr(pos + marker.size());
+    }
+
+    auto decode_tokens = [&](const std::vector<llama_token> & toks) -> int {
+        if (toks.empty()) {
+            return 0;
+        }
+        ctx.batch.clear();
+        for (size_t i = 0; i < toks.size(); i++) {
+            ctx.batch.add(toks[i], ctx.n_past, 0, i + 1 == toks.size());
+            ctx.n_past++;
+        }
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
+            LOG_ERR("%s: failed to decode\n", __func__);
+            return 1;
+        }
+        return 0;
+    };
+
+    inject_test_response_marker();
+
+    if (decode_tokens(common_tokenize(ctx.lctx, pre, true, true))) {
+        return 1;
+    }
+    // the checkpoints trained with a two-branch answer expect the source-branch
+    // marker at the head of every assistant turn; it is part of -p, not of the
+    // code, so nothing model-specific is injected here
+    const auto post_toks = common_tokenize(ctx.lctx, post, false, true);
+
+    const int64_t t_start = ggml_time_us();
+    size_t        off     = 0;
+    int           n_gen   = 0;
+    int           n_emit  = 0;  // turns that produced content; the rest are WAIT
+    int           n_turn  = 0;  // turns actually fed; the last one is usually short
+    bool          done    = false;
+
+    for (int turn = 0; !done && off < n_all && !g_is_interrupted; turn++) {
+        const size_t want    = (size_t) rate * (turn == 0 ? first_ms : step_ms) / 1000;
+        const size_t n_chunk = std::min(want, n_all - off);
+        if (n_chunk == 0) {
+            break;
+        }
+        n_turn++;
+        mtmd::bitmap turn_bmp(mtmd_bitmap_init_from_audio(n_chunk, all + off));
+        off += n_chunk;
+
+        // one turn = one mel = one encoder call, exactly what the reference does
+        mtmd::input_chunks           chunks(mtmd_input_chunks_init());
+        std::vector<mtmd_input_part> parts;
+        // exactly one of text/bitmap may be set, so this part is bitmap-only
+        parts.push_back({ nullptr, turn_bmp.ptr.get() });
+        std::vector<const mtmd_input_part *> parts_ptr{ parts.data() };
+        if (mtmd_tokenize_from_parts(ctx.ctx_vision.get(), chunks.ptr.get(), parts_ptr.data(), parts_ptr.size(),
+                                     false) != 0) {
+            LOG_ERR("%s: failed to tokenize audio turn\n", __func__);
+            return 1;
+        }
+
+        // every audio turn is its own user message, so the role token comes back
+        // from the second turn on; the first one already got it in `pre`
+        if (turn > 0 && decode_tokens(std::vector<llama_token>{ t_user })) {
+            return 1;
+        }
+
+        // libmtmd emits the audio markers as text chunks of their own, so a turn
+        // is just its chunks in order
+        for (size_t i = 0; i < mtmd_input_chunks_size(chunks.ptr.get()); i++) {
+            auto * c = mtmd_input_chunks_get(chunks.ptr.get(), i);
+            if (mtmd_input_chunk_get_type(c) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                size_t              n_tok = 0;
+                const llama_token * toks  = mtmd_input_chunk_get_tokens_text(c, &n_tok);
+                if (decode_tokens(std::vector<llama_token>(toks, toks + n_tok))) {
+                    return 1;
+                }
+                continue;
+            }
+            if (mtmd_encode_chunk(ctx.ctx_vision.get(), c) != 0) {
+                LOG_ERR("%s: failed to encode turn %d\n", __func__, turn);
+                return 1;
+            }
+            const int32_t            n_tok = mtmd_input_chunk_get_n_tokens(c);
+            const float *            rows  = mtmd_get_output_embd(ctx.ctx_vision.get());
+            const std::vector<float> embd(rows, rows + (size_t) n_tok * n_embd);
+
+            ctx.batch.clear();
+            for (int32_t j = 0; j < n_tok; j++) {
+                const llama_pos pos[GGML_MROPE_SECTIONS] = { ctx.n_past, ctx.n_past, ctx.n_past, 0 };
+                ctx.n_past++;
+                ctx.batch.add_embd({ embd.data() + (size_t) j * n_embd, 1, (size_t) n_embd }, pos, 0, j + 1 == n_tok);
+            }
+            if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
+                LOG_ERR("%s: failed to decode audio turn %d\n", __func__, turn);
+                return 1;
+            }
+        }
+
+        if (decode_tokens(post_toks)) {
+            return 1;
+        }
+
+        // generate this turn's answer, then hand the boundary token back so the
+        // next turn sees a finished assistant turn
+        bool emitted = false;
+        while (!g_is_interrupted) {
+            const llama_token tok = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
+            common_sampler_accept(ctx.smpl, tok, true);
+            n_gen++;
+
+            // EOT is only in the EOG set if the GGUF carries
+            // tokenizer.ggml.eot_token_id; without it the model repeats the same
+            // turn until it hits EOS
+            const bool is_eog = llama_vocab_is_eog(ctx.vocab, tok);
+            if (is_eog) {
+                // one line per turn so the two branches stay separable
+                LOG("\n");
+                done = (tok == llama_vocab_eos(ctx.vocab));
+            } else if (tok == t_tgt || !llama_vocab_is_control(ctx.vocab, tok)) {
+                LOG("%s", common_token_to_piece(ctx.lctx, tok).c_str());
+                fflush(stdout);
+                emitted = true;
+            }
+            if (decode_tokens(std::vector<llama_token>{ tok })) {
+                return 1;
+            }
+            if (is_eog) {
+                break;
+            }
+            if (n_gen >= n_predict) {
+                done = true;
+                break;
+            }
+        }
+        n_emit += emitted ? 1 : 0;
+    }
+
+    const double t_total = (ggml_time_us() - t_start) / 1e6;
+    LOG("\n\n%s: %d tokens, %d/%d turns emitted, %.2f s audio in %.2f s (%.2fx realtime)\n", __func__, n_gen, n_emit,
+        n_turn, (double) n_all / rate, t_total, (double) n_all / rate / t_total);
+    llama_perf_context_print(ctx.lctx);
+
+    return 0;
+}
+
 static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
     LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
         new_msg.role.c_str(), new_msg.content.c_str());
@@ -532,9 +746,14 @@ int main(int argc, char ** argv) {
     mtmd_helper_log_set(common_log_default_callback, nullptr);
 
     if (params.mmproj.path.empty()) {
-        show_additional_info(argc, argv);
-        LOG_ERR("ERR: Missing --mmproj argument\n");
-        return 1;
+        // single file layout: the projector may be packaged inside the model file itself
+        if (params.model.path.empty() || !mtmd_has_projector(params.model.path.c_str())) {
+            show_additional_info(argc, argv);
+            LOG_ERR("ERR: Missing --mmproj argument\n");
+            return 1;
+        }
+        params.mmproj.path = params.model.path;
+        LOG_INF("%s: --mmproj not given, using the projector packaged in %s\n", __func__, params.model.path.c_str());
     }
 
     ggml_backend_load_all();
@@ -567,7 +786,17 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
-    if (ctx.mtmd_cap.audio_stream) {
+    const auto audio_mode = mtmd_audio_stream_mode(ctx.ctx_vision.get());
+
+    if (audio_mode == MTMD_AUDIO_STREAM_TURN) {
+        if (params.image.size() != 1) {
+            LOG_ERR("This model answers audio turn by turn, pass exactly one --audio file\n");
+            return 1;
+        }
+        return run_turn_stream(ctx, params, params.image[0], n_predict);
+    }
+
+    if (audio_mode == MTMD_AUDIO_STREAM_REALTIME) {
         if (params.image.size() != 1) {
             LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
             return 1;

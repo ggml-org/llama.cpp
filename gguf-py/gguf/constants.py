@@ -6546,6 +6546,7 @@ class VisionProjectorType:
     D1OMNI_V       = "d1omni_v"  # lfm2 vision, without separator tokens
     D1OMNI_A       = "d1omni_a"  # lfm2a audio, with a residual block after the projector
     MUSE_SPARK_AUDIO = "muse-spark-audio"
+    HYV3_SPEECH      = "hyv3_speech" # audio: conv2d stack + sinusoidal pos + FSK adapter
 
 
 # Items here are (block size, type size)

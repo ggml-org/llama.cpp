@@ -931,6 +931,20 @@ struct clip_model {
     ggml_tensor * audio_out_proj_w = nullptr;
     ggml_tensor * audio_out_proj_b = nullptr;
 
+    // hyv3_speech encoder: sinusoidal table + the two head projections
+    ggml_tensor * a_pos_embd = nullptr;
+    ggml_tensor * a_proj1_w  = nullptr;
+    ggml_tensor * a_proj1_b  = nullptr;
+    ggml_tensor * a_proj2_w  = nullptr;
+    ggml_tensor * a_proj2_b  = nullptr;
+    // hyv3_speech adapter: Linear -> SiLU -> Linear -> LayerNorm
+    ggml_tensor * a_mm_0_w   = nullptr;
+    ggml_tensor * a_mm_0_b   = nullptr;
+    ggml_tensor * a_mm_3_w   = nullptr;
+    ggml_tensor * a_mm_3_b   = nullptr;
+    ggml_tensor * a_mm_ln_w  = nullptr;
+    ggml_tensor * a_mm_ln_b  = nullptr;
+
     // granite_speech encoder
     ggml_tensor * inp_proj_w    = nullptr;
     ggml_tensor * inp_proj_b    = nullptr;

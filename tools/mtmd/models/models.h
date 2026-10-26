@@ -184,6 +184,18 @@ struct clip_graph_conformer : clip_graph {
     ggml_cgraph * build() override;
 };
 
+// HYV3Speech audio tower: 3x conv2d + sinusoidal pos + transformer + FSK adapter
+struct clip_graph_hyv3_speech : clip_graph {
+    clip_graph_hyv3_speech(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+
+    ggml_cgraph * build() override;
+
+    // mel frames -> encoder frames for a single convolution window
+    static int conv_out_len(int n_mel_frames);
+    // mel frames -> number of speech tokens (after FSK stacking)
+    static int n_tokens_from_mel(int n_mel_frames, int fsk);
+};
+
 struct clip_graph_granite_speech : clip_graph {
     clip_graph_granite_speech(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;

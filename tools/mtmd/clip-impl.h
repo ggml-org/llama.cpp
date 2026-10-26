@@ -208,6 +208,13 @@
 #define TN_MM_NORM_PRE  "mm.a.norm_pre.%s"
 #define TN_MM_NORM_MID  "mm.a.norm_mid.%s"
 
+// hyv3_speech: sinusoidal table (generated, not in the checkpoint), the two
+// encoder head projections and the adapter's trailing layer norm
+#define TN_A_POS_EMBD      "a.sinusoid_pos_embd"
+#define TN_A_PROJ1         "a.proj1.%s"
+#define TN_A_PROJ2         "a.proj2.%s"
+#define TN_MM_A_OUT_NORM   "mm.a.output_norm.%s"
+
 // mimo-audio-tokenizer
 #define TN_A_DOWNSAMPLE_CONV "a.downsample.conv.%s"
 #define TN_A_DOWNSAMPLE_NORM "a.downsample.norm.%s"
@@ -559,6 +566,7 @@ enum projector_type {
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
     PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
+    PROJECTOR_TYPE_HYV3_SPEECH,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -637,6 +645,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
     { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
+    { PROJECTOR_TYPE_HYV3_SPEECH,       "hyv3_speech"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

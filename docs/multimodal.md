@@ -119,6 +119,14 @@ NOTE: some models may require large context window, for example: `-c 8192`
 # Qwen3-ASR
 (tool_name) -hf ggml-org/Qwen3-ASR-0.6B-GGUF
 (tool_name) -hf ggml-org/Qwen3-ASR-1.7B-GGUF
+
+# HYV3Speech
+# Capabilities: audio input, turn-by-turn simultaneous translation
+# note: fed 1600 ms of audio, then 800 ms per turn; llama-mtmd-cli does this
+#       automatically, llama-server cannot run these GGUFs yet
+# ref: ../../docs/multimodal/hyv3-speech.md
+(tool_name) -hf tencent/Hy-SimulMT-30B-A3B-GGUF
+(tool_name) -hf tencent/Hy-SimulMT-30B-A3B-Interleave-GGUF
 ```
 
 **Mixed modalities**:
