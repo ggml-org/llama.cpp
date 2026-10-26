@@ -34,7 +34,7 @@ n_ovf = 0
 n_bytes = 0
 for t in rt.tensors:
     shape = [int(x) for x in t.shape]
-    raw_shape = list(t.data.shape) if t.tensor_type == gguf.GGMLQuantizationType.BF16X else shape
+    raw_shape = list(t.data.shape)
     w.add_tensor(t.name, np.asarray(t.data), raw_shape=raw_shape, raw_dtype=t.tensor_type)
     if t.tensor_type != gguf.GGMLQuantizationType.BF16X:
         continue
