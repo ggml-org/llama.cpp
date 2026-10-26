@@ -1582,6 +1582,80 @@ static void test_set_sampler(const test_params & params) {
     printf("backend set sampler test PASSED\n");
 }
 
+static int n_sched_reserve = 0;
+
+static void count_sched_reserve(ggml_log_level /*level*/, const char * text, void * /*user_data*/) {
+    if (strstr(text, "sched_reserve: reserving ...") != nullptr) {
+        n_sched_reserve++;
+    }
+    fputs(text, stderr);
+}
+
+static void test_set_sampler_reserve(const test_params & params) {
+    const int seq_id = 0;
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+
+    auto first_token = [&](const std::string & piece) {
+        std::vector<llama_token> tokens(16);
+        llama_tokenize(vocab, piece.c_str(), piece.size(), tokens.data(), tokens.size(), false, false);
+        return tokens[0];
+    };
+    const llama_token token_a = first_token("World");
+    const llama_token token_b = first_token("Hello");
+    GGML_ASSERT(token_a != token_b);
+
+    // chains of the same shape that sample different tokens (the bias wins over any logit)
+    auto make_chain = [&](llama_token token, int32_t top_k) {
+        llama_logit_bias bias = { token, +1000.0f };
+        llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(chain, llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), 1, &bias));
+        if (top_k > 0) {
+            llama_sampler_chain_add(chain, llama_sampler_init_top_k(top_k));
+        }
+        llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+        return llama_sampler_ptr(chain);
+    };
+
+    llama_sampler_ptr chain_a = make_chain(token_a, 0);
+    std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, chain_a.get() }};
+    test_context test_ctx(params, backend_sampler_configs);
+    llama_context * ctx = test_ctx.ctx.get();
+
+    llama_log_set(count_sched_reserve, nullptr);
+
+    GGML_ASSERT(test_ctx.decode({{seq_id, "Hello"}}));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_a);
+    GGML_ASSERT(test_ctx.decode_token(token_a, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_a);
+    const int n_reserve = n_sched_reserve;
+
+    // a new chain of the same shape does not need a new reserve
+    llama_set_sampler(ctx, seq_id, nullptr);
+    chain_a.reset();
+    llama_sampler_ptr chain_b = make_chain(token_b, 0);
+    llama_set_sampler(ctx, seq_id, chain_b.get());
+    GGML_ASSERT(test_ctx.decode_token(token_a, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_b);
+    GGML_ASSERT(n_sched_reserve == n_reserve);
+
+    // removing the sampler does not need a new reserve
+    llama_set_sampler(ctx, seq_id, nullptr);
+    GGML_ASSERT(test_ctx.decode_token(token_b, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == LLAMA_TOKEN_NULL);
+    GGML_ASSERT(n_sched_reserve == n_reserve);
+
+    // a chain of another shape needs a new reserve
+    llama_sampler_ptr chain_c = make_chain(token_a, 5);
+    llama_set_sampler(ctx, seq_id, chain_c.get());
+    GGML_ASSERT(test_ctx.decode_token(token_b, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_a);
+    GGML_ASSERT(n_sched_reserve == n_reserve + 1);
+
+    llama_log_set(nullptr, nullptr);
+
+    printf("backend set sampler reserve test PASSED\n");
+}
+
 static void test_cpu_mixed(const test_params & params) {
     // Sequence 0 uses backend sampling
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
@@ -2206,6 +2280,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_mixed",                  test_mixed,                  true },
     { "test_cpu_mixed",              test_cpu_mixed,              true },
     { "test_set_sampler",            test_set_sampler,            true },
+    { "test_set_sampler_reserve",    test_set_sampler_reserve,    true },
     // multiple outputs per sequence
     { "test_multi_output_limit",                  test_multi_output_limit,               true },
     { "test_multi_output_multi_sequence_dist",    test_multi_output_multi_sequence_dist, true },
