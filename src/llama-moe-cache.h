@@ -34,8 +34,7 @@ public:
 
     // the CPU part of the layer of the slot lookup, with n_used experts per token, no inputs if the graph has no CPU part
     // its inputs on the device are read together with the selected experts, so the CPU part does not wait for the device
-    // its output is copied to the device without waiting on the host
-    void set_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs, const ggml_tensor * output);
+    void set_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs);
 
     // called before each graph compute
     void begin();
