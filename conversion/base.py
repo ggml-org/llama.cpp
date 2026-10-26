@@ -132,7 +132,8 @@ class ModelBase:
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
                  fp8_as_q8: bool = False,
-                 fuse_qkv: bool = False):
+                 fuse_qkv: bool = False,
+                 ple_only: bool = False, no_ple: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -141,6 +142,11 @@ class ModelBase:
         if self.is_mistral_format and not _mistral_common_installed:
             raise ImportError(_mistral_import_error_msg)
 
+        if ple_only and no_ple:
+            raise ValueError("ple_only and no_ple are mutually exclusive")
+        self.ple_only = ple_only
+        self.no_ple = no_ple
+        self._has_ple = False
         self.dir_model = dir_model
         self.ftype = ftype
         self.fname_out = fname_out
@@ -198,7 +204,8 @@ class ModelBase:
 
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
-                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard,
+                                           tensor_filter=self._include_ple_tensor if ple_only or no_ple else None)
 
         # Mistral specific
         self.disable_mistral_community_chat_template = disable_mistral_community_chat_template
@@ -1127,6 +1134,11 @@ class ModelBase:
 
         del experts, merged
 
+    def _include_ple_tensor(self, name: str) -> bool:
+        is_ple = name == gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight"
+        self._has_ple |= is_ple
+        return is_ple if self.ple_only else not is_ple
+
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
         quantization_config = self.hparams.get("quantization_config") or {}
@@ -1238,6 +1250,8 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+                if (self.ple_only or self.no_ple) and not self._include_ple_tensor(new_name):
+                    continue
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
@@ -1399,6 +1413,8 @@ class ModelBase:
 
     def write(self):
         self.prepare_tensors()
+        if (self.ple_only or self.no_ple) and not self._has_ple:
+            raise ValueError("model has no per-layer embedding table to export separately")
         self.prepare_metadata(vocab_only=False)
         self.gguf_writer.write_header_to_file(path=self.fname_out)
         self.gguf_writer.write_kv_data_to_file()
@@ -1591,7 +1607,8 @@ class TextModel(ModelBase):
                 fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=None, model_type="vocab")
 
             # Use the default filename
-            self.fname_out = self.fname_out / f"{fname_default}.gguf"
+            prefix = "ple-" if self.ple_only else "no-ple-" if self.no_ple else ""
+            self.fname_out = self.fname_out / f"{prefix}{fname_default}.gguf"
         else:
             # Output path is a custom defined templated filename
             # Note: `not is_dir()` is used because `.is_file()` will not detect
@@ -1600,8 +1617,9 @@ class TextModel(ModelBase):
             # Process templated file name with the output ftype, useful with the "auto" ftype
             self.fname_out = self.fname_out.parent / gguf.fill_templated_filename(self.fname_out.name, output_type)
 
-        logger.info("Set model tokenizer")
-        self.set_vocab()
+        if not self.ple_only:
+            logger.info("Set model tokenizer")
+            self.set_vocab()
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
