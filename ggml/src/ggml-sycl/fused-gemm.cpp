@@ -1375,11 +1375,17 @@ bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool r
         device.get_info<sycl::info::device::local_mem_size>() < 3 * (n_as + 1) * sizeof(uint32_t)) {
         return false;
     }
-    if (grouped_gemm_max_tiles(total_rows, n_as, GGML_SYCL_FG_BN) > INT32_MAX / GGML_SYCL_FG_BN ||
-        fg_pick_combo(stream, GGML_TYPE_F32, src1_prec) < 0) {
+    if (grouped_gemm_max_tiles(total_rows, n_as, GGML_SYCL_FG_BN) > INT32_MAX / GGML_SYCL_FG_BN) {
         return false;
     }
-    return true;
+    const int combo = fg_pick_combo(stream, GGML_TYPE_F32, src1_prec);
+    if (combo < 0) {
+        return false;
+    }
+    // the device schedule is built for GGML_SYCL_FG_BN-wide tiles, see fg_grouped_device_run()
+    bool bn_ok = false;
+    fg_visit_combo(combo, [&](auto s) { bn_ok = decltype(s)::BN == GGML_SYCL_FG_BN; });
+    return bn_ok;
 }
 
 bool ggml_sycl_grouped_dequant_gemm_device(ggml_type src0_type, bool reordered, const void * src0_base,
