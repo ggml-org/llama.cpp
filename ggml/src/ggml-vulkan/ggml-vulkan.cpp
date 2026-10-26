@@ -1213,6 +1213,9 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         result.disable_subgroups = true;
     } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
         result.subgroup_size = n_rows < 4 ? 32 : device->subgroup_size;
+    } else if (device->vendor_id == VK_VENDOR_ID_IMAGINATION) {
+        // Force 64 SGS for Imagination devices due to lack of support for 128 SGS in some f16 aligned flash attention shaders
+        result.subgroup_size = 64;
     } else {
         result.subgroup_size = device->subgroup_size;
     }
@@ -15478,9 +15481,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_FLASH_ATTN_EXT:
             {
-                if (device->vendor_id == VK_VENDOR_ID_IMAGINATION) { // Flash attention in development on Imagination GPUs
-                    return false;
-                }
                 bool coopmat2 = device->coopmat2;
                 uint32_t HSK = op->src[1]->ne[0];
                 uint32_t HSV = op->src[2]->ne[0];
