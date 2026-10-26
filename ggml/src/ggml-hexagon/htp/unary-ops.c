@@ -63,6 +63,7 @@ struct htp_unary_context {
 
     dma_addr_t                data_src0;
     dma_addr_t                data_src1;            // weight/scale tensor for RMS_NORM_MUL
+    dma_addr_t                data_src2;            // residual for RMS_NORM_MUL post_add
     dma_addr_t                data_dst;
 
     size_t                    src0_data_row_size;   // actual data bytes per row
@@ -87,10 +88,12 @@ struct htp_unary_context {
 
     uint8_t *                 vtcm_src0;
     uint8_t *                 vtcm_src1;
+    uint8_t *                 vtcm_src2;
     uint8_t *                 vtcm_dst;
 
     size_t                    vtcm_src0_size_per_thread;
     size_t                    vtcm_src1_size_per_thread;
+    size_t                    vtcm_src2_size_per_thread;
     size_t                    vtcm_dst_size_per_thread;
 };
 
@@ -1332,7 +1335,9 @@ static void unary_thread_rms_norm_mul_f32(unsigned int nth, unsigned int ith, vo
 
     uint8_t * src0_vtcm_data = uctx->vtcm_src0 + (ith * uctx->vtcm_src0_size_per_thread);
     uint8_t * src1_vtcm_data = uctx->vtcm_src1 ? (uctx->vtcm_src1 + (ith * uctx->vtcm_src1_size_per_thread)) : NULL;
+    uint8_t * src2_vtcm_data = uctx->vtcm_src2 ? (uctx->vtcm_src2 + (ith * uctx->vtcm_src2_size_per_thread)) : NULL;
     uint8_t * dst_vtcm_data  = uctx->vtcm_dst + (ith * uctx->vtcm_dst_size_per_thread);
+    const bool post_add      = uctx->kparams->post_add != 0;
 
     const size_t src0_vtcm_half_size = uctx->src0_vtcm_half_size;
     const size_t src1_vtcm_half_size = uctx->src1_vtcm_half_size;
@@ -1376,6 +1381,12 @@ static void unary_thread_rms_norm_mul_f32(unsigned int nth, unsigned int ith, vo
                 uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, block_size);
         }
 
+        if (post_add) {
+            dma_queue_push(dma_q,
+                dma_make_data(src2_vtcm_data + (vtcm_idx * src0_vtcm_half_size), uctx->data_src2 + src0_off),
+                src0_row_size_aligned, nb01, src0_data_row_size, block_size);
+        }
+
         ir += block_size;
     }
 
@@ -1390,10 +1401,15 @@ static void unary_thread_rms_norm_mul_f32(unsigned int nth, unsigned int ith, vo
         if (!uctx->broadcast_weight) {
             src1_vtcm = (void *) (uintptr_t) dma_queue_pop(dma_q).dst;
         }
+        void * src2_vtcm = post_add ? (void *) (uintptr_t) dma_queue_pop(dma_q).dst : NULL;
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);
         const void * w = uctx->broadcast_weight ? (const void *) src1_vtcm_data : src1_vtcm;
         compute(src0_vtcm, w, dst_vtcm, block_size, uctx);
+        for (uint32_t r = 0; post_add && r < block_size; r++) {
+            uint8_t * d = (uint8_t *) dst_vtcm + r * dst_row_size_aligned;
+            hvx_add_f32_aaa(d, d, (const uint8_t *) src2_vtcm + r * src0_row_size_aligned, uctx->nc);
+        }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);
 
         const size_t dst_off = (size_t) ir * nb1;
@@ -1421,6 +1437,12 @@ static void unary_thread_rms_norm_mul_f32(unsigned int nth, unsigned int ith, vo
                     dma_queue_push(dma_q,
                         dma_make_data(src1_vtcm, data_src1 + src1_pref_off),
                         uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, pref_block_size);
+                }
+
+                if (post_add) {
+                    dma_queue_push(dma_q,
+                        dma_make_data(src2_vtcm, uctx->data_src2 + src0_pref_off),
+                        src0_row_size_aligned, nb01, src0_data_row_size, pref_block_size);
                 }
             }
         }
@@ -1835,7 +1857,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
     struct htp_unary_vtcm_layout L;
     htp_unary_vtcm_layout_build(&L, octx->op, src0_data_row_size, dst_data_row_size, src1_data_row_size,
-                                src0_elem_size, col_tile, kparams->block, broadcast_weight, kparams->n_threads);
+                                src0_elem_size, col_tile, kparams->block, broadcast_weight, kparams->n_threads,
+                                kparams->post_add != 0);
 
     FARF(HIGH, "%s: (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-vtcm-size %zu src1-vtcm-size %zu dst-vtcm-size %zu\n", op_type,
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
@@ -1851,6 +1874,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
         .data_src0             = src0->data,
         .data_src1             = (octx->op == HTP_OP_RMS_NORM_MUL) ? src1->data : 0,
+        .data_src2             = kparams->post_add ? octx->src[2]->data : 0,
         .data_dst              = dst->data,
 
         .src0_data_row_size    = src0_data_row_size,
@@ -1872,10 +1896,12 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
         .vtcm_src0             = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0),
         .vtcm_src1             = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, base, L.off_src1, L.src1_bytes > 0),
+        .vtcm_src2             = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, base, L.off_src2, L.src2_bytes > 0),
         .vtcm_dst              = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst),
 
         .vtcm_src0_size_per_thread = L.src0_bytes,
         .vtcm_src1_size_per_thread = L.src1_bytes,
+        .vtcm_src2_size_per_thread = L.src2_bytes,
         .vtcm_dst_size_per_thread  = L.dst_bytes,
     };
 
