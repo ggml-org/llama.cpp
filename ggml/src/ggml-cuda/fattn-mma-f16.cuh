@@ -23,11 +23,6 @@ struct fattn_mma_config {
         nstages_target(nstages_target), Q_in_reg(Q_in_reg) {}
 };
 
-// Head sizes that are not a multiple of 16 are padded to the next multiple of 16
-static constexpr __host__ __device__ int ggml_cuda_fattn_mma_get_head_padded(const int D) {
-    return GGML_PAD(D, 16);
-}
-
 #define GGML_CUDA_FATTN_MMA_CONFIG_CASE(DKQ_, DV_, ncols_, nthreads_, occupancy_, nbatch_fa_, nbatch_K2_, nbatch_V2_, nbatch_combine_, nstages_target_, Q_in_reg_) \
     if (DKQ == (DKQ_) && DV == (DV_) && ncols == (ncols_)) {                                                                                                       \
         static_assert((nthreads_)       % 32 == 0 && (nthreads_)       <= 512, "bad nthreads");                                                                    \
@@ -648,8 +643,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     constexpr bool Q_in_reg        = ggml_cuda_fattn_mma_get_Q_in_reg (DKQ, DV, ncols);
     constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages  (DKQ, DV, ncols1, ncols2, use_sparse);
 
-    constexpr int DKQp = ggml_cuda_fattn_mma_get_head_padded(DKQ);
-    constexpr int DVp  = ggml_cuda_fattn_mma_get_head_padded(DV);
+    constexpr int DKQp = GGML_PAD(DKQ, 16);
+    constexpr int DVp  = GGML_PAD(DV, 16);
 
     constexpr bool swz = ggml_cuda_fattn_mma_get_swizzled(DKQ, DV, ncols);
     constexpr int stride_tile_K = swz ? nbatch_K2 : nbatch_K2 + 4;
@@ -1304,8 +1299,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     constexpr bool Q_in_reg        = ggml_cuda_fattn_mma_get_Q_in_reg      (DKQ, DV, ncols);
     constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages       (DKQ, DV, ncols1, ncols2, use_sparse);
 
-    constexpr int DKQp = ggml_cuda_fattn_mma_get_head_padded(DKQ);
-    constexpr int DVp  = ggml_cuda_fattn_mma_get_head_padded(DV);
+    constexpr int DKQp = GGML_PAD(DKQ, 16);
+    constexpr int DVp  = GGML_PAD(DV, 16);
 
     if (cols_per_warp > ncols) {
         NO_DEVICE_CODE;
@@ -1331,11 +1326,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #elif defined(AMD_WMMA_AVAILABLE) && defined(RDNA3)
     T_C_VKQ VKQ_C[DVp % 32 != 0      ? DVp/T_C_VKQ::J : DVp/(2*T_C_VKQ::J)];
 #elif defined(AMD_MFMA_AVAILABLE)
-    T_C_VKQ VKQ_C[                                     DVp/T_C_VKQ::J];
+    T_C_VKQ VKQ_C[                                      DVp/T_C_VKQ::J];
 #elif defined(AMD_WMMA_AVAILABLE)
-    T_C_VKQ VKQ_C[                                     DVp/(2*T_C_VKQ::J)];
+    T_C_VKQ VKQ_C[                                      DVp/(2*T_C_VKQ::J)];
 #else // Volta
-    T_C_VKQ VKQ_C[                                     DVp/(2*T_C_VKQ::J)];
+    T_C_VKQ VKQ_C[                                      DVp/(2*T_C_VKQ::J)];
 #endif // defined(TURING_MMA_AVAILABLE)
 
     float KQ_rowsum[cols_per_thread] = {0.0f};
@@ -1410,6 +1405,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         static_assert(nbatch_K2 == DKQp/2 && nbatch_V2 == DVp/2, "K/V tile batching not implemented for padded head sizes");
         static_assert(DKQ == DV, "pad zero-fill for DKQ != DV requires separate handling of the aliased V tile");
 
+        const half2 zero[4] = {{0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}};
         const int tid = threadIdx.y*warp_size + threadIdx.x;
 #pragma unroll
         for (int i0 = 0; i0 < nbatch_fa; i0 += nwarps*warp_size) {
@@ -1420,13 +1416,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             }
 
 #pragma unroll
-            for (int k = DKQ/2; k < DKQp/2; ++k) {
-                tile_K[i*stride_tile_K + k] = make_half2(0.0f, 0.0f);
+            for (int k = DKQ/2; k < DKQp/2; k += 4) {
+                ggml_cuda_memcpy_1<16>(tile_K + i*stride_tile_K + k, zero);
             }
-            if (nstages > 1) { // tile_V is only a separate buffer with multi-stage loading.
+            if constexpr (nstages > 1) { // tile_V is only a separate buffer with multi-stage loading.
 #pragma unroll
-                for (int k = DV/2; k < DVp/2; ++k) {
-                    tile_V[i*stride_tile_V + k] = make_half2(0.0f, 0.0f);
+                for (int k = DV/2; k < DVp/2; k += 4) {
+                    ggml_cuda_memcpy_1<16>(tile_V + i*stride_tile_V + k, zero);
                 }
             }
         }
@@ -2133,7 +2129,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const int nwarps         = nthreads / warp_size_host;
 
     constexpr bool V_is_K_view = DKQ == 576; // Guaranteed by the kernel selection logic in fattn.cu
-    constexpr int  DKQp        = ggml_cuda_fattn_mma_get_head_padded(DKQ);
+    constexpr int  DKQp        = GGML_PAD(DKQ, 16);
 
     // KV tile strides must match flash_attn_ext_f16_iter / _process_tile.
     const bool swz = ggml_cuda_fattn_mma_get_swizzled(DKQ, DV, ncols, cc);
