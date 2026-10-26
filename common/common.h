@@ -311,6 +311,14 @@ struct common_params_model {
     std::string hf_file     = ""; // HF file
     std::string docker_repo = ""; // Docker repo
 
+    std::vector<std::string> shards; // shards following path, for splits not named <name>-%05d-of-%05d.gguf
+
+    std::vector<std::string> get_paths() const {
+        std::vector<std::string> paths = { path };
+        paths.insert(paths.end(), shards.begin(), shards.end());
+        return paths;
+    }
+
     std::string get_name() const {
         if (!hf_repo.empty()) {
             return hf_repo;
@@ -1016,6 +1024,9 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
+
+// a single path also finds the other splits by file name
+struct llama_model * common_model_load(const std::vector<std::string> & paths, const struct llama_model_params & mparams);
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);

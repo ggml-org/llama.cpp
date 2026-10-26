@@ -132,7 +132,8 @@ class ModelBase:
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
                  fp8_as_q8: bool = False,
-                 fuse_qkv: bool = False):
+                 fuse_qkv: bool = False,
+                 ple_split: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -197,8 +198,10 @@ class ModelBase:
                 logger.info("heuristics unable to detect tensor dtype, defaulting to --outtype f16")
 
         # Configure GGUF Writer
+        second_shard_tensors = [gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight"] if ple_split else []
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
-                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard,
+                                           second_shard_tensors=second_shard_tensors)
 
         # Mistral specific
         self.disable_mistral_community_chat_template = disable_mistral_community_chat_template

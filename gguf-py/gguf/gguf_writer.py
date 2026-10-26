@@ -11,7 +11,7 @@ from enum import Enum, auto
 from math import prod
 from pathlib import Path
 from io import BufferedWriter
-from typing import IO, Any, Sequence, Mapping
+from typing import IO, Any, Collection, Sequence, Mapping
 from string import ascii_letters, digits
 
 import numpy as np
@@ -86,7 +86,8 @@ class GGUFWriter:
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+        second_shard_tensors: Collection[str] = (),
     ):
         self.fout = None
         self.path = Path(path) if path else None
@@ -101,13 +102,21 @@ class GGUFWriter:
         self.split_max_size = split_max_size
         self.dry_run = dry_run
         self.small_first_shard = small_first_shard
+        self.second_shard_tensors = set(second_shard_tensors)
         logger.info("gguf: This GGUF file is for {0} Endian only".format(
             "Big" if self.endianess == GGUFEndian.BIG else "Little",
         ))
         self.state = WriterState.NO_FILE
 
+        # a fixed shard index lets this shard be shared by models with a different shard count
+        if self.second_shard_tensors:
+            if self.use_temp_file:
+                raise ValueError("Cannot use temp file with second_shard_tensors")
+            self.tensors.append({})
+
         if self.small_first_shard:
             self.tensors.append({})
+        self.cur_shard = len(self.tensors) - 1 if self.small_first_shard else 0
 
         self.add_architecture()
 
@@ -177,6 +186,9 @@ class GGUFWriter:
 
         if path is not None:
             self.path = path
+
+        if self.second_shard_tensors and not self.tensors[1]:
+            raise ValueError(f"None of the second shard tensors were added: {sorted(self.second_shard_tensors)}")
 
         if self.path is not None:
             filenames = self.print_plan()
@@ -364,18 +376,23 @@ class GGUFWriter:
             if tensor_dtype == np.uint8:
                 tensor_shape = quant_shape_from_byte_shape(tensor_shape, raw_dtype)
 
+        if name in self.second_shard_tensors:
+            self.tensors[1][name] = TensorInfo(shape=tensor_shape, dtype=dtype, nbytes=tensor_nbytes)
+            return
+
         # make sure there is at least one tensor before splitting
-        if len(self.tensors[-1]) > 0:
+        if len(self.tensors[self.cur_shard]) > 0:
             if (  # split when over tensor limit
                 self.split_max_tensors != 0
-                and len(self.tensors[-1]) >= self.split_max_tensors
+                and len(self.tensors[self.cur_shard]) >= self.split_max_tensors
             ) or (   # split when over size limit
                 self.split_max_size != 0
-                and sum(ti.nbytes for ti in self.tensors[-1].values()) + tensor_nbytes > self.split_max_size
+                and sum(ti.nbytes for ti in self.tensors[self.cur_shard].values()) + tensor_nbytes > self.split_max_size
             ):
                 self.tensors.append({})
+                self.cur_shard = len(self.tensors) - 1
 
-        self.tensors[-1][name] = TensorInfo(shape=tensor_shape, dtype=dtype, nbytes=tensor_nbytes)
+        self.tensors[self.cur_shard][name] = TensorInfo(shape=tensor_shape, dtype=dtype, nbytes=tensor_nbytes)
 
     def add_tensor(
         self, name: str, tensor: np.ndarray[Any, Any], raw_shape: Sequence[int] | None = None,
@@ -397,7 +414,8 @@ class GGUFWriter:
         self.add_tensor_info(name, shape, tensor.dtype, tensor.nbytes, raw_dtype=raw_dtype)
 
         if self.temp_file is None:
-            self.tensors[-1][name].tensor = tensor
+            shard = self.tensors[1] if name in self.second_shard_tensors else self.tensors[self.cur_shard]
+            shard[name].tensor = tensor
             return
 
         tensor.tofile(self.temp_file)

@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "llama.h"
 
+#include <string>
 #include <vector>
 
 enum common_params_fit_status {
@@ -15,7 +16,7 @@ enum common_params_fit_status {
 //   - its context follows the context of the main model, so its memory is measured again whenever that context changes
 //   - shares_model tells the fit that the weights are already counted in the main model, as for an MTP context
 struct common_fit_extra_model {
-    const char * path_model;
+    std::vector<std::string> paths_model;
     llama_model_params * mparams;
     llama_context_params * cparams;
     bool shares_model;
@@ -27,7 +28,7 @@ struct common_fit_extra_model {
 //   - only parameters that have the same value as in llama_default_model_params are modified
 //     with the exception of the context size which is modified if and only if equal to 0
 common_params_fit_status common_fit_params(
-                         const char * path_model,
+    const std::vector<std::string> & paths_model,
                  llama_model_params * mparams,
                llama_context_params * cparams,
                               float * tensor_split,          // writable buffer for tensor split, needs at least llama_max_devices elements
@@ -39,7 +40,7 @@ common_params_fit_status common_fit_params(
 
 // print estimated memory to stdout
 void common_fit_print(
-                         const char * path_model,
+    const std::vector<std::string> & paths_model,
                  llama_model_params * mparams,
                llama_context_params * cparams);
 
@@ -57,7 +58,7 @@ using common_device_memory_data_vec = std::vector<common_device_memory_data>;
 
 // Load a model + context with no_alloc and return the per-device memory breakdown.
 common_device_memory_data_vec common_get_device_memory_data(
-                         const char * path_model,
+    const std::vector<std::string> & paths_model,
            const llama_model_params * mparams,
          const llama_context_params * cparams,
     std::vector<ggml_backend_dev_t> & devs,

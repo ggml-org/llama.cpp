@@ -3063,6 +3063,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_DOWNLOAD, LLAMA_EXAMPLE_TOKENIZE}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
+        {"--shard"}, "FNAME,...",
+        "comma-separated paths of the model splits following the one given by -m, in order\n"
+        "use it when the splits are not named <name>-%05d-of-%05d.gguf, e.g. to share a split between models",
+        [](common_params & params, const std::string & value) {
+            for (const auto & item : parse_csv_row(value)) {
+                params.model.shards.push_back(item);
+            }
+        }
+    ).set_env("LLAMA_ARG_SHARD"));
+    add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {

@@ -102,6 +102,10 @@ def parse_args() -> argparse.Namespace:
         help="do not add tensors to the first split (disabled by default)"
     )
     parser.add_argument(
+        "--ple-split", action="store_true",
+        help="put the per-layer embedding table alone in the second split, so it can be shared between quants (load with --shard)"
+    )
+    parser.add_argument(
         "--metadata", type=Path,
         help="Specify the path for an authorship metadata override file"
     )
@@ -219,7 +223,7 @@ def main() -> None:
         "auto": gguf.LlamaFileType.GUESSED,
     }
 
-    is_split = args.split_max_tensors > 0 or args.split_max_size != "0"
+    is_split = args.split_max_tensors > 0 or args.split_max_size != "0" or args.ple_split
     if args.use_temp_file and is_split:
         logger.error("Error: Cannot use temp file when splitting")
         sys.exit(1)
@@ -299,6 +303,7 @@ def main() -> None:
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
                                      fuse_qkv=args.fuse_qkv,
+                                     ple_split=args.ple_split,
                                      )
 
         if args.vocab_only:
