@@ -1,4 +1,11 @@
-import { AUTO_SCROLL_AT_BOTTOM_THRESHOLD, AUTO_SCROLL_INTERVAL } from '$lib/constants';
+import {
+	AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
+	AUTO_SCROLL_INTERVAL,
+	USER_SCROLL_INTENT_MS
+} from '$lib/constants';
+import { KeyboardKey } from '$lib/enums';
+
+const SCROLL_UP_KEYS: string[] = [KeyboardKey.ARROW_UP, KeyboardKey.HOME, KeyboardKey.PAGE_UP];
 
 export interface AutoScrollOptions {
 	disabled?: boolean;
@@ -11,17 +18,26 @@ export interface AutoScrollOptions {
  * - Auto-scrolls to bottom during streaming/loading
  * - Stops auto-scroll when user manually scrolls up
  * - Resumes auto-scroll when user scrolls back to bottom
+ *
+ * Only the reader's own input (wheel, touch, scroll keys, scrollbar drag)
+ * counts as scrolling up: the page also moves up on its own while a
+ * response streams (scroll anchoring, blocks re-rendering shorter, the
+ * send animation), and that must not stop following the response.
  */
 export class AutoScrollController {
 	private _autoScrollEnabled = $state(true);
 	private _container: HTMLElement | undefined;
 	private _disabled: boolean;
+	private _draggingScrollbar = false;
 	private _lastScrollTop = $state(0);
+	private _lastUserIntentAt = 0;
 	private _mutationObserver: MutationObserver | null = null;
 	private _observerEnabled = false;
 	private _rafPending = false;
 	private _scrollInterval: ReturnType<typeof setInterval> | undefined;
+	private _unbindUserIntent: (() => void) | null = null;
 	private _userScrolledUp = $state(false);
+
 	get autoScrollEnabled(): boolean {
 		return this._autoScrollEnabled;
 	}
@@ -40,6 +56,8 @@ export class AutoScrollController {
 	destroy(): void {
 		this.stopInterval();
 		this._doStopObserving();
+		this._unbindUserIntent?.();
+		this._unbindUserIntent = null;
 	}
 
 	/**
@@ -62,8 +80,10 @@ export class AutoScrollController {
 		const distanceFromBottom = scrollHeight - clientHeight - scrollTop;
 		const isScrollingUp = scrollTop < this._lastScrollTop;
 		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
+		const isUserScrolling =
+			this._draggingScrollbar || performance.now() - this._lastUserIntentAt < USER_SCROLL_INTENT_MS;
 
-		if (isScrollingUp && !isAtBottom) {
+		if (isScrollingUp && !isAtBottom && isUserScrolling) {
 			this._userScrolledUp = true;
 			this._autoScrollEnabled = false;
 		} else if (isAtBottom && this._userScrolledUp) {
@@ -100,7 +120,13 @@ export class AutoScrollController {
 	 */
 	setContainer(container: HTMLElement | undefined): void {
 		this._doStopObserving();
+		this._unbindUserIntent?.();
+		this._unbindUserIntent = null;
 		this._container = container;
+
+		if (container) {
+			this._unbindUserIntent = this._bindUserIntent(container);
+		}
 
 		if (this._observerEnabled && container && !this._disabled) {
 			this._doStartObserving();
@@ -183,6 +209,52 @@ export class AutoScrollController {
 		} else {
 			this.stopInterval();
 		}
+	}
+
+	/**
+	 * Records the reader's own scroll input, so `handleScroll` can tell their
+	 * scrolling from the page moving on its own.
+	 */
+	private _bindUserIntent(container: HTMLElement): () => void {
+		const isPage = container === document.documentElement;
+		const target: HTMLElement | Window = isPage ? window : container;
+		const markIntent = () => {
+			this._lastUserIntentAt = performance.now();
+		};
+		const onWheel = (event: WheelEvent) => {
+			if (event.deltaY < 0) markIntent();
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (
+				SCROLL_UP_KEYS.includes(event.key) ||
+				(event.key === KeyboardKey.SPACE && event.shiftKey)
+			) {
+				markIntent();
+			}
+		};
+		// a press right of the content box lands on the scrollbar
+		const onPointerDown = (event: PointerEvent) => {
+			const left = isPage ? 0 : container.getBoundingClientRect().left;
+
+			this._draggingScrollbar = event.clientX >= left + container.clientWidth;
+		};
+		const onPointerUp = () => {
+			this._draggingScrollbar = false;
+		};
+
+		target.addEventListener('wheel', onWheel as EventListener, { passive: true });
+		target.addEventListener('touchmove', markIntent, { passive: true });
+		target.addEventListener('keydown', onKeyDown as EventListener);
+		target.addEventListener('pointerdown', onPointerDown as EventListener);
+		window.addEventListener('pointerup', onPointerUp);
+
+		return () => {
+			target.removeEventListener('wheel', onWheel as EventListener);
+			target.removeEventListener('touchmove', markIntent);
+			target.removeEventListener('keydown', onKeyDown as EventListener);
+			target.removeEventListener('pointerdown', onPointerDown as EventListener);
+			window.removeEventListener('pointerup', onPointerUp);
+		};
 	}
 
 	private _doStartObserving(): void {

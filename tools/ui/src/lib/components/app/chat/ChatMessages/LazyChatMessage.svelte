@@ -6,6 +6,8 @@
 	interface Props {
 		chatActions: ChatMessageActions;
 		class?: string;
+		/** Mount right away instead of waiting for the row to near the viewport. */
+		eager?: boolean;
 		isLastAssistantMessage?: boolean;
 		isLastUserMessage?: boolean;
 		message: DatabaseMessage;
@@ -17,6 +19,7 @@
 	let {
 		chatActions,
 		class: className = '',
+		eager = false,
 		isLastAssistantMessage = false,
 		isLastUserMessage = false,
 		message,
@@ -34,8 +37,17 @@
 	let mounted = $state(false);
 	let wrapperEl: HTMLDivElement | undefined = $state();
 
+	// eager rows render in the same pass as the list, so a conversation
+	// landing at its bottom never paints empty placeholders there; latch it,
+	// since a row stops being eager once newer messages push it up
+	let shouldMount = $derived(mounted || eager);
+
 	$effect(() => {
-		if (mounted || !wrapperEl) return;
+		if (eager) mounted = true;
+	});
+
+	$effect(() => {
+		if (shouldMount || !wrapperEl) return;
 
 		const observer = new IntersectionObserver(
 			(entries) => {
@@ -65,10 +77,11 @@
 
 <div
 	bind:this={wrapperEl}
+	class:chat-message--eager={eager}
 	class:chat-message--synthetic={Boolean(message.isSynthetic)}
 	class="chat-message"
 >
-	{#if mounted}
+	{#if shouldMount}
 		<ChatMessage
 			{chatActions}
 			class={className}
@@ -101,5 +114,14 @@
 	 */
 	.chat-message--synthetic {
 		--chat-message-intrinsic-size: 40px;
+	}
+
+	/*
+	 * A freshly created row is skipped for a frame until its viewport
+	 * proximity is determined, so the rows a conversation lands on would paint
+	 * as empty placeholders. They sit at the bottom anyway, so lay them out.
+	 */
+	.chat-message--eager {
+		content-visibility: visible;
 	}
 </style>

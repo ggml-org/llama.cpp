@@ -1,6 +1,7 @@
 <script lang="ts">
 	import LazyChatMessage from './LazyChatMessage.svelte';
 	import { ChatMessageUserPending } from '$lib/components/app';
+	import { LANDING_EAGER_ROWS } from '$lib/constants';
 	import { MessageRole } from '$lib/enums';
 	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import type { ChatMessageActions } from '$lib/types';
@@ -237,14 +238,15 @@
 	});
 </script>
 
-<!-- Re-created per conversation, so the CSS fade-in below plays on every
-     navigation into a chat route. -->
+<!-- Re-created per conversation, so each one starts from fresh rows that
+     mount eagerly at its bottom. -->
 {#key conversationsStore.activeConversation?.id ?? 'new'}
 	<div class="chat-messages">
-		{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
+		{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages }, index (message.id)}
 			<LazyChatMessage
 				{chatActions}
 				class="mx-auto mt-12 w-full max-w-3xl"
+				eager={index >= displayMessages.length - LANDING_EAGER_ROWS}
 				{isLastAssistantMessage}
 				{isLastUserMessage}
 				{message}

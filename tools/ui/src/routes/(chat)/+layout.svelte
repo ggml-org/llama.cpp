@@ -23,7 +23,9 @@
 	});
 </script>
 
-<div class={showTabs ? 'md:[--chat-tabs-offset:1.25rem]' : ''}>
+<!-- the offset is the tab bar's full height (pt-3.25 + h-10), so the chat
+     column still fits the viewport and only scrolls when the messages overflow -->
+<div class={showTabs ? 'md:[--chat-tabs-offset:3.3125rem]' : ''}>
 	{#if showTabs}
 		<ChatTabs />
 	{/if}
