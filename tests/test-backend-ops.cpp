@@ -12558,7 +12558,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_pool2d(
                 GGML_OP_POOL_MAX, GGML_TYPE_F32, {n_ps, 4, n_tokens, 1}, 128, 1, 128, 1, 0, 0));
         }
-    }   
+    }
 
     // RMS_NORM and fused variants at decode and prefill shapes
     for (int64_t n_tokens : {1, 512}) {
