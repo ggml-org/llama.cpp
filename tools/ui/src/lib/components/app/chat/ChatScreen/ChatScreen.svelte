@@ -268,11 +268,7 @@
 	}
 
 	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
-		if (draft.message || draft.files.length > 0) {
-			chatStore.savePendingDraft(draft.message, draft.files);
-		}
-
-		await chatStore.addSystemPrompt();
+		await chatStore.addSystemPrompt(draft);
 	}
 
 	$effect(() => {
@@ -288,13 +284,6 @@
 	});
 
 	onMount(() => {
-		const pendingDraft = chatStore.consumePendingDraft();
-
-		if (pendingDraft) {
-			initialMessage = pendingDraft.message;
-			fileUpload.uploadedFiles = pendingDraft.files;
-		}
-
 		autoScroll.startObserving();
 
 		if (!disableAutoScroll) {
