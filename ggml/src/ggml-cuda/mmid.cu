@@ -1,6 +1,8 @@
 #include "common.cuh"
 #include "mmid.cuh"
 
+#define CUDA_MM_IDS_ZERO_BLOCK_SIZE 256
+
 // To reduce shared memory use, store "it" and "iex_used" with 22/10 bits each.
 struct mm_ids_helper_store {
     uint32_t data;
@@ -53,9 +55,13 @@ static __global__ void mm_ids_helper(
             int iex_used = -1; // The index at which the expert is used, if any.
             for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
                 const int expert_used = ids[it*si1 + iex];
-                nex_prev += expert_used < expert;
+                nex_prev += expert_used != -1 && expert_used < expert;
                 if (expert_used == expert) {
                     iex_used = iex;
+                }
+                // a skipped slot belongs to no expert, so the first block marks it in the inverse map
+                if (write_inverse && expert == 0 && expert_used == -1) {
+                    ids_src1[it*n_expert_used + iex] = -1;
                 }
             }
 
@@ -79,7 +85,12 @@ static __global__ void mm_ids_helper(
             const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < n_tokens ?
                 ids[it*si1 + iex] : INT_MAX;
             const int iex_used = expert_used == expert ? iex : -1;
-            nex_prev += expert_used < expert;
+            nex_prev += expert_used != -1 && expert_used < expert;
+
+            // a skipped slot belongs to no expert, so the first block marks it in the inverse map
+            if (write_inverse && expert == 0 && expert_used == -1) {
+                ids_src1[it*n_expert_used + iex] = -1;
+            }
 
             // Whether the threads at this token position have used the expert:
             const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
@@ -115,6 +126,26 @@ static __global__ void mm_ids_helper(
             ids_src1[it*n_expert_used + iex_used] = nex_prev + itc;
         } else {
             ids_src1[nex_prev + itc] = it*sis1 + iex_used % nchannels_y;
+        }
+    }
+
+    // skipped slots shrink the compact columns, so the last block fills the tail that no expert writes
+    if (expert == static_cast<int>(gridDim.x) - 1) {
+        const int ncols = nex_prev + it_compact;
+        const int ncols_max = n_tokens*n_expert_used;
+
+        // point the unused forward map at row 0 to keep the quantizer in bounds
+        if (!write_inverse) {
+            for (int i = ncols + threadIdx.x; i < ncols_max; i += warp_size) {
+                ids_src1[i] = 0;
+            }
+        }
+
+        // mark the seam tiles past the last column as empty
+        const int ntiles     = fastdiv(ncols     + tile_width.z - 1, tile_width);
+        const int ntiles_max = fastdiv(ncols_max + tile_width.z - 1, tile_width);
+        for (int jt = ntiles + threadIdx.x; jt < ntiles_max; jt += warp_size) {
+            tile_spec[jt] = {0, 0, 0, /*padding =*/ 0};
         }
     }
 
@@ -161,6 +192,31 @@ static void launch_mm_ids_helper(
     GGML_ASSERT(nbytes_shared <= smpbo);
     mm_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>
         (ids, ids_src1, ids_dst, tile_spec, n_tokens, n_expert_used_var, nchannels_y, tile_width_fd, si1, sis1, write_inverse);
+}
+
+static __global__ void mm_ids_zero_dst(
+        const int32_t * __restrict__ ids, float * __restrict__ dst,
+        const int ne0, const int si1, const int64_t s1, const int64_t s2) {
+    const int it  = blockIdx.x; // token
+    const int iex = blockIdx.y; // slot
+
+    if (ids[it*si1 + iex] != -1) {
+        return;
+    }
+
+    float * dst_row = dst + it*s2 + iex*s1;
+
+    for (int i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
+        dst_row[i0] = 0.0f;
+    }
+}
+
+void ggml_cuda_launch_mm_ids_zero_dst(
+        const int32_t * ids, float * dst,
+        const int n_tokens, const int n_expert_used, const int ne0, const int si1,
+        const int64_t s1, const int64_t s2, cudaStream_t stream) {
+    const dim3 num_blocks(n_tokens, n_expert_used, 1);
+    mm_ids_zero_dst<<<num_blocks, CUDA_MM_IDS_ZERO_BLOCK_SIZE, 0, stream>>>(ids, dst, ne0, si1, s1, s2);
 }
 
 void ggml_cuda_launch_mm_ids_helper(

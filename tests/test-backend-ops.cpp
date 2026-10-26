@@ -1196,6 +1196,7 @@ static bool op_filter_entry_matches(std::string_view entry, std::string_view op_
 
 // TODO: [TAG_MUL_MAT_ID_SKIP] see https://github.com/ggml-org/llama.cpp/pull/26631
 static bool backend_lacks_skipped_ids(ggml_backend_t backend, ggml_cgraph * gf) {
+    return false; // local: CUDA skip support from #26631 (1a2a346fae reverted)
     const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
     if (strcmp(name, "CUDA") != 0 && strcmp(name, "ROCm") != 0 && strcmp(name, "MUSA") != 0) {
         return false;

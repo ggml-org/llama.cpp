@@ -18,6 +18,14 @@ static __global__ void add_id_kernel(
 
     float * dst_row = (float *)((char *)dst + i1*nb1 + i2*nb2);
     const float * src0_row = (const float *)((const char *)src0 +  i1*nb01 + i2*nb02);
+
+    if (i11 == -1) {
+        for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
+            dst_row[i0] = src0_row[i0];
+        }
+        return;
+    }
+
     const float * src1_row = (const float *)((const char *)src1 + i11*nb11);
 
     for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
