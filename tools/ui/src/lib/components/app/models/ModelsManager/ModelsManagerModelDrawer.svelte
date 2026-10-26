@@ -137,12 +137,16 @@
 
 <!-- the pane is a drawer over whatever is open, from the right on desktop and from the
      bottom on a phone: Escape, the overlay and the pane's own close button clear it -->
+<!-- bound both ways: a drag to dismiss writes the drawer's own open state, which a
+     one-way prop would keep closed after the store opens it again -->
 <Drawer.Root
+	bind:open={
+		() => selected !== null,
+		(open) => {
+			if (!open) uiStore.closeModelDetails();
+		}
+	}
 	direction={deviceStore.isMobile ? 'bottom' : 'right'}
-	onOpenChange={(open) => {
-		if (!open) uiStore.closeModelDetails();
-	}}
-	open={selected !== null}
 	shouldScaleBackground={false}
 >
 	<Drawer.Content
