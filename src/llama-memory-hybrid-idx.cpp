@@ -1,20 +1,16 @@
 #include "llama-memory-hybrid-idx.h"
 
-#include <algorithm>
-#include <cmath>
-#include <type_traits>
-
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-model.h"
-
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <iterator>
 #include <stdexcept>
+#include <type_traits>
 
 //
 // llama_memory_hybrid_idx
@@ -22,6 +18,7 @@
 
 llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         const llama_model & model,
+                     bool   no_alloc,
                             /* attn */
                 ggml_type   type_k,
                 ggml_type   type_v,
@@ -45,6 +42,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
     const layer_filter_cb & filter_idx) :
     llama_memory_hybrid(
         model,
+        no_alloc,
         type_k, type_v, v_trans, kv_size, n_pad, n_swa, swa_type,
         type_r, type_s, rs_size,
         n_seq_max, n_rs_seq, offload, unified,
@@ -68,7 +66,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
         return new llama_kv_cache(
-            model, hparams_idx, type_k, type_v, v_trans, offload, unified,
+            model, no_alloc, hparams_idx, type_k, type_v, v_trans, offload, unified,
             kv_size, n_seq_max, n_pad, n_swa, swa_type,
             nullptr, filter_idx, nullptr, nullptr, "idx_");
     }()) {}

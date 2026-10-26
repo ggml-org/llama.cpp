@@ -61,7 +61,6 @@ struct llama_hparams {
     //       for example: n_embd_out() vs n_embd_out_impl
 
     bool vocab_only;
-    bool no_alloc; // TODO: no_alloc is not a model hyperparameter; move it out of llama_hparams
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;

@@ -18,6 +18,7 @@ class llama_memory_recurrent : public llama_memory_i {
 public:
     llama_memory_recurrent(
             const llama_model & model,
+                         bool   no_alloc,
                     ggml_type   type_r,
                     ggml_type   type_s,
                          bool   offload,
@@ -120,8 +121,8 @@ private:
 
     const uint32_t n_seq_max = 1;
 
-    // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    // ggml contexts for the RS cache along with the allocated backend buffers:
+    llama_memory_bufs ctxs_bufs;
 
     // true if no layers - can happen if the layer filter removes all layers
     bool is_empty() const;

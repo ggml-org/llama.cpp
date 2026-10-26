@@ -15,6 +15,7 @@ class llama_kv_cache_msa : public llama_memory_i {
 public:
     llama_kv_cache_msa(
             const llama_model & model,
+                         bool   no_alloc,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,

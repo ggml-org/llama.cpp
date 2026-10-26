@@ -718,6 +718,54 @@ struct case_state_restore_fragmented : ctx_test {
     }
 };
 
+//
+// no_alloc
+//
+
+// - load a second instance of the model with no_alloc, so the tensor data stays on disk
+// - create a context from it, which reserves the compute graphs over the dummy buffers
+// - the memory use must still be reported, and nothing real may be allocated for the memory
+struct case_noalloc : ctx_test {
+    const char * name() const override { return "noalloc"; }
+
+    const char * description() const override {
+        return "with no_alloc the memory use is simulated: non-zero breakdown, null buffer bases";
+    }
+
+    case_result run(model_run & mr) const override {
+        const std::string & path = mr.params.model.path;
+        CTX_REQUIRE(!path.empty(), "the model path is not known");
+
+        llama_model_params mparams = llama_model_default_params();
+        mparams.no_alloc  = true;
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
+
+        llama_model_ptr model(llama_model_load_from_file(path.c_str(), mparams));
+        CTX_REQUIRE(model, "failed to load the model with no_alloc");
+
+        auto ctx = init_ctx(model.get(), common_context_params_to_llama(mr.params), 0);
+        CTX_REQUIRE(ctx, "failed to create the context with no_alloc");
+
+        size_t n_ctx_mem = 0;
+        for (const auto & [_, data] : llama_get_memory_breakdown(ctx.get())) {
+            n_ctx_mem += data.context;
+        }
+
+        // models without a memory module (BERT, diffusion) have a null memory
+        if (llama_get_memory(ctx.get()) != nullptr) {
+            CTX_REQUIRE(n_ctx_mem > 0, "the simulated memory breakdown is zero");
+        } else {
+            CTX_REQUIRE(n_ctx_mem == 0, "a model without memory reported context memory");
+        }
+
+        for (ggml_backend_buffer_t buf : llama_memory_get_buffers(llama_get_memory(ctx.get()))) {
+            CTX_REQUIRE(ggml_backend_buffer_get_base(buf) == nullptr, "a memory buffer was really allocated");
+        }
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_kv_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -733,6 +781,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_restore_failure>());
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
+    cases.push_back(std::make_unique<case_noalloc>());
 
     return cases;
 }
