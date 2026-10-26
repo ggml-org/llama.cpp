@@ -40,6 +40,12 @@ static __global__ void lightning_indexer_kernel_mma(
     static_assert(N_EMBD           % MMA_DIM == 0, "N_EMBD must be a multiple of 16");
     static_assert(K_VECS_PER_BLOCK % MMA_DIM == 0, "K_VECS_PER_BLOCK must be a multiple of 16");
 
+#if defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
+    using tile_qk = ggml_cuda_mma::tile<MMA_DIM, MMA_DIM, float, ggml_cuda_mma::DATA_LAYOUT_J_MAJOR>;
+#else
+    using tile_qk = ggml_cuda_mma::tile<MMA_DIM, MMA_DIM, float>;
+#endif
+
     const int i_batch  = blockIdx.y;
     const int i_stream = blockIdx.z;
     const int i_warp   = threadIdx.y;
@@ -125,7 +131,7 @@ static __global__ void lightning_indexer_kernel_mma(
         }
 
         for (int kt = i_warp; kt < N_KV_TILES; kt += WARPS_PER_BLOCK) {
-            ggml_cuda_mma::tile<MMA_DIM, MMA_DIM, float> Dqk;
+            tile_qk Dqk;
 #pragma unroll
             for (int et = 0; et < N_EMBD_TILES; ++et) {
                 ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2, input_layout> Aq;
@@ -136,8 +142,8 @@ static __global__ void lightning_indexer_kernel_mma(
             }
 #pragma unroll
             for (int l = 0; l < Dqk.ne; ++l) {
-                const int head_local = Dqk.get_j(l);
-                const int kv_local   = kt*MMA_DIM + Dqk.get_i(l);
+                const int head_local = Dqk.get_i(l);
+                const int kv_local   = kt*MMA_DIM + Dqk.get_j(l);
                 qk_chunk[head_local][kv_local] = Dqk.x[l];
             }
         }
