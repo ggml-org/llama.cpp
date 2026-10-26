@@ -1049,7 +1049,9 @@ static void func_args_not_string(json & messages) {
                         try {
                             args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
+                            // a truncated or otherwise invalid call from an earlier
+                            // turn must not fail the whole request: keep it as-is
+                            LOG_WRN("%s: keeping raw tool call arguments: %s\n", __func__, e.what());
                         }
                     }
                 }
