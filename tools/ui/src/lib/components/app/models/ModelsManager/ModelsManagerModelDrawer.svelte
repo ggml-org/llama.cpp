@@ -1,38 +1,28 @@
 <script lang="ts">
 	import ModelsManagerModelConfiguration from './ModelsManagerModelConfiguration/ModelsManagerModelConfiguration.svelte';
-	import { downloadGroups } from './utils';
+	import { downloadGroups, findModelOption } from './utils';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import { conversationsStore, deviceStore, modelsStore, serverStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { untrack } from 'svelte';
 
-	// tracked downloads are not in the listing yet, so their own rows are searched too
+	// tracked downloads are not in the listing yet
 	let downloads = $derived(
 		downloadGroups(modelsStore.status.getDownloadEntries(), modelsStore.models, (repo) =>
 			modelsStore.status.getDraftSidecars(repo)
 		)
 	);
 
-	let allModels = $derived(modelsStore.models);
-
-	/** Find a model by its qualified id or raw name, in the listing or the downloads. */
-	function findOption(key: string | null): ModelOption | null {
-		if (!key) return null;
-
-		const matches = (candidate: ModelOption) => candidate.id === key || candidate.model === key;
-
-		return allModels.find(matches) ?? downloads.find((group) => matches(group.base))?.base ?? null;
-	}
-
-	let selected = $derived(findOption(uiStore.modelDetailsFocus));
-	// The pane renders the selection, else the model it last showed, so its copy stays
-	// in place while it closes.
+	let selected = $derived(
+		findModelOption(uiStore.modelDetailsFocus, modelsStore.models, downloads)
+	);
+	// keep the last model on screen while the drawer closes
 	let lastPicked = $state<ModelOption | null>(null);
 	let target = $derived(selected ?? lastPicked);
 	let shownId = $state<string | null>(null);
 	let isSwapping = $state(false);
 	let fade = $state<'open' | 'swap'>('open');
-	let shownOption = $derived(findOption(shownId));
+	let shownOption = $derived(findModelOption(shownId, modelsStore.models, downloads));
 
 	$effect(() => {
 		const option = selected;
@@ -96,9 +86,10 @@
 		await modelsStore.status.load(option.model);
 	}
 
-	/** Close the pane and leave the models page, if open, with the composer focused. */
+	/** Close the drawer, the picker and the models page, then focus the composer. */
 	function returnToChat(): void {
 		uiStore.closeModelDetails();
+		uiStore.closeModelsSelector();
 		uiStore.requestComposerFocus();
 		void uiStore.closeModelsManager();
 	}
@@ -135,10 +126,7 @@
 	}
 </script>
 
-<!-- the pane is a drawer over whatever is open, from the right on desktop and from the
-     bottom on a phone: Escape, the overlay and the pane's own close button clear it -->
-<!-- bound both ways: a drag to dismiss writes the drawer's own open state, which a
-     one-way prop would keep closed after the store opens it again -->
+<!-- bound both ways: vaul writes its own open state on a drag to dismiss, and a one-way prop would then keep it closed -->
 <Drawer.Root
 	bind:open={
 		() => selected !== null,

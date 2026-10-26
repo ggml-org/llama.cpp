@@ -2,6 +2,7 @@
 	import ModelsManagerModelsTable from './ModelsManagerModelsTable.svelte';
 	import {
 		downloadGroups,
+		findModelOption,
 		groupModelQuants,
 		modelCapability,
 		modelContextLength,
@@ -29,9 +30,6 @@
 	let contextLimit = $state(0);
 	let modalityFilter = $state<ModalityKey[]>([]);
 	let capabilityFilter = $state<ModelCapability[]>([]);
-	// the pane is the global model drawer, so the row highlight follows what it shows
-	let selectedId = $derived(uiStore.modelDetailsFocus);
-
 	// tracked downloads get their own section, listed like any other model
 	let downloads = $derived(
 		downloadGroups(modelsStore.status.getDownloadEntries(), modelsStore.models, (repo) =>
@@ -40,6 +38,10 @@
 	);
 
 	let allModels = $derived(modelsStore.models);
+	// the highlighted row is the model the global details drawer shows
+	let selectedId = $derived(
+		findModelOption(uiStore.modelDetailsFocus, allModels, downloads)?.id ?? null
+	);
 
 	let isFavorite = $derived((option: ModelOption) =>
 		modelsStore.favoriteModelIds.has(option.model)

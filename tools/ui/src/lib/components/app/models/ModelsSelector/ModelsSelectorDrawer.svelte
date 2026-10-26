@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { DropdownMenuSearchable } from '$lib/components/app';
 	import { Drawer, DrawerContent } from '$lib/components/ui/drawer';
-	import { cn } from '$lib/components/ui/utils';
 	import { uiStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';
 
@@ -31,16 +30,13 @@
 		placeholder = 'Search models...',
 		searchTerm = ''
 	}: Props = $props();
-
-	let isDetailsOpen = $derived(uiStore.modelDetailsFocus !== null);
 </script>
 
-<!-- the details drawer opens over the picker and leaves it open: the picker steps
-     under the details drawer's backdrop (z-50) until it closes -->
+<!-- the details drawer opens over the picker: the picker stays open under its backdrop -->
 <Drawer bind:open {onOpenChange}>
 	<DrawerContent
-		class={cn('overflow-hidden', isDetailsOpen && 'z-40')}
-		overlayClass={isDetailsOpen ? 'z-40' : undefined}
+		class={['overflow-hidden', uiStore.isModelDetailsOpen && 'z-40']}
+		overlayClass={uiStore.isModelDetailsOpen ? 'z-40' : undefined}
 	>
 		<!-- the wrapper is the scrollport: the search header and the footer stick to it -->
 		<div class="max-h-[min(40rem,calc(100dvh-5rem))] min-h-0 overflow-y-auto">

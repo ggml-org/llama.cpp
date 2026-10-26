@@ -49,7 +49,6 @@
 	}: Props = $props();
 
 	const selectedOption = $derived(ms.getDisplayOption());
-	const isDetailsOpen = $derived(uiStore.modelDetailsFocus !== null);
 	const triggerModel = $derived(selectedOption?.model ?? null);
 
 	let triggerStatus = $derived(
@@ -176,22 +175,20 @@
 		{/if}
 	</Tooltip.Root>
 
-	<!-- the details drawer opens over the menu and leaves it open: the menu steps under
-	     the drawer's backdrop and ignores the clicks and focus that land in the drawer -->
+	<!-- the details drawer opens over the menu: the menu stays open under its backdrop -->
 	<DropdownMenu.Content
 		align="end"
 		class="w-full md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
-		data-under-details={isDetailsOpen || undefined}
+		data-under-details={uiStore.isModelDetailsOpen || undefined}
 		onCloseAutoFocus={(event) => {
-			// the details drawer opening or closing re-runs the menu's focus scope while
-			// the menu stays open: handing focus to the trigger would pop its tooltip
+			// bits-ui re-mounts the focus scope when the drawer opens or closes, so this runs with the menu still open; trigger focus would show its tooltip
 			if (open) event.preventDefault();
 		}}
 		onFocusOutside={(event) => {
-			if (isDetailsOpen) event.preventDefault();
+			if (uiStore.isModelDetailsOpen) event.preventDefault();
 		}}
 		onInteractOutside={(event) => {
-			if (isDetailsOpen) event.preventDefault();
+			if (uiStore.isModelDetailsOpen) event.preventDefault();
 		}}
 		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
@@ -263,8 +260,7 @@
 {/snippet}
 
 <style>
-	/* bits-ui copies the content's z-index onto its wrapper once, on mount, so the
-	   wrapper itself steps under the details drawer's backdrop (z-50) */
+	/* bits-ui copies the content z-index to its floating wrapper only on mount, and the drawer portal is inserted before the wrapper, so at equal z-50 the menu covers the drawer; lower the wrapper while the drawer is open */
 	:global([data-bits-floating-content-wrapper]:has(> [data-under-details])) {
 		z-index: 40 !important;
 	}

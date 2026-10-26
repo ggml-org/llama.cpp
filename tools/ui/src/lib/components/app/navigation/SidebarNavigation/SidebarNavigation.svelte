@@ -9,10 +9,10 @@
 		DialogMcpServers,
 		DialogSettingsChat,
 		Logo,
+		ModelsManagerModelDrawer,
 		SidebarNavigationActions,
 		SidebarNavigationConversationList
 	} from '$lib/components/app';
-	import ModelsManagerModelDrawer from '$lib/components/app/models/ModelsManager/ModelsManagerModelDrawer.svelte';
 	import {
 		ROUTES,
 		SIDEBAR_COLLAPSE_WIDTH,

@@ -38,6 +38,8 @@ class UiStore {
 	modelDetailsFocus = $state<string | null>(null);
 	/** Route the models page returns to: the last page visited before it. */
 	modelsReturnRoute: string = ROUTES.START;
+	/** Bumped to close every open models selector; a counter, so no selector has to reset it. */
+	modelsSelectorCloseSignal = $state(0);
 	/** Expanded desktop sidebar width in px; null keeps the stylesheet default. */
 	sidebarWidth = $state<number | null>(this.loadSidebarWidth());
 
@@ -46,6 +48,11 @@ class UiStore {
 	/** Whether Discover is turned on; every Discover entry point hides without it. */
 	get isDiscoverEnabled(): boolean {
 		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_DISCOVER_MODELS));
+	}
+
+	/** Whether the model details drawer is open. */
+	get isModelDetailsOpen(): boolean {
+		return this.modelDetailsFocus !== null;
 	}
 
 	/** Whether the models manager route is the current page. */
@@ -77,6 +84,11 @@ class UiStore {
 		if (!this.isModelsPageOpen) return;
 
 		await goto(this.modelsReturnRoute);
+	}
+
+	/** Close any open models selector. */
+	closeModelsSelector(): void {
+		this.modelsSelectorCloseSignal++;
 	}
 
 	/** Open the model details drawer over the current page, without leaving it. */
