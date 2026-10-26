@@ -624,7 +624,9 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         ctx_gen_a = res.ctx_gen_a;
-        if (!ctx_v && !ctx_a) {
+        // soprano has no speaker encoder, its mmproj only holds the decoder
+        const bool gen_only = ctx_gen_a && clip_get_projector_type(ctx_gen_a) == PROJECTOR_TYPE_SOPRANO;
+        if (!ctx_v && !ctx_a && !gen_only) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
 
@@ -641,7 +643,8 @@ struct mtmd_context {
 
         // since we already validate n_embd of vision and audio mmproj,
         // we can safely assume that they are the same
-        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
+        // a gen-only mmproj is validated below
+        int n_embd_clip = ctx_v || ctx_a ? clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a) : n_embd_text;
         if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
             throw std::runtime_error(string_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
@@ -899,6 +902,11 @@ struct mtmd_context {
                 {
                     // no vocab tokens are added; the start/end/newline markers are learned embeddings emitted by the encoder
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseek4v>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_DEEPSEEK41V:
+                {
+                    // as deepseek4v: markers come from the encoder, the block is decoded causally
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseek41v>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DOTS_OCR:
             case PROJECTOR_TYPE_DOTS3NOTE_V:
@@ -2082,6 +2090,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_POCKETTTS;
             info.sample_rate = 24000;
             break;
+        case PROJECTOR_TYPE_SOPRANO:
+            info.type = MTMD_GEN_AUDIO_TYPE_SOPRANO;
+            info.sample_rate = 32000;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -2108,6 +2120,9 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.top_k = 50;
             inp.top_p = 1.0f;
             inp.temp  = 0.7f;
+            break;
+        case PROJECTOR_TYPE_SOPRANO:
+            inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
             break;
         default:
             break;
@@ -2169,6 +2184,14 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     }
 
     *out = {};
+
+    if (clip_get_projector_type(ctx_clip) == PROJECTOR_TYPE_SOPRANO) {
+        const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
+        if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->feats || inp->n_feats < 2 * n_embd || inp->n_feats % n_embd != 0 || inp->codes) {
+            LOG_ERR("%s: soprano requires at least 2 frames of features, without codes\n", __func__);
+            return 1;
+        }
+    }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {
         const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
@@ -3045,6 +3068,9 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
         }
         if (ctx->ctx_a) {
             merge(ctx->ctx_a);
+        }
+        if (ctx->ctx_gen_a) {
+            merge(ctx->ctx_gen_a);
         }
         mtmd_memory_usage res;
         res.backend_mem_usage = std::move(total_mem);

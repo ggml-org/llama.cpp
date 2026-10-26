@@ -1077,6 +1077,28 @@ class GGUFWriter:
     def add_attention_compress_rope_freq_base(self, value: float) -> None:
         self.add_float32(Keys.Attention.COMPRESS_ROPE_FREQ_BASE.format(arch=self.arch), value)
 
+    # deepseek41
+    def add_attention_kv_source_layers(self, layers: Sequence[int]) -> None:
+        self.add_key_value(Keys.Attention.KV_SOURCE_LAYERS.format(arch=self.arch), list(layers), GGUFValueType.ARRAY, GGUFValueType.UINT32)
+
+    def add_indexer_source_layers(self, layers: Sequence[int]) -> None:
+        self.add_key_value(Keys.Attention.Indexer.SOURCE_LAYERS.format(arch=self.arch), list(layers), GGUFValueType.ARRAY, GGUFValueType.UINT32)
+
+    def add_indexer_candidate_source_layer(self, layer: int) -> None:
+        self.add_int32(Keys.Attention.Indexer.CANDIDATE_SOURCE_LAYER.format(arch=self.arch), layer)
+
+    def add_indexer_candidate_top_k_blocks(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.CANDIDATE_TOP_K_BLOCKS.format(arch=self.arch), value)
+
+    def add_indexer_candidate_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.CANDIDATE_BLOCK_SIZE.format(arch=self.arch), value)
+
+    def add_engram_pad_token_id(self, value: int) -> None:
+        self.add_uint32(Keys.Engram.PAD_TOKEN_ID.format(arch=self.arch), value)
+
+    def add_engram_token_map(self, values: Sequence[int]) -> None:
+        self.add_key_value(Keys.Engram.TOKEN_MAP.format(arch=self.arch), list(values), GGUFValueType.ARRAY, GGUFValueType.INT32)
+
     def add_hyper_connection_count(self, count: int) -> None:
         self.add_uint32(Keys.HyperConnection.COUNT.format(arch=self.arch), count)
 
@@ -1091,6 +1113,9 @@ class GGUFWriter:
 
     def add_hyper_connection_low_rank(self, value: int) -> None:
         self.add_uint32(Keys.HyperConnection.LOW_RANK.format(arch=self.arch), value)
+
+    def add_hyper_connection_single_pass(self, value: bool) -> None:
+        self.add_bool(Keys.HyperConnection.SINGLE_PASS.format(arch=self.arch), value)
 
     def add_ple_layers(self, values: Sequence[int]) -> None:
         self.add_array(Keys.PerLayerEmbedding.LAYERS.format(arch=self.arch), values)

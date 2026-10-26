@@ -563,7 +563,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `64`, where `0` is disabled.
 
-`dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. Default: `['\n', ':', '"', '*']`
+`dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. At most 64 distinct breakers, duplicates are ignored. Default: `['\n', ':', '"', '*']`
 
 `xtc_probability`: Set the chance for token removal via XTC sampler. Default: `0.0`, which is disabled.
 

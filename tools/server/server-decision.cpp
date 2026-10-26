@@ -26,6 +26,9 @@ static const size_t DECISION_H2O_MAX_STATE_TOKENS = 32000;
 // the value head has one score per class: [inconsistent, consistent]
 static const int32_t OCR_JEV_N_CLASSES = 2;
 
+// the recursive functions of this file walk request JSON, a deeper value would overflow the stack
+static const int RECURSIVE_LIMIT = 128;
+
 static std::string decision_meta_str(const llama_model * model, const std::string & key) {
     char buf[256];
     const int32_t n = llama_model_meta_val_str(model, key.c_str(), buf, sizeof(buf));
@@ -464,7 +467,10 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
 //
 
 // replace text in all strings of a JSON value
-static json decision_replace_text(const json & val, const std::string & search, const std::string & replace) {
+static json decision_replace_text(const json & val, const std::string & search, const std::string & replace, int depth = 0) {
+    if (depth >= RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(RECURSIVE_LIMIT) + " levels deep");
+    }
     if (val.is_string()) {
         std::string str = val.get<std::string>();
         string_replace_all(str, search, replace);
@@ -473,14 +479,14 @@ static json decision_replace_text(const json & val, const std::string & search, 
     if (val.is_array()) {
         json out = json::array();
         for (const auto & item : val) {
-            out.push_back(decision_replace_text(item, search, replace));
+            out.push_back(decision_replace_text(item, search, replace, depth + 1));
         }
         return out;
     }
     if (val.is_object()) {
         json out = json::object();
         for (const auto & [key, item] : val.items()) {
-            out[key] = decision_replace_text(item, search, replace);
+            out[key] = decision_replace_text(item, search, replace, depth + 1);
         }
         return out;
     }
@@ -488,18 +494,21 @@ static json decision_replace_text(const json & val, const std::string & search, 
 }
 
 // sort the keys of all objects of a JSON value
-static json decision_sort_keys(const json & val) {
+static json decision_sort_keys(const json & val, int depth = 0) {
+    if (depth >= RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(RECURSIVE_LIMIT) + " levels deep");
+    }
     if (val.is_array()) {
         json out = json::array();
         for (const auto & item : val) {
-            out.push_back(decision_sort_keys(item));
+            out.push_back(decision_sort_keys(item, depth + 1));
         }
         return out;
     }
     if (val.is_object()) {
         std::map<std::string, json> sorted;
         for (const auto & [key, item] : val.items()) {
-            sorted[key] = decision_sort_keys(item);
+            sorted[key] = decision_sort_keys(item, depth + 1);
         }
         json out = json::object();
         for (const auto & [key, item] : sorted) {
@@ -511,7 +520,10 @@ static json decision_sort_keys(const json & val) {
 }
 
 // kev flattens a JSON value into text, the keys of an object are kept as labels (kev/api.py: render)
-static std::string decision_kev_render(const json & val, int indent = 0) {
+static std::string decision_kev_render(const json & val, int indent = 0, int depth = 0) {
+    if (depth >= RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(RECURSIVE_LIMIT) + " levels deep");
+    }
     const std::string pad(2 * indent, ' ');
     if (val.is_null()) {
         return "";
@@ -525,7 +537,7 @@ static std::string decision_kev_render(const json & val, int indent = 0) {
     if (val.is_array()) {
         std::string out;
         for (const auto & item : val) {
-            const std::string text = decision_kev_render(item, indent + 1);
+            const std::string text = decision_kev_render(item, indent + 1, depth + 1);
             out += (out.empty() ? "" : "\n") + pad + "- " + text.substr(std::min(text.size(), text.find_first_not_of(" \t\n\r")));
         }
         return out;
@@ -534,7 +546,7 @@ static std::string decision_kev_render(const json & val, int indent = 0) {
         std::string out;
         for (const auto & [key, item] : val.items()) {
             const bool is_nested = item.is_object() || item.is_array();
-            out += (out.empty() ? "" : "\n") + pad + key + (is_nested ? ":\n" : ": ") + decision_kev_render(item, is_nested ? indent + 1 : 0);
+            out += (out.empty() ? "" : "\n") + pad + key + (is_nested ? ":\n" : ": ") + decision_kev_render(item, is_nested ? indent + 1 : 0, depth + 1);
         }
         return out;
     }
@@ -575,21 +587,24 @@ static std::string decision_kev_text(const json & val) {
 }
 
 // lfm2-d1-omni: special tokens written in the input must not be parsed as such, in keys too (d1-omni prompt.py: escape)
-static json decision_d1omni_escape(const json & val) {
+static json decision_d1omni_escape(const json & val, int depth = 0) {
+    if (depth >= RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(RECURSIVE_LIMIT) + " levels deep");
+    }
     if (val.is_string()) {
         return server_decision_escape_special_tokens(val.get<std::string>());
     }
     if (val.is_array()) {
         json out = json::array();
         for (const auto & item : val) {
-            out.push_back(decision_d1omni_escape(item));
+            out.push_back(decision_d1omni_escape(item, depth + 1));
         }
         return out;
     }
     if (val.is_object()) {
         json out = json::object();
         for (const auto & [key, item] : val.items()) {
-            out[server_decision_escape_special_tokens(key)] = decision_d1omni_escape(item);
+            out[server_decision_escape_special_tokens(key)] = decision_d1omni_escape(item, depth + 1);
         }
         return out;
     }
@@ -716,6 +731,9 @@ static void decision_py_str(std::string & out, const std::string & s, bool ensur
 
 // json.dumps() of Python: indent < 0 is no indent, keys stay in their order
 static void decision_py_dump(std::string & out, const json & val, int indent, int level, const std::string & item_sep, const std::string & key_sep, bool ensure_ascii) {
+    if (level >= RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(RECURSIVE_LIMIT) + " levels deep");
+    }
     const auto newline = [&](int lvl) {
         return indent < 0 ? std::string() : "\n" + std::string(indent * lvl, ' ');
     };

@@ -55,6 +55,8 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_LOG:
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
+        case HTP_OP_UNARY_CEIL:
+        case HTP_OP_UNARY_SGN:
         case HTP_OP_L2_NORM:
         case HTP_OP_TRI:
         case HTP_OP_HADAMARD:
@@ -65,6 +67,9 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
 }
 
 static inline bool htp_unary_is_elementwise(uint32_t opcode) {
+    if (!htp_op_is_unary(opcode)) {
+        return false;
+    }
     switch (opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
@@ -77,31 +82,6 @@ static inline bool htp_unary_is_elementwise(uint32_t opcode) {
             return true;
     }
 }
-
-#define HTP_UNARY_COLLAPSE_DIMS(src_ne, src_nb, dst_ne, dst_nb, elem_size)                   \
-    do {                                                                                     \
-        while (((src_ne)[1] > 1 || (src_ne)[2] > 1 || (src_ne)[3] > 1) &&                    \
-               (size_t) (src_nb)[0] == (elem_size) &&                                        \
-               (size_t) (dst_nb)[0] == (elem_size) &&                                        \
-               (((src_ne)[1] == 1 && (dst_ne)[1] == 1) ||                                    \
-                ((size_t) (src_nb)[1] == (size_t) (src_ne)[0] * (size_t) (src_nb)[0] &&      \
-                 (size_t) (dst_nb)[1] == (size_t) (dst_ne)[0] * (size_t) (dst_nb)[0] &&      \
-                 ((src_ne)[0] == 1 ||                                                        \
-                  (uint64_t) (src_ne)[0] * (uint64_t) (src_ne)[1] * (elem_size) <= 128)))) { \
-            (src_ne)[0] *= (src_ne)[1];                                                      \
-            (src_ne)[1]  = (src_ne)[2];                                                      \
-            (src_ne)[2]  = (src_ne)[3];                                                      \
-            (src_ne)[3]  = 1;                                                                \
-            (dst_ne)[0] *= (dst_ne)[1];                                                      \
-            (dst_ne)[1]  = (dst_ne)[2];                                                      \
-            (dst_ne)[2]  = (dst_ne)[3];                                                      \
-            (dst_ne)[3]  = 1;                                                                \
-            (src_nb)[1]  = (src_nb)[2];                                                      \
-            (src_nb)[2]  = (src_nb)[3];                                                      \
-            (dst_nb)[1]  = (dst_nb)[2];                                                      \
-            (dst_nb)[2]  = (dst_nb)[3];                                                      \
-        }                                                                                    \
-    } while (0)
 
 struct htp_unary_vtcm_layout {
     size_t total_bytes;

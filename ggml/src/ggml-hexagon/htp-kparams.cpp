@@ -1,6 +1,7 @@
 #define _USE_MATH_DEFINES
 
 #include "htp-kparams.h"
+#include "htp-opnode.h"
 #include "ggml-impl.h"
 
 #include <algorithm>
@@ -72,6 +73,8 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
                 case GGML_UNARY_OP_ABS:        return HTP_OP_UNARY_ABS;
                 case GGML_UNARY_OP_RELU:       return HTP_OP_UNARY_RELU;
                 case GGML_UNARY_OP_STEP:       return HTP_OP_UNARY_STEP;
+                case GGML_UNARY_OP_CEIL:       return HTP_OP_UNARY_CEIL;
+                case GGML_UNARY_OP_SGN:        return HTP_OP_UNARY_SGN;
                 default:                       break;
             }
             break;
@@ -395,8 +398,19 @@ static bool htp_kparams_solve_flash_attn(
     kparams->scale         = scale;
     kparams->max_bias      = max_bias;
     kparams->logit_softcap = logit_softcap;
-    kparams->head_split    = (opt_fa_head_split != 0) ? 1 : 0;
+    kparams->head_split    = (opt_fa_split != 0) ? 1 : 0;
+    kparams->flags         = 0;
     kparams->G             = G;
+
+    // team-split only when a team has >1 member (n_kv_heads < N_cores)
+    uint32_t fa_teams = 1, fa_team_size = 1;
+    const uint32_t mdev_count = htp_session_mdev_count(sess);
+    if (opt_fa_split && mdev_count > 1) {
+        htp_fa_mdev_teams(n_kv_heads, mdev_count, kparams->head_split != 0, &fa_teams, &fa_team_size);
+        if (fa_team_size > 1) {
+            kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
+        }
+    }
 
     const uint32_t n_head = q->ne[2];
     kparams->n_head_log2 = 1u << (uint32_t) std::floor(std::log2(n_head));
@@ -407,7 +421,7 @@ static bool htp_kparams_solve_flash_attn(
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
         size_t Br = 0, Bc = 0;
-        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head);
+        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
         if (ret == 0) {
             kparams->kernel_type = HTP_FA_KERNEL_HMX;
             if (logit_softcap == 0.0f) {
@@ -1010,14 +1024,12 @@ static bool htp_kparams_solve_matmul(
     if (htp_matmul_can_collapse(src0, src1, dst)) {
         const ggml_tensor src1_collapsed = htp_tensor_collapse_rows(src1);
         const ggml_tensor dst_collapsed  = htp_tensor_collapse_rows(dst);
-        const bool ok = htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, 0, 0, kparams);
-        kparams->collapse = 1;
-        return ok;
+        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, 0, 0, kparams);
     }
     return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, kparams);
 }
 
-static bool htp_matmul_add_can_collapse(
+bool htp_matmul_add_can_collapse(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * src2,
@@ -1055,9 +1067,7 @@ bool htp_kparams_solve_matmul_add(
                                            : (src2 ? *src2 : ggml_tensor{});
         const struct ggml_tensor * p_src2 = src2 ? &src2_collapsed : nullptr;
         const size_t src2_size = p_src2 ? hex_round_up(ggml_nbytes(p_src2), 128) : 0;
-        const bool ok = htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, p_src2 ? p_src2->nb[1] : 0, src2_size, kparams);
-        kparams->collapse = 1;
-        return ok;
+        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, p_src2 ? p_src2->nb[1] : 0, src2_size, kparams);
     }
     const size_t src2_size = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
     return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2 ? src2->nb[1] : 0, src2_size, kparams);
@@ -1391,6 +1401,108 @@ static bool htp_kparams_solve_binary(
     return true;
 }
 
+// collapse contiguous dims of elementwise ops so that rows fill at least one HVX vector
+static void htp_collapse_dims(struct ggml_tensor ** tensors, size_t n_tensors, size_t elem_size, uint32_t n_threads) {
+    if (n_tensors == 0 || !tensors[0]) {
+        return;
+    }
+    for (size_t t = 0; t < n_tensors; t++) {
+        if (!tensors[t] || tensors[t]->nb[0] != elem_size) {
+            return;
+        }
+        if (t > 0 && !ggml_are_same_shape(tensors[0], tensors[t])) {
+            return;
+        }
+    }
+
+    struct ggml_tensor * t0 = tensors[0];
+
+    while (t0->ne[1] > 1 || t0->ne[2] > 1 || t0->ne[3] > 1) {
+        const size_t row_size = (size_t) t0->ne[0] * elem_size;
+        bool rows_contig = true;
+        for (size_t t = 0; t < n_tensors; t++) {
+            if (tensors[t]->nb[1] != (size_t) tensors[t]->ne[0] * elem_size) {
+                rows_contig = false;
+                break;
+            }
+        }
+        bool all_ne1_one = true;
+        for (size_t t = 0; t < n_tensors; t++) {
+            if (tensors[t]->ne[1] != 1) {
+                all_ne1_one = false;
+                break;
+            }
+        }
+        const bool can_merge = all_ne1_one ||
+                               (rows_contig && (t0->ne[0] == 1 || (row_size < 128 && row_size * t0->ne[1] <= 2048)));
+        if (!can_merge) {
+            break;
+        }
+        for (size_t t = 0; t < n_tensors; t++) {
+            tensors[t]->ne[0] *= tensors[t]->ne[1];
+            tensors[t]->ne[1]  = tensors[t]->ne[2];
+            tensors[t]->ne[2]  = tensors[t]->ne[3];
+            tensors[t]->ne[3]  = 1;
+            tensors[t]->nb[1]  = tensors[t]->nb[2];
+            tensors[t]->nb[2]  = tensors[t]->nb[3];
+            tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
+        }
+    }
+
+    // ne1 too big to merge in full: merge it in chunks of k rows (k divides ne1)
+    const size_t row_size = (size_t) t0->ne[0] * elem_size;
+    bool rows_contig = true;
+    for (size_t t = 0; t < n_tensors; t++) {
+        if (tensors[t]->nb[1] != row_size) {
+            rows_contig = false;
+            break;
+        }
+    }
+    if (t0->ne[1] > 1 && row_size < 128 && rows_contig) {
+        int64_t k = 2048 / row_size;
+        while (k > 1 && t0->ne[1] % k != 0) {
+            k--;
+        }
+        if (k > 1) {
+            for (size_t t = 0; t < n_tensors; t++) {
+                tensors[t]->ne[0] *= k;
+                tensors[t]->ne[1] /= k;
+                tensors[t]->nb[1] *= k;
+                tensors[t]->nb[2]  = tensors[t]->nb[1] * tensors[t]->ne[1];
+                tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
+            }
+        }
+    }
+
+    // nrows too small to saturate threads: split ne0 into k rows (k divides ne0)
+    const size_t   row_size_curr = (size_t) t0->ne[0] * elem_size;
+    const uint32_t nrows         = (uint32_t) (t0->ne[1] * t0->ne[2] * t0->ne[3]);
+    rows_contig = true;
+    for (size_t t = 0; t < n_tensors; t++) {
+        if (tensors[t]->ne[1] != 1 && tensors[t]->nb[1] != row_size_curr) {
+            rows_contig = false;
+            break;
+        }
+    }
+    if (nrows < n_threads && rows_contig && row_size_curr >= 4096) {
+        const size_t vec_elems = 128 / elem_size;
+        int64_t k = std::max<int64_t>(row_size_curr / 16384, (n_threads * 4 + nrows - 1) / nrows);
+        k = std::min<int64_t>(k, row_size_curr / 2048);
+        while (k > 1 && t0->ne[0] % (k * vec_elems) != 0) {
+            k--;
+        }
+        if (k > 1) {
+            for (size_t t = 0; t < n_tensors; t++) {
+                tensors[t]->ne[0] /= k;
+                tensors[t]->ne[1] *= k;
+                tensors[t]->nb[1]  = tensors[t]->ne[0] * elem_size;
+                tensors[t]->nb[2]  = tensors[t]->nb[1] * tensors[t]->ne[1];
+                tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
+            }
+        }
+    }
+}
+
 static bool htp_kparams_solve_unary_impl(
     const struct ggml_hexagon_session * sess,
     uint32_t op,
@@ -1433,6 +1545,8 @@ static bool htp_kparams_solve_unary_impl(
                 case HTP_OP_UNARY_LOG:
                 case HTP_OP_UNARY_ABS:
                 case HTP_OP_UNARY_STEP:
+                case HTP_OP_UNARY_CEIL:
+                case HTP_OP_UNARY_SGN:
                     break;
                 default:
                     return false;
@@ -1445,14 +1559,6 @@ static bool htp_kparams_solve_unary_impl(
     }
 
     const size_t elem_size = ggml_type_size(src0->type);
-
-    struct ggml_tensor src0_c = *src0;
-    struct ggml_tensor dst_c  = *dst;
-    if (htp_unary_is_elementwise(op)) {
-        HTP_UNARY_COLLAPSE_DIMS(src0_c.ne, src0_c.nb, dst_c.ne, dst_c.nb, elem_size);
-        src0 = &src0_c;
-        dst  = &dst_c;
-    }
 
     const size_t dst_data_row_size  = dst->ne[0]  * ggml_type_size(dst->type);
 
@@ -1467,9 +1573,14 @@ static bool htp_kparams_solve_unary_impl(
     const bool broadcast_weight = (op == HTP_OP_RMS_NORM_MUL) && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
     kparams->broadcast_weight   = broadcast_weight;
 
-    const bool     src0_contig = ggml_is_contiguous_1(src0);
-    const bool     src1_contig = (op == HTP_OP_RMS_NORM_MUL && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
-    const uint32_t max_block   = (src0_contig && src1_contig) ? src0_nrows : (uint32_t) src0->ne[1];
+    const bool     src0_contig           = ggml_is_contiguous_1(src0);
+    const bool     src1_contig           = (op == HTP_OP_RMS_NORM_MUL && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
+    const uint32_t src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
+    const uint32_t min_block_rows        = (uint32_t) (std::max<size_t>(1, 2048 / dst_data_row_size));
+    uint32_t       max_block             = (src0_contig && src1_contig) ? src0_nrows : (uint32_t) src0->ne[1];
+    if (src0_nrows_per_thread >= 2 * min_block_rows) {
+        max_block = (std::min)(max_block, (std::max)(min_block_rows, src0_nrows_per_thread / 4));
+    }
 
     kparams->src0_contig = src0_contig ? 1 : 0;
     kparams->src1_contig = src1_contig ? 1 : 0;
@@ -1934,9 +2045,15 @@ bool htp_kparams_solve_unary_mul_glu(
     const size_t   vtcm_size           = htp_session_vtcm_size(sess);
 
     const size_t   row_size_aligned    = hex_round_up(dst_row_size, 128);
-    const uint32_t vtcm_row_per_thread = (uint32_t) (vtcm_size / (n_threads * 3 * row_size_aligned));
+    uint32_t       vtcm_row_per_thread = (uint32_t) (vtcm_size / (n_threads * 3 * row_size_aligned));
     if (vtcm_row_per_thread < 2) {
         return false;
+    }
+
+    const uint32_t src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
+    if (src0_nrows_per_thread >= 2 && vtcm_row_per_thread > src0_nrows_per_thread) {
+        uint32_t target_rpt = (src0_nrows_per_thread >= 4) ? (src0_nrows_per_thread / 2) & ~1u : 2;
+        vtcm_row_per_thread = (std::max)(2u, (std::min)(vtcm_row_per_thread, target_rpt));
     }
 
     struct htp_glu_vtcm_layout L;
@@ -3180,12 +3297,131 @@ static inline bool htp_kparams_invoke(
     return SolveFn(sess, op, kparams ? (KParams *) kparams : &tmp);
 }
 
+void htp_opnode_collapse(const struct ggml_hexagon_session * sess, htp_opnode & node) {
+    const uint32_t n_threads = htp_session_n_threads(sess);
+
+    if (htp_op_is_unary(node.opcode) && htp_unary_is_elementwise(node.opcode)) {
+        if (node.inputs.empty() || !node.inputs[0] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        if (!ggml_are_same_shape(node.inputs[0], node.outputs[0])) {
+            return;
+        }
+        const size_t elem_size = ggml_type_size(node.inputs[0]->type);
+        struct ggml_tensor src0_c = *node.inputs[0];
+        struct ggml_tensor dst_c  = *node.outputs[0];
+        struct ggml_tensor * tensors[2] = { &src0_c, &dst_c };
+        htp_collapse_dims(tensors, 2, elem_size, n_threads);
+        if (src0_c.ne[0] != node.inputs[0]->ne[0] || src0_c.ne[1] != node.inputs[0]->ne[1]) {
+            node.inputs[0]  = node.add_dummy(src0_c);
+            node.outputs[0] = node.add_dummy(dst_c);
+        }
+        return;
+    }
+
+    if (htp_op_is_glu(node.opcode)) {
+        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        if (!ggml_are_same_shape(node.inputs[0], node.outputs[0]) ||
+            !ggml_are_same_shape(node.inputs[1], node.outputs[0])) {
+            return;
+        }
+        const size_t elem_size = ggml_type_size(node.inputs[0]->type);
+        struct ggml_tensor src0_c = *node.inputs[0];
+        struct ggml_tensor src1_c = *node.inputs[1];
+        struct ggml_tensor dst_c  = *node.outputs[0];
+        struct ggml_tensor * tensors[3] = { &src0_c, &src1_c, &dst_c };
+        htp_collapse_dims(tensors, 3, elem_size, n_threads);
+        if (src0_c.ne[0] != node.inputs[0]->ne[0] || src0_c.ne[1] != node.inputs[0]->ne[1]) {
+            node.inputs[0]  = node.add_dummy(src0_c);
+            node.inputs[1]  = node.add_dummy(src1_c);
+            node.outputs[0] = node.add_dummy(dst_c);
+        }
+        return;
+    }
+
+    if (node.opcode == HTP_OP_MUL_MAT) {
+        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * src0 = node.inputs[0];
+        const struct ggml_tensor * src1 = node.inputs[1];
+        const struct ggml_tensor * dst  = node.outputs[0];
+        if (htp_matmul_can_collapse(src0, src1, dst)) {
+            node.inputs[1]  = node.add_dummy(htp_tensor_collapse_rows(src1));
+            node.outputs[0] = node.add_dummy(htp_tensor_collapse_rows(dst));
+        }
+        return;
+    }
+
+    if (node.opcode == HTP_OP_MUL_MAT_ADD) {
+        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * src0 = node.inputs[0];
+        const struct ggml_tensor * src1 = node.inputs[1];
+        const struct ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
+        const struct ggml_tensor * dst  = node.outputs[0];
+        if (htp_matmul_add_can_collapse(src0, src1, src2, dst)) {
+            node.inputs[1]  = node.add_dummy(htp_tensor_collapse_rows(src1));
+            node.outputs[0] = node.add_dummy(htp_tensor_collapse_rows(dst));
+            if (src2 && (src2->ne[1] * src2->ne[2] * src2->ne[3] > 1)) {
+                node.inputs[2] = node.add_dummy(htp_tensor_collapse_rows(src2));
+            }
+        }
+        return;
+    }
+}
+
+bool htp_kparams_solve(
+    const struct ggml_hexagon_session * sess,
+    htp_opnode & node
+) {
+    htp_opnode_collapse(sess, node);
+
+    const ggml_tensor * src0 = node.inputs.empty() ? nullptr : node.inputs[0];
+    const ggml_tensor * src1 = node.inputs.size() > 1 ? node.inputs[1] : nullptr;
+    const ggml_tensor * dst  = node.dst();
+
+    if (htp_op_is_unary(node.opcode)) {
+        return htp_kparams_solve_unary_impl(sess, node.opcode, src0, src1, dst, node.kparams<htp_unary_kernel_params>());
+    }
+    if (htp_op_is_glu(node.opcode)) {
+        return htp_kparams_solve_unary_mul_glu(sess, node.opcode, src0, src1, dst, node.kparams<htp_glu_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_MUL_MAT) {
+        if (!htp_matmul_check_types(src0, src1, dst)) {
+            return false;
+        }
+        return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, node.kparams<htp_mm_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_MUL_MAT_ADD) {
+        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
+        const size_t src2_size = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
+        return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2 ? src2->nb[1] : 0, src2_size, node.kparams<htp_mm_kernel_params>());
+    }
+
+    return htp_kparams_solve(sess, node.node, node.kernel_params);
+}
+
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
     void * kparams
 ) {
     const htp_op_code opcode = htp_op_remap(op);
+    if (htp_op_is_unary(opcode) || htp_op_is_glu(opcode)) {
+        htp_opnode tmp(opcode, op);
+        if (!htp_kparams_solve(sess, tmp)) {
+            return false;
+        }
+        if (kparams) {
+            memcpy(kparams, tmp.kernel_params, sizeof(tmp.kernel_params));
+        }
+        return true;
+    }
+
     switch (opcode) {
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ID:

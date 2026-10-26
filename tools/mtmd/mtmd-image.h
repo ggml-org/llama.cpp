@@ -31,6 +31,7 @@ struct mtmd_image_preprocessor {
     const clip_hparams & hparams;
 
     mtmd_image_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
+    mtmd_image_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
 
     virtual ~mtmd_image_preprocessor() = default;
     virtual mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const = 0;
@@ -59,6 +60,7 @@ struct mtmd_image_preprocessor {
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_llava_uhd(const clip_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 
     struct slice_coordinates {
@@ -162,6 +164,15 @@ private:
     static grid_info grid_tokens(int best_height, int best_width, int patch_size, int r);
     static void solve_resize_ratio(int height, int width, int p, int r, int max_n_token, int & best_height, int & best_width);
     static void safe_resize(int height, int width, int & best_height, int & best_width, int p, int r, int max_n_token);
+};
+
+// ref: inference/image_processor.py in the HF repo (DeepSeek-V4.1-Flash): plan_image_grid / load_image
+struct mtmd_image_preprocessor_deepseek41v : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_deepseek41v(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    // target pixel size (multiples of patch_size) for an image of the given size, exposed for tests
+    static void plan_grid(int width, int height, int p, int r, int max_n_token, int min_pixels,
+                          int & best_width, int & best_height);
 };
 
 // custom llava-uhd slicing logic for MiniCPM-V
