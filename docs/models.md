@@ -24,3 +24,17 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 - Use the [GGUF-my-LoRA space](https://huggingface.co/spaces/ggml-org/gguf-my-lora) to convert LoRA adapters to GGUF format (more info: https://github.com/ggml-org/llama.cpp/discussions/10123)
 - Use the [GGUF-editor space](https://huggingface.co/spaces/CISCai/gguf-editor) to edit GGUF meta data in the browser (more info: https://github.com/ggml-org/llama.cpp/discussions/9268)
 - Use the [Inference Endpoints](https://ui.endpoints.huggingface.co/) to directly host `llama.cpp` in the cloud (more info: https://github.com/ggml-org/llama.cpp/discussions/9669)
+
+## Exporting per-layer embeddings separately
+
+For models with a per-layer embedding (PLE) table, export the backbone and table from the same checkpoint:
+
+```sh
+python3 convert_hf_to_gguf.py /path/to/model --no-ple --outfile model-no-ple.gguf
+python3 convert_hf_to_gguf.py /path/to/model --ple-only --outfile model-ple.gguf
+llama-completion -m model-no-ple.gguf --ple model-ple.gguf
+```
+
+`--no-ple` excludes only `per_layer_token_embd.weight` and keeps the PLE metadata and projection weights. `--ple-only` exports only that table, without a tokenizer. Each export supports `--outtype`, so the table and backbone can use different precisions. Default output names start with `no-ple-` and `ple-` respectively.
+
+These modes are mutually exclusive and require a model with a PLE table, such as Qwen3.8 Flash Next or Gemma 4. They cannot be combined with vocabulary, multimodal projector, MTP-only, or DSpark-only export. `--no-ple` can be combined with `--no-mtp`.
