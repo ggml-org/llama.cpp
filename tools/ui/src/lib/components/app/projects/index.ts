@@ -57,6 +57,9 @@ export { default as ProjectPrefix } from './ProjectPrefix.svelte';
  */
 export { default as ProjectSubmenu } from './ProjectSubmenu.svelte';
 
+/** **ProjectActions** - Pin and menu of the project page's title */
+export { default as ProjectActions } from './ProjectActions.svelte';
+
 /** **ProjectBreadcrumb** - Part of the project page */
 export { default as ProjectBreadcrumb } from './ProjectBreadcrumb.svelte';
 
