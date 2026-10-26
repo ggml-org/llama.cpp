@@ -501,15 +501,6 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(const mtmd_context 
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder, opt);
 }
 
-bool mtmd_helper_support_video(const mtmd_context * ctx) {
-#ifdef MTMD_VIDEO
-    return mtmd_support_vision(ctx);
-#else
-    GGML_UNUSED(ctx);
-    return false;
-#endif
-}
-
 //
 // Video input helpers
 //
@@ -1033,17 +1024,40 @@ int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
 #endif
 }
 
-bool mtmd_helper_model_can_chat(const llama_context * lctx, const mtmd_context * mctx) {
+mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mtmd_context * mctx) {
+    mtmd_helper_cap cap = {};
+    cap.chat     = true;
+    cap.text_gen = true;
     if (!mctx) {
-        return true;
+        return cap;
     }
 
-    auto * model = llama_get_model(lctx);
-    auto * tmpl = llama_model_chat_template(model, nullptr);
-    auto info = mtmd_gen_audio_get_info(mctx);
+    cap.vision = mtmd_support_vision(mctx);
+    cap.audio  = mtmd_support_audio(mctx);
+    cap.audio_stream = mtmd_support_audio_stream(mctx);
+#ifdef MTMD_VIDEO
+    cap.video  = cap.vision;
+#endif
+    const auto gen_audio_type = mtmd_gen_audio_get_info(mctx).type;
+    cap.audio_gen = gen_audio_type != MTMD_GEN_AUDIO_TYPE_NONE;
+    cap.audio_gen_spk_ref = gen_audio_type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS
+                         || gen_audio_type == MTMD_GEN_AUDIO_TYPE_POCKETTTS;
 
     // tts-only model cannot be used for chat (no chat template)
-    bool is_tts_only = info.type != MTMD_GEN_AUDIO_TYPE_NONE && tmpl == nullptr;
+    cap.chat = !cap.audio_gen || llama_model_chat_template(model, nullptr) != nullptr;
 
-    return !is_tts_only;
+    return cap;
+}
+
+bool mtmd_helper_model_can_chat(const llama_context * lctx, const mtmd_context * mctx) {
+    return mtmd_helper_get_capabilities(llama_get_model(lctx), mctx).chat;
+}
+
+bool mtmd_helper_support_video(const mtmd_context * ctx) {
+#ifdef MTMD_VIDEO
+    return mtmd_support_vision(ctx);
+#else
+    GGML_UNUSED(ctx);
+    return false;
+#endif
 }

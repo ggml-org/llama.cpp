@@ -45,9 +45,6 @@ MTMD_API struct mtmd_helper_init_opt mtmd_helper_init_opt_default(void);
 // Note: this also call mtmd_log_set() internally
 MTMD_API void mtmd_helper_log_set(ggml_log_callback log_callback, void * user_data);
 
-// Returns true if this build includes video support (MTMD_VIDEO was ON at compile time).
-MTMD_API bool mtmd_helper_support_video(const mtmd_context * ctx);
-
 struct mtmd_helper_bitmap_wrapper {
     mtmd_bitmap * bitmap;
     mtmd_helper_video * video_ctx;
@@ -186,8 +183,31 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
             mtmd_bitmap ** out_bitmap,
             char ** out_text);
 
-// return true if model can be used for chat
-MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx);
+struct mtmd_helper_cap {
+    bool chat; // false for tts-only model (no chat template)
+
+    // input capabilities
+    bool vision;
+    bool audio;
+    bool video; // also depending on MTMD_VIDEO build option
+
+    // realtime capabilities
+    bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
+
+    // output capabilities
+    bool text_gen; // always true for now
+    bool audio_gen;
+    bool audio_gen_spk_ref; // accepts a speaker reference audio for voice cloning
+};
+typedef struct mtmd_helper_cap mtmd_helper_cap;
+
+// mctx can be NULL (text-only model)
+MTMD_API struct mtmd_helper_cap mtmd_helper_get_capabilities(const struct llama_model * model, const struct mtmd_context * mctx);
+
+DEPRECATED(MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx),
+           "use mtmd_helper_get_capabilities() instead");
+DEPRECATED(MTMD_API bool mtmd_helper_support_video(const struct mtmd_context * ctx),
+           "use mtmd_helper_get_capabilities() instead");
 
 //
 // Audio generation helpers

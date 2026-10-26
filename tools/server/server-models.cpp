@@ -533,7 +533,7 @@ void server_model_meta::update_caps(const common_params & base) {
     std::vector<std::string> output_modalities = {"text"};
     if (!params.model.path.empty()) {
         const common_gguf_info info = common_get_gguf_info(params.model.path);
-        // same rule as mtmd_helper_model_can_chat()
+        // same rule as mtmd_helper_get_capabilities()
         const bool can_chat = !gen_audio || info.has_chat_tmpl;
         output_modalities = server_model_output_modalities(info.decision_type, can_chat, gen_audio);
         n_ctx_train       = info.n_ctx_train;
