@@ -2474,7 +2474,7 @@ private:
         if (decision.n_classes > 0) {
             // the pooled output of the sequence, one score per class
             const float * embd = llama_get_embeddings_seq(slot.ctx_tgt, slot.id);
-            if (embd == nullptr || llama_model_n_embd_out(model_tgt) != decision.n_classes) {
+            if (embd == nullptr || llama_model_n_embd_out(model_tgt) != (uint32_t) decision.n_classes) {
                 send_error(slot, "failed to get the class scores", ERROR_TYPE_SERVER);
                 return;
             }

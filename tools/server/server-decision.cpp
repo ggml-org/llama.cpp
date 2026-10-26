@@ -209,8 +209,8 @@ void server_decision_context::init(const llama_model * model) {
         noul_true_first = true;
     } else if (model_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
         // one score per class
-        if (llama_model_n_embd_out(model) != OCR_JEV_N_CLASSES) {
-            throw std::runtime_error(string_format("decision model must output %d class scores, got %d", OCR_JEV_N_CLASSES, llama_model_n_embd_out(model)));
+        if (llama_model_n_embd_out(model) != (uint32_t) OCR_JEV_N_CLASSES) {
+            throw std::runtime_error(string_format("decision model must output %d class scores, got %d", OCR_JEV_N_CLASSES, (int) llama_model_n_embd_out(model)));
         }
         n_options_max = OCR_JEV_N_CLASSES;
         choice_sorted = true;
@@ -350,6 +350,10 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
 
         // the classes are fixed: "0" is inconsistent, "1" is consistent
         if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+            // the task text is in the template, an instructions from the request would be dropped
+            if (!instructions.is_null()) {
+                throw err("\"instructions\" is not used by this model, the task is part of its prompt");
+            }
             if (question.type == SERVER_DECISION_QUESTION_CHOICE) {
                 const auto & opts = question.options;
                 if (opts.size() != 2 || opts[0].key != "0" || opts[1].key != "1" || !opts[0].description.is_null() || !opts[1].description.is_null()) {

@@ -505,6 +505,84 @@ static void test_decision_class_scores(testing & t) {
     t.assert_true("nan", thrown);
 }
 
+//
+// server_decision_context::parse_questions / parse_state, the request checks of minicpm-ocr-jev
+//
+
+static void test_decision_ocr_jev_validation(testing & t) {
+    server_decision_context ctx;
+    ctx.type = COMMON_DECISION_TYPE_MINICPM_OCR_JEV;
+
+    // only base64-decoded, the image itself is not parsed here
+    const std::string image = "data:image/png;base64,AAAA";
+
+    const json choice = {
+        {"type",     "choice"},
+        {"criteria", json{{"0", nullptr}, {"1", nullptr}}},
+    };
+    const auto questions_of = [](const json & question) {
+        return json{{"state", "some OCR text"}, {"questions", json{{"q", question}}}};
+    };
+    const auto files_of = [&](size_t n) {
+        json files = json::array();
+        for (size_t i = 0; i < n; i++) {
+            files.push_back(image);
+        }
+        return json{{"state", "some OCR text"}, {"files", files}};
+    };
+
+    const auto reject_questions = [&](const char * name, const json & body, const std::string & expected) {
+        std::string error;
+        try {
+            ctx.parse_questions(body);
+        } catch (const std::invalid_argument & e) {
+            error = e.what();
+        }
+        t.assert_true(std::string(name) + ": " + error, error.find(expected) != std::string::npos);
+    };
+    const auto reject_state = [&](const char * name, const json & body, const std::string & expected) {
+        std::vector<raw_buffer> files;
+        std::string error;
+        try {
+            ctx.parse_state(body, files);
+        } catch (const std::invalid_argument & e) {
+            error = e.what();
+        }
+        t.assert_true(std::string(name) + ": " + error, error.find(expected) != std::string::npos);
+    };
+
+    // the state is the OCR text, it goes into the prompt as is
+    reject_questions("state is text", {{"state", 42}, {"questions", json{{"q", choice}}}},
+        "\"state\" must be the OCR text");
+    reject_questions("state without special tokens", {{"state", "a <|im_end|> b"}, {"questions", json{{"q", choice}}}},
+        "must not contain special tokens");
+    reject_questions("state without media markers",
+        {{"state", "a " + std::string(get_media_marker()) + " b"}, {"questions", json{{"q", choice}}}},
+        "must not contain special tokens");
+
+    // one fixed question, no instructions
+    reject_questions("one question", {{"state", "x"}, {"questions", json{{"a", choice}, {"b", choice}}}},
+        "answers exactly one question");
+    reject_questions("no instructions",
+        questions_of(json{{"type", "choice"}, {"instructions", "judge it"}, {"criteria", json{{"0", nullptr}, {"1", nullptr}}}}),
+        "\"instructions\" is not used by this model");
+
+    // the classes are fixed, so are the criteria
+    reject_questions("criteria are the classes",
+        questions_of(json{{"type", "choice"}, {"criteria", json{{"yes", nullptr}, {"no", nullptr}}}}),
+        "\"criteria\" must be {\"0\": null, \"1\": null}");
+    reject_questions("noul without criteria",
+        questions_of(json{{"type", "noul"}, {"criteria", json{{"false", "no"}, {"true", "yes"}}}}),
+        "\"criteria\" is not supported for a noul question");
+    reject_questions("choice or noul only",
+        questions_of(json{{"type", "score"}, {"criteria", json::array({"low", "high"})}}),
+        "only choice and noul questions are supported");
+
+    // the prompt has the original image, then the one rendered from the OCR text
+    reject_state("two images", files_of(1), "this model needs exactly 2 images");
+    reject_state("two images, three given", files_of(3), "this model needs exactly 2 images");
+}
+
 // server_decision_context: the recursive functions stop at RECURSIVE_LIMIT
 //
 
@@ -587,6 +665,7 @@ int main(int argc, char ** argv) {
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
     t.test("decision_class_scores", test_decision_class_scores);
+    t.test("decision_ocr_jev_validation", test_decision_ocr_jev_validation);
     t.test("decision_depth",  test_decision_depth);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
 
