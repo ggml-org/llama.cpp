@@ -5,7 +5,14 @@
 #include "ggml.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <vector>
 
 //
@@ -677,6 +684,91 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+static void test_backend_graph_many_deps(ggml_backend_t /*backend*/, ggml_cgraph * graph, ggml_backend_graph_optimize_params * params) {
+    for (int i = 0; i < graph->n_nodes; i++) {
+        for (int j = 0; j < graph->n_nodes; j++) {
+            params->add_alloc_dep(params->user_data, graph->nodes[j]->src[0], graph->nodes[i]);
+        }
+        for (int j = 0; j < i; j++) {
+            params->add_alloc_dep(params->user_data, graph->nodes[j], graph->nodes[i]);
+        }
+    }
+}
+
+static void test_graph_optimize_many_deps() {
+    constexpr int n = 500;
+    ggml_init_params params{};
+    params.mem_size = 2*n*ggml_tensor_overhead() + ggml_graph_overhead_custom(2*n, false);
+    params.no_alloc = true;
+    ggml_context_ptr ctx(ggml_init(params));
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 2*n, false);
+    for (int i = 0; i < n; i++) {
+        ggml_tensor * input = make_input_1d(ctx.get(), 1);
+        ggml_build_forward_expand(graph, ggml_scale(ctx.get(), input, 2.0f));
+    }
+
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    backend.context->backend.iface.graph_optimize = test_backend_graph_many_deps;
+    ggml_backend_t backend_ptr = &backend.context->backend;
+    ggml_backend_buffer_type_t buft = &backend.buffer_type;
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(&backend_ptr, &buft, 1, 2*n, false, true));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+}
+
+static void test_backend_graph_keep_all(ggml_backend_t /*backend*/, ggml_cgraph * graph, ggml_backend_graph_optimize_params * params) {
+    for (int i = 0; i < graph->n_nodes; i++) {
+        for (int j = 0; j < graph->n_nodes; j++) {
+            params->add_alloc_dep(params->user_data, graph->nodes[j], graph->nodes[i]);
+        }
+    }
+}
+
+// n nodes and n*ceil(n/GGML_MAX_SRC) dep nodes need more backend id entries than the 61*(n + 8) the scheduler was created for
+static void run_deps_exceed_creation_size() {
+    constexpr int n = 1100;
+    ggml_init_params params{};
+    params.mem_size = 2*n*ggml_tensor_overhead() + ggml_graph_overhead_custom(2*n, false);
+    params.no_alloc = true;
+    ggml_context_ptr ctx(ggml_init(params));
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 2*n, false);
+
+    ggml_tensor * x = make_input_1d(ctx.get(), 1);
+    for (int i = 0; i < n; i++) {
+        x = ggml_scale(ctx.get(), x, 2.0f);
+    }
+    ggml_set_output(x);
+    ggml_build_forward_expand(graph, x);
+
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    backend.context->backend.iface.graph_optimize = test_backend_graph_keep_all;
+    ggml_backend_t backend_ptr = &backend.context->backend;
+    ggml_backend_buffer_type_t buft = &backend.buffer_type;
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(&backend_ptr, &buft, 1, n + 8, false, true));
+    ggml_backend_sched_alloc_graph(sched.get(), graph);
+}
+
+static const char * g_exe = nullptr;
+static const char * deps_exceed_arg = "--deps-exceed-creation-size";
+
+// The scheduler must abort with a message, not write past the end of its backend id arrays: run the case in a child process
+static void test_graph_optimize_deps_exceed_creation_size() {
+    GGML_ASSERT(g_exe != nullptr);
+    const std::string name = "test-alloc-deps-exceed-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt";
+    const std::string err = (std::filesystem::temp_directory_path() / name).string();
+    std::string cmd = std::string("\"") + g_exe + "\" " + deps_exceed_arg + " 2> \"" + err + "\"";
+#ifdef _WIN32
+    cmd = "\"" + cmd + "\"";
+#endif
+    const int status = std::system(cmd.c_str());
+    std::ifstream f(err);
+    std::stringstream msg;
+    msg << f.rdbuf();
+    f.close();
+    std::filesystem::remove(err);
+    GGML_ASSERT(status != 0);
+    GGML_ASSERT(msg.str().find("backend id entries") != std::string::npos);
+}
+
 // Check that the size reported by ggml_backend_alloc_ctx_tensors_from_buft_size
 // matches the actual size of the buffer allocated for the ctx tensors
 static ggml_backend_buffer_ptr check_size_matches(ggml_backend_buffer_type_t buft, ggml_context * ctx) {
@@ -1106,7 +1198,20 @@ static void run(const char * name, void (*f)()) {
     printf("PASSED\n");
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    if (argc > 1 && strcmp(argv[1], deps_exceed_arg) == 0) {
+        // child of test_graph_optimize_deps_exceed_creation_size, expected to abort
+#ifdef _WIN32
+        _putenv_s("GGML_NO_BACKTRACE", "1");
+        _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT); // no abort dialog in the child
+#else
+        setenv("GGML_NO_BACKTRACE", "1", 1);
+#endif
+        run_deps_exceed_creation_size();
+        return 0;
+    }
+    g_exe = argv[0];
+
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
@@ -1121,6 +1226,8 @@ int main() {
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
+    run("test_graph_optimize_many_deps", test_graph_optimize_many_deps);
+    run("test_graph_optimize_deps_exceed_creation_size", test_graph_optimize_deps_exceed_creation_size);
     run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
     run("test_buft_alloc_buffer_n_multi_buffer", test_buft_alloc_buffer_n_multi_buffer);
     run("test_buft_alloc_buffer_n_zero_size", test_buft_alloc_buffer_n_zero_size);
