@@ -19,6 +19,7 @@
 #include <openvino/op/scatter_update.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/softmax.hpp>
+#include <openvino/op/tanh.hpp>
 #include <openvino/op/tile.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
@@ -136,7 +137,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     float * params = reinterpret_cast<float *>(context.get_output_op_params());
     float scale = params[0];
     // float max_bias      = params[1];
-    // float logit_softcap = params[2];
+    const float logit_softcap = params[2];
 
     auto q = std::make_shared<ov::op::v0::Convert>(q_f32, ov::element::f16);
     auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f16, ov::Shape{}, std::vector<float>{scale});
@@ -183,8 +184,14 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     // The manual path reshapes Q, K, V and the output with one head size; models whose K/V head sizes differ
     // from Q's (e.g. MLA) take the SDPA path.
     const bool same_head_size = k_shape[3] == q_shape[3] && v_shape[3] == q_shape[3];
+    // SDPA has no logit soft-capping (gemma-2), so soft-capped attention always takes the manual path, also in
+    // stateful execution
     const bool use_manual_gqa_attention =
-        manual_gqa_enabled && factor > 1 && num_heads_kv > 1 && same_head_size && !context.is_stateful();
+        (logit_softcap != 0.0f || (manual_gqa_enabled && factor > 1 && num_heads_kv > 1 && !context.is_stateful())) &&
+        same_head_size;
+    FRONT_END_OP_CONVERSION_CHECK(logit_softcap == 0.0f || use_manual_gqa_attention,
+                                  "FLASH_ATTN_EXT with logit soft-capping is not supported with different K/V head "
+                                  "sizes");
 
     if (use_manual_gqa_attention) {
         // Q, K, V arrive as [B, n_heads(_kv), S, head_size], where B is the active
@@ -205,7 +212,18 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
 
         // QK^T -> [B, num_heads_kv, factor * S_q, S_k]
         auto qk = std::make_shared<ov::op::v0::MatMul>(q_r, k, /*tA=*/false, /*tB=*/true);
-        ov::Output<ov::Node> probs = std::make_shared<ov::op::v1::Multiply>(qk, scale_node);
+        ov::Output<ov::Node> probs;
+        if (logit_softcap != 0.0f) {
+            // as ggml: softcap * tanh(qk * scale / softcap)
+            probs = std::make_shared<ov::op::v1::Multiply>(
+                qk,
+                ov::op::v0::Constant::create(ov::element::f16, ov::Shape{}, std::vector<float>{scale / logit_softcap}));
+            probs = std::make_shared<ov::op::v1::Multiply>(
+                std::make_shared<ov::op::v0::Tanh>(probs),
+                ov::op::v0::Constant::create(ov::element::f16, ov::Shape{}, std::vector<float>{logit_softcap}));
+        } else {
+            probs = std::make_shared<ov::op::v1::Multiply>(qk, scale_node);
+        }
 
         if (has_mask) {
             // Mask arrives as [B, 1, S_q, S_k]. Row j * S_q + s of the scores belongs to query position s, so
