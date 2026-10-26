@@ -6,6 +6,10 @@ machine with one model; read the Limitations section before trusting a number.
 Research material, not an upstream submission. `src/` and `tools/` changes are
 split per topic in the branch history; see "Upstream status" at the end.
 
+Sections 1 to 11 are the original measurements, taken with the branch based on
+upstream `78a8ae1`. The branch was later rebased onto `d854d98b`; section 12
+re-runs them there and reports which numbers moved and why.
+
 ## 1. Setup
 
 | | |
@@ -15,7 +19,7 @@ split per topic in the branch history; see "Upstream status" at the end.
 | CPU / RAM | AMD Ryzen 7 9700X, 8 cores / 16 threads, 31.11 GiB |
 | OS / toolchain | Windows 11, MSVC 19.29, CUDA 12 runtime |
 | Baseline | upstream master `78a8ae1` built in `llama.cpp-src/build-base` |
-| Branch | `moe-gpu-optimize` |
+| Branch | `moe-gpu-optimize`, based on `78a8ae1` here, rebased onto `d854d98b` in section 12 |
 | Model | Qwen3.6-35B-A3B, `UD-Q4_K_XL`, 20.81 GiB |
 
 Model shape that matters for the cache:
@@ -397,3 +401,139 @@ Before any resubmission: one PR at a time, the PR template filled in, the
 description and commit messages written by hand, and the AI usage disclosed. Per
 `AGENTS.md` this repository forbids automated PR submission, so submitting is a
 manual step.
+
+## 12. Rebase verification on `d854d98b`
+
+The branch was rebased from `78a8ae1` onto upstream master `d854d98b`, 21 commits
+later. No conflicts: only `src/llama-context.cpp` is touched by both sides, and
+`git range-diff` reports all 7 commits as unchanged. The build is clean, 563 of
+563 targets, with no warnings in any file this branch touches.
+
+Everything in this section was re-measured on the rebased branch. Sections 1 to
+11 are left as the `78a8ae1` record.
+
+### Upstream changed the routing, so the exact figures moved
+
+The deterministic numbers no longer reproduce to the digit, and the cause is not
+in this branch. With `--moe-cache-mib 0`, where the cache is never constructed
+and none of this branch's code runs, the two bases generate different text from
+the same greedy decode of the same prompt:
+
+```
+<     *   Scenario
+>     *   Scenario: GPU reads model weights stored in system RAM.
+```
+
+So upstream's own commits perturbed the arithmetic enough to change the router's
+top-8 at some positions. This is consistent with `c49edf096` (fused FFN gate/up
+matmuls and GLU in MMQ) and `a55c16e4e` (fused MRoPE and set-rows) altering
+reduction order and therefore rounding, but intermediate commits were not built,
+so the attribution is not isolated. Prefill traffic moved the same way, 5696.85
+to 5707.74 MiB.
+
+An expert-selection change does not move the uploaded byte count at a 0% hit
+rate: every selected expert is uploaded, 8 per layer per token, and expert size
+depends on the layer rather than on which expert. That is why the 384 MiB
+upstream row below is unchanged to the last digit.
+
+### Hit rate and uploaded bytes
+
+255 greedily decoded tokens on `moe-bench/prompt.txt`, from the cache's own
+counters, against the section 5 table:
+
+| cache MiB | upstream hit / uploaded | branch hit / uploaded | traffic | section 5 branch hit | delta |
+|---:|---:|---:|---:|---:|---:|
+| 384 | 0.00% / 145030.88 MiB | **21.32%** / 114174.28 MiB | **-21.3%** | 20.94% | +0.38 |
+| 528 | 1.04% / 143422.10 MiB | **27.53%** / 105147.00 MiB | **-26.7%** | 27.37% | +0.16 |
+| 586 | 20.93% / 114692.98 MiB | **29.64%** / 102097.78 MiB | **-11.0%** | 29.50% | +0.14 |
+
+Every hit rate reproduces within 0.8 points and every conclusion of section 4
+holds: upstream returns almost nothing below one token's experts, the sampled
+victim recovers 8.7 to 26.5 points of hit rate, and traffic falls by 11 to 27%.
+
+Above the crossover the two arms came out **byte-identical** - same hits, same
+misses, same uploaded bytes to the hundredth of a MiB:
+
+| cache MiB | slots per token | both arms | uploaded |
+|---:|---:|---:|---:|
+| 645 | 1.10 | 29.96% | 101592.12 MiB |
+| 1024 | 1.75 | 41.36% | 87882.56 MiB |
+| 2048 | 3.49 | 61.38% | 58033.62 MiB |
+
+Section 4 claimed this inertness from the simulator; it is now measured on
+hardware.
+
+### Throughput
+
+`llama-bench -n 64 -p 0 -r 4`, mean of two order-balanced passes, this time with
+**16.1 GiB of host RAM free** instead of the roughly 18 GiB of section 5:
+
+| cache MiB | upstream tok/s | branch tok/s | change | section 5 change |
+|---:|---:|---:|---:|---:|
+| 384 | 5.71 | 7.54 | +32.2% | +17.0% |
+| 528 | 7.24 | 10.65 | +47.1% | +32.9% |
+| 586 | 10.07 | 12.67 | +25.8% | +17.1% |
+| 645 | 12.15 | 12.24 | +0.7% | +0.4% |
+| 1024 | 15.02 | 15.57 | +3.7% | -1.3% |
+| 2048 | 22.10 | 21.24 | -3.9% | +0.4% |
+
+**The larger gains are not an improvement.** Absolute throughput is down 10 to
+15% everywhere, and the host expert working set is 18.32 GiB against 16.1 GiB
+free, so mmap page-cache misses penalise whichever arm reads more bytes - which
+is the upstream arm. Host memory pressure inflates the ratio. The gain below the
+crossover is real; its size is a property of how loaded the machine is.
+
+The control rows put a number on that. The table above this one proves the two
+arms are byte-identical at 645, 1024 and 2048 MiB, so those three rows measure
+nothing but noise, and they span +3.7% to -3.9%. That is the noise floor of this
+session, wider than the +-1.3% of section 5 at 18 GiB free. The sub-crossover
+gains sit far outside it, but carry at least that uncertainty.
+
+### Effective bandwidth of the pageable path
+
+Section 7 derived this from the upstream arm's known upload volume and time per
+token; recomputed from the measurements above, using measured rather than
+theoretical bytes per token:
+
+| cache MiB | MiB uploaded per token | tok/s | GB/s | section 7 GB/s |
+|---:|---:|---:|---:|---:|
+| 384 | 568.7 | 5.71 | 3.40 | 4.21 |
+| 528 | 562.4 | 7.24 | 4.27 | 4.83 |
+| 586 | 449.8 | 10.07 | 4.75 | 4.92 |
+| 645 | 398.4 | 12.15 | 5.08 | 5.03 |
+| 1024 | 344.6 | 15.02 | 5.43 | 5.48 |
+| 2048 | 227.6 | 22.10 | 5.27 | 5.30 |
+
+The three largest caches agree closely with section 7. The two smallest are
+lower, which is the same host memory pressure: those are the configurations that
+read the most bytes through mmap. The conclusion is unchanged - the pageable path
+delivers a fraction of the roughly 14 GB/s the link can carry, and generation
+stays bandwidth-bound on the host-to-device copy.
+
+### Correctness
+
+`moe-bench/check-correctness.sh` with no baseline build, so 6 configurations
+against cache-disabled rather than the 8 of section 6:
+
+```
+== diff against cache-off ==
+  OK    cache528-lru      OK    cache2048-lru     OK    cache1024-pinned
+  OK    cache528-auto     OK    cache2048-auto    OK    cache2048-s16
+```
+
+All byte-identical: the policy on and off, above and below the crossover, and
+host page pinning. The `upstream-off` and `upstream-2048` rows of section 6 need
+a build of upstream master at this base, which was not made.
+
+### Not re-run
+
+- **The simulated tables of sections 4 and 8.** They average four traces
+  collected on `78a8ae1`; the traces would have to be collected again on this
+  base, and the simulator re-validated against it, before those numbers can be
+  quoted for `d854d98b`.
+- **The pinning sweep of section 7.** It was already the noisiest measurement
+  here (+-25 to 45%) and explicitly confounded with page residency; with less
+  free RAM than before, re-running it would be dominated by the confound rather
+  than informative about the rebase.
+- **Prompt processing.** Only the one figure above, prefill traffic, was
+  re-checked.
