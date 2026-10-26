@@ -3012,6 +3012,17 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #endif // GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT
         }
 
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+        if (device->integer_dot_product) {
+            const uint32_t subgroup_size_int = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control) ? device->subgroup_min_size : device->subgroup_size;
+            const uint32_t wg_size_subgroup_int = (w == DMMV_WG_SIZE_SUBGROUP) ? subgroup_size_int : (subgroup_size_int * 4);
+
+            for (uint32_t i = mul_mat_vec_max_cols; i < mul_mat_vec_q8_0_max_cols; ++i) {
+                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_0_q8_1_f32_wide[w][i - mul_mat_vec_max_cols], "mul_mat_vec_q8_0_q8_1_f32_wide", arr_dmmv_q8_0_q8_1_f32_wide_len[reduc], arr_dmmv_q8_0_q8_1_f32_wide_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_int_n(1*rm_stdq_int, i), 1, 1}, {wg_size_subgroup_int, rm_int_n(1*rm_stdq_int, i), i+1}, 1, true, use_subgroups, subgroup_size_int);
+            }
+        }
+#endif // GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT
+
         ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_F32 ], "mul_mat_vec_id_f32_f32",        arr_dmmv_id_f32_f32_f32_len[reduc],     arr_dmmv_id_f32_f32_f32_data[reduc],     "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1, 1, 1}, {wg_size_subgroup, 1}, 1, false, use_subgroups, force_subgroup_size);
         ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_F16 ], "mul_mat_vec_id_f16_f32",        arr_dmmv_id_f16_f32_f32_len[reduc],     arr_dmmv_id_f16_f32_f32_data[reduc],     "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {2, 1, 1}, {wg_size_subgroup, 2}, 1, false, use_subgroups, force_subgroup_size);
         ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_BF16], "mul_mat_vec_id_bf16_f32",       arr_dmmv_id_bf16_f32_f32_len[reduc],    arr_dmmv_id_bf16_f32_f32_data[reduc],    "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {2, 1, 1}, {wg_size_subgroup, 2}, 1, false, use_subgroups, force_subgroup_size);
@@ -5552,7 +5563,8 @@ vk_pipeline ggml_vk_get_to_fp16(ggml_backend_vk_context * ctx, ggml_type type) {
 static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * ctx, ggml_type a_type, ggml_type b_type, uint32_t num_cols, uint32_t m, uint32_t k) {
     VK_LOG_DEBUG("ggml_vk_get_dequantize_mul_mat_vec()");
     GGML_ASSERT(b_type == GGML_TYPE_F32 || b_type == GGML_TYPE_F16 || b_type == GGML_TYPE_Q8_1);
-    GGML_ASSERT(num_cols >= 1 && num_cols <= mul_mat_vec_max_cols);
+    const bool q8_0_q8_1 = a_type == GGML_TYPE_Q8_0 && b_type == GGML_TYPE_Q8_1;
+    GGML_ASSERT(num_cols >= 1 && num_cols <= (q8_0_q8_1 ? mul_mat_vec_q8_0_max_cols : mul_mat_vec_max_cols));
 
     if (b_type == GGML_TYPE_Q8_1) {
         switch (a_type) {
@@ -5631,6 +5643,9 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * 
     if (b_type == GGML_TYPE_Q8_1) {
         if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
+        }
+        if (num_cols > mul_mat_vec_max_cols) {
+            return ctx->device->pipeline_dequant_mul_mat_vec_q8_0_q8_1_f32_wide[dmmv_wg][num_cols - mul_mat_vec_max_cols - 1];
         }
         return ctx->device->pipeline_dequant_mul_mat_vec_q8_1_f32[dmmv_wg][a_type][num_cols-1];
     }
@@ -7318,6 +7333,23 @@ void ggml_vk_dsv4_hc_post(ggml_backend_vk_context * ctx, vk_context& subctx, con
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { x_buf, r_buf, p_buf, c_buf, d_buf }, pc, { n_embd, n_tokens, 1 });
 }
 
+// Q8_0 x F32 with 9..16 columns also runs as MMVQ (the A-reuse shader) instead of the matmul shader. Mirrors the
+// quantize_y condition of ggml_vk_mul_mat_vec_q_f16. AMD only for now: the crossover on other vendors is unmeasured.
+static bool ggml_vk_mul_mat_vec_q8_0_wide(ggml_backend_vk_context * ctx, const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const int64_t ne11 = dst->ne[1];
+    if (ne11 <= (int64_t) mul_mat_vec_max_cols || ne11 > (int64_t) mul_mat_vec_q8_0_max_cols) {
+        return false;
+    }
+    return ctx->device->vendor_id == VK_VENDOR_ID_AMD && ctx->device->integer_dot_product &&
+           src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_F32 &&
+           src1->ne[2] * src1->ne[3] == 1 && ggml_is_contiguous(src1) && ggml_vk_dim01_contiguous(src1) && ggml_vk_dim01_contiguous(src0) &&
+           (ne11 * src1->ne[0]) % 4 == 0 && ggml_vk_src1_prec_allows_q8(dst) &&
+           ggml_vk_should_use_mmvq(ctx->device, src0->ne[1], ne11, src1->ne[0], src0->type) &&
+           ggml_vk_get_dequantize_mul_mat_vec(ctx, src0->type, GGML_TYPE_Q8_1, ne11, src0->ne[1], src0->ne[0]) != nullptr;
+}
+
 void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
     ggml_tensor * dst = cgraph->nodes[node_idx];
     ggml_tensor * src0 = dst->src[0];
@@ -7384,7 +7416,8 @@ void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, const st
         ggml_vk_mul_mat_vec_q_f16(ctx, subctx, cgraph, node_idx, true);
     // mul_mat_vec supports batching ne12*ne13 when ne11==1, or treating ne11 as the batch size (up to four)
     // when ne12 and ne13 are one.
-    } else if ((dst->ne[1] == 1 || (dst->ne[1] <= mul_mat_vec_max_cols && src1->ne[2] * src1->ne[3] == 1)) &&
+    } else if ((dst->ne[1] == 1 || (dst->ne[1] <= mul_mat_vec_max_cols && src1->ne[2] * src1->ne[3] == 1) ||
+                ggml_vk_mul_mat_vec_q8_0_wide(ctx, dst)) &&
                (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || ggml_is_quantized(src0->type))) {
         ggml_vk_mul_mat_vec_q_f16(ctx, subctx, cgraph, node_idx);
     } else {
