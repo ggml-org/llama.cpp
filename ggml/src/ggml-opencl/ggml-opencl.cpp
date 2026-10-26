@@ -34162,7 +34162,7 @@ static void ggml_cl_mul_mat_id_float(ggml_backend_t backend, const ggml_tensor *
 
     // The router uses the IDs row stride as its expert count.
     const size_t router_experts = src2->nb[1]/sizeof(int32_t);
-    if (src1->ne[2] >= 16 && ncols >= 64 && nrows >= 32 &&
+    if (src1->ne[2] >= 16 && ncols >= 64 && nrows >= 32 && ggml_is_contiguous(dst) &&
         src2->nb[0] == sizeof(int32_t) && src2->nb[1] % sizeof(int32_t) == 0 &&
         router_experts >= (size_t) src0->ne[2] && router_experts <= 1024 &&
         dst->ne[1]*dst->ne[2] >= (int64_t) router_experts*4 &&
@@ -34172,6 +34172,8 @@ static void ggml_cl_mul_mat_id_float(ggml_backend_t backend, const ggml_tensor *
         const size_t max_tiles = (size_t) nused*dst->ne[2]/32 + router_experts;
         moe_router_reoerder(backend, src2, nused);
         backend_ctx->toggle_reorder = true;
+        const float zero = 0.0f;
+        CL_CHECK(clEnqueueFillBuffer(backend_ctx->queue, extrad->data_device, &zero, sizeof(zero), offsetd, ggml_nbytes(dst), 0, nullptr, nullptr));
         kernel = backend_ctx->kernel_mul_mm_id_f32_f32;
         CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
         CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
