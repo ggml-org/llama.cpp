@@ -795,14 +795,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const std::unordered_map<std::string, std::vector<float>> * values_data,
     const std::unordered_map<std::string, std::vector<float>> * activations_data,
     const std::unordered_map<std::string, std::vector<float>> * statistics_data,
+    const std::vector<std::string> * stats_schema,
     const std::unordered_map<std::string, ggml_type> * locked_tensors,
     int nthread
 ) {
     bpw_stop.store(false, std::memory_order_relaxed);
-
-    // Vector indices for statistics_data's metrics
-    enum { ENERGY = 0, MEAN = 1, ELEMENTS = 2, STDDEV = 3, SKEWNESS = 4, KURTOSIS = 5, GAIN = 6,
-           H_NORM = 7, L2_DIST = 8, COSSIM = 9, PCC = 10, COVAR = 11 };
 
     // SIGINT/SIGTERM signal handlers
     struct signal_scope_guard {
@@ -970,6 +967,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
         }
 
+        const uint8_t has_schema = stats_schema != nullptr;
+        hash_bytes(& has_schema, sizeof(has_schema));
+        if (stats_schema) {
+            hash_size(stats_schema->size());
+            for (const auto & name : * stats_schema) {
+                hash_size(name.size());
+                hash_bytes(name.data(), name.size());
+            }
+        }
+
         for (const auto & [blk, num] : mapped) {
             const int32_t b = blk;
             hash_bytes(& b, sizeof(b));
@@ -1119,7 +1126,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 ifs.read((char *)& t, sizeof(t));
                 if (!ifs.good()) { break; }
                 if (std::find(std::begin(quant_types), std::end(quant_types), t) == std::end(quant_types)) {
-                    LLAMA_LOG_WARN("%s: candidate type is not in the selection pool, ignoring state file \n", func);
+                    LLAMA_LOG_WARN("%s: candidate type is not in the selection pool, ignoring state file\n", func);
                     return {};
                 }
                 cd.type = (ggml_type)t;
@@ -1442,9 +1449,27 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return sz == req || sz == (size_t) n_per_row;
     };
 
+    // Look up stats used by CNIF
+    enum { ENERGY, H_NORM, L2_DIST, COSSIM, PCC, N_STATS };
+    const char * stat_names[N_STATS] = { "sum_sq", "h_norm", "l2_dist", "cossim", "pearson" };
+    size_t stat_pos[N_STATS] = {};
+    size_t min_stats = 0;
+    bool use_cnif = statistics_data && !statistics_data->empty();
+    for (int i = 0; use_cnif && i < N_STATS; ++i) {
+        const size_t n = stats_schema ? stats_schema->size() : 0;
+        size_t p = 0;
+        while (p < n && (* stats_schema)[p] != stat_names[i]) { ++p; }
+        if (p == n) {
+            LLAMA_LOG_WARN("%s: statistics have no %s metric, skipping CNIF; model quality may be compromised\n", func, stat_names[i]);
+            use_cnif = false;
+        }
+        stat_pos[i] = p;
+        min_stats = std::max(min_stats, p + 1);
+    }
+
     // Precompute the Centered‑Normalized Importance Factor (CNIF)
     std::unordered_map<std::string, float> cnif_scores;
-    if (statistics_data && !statistics_data->empty()) {
+    if (use_cnif) {
         struct tensor_score {
             std::string name;
             float score = 0.0f;
@@ -1531,19 +1556,19 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
             const std::string name = remap_imatrix(ggml_get_name(tensor), mapped);
             auto it = statistics_data->find(name);
-            if (it == statistics_data->end() || it->second.size() <= (size_t) L2_DIST) { continue; }
+            if (it == statistics_data->end() || it->second.size() < min_stats) { continue; }
 
             // Heads have no previous-layer counterpart so they stay outside the pool at cnif = 1.0
             if (tensor_name_match_token_embd(ggml_get_name(tensor)) || tensor_name_match_output_weight(ggml_get_name(tensor))) { continue; }
 
             const auto & ts = it->second;
-            const float h_norm = std::isfinite(ts[H_NORM]) ? std::clamp(ts[H_NORM], 0.0f, 100.0f) : 100.0f;
+            const float h_norm = std::isfinite(ts[stat_pos[H_NORM]]) ? std::clamp(ts[stat_pos[H_NORM]], 0.0f, 100.0f) : 100.0f;
             const float concentration = 1.0f - h_norm / 100.0f;
-            const float energy = std::isfinite(ts[ENERGY]) ? std::max(0.0f, ts[ENERGY]) : 0.0f;
-            const float l2_dist = std::isfinite(ts[L2_DIST]) ? std::max(0.0f, ts[L2_DIST]) : 0.0f;
+            const float energy = std::isfinite(ts[stat_pos[ENERGY]]) ? std::max(0.0f, ts[stat_pos[ENERGY]]) : 0.0f;
+            const float l2_dist = std::isfinite(ts[stat_pos[L2_DIST]]) ? std::max(0.0f, ts[stat_pos[L2_DIST]]) : 0.0f;
             const float rel_l2 = l2_dist / (std::sqrt(energy) + EPSILON);
             const float density = rel_l2 / (1.0f + rel_l2);
-            const float fragility = 0.5f * (corr_error(ts[COSSIM]) + corr_error(ts[PCC]));
+            const float fragility = 0.5f * (corr_error(ts[stat_pos[COSSIM]]) + corr_error(ts[stat_pos[PCC]]));
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t ne2 = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
@@ -1551,6 +1576,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             const bool has_acts = has_side_data(activations_data, name, ne2, n_per_row);
             const bool use_wce = has_vals && has_acts && is_angle_sensitive(name);
 
+            // parameters tuned for better results at low bitrates (<= 4.5 bits)
             const float score = use_wce
                 ? 0.75f * concentration + 0.15f * density + 0.10f * fragility
                 : 0.40f * concentration + 0.35f * density + 0.25f * fragility;
@@ -3105,6 +3131,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::unordered_map<std::string, std::vector<float>> vdata;
     std::unordered_map<std::string, std::vector<float>> adata;
     std::unordered_map<std::string, std::vector<float>> sdata;
+    const std::vector<std::string> * stats_schema = nullptr;
+    std::vector<std::string> sschema;
     if (params->imatrix) {
         for (const llama_model_imatrix_data * i = params->imatrix; i->name != nullptr; i++) {
             vdata.emplace(i->name, std::vector<float>(i->data, i->data + i->size));
@@ -3142,6 +3170,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (params->statistics) {
         for (const llama_model_imatrix_data * s = params->statistics; s->name != nullptr; s++) {
             sdata.emplace(s->name, std::vector<float>(s->data, s->data + s->size));
+        }
+        if (params->stats_schema) {
+            for (const char * const * s = params->stats_schema; * s != nullptr; s++) { sschema.emplace_back(* s); }
+            stats_schema = & sschema;
         }
 
         statistics_data = & sdata;
@@ -3373,7 +3405,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             // get quantization type overrides targeting a given bits per weight budget
             const auto * lt = locked_tensors.empty() ? nullptr : & locked_tensors;
-            bpw_overrides = target_bpw_type(ml, qs, tensors, mapped, values_data, activations_data, statistics_data, lt, nthread);
+            bpw_overrides = target_bpw_type(ml, qs, tensors, mapped, values_data, activations_data, statistics_data, stats_schema, lt, nthread);
             for (size_t i = 0; i < tensors.size(); ++i) {
                 const std::string name = ggml_get_name(tensors[i]->tensor);
                 auto it = bpw_overrides.find(name);
@@ -3608,6 +3640,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.imatrix                     =*/ nullptr,
         /*.activations                 =*/ nullptr,
         /*.statistics                  =*/ nullptr,
+        /*.stats_schema                =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
         /*.prune_layers                =*/ nullptr,
@@ -3615,7 +3648,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.target_bpw                  =*/ -1.0f,
         /*.target_size                 =*/ -1,
         /*.state_file                  =*/ nullptr,
-        /*.target_exclude              =*/ nullptr
+        /*.target_exclude              =*/ nullptr,
     };
 
     return result;

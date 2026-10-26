@@ -453,6 +453,7 @@ extern "C" {
         const struct llama_model_imatrix_data * imatrix;            // pointer to importance matrix data
         const struct llama_model_imatrix_data * activations;        // pointer to activations data
         const struct llama_model_imatrix_data * statistics;         // pointer to statistics data
+        const char * const * stats_schema;                          // pointer to statistics schema names
         const struct llama_model_kv_override * kv_overrides;        // pointer to kv overrides
         const struct llama_model_tensor_override * tt_overrides;    // pointer to tensor overrides
         const int32_t * prune_layers;                               // pointer to layer indices to prune

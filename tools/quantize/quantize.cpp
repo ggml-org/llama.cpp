@@ -187,7 +187,8 @@ static int load_imatrix(const std::string & imatrix_file,
     std::vector<std::string> & imatrix_datasets,
     std::unordered_map<std::string, std::vector<float>> & values_data,
     std::unordered_map<std::string, std::vector<float>> & activations_data,
-    std::unordered_map<std::string, std::vector<float>> & statistics_data)
+    std::unordered_map<std::string, std::vector<float>> & statistics_data,
+    std::vector<std::string> & statistics_schema)
 {
     common_imatrix loaded;
     if (!common_imatrix_load(imatrix_file, loaded)) {
@@ -278,6 +279,7 @@ static int load_imatrix(const std::string & imatrix_file,
     }
 
     imatrix_datasets = std::move(loaded.datasets);
+    statistics_schema = std::move(loaded.stats_schema);
 
     if (!imatrix_datasets.empty()) {
         printf("%s: imatrix datasets=['%s'", __func__, imatrix_datasets[0].c_str());
@@ -298,10 +300,11 @@ static int prepare_imatrix(const std::string & imatrix_file,
         const std::vector<std::string> & excluded_weights,
         std::unordered_map<std::string, std::vector<float>> & values_data,
         std::unordered_map<std::string, std::vector<float>> & activations_data,
-        std::unordered_map<std::string, std::vector<float>> & statistics_data) {
+        std::unordered_map<std::string, std::vector<float>> & statistics_data,
+        std::vector<std::string> & stats_schema) {
     int m_last_call = -1;
     if (!imatrix_file.empty()) {
-        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, values_data, activations_data, statistics_data);
+        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, values_data, activations_data, statistics_data, stats_schema);
     }
     if (values_data.empty()) {
         return m_last_call;
@@ -708,11 +711,13 @@ int llama_quantize(int argc, char ** argv) {
     std::unordered_map<std::string, std::vector<float>> values_data;
     std::unordered_map<std::string, std::vector<float>> activations_data;
     std::unordered_map<std::string, std::vector<float>> statistics_data;
-    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, values_data, activations_data, statistics_data);
+    std::vector<std::string> stats_schema;
+    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, values_data, activations_data, statistics_data, stats_schema);
 
     std::vector<llama_model_imatrix_data> vdata;
     std::vector<llama_model_imatrix_data> adata;
     std::vector<llama_model_imatrix_data> sdata;
+    std::vector<const char *> sschema;
     std::vector<llama_model_tensor_override> tto;
 
     if (!values_data.empty()) {
@@ -763,6 +768,10 @@ int llama_quantize(int argc, char ** argv) {
         for (const auto & kv : statistics_data) { sdata.push_back({kv.first.c_str(), kv.second.data(), kv.second.size()}); }
         sdata.push_back({nullptr, nullptr, 0});  // array terminator
         params.statistics = sdata.data();
+        sschema.reserve(stats_schema.size() + 1);
+        for (const auto & name : stats_schema) { sschema.push_back(name.c_str()); }
+        sschema.push_back(nullptr);  // array terminator
+        params.stats_schema = sschema.data();
     }
     if (!kv_overrides.empty()) {
         kv_overrides.emplace_back();

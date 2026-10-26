@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
-#include <unordered_map>
 
 static bool common_imatrix_load_legacy(const std::string & fname, common_imatrix & imatrix) {
     std::ifstream in(fname, std::ios::binary);
@@ -118,34 +117,20 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
     imatrix.chunk_size    = chunk_size_key  != -1 ? gguf_get_val_u32(ctx_gguf, chunk_size_key) : 0;
     imatrix.n_layer_nextn = nextn_key       != -1 ? gguf_get_val_u32(ctx_gguf, nextn_key) : 0;
 
-    // stats schema: maps file-order positions to canonical metric indices
     const int64_t schema_idx = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_STATS_SCHEMA);
-    const std::unordered_map<std::string, int> default_schema_map = {
-        {"sum_sq", 0}, {"mean", 1}, {"elements", 2}, {"std_deviation", 3}, {"skewness", 4},
-        {"kurtosis", 5}, {"gain", 6}, {"h_norm", 7}, {"l2_dist", 8}, {"cossim", 9}, {"pearson", 10}, {"covariance", 11}
-    };
-    std::vector<int> stats_indices;
     if (schema_idx != -1 && gguf_get_kv_type(ctx_gguf, schema_idx) == GGUF_TYPE_ARRAY &&
         gguf_get_arr_type(ctx_gguf, schema_idx) == GGUF_TYPE_STRING) {
         const int64_t n_schema = gguf_get_arr_n(ctx_gguf, schema_idx);
-        for (int64_t i = 0; i < n_schema; ++i) {
-            const std::string key = gguf_get_arr_str(ctx_gguf, schema_idx, i);
-            auto it = default_schema_map.find(key);
-            stats_indices.push_back(it != default_schema_map.end() ? it->second : -1);
-        }
+        imatrix.stats_schema.resize(n_schema);
+        for (int64_t i = 0; i < n_schema; ++i) { imatrix.stats_schema[i] = gguf_get_arr_str(ctx_gguf, schema_idx, i); }
     } else {
         if (schema_idx != -1) {
             LOG_WRN("%s: %s in %s is not an array of strings, using the default order\n", __func__, LLM_KV_IMATRIX_STATS_SCHEMA, fname.c_str());
         }
-        for (size_t i = 0; i < default_schema_map.size(); ++i) {
-            stats_indices.push_back((int) i);
-        }
-    }
 
-    // store canonical schema names in order
-    imatrix.stats_schema.resize(default_schema_map.size());
-    for (const auto & [name, idx] : default_schema_map) {
-        imatrix.stats_schema[idx] = name;
+        imatrix.stats_schema = {
+            "sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain", "h_norm", "l2_dist", "cossim", "pearson", "covariance",
+        };
     }
 
     const std::string in_sum_suffix{ ".in_sum" };
@@ -220,14 +205,9 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         }
 
         if (stats && stats->type == GGML_TYPE_F32) {
-            e.stats.resize(default_schema_map.size(), 0.0f);
-            const auto * stats_data = (const float *) stats->data;
             const int64_t n_stats = ggml_nelements(stats);
-            for (int64_t j = 0; j < (int64_t) stats_indices.size() && j < n_stats; ++j) {
-                if (stats_indices[j] >= 0 && stats_indices[j] < (int) e.stats.size()) {
-                    e.stats[stats_indices[j]] = stats_data[j];
-                }
-            }
+            e.stats.resize(n_stats);
+            for (int64_t j = 0; j < n_stats; ++j) { e.stats[j] = ((const float *) stats->data)[j]; }
         }
     }
 
