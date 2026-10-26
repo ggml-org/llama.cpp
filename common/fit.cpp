@@ -29,7 +29,7 @@ class common_params_fit_exception : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-// while alive, llama prints below min_level go to the debug log
+// RAII: send llama logs below min_level to the debug log
 struct common_fit_log_scope {
     common_fit_log_scope(ggml_log_level min_level) : min_level(min_level) {
         llama_log_get(&original_logger.callback, &original_logger.user_data);
@@ -205,7 +205,7 @@ common_memory_reports common_measure_memory(common_params & params) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    // max: what --fit settles on given the free memory right now, a no-op with -fit off
+    // max: what --fit picks now, no-op with -fit off
     {
         auto mparams_fit = mparams;
         auto cparams_fit = cparams;
@@ -213,12 +213,11 @@ common_memory_reports common_measure_memory(common_params & params) {
         res.info_max = common_fit_measure(path_model, &mparams_fit, &cparams_fit, &res.n_ctx_train, &res.n_ctx_max, log_level);
     }
 
-    // min: the smallest context --fit may pick, with the placement from params
-    // --fit only touches n_ctx when it is 0, same rule as in common_params_fit_impl
+    // min: the smallest context --fit may pick (--fit only changes n_ctx when it is 0)
     uint32_t n_ctx_min = cparams.n_ctx;
     if (n_ctx_min == 0 && params.fit_params) {
         const uint32_t n_streams = cparams.kv_unified ? 1 : std::max<uint32_t>(1, cparams.n_seq_max);
-        // -c 0 sets fit_params_min_ctx to UINT32_MAX, saturate to the trained context like --fit does
+        // -c 0 sets fit_params_min_ctx to UINT32_MAX, cap at n_ctx_train like --fit
         n_ctx_min = (uint32_t) std::min<uint64_t>(
             uint64_t(params.fit_params_min_ctx) * n_streams,
             uint64_t(res.n_ctx_train) * n_streams);

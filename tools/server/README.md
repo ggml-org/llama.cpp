@@ -230,7 +230,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
-| `--models-memory-margin N` | for router server, MiB of device memory to keep free when loading a model, models are measured<br/>on startup and unloaded (LRU) until the new one fits at its minimum context (default: 0, 0 = disabled)<br/>(env: LLAMA_ARG_MODELS_MEMORY_MARGIN) |
+| `--models-memory-margin N` | for router server, MiB of device memory to keep free per device, unload LRU models until a new one fits (default: 0, 0 = disabled)<br/>(env: LLAMA_ARG_MODELS_MEMORY_MARGIN) |
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |

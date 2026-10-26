@@ -777,7 +777,7 @@ static inline server_role_type server_role_type_from_str(const std::string & str
 // the states a child reports to the router
 enum server_state {
     SERVER_STATE_DOWNLOADING,
-    SERVER_STATE_MEASURING, // a measure child reporting the memory the model needs, see server_run_measure
+    SERVER_STATE_MEASURING, // sent by a measure child, see server_run_measure
     SERVER_STATE_LOADING,
     SERVER_STATE_READY,
     SERVER_STATE_SLEEPING,

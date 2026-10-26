@@ -1018,7 +1018,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
 
-// fit mparams and cparams to free device memory as --fit does, a no-op when params.fit_params is false
+// apply --fit to mparams and cparams, no-op if params.fit_params is false
 void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams);
 
 // clear LoRA adapters from context, then apply new list of adapters

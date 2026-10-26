@@ -425,12 +425,11 @@ static int server_run_download(common_params & params, server_role & role) {
 }
 
 //
-// measure worker: a child of the router that reports the memory a model needs without loading it,
-// see "Memory-based unloading" in the README
+// measure worker: a child of the router, reports the memory a model needs without loading it
 //
 
 static int server_run_measure(common_params & params, server_role & role, common_models_handler & models_handler) {
-    // the router passes --offline, so this only resolves the path of an already downloaded model
+    // the router sets --offline: only resolve the local path, never download
     try {
         common_models_handler_apply(models_handler, params);
     } catch (const std::exception & e) {
@@ -440,7 +439,7 @@ static int server_run_measure(common_params & params, server_role & role, common
 
     const std::string model_name = params.model.get_name();
 
-    // TODO: mmproj buffers are not part of llama_get_memory_breakdown, a multimodal model is underestimated by its projector
+    // TODO: mmproj is not in llama_get_memory_breakdown, a multimodal model is underestimated
     json payload;
     try {
         common_memory_reports m = common_measure_memory(params);
@@ -705,7 +704,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
     if (role.is_managed_by_router()) {
         monitor_thread = role.setup(shutdown_handler);
         json info = routes.get_model_info();
-        // the router keeps track of device memory from what its instances report
+        // the router tracks device memory from these reports
         if (const auto * ll_ctx = ctx_server.get_llama_context()) {
             info["memory"] = server_model_memory(llama_n_ctx(ll_ctx), common_memory_breakdown_rows(ll_ctx)).to_json();
         }
