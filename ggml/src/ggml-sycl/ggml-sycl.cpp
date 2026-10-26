@@ -6888,11 +6888,6 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 }
                 break;
             case GGML_OP_FLASH_ATTN_EXT:
-                if (ggml_sycl_flash_attn_ext_needs_sync(ctx->device, node)) {
-                    GGML_LOG_DEBUG("%s: disabling SYCL graphs due to host wait in %s\n", __func__,
-                                   ggml_op_name(node_op));
-                    return false;
-                }
 #ifndef GGML_SYCL_GRAPH_DNNL_SUPPORTED
                 if (ggml_sycl_flash_attn_ext_uses_onednn(ctx->device, node)) {
                     GGML_LOG_DEBUG("%s: disabling SYCL graphs due to %s using oneDNN\n", __func__,
