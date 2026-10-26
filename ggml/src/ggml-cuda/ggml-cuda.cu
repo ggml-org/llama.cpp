@@ -619,15 +619,12 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 
             // reserve virtual address space (if not already reserved)
             if (pool_addr == 0) {
-                while ((max_size >> 1) >= reserve_size && (max_size >> 1) >= granularity) {
-                    if (cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0) == 0) {
-                        break;
-                    }
+                CUresult err = cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0);
+                while (err == CUDA_ERROR_OUT_OF_MEMORY && (max_size >> 1) >= reserve_size && (max_size >> 1) >= granularity) {
                     max_size >>= 1;
+                    err = cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0);
                 }
-                if (pool_addr == 0) {
-                    CU_CHECK(cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0));
-                }
+                CU_CHECK(err);
             }
 
             GGML_ASSERT(pool_size + reserve_size <= max_size);
