@@ -70,6 +70,7 @@
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/fill.cuh"
 #include "ggml-cuda/lightning-indexer.cuh"
+#include "ggml-cuda/top-k-mask.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -213,52 +214,36 @@ static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device)
 }
 
 #if defined(GGML_USE_HIP)
-static int ggml_cuda_parse_id(char devName[]) {
+static int ggml_cuda_parse_id(const char * devName) {
     // A list of possible Target IDs can be found under the rocclr/clr repo in device.cpp
     // these values are not stable so this is susceptible to breakage
     // https://github.com/ROCm/clr/blob/amd-staging/rocclr/device/device.cpp
-    int archMajor = 0x0;
-    int archMinor = 0x0;
-    int archNum = GGML_CUDA_CC_OFFSET_AMD;
-    int archLen = strlen(devName);
-    char archName[archLen + 1];
+    // Extract the base architecture model ("gfx908:sramecc+:xnack-" -> "908")
+    std::string archName = devName;
+    archName.erase(0, 3);
+    archName = archName.substr(0, archName.find(':'));
 
-    // strip leading 'gfx' while copying into our buffer
-    if (archLen > 3) {
-        strcpy(archName, &devName[3]);
-        archLen -= 3;
-    }
+    const auto hex = [](const std::string & s) { return (int) strtoul(s.c_str(), nullptr, 16); };
 
-    // trim trailing :xnack- or :sramecc- statuses
-    archLen = strcspn(archName, ":");
-    archName[archLen] = '\0';
+    int cc = 0;
 
     // tease out the version information
-    if (archLen > 8) {
+    if (archName.size() > 8) {
         // versions labeled generic use '-' as delimiter
-        // strip the trailing "-generic" then iterate through what remains
-        if ((strstr(archName, "-generic"))) {
-            archName[archLen - 8] = '\0';
-            char * pch;
-            if ((pch = strtok(archName, "-"))) {
-                archMajor = (int)strtoul(pch, 0, 16);
-                if ((pch = strtok(NULL, "-"))) {
-                    archMinor = 0x10 * (int)strtoul(pch, 0, 16);
-                }
+        if (archName.compare(archName.size() - 8, 8, "-generic") == 0) {
+            archName.resize(archName.size() - 8);
+            const size_t sep = archName.find('-');
+            cc = 0x100 * hex(archName.substr(0, sep));
+            if (sep != std::string::npos) {
+                cc += 0x10 * hex(archName.substr(sep + 1));
             }
         }
-    } else if (archLen >= 3) {
-        // last two digits should be the minor * 0x10 + stepping
-        archMinor = (int)strtoul(&archName[archLen - 2], 0, 16);
-        archName[archLen - 2] = '\0';
-
-        // only the major version remains
-        archMajor = (int)strtoul(archName, 0, 16);
+    } else if (archName.size() >= 3) {
+        // ordinary IDs are the version in hex
+        cc = hex(archName);
     }
-    archNum += archMajor * 0x100;
-    archNum += archMinor;
 
-    return archNum;
+    return GGML_CUDA_CC_OFFSET_AMD + cc;
 }
 #endif // defined(GGML_USE_HIP)
 
@@ -457,6 +442,7 @@ const ggml_cuda_device_info & ggml_cuda_info() {
 struct ggml_cuda_pool_leg : public ggml_cuda_pool {
     static const int MAX_BUFFERS = 256;
 
+    ggml_backend_cuda_context & ctx;
     int device;
     struct ggml_cuda_buffer {
         void * ptr = nullptr;
@@ -466,7 +452,8 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
     ggml_cuda_buffer buffer_pool[MAX_BUFFERS] = {};
     size_t pool_size = 0;
 
-    explicit ggml_cuda_pool_leg(int device) :
+    ggml_cuda_pool_leg(ggml_backend_cuda_context & ctx, int device) :
+        ctx(ctx),
         device(device) {
     }
 
@@ -486,6 +473,20 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                 b.size = 0;
             }
         }
+    }
+
+    // captured CUDA graphs can still use freed buffers, so they must be captured again
+    void invalidate_cuda_graphs() {
+#ifdef USE_CUDA_GRAPH
+        int n_captured = 0;
+        for (const auto & [key, graph] : ctx.cuda_graphs) {
+            n_captured += graph->instances.size();
+        }
+        if (n_captured > 0) {
+            GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: memory freed, %d captured CUDA graphs must be captured again\n", device, n_captured);
+        }
+        ctx.cuda_graphs.clear();
+#endif // USE_CUDA_GRAPH
     }
 
     void * alloc(size_t size, size_t * actual_size) override {
@@ -538,6 +539,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                            device, look_ahead_size/1024.0/1024.0, cached_bytes/1024.0/1024.0);
             CUDA_CHECK(cudaDeviceSynchronize());
             clear_pool();
+            invalidate_cuda_graphs();
             err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
             if (err == cudaSuccess) {
                 GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded\n", device);
@@ -566,6 +568,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         ggml_cuda_set_device(device);
         CUDA_CHECK(cudaFree(ptr));
         pool_size -= size;
+        invalidate_cuda_graphs();
     }
 };
 
@@ -720,14 +723,15 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 };
 #endif // defined(GGML_USE_VMM)
 
-std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(int                  device,
-                                                                               [[maybe_unused]] int stream_no) {
+std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(ggml_backend_cuda_context & ctx,
+                                                                               int                         device,
+                                                                               [[maybe_unused]] int        stream_no) {
 #if defined(GGML_USE_VMM)
     if (ggml_cuda_info().devices[device].vmm) {
         return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_vmm(device));
     }
 #endif // defined(GGML_USE_VMM)
-    return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_leg(device));
+    return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_leg(ctx, device));
 }
 
 // destroying a cuBLAS handle while a graph is being captured in a different thread can result in a CUDA error
@@ -1953,6 +1957,61 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
     return true;
 }
 
+// Buffer- and batch-size independent, so graph_optimize produces the same graph topology for every ubatch size (see #29986).
+static bool ggml_cuda_mul_mat_q_fusion_matches(const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu, const int device) {
+    const ggml_tensor * x_up = up->src[0];
+    const ggml_tensor * y    = up->src[1];
+
+    if (up->op != GGML_OP_MUL_MAT || !ggml_cuda_mmq_fusion_supported(x_up->type) || y->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // The fused kernel is only compiled for weights whose rows fill whole tiles (no fallback).
+    if (ggml_cuda_mmq_needs_fallback(x_up->ne[1])) {
+        return false;
+    }
+
+    if (!ggml_cuda_should_fuse_mul_mat(up, gate, glu)) {
+        return false;
+    }
+
+    // The fused write-back applies SWIGLU_OAI with the default alpha and limit of ggml_cuda_op_swiglu_oai_single.
+    if (ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU_OAI && (ggml_get_op_params_f32(glu, 2) != 1.702f || ggml_get_op_params_f32(glu, 3) != 7.0f)) {
+        return false;
+    }
+
+    // NVIDIA only: the fused write-back relies on the MMA accumulator layout.
+    return turing_mma_available(ggml_cuda_info().devices[device].cc);
+}
+
+static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu) {
+    // A hinted matmul can be fused, but its unfused path may be faster (e.g. FWHT for GGML_HINT_SRC0_IS_HADAMARD).
+    if (ggml_get_op_params_i32(up, 1) != GGML_HINT_NONE || ggml_get_op_params_i32(gate, 1) != GGML_HINT_NONE) {
+        return false;
+    }
+
+    // The padding of a compute-buffer weight that is a view cannot be cleared, see ggml_cuda_mul_mat.
+    const auto bad_padding_clear = [](const ggml_tensor * x) {
+        return ggml_backend_buffer_get_usage(x->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+            ggml_nbytes(x) != ggml_backend_buffer_get_alloc_size(x->buffer, x) && x->view_src;
+    };
+    const int device = ggml_cuda_get_device();
+    if (!ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, device) || bad_padding_clear(up->src[0]) || bad_padding_clear(gate->src[0])) {
+        return false;
+    }
+
+    // The batch size checks are done here, not in ggml_cuda_mul_mat_q_fusion_matches.
+    const ggml_tensor * x_up = up->src[0];
+    const ggml_tensor * y    = up->src[1];
+    const int           cc   = ggml_cuda_info().devices[device].cc;
+    if (ggml_cuda_should_use_mmvq(x_up->type, cc, y->ne[1]) || !ggml_cuda_should_use_mmq(x_up->type, cc, y->ne[1], 0)) {
+        return false;
+    }
+
+    // The fused kernel needs one block per tile (no stream-k split), so only fuse if the tiling is efficient.
+    return ggml_cuda_mmq_fusion_is_efficient(x_up->type, x_up->ne[1], y->ne[1], y->ne[2]*y->ne[3], device);
+}
+
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -2014,6 +2073,8 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+
     if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return true;
     }
@@ -2032,7 +2093,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
         return false;
     }
 
-    if (ggml_cuda_should_use_mmf(src0->type, cc, WARP_SIZE, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
+    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
         return false;
     }
 
@@ -2050,6 +2111,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -2074,7 +2136,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             return;
         }
 
-        if (ggml_cuda_should_use_mmf(src0->type, cc, WARP_SIZE, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
+        if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
             ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
             return;
         }
@@ -2548,6 +2610,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_LIGHTNING_INDEXER:
             ggml_cuda_lightning_indexer(ctx, dst);
             break;
+        case GGML_OP_TOP_K_MASK:
+            ggml_cuda_op_top_k_mask(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -2777,16 +2842,14 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     return res;
 }
 
-static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
-    ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
-
+static void ggml_cuda_graph_update_executable(cudaGraphExec_t & instance, cudaGraph_t cuda_graph) {
 #if CUDART_VERSION >= 12000
     cudaGraphExecUpdateResultInfo result_info;
-    cudaError_t stat = cudaGraphExecUpdate(graph->instance, graph->graph, &result_info);
+    cudaError_t stat = cudaGraphExecUpdate(instance, cuda_graph, &result_info);
 #else
     cudaGraphNode_t errorNode;
     cudaGraphExecUpdateResult result_info;
-    cudaError_t stat = cudaGraphExecUpdate(graph->instance, graph->graph, &errorNode, &result_info);
+    cudaError_t stat = cudaGraphExecUpdate(instance, cuda_graph, &errorNode, &result_info);
 #endif // CUDART_VERSION >= 12000
 
     if (stat == cudaErrorGraphExecUpdateFailure) {
@@ -2797,12 +2860,38 @@ static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_c
         // The pre-existing graph exec cannot be updated due to violated constraints
         // so instead clear error and re-instantiate
         (void)cudaGetLastError();
-        CUDA_CHECK(cudaGraphExecDestroy(graph->instance));
-        graph->instance = nullptr;
-        CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
+        CUDA_CHECK(cudaGraphExecDestroy(instance));
+        instance = nullptr;
+        CUDA_CHECK(cudaGraphInstantiate(&instance, cuda_graph, nullptr, nullptr, 0));
     } else {
         GGML_ASSERT(stat == cudaSuccess);
     }
+}
+
+// number of ggml nodes per CUDA graph chunk, 0 captures the whole ggml graph as one CUDA graph
+static int ggml_cuda_graph_chunk_size() {
+    static const int chunk_size = [] {
+        const char * env = getenv("GGML_CUDA_GRAPH_CHUNK_SIZE");
+        return env != nullptr ? atoi(env) : 512;
+    }();
+    return chunk_size;
+}
+
+// end the capture of chunk `idx`, update or create its executable and launch it
+static void ggml_cuda_graph_launch_chunk(ggml_backend_cuda_context * cuda_ctx, ggml_cuda_graph * graph, size_t idx) {
+    cudaGraph_t cuda_graph = nullptr;
+    CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_graph));
+
+    if (idx < graph->instances.size()) {
+        ggml_cuda_graph_update_executable(graph->instances[idx], cuda_graph);
+    } else {
+        GGML_ASSERT(idx == graph->instances.size());
+        graph->instances.emplace_back(nullptr);
+        CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx], cuda_graph, nullptr, nullptr, 0));
+    }
+    CUDA_CHECK(cudaGraphDestroy(cuda_graph));
+
+    CUDA_CHECK(cudaGraphLaunch(graph->instances[idx], cuda_ctx->stream()));
 }
 #endif // USE_CUDA_GRAPH
 
@@ -2831,9 +2920,10 @@ static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
         return false;
     }
 
-    // Only norm/neox shaders have the fusion code
+    // Only norm/neox/multi shaders have the fusion code
     const int mode = ((const int32_t *) rope->op_params)[2];
-    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX) {
+    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX &&
+        mode != GGML_ROPE_TYPE_MROPE && mode != GGML_ROPE_TYPE_IMROPE) {
         return false;
     }
 
@@ -4327,6 +4417,18 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 fused_node_count  = 3;
                 break;
             }
+
+            if (ggml_cuda_should_fuse_mul_mat_q(up, gate, glu)) {
+                ggml_cuda_mm_fusion_args_host fusion_data{};
+                fusion_data.gate      = gate->src[0];
+                fusion_data.glu_op    = ggml_get_glu_op(glu);
+                fusion_data.glu_limit = ggml_get_op_params_f32(glu, 3);
+
+                ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
+                fused_mul_mat_vec = true;
+                fused_node_count  = 3;
+                break;
+            }
         }
     }
 
@@ -4557,6 +4659,13 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
     ggml_cuda_concurrent_event * concurrent_event           = nullptr;
     bool                         should_launch_concurrent_events = false;
 
+#ifdef USE_CUDA_GRAPH
+    ggml_cuda_graph * graph      = use_cuda_graph ? cuda_ctx->cuda_graph(graph_key) : nullptr;
+    const int         chunk_size = ggml_cuda_graph_chunk_size();
+    int               chunk_end  = chunk_size;
+    size_t            n_chunks   = 0;
+#endif // USE_CUDA_GRAPH
+
     const auto try_launch_concurrent_event = [&](const ggml_tensor * node) {
         if (stream_ctx.concurrent_events.find(node) != stream_ctx.concurrent_events.end()) {
             concurrent_event = &stream_ctx.concurrent_events[node];
@@ -4646,6 +4755,15 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
+#ifdef USE_CUDA_GRAPH
+                // fused nodes are skipped together, so a cut never splits a fusion
+                // a concurrent region must join before its capture can end
+                if (use_cuda_graph && chunk_size > 0 && i >= chunk_end && !is_concurrent_event_active) {
+                    ggml_cuda_graph_launch_chunk(cuda_ctx, graph, n_chunks++);
+                    CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
+                    chunk_end = i + chunk_size;
+                }
+#endif // USE_CUDA_GRAPH
                 if (is_concurrent_event_active) {
                     GGML_ASSERT(concurrent_event);
 
@@ -4728,14 +4846,14 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         }
 
 #ifdef USE_CUDA_GRAPH
-        ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
-            if (graph->graph != nullptr) {
-                CUDA_CHECK(cudaGraphDestroy(graph->graph));
-                graph->graph = nullptr;
-            }
+            ggml_cuda_graph_launch_chunk(cuda_ctx, graph, n_chunks++);
 
-            CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &graph->graph));
+            // drop the chunks left over from a longer graph
+            for (size_t i = n_chunks; i < graph->instances.size(); ++i) {
+                CUDA_CHECK(cudaGraphExecDestroy(graph->instances[i]));
+            }
+            graph->instances.resize(n_chunks);
             graph_evaluated_or_captured = true; // CUDA graph has been captured
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
@@ -4747,16 +4865,11 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         }
     }
 
-    if (use_cuda_graph) {
-        ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
-        if (graph->instance == nullptr) { // Create executable graph from captured graph.
-            CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
+    if (use_cuda_graph && !cuda_graph_update_required) {
+        // the chunks were launched during capture, otherwise launch them here
+        for (cudaGraphExec_t instance : graph->instances) {
+            CUDA_CHECK(cudaGraphLaunch(instance, cuda_ctx->stream()));
         }
-        if (cuda_graph_update_required) { // Update graph executable
-            ggml_cuda_graph_update_executable(cuda_ctx, graph_key);
-        }
-        // Launch graph
-        CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
 #else
         GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
@@ -4768,7 +4881,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
-    if (graph->graph == nullptr) {
+    if (graph->instances.empty()) {
         if (ggml_cuda_info().devices[cuda_ctx->device].cc < GGML_CUDA_CC_VOLTA) {
             if (!graph->disable_due_to_gpu_arch && ggml_cuda_graph_debug_enabled()) {
                 GGML_LOG_DEBUG("%s: disabling CUDA graphs due to GPU architecture\n", __func__);
@@ -4822,7 +4935,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
                     }
                 } else {
                     use_cuda_graph = true;
-                    cuda_graph_update_required = graph->instance == nullptr;
+                    cuda_graph_update_required = graph->instances.empty();
                 }
             }
         }
@@ -4912,6 +5025,19 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             }
         }
         for (int i = 0; i < cgraph->n_nodes; ++i) {
+            // Keep the inputs of the fused gate/up/GLU MMQ kernel alive until the GLU so that they cannot alias its output (under op offload the weights are buffer copies).
+            if (i + 2 < cgraph->n_nodes && cgraph->nodes[i + 2]->op == GGML_OP_GLU) {
+                ggml_tensor * glu  = cgraph->nodes[i + 2];
+                ggml_tensor * gate = glu->src[0];
+                ggml_tensor * up   = glu->src[1];
+                const bool ok = (gate == cgraph->nodes[i] && up == cgraph->nodes[i + 1]) || (gate == cgraph->nodes[i + 1] && up == cgraph->nodes[i]);
+                if (ok && ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, cuda_ctx->device)) {
+                    add_alloc_deps(i, i + 2);
+                    i += 2;
+                    continue;
+                }
+            }
+
             ggml_cuda_moe_weighted_reduction_match match;
             if (ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
                 params->add_alloc_dep(params->user_data, const_cast<ggml_tensor *>(match.experts), match.dst);
@@ -5983,6 +6109,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
         case GGML_OP_LIGHTNING_INDEXER:
             return ggml_cuda_lightning_indexer_supported(dev_ctx->device, op);
+        case GGML_OP_TOP_K_MASK:
+            return op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32;
 
         default:
             return false;

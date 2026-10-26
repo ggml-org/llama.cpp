@@ -165,6 +165,12 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+static const llm_fused_op_probe llm_fused_op_top_k_mask_probe = {
+    /*.op               =*/ LLM_FUSED_OP_TOP_K_MASK,
+    /*.name             =*/ "fused top-k mask",
+    /*.n_tokens_per_seq =*/ 1,
+};
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -328,6 +334,10 @@ llama_context::llama_context(
     cparams.fused_dsv4_hc_post = true;
     cparams.auto_fhc           = true;
 
+    // only the indexer models build this mask, skip the probe for the others
+    cparams.fused_top_k_mask = true;
+    cparams.auto_ftkm        = hparams.indexer_top_k > 0;
+
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
 
@@ -479,6 +489,7 @@ llama_context::llama_context(
             /*.swa_full  =*/ params.swa_full,
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
+            /*.no_alloc  =*/ model.no_alloc(),
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -549,7 +560,7 @@ llama_context::llama_context(
         }
 
         if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
+            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size);
         }
 
         sched_reserve();
@@ -577,7 +588,7 @@ llama_context::~llama_context() {
     synchronize();
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
-    if (!model.hparams.no_alloc && !opt_ctx) {
+    if (!model.no_alloc() && !opt_ctx) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
@@ -670,6 +681,12 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_dsv4_hc_comb_probe, cparams.fused_dsv4_hc_comb);
         resolve(llm_fused_op_dsv4_hc_post_probe, cparams.fused_dsv4_hc_post);
         cparams.auto_fhc = false;
+    }
+
+    if (cparams.auto_ftkm) {
+        LLAMA_LOG_INFO("%s: resolving fused top-k mask support:\n", func);
+        resolve(llm_fused_op_top_k_mask_probe, cparams.fused_top_k_mask);
+        cparams.auto_ftkm = false;
     }
 }
 
@@ -772,7 +789,7 @@ void llama_context::sched_reserve() {
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
         auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(),
-                model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
+                model.no_alloc(), model.no_alloc() ? backend_buf_exp_size.data() : nullptr);
         if (!gf) {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
@@ -799,7 +816,7 @@ void llama_context::sched_reserve() {
         n_splits_tg = n_splits_pp;
         n_nodes_tg  = n_nodes_pp;
     } else {
-        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc);
+        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.no_alloc());
         if (!gf) {
             throw std::runtime_error("failed to allocate compute tg buffers");
         }
@@ -821,10 +838,10 @@ void llama_context::sched_reserve() {
                 // [TAG_RESERVE_DIAG_DECAY]
                 // the `inp_diag_decay` tensor size scales with `n_seq_tokens^2` which
                 // makes `n_seqs == 1` use more memory for the compute graph compared to `n_seqs > 1`
-                gf = graph_reserve(n_tokens, 1,      n_outputs_pp, mctx.get(), model.hparams.no_alloc);
+                gf = graph_reserve(n_tokens, 1,      n_outputs_pp, mctx.get(), model.no_alloc());
                 break;
             default:
-                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.hparams.no_alloc);
+                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.no_alloc());
         };
 
         if (!gf) {
@@ -835,7 +852,7 @@ void llama_context::sched_reserve() {
     for (size_t i = 0; i < backend_ptrs.size(); ++i) {
         ggml_backend_t             backend = backend_ptrs[i];
         ggml_backend_buffer_type_t buft    = backend_buft[i];
-        if (!model.hparams.no_alloc) {
+        if (!model.no_alloc()) {
             backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend);
         }
         if (backend_buf_exp_size[i] > 1) {
@@ -1323,8 +1340,9 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
 void llama_context::set_embeddings(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
-    // a pooled context computes the logits only without embeddings, so the toggle changes the graph shape
-    if (cparams.embeddings != value && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE) {
+    // the toggle changes the graph shape (pooled: logits only; pooling NONE: the reserve graph outputs all tokens,
+    // which crashed ggml_gallocr on the first /completion), so re-reserve on every toggle
+    if (cparams.embeddings != value) {
         sched_need_reserve = true;
     }
 
@@ -2520,6 +2538,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_CLEF ||
         model.arch == LLM_ARCH_QWEN4EXP ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
+        model.arch == LLM_ARCH_DEEPSEEK41 ||
         (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_MINIMAX_01 ||
@@ -3712,7 +3731,7 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
             ret[buft].context += size;
         }
     }
-    if (model.hparams.no_alloc) {
+    if (model.no_alloc()) {
         for (size_t i = 0; i < backends.size(); ++i) {
             ggml_backend_t             backend = backends[i].get();
             ggml_backend_buffer_type_t buft    = ggml_backend_sched_get_buffer_type(sched.get(), backend);
@@ -4055,7 +4074,7 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4) && params.type_k != params.type_v) {
+    if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.type_k != params.type_v) {
         LLAMA_LOG_ERROR("%s: model does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
         return nullptr;
     }

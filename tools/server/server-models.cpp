@@ -37,9 +37,6 @@ extern char **environ;
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
-#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
-
 // note: SIGPIPE is ignored by the server
 static void request_child_exit(server_subproc & proc) {
     FILE * stdin_file = proc.sproc.stdin_file();
@@ -48,10 +45,6 @@ static void request_child_exit(server_subproc & proc) {
         fflush(stdin_file);
     }
 }
-
-// address for child process, this is needed because router may run on 0.0.0.0
-// ref: https://github.com/ggml-org/llama.cpp/issues/17862
-#define CHILD_ADDR "127.0.0.1"
 
 // single-threaded, watching all child processes at once
 struct server_monitor {
@@ -65,11 +58,11 @@ struct server_monitor {
     }
 
     // thread-safe
-    void watch(const std::string & name, std::shared_ptr<server_subproc> proc, server_child_mode mode, int port) {
+    void watch(const std::string & name, std::shared_ptr<server_subproc> proc, server_role_type role, int port) {
         child_t c;
         c.name = name;
         c.proc = std::move(proc);
-        c.mode = mode;
+        c.role = role;
         c.port = port;
         if (!c.proc->has_output()) {
             SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
@@ -87,7 +80,7 @@ private:
     struct child_t {
         std::string name;
         std::shared_ptr<server_subproc> proc;
-        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        server_role_type role = SERVER_ROLE_INSTANCE;
         int port = 0;
         std::string buf[SERVER_SUBPROC_STREAMS]; // partial line of each pipe
         bool eof = false;     // output closed, waiting for the process to be reaped
@@ -241,7 +234,7 @@ private:
                 if (it->eof && !it->proc->is_alive()) {
                     int exit_code = it->proc->join();
                     it->proc->stopped.store(true, std::memory_order_release);
-                    models.on_child_exit(it->name, it->proc, it->mode, exit_code);
+                    models.on_child_exit(it->name, it->proc, it->role, exit_code);
                     SRV_INF("instance name=%s exited with status %d\n", it->name.c_str(), exit_code);
                     it = children.erase(it);
                 } else {
@@ -521,25 +514,29 @@ void server_model_meta::update_caps(const common_params & base) {
         return;
     }
 
-    // read the output modalities and the trained context from the GGUF metadata
-    std::vector<std::string> output_modalities = {"text"};
-    if (!params.model.path.empty()) {
-        const common_gguf_info info = common_get_gguf_info(params.model.path);
-        output_modalities = server_model_output_modalities(info.decision_type);
-        n_ctx_train       = info.n_ctx_train;
-    }
-
     bool inp_image = false;
     bool inp_audio = false;
+    bool gen_audio = false;
     try {
         if (!params.no_mmproj && !params.mmproj.path.empty()) {
             mtmd_caps caps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
             inp_image = caps.inp_vision;
             inp_audio = caps.inp_audio;
+            gen_audio = caps.gen_audio;
         }
     } catch (const std::exception & e) {
         LOG_WRN("failed to read the multimodal capabilities of '%s': %s\n", name.c_str(), e.what());
         // keep the output modalities from the GGUF metadata
+    }
+
+    // read the output modalities and the trained context from the GGUF metadata
+    std::vector<std::string> output_modalities = {"text"};
+    if (!params.model.path.empty()) {
+        const common_gguf_info info = common_get_gguf_info(params.model.path);
+        // same rule as mtmd_helper_get_capabilities()
+        const bool can_chat = !gen_audio || info.has_chat_tmpl;
+        output_modalities = server_model_output_modalities(info.decision_type, can_chat, gen_audio);
+        n_ctx_train       = info.n_ctx_train;
     }
 
     // offline discovery cannot see video; a loaded model reports it
@@ -1320,7 +1317,7 @@ void server_models::load(const std::string & name) {
 
 void server_models::load(const std::string & name, const load_options & opts) {
     // the fake load time of a model; a download worker loads none
-    if (debug_fake_timing && opts.mode == SERVER_CHILD_MODE_NORMAL) {
+    if (debug_fake_timing && opts.role == SERVER_ROLE_INSTANCE) {
         // do not hold the mutex here, other requests must keep making progress
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
@@ -1341,7 +1338,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // same model cannot start in between: a paused download or an idle cached model
     // is downloaded again with its files kept, a download on its way and a running
     // model are refused, and a preset or local model is not a download
-    if (opts.mode == SERVER_CHILD_MODE_DOWNLOAD) {
+    if (opts.role == SERVER_ROLE_DOWNLOAD) {
         auto it = mapping.find(name);
         if (it != mapping.end()) {
             const auto & cur = it->second.meta;
@@ -1385,7 +1382,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // releasing its lock and this lock_guard acquiring allows multiple
     // threads to each observe capacity and all proceed to load.
     // Download workers do not use models_max slots.
-    if (opts.mode == SERVER_CHILD_MODE_NORMAL && base_params.models_max > 0) {
+    if (opts.role == SERVER_ROLE_INSTANCE && base_params.models_max > 0) {
         size_t count_active = 0;
         for (const auto & m : mapping) {
             if (m.second.meta.is_running()) {
@@ -1417,11 +1414,11 @@ void server_models::load(const std::string & name, const load_options & opts) {
 
         std::vector<std::string> child_args = inst.meta.args; // copy
         std::vector<std::string> child_env  = base_env; // copy
-        child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
+        child_env.push_back(std::string(SERVER_ENV_ROUTER_PORT) + "=" + std::to_string(base_params.port));
 
-        if (opts.mode == SERVER_CHILD_MODE_DOWNLOAD) {
+        if (opts.role == SERVER_ROLE_DOWNLOAD) {
             inst.meta.status = SERVER_MODEL_STATUS_DOWNLOADING;
-            child_env.push_back("LLAMA_SERVER_CHILD_MODE=download");
+            child_env.push_back(std::string(SERVER_ENV_CHILD_ROLE) + "=" + server_role_type_to_str(SERVER_ROLE_DOWNLOAD));
             child_env.push_back("LLAMA_ARG_HF_REPO=" + name);
 
             // the sidecars as -hf would pull them: the draft types, and the mmproj switch
@@ -1456,7 +1453,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     }
 
     // remember the download: the partial files carry a content hash, not the name
-    if (opts.mode == SERVER_CHILD_MODE_DOWNLOAD) {
+    if (opts.role == SERVER_ROLE_DOWNLOAD) {
         unfinished_downloads.add({ name, opts.sidecars, opts.partials });
     }
 
@@ -1476,7 +1473,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     auto proc = inst.subproc;
     int  port = inst.meta.port;
     mapping[name] = std::move(inst);
-    monitor->watch(name, proc, opts.mode, port);
+    monitor->watch(name, proc, opts.role, port);
     cv.notify_all();
 }
 
@@ -1489,7 +1486,7 @@ void server_models::request_stop(const std::string & name, bool send_exit) {
     monitor->stop(name, it->second.meta.stop_timeout, send_exit);
 }
 
-void server_models::on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_child_mode mode, int exit_code) {
+void server_models::on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_role_type role, int exit_code) {
     {
         std::lock_guard<std::mutex> lk(mutex);
         auto it = mapping.find(name);
@@ -1498,7 +1495,7 @@ void server_models::on_child_exit(const std::string & name, const std::shared_pt
             return; // entry erased, or a newer instance took the name
         }
     }
-    if (mode == SERVER_CHILD_MODE_DOWNLOAD) {
+    if (role == SERVER_ROLE_DOWNLOAD) {
         // instance will be cleaned up on next load_models() call
         std::lock_guard<std::mutex> lk(mutex);
         stopping_models.erase(name);
@@ -1899,6 +1896,81 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     return proxy;
 }
 
+void server_models::proxy_ws(const server_http_req & req, server_http_context::ws_conn & conn, const std::string & name) {
+    auto send_error = [&conn](const std::string & message) {
+        conn.send(safe_json_to_str(json {
+            {"type", "error"},
+            {"error", {{"type", "server_error"}, {"code", nullptr}, {"message", message}, {"param", nullptr}}},
+        }));
+        conn.close();
+    };
+
+    auto meta = get_meta(name);
+    if (!meta.has_value() || !meta->is_running()) {
+        send_error("model name=" + name + " is not running");
+        return;
+    }
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        mapping[name].meta.last_used = ggml_time_ms();
+        mapping[name].req_count++;
+    }
+    SRV_INF("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
+
+    std::string url = std::string("ws://") + CHILD_ADDR + ":" + std::to_string(meta->port) + req.path;
+    if (!req.query_string.empty()) {
+        url += '?' + req.query_string;
+    }
+    // the client library adds its own upgrade headers
+    httplib::Headers headers;
+    for (const auto & [key, value] : req.headers) {
+        std::string lower = key;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0) {
+            continue;
+        }
+        headers.emplace(key, value);
+    }
+
+    {
+        httplib::ws::WebSocketClient upstream(url, headers);
+        if (!upstream.connect()) {
+            send_error("failed to connect to model name=" + name);
+        } else {
+            // client to child
+            std::thread pump([&]() {
+                std::string msg;
+                while (true) {
+                    const int res = conn.read(msg);
+                    if (res == 0 || !(res == 1 ? upstream.send(msg) : upstream.send(msg.data(), msg.size()))) {
+                        break;
+                    }
+                }
+                upstream.close();
+            });
+            // child to client
+            std::string msg;
+            while (true) {
+                const auto res = upstream.read(msg);
+                if (res == httplib::ws::Fail || !(res == httplib::ws::Text ? conn.send(msg) : conn.send_binary(msg))) {
+                    break;
+                }
+            }
+            conn.close();
+            pump.join();
+        }
+    }
+
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end() && it->second.req_count > 0) {
+        it->second.req_count--;
+        if (it->second.req_count == 0) {
+            sched->tick(lk);
+        }
+    }
+}
+
 void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
     server_state state;
     json payload;
@@ -1966,149 +2038,6 @@ void server_models::handle_child_state(const std::string & name, const std::stri
             GGML_ASSERT(false && "unexpected state from child server");
     }
 }
-
-//
-// server_child
-//
-
-server_child::server_child() {
-    if (is_child()) {
-        cmd_out = server_reserve_stdout();
-    }
-}
-
-server_child::~server_child() {
-    if (cmd_out) {
-        fclose(cmd_out);
-    }
-}
-
-bool server_child::is_child() {
-    const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
-    return router_port != nullptr;
-}
-
-server_child_mode server_child::get_mode() {
-    const char * mode = std::getenv("LLAMA_SERVER_CHILD_MODE");
-    std::string mode_str(mode ? mode : "");
-    if (mode_str == "download") {
-        return SERVER_CHILD_MODE_DOWNLOAD;
-    } else {
-        return SERVER_CHILD_MODE_NORMAL;
-    }
-}
-
-struct server_download_state : public common_download_callback {
-    server_child * self;
-    std::function<bool()> should_stop;
-    std::atomic<int64_t> last_progress_time{0}; // multiple files downloading in different threads
-    bool is_ok = false;
-
-    server_download_state(server_child * s) : self(s) {}
-
-    bool run(common_params & params) {
-        try {
-            common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-            common_models_handler_apply(handler, params, this);
-            is_ok = true;
-        } catch (const std::exception & e) {
-            auto model_name = params.model.get_name();
-            SRV_ERR("download failed for model name=%s: %s\n", model_name.c_str(), e.what());
-            is_ok = false;
-        }
-        return is_ok;
-    }
-    void on_progress(const common_download_progress & p) {
-        json data = {
-            {"url", p.url},
-            {"downloaded", p.downloaded},
-            {"total", p.total},
-        };
-        self->notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), data);
-    }
-    void on_start(const common_download_progress & p) override {
-        on_progress(p);
-    }
-    void on_update(const common_download_progress & p) override {
-        int64_t now = ggml_time_ms();
-        // throttle progress updates to avoid flooding logs
-        if (now - last_progress_time.load(std::memory_order_relaxed) >= 100) {
-            on_progress(p);
-            last_progress_time.store(now, std::memory_order_relaxed);
-        }
-    }
-    void on_done(const common_download_progress & p, bool) override {
-        on_progress(p);
-    }
-    bool is_cancelled() const override {
-        return should_stop ? should_stop() : false;
-    }
-};
-
-int server_child::run_download(common_params & params) {
-    auto cancelled = std::make_shared<std::atomic<bool>>(false);
-
-    // monitor stdin for cancellation command from the router
-    std::thread signal_thread = setup([cancelled](int) {
-        cancelled->store(true, std::memory_order_relaxed);
-    });
-
-    server_download_state dl(this);
-    dl.should_stop = [cancelled]() {
-        return cancelled->load(std::memory_order_relaxed);
-    };
-
-    bool ok = dl.run(params);
-
-    notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), {
-        {"result", ok ? "download_finished" : "download_failed"},
-    });
-
-    // router should send CMD_ROUTER_TO_CHILD_EXIT after receiving the result
-    if (signal_thread.joinable()) {
-        signal_thread.join();
-    }
-
-    SRV_INF("download completed %s\n", ok ? "successfully" : "with errors");
-    return 0;
-}
-
-std::thread server_child::setup(const std::function<void(int)> & shutdown_handler) {
-    // setup thread for monitoring stdin
-    return std::thread([shutdown_handler]() {
-        // wait for EOF on stdin
-        SRV_INF("%s", "child server monitoring thread started, waiting for EOF on stdin...\n");
-        bool eof = false;
-        while (true) {
-            std::string line;
-            if (!std::getline(std::cin, line)) {
-                // EOF detected, that means the router server is unexpectedly exit or killed
-                eof = true;
-                break;
-            }
-            if (line.find(CMD_ROUTER_TO_CHILD_EXIT) != std::string::npos) {
-                SRV_INF("%s", "exit command received, exiting...\n");
-                shutdown_handler(0);
-                break;
-            }
-        }
-        if (eof) {
-            SRV_INF("%s", "EOF on stdin detected, forcing shutdown...\n");
-            exit(1);
-        }
-    });
-}
-
-void server_child::notify_to_router(const std::string & state, const json & payload) {
-    json data = {
-        {"state", state},
-        {"payload", payload},
-    };
-    std::lock_guard<std::mutex> lk(mtx_stdout);
-    fprintf(cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
-    fflush(cmd_out);
-}
-
 
 //
 // server_models_routes
@@ -2275,6 +2204,24 @@ void server_models_routes::init_routes() {
             models.ensure_model_ready(name, req.should_stop);
         }
         return models.proxy_request(req, method, name, false);
+    };
+
+    this->proxy_ws = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        std::string name = req.get_param("model");
+        bool autoload = is_autoload(params, req);
+        auto error_res = std::make_unique<server_http_res>();
+        if (!router_validate_model(name, models, autoload, error_res)) {
+            // error_res holds {"error": {...}}, send it as a websocket error event
+            json err = json::parse(error_res->data);
+            err["type"] = "error";
+            conn.send(safe_json_to_str(err));
+            conn.close();
+            return;
+        }
+        if (autoload) {
+            models.ensure_model_ready(name, req.should_stop);
+        }
+        models.proxy_ws(req, conn, name);
     };
 
     this->proxy_post = [this](const server_http_req & req) {
@@ -2520,7 +2467,7 @@ void server_models_routes::init_routes() {
         SRV_INF("starting download for model '%s'\n", name.c_str());
         {
             server_models::load_options load_opts;
-            load_opts.mode = SERVER_CHILD_MODE_DOWNLOAD;
+            load_opts.role = SERVER_ROLE_DOWNLOAD;
             load_opts.custom_meta = server_model_meta{};
             load_opts.custom_meta->source = SERVER_MODEL_SOURCE_CACHE;
             load_opts.custom_meta->name   = name;
@@ -2836,9 +2783,10 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup_pipes = [pipe]() {
+    this->cleanup_pipes = [pipe, cli]() {
         pipe->close_read();
         pipe->close_write();
+        cli->stop();
     };
 
     // wire up the receive end of the pipe

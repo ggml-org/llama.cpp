@@ -10,9 +10,11 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
-#include <regex>
 #include <set>
 #include <stdexcept>
+
+// The parser can run with a lower limit than COMMON_RECURSIVE_LIMIT
+static constexpr int RULE_RECURSIVE_LIMIT = 64;
 
 // Trick to catch missing branches
 template <typename T>
@@ -186,13 +188,17 @@ std::string common_peg_ast_node::sanitized_text() const {
 }
 
 void common_peg_ast_arena::visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const {
-    if (id == COMMON_PEG_INVALID_AST_ID) {
-        return;
-    }
-    const auto & node = get(id);
-    visitor(node);
-    for (const auto & child : node.children) {
-        visit(child, visitor);
+    // no recursion: the AST is several nodes deep per level of the input
+    std::vector<common_peg_ast_id> stack = { id };
+    while (!stack.empty()) {
+        const auto cur = stack.back();
+        stack.pop_back();
+        if (cur == COMMON_PEG_INVALID_AST_ID) {
+            continue;
+        }
+        const auto & node = get(cur);
+        visitor(node);
+        stack.insert(stack.end(), node.children.rbegin(), node.children.rend());
     }
 }
 
@@ -736,8 +742,15 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
+        // only rules recurse, a recursive rule is entered once per input level
+        if (ctx.rule_depth[p.child] >= RULE_RECURSIVE_LIMIT) {
+            throw common_peg_recursion_error("input is nested more than " + std::to_string(RULE_RECURSIVE_LIMIT) + " levels deep");
+        }
+
         // Parse the child
+        ctx.rule_depth[p.child]++;
         auto result = arena.parse(p.child, ctx, start_pos);
+        ctx.rule_depth[p.child]--;
 
         if (!result.fail()) {
             std::string_view text;
@@ -819,6 +832,10 @@ common_peg_parse_result common_peg_arena::parse(common_peg_parse_context & ctx, 
     if (root_ == COMMON_PEG_INVALID_PARSER_ID) {
         throw std::runtime_error("No root parser set");
     }
+
+    // Initialize rule depth for all parsers
+    ctx.rule_depth.assign(parsers_.size(), 0);
+
     return parse(root_, ctx, start);
 }
 
@@ -1069,11 +1086,6 @@ common_peg_parser operator|(const std::string & str, const common_peg_parser & p
     return operator|(str.c_str(), p);
 }
 
-static std::string rule_name(const std::string & name) {
-    static const std::regex invalid_rule_chars_re("[^a-zA-Z0-9-]+");
-    return std::regex_replace(name, invalid_rule_chars_re, "-");
-}
-
 common_peg_parser_builder::common_peg_parser_builder() {}
 
 common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
@@ -1155,14 +1167,14 @@ common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p,
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const common_peg_parser & p, bool trigger) {
-    auto clean_name = rule_name(name);
+    auto clean_name = gbnf_format_rule_name(name);
     auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, p.id(), trigger});
     arena_.add_rule(clean_name, rule_id);
     return ref(clean_name);
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const std::function<common_peg_parser()> & builder_fn, bool trigger) {
-    auto clean_name = rule_name(name);
+    auto clean_name = gbnf_format_rule_name(name);
     if (arena_.has_rule(clean_name)) {
         return ref(clean_name);
     }

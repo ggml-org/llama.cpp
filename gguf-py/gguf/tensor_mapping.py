@@ -429,6 +429,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_SINKS: (
+            "model.layers.{bid}.self_attn.softmax_offset", # flint
             "model.layers.{bid}.self_attn.sinks", # openai-moe
             "model.layers.{bid}.self_attn.attention_sink_bias", # mimov2
             "model.layers.{bid}.self_attn.learnable_sink_param", # hy-v4

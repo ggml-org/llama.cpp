@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstring>
 
+#define JINJA_RECURSIVE_LIMIT 128
+
 namespace jinja {
 
 static void string_replace_all(std::string & s, const std::string & search, const std::string & replace) {

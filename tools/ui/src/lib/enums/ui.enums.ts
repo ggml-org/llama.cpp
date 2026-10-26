@@ -32,12 +32,6 @@ export enum SidebarAction {
 /**
  * MCP prompt display variant
  */
-/** View the models dialog renders. */
-export enum ModelsDialogView {
-	DISCOVER = 'discover',
-	MANAGE = 'manage'
-}
-
 export enum McpPromptVariant {
 	ATTACHMENT = 'attachment',
 	MESSAGE = 'message'

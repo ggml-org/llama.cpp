@@ -500,5 +500,5 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
 
-/** **DialogManageModels** - shell for the models manager. */
-export { default as DialogManageModels } from './DialogManageModels.svelte';
+/** **DialogDiscoverModels** - shell for the Hugging Face model discovery view. */
+export { default as DialogDiscoverModels } from './DialogDiscoverModels.svelte';

@@ -4,9 +4,10 @@
 	import { XCircle } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
+	import { FileTypeText } from '$lib/enums';
 	import { toolsStore } from '$lib/stores';
 	import type { AgenticSection } from '$lib/types';
-	import { abbreviateHome } from '$lib/utils';
+	import { abbreviateHome, formatJsonPretty } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -42,32 +43,48 @@
 		</span>
 	{/snippet}
 
-	{#snippet children(meta, ctx)}
-		{#if meta?.errorMessage}
+	{#snippet children(_meta, ctx)}
+		{#if writeFileBody?.errorMessage}
 			<div
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
 				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
 
-				<span>{meta.errorMessage}</span>
+				<span>{writeFileBody.errorMessage}</span>
 			</div>
-		{:else if meta}
+		{:else if writeFileBody?.content !== undefined}
 			<SyntaxHighlightedCode
-				code={writeFileBody?.content ?? ''}
-				language={meta.language}
+				code={writeFileBody.content}
+				language={writeFileBody.language}
 				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				streaming={ctx.isCodeStreaming}
 			/>
 
 			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
-				{#if meta.resultMessage}
-					{meta.resultMessage}{meta.bytesWritten != null ? RESULT_STAT_SEPARATOR : ''}{/if}
+				{#if writeFileBody.resultMessage}
+					{writeFileBody.resultMessage}{writeFileBody.bytesWritten != null
+						? RESULT_STAT_SEPARATOR
+						: ''}{/if}
 
-				{#if meta.bytesWritten != null}
-					<span class="font-mono">{meta.bytesWritten}</span>
+				{#if writeFileBody.bytesWritten != null}
+					<span class="font-mono">{writeFileBody.bytesWritten}</span>
 					bytes
 				{/if}
 			</div>
+		{:else if section.toolArgs}
+			<!-- no content arg: not streamed yet, or a same-named tool with other arg names -->
+			<SyntaxHighlightedCode
+				code={formatJsonPretty(section.toolArgs)}
+				language={FileTypeText.JSON}
+				maxHeight={MAX_HEIGHT_CODE_BLOCK}
+				streaming={ctx.isCodeStreaming}
+			/>
+		{:else if ctx.isStreaming}
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+				Receiving arguments...
+			</div>
+		{:else}
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No content</div>
 		{/if}
 	{/snippet}
 </ToolCallBlock>

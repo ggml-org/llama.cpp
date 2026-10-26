@@ -1077,6 +1077,28 @@ class GGUFWriter:
     def add_attention_compress_rope_freq_base(self, value: float) -> None:
         self.add_float32(Keys.Attention.COMPRESS_ROPE_FREQ_BASE.format(arch=self.arch), value)
 
+    # deepseek41
+    def add_attention_kv_source_layers(self, layers: Sequence[int]) -> None:
+        self.add_key_value(Keys.Attention.KV_SOURCE_LAYERS.format(arch=self.arch), list(layers), GGUFValueType.ARRAY, GGUFValueType.UINT32)
+
+    def add_indexer_source_layers(self, layers: Sequence[int]) -> None:
+        self.add_key_value(Keys.Attention.Indexer.SOURCE_LAYERS.format(arch=self.arch), list(layers), GGUFValueType.ARRAY, GGUFValueType.UINT32)
+
+    def add_indexer_candidate_source_layer(self, layer: int) -> None:
+        self.add_int32(Keys.Attention.Indexer.CANDIDATE_SOURCE_LAYER.format(arch=self.arch), layer)
+
+    def add_indexer_candidate_top_k_blocks(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.CANDIDATE_TOP_K_BLOCKS.format(arch=self.arch), value)
+
+    def add_indexer_candidate_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.CANDIDATE_BLOCK_SIZE.format(arch=self.arch), value)
+
+    def add_engram_pad_token_id(self, value: int) -> None:
+        self.add_uint32(Keys.Engram.PAD_TOKEN_ID.format(arch=self.arch), value)
+
+    def add_engram_token_map(self, values: Sequence[int]) -> None:
+        self.add_key_value(Keys.Engram.TOKEN_MAP.format(arch=self.arch), list(values), GGUFValueType.ARRAY, GGUFValueType.INT32)
+
     def add_hyper_connection_count(self, count: int) -> None:
         self.add_uint32(Keys.HyperConnection.COUNT.format(arch=self.arch), count)
 
@@ -1091,6 +1113,9 @@ class GGUFWriter:
 
     def add_hyper_connection_low_rank(self, value: int) -> None:
         self.add_uint32(Keys.HyperConnection.LOW_RANK.format(arch=self.arch), value)
+
+    def add_hyper_connection_single_pass(self, value: bool) -> None:
+        self.add_bool(Keys.HyperConnection.SINGLE_PASS.format(arch=self.arch), value)
 
     def add_ple_layers(self, values: Sequence[int]) -> None:
         self.add_array(Keys.PerLayerEmbedding.LAYERS.format(arch=self.arch), values)
@@ -1166,6 +1191,9 @@ class GGUFWriter:
 
     def add_rope_freq_base(self, value: float) -> None:
         self.add_float32(Keys.Rope.FREQ_BASE.format(arch=self.arch), value)
+
+    def add_rope_freq_base_spatial(self, value: float) -> None:
+        self.add_float32(Keys.Rope.FREQ_BASE_SPATIAL.format(arch=self.arch), value)
 
     def add_rope_scaling_type(self, value: RopeScalingType) -> None:
         self.add_string(Keys.Rope.SCALING_TYPE.format(arch=self.arch), value.value)
@@ -1323,6 +1351,9 @@ class GGUFWriter:
     def add_remove_extra_whitespaces(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.REMOVE_EXTRA_WS, value)
 
+    def add_clean_spaces(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.CLEAN_SPACES, value)
+
     def add_precompiled_charsmap(self, charsmap: bytes) -> None:
         self.add_array(Keys.Tokenizer.PRECOMPILED_CHARSMAP, charsmap)
 
@@ -1371,6 +1402,9 @@ class GGUFWriter:
     def add_normalizer_strip_accents(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.NORMALIZER_STRIP_ACCENTS, value)
 
+    def add_metaspace_prepend_scheme(self, value: str) -> None:
+        self.add_string(Keys.Tokenizer.METASPACE_PREPEND_SCHEME, value)
+
     def add_eot_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOT_ID, id)
 
@@ -1400,6 +1434,9 @@ class GGUFWriter:
 
     def add_decision_max_head_tokens(self, value: int) -> None:
         self.add_uint32(Keys.Decision.MAX_HEAD_TOKENS.format(arch=self.arch), value)
+
+    def add_decision_labels(self, labels: Sequence[str]) -> None:
+        self.add_array(Keys.Decision.LABELS.format(arch=self.arch), labels)
 
     def add_decision_temperature(self, name: str, value: float) -> None:
         self.add_float32(Keys.Decision.TEMPERATURE.format(arch=self.arch, name=name), value)
@@ -1469,6 +1506,12 @@ class GGUFWriter:
 
     def add_vision_preproc_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
+
+    def add_vision_preproc_tile_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_TILE_SIZE, value)
+
+    def add_vision_preproc_max_pixels_tolerance(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.PREPROC_MAX_PIXELS_TOLERANCE, value)
 
     def add_vision_projector_query_side(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Projector.QUERY_SIDE, value)

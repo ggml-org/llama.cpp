@@ -26,6 +26,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <random>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -741,50 +742,56 @@ static inline bool glob_class_match(const char c, const char * pattern, const ch
 }
 
 // simple glob: * matches non-/ chars, ** matches anything including /, [] matches character class
-static inline bool glob_match(const char * pattern, const char * str) {
-    if (*pattern == '\0') {
-        return *str == '\0';
-    }
-    if (pattern[0] == '*' && pattern[1] == '*') {
-        const char * p = pattern + 2;
-        if (glob_match(p, str)) return true;
-        if (*str != '\0') return glob_match(pattern, str + 1);
+// only wildcards recurse, too many wildcards: no match
+static bool glob_match(const char * pattern, const char * str, int depth = 0) {
+    if (depth >= COMMON_RECURSIVE_LIMIT) {
         return false;
     }
-    if (*pattern == '*') {
-        const char * p = pattern + 1;
-        for (; *str != '\0' && *str != '/'; str++) {
-            if (glob_match(p, str)) return true;
-        }
-        return glob_match(p, str);
-    }
-    if (*pattern == '?' && *str != '\0' && *str != '/') {
-        return glob_match(pattern + 1, str + 1);
-    }
-    if (*pattern == '[') {
-        const char * class_end = pattern + 1;
-        // If first character after '[' is ']' or '-', treat it as literal
-        if (*class_end == ']' || *class_end == '-') {
-            class_end++;
-        }
-        while (*class_end != '\0' && *class_end != ']') {
-            class_end++;
-        }
-        if (*class_end == ']') {
-            if (*str == '\0') return false;
-            bool matched = glob_class_match(*str, pattern + 1, class_end);
-            return matched && glob_match(class_end + 1, str + 1);
-        } else {
-            if (*str == '[') {
-                return glob_match(pattern + 1, str + 1);
+    while (*pattern != '\0') {
+        if (pattern[0] == '*' && pattern[1] == '*') {
+            const char * p = pattern + 2;
+            for (;; str++) {
+                if (glob_match(p, str, depth + 1)) return true;
+                if (*str == '\0') return false;
             }
-            return false;
         }
+        if (*pattern == '*') {
+            const char * p = pattern + 1;
+            for (; *str != '\0' && *str != '/'; str++) {
+                if (glob_match(p, str, depth + 1)) return true;
+            }
+            return glob_match(p, str, depth + 1);
+        }
+        if (*pattern == '?' && *str != '\0' && *str != '/') {
+            pattern++;
+            str++;
+            continue;
+        }
+        if (*pattern == '[') {
+            const char * class_end = pattern + 1;
+            // If first character after '[' is ']' or '-', treat it as literal
+            if (*class_end == ']' || *class_end == '-') {
+                class_end++;
+            }
+            while (*class_end != '\0' && *class_end != ']') {
+                class_end++;
+            }
+            if (*class_end == ']') {
+                if (*str == '\0' || !glob_class_match(*str, pattern + 1, class_end)) return false;
+                pattern = class_end + 1;
+                str++;
+                continue;
+            }
+            if (*str != '[') return false;
+            pattern++;
+            str++;
+            continue;
+        }
+        if (*pattern != *str) return false;
+        pattern++;
+        str++;
     }
-    if (*pattern == *str) {
-        return glob_match(pattern + 1, str + 1);
-    }
-    return false;
+    return *str == '\0';
 }
 
 bool glob_match(const std::string & pattern, const std::string & str) {
@@ -917,9 +924,13 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
 }
 
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
+    // a random suffix gives every writer its own temporary file, across processes and containers
+    std::random_device rd;
+    const uint64_t id = ((uint64_t) rd() << 32) | rd();
+
     std::error_code ec;
     std::filesystem::path path_tmp = path;
-    path_tmp += ".tmp";
+    path_tmp += "." + std::to_string(id) + ".tmp";
 
     if (path.has_parent_path()) {
         std::filesystem::create_directories(path.parent_path(), ec);
@@ -1175,6 +1186,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_LFM2_D1,        "lfm2-d1"       },
     { COMMON_DECISION_TYPE_LFM2_D1_OMNI,   "lfm2-d1-omni"  },
     { COMMON_DECISION_TYPE_GRANITE_SWITCH, "granite-switch"},
+    { COMMON_DECISION_TYPE_H2O_LIGHTNING,  "h2o-lightning" },
     // for future models, ALWAYS add org name prefix to avoid name collisions, e.g. "orgname-modelname"
 };
 
@@ -1233,6 +1245,9 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     if (ctx_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), ctx_id) == GGUF_TYPE_UINT32) {
         info.n_ctx_train = gguf_get_val_u32(gguf_ctx.get(), ctx_id);
     }
+
+    // same key as llama_model_chat_template(model, nullptr)
+    info.has_chat_tmpl = gguf_find_key(gguf_ctx.get(), "tokenizer.chat_template") >= 0;
 
     return info;
 }

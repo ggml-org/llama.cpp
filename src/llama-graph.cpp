@@ -1164,7 +1164,10 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
     mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
     mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
 
-    mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    // leave the mask unallocated if all attention layers have their own (e.g. qwen4exp QSA)
+    if (inp_attn->self_kq_mask->buffer) {
+        mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    }
 
     if (inp_attn->self_k_rot) {
         mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
@@ -1630,8 +1633,9 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
-    cur = build_hadamard_input(w, cur);
-    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+    // a Hadamard-folded weight reads the transformed input; a LoRA delta lives in the primal basis and reads `cur`
+    ggml_tensor * cur_mm = build_hadamard_input(w, cur);
+    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
 
     if (prec_policy) {
         prec_policy->apply(res);
@@ -1666,17 +1670,55 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     return res;
 }
 
+llm_graph_amax_src1 llm_graph_context::build_amax_src1_f16(
+          ggml_tensor * cur) const {
+    llm_graph_amax_src1 result = {
+        /*.res     =*/ cur,
+        /*.scale_s =*/ nullptr,
+    };
+
+    const int64_t n_embd = cur->ne[0];
+
+    // amax = max|cur| along the rows for each [expert, token] -> [1, n_expert, n_tokens]
+    ggml_tensor * ab = ggml_abs(ctx0, cur);
+    ggml_tensor * amax = ggml_pool_1d(ctx0, ab, GGML_OP_POOL_MAX, n_embd, n_embd, 0);
+
+    // ref: https://github.com/ggml-org/llama.cpp/pull/26223
+    constexpr float k_log2_e = 1.4426950408889634f; // 1 / ln(2)
+    constexpr float k_ln_2   = 0.6931471805599453f;
+
+    ggml_tensor * e;
+    // note: this can technically be:
+    // e = ggml_scale(ctx0, amax, 1.0f/32768.0f);
+    // but we leave x32 headroom for the F16 sums of 32 values in Q8 activation blocks
+    e = ggml_scale(ctx0, amax, 1.0f/1024.0f);
+    e = ggml_log  (ctx0, e);
+    e = ggml_scale(ctx0, e, k_log2_e);
+    e = ggml_ceil (ctx0, e);
+    e = ggml_clamp(ctx0, e, 0.0f, 127.0f);
+    e = ggml_scale(ctx0, e, k_ln_2);
+    e = ggml_exp  (ctx0, e);
+
+    result = {
+        /*.res     =*/ ggml_div(ctx0, cur, e),
+        /*.scale_s =*/ e,
+    };
+
+    return result;
+}
+
 ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
           ggml_tensor * w_s,
           ggml_tensor * slots) const {
-    cur = build_hadamard_input(w, cur);
+    // as in build_lora_mm: the folded weight reads the transformed input, the LoRA delta reads `cur`
+    ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     // the experts in the MoE cache are selected by their slots
     ggml_tensor * res = slots == nullptr ?
-        ggml_mul_mat_id(ctx0, w, cur, ids) :
-        ggml_mul_mat_id(ctx0, moe_cache->get_experts(w), cur, slots);
+        ggml_mul_mat_id(ctx0, w, cur_mm, ids) :
+        ggml_mul_mat_id(ctx0, moe_cache->get_experts(w), cur_mm, slots);
 
     if (prec_policy) {
         prec_policy->apply(res);
@@ -1968,7 +2010,7 @@ ggml_tensor * llm_graph_context::build_ffn(
                     const float limit = hparams.swiglu_clamp_shexp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
-                        if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0)) {
+                        if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0)) {
                             cur = ggml_swiglu_clamp(ctx0, cur, tmp, limit);
                         } else {
                             tmp = ggml_clamp(ctx0, tmp, -limit, limit);
@@ -2298,8 +2340,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
 
-        // Avoid division by zero, clamp to smallest number representable by F16
-        weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
+        if (arch == LLM_ARCH_DEEPSEEK41) {
+            // model.py Gate.forward: weights / (sum + 1e-20); the sum can fall below the F16 clamp below
+            weights_sum = ggml_scale_bias(ctx0, weights_sum, 1.0f, 1e-20f);
+        } else {
+            // Avoid division by zero, clamp to smallest number representable by F16
+            weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
+        }
         cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
 
         weights = ggml_div(ctx0, weights, weights_sum); // [n_expert_used, n_tokens]
@@ -2389,7 +2436,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                     const float limit = hparams.swiglu_clamp_exp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
-                        if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
+                        if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
                             cur = ggml_swiglu_clamp(ctx0, cur, up, limit);
                         } else {
                             up = ggml_clamp(ctx0, up, -limit, limit);
@@ -2465,12 +2512,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
-    if (arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_MELLUM) {
-        // src1 can exceed F16 range
-        ggml_prec_set_src(experts, GGML_PREC_F32, 1);
+    {
+        // TODO: this graph-level rescaling should only be applied when the corresponding backend does not support
+        //       ggml_prec_set_src(experts, GGML_PREC_BF16, 1);
+        //       the amax op cannot be split across devices, so these architectures are denied -sm tensor [TAG_MOE_AMAX_SCALE]
+        //       ref: https://github.com/ggml-org/llama.cpp/pull/30656#issuecomment-6269597922
+        llm_graph_amax_src1 amax_src1 = { nullptr, nullptr };
+
+        if (arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_MELLUM || arch == LLM_ARCH_FLINT) {
+            amax_src1 = build_amax_src1_f16(cur);
+            cur = amax_src1.res;
+        }
+
+        experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
+        //ggml_prec_set_src(experts, GGML_PREC_BF16, 1); // (see TODO above)
+        cb(experts, "ffn_moe_down", il);
+
+        if (amax_src1.scale_s) {
+            experts = ggml_mul(ctx0, experts, amax_src1.scale_s);
+        }
     }
-    cb(experts, "ffn_moe_down", il);
 
     if (down_exps_s) {
         cb(experts, "ffn_moe_down_scaled", il);
@@ -3328,6 +3389,28 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+ggml_tensor * llm_graph_context::build_fused_top_k_mask(
+        ggml_tensor * kq_mask,
+        ggml_tensor * top_k,
+        ggml_tensor * score,
+        ggml_tensor * blocks,
+        ggml_tensor * extra,
+        ggml_tensor * mask,
+                int   il) const {
+    const int64_t m1 = kq_mask->ne[1];
+    const int64_t m2 = kq_mask->ne[2];
+    const int64_t m3 = kq_mask->ne[3];
+
+    auto rows = [&](ggml_tensor * t) {
+        return t ? ggml_reshape_4d(ctx0, t, t->ne[0], m1, m2, m3) : nullptr;
+    };
+
+    ggml_tensor * cur = ggml_top_k_mask(ctx0, mask ? mask : kq_mask, rows(top_k), rows(score), blocks, rows(extra));
+    res->add_fused_node({LLM_FUSED_OP_TOP_K_MASK, cur, il});
+
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_k_dsa * inp,
         ggml_tensor * wo,
@@ -3360,31 +3443,36 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = inp->get_kq_mask_mla();
 
-    // prepare new kq mask - starts filled with -INFINITY
-    ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
+    ggml_tensor * kq_mask_top_k = nullptr;
+    if (cparams.fused_top_k_mask) {
+        kq_mask_top_k = build_fused_top_k_mask(kq_mask, top_k, nullptr, nullptr, nullptr, nullptr, il);
+    } else {
+        // prepare new kq mask - starts filled with -INFINITY
+        ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
 
-    // reshape KQ mask into tensor with rows of size 1:
-    // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
-    kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
+        // reshape KQ mask into tensor with rows of size 1:
+        // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
+        kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
 
-    // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
-    ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
+        // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
+        ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
 
-    // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
-    // this will be our source of zero values for unmasking top k mask elements
-    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
-    zeros = ggml_fill(ctx0, zeros, 0.0f);
+        // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
+        // this will be our source of zero values for unmasking top k mask elements
+        ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
+        zeros = ggml_fill(ctx0, zeros, 0.0f);
 
-    // modify KQ mask by unmasking elements that are in top_k indices
-    // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
-    ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
+        // modify KQ mask by unmasking elements that are in top_k indices
+        // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
+        kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
 
-    // reshape to restore the original shape of KQ mask:
-    // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
-    kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
+        // reshape to restore the original shape of KQ mask:
+        // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
+        kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
 
-    // combine with the original kq mask
-    kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);
+        // combine with the original kq mask
+        kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);
+    }
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);

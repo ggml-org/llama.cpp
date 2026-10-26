@@ -13,6 +13,7 @@
 
 llama_kv_cache_dsa::llama_kv_cache_dsa(
         const llama_model & model,
+                     bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -31,7 +32,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     LLAMA_LOG_INFO("%s: creating main KV cache, size = %u cells\n", __func__, kv_size);
 
     kv_mla = std::make_unique<llama_kv_cache>(
-            model, model.hparams, type_k, type_v,
+            model, no_alloc, model.hparams, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
             n_swa, swa_type, nullptr, filter_mla, reuse, nullptr);
 
@@ -48,7 +49,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
     kv_lid = std::make_unique<llama_kv_cache>(
-            model, hparams_lid, type_k, type_v,
+            model, no_alloc, hparams_lid, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
             n_swa, swa_type, nullptr, filter_lid, reuse, nullptr);
 }

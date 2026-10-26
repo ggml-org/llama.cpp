@@ -45,9 +45,6 @@ MTMD_API struct mtmd_helper_init_opt mtmd_helper_init_opt_default(void);
 // Note: this also call mtmd_log_set() internally
 MTMD_API void mtmd_helper_log_set(ggml_log_callback log_callback, void * user_data);
 
-// Returns true if this build includes video support (MTMD_VIDEO was ON at compile time).
-MTMD_API bool mtmd_helper_support_video(const mtmd_context * ctx);
-
 struct mtmd_helper_bitmap_wrapper {
     mtmd_bitmap * bitmap;
     mtmd_helper_video * video_ctx;
@@ -186,8 +183,31 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
             mtmd_bitmap ** out_bitmap,
             char ** out_text);
 
-// return true if model can be used for chat
-MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx);
+struct mtmd_helper_cap {
+    bool chat; // false for tts-only model (no chat template)
+
+    // input capabilities
+    bool vision;
+    bool audio;
+    bool video; // also depending on MTMD_VIDEO build option
+
+    // realtime capabilities
+    bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
+
+    // output capabilities
+    bool text_gen; // always true for now
+    bool audio_gen;
+    bool audio_gen_spk_ref; // accepts a speaker reference audio for voice cloning
+};
+typedef struct mtmd_helper_cap mtmd_helper_cap;
+
+// mctx can be NULL (text-only model)
+MTMD_API struct mtmd_helper_cap mtmd_helper_get_capabilities(const struct llama_model * model, const struct mtmd_context * mctx);
+
+DEPRECATED(MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx),
+           "use mtmd_helper_get_capabilities() instead");
+DEPRECATED(MTMD_API bool mtmd_helper_support_video(const struct mtmd_context * ctx),
+           "use mtmd_helper_get_capabilities() instead");
 
 //
 // Audio generation helpers
@@ -204,6 +224,7 @@ enum mtmd_helper_gen_audio_outtype {
     MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE, mono
 };
 struct mtmd_helper_gen_audio_inp {
+    bool stream; // if true, output() must be called after each step_gen()
     llama_seq_id seq_id;
 
     const char * prompt;
@@ -218,6 +239,8 @@ struct mtmd_helper_gen_audio_inp {
 
     enum mtmd_helper_gen_audio_outtype out_type;
 };
+
+MTMD_API struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void);
 
 MTMD_API mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(
                                     struct llama_context * lctx,
@@ -250,12 +273,18 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
 
 // out_data valid until next get_output() or reset() call
 // out_n_samples (optional, can be NULL) receives the number of generated PCM samples
+// if inp->stream is true: returns only audio produced since the previous call, and
+// *out_data_len == 0 whenever a full window_frames batch hasn't accumulated yet
 MTMD_API int32_t mtmd_helper_gen_audio_get_output(
                         mtmd_helper_gen_audio * ctx,
                         int32_t * out_sample_rate,
                         const char ** out_data,
                         size_t * out_data_len,
                         int64_t * out_n_samples);
+
+// forces any buffered codes through code2wav now, regardless of window_frames;
+// call once when generation has ended, before the last get_output() in stream mode
+MTMD_API int32_t mtmd_helper_gen_audio_flush(mtmd_helper_gen_audio * ctx);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -283,8 +312,41 @@ struct mtmd_helper_gen_audio_deleter {
 };
 using gen_audio_ptr = std::unique_ptr<mtmd_helper_gen_audio, mtmd_helper_gen_audio_deleter>;
 struct gen_audio {
+
+    // sub-struct, RAII wrapper for mtmd_helper_gen_audio_inp
+    struct inp {
+        mtmd_helper_gen_audio_inp data = mtmd_helper_gen_audio_inp_default();
+        std::string prompt_str;
+        std::string lang_str;
+        mtmd::bitmap_ptr speaker_ref_ptr;
+
+        inp()                             = default;
+        inp(inp &&)                       = default;
+        inp & operator=(inp &&)           = default;
+        inp(const inp &)                  = delete;
+        inp & operator=(const inp &)      = delete;
+
+        void set_prompt     (std::string p)        { prompt_str = std::move(p); }
+        void set_lang       (std::string l)        { lang_str   = std::move(l); }
+        void set_speaker_ref(mtmd::bitmap_ptr bmp) { speaker_ref_ptr = std::move(bmp); }
+
+        // pointers are only valid as long as *this is alive
+        const mtmd_helper_gen_audio_inp * get() {
+            data.prompt      = prompt_str.c_str();
+            data.prompt_len  = prompt_str.size();
+            data.lang        = lang_str.empty() ? nullptr : lang_str.c_str();
+            data.speaker_ref = speaker_ref_ptr.get();
+            return &data;
+        }
+    };
+
     gen_audio_ptr ctx;
-    gen_audio(struct llama_context * lctx, struct mtmd_context * mctx) : ctx(mtmd_helper_gen_audio_init(lctx, mctx)) {}
+    void init(struct llama_context * lctx, struct mtmd_context * mctx) {
+        ctx.reset(mtmd_helper_gen_audio_init(lctx, mctx));
+    }
+    bool valid() const {
+        return ctx.get() != nullptr;
+    }
     void reset() {
         mtmd_helper_gen_audio_reset(ctx.get());
     }
@@ -299,6 +361,9 @@ struct gen_audio {
     }
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples = nullptr) {
         return mtmd_helper_gen_audio_get_output(ctx.get(), out_sample_rate, out_data, out_data_len, out_n_samples);
+    }
+    int32_t flush() {
+        return mtmd_helper_gen_audio_flush(ctx.get());
     }
 };
 

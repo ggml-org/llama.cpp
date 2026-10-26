@@ -215,6 +215,8 @@ export {
 	type PathQuery
 } from './working-directory';
 
+export { resolveTabTarget, resolveTabView, type TabView } from './chat-tabs';
+
 // Shared `file_glob_search` runner with a short-lived result cache
 export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
 
@@ -282,6 +284,7 @@ export {
 	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
+	isSectionExpandedByDefault,
 	classifyToolResult,
 	classifyContinueIntent
 } from './agentic';

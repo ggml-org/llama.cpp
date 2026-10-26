@@ -31,6 +31,8 @@
 #define DIRECTORY_SEPARATOR '/'
 #endif // _WIN32
 
+#define COMMON_RECURSIVE_LIMIT 128
+
 #define COM_DBG(fmt, ...) LOG_DBG("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define COM_TRC(fmt, ...) LOG_TRC("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define COM_INF(fmt, ...) LOG_INF("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -975,6 +977,7 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_LFM2_D1, // same as openjev, the labels depend on the question type
     COMMON_DECISION_TYPE_LFM2_D1_OMNI, // same as laya, other prompt layout
     COMMON_DECISION_TYPE_GRANITE_SWITCH, // same as openjev, run by the decision aLoRA of granite switch
+    COMMON_DECISION_TYPE_H2O_LIGHTNING, // same as openjev, the labels are read after an answer prefill
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
@@ -984,6 +987,7 @@ common_decision_type common_get_decision_type(const struct llama_model * model);
 struct common_gguf_info {
     common_decision_type decision_type = COMMON_DECISION_TYPE_UNKNOWN; // UNKNOWN if the file is missing, unreadable, or invalid
     uint32_t             n_ctx_train   = 0;                            // 0 if unknown
+    bool                 has_chat_tmpl = false;                        // has the default tokenizer.chat_template
 };
 
 common_gguf_info common_get_gguf_info(const std::string & fname);

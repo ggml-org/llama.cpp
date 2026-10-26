@@ -547,7 +547,7 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
-    container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
+    container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.8'
 
     defaults:
       run:
@@ -600,7 +600,7 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
-    container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
+    container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.8'
 
     defaults:
       run:

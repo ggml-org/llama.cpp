@@ -768,19 +768,13 @@ int op_im2col(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
-        return HTP_STATUS_INVAL_PARAMS;
-    }
-
     const struct htp_tensor * dst = octx->dst;
 
     uint32_t row_base = 0;
     uint32_t nrows    = kparams->total_rows;
     if (octx->ctx->mdev.count > 1) {
-        const uint32_t row_size = dst->nb[2];
-        const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
         const struct htp_tensor_mdev_range range =
-            htp_tensor_mdev_partition(kparams->total_rows, htp_tensor_mdev_data_aligned(dst) ? rows_per_chunk : 0,
+            htp_tensor_mdev_partition(kparams->total_rows, htp_tensor_mdev_data_aligned(dst) ? kparams->rows_per_chunk : 0,
                                       octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_base = range.start;
         nrows    = range.count;
@@ -790,20 +784,27 @@ int op_im2col(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
+    if (!htp_ops_context_set_n_threads(octx, MIN((uint32_t) kparams->n_threads, nrows))) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    struct htp_im2col_vtcm_layout layout;
+    htp_im2col_vtcm_layout_build(&layout, kparams->src_row_bytes, kparams->dst_row_bytes, kparams->n_threads);
+
     struct htp_im2col_context ictx = { 0 };
     uint8_t * const base = octx->ctx->vtcm_base;
 
-    const uint32_t pth = MIN(octx->n_threads, nrows);
+    const uint32_t pth = octx->n_threads;
     ictx.octx                   = octx;
     ictx.pe_row_base            = row_base;
     ictx.pe_nrows               = nrows;
-    ictx.pe_rows_per_thread     = (nrows + pth - 1) / pth;
+    ictx.pe_rows_per_thread     = fastdiv(nrows + pth - 1, &octx->n_threads_div);
     ictx.pe_src_row_bytes       = kparams->src_row_bytes;
     ictx.pe_dst_row_bytes       = kparams->dst_row_bytes;
-    ictx.pe_vtcm_src            = VTCM_LAYOUT_PTR(uint8_t, base, kparams->off_src);
-    ictx.pe_vtcm_dst            = VTCM_LAYOUT_PTR(uint8_t, base, kparams->off_dst);
-    ictx.pe_src_size_per_thread = kparams->src_bytes_per_thread;
-    ictx.pe_dst_size_per_thread = kparams->dst_bytes_per_thread;
+    ictx.pe_vtcm_src            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_src);
+    ictx.pe_vtcm_dst            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_dst);
+    ictx.pe_src_size_per_thread = layout.src_bytes_per_thread;
+    ictx.pe_dst_size_per_thread = layout.dst_bytes_per_thread;
     ictx.pe_owb                 = kparams->owb;
     ictx.pe_wb                  = kparams->wb;
     ictx.pe_nbpr                = kparams->nbpr;
@@ -821,9 +822,10 @@ int op_im2col(struct htp_ops_context * octx) {
     ictx.patch_stride           = kparams->patch_stride;
 
     for (uint32_t ith = 0; ith < pth; ith++) {
-        uint32_t r = row_base + ictx.pe_rows_per_thread * ith;
-        ictx.thread_ioh[ith] = r % kparams->OH;
-        ictx.thread_in[ith]  = r / kparams->OH;
+        const uint32_t r  = row_base + ictx.pe_rows_per_thread * ith;
+        const uint32_t in = fastdiv(r, &kparams->div_OH);
+        ictx.thread_ioh[ith] = r - in * kparams->OH;
+        ictx.thread_in[ith]  = in;
     }
 
     ictx.dst_elem = dst->type == HTP_TYPE_F16 ? sizeof(__fp16) : sizeof(float);
@@ -850,19 +852,13 @@ int op_im2col_3d(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
-        return HTP_STATUS_INVAL_PARAMS;
-    }
-
     const struct htp_tensor * dst = octx->dst;
 
     uint32_t row_base = 0;
     uint32_t nrows    = kparams->total_rows;
     if (octx->ctx->mdev.count > 1) {
-        const uint32_t row_size = dst->nb[2];
-        const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
         const struct htp_tensor_mdev_range range =
-            htp_tensor_mdev_partition(kparams->total_rows, htp_tensor_mdev_data_aligned(dst) ? rows_per_chunk : 0,
+            htp_tensor_mdev_partition(kparams->total_rows, htp_tensor_mdev_data_aligned(dst) ? kparams->rows_per_chunk : 0,
                                       octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_base = range.start;
         nrows    = range.count;
@@ -872,20 +868,27 @@ int op_im2col_3d(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
+    if (!htp_ops_context_set_n_threads(octx, MIN((uint32_t) kparams->n_threads, nrows))) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    struct htp_im2col_vtcm_layout layout;
+    htp_im2col_vtcm_layout_build(&layout, kparams->src_row_bytes, kparams->dst_row_bytes, kparams->n_threads);
+
     struct htp_im2col_context ictx = { 0 };
     uint8_t * const base = octx->ctx->vtcm_base;
 
-    const uint32_t pth = MIN(octx->n_threads, nrows);
+    const uint32_t pth = octx->n_threads;
     ictx.octx                   = octx;
     ictx.pe_row_base            = row_base;
     ictx.pe_nrows               = nrows;
-    ictx.pe_rows_per_thread     = (nrows + pth - 1) / pth;
+    ictx.pe_rows_per_thread     = fastdiv(nrows + pth - 1, &octx->n_threads_div);
     ictx.pe_src_row_bytes       = kparams->src_row_bytes;
     ictx.pe_dst_row_bytes       = kparams->dst_row_bytes;
-    ictx.pe_vtcm_src            = VTCM_LAYOUT_PTR(uint8_t, base, kparams->off_src);
-    ictx.pe_vtcm_dst            = VTCM_LAYOUT_PTR(uint8_t, base, kparams->off_dst);
-    ictx.pe_src_size_per_thread = kparams->src_bytes_per_thread;
-    ictx.pe_dst_size_per_thread = kparams->dst_bytes_per_thread;
+    ictx.pe_vtcm_src            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_src);
+    ictx.pe_vtcm_dst            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_dst);
+    ictx.pe_src_size_per_thread = layout.src_bytes_per_thread;
+    ictx.pe_dst_size_per_thread = layout.dst_bytes_per_thread;
     ictx.pe_owb                 = kparams->owb;
     ictx.pe_wb                  = kparams->wb;
     ictx.pe_nbpr                = kparams->nbpr;
@@ -903,11 +906,12 @@ int op_im2col_3d(struct htp_ops_context * octx) {
     ictx.patch_stride           = kparams->patch_stride;
 
     for (uint32_t ith = 0; ith < pth; ith++) {
-        uint32_t rem = row_base + ictx.pe_rows_per_thread * ith;
-        ictx.thread_ioh[ith] = rem % kparams->OH;
-        rem /= kparams->OH;
-        ictx.thread_iod[ith] = rem % kparams->OD;
-        ictx.thread_in[ith]  = rem / kparams->OD;
+        const uint32_t rem  = row_base + ictx.pe_rows_per_thread * ith;
+        const uint32_t q_oh = fastdiv(rem, &kparams->div_OH);
+        ictx.thread_ioh[ith] = rem - q_oh * kparams->OH;
+        const uint32_t in   = fastdiv(q_oh, &kparams->div_OD);
+        ictx.thread_iod[ith] = q_oh - in * kparams->OD;
+        ictx.thread_in[ith]  = in;
     }
 
     ictx.dst_elem = dst->type == HTP_TYPE_F16 ? sizeof(__fp16) : sizeof(float);

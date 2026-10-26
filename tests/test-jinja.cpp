@@ -17,6 +17,7 @@
 using json = common_json;
 
 static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect);
+static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect);
 
 static void test_whitespace_control(testing & t);
 static void test_conditionals(testing & t);
@@ -25,6 +26,7 @@ static void test_expressions(testing & t);
 static void test_set_statement(testing & t);
 static void test_filters(testing & t);
 static void test_literals(testing & t);
+static void test_hexadecimal_escapes(testing & t);
 static void test_comments(testing & t);
 static void test_macros(testing & t);
 static void test_namespace(testing & t);
@@ -65,6 +67,7 @@ int main(int argc, char *argv[]) {
     t.test("set statement", test_set_statement);
     t.test("filters", test_filters);
     t.test("literals", test_literals);
+    t.test("hexadecimal escapes", test_hexadecimal_escapes);
     t.test("comments", test_comments);
     t.test("macros", test_macros);
     t.test("namespace", test_namespace);
@@ -604,6 +607,17 @@ static void test_expressions(testing & t) {
         {{"cond", true}},
         "yes"
     );
+
+    test_template(t, "nested parentheses",
+        "{{ " + std::string(30, '(') + "1" + std::string(30, ')') + " }}",
+        json::object(),
+        "1"
+    );
+
+    test_template_error(t, "too deeply nested parentheses",
+        "{{ " + std::string(1000, '(') + "1" + std::string(1000, ')') + " }}",
+        "template is nested more than 128 levels deep"
+    );
 }
 
 static void test_set_statement(testing & t) {
@@ -1027,6 +1041,11 @@ static void test_filters(testing & t) {
         {{"x", nullptr}},
         "None"
     );
+
+    test_template_error(t, "tojson of a list that contains itself",
+        "{% set arr = [] %}{% set _ = arr.append(arr) %}{{ arr|tojson }}",
+        "value is nested more than 128 levels deep"
+    );
 }
 
 static void test_literals(testing & t) {
@@ -1171,6 +1190,54 @@ static void test_literals(testing & t) {
     );
 }
 
+static void test_hexadecimal_escapes(testing & t) {
+    test_template(t, "remove NUL from message content",
+        R"({{ message.content | replace("\x00", "") }})",
+        {{"message", {{"content", std::string("\0a\0b\0", 5)}}}},
+        "ab"
+    );
+
+    test_template(t, "non-ASCII hex escape produces UTF-8",
+        R"({{ '\xE9' }})",
+        json::object(),
+        "\xc3\xa9"
+    );
+
+    test_template(t, "consume exactly two hex digits",
+        R"({{ '\x414' }})",
+        json::object(),
+        "A4"
+    );
+
+    test_template(t, "escaped backslashes remain literal",
+        R"({{ '\\xE9' }})",
+        json::object(),
+        R"(\xE9)"
+    );
+
+    if (!g_python_mode) {
+        const char * invalid_templates[] = {
+            R"({{ '\x' }})",
+            R"({{ '\x0' }})",
+            R"({{ '\xG1' }})",
+            R"({{ '\x1G' }})",
+            R"({{ '\x)",
+            R"({{ '\x0)",
+        };
+        for (const auto * tmpl : invalid_templates) {
+            t.test("reject " + json(tmpl).dump(), [&](testing & t) {
+                bool rejected = false;
+                try {
+                    jinja::lexer().tokenize(tmpl);
+                } catch (const jinja::lexer_exception &) {
+                    rejected = true;
+                }
+                t.assert_true("malformed hex escape must raise a lexer error", rejected);
+            });
+        }
+    }
+}
+
 static void test_comments(testing & t) {
     test_template(t, "inline comment",
         "before{# comment #}after",
@@ -1241,6 +1308,17 @@ static void test_macros(testing & t) {
         json::object(),
         "Dict {\n    root1: 1\n    root2: {\n        nest1: 1\n        nest2: {\n            nest3: 2\n        }\n    }\n}"
     );
+
+    test_template(t, "macro recursion",
+        "{% macro f(n) %}{% if n < 100 %}{{ f(n + 1) }}{% else %}{{ n }}{% endif %}{% endmacro %}{{ f(0) }}",
+        json::object(),
+        "100"
+    );
+
+    test_template_error(t, "endless macro recursion",
+        "{% macro f(n) %}{{ f(n + 1) }}{% endmacro %}{{ f(0) }}",
+        "macro calls are nested more than 128 levels deep"
+    );
 }
 
 static void test_namespace(testing & t) {
@@ -1248,6 +1326,18 @@ static void test_namespace(testing & t) {
         "{% set ns = namespace(count=0) %}{% for i in range(3) %}{% set ns.count = ns.count + 1 %}{% endfor %}{{ ns.count }}",
         json::object(),
         "3"
+    );
+
+    test_template(t, "namespace attribute named like a dict method",
+        "{% set ns = namespace(items=[]) %}{{ 'yes' if ns.items else 'no' }}{% set ns.items = ns.items + [1] %}{{ ns.items | length }}{{ 'yes' if ns.items else 'no' }}",
+        json::object(),
+        "no1yes"
+    );
+
+    test_template(t, "dict keeps its methods",
+        "{% set d = dict(items=1) %}{% for k, v in d.items() %}{{ k }}={{ v }}{% endfor %}",
+        json::object(),
+        "items=1"
     );
 }
 
@@ -1740,6 +1830,54 @@ static void test_array_methods(testing & t) {
             json::array({2, "y"}),
         })}},
         "z y "
+    );
+
+    test_template(t, "array|select with test",
+        "{{ items|select('odd')|join(',') }}",
+        {{"items", json::array({1, 2, 3, 4, 5})}},
+        "1,3,5"
+    );
+
+    test_template(t, "array|reject with test",
+        "{{ items|reject('odd')|join(',') }}",
+        {{"items", json::array({1, 2, 3, 4, 5})}},
+        "2,4"
+    );
+
+    test_template(t, "array|select without test",
+        "{{ items|select|join(',') }}",
+        {{"items", json::array({0, 1, "", "a", nullptr, false})}},
+        "1,a"
+    );
+
+    test_template(t, "array|selectattr with test",
+        "{% for p in items|selectattr('type', 'defined') %}{{ p.type }} {% endfor %}",
+        {{"items", json::array({
+            {{"type", "string"}},
+            {{"enum", json::array({1})}},
+            {{"type", "integer"}}
+        })}},
+        "string integer "
+    );
+
+    test_template(t, "array|rejectattr with test",
+        "{{ items|rejectattr('type', 'defined')|list|length }}",
+        {{"items", json::array({
+            {{"type", "string"}},
+            {{"enum", json::array({1})}},
+            {{"type", "integer"}}
+        })}},
+        "1"
+    );
+
+    test_template(t, "array|selectattr with attr named like a test",
+        "{% for p in items|selectattr('odd', 'even') %}{{ p.odd }} {% endfor %}",
+        {{"items", json::array({
+            {{"odd", 1}},
+            {{"odd", 2}},
+            {{"odd", 4}}
+        })}},
+        "2 4 "
     );
 
     test_template(t, "array|tojson",
@@ -2442,6 +2580,22 @@ static void test_string_parts(testing & t) {
         }
     });
 
+}
+
+static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect) {
+    t.test(name, [&tmpl, &expect](testing & t) {
+        std::string error;
+        try {
+            jinja::lexer lexer;
+            jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
+            jinja::context ctx(tmpl);
+            jinja::runtime runtime(ctx);
+            runtime.gather_string_parts(runtime.execute(ast));
+        } catch (const std::exception & e) {
+            error = e.what();
+        }
+        t.assert_true("expected error: " + expect + ", got: " + error, error.find(expect) != std::string::npos);
+    });
 }
 
 static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {

@@ -16,7 +16,9 @@
 #include <limits>
 #include <cstring>
 #include <type_traits>
+#include <atomic>
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 #ifdef _WIN32
@@ -202,7 +204,8 @@ const char * get_media_marker() {
 // model output modalities
 //
 
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type) {
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type, bool has_cap_chat, bool has_cap_tts) {
+    std::vector<std::string> out;
     switch (decision_type) {
         case COMMON_DECISION_TYPE_OPENJEV:
         case COMMON_DECISION_TYPE_LEV:
@@ -215,13 +218,28 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_VLLM_D3:
         case COMMON_DECISION_TYPE_LFM2_D1:
         case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
-            return {"decisions"};
+        case COMMON_DECISION_TYPE_H2O_LIGHTNING:
+            out = {"decisions"};
+            break;
         case COMMON_DECISION_TYPE_GRANITE_SWITCH:
-            return {"text", "decisions"};
+            out = {"text", "decisions"};
+            break;
         default:
-            // fallback when there is no decision type or the metadata is bad
-            return {"text"};
+            // a tts-only model cannot generate text
+            if (has_cap_chat || !has_cap_tts) {
+                // fallback when there is no decision type or the metadata is bad
+                out = {"text"};
+            }
+            break;
     }
+    if (has_cap_tts) {
+        out.push_back("audio");
+    }
+    return out;
+}
+
+std::vector<std::string> server_model_output_modalities(const llama_model * model, bool has_cap_chat, bool has_cap_tts) {
+    return server_model_output_modalities(common_get_decision_type(model), has_cap_chat, has_cap_tts);
 }
 
 json server_model_architecture_json(
@@ -1249,7 +1267,6 @@ void handle_media(
         out_files.push_back(decoded_data);
     }
 }
-
 // load media files from an OAI content array, then replace each media part with a media marker text part
 static void oaicompat_content_load_media(json & content, const server_chat_params & opt, std::vector<raw_buffer> & out_files) {
     for (auto & p : content) {
@@ -1320,6 +1337,7 @@ server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context
     if (files.empty()) {
         return server_tokens(common_tokenize(vocab, prompt, add_special, parse_special), false);
     }
+
     return process_mtmd_prompt(mctx, prompt, files, init_opt);
 }
 
@@ -1929,24 +1947,73 @@ llama_tokens format_prompt_infill(
     return embd_inp;
 }
 
+std::string format_rerank_template(
+        const std::string & tmpl,
+        const std::string & query,
+        const std::string & doc) {
+    std::string prompt;
+    prompt.reserve(tmpl.size());
+    for (size_t pos = 0; pos < tmpl.size();) {
+        if (tmpl.compare(pos, 7, "{query}") == 0) {
+            prompt += query;
+            pos += 7;
+        } else if (tmpl.compare(pos, 10, "{document}") == 0) {
+            prompt += doc;
+            pos += 10;
+        } else {
+            prompt += tmpl[pos++];
+        }
+    }
+    return prompt;
+}
+
 server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc,
+        const std::vector<raw_buffer> & query_files,
+        const std::vector<raw_buffer> & doc_files,
         const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
+
+    // media must be spliced through the mtmd pipeline
+    if ((!query_files.empty() || !doc_files.empty()) && mctx == nullptr) {
+        throw std::invalid_argument("multimodal rerank input requires --mmproj");
+    }
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
 
     if (rerank_prompt != nullptr) {
-        std::string prompt = rerank_prompt;
-        string_replace_all(prompt, "{query}"   , query);
-        string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
-        result.push_back(tokens);
+        // multimodal: append one media marker per image (arrays already flattened by caller)
+        std::string q = query;
+        for (size_t i = 0; i < query_files.size(); i++) {
+            q += get_media_marker();
+        }
+        std::string d = doc;
+        for (size_t i = 0; i < doc_files.size(); i++) {
+            d += get_media_marker();
+        }
+
+        std::string prompt = format_rerank_template(rerank_prompt, q, d);
+
+        if (query_files.empty() && doc_files.empty()) {
+            server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
+            result.push_back(tokens);
+        } else {
+            // process_mtmd_prompt returns a complete mtmd server_tokens; return it directly
+            // (push_back into a non-mtmd result would hit the NULL placeholder tokens)
+            std::vector<raw_buffer> files;
+            files.insert(files.end(), query_files.begin(), query_files.end());
+            files.insert(files.end(), doc_files.begin(),   doc_files.end());
+            return process_mtmd_prompt(mctx, prompt, files, init_opt);
+        }
     } else {
+        if (!query_files.empty() || !doc_files.empty()) {
+            throw std::invalid_argument("multimodal rerank input requires a model with a rerank chat template");
+        }
+
         // Get EOS token - use SEP token as fallback if EOS is not available
         server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
         server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);
@@ -2144,4 +2211,65 @@ void server_subproc::waiter::wait(const std::vector<server_subproc *> & procs, s
         }
     }
 #endif
+}
+
+//
+// server_role
+//
+
+server_role::server_role() {
+    if (is_managed_by_router()) {
+        cmd_out = server_reserve_stdout();
+    }
+}
+
+server_role::~server_role() {
+    if (cmd_out) {
+        fclose(cmd_out);
+    }
+}
+
+bool server_role::is_managed_by_router() {
+    return std::getenv(SERVER_ENV_ROUTER_PORT) != nullptr;
+}
+
+server_role_type server_role::get_role() {
+    const char * role = std::getenv(SERVER_ENV_CHILD_ROLE);
+    return server_role_type_from_str(role ? role : "");
+}
+
+std::thread server_role::setup(const std::function<void(int)> & shutdown_handler) {
+    // setup thread for monitoring stdin
+    return std::thread([shutdown_handler]() {
+        // wait for EOF on stdin
+        SRV_INF("%s", "child server monitoring thread started, waiting for EOF on stdin...\n");
+        bool eof = false;
+        while (true) {
+            std::string line;
+            if (!std::getline(std::cin, line)) {
+                // EOF detected, that means the router server is unexpectedly exit or killed
+                eof = true;
+                break;
+            }
+            if (line.find(CMD_ROUTER_TO_CHILD_EXIT) != std::string::npos) {
+                SRV_INF("%s", "exit command received, exiting...\n");
+                shutdown_handler(0);
+                break;
+            }
+        }
+        if (eof) {
+            SRV_INF("%s", "EOF on stdin detected, forcing shutdown...\n");
+            exit(1);
+        }
+    });
+}
+
+void server_role::notify_to_router(const std::string & state, const json & payload) {
+    json data = {
+        {"state", state},
+        {"payload", payload},
+    };
+    std::lock_guard<std::mutex> lk(mtx_stdout);
+    fprintf(cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fflush(cmd_out);
 }

@@ -4,6 +4,7 @@
 #include "gguf.h"
 
 #include "llama-arch.h"
+#include "llama-ext.h"
 #include "llama.h"
 #include "llama-hparams.h"
 #include "llama-model.h"
@@ -13,33 +14,13 @@
 #include <string>
 #include <unordered_set>
 
-bool llama_model_saver_supports_arch(llm_arch arch) {
-    switch (arch) {
-        case LLM_ARCH_GEMMA3N:
-        case LLM_ARCH_BITNET:
-        case LLM_ARCH_T5:
-        case LLM_ARCH_APERTUS:
-        case LLM_ARCH_STEP35:
-        case LLM_ARCH_CLEF: // the head tensors are not saved
-        case LLM_ARCH_VLLM_DECISION2:
-            return false;
-        default:
-            return true;
-    }
-}
-
 llama_model_saver::llama_model_saver(const struct llama_model * model) :
-        gguf_ctx(gguf_init_empty()), gguf_ctx_owned(true), model(model), llm_kv(model->arch) {
-    GGML_ASSERT(llama_model_saver_supports_arch(model->arch));
+        gguf_ctx(gguf_init_empty()), model(model), llm_kv(model->arch) {
+    GGML_ASSERT(llama_arch_supports_save(model->arch));
 }
-
-llama_model_saver::llama_model_saver(enum llm_arch arch, struct gguf_context * gguf_ctx) :
-        gguf_ctx(gguf_ctx == nullptr ? gguf_init_empty() : gguf_ctx), gguf_ctx_owned(gguf_ctx == nullptr), model(nullptr), llm_kv(arch) {}
 
 llama_model_saver::~llama_model_saver() {
-    if (gguf_ctx_owned) {
-        gguf_free(gguf_ctx);
-    }
+    gguf_free(gguf_ctx);
 }
 
 void llama_model_saver::add_kv(const enum llm_kv key, const uint32_t value) {
@@ -117,10 +98,6 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
         GGML_ABORT("fatal error");
     }
 }
-// instantiate for external usage:
-template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
-template void llama_model_saver::add_kv<std::vector<float>>(const enum llm_kv, const std::vector<float> &, const bool);
-template void llama_model_saver::add_kv<std::vector<uint64_t>>(const enum llm_kv, const std::vector<uint64_t> &, const bool);
 
 void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
@@ -338,6 +315,30 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);
     add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK,             hparams.hc_low_rank);
 
+    if (model->arch == LLM_ARCH_DEEPSEEK41) {
+        std::vector<uint32_t> kv_src;
+        std::vector<uint32_t> idx_src;
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+            if (hparams.dsv41_kv_src[il] == (int32_t) il) {
+                kv_src.push_back(il);
+            }
+            if (hparams.dsv41_topk_src[il] == (int32_t) il) {
+                idx_src.push_back(il);
+            }
+        }
+        add_kv(LLM_KV_ATTENTION_KV_SOURCE_LAYERS,      kv_src);
+        add_kv(LLM_KV_ATTENTION_INDEXER_SOURCE_LAYERS, idx_src);
+        if (hparams.dsv41_cand_src >= 0) {
+            add_kv(LLM_KV_ATTENTION_INDEXER_CANDIDATE_SOURCE_LAYER, hparams.dsv41_cand_src);
+            add_kv(LLM_KV_ATTENTION_INDEXER_CANDIDATE_TOP_K_BLOCKS, hparams.dsv41_cand_topk_blocks);
+            add_kv(LLM_KV_ATTENTION_INDEXER_CANDIDATE_BLOCK_SIZE,   hparams.dsv41_cand_block_size);
+        }
+        if (hparams.ple_n_heads > 0) {
+            add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID, hparams.engram_pad_id);
+            add_kv(LLM_KV_ENGRAM_TOKEN_MAP,    model->engram_token_map);
+        }
+    }
+
     // the PLE group only means anything whole: write all of it or none
     if (hparams.ple_n_heads > 0) {
         std::vector<uint32_t> ple_layers;
@@ -354,13 +355,13 @@ void llama_model_saver::add_kv_from_model() {
         add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, hparams.ple_head_dim);
         add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS, std::vector<uint64_t>(
                 hparams.ple_layer_multipliers.begin(),
-                hparams.ple_layer_multipliers.begin() + hparams.ple_ngram_size));
+                hparams.ple_layer_multipliers.begin() + hparams.ple_n_modules*hparams.ple_ngram_size));
         add_kv(LLM_KV_PLE_HEAD_OFFSETS,      std::vector<uint64_t>(
                 hparams.ple_head_offsets.begin(),
-                hparams.ple_head_offsets.begin() + hparams.ple_n_heads));
+                hparams.ple_head_offsets.begin() + hparams.ple_n_modules*hparams.ple_n_heads));
         add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,  std::vector<uint64_t>(
                 hparams.ple_head_vocab_sizes.begin(),
-                hparams.ple_head_vocab_sizes.begin() + hparams.ple_n_heads));
+                hparams.ple_head_vocab_sizes.begin() + hparams.ple_n_modules*hparams.ple_n_heads));
     }
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
@@ -423,6 +424,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TOKENIZER_ADD_SEP,                 vocab.get_add_sep());
     add_kv(LLM_KV_TOKENIZER_ADD_PREFIX,              vocab.get_add_space_prefix());
     add_kv(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS,         vocab.get_remove_extra_whitespaces());
+    add_kv(LLM_KV_TOKENIZER_CLEAN_SPACES,            vocab.get_clean_spaces());
     add_kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,    vocab.get_precompiled_charsmap());
     // add_kv(LLM_KV_TOKENIZER_HF_JSON,                 ???);
     // add_kv(LLM_KV_TOKENIZER_RWKV,                    ???);
@@ -520,8 +522,4 @@ void llama_model_saver::add_tensors_from_model() {
 
 void llama_model_saver::save(const std::string & path_model) {
     gguf_write_to_file(gguf_ctx, path_model.c_str(), false);
-}
-
-void llama_model_saver::save(FILE * file) {
-    gguf_write_to_file_ptr(gguf_ctx, file, false);
 }
