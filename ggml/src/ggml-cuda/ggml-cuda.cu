@@ -625,6 +625,10 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
                     err = cuMemAddressReserve(&pool_addr, max_size, 0, 0, 0);
                 }
                 CU_CHECK(err);
+                if (max_size < CUDA_POOL_VMM_MAX_SIZE) {
+                    GGML_LOG_WARN(GGML_CUDA_NAME " pool[%d]: reserved %.2f GiB of virtual memory instead of %.2f GiB\n",
+                                  device, max_size / (1024.0 * 1024.0 * 1024.0), CUDA_POOL_VMM_MAX_SIZE / (1024.0 * 1024.0 * 1024.0));
+                }
             }
 
             GGML_ASSERT(pool_size + reserve_size <= max_size);
