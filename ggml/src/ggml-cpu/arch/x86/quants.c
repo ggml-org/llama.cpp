@@ -127,8 +127,11 @@ static inline __m256 mul_sum_i8_pairs_float(const __m256i x, const __m256i y) {
 #else
     // Get absolute values of x vectors
     const __m256i ax = _mm256_sign_epi8(x, x);
+    // Clamp y to [-127, 127] to avoid -128 negation overflow in _mm256_sign_epi8
+    // Note: quantize_row_q8_0 never produces -128, so this only affects external inputs
+    const __m256i y_clamped = _mm256_max_epi8(_mm256_min_epi8(y, _mm256_set1_epi8(127)), _mm256_set1_epi8(-127));
     // Sign the values of the y vectors
-    const __m256i sy = _mm256_sign_epi8(y, x);
+    const __m256i sy = _mm256_sign_epi8(y_clamped, x);
     return mul_sum_us8_pairs_float(ax, sy);
 #endif
 }
@@ -172,7 +175,12 @@ static inline __m128i packNibbles( __m128i bytes1, __m128i bytes2 )
 
 static inline __m128i mul_add_epi8_sse(const __m128i x, const __m128i y) {
     const __m128i ax = _mm_sign_epi8(x, x);
-    const __m128i sy = _mm_sign_epi8(y, x);
+    // Clamp y to [-127, 127] to avoid -128 negation overflow in _mm_sign_epi8
+    // Note: quantize_row_q8_0 never produces -128, so this only affects external inputs
+    const __m128i min_127 = _mm_set1_epi8(-127);
+    const __m128i max_127 = _mm_set1_epi8(127);
+    const __m128i y_clamped = _mm_max_epi8(_mm_min_epi8(y, max_127), min_127);
+    const __m128i sy = _mm_sign_epi8(y_clamped, x);
     return _mm_maddubs_epi16(ax, sy);
 }
 
@@ -234,9 +242,15 @@ static inline __m256 mul_sum_i8_pairs_float(const __m256i x, const __m256i y) {
     // Get absolute values of x vectors
     const __m128i axl = _mm_sign_epi8(xl, xl);
     const __m128i axh = _mm_sign_epi8(xh, xh);
+    // Clamp y to [-127, 127] to avoid -128 negation overflow in _mm_sign_epi8
+    // Note: quantize_row_q8_0 never produces -128, so this only affects external inputs
+    const __m128i min_127 = _mm_set1_epi8(-127);
+    const __m128i max_127 = _mm_set1_epi8(127);
+    const __m128i ycl = _mm_max_epi8(_mm_min_epi8(yl, max_127), min_127);
+    const __m128i ych = _mm_max_epi8(_mm_min_epi8(yh, max_127), min_127);
     // Sign the values of the y vectors
-    const __m128i syl = _mm_sign_epi8(yl, xl);
-    const __m128i syh = _mm_sign_epi8(yh, xh);
+    const __m128i syl = _mm_sign_epi8(ycl, xl);
+    const __m128i syh = _mm_sign_epi8(ych, xh);
     // Perform multiplication and create 16-bit values
     const __m128i dotl = _mm_maddubs_epi16(axl, syl);
     const __m128i doth = _mm_maddubs_epi16(axh, syh);
