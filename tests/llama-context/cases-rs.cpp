@@ -7,18 +7,14 @@
 
 #include "common.h"
 
-#include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <string>
 #include <vector>
 
-// roll back multiple sequences, then replay them in a single batch whose per-seq token count
-// exceeds n_ubatch: each seq's replay spans several ubatches while its rollback restore is
-// still pending. Compared against a reference context that never advanced past the rollback
-// point and decodes the identical replay batch. Only the first replayed token of each seq is
-// compared - the two contexts reach the replay with states differing in the last bits, and the
-// differences grow with every replayed token.
+// roll back multiple sequences, then replay them in a single batch whose per-seq token count exceeds n_ubatch: each
+// seq's replay spans several ubatches while its rollback restore is still pending. Compared against a reference context
+// that never advanced past the rollback point and decodes the identical replay batch. Only the first replayed token of
+// each seq is compared.
 struct case_multi_seq_split_replay : ctx_test {
     test_group group() const override { return TEST_GROUP_RS; }
 
@@ -129,6 +125,19 @@ struct case_multi_seq_split_replay : ctx_test {
 
             ok = ok && get_seq_state(ctx_roll.get(), (llama_seq_id) s, 0, state);
             ok = ok && set_seq_state(ctx_ref.get(),  (llama_seq_id) s, 0, state);
+
+            // do a second round of state save/load to negate any SWA-positioning effects
+            if (ok) {
+                std::vector<uint8_t> restored;
+                ok = ok && get_seq_state(ctx_ref.get(), (llama_seq_id) s, 0, restored);
+
+                // what was loaded into ref must come back out bit-identical
+                CTX_REQUIRE(ok && state == restored,
+                        "the seq " + std::to_string(s) + " state did not round-trip bit-exact (sizes " +
+                        std::to_string(state.size()) + "/" + std::to_string(restored.size()) + ")");
+
+                ok = ok && set_seq_state(ctx_roll.get(), (llama_seq_id) s, 0, restored);
+            }
         }
         CTX_REQUIRE(ok, "the multi-seq state copy failed");
 
@@ -164,7 +173,7 @@ struct case_multi_seq_split_replay : ctx_test {
             diff_tail.add(l_roll, l_ref, n_vocab);
         }
 
-        CTX_REQUIRE(ok && diff_tail.nmse() <= nmse_eps,
+        CTX_REQUIRE(ok && diff_tail.nmse() <= 0.0f,
                 "a seq-1-only decode leaked the state of seq 0 (nmse " + std::to_string(diff_tail.nmse()) + ")");
 
         TLOG_INF("%s: seq-1-only decode is independent of seq 0 (max diff %g, nmse %g)\n",
