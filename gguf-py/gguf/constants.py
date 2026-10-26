@@ -6544,6 +6544,8 @@ class DecisionType:
     VLLM_D3 = "vllm-d3"  # same as pplx-decider, non-causal attention
     LFM2_D1 = "lfm2-d1"  # same as openjev, the labels depend on the question type
     LFM2_D1_OMNI = "lfm2-d1-omni"  # same head as laya on a bidirectional LFM2 trunk, other prompt layout
+    LFM3_D1 = "lfm3-d1"  # same as lfm2-d1 on LFM3-VL, full attention layers read the prompt both ways
+    LFM3_D1_OMNI = "lfm3-d1-omni"  # same as lfm3-d1 on LFM3-Omni
     GRANITE_SWITCH = "granite-switch"  # same as openjev, run by the decision aLoRA of granite switch
     H2O_LIGHTNING = "h2o-lightning"  # same as openjev, labels read after an answer prefill
     MINICPM_OCR_JEV = "openbmb-minicpm-ocr-jev"  # class scores of a value head read at the last token, one fixed task
