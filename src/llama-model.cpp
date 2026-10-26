@@ -46,6 +46,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_clip(params);
         case LLM_ARCH_LLAMA:
             return new llama_model_llama(params);
+        case LLM_ARCH_KAIL:
+            return new llama_model_kail(params);
         case LLM_ARCH_LLAMA4:
             return new llama_model_llama4(params);
         case LLM_ARCH_LLAMA_EMBED:
@@ -3565,6 +3567,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_POCKETTTS:
+        case LLM_ARCH_KAIL:
             return LLAMA_ROPE_TYPE_NORM;
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope
