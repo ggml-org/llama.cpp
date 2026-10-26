@@ -1838,8 +1838,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             if (!model_cache_dir.empty()) {
                 uint64_t base_extra = ggml_openvino_model_cache_extra_cfg(stateful, /*recurrent=*/false);
                 base_extra = base_extra * 131 + (self_contained ? 1u : 0u);
-                base_extra = base_extra * 131 + static_cast<uint64_t>(ggml_openvino_getenv_int("GGML_OPENVINO_TOKEN_EMBD_I8"));
-                base_extra = base_extra * 131 + static_cast<uint64_t>(ggml_openvino_getenv_int("GGML_OPENVINO_TOKEN_EMBD_I4"));
+                base_extra = ggml_openvino_model_cache_mix_string(
+                    base_extra, ggml_openvino_getenv_str("GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT"));
                 base_extra = base_extra * 131 + static_cast<uint64_t>(ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KEEP_Q4_0"));
                 base_extra = base_extra * 131 + (ggml_openvino_static_kv_slice_enabled() ? 1u : 0u);
                 base_extra = ggml_openvino_model_cache_mix_string(

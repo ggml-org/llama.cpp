@@ -173,7 +173,6 @@ bool ggml_openvino_model_cache_only() {
 static const char * cache_settings[] = {
     "GGML_OPENVINO_REQUANT_KQUANT",
     "GGML_OPENVINO_NATIVE_SOFTPLUS",
-    "GGML_OPENVINO_GATHER_BEFORE_DEQUANT",
     "GGML_OPENVINO_DISABLE_KV_SLICE",
     "GGML_OPENVINO_KV_SLICE",
     "GGML_OPENVINO_MANUAL_GQA_ATTN",
