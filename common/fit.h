@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "llama.h"
 
+#include <string>
 #include <vector>
 
 enum common_params_fit_status {

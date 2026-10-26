@@ -377,7 +377,7 @@ def test_router_memory_margin_evicts_lru():
     _load_model_and_wait(MODEL_B, timeout=120)
     eff = _get_model_memory(MODEL_B)["effective"]
     if not any(d["kind"] == "device" for d in eff["devices"]):
-        pytest.skip("no GPU device, the memory limit does not apply")
+        pytest.skip("no GPU device, the memory limit does not apply")  # ty: ignore[too-many-positional-arguments]
 
     _load_model_and_wait(MODEL_C, timeout=120)
     assert _get_model_status(MODEL_C) == "loaded"
