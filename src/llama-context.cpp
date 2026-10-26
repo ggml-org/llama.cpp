@@ -786,12 +786,28 @@ void llama_context::sched_new(const sched_params & params) {
     sched_params_cur = params;
 }
 
+// the names of the samplers in a backend sampler chain
+// parameters such as the top-k value are not part of it: if a later chain needs larger buffers, the scheduler grows them
+static std::string llama_sampler_chain_shape(llama_sampler * smpl) {
+    std::string shape = llama_sampler_name(smpl);
+    for (int32_t i = 0; i < llama_sampler_chain_n(smpl); ++i) {
+        shape += '|';
+        shape += llama_sampler_name(llama_sampler_chain_get(smpl, i));
+    }
+    return shape;
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
     }
 
     sched_need_reserve = false;
+
+    sampling.samplers_reserved.clear();
+    for (const auto & [seq_id, smpl] : sampling.samplers) {
+        sampling.samplers_reserved[seq_id] = llama_sampler_chain_shape(smpl);
+    }
 
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
@@ -1763,7 +1779,14 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
         sampling.samplers[seq_id] = sampler;
 
-        sched_need_reserve = true;
+        // a server sets the sampler again for every request, so reserve only for a chain shape the last reserve did not include
+        const auto it = sampling.samplers_reserved.find(seq_id);
+        if (it == sampling.samplers_reserved.end() || it->second != llama_sampler_chain_shape(sampler)) {
+            sched_need_reserve = true;
+        }
+
+        // do not reuse a graph built for the previous sampler, even if the new sampler has the same address
+        gf_res_prev_active = nullptr;
 
         return true;
     }
@@ -1780,9 +1803,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
         return false;
     }
 
+    // removing a sampler only removes nodes from the graph, so the reserved buffers are still large enough
     sampling.samplers.erase(seq_id);
-
-    sched_need_reserve = true;
 
     return true;
 }
