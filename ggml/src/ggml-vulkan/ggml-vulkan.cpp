@@ -819,6 +819,11 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
                 VK_LOG_DEBUG(pipeline->name << " " << s.name << ": " << s.value.u64 << " registers");
                 pipeline->register_count = (uint32_t)s.value.u64;
             }
+            // "LDS size" is reported by RADV, "ldsUsageSizeInBytes" by AMDVLK, "Shared Memory Size" by NVIDIA.
+            if (strcmp(s.name, "LDS size") == 0 || strcmp(s.name, "ldsUsageSizeInBytes") == 0 ||
+                strcmp(s.name, "Shared Memory Size") == 0) {
+                pipeline->shmem_size = (uint32_t)s.value.u64;
+            }
         }
     }
 
@@ -5900,8 +5905,51 @@ void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<vk_stagi
     }
 }
 
-static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m, uint32_t n, uint32_t k, bool disable_split_k, const vk_pipeline& pipeline) {
-    VK_LOG_DEBUG("ggml_vk_guess_split_k(" << m << ", " << n << ", " << k << ", " << disable_split_k << ")");
+// RDNA3/RDNA4 with 128x128 tiles: the generic rule leaves CU*2/3 < workgroups <= CU*2 unsplit,
+// so the last wave runs partly empty. Split K by 2 or 3 when that needs fewer K steps.
+static uint32_t ggml_vk_guess_split_k_large_tile(const vk_device& device, uint64_t workgroups, uint32_t k, const vk_pipeline& pipeline) {
+    const uint64_t cores = device->shader_core_count;
+    if (workgroups > cores * 2) {
+        return 1;
+    }
+
+    // One partial wave and a long K. Splitting does not reduce the work of any busy CU here, it only
+    // pays off if a second workgroup fits in the LDS of a CU and hides latency.
+    const uint32_t lds_limit = device->properties.limits.maxComputeSharedMemorySize;
+    const bool two_per_cu = pipeline->shmem_size != 0 && 2 * pipeline->shmem_size <= lds_limit;
+    if (k >= 8192 && workgroups * 6 <= cores * 5 && two_per_cu) {
+        return 3;
+    }
+
+    // Pick the split with the fewest K elements on the busiest CU, assuming one workgroup per CU at a time:
+    // waves * k_chunk, plus split_k_reduce_cost per wave for each extra split.
+    constexpr uint64_t split_k_reduce_cost = 64;
+    const uint64_t base_waves = CEIL_DIV(workgroups, cores);
+    uint64_t best_cost = base_waves * k;
+    uint64_t best_compute = best_cost;
+    uint32_t split_k = 1;
+    for (uint32_t candidate = 2; candidate <= 3; ++candidate) {
+        const uint32_t k_chunk = ROUNDUP_POW2(CEIL_DIV(k, candidate), 256);
+        if (k_chunk * (candidate - 1) >= k) {
+            continue;
+        }
+        const uint64_t compute = CEIL_DIV(workgroups * candidate, cores) * k_chunk;
+        const uint64_t cost = compute + base_waves * (candidate - 1) * split_k_reduce_cost;
+        // on equal compute, take the split that fills every wave
+        const bool fills_waves = workgroups * split_k % cores != 0 && workgroups * candidate % cores == 0;
+        if (cost < best_cost) {
+            split_k = candidate;
+            best_cost = cost;
+            best_compute = compute;
+        } else if (compute == best_compute && fills_waves) {
+            split_k = candidate;
+        }
+    }
+    return split_k;
+}
+
+static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m, uint32_t n, uint32_t k, uint32_t batch, bool disable_split_k, const vk_pipeline& pipeline) {
+    VK_LOG_DEBUG("ggml_vk_guess_split_k(" << m << ", " << n << ", " << k << ", " << batch << ", " << disable_split_k << ")");
 
     if (disable_split_k) {
         return 1;
@@ -5921,6 +5969,11 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m,
             }
             // Cap the split at 8x. Unless k is huge this is a lot of overhead.
             split_k = std::min(split_k, 8u);
+
+            const bool rdna3_or_4 = ctx->device->architecture == AMD_RDNA3 || ctx->device->architecture == AMD_RDNA4;
+            if (split_k == 1 && rdna3_or_4 && n >= 512 && pipeline->wg_denoms[0] * pipeline->wg_denoms[1] >= 128 * 128) {
+                split_k = ggml_vk_guess_split_k_large_tile(ctx->device, (uint64_t)m_tiles * n_tiles * batch, k, pipeline);
+            }
 
             // ggml_vk_matmul will align the splits to be a multiple of 256.
             // If this rounded up size would cause the last split to be empty,
@@ -6450,6 +6503,11 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         pipeline = ggml_vk_get_64b_indexing_pipeline(ctx, pipeline);
     }
 
+    // the split_k heuristic reads properties of the compiled pipeline
+    if (!pipeline->compiled) {
+        ggml_vk_load_shaders(ctx->device, pipeline);
+    }
+
     // Reserve extra storage in the N dimension for the Y matrix, so we can avoid bounds-checking
     uint32_t padded_n = qy_needs_dequant ? ROUNDUP_POW2(ne11, pipeline->wg_denoms[1]) : ne11;
     const uint64_t x_ne = ggml_nelements(src0);
@@ -6457,7 +6515,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     const uint64_t y_ne = padded_n * ne10 * ne12 * ne13;
     const uint64_t d_ne = ggml_nelements(dst);
 
-    const uint32_t split_k = ggml_vk_guess_split_k(ctx, ne01, ne11, ne10, disable_split_k, pipeline);
+    const uint32_t split_k = ggml_vk_guess_split_k(ctx, ne01, ne11, ne10, ne12 * ne13, disable_split_k, pipeline);
 
     const uint64_t qx_sz = ggml_type_size(src0->type) * x_ne / ggml_blck_size(src0->type);
     const uint64_t qy_sz = ggml_type_size(src1->type) * y_ne / ggml_blck_size(src1->type);
