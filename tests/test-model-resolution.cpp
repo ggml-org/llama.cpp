@@ -51,10 +51,43 @@ static std::map<std::string, std::vector<std::string>> g_repos;
 
 static const char * COMMIT = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+static const struct {
+    const char * repo;
+    std::string token;
+    bool valid_header;
+} token_cases[] = {
+    {"test/token-pat",    "hf_" + std::string(34, 'a'),       true},
+    {"test/token-oauth",  "hf_oauth_" + std::string(34, 'b'), true},
+    {"test/token-short",  "opaque-token",                   true},
+    {"test/token-long",   "hf_" + std::string(300, 'c'),      true},
+    {"test/token-empty",  "",                               true},
+    {"test/token-crlf",   "token\r\nX-Injected: yes",        false},
+    {"test/token-null",   std::string("token\0suffix", 12),  false},
+};
+
+static bool check_token_header(const httplib::Request & req, httplib::Response & res) {
+    for (const auto & c : token_cases) {
+        if (req.matches[1].str() != c.repo) {
+            continue;
+        }
+        REQUIRE(c.valid_header);
+        const std::string expected = c.token.empty() ? "" : "Bearer " + c.token;
+        if (req.get_header_value_count("Authorization") != (c.token.empty() ? 0u : 1u) ||
+            req.get_header_value("Authorization") != expected) {
+            res.status = 401;
+            return false;
+        }
+    }
+    return true;
+}
+
 // the server lives in main, so its destructor runs before the static teardown
 // tears down the winsock state httplib brings in
 static void serve_repos(httplib::Server & server) {
     server.Get(R"(/api/models/(.+)/refs)", [](const httplib::Request & req, httplib::Response & res) {
+        if (!check_token_header(req, res)) {
+            return;
+        }
         if (g_repos.count(req.matches[1])) {
             res.set_content(common_json{{"branches", common_json::array({ common_json{{"name", "main"}, {"targetCommit", COMMIT}} })}}.dump(),
                             "application/json");
@@ -63,6 +96,9 @@ static void serve_repos(httplib::Server & server) {
         }
     });
     server.Get(R"(/api/models/(.+)/tree/.+)", [](const httplib::Request & req, httplib::Response & res) {
+        if (!check_token_header(req, res)) {
+            return;
+        }
         if (!g_repos.count(req.matches[1])) {
             res.status = 404;
             return;
@@ -83,6 +119,25 @@ static common_params_model model_ref(const std::string & hf_repo, const std::str
     m.hf_repo = hf_repo;
     m.hf_file = hf_file;
     return m;
+}
+
+static void test_token_forwarding() {
+    printf("test-model-resolution: token forwarding\n");
+
+    for (const auto & c : token_cases) {
+        g_context = c.repo;
+        common_download_opts opts;
+        opts.bearer_token = c.token;
+        const auto plan = common_download_get_hf_plan(model_ref(c.repo), opts);
+        if (c.valid_header) {
+            REQUIRE_EQ(plan.primary.path, "model-Q4_0.gguf");
+            REQUIRE(plan.model_files.size() == 1);
+        } else {
+            REQUIRE(plan.primary.path.empty());
+            REQUIRE(plan.model_files.empty());
+        }
+    }
+    g_repos.clear();
 }
 
 // the model cache is isolated under a temporary directory named after the
@@ -614,6 +669,9 @@ int main(void) {
     // https on the builds without TLS support
     httplib::Server server;
     serve_repos(server);
+    for (const auto & c : token_cases) {
+        g_repos[c.repo] = { "model-Q4_0.gguf" };
+    }
     int port = server.bind_to_any_port("127.0.0.1");
 
     // isolate the cache, its location is read once so it is set
@@ -627,6 +685,7 @@ int main(void) {
     server.wait_until_ready();
     common_set_env("MODEL_ENDPOINT", "http://127.0.0.1:" + std::to_string(port) + "/");
 
+    test_token_forwarding();
     test_plan_resolution();
     test_plan_partials();
     test_sidecar_removal();
