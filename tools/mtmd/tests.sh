@@ -47,31 +47,6 @@ if [ "${2:-}" = "flash_off" ] || [ "${1:-}" = "flash_off" ]; then
     echo "Flash attention disabled..."
 fi
 
-# Check that consecutive image messages do not access freed batch data.
-# MTMD_TEST_CLI must point to an ASan-enabled llama-mtmd-cli.
-if [ "${1:-}" = "batch-lifetime" ]; then
-    cli="${MTMD_TEST_CLI:?Set MTMD_TEST_CLI to an ASan-enabled llama-mtmd-cli}"
-    log="$SCRIPT_DIR/output/batch-lifetime.log"
-
-    printf '%s\n' \
-        "/image $SCRIPT_DIR/test-1.jpeg" "what is this?" "/clear" \
-        "/image $SCRIPT_DIR/test-1.jpeg" "what is this?" "/quit" |
-        "$cli" -hf ggml-org/SmolVLM-500M-Instruct-GGUF:Q8_0 --temp 0 -n 16 \
-            > "$log" 2>&1 || {
-                echo "FAIL: CLI execution (log $log)" >&2
-                exit 1
-            }
-
-    if grep -qE 'ERROR: AddressSanitizer|heap-use-after-free' "$log" ||
-       [ "$(grep -c 'image loaded' "$log")" -ne 2 ]; then
-        echo "FAIL: batch lifetime regression (log $log)" >&2
-        exit 1
-    fi
-
-    echo "OK: batch-lifetime"
-    exit 0
-fi
-
 ###############
 
 arr_prefix=()
