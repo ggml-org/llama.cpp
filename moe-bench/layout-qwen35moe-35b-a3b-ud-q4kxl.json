@@ -1,0 +1,88 @@
+{
+ "n_layer": 40,
+ "n_expert": 256,
+ "groups": [
+  {
+   "layers": [
+    0,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    35,
+    36,
+    37
+   ],
+   "per_tensor_bytes": [
+    589824,
+    589824,
+    720896
+   ],
+   "tensors": [
+    "ffn_gate_exps",
+    "ffn_up_exps",
+    "ffn_down_exps"
+   ]
+  },
+  {
+   "layers": [
+    1
+   ],
+   "per_tensor_bytes": [
+    720896,
+    720896,
+    860160
+   ],
+   "tensors": [
+    "ffn_gate_exps",
+    "ffn_up_exps",
+    "ffn_down_exps"
+   ]
+  },
+  {
+   "layers": [
+    34,
+    38,
+    39
+   ],
+   "per_tensor_bytes": [
+    589824,
+    589824,
+    860160
+   ],
+   "tensors": [
+    "ffn_gate_exps",
+    "ffn_up_exps",
+    "ffn_down_exps"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,1 @@
+Translate the following into French, then into German, then explain the grammatical differences: "The cache keeps the most frequently used experts in video memory, so the processor does not have to read them over the bus again."

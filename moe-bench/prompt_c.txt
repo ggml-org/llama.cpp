@@ -1,0 +1,1 @@
+Summarize the history of computer memory hierarchies, from magnetic core memory through DRAM, SRAM caches, NAND flash and modern HBM. Discuss why each level exists and how the latency and bandwidth gaps shaped software design.

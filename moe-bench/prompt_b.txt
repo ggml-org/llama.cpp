@@ -1,0 +1,1 @@
+Write a C++ class that implements a thread-safe LRU cache with a fixed capacity. Include the header, the implementation, and a short unit test using assert. Explain the locking strategy in comments.

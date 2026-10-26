@@ -1,0 +1,1 @@
+Write a detailed technical explanation of how PCI Express bandwidth, DMA transfers and pinned host memory interact when a GPU reads model weights that are stored in system RAM. Cover the role of the page cache, staging buffers, and asynchronous copies.
