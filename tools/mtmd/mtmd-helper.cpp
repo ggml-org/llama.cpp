@@ -1026,7 +1026,8 @@ int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
 
 mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mtmd_context * mctx) {
     mtmd_helper_cap cap = {};
-    cap.chat = true;
+    cap.chat     = true;
+    cap.text_gen = true;
     if (!mctx) {
         return cap;
     }
@@ -1037,7 +1038,10 @@ mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mt
 #ifdef MTMD_VIDEO
     cap.video  = cap.vision;
 #endif
-    cap.audio_gen = mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE;
+    const auto gen_audio_type = mtmd_gen_audio_get_info(mctx).type;
+    cap.audio_gen = gen_audio_type != MTMD_GEN_AUDIO_TYPE_NONE;
+    cap.audio_gen_spk_ref = gen_audio_type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS
+                         || gen_audio_type == MTMD_GEN_AUDIO_TYPE_POCKETTTS;
 
     // tts-only model cannot be used for chat (no chat template)
     cap.chat = !cap.audio_gen || llama_model_chat_template(model, nullptr) != nullptr;

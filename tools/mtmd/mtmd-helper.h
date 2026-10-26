@@ -195,7 +195,9 @@ struct mtmd_helper_cap {
     bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
 
     // output capabilities
+    bool text_gen; // always true for now
     bool audio_gen;
+    bool audio_gen_spk_ref; // accepts a speaker reference audio for voice cloning
 };
 typedef struct mtmd_helper_cap mtmd_helper_cap;
 
