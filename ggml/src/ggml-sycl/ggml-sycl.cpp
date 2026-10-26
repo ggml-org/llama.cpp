@@ -842,6 +842,19 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// allocates the pinned upload staging on first use; returns false if staging is disabled or the allocation failed
+static bool ggml_sycl_buffer_init_staging(ggml_backend_sycl_buffer_context * ctx) {
+    const int n_slots = g_ggml_sycl_upload_staging_slots;
+    if (n_slots > 0 && ctx->staging.data == nullptr) {
+        ctx->staging.data = sycl::malloc_host(n_slots * ctx->staging_slot_size, *ctx->stream);
+        if (ctx->staging.data != nullptr) {
+            ctx->staging.events.resize(n_slots);
+            ctx->staging.submitted.assign(n_slots, false);
+        }
+    }
+    return ctx->staging.data != nullptr;
+}
+
 static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                 ggml_tensor *tensor,
                                                 const void *data, size_t offset,
@@ -854,15 +867,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     // copy through pinned memory so the device never reads mmap()ed pages directly
     // chunks pipeline on the in-order compute queue, so no drain per tensor is needed
-    const int n_slots = g_ggml_sycl_upload_staging_slots;
-    if (n_slots > 0 && ctx->staging.data == nullptr) {
-        ctx->staging.data = sycl::malloc_host(n_slots * ctx->staging_slot_size, *ctx->stream);
-        if (ctx->staging.data != nullptr) {
-            ctx->staging.events.resize(n_slots);
-            ctx->staging.submitted.assign(n_slots, false);
-        }
-    }
-    if (ctx->staging.data != nullptr) {
+    if (ggml_sycl_buffer_init_staging(ctx)) {
         queue_ptr    stream    = ctx->stream;
         char *       dst       = (char *) tensor->data + offset;
         const char * src       = (const char *) data;
@@ -897,6 +902,49 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 #else
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
 #endif
+}
+catch (sycl::exception const &exc) {
+  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
+            << ", line:" << __LINE__ << std::endl;
+  std::exit(1);
+}
+
+// Copy n_copies rows in one call. -sm tensor uploads split weights this way; the generic fallback does one set_tensor per row.
+static void ggml_backend_sycl_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_tensor * tensor,
+                                                   const void * data, size_t offset, size_t size,
+                                                   size_t n_copies, size_t stride_tensor,
+                                                   size_t stride_data) try {
+    ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+    const char * src = (const char *) data;
+    ggml_sycl_set_device(ctx->device);
+
+    if (stride_tensor != size || size > ctx->staging_slot_size || !ggml_sycl_buffer_init_staging(ctx)) {
+        // dst rows not contiguous, row larger than a staging slot, or no staging: same as the generic fallback
+        for (size_t i = 0; i < n_copies; ++i) {
+            ggml_backend_sycl_buffer_set_tensor(buffer, tensor, src + i * stride_data, offset + i * stride_tensor, size);
+        }
+        return;
+    }
+
+    // dst rows are contiguous: pack as many rows as fit into a staging slot and copy each slot with one memcpy
+    // a slot is only waited on when it is reused, so packing the next slot overlaps with the previous copies
+    queue_ptr    stream        = ctx->stream;
+    char *       dst           = (char *) tensor->data + offset;
+    const size_t rows_per_slot = ctx->staging_slot_size / size;
+    for (size_t i0 = 0; i0 < n_copies; i0 += rows_per_slot) {
+        const size_t n    = std::min(rows_per_slot, n_copies - i0);
+        const int    slot = ctx->staging.next;
+        ctx->staging.next = (ctx->staging.next + 1) % (int) ctx->staging.submitted.size();
+        if (ctx->staging.submitted[slot]) {
+            ctx->staging.events[slot].wait_and_throw();
+        }
+        char * stage = (char *) ctx->staging.data + slot * ctx->staging_slot_size;
+        for (size_t i = 0; i < n; ++i) {
+            memcpy(stage + i * size, src + (i0 + i) * stride_data, size);
+        }
+        ctx->staging.events[slot]    = stream->memcpy(dst + i0 * size, stage, n * size);
+        ctx->staging.submitted[slot] = true;
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -1122,7 +1170,7 @@ static const ggml_backend_buffer_i ggml_backend_sycl_buffer_interface = {
     /* .memset_tensor   = */ ggml_backend_sycl_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_sycl_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_sycl_buffer_get_tensor,
-    /* .set_tensor_2d   = */ NULL,
+    /* .set_tensor_2d   = */ ggml_backend_sycl_buffer_set_tensor_2d,
     /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ ggml_backend_sycl_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_sycl_buffer_clear,
