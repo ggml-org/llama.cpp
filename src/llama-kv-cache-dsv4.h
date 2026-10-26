@@ -170,7 +170,7 @@ private:
     std::vector<uint32_t> rs_idx;
 
     // [n_layer] storage layer -> layer whose rows it holds (itself, or the source of a mirror)
-    std::vector<int32_t> comp_kv_src;
+    std::vector<int32_t> comp_il_src;
 
     // [n_layer] layer -> layer whose compressed-KV storage it reads (itself, its V4.1 kv source or a mirror), -1 = none
     std::vector<int32_t> comp_read;

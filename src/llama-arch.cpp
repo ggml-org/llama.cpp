@@ -1,5 +1,6 @@
 #include "llama-arch.h"
 
+#include "llama-ext.h"
 #include "llama-impl.h"
 
 #include <map>
@@ -1357,4 +1358,44 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         default:
             return true;
     }
+}
+
+bool llama_arch_supports_save(llm_arch arch) {
+    switch (arch) {
+        case LLM_ARCH_SENSENOVA_U1:
+        case LLM_ARCH_GEMMA3N:
+        case LLM_ARCH_BITNET:
+        case LLM_ARCH_T5:
+        case LLM_ARCH_APERTUS:
+        case LLM_ARCH_STEP35:
+        case LLM_ARCH_CLEF: // the head tensors are not saved
+        case LLM_ARCH_VLLM_DECISION2:
+            return false;
+        default:
+            return true;
+    }
+}
+
+std::vector<llm_arch> llama_arch_all() {
+    return llm_arch_all();
+}
+
+const char * llama_arch_name(llm_arch arch) {
+    return llm_arch_name(arch);
+}
+
+llm_arch llama_arch_from_string(const std::string & name) {
+    return llm_arch_from_string(name);
+}
+
+std::string llama_arch_kv_name(llm_arch arch, llm_kv key) {
+    return LLM_KV(arch)(key);
+}
+
+bool llama_arch_supports_sm_tensor(llm_arch arch) {
+    return llm_arch_supports_sm_tensor(arch);
+}
+
+bool llama_arch_supports_mixed_batch(llm_arch arch) {
+    return llm_arch_supports_mixed_batch(arch);
 }
