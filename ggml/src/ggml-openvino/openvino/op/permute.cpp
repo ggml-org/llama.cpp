@@ -154,7 +154,9 @@ OutputVector translate_permute(const NodeContext & context) {
 
         Output<Node> attention_size;
         if (!context.has_input("attention_size")) {
-            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[2]});
+            // the attended tokens are the last axis of the transposed V cache (`-fa off`)
+            const size_t tokens_axis = (op_case == 5 || op_case == 6) ? 3 : 2;
+            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[tokens_axis]});
         } else if (op_case == 3 || op_case == 5) {
             attention_size = context.get_input("attention_size");
         } else {

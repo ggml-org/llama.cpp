@@ -1654,8 +1654,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (max_bias > 0) {
             return {false, "FLASH_ATTN_EXT with max_bias > 0 (max_bias=" + std::to_string(max_bias) + ") is not supported"};
         }
-        if (logit_softcap != 0) {
-            return {false, "FLASH_ATTN_EXT with logit_softcap != 0 (logit_softcap=" + std::to_string(logit_softcap) + ") is not supported"};
+        // soft-capping (gemma-2) is applied on the manual attention path of translate_flash_attn_ext, which needs one
+        // head size for Q, K and V
+        if (logit_softcap != 0 && (op->src[1]->ne[0] != op->src[0]->ne[0] || op->src[2]->ne[0] != op->src[0]->ne[0])) {
+            return {false, "FLASH_ATTN_EXT with logit_softcap != 0 needs one head size for Q, K and V"};
         }
         break;
     }
