@@ -65,9 +65,12 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
 
     llama_context * ctx = llama_init_from_model(model, *cparams);
     if (ctx == nullptr) {
+        // the reason is logged below the fitting log level, name the common one here
+        const bool no_mtp = cparams->ctx_type == LLAMA_CONTEXT_TYPE_MTP && llama_model_n_layer_nextn(model) == 0;
         llama_model_free(model);
         llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
-        throw std::runtime_error("failed to create llama_context from model");
+        throw std::runtime_error(no_mtp ? "the model has no MTP layers (needed by --spec-type draft-mtp)"
+                                        : "failed to create llama_context from model");
     }
 
     const size_t nd = llama_model_n_devices(model);
@@ -1088,7 +1091,8 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
 void common_fit_print(
         const char * path_model,
         llama_model_params * mparams,
-        llama_context_params * cparams) {
+        llama_context_params * cparams,
+        const common_fit_extra_model * extra) {
     std::vector<ggml_backend_dev_t> devs;
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
     uint32_t hp_nct = 0; // hparams.n_ctx_train
@@ -1096,6 +1100,41 @@ void common_fit_print(
 
     auto dmd = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
     GGML_ASSERT(dmd.size() == devs.size() + 1);
+
+    // the extra model uses memory on the same devices as the main model
+    if (extra != nullptr) {
+        extra->cparams->n_ctx = cparams->n_ctx;
+
+        std::vector<ggml_backend_dev_t> devs_extra;
+        uint32_t ngl_extra = 0;
+        uint32_t nct_extra = 0;
+        uint32_t nex_extra = 0;
+        try {
+            const auto measured = common_get_device_memory_data_impl(
+                extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, GGML_LOG_LEVEL_ERROR);
+
+            auto add = [&](llama_device_memory_data & dst, const llama_device_memory_data & src) {
+                if (!extra->shares_model) {
+                    dst.mb.model += src.mb.model;
+                }
+                dst.mb.context += src.mb.context;
+                dst.mb.compute += src.mb.compute;
+            };
+            for (size_t je = 0; je < devs_extra.size(); je++) {
+                for (size_t id = 0; id < devs.size(); id++) {
+                    if (devs_extra[je] == devs[id]) {
+                        add(dmd[id], measured[je]);
+                        break;
+                    }
+                }
+            }
+            add(dmd.back(), measured.back());
+        } catch (const std::runtime_error & e) {
+            LOG_WRN("%s: failed to measure the memory of the extra model, printing the main model alone: %s\n", __func__, e.what());
+        }
+        // logs go to stderr asynchronously, the table below to stdout: don't let them interleave
+        common_log_flush(common_log_main());
+    }
 
     for (size_t id = 0; id < devs.size(); id++) {
         printf("%s ",  ggml_backend_dev_name(devs[id]));

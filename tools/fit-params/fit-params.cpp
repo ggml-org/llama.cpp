@@ -5,6 +5,7 @@
 #include "common.h"
 #include "fit.h"
 #include "log.h"
+#include "speculative.h"
 
 #include <cinttypes>
 
@@ -30,10 +31,13 @@ int llama_fit_params(int argc, char ** argv) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
+    // count the draft model or MTP context, as llama-server does
+    common_speculative_fit_extra spec_fit(params);
+
     if (!params.fit_params_print) {
         const common_params_fit_status status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
                 params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
-                nullptr,
+                spec_fit.get(),
                 params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
         if (status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
             LOG_ERR("%s: failed to fit CLI arguments to free memory, exiting...\n", __func__);
@@ -71,7 +75,7 @@ int llama_fit_params(int argc, char ** argv) {
         LOG_INF("%s: printing estimated memory in MiB to stdout (device, model, context, compute) ...\n", __func__);
         common_log_flush(common_log_main());
 
-        common_fit_print(params.model.path.c_str(), &mparams, &cparams);
+        common_fit_print(params.model.path.c_str(), &mparams, &cparams, spec_fit.get());
     }
 
     return 0;

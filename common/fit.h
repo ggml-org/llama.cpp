@@ -37,11 +37,12 @@ common_params_fit_status common_fit_params(
       const common_fit_extra_model * extra,                  // model to fit alongside the main one, nullptr if there is none
                      ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
 
-// print estimated memory to stdout
+// print estimated memory to stdout, including an extra model (e.g. a draft or MTP context) when given
 void common_fit_print(
                          const char * path_model,
                  llama_model_params * mparams,
-               llama_context_params * cparams);
+               llama_context_params * cparams,
+      const common_fit_extra_model * extra = nullptr);
 
 void common_memory_breakdown_print(const llama_context * ctx);
 

@@ -2692,6 +2692,28 @@ common_params common_base_params_to_speculative(const common_params & params) {
     return result;
 }
 
+common_speculative_fit_extra::common_speculative_fit_extra(const common_params & params_base) :
+        params(common_base_params_to_speculative(params_base)) {
+    const bool has_draft = params_base.speculative.has_dft();
+    const bool spec_mtp  = std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+
+    mparams = common_model_params_to_llama(params);
+    cparams = common_context_params_to_llama(params);
+    if (spec_mtp) {
+        cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    }
+    cparams.n_rs_seq = 0;
+
+    extra = {
+        /*.path_model   =*/ params.model.path.c_str(),
+        /*.mparams      =*/ &mparams,
+        /*.cparams      =*/ &cparams,
+        /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
+    };
+    enabled = has_draft || spec_mtp;
+}
+
 struct common_speculative_init_result::impl {
     impl() = default;
     ~impl() = default;

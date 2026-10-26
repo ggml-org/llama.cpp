@@ -284,6 +284,50 @@ static void test(void) {
         assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
     }
 
+    // llama-fit-params accepts the speculative decoding args and fits the draft context with the main model
+    {
+        common_params fit_params;
+        argv = {"binary_name", "-m", "main.gguf", "--spec-type", "draft-mtp"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), fit_params, LLAMA_EXAMPLE_FIT_PARAMS));
+
+        // an MTP context runs on the weights of the main model
+        common_speculative_fit_extra spec_fit(fit_params);
+        assert(spec_fit.get() != nullptr);
+        assert(spec_fit.get()->shares_model);
+        assert(spec_fit.get()->cparams->ctx_type == LLAMA_CONTEXT_TYPE_MTP);
+        assert(std::string(spec_fit.get()->path_model) == "main.gguf");
+    }
+
+    {
+        common_params fit_params;
+        argv = {"binary_name", "-m", "main.gguf", "-md", "draft.gguf", "-ngld", "99"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), fit_params, LLAMA_EXAMPLE_FIT_PARAMS));
+        assert(fit_params.speculative.draft.n_gpu_layers == 99);
+
+        // a separate draft model brings its own weights
+        common_speculative_fit_extra spec_fit(fit_params);
+        assert(spec_fit.get() != nullptr);
+        assert(!spec_fit.get()->shares_model);
+        assert(std::string(spec_fit.get()->path_model) == "draft.gguf");
+    }
+
+    {
+        // without speculative decoding there is nothing to fit besides the main model
+        common_params fit_params;
+        argv = {"binary_name", "-m", "main.gguf"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), fit_params, LLAMA_EXAMPLE_FIT_PARAMS));
+
+        common_speculative_fit_extra spec_fit(fit_params);
+        assert(spec_fit.get() == nullptr);
+    }
+
+    {
+        // tools without speculative decoding still reject the args
+        common_params emb_params;
+        argv = {"binary_name", "--spec-type", "draft-mtp"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), emb_params, LLAMA_EXAMPLE_EMBEDDING));
+    }
+
     argv = {"binary_name", "-lm", "none"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_NONE);
