@@ -4,6 +4,7 @@
 #include "gguf.h"
 
 #include "llama-arch.h"
+#include "llama-ext.h"
 #include "llama.h"
 #include "llama-hparams.h"
 #include "llama-model.h"
@@ -13,34 +14,13 @@
 #include <string>
 #include <unordered_set>
 
-bool llama_model_saver_supports_arch(llm_arch arch) {
-    switch (arch) {
-        case LLM_ARCH_SENSENOVA_U1:
-        case LLM_ARCH_GEMMA3N:
-        case LLM_ARCH_BITNET:
-        case LLM_ARCH_T5:
-        case LLM_ARCH_APERTUS:
-        case LLM_ARCH_STEP35:
-        case LLM_ARCH_CLEF: // the head tensors are not saved
-        case LLM_ARCH_VLLM_DECISION2:
-            return false;
-        default:
-            return true;
-    }
-}
-
 llama_model_saver::llama_model_saver(const struct llama_model * model) :
-        gguf_ctx(gguf_init_empty()), gguf_ctx_owned(true), model(model), llm_kv(model->arch) {
-    GGML_ASSERT(llama_model_saver_supports_arch(model->arch));
+        gguf_ctx(gguf_init_empty()), model(model), llm_kv(model->arch) {
+    GGML_ASSERT(llama_arch_supports_save(model->arch));
 }
-
-llama_model_saver::llama_model_saver(enum llm_arch arch, struct gguf_context * gguf_ctx) :
-        gguf_ctx(gguf_ctx == nullptr ? gguf_init_empty() : gguf_ctx), gguf_ctx_owned(gguf_ctx == nullptr), model(nullptr), llm_kv(arch) {}
 
 llama_model_saver::~llama_model_saver() {
-    if (gguf_ctx_owned) {
-        gguf_free(gguf_ctx);
-    }
+    gguf_free(gguf_ctx);
 }
 
 void llama_model_saver::add_kv(const enum llm_kv key, const uint32_t value) {
@@ -118,11 +98,6 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
         GGML_ABORT("fatal error");
     }
 }
-// instantiate for external usage:
-template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
-template void llama_model_saver::add_kv<std::vector<float>>(const enum llm_kv, const std::vector<float> &, const bool);
-template void llama_model_saver::add_kv<std::vector<uint64_t>>(const enum llm_kv, const std::vector<uint64_t> &, const bool);
-template void llama_model_saver::add_kv<std::vector<int32_t>>(const enum llm_kv, const std::vector<int32_t> &, const bool);
 
 void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
@@ -547,8 +522,4 @@ void llama_model_saver::add_tensors_from_model() {
 
 void llama_model_saver::save(const std::string & path_model) {
     gguf_write_to_file(gguf_ctx, path_model.c_str(), false);
-}
-
-void llama_model_saver::save(FILE * file) {
-    gguf_write_to_file_ptr(gguf_ctx, file, false);
 }
