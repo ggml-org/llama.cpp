@@ -203,6 +203,24 @@ class LFM3VLVisionMixin(MmprojModel):
         if resize_algo is None:
             raise ValueError(f"unsupported resample: {resample}")
         self.gguf_writer.add_vision_image_resize_algo(resize_algo)
+        self._check_video_config()
+
+    # mtmd_get_video_ts_style and the lfm3vl video frame sizing hardcode these, conversion fails on a mismatch
+    _video = {"fps": 2.0, "min_frames": 4, "temporal_patch_size": 2, "size": {"shortest_edge": 4096, "longest_edge": 25165824}}
+    _video_max_frames = 768
+
+    def _check_video_config(self):
+        import json
+        video = self.preprocessor_config.get("video_processor")
+        path = self.dir_model / "video_preprocessor_config.json"
+        if video is None and path.is_file():
+            with open(path, encoding="utf-8") as f:
+                video = json.load(f)
+        if video is None:
+            return
+        for k, v in {**self._video, "max_frames": self._video_max_frames}.items():
+            if video.get(k) != v:
+                raise ValueError(f"unsupported video {k}={video.get(k)!r}, expected {v!r}")
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if "patch_embd" in new_name:
@@ -562,6 +580,7 @@ class LFM3OmniMmprojModel(LFM3VLVisionMixin, LFM3AudioMmprojModel):
     has_audio_encoder = True
 
     _audio_sampling = {"audio_temperature": 0.4, "audio_repetition_penalty": 1.2, "audio_repetition_window": 64}
+    _video_max_frames = 384
 
     # the audio side is the LFM3-Audio model under the HF-native names
     _audio_renames = (
