@@ -864,6 +864,44 @@ const llama_model_loader::llama_tensor_weight & llama_model_loader::require_weig
     return *weight;
 }
 
+void llama_model_loader::add_ple_file(const std::string & fname) {
+    if (files.empty()) {
+        throw std::runtime_error("per-layer embeddings file needs a model loaded from a file");
+    }
+    if (files.size() >= UINT16_MAX) {
+        throw std::runtime_error("too many model files");
+    }
+
+    struct ggml_context * ctx = NULL;
+    struct gguf_init_params params = {
+        /*.no_alloc = */ true,
+        /*.ctx      = */ &ctx,
+    };
+    gguf_context_ptr ple_metadata(gguf_init_from_file(fname.c_str(), params));
+    ggml_context_ptr ctx_ptr(ctx);
+    if (!ple_metadata) {
+        throw std::runtime_error(format("%s: failed to load per-layer embeddings from %s", __func__, fname.c_str()));
+    }
+
+    const uint16_t idx = (uint16_t) files.size();
+    files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
+    contexts.emplace_back(std::move(ctx_ptr));
+
+    int n_added = 0;
+    for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
+        if (weights_map.find(cur->name) != weights_map.end()) {
+            throw std::runtime_error(format("tensor '%s' is both in the model and in %s", cur->name, fname.c_str()));
+        }
+        n_elements += ggml_nelements(cur);
+        n_bytes    += ggml_nbytes(cur);
+        weights_map.emplace(cur->name, llama_tensor_weight(files.back().get(), idx, ple_metadata.get(), cur));
+        n_added++;
+    }
+    n_tensors += n_added;
+
+    LLAMA_LOG_INFO("%s: added %d per-layer embedding tensors from %s\n", __func__, n_added, fname.c_str());
+}
+
 struct ggml_tensor * llama_model_loader::get_tensor_meta(const char * name) const {
     const auto * weight = get_weight(name);
     if (!weight) {

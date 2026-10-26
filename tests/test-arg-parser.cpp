@@ -245,6 +245,15 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.model.path == "model_file.gguf");
 
+    {
+        common_params ple_params;
+        assert(common_model_params_to_llama(ple_params).path_ple == nullptr);
+        argv = {"binary_name", "-m", "model_file.gguf", "--ple", "ple.gguf"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), ple_params, LLAMA_EXAMPLE_COMMON));
+        assert(ple_params.ple_path == "ple.gguf");
+        assert(std::string(common_model_params_to_llama(ple_params).path_ple) == "ple.gguf");
+    }
+
     argv = {"binary_name", "-t", "1234"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.cpuparams.n_threads == 1234);

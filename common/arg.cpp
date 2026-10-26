@@ -3063,6 +3063,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_DOWNLOAD, LLAMA_EXAMPLE_TOKENIZE}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
+        {"--ple"}, "FNAME",
+        "separate GGUF with the per-layer embeddings, loaded alongside the model",
+        [](common_params & params, const std::string & value) {
+            params.ple_path = value;
+        }
+    ).set_env("LLAMA_ARG_PLE"));
+    add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {

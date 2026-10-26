@@ -220,6 +220,8 @@ struct llama_model_loader {
 
     const llama_tensor_weight * get_weight(const char * name) const;
 
+    void add_ple_file(const std::string & fname);
+
     const llama_tensor_weight & require_weight(const char * name) const;
 
     struct ggml_tensor * get_tensor_meta(const char * name) const;
