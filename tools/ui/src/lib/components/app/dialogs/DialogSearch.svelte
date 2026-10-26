@@ -12,7 +12,7 @@
 	import { KeyboardKey, SidebarAction } from '$lib/enums';
 	import { RouterService } from '$lib/services/router.service';
 	import { conversationsStore } from '$lib/stores';
-	import { formatRelativeTime } from '$lib/utils';
+	import { formatRelativeTime, isIMEComposing } from '$lib/utils';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -108,6 +108,9 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
+		// while an IME is composing, Enter confirms a candidate and the arrows move through them
+		if (isIMEComposing(event)) return;
+
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			move(1);
