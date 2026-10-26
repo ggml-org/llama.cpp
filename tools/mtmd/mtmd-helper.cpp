@@ -1033,6 +1033,7 @@ mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mt
 
     cap.vision = mtmd_support_vision(mctx);
     cap.audio  = mtmd_support_audio(mctx);
+    cap.audio_stream = mtmd_support_audio_stream(mctx);
 #ifdef MTMD_VIDEO
     cap.video  = cap.vision;
 #endif

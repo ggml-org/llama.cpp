@@ -191,6 +191,9 @@ struct mtmd_helper_cap {
     bool audio;
     bool video; // also depending on MTMD_VIDEO build option
 
+    // realtime capabilities
+    bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
+
     // output capabilities
     bool audio_gen;
 };

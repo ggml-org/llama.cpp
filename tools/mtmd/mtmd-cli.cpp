@@ -567,7 +567,7 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
-    if (mtmd_support_audio_stream(ctx.ctx_vision.get())) {
+    if (ctx.mtmd_cap.audio_stream) {
         if (params.image.size() != 1) {
             LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
             return 1;
