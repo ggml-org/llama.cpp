@@ -1031,6 +1031,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_sensenova_u1>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_LFM3VL:
+            {
+                builder = std::make_unique<clip_graph_lfm3vl>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_LING3VL:
             {
                 builder = std::make_unique<clip_graph_ling3vl>(ctx, img);
@@ -1876,6 +1880,39 @@ struct clip_model_loader {
                         }
                         hparams.set_warmup_n_tokens(16*16);
                     } break;
+                case PROJECTOR_TYPE_LFM3VL:
+                    {
+                        std::string resize_algo;
+                        get_string(KEY_IMAGE_RESIZE_ALGO, resize_algo);
+                        // Lfm3VlImageProcessor resizes with torchvision
+                        if (resize_algo == "bilinear") {
+                            hparams.set_image_resize_algo(RESIZE_ALGO_BILINEAR, true);
+                        } else if (resize_algo == "bicubic") {
+                            hparams.set_image_resize_algo(RESIZE_ALGO_BICUBIC, true);
+                        } else {
+                            throw std::runtime_error(string_format("%s: unsupported image resize algo: %s\n", __func__, resize_algo.c_str()));
+                        }
+                        // smart_resize stretches to the aligned size, no letterbox
+                        hparams.image_resize_pad = PAD_NONE;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
+                        // token counts and the projector graph assume a 2x2 merge
+                        if (hparams.n_merge != 2) {
+                            throw std::runtime_error(string_format("%s: unsupported spatial_merge_size %d for lfm3vl, only 2 is supported\n", __func__, hparams.n_merge));
+                        }
+                        get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
+                        hparams.rope_theta = 1000000.0f; // vision_rope_theta
+                        // HF processor size; the max is also capped at 4096 tokens as an OOM guard
+                        int min_pixels = 0;
+                        int max_pixels = 0;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, max_pixels);
+                        if (min_pixels <= 0 || max_pixels < min_pixels) {
+                            throw std::runtime_error(string_format("%s: invalid image min/max pixels %d/%d\n", __func__, min_pixels, max_pixels));
+                        }
+                        const int patch_area = hparams.patch_size * hparams.patch_size * hparams.n_merge * hparams.n_merge;
+                        hparams.set_limit_image_tokens(min_pixels / patch_area, std::min(4096, max_pixels / patch_area));
+                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                    } break;
                 case PROJECTOR_TYPE_MINIMAX_M3:
                     {
                         hparams.n_merge = 2; // spatial_merge_size
@@ -2515,6 +2552,9 @@ struct clip_model_loader {
 
         model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
 
+        // lfm3vl
+        model.lfm3vl_embedding_norm_w = get_tensor(string_format(TN_LFM3VL_EMBEDDING_NORM, prefix, "weight"), false);
+
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
@@ -2527,10 +2567,12 @@ struct clip_model_loader {
         model.layers.resize(n_layers_to_load);
         for (int il = 0; il < n_layers_to_load; ++il) {
             auto & layer = model.layers[il];
+            // lfm3vl conv layers have no attention tensors
+            const bool o_w_required = model.proj_type != PROJECTOR_TYPE_LFM3VL;
             layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
             layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
             layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"), false);
-            layer.o_w    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
+            layer.o_w    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"), o_w_required);
             layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
             layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
             layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
@@ -2579,6 +2621,11 @@ struct clip_model_loader {
             if (layer.has_deepstack()) {
                 model.n_deepstack_layers++;
             }
+
+            // lfm3vl conv layers
+            layer.conv2d_in_proj_w  = get_tensor(string_format(TN_LFM3VL_CONV2D_IN_PROJ,  prefix, il, "weight"), false);
+            layer.conv2d_spatial_w  = get_tensor(string_format(TN_LFM3VL_CONV2D_SPATIAL,   prefix, il, "weight"), false);
+            layer.conv2d_out_proj_w = get_tensor(string_format(TN_LFM3VL_CONV2D_OUT_PROJ,  prefix, il, "weight"), false);
 
             // some models already exported with legacy (incorrect) naming which is quite messy, let's fix it here
             // note: Qwen model converted from the old surgery script has n_ff = 0, so we cannot use n_ff to check!
@@ -2763,6 +2810,24 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_LFM3VL:
+                {
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    // each layer must be either a conv block or a complete attention block
+                    for (size_t il = 0; il < model.layers.size(); ++il) {
+                        const auto & layer = model.layers[il];
+                        const bool is_conv = layer.conv2d_in_proj_w != nullptr;
+                        const bool is_attn = layer.q_w && layer.k_w && layer.v_w && layer.o_w;
+                        if (is_conv == is_attn) {
+                            throw std::runtime_error(string_format("%s: lfm3vl layer %zu is neither a complete conv nor a complete attention block\n", __func__, il));
+                        }
+                    }
                 } break;
             case PROJECTOR_TYPE_LING3VL:
                 {
@@ -4452,6 +4517,7 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
         case PROJECTOR_TYPE_MUSE_GLIMMER:
+        case PROJECTOR_TYPE_LFM3VL:
             return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
         case PROJECTOR_TYPE_MINICPMV4_6:
@@ -4484,6 +4550,7 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
         case PROJECTOR_TYPE_MUSE_GLIMMER:
+        case PROJECTOR_TYPE_LFM3VL:
             return (img->ny() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
         case PROJECTOR_TYPE_MINICPMV4_6:
@@ -4571,6 +4638,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_GLM5V:
         case PROJECTOR_TYPE_YOUTUVL:
         case PROJECTOR_TYPE_MUSE_GLIMMER:
+        case PROJECTOR_TYPE_LFM3VL:
             {
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx() / (params.patch_size * 2);
@@ -5376,6 +5444,24 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 set_input_i32("merger_ds_idx_1", m_ds_1);
                 set_input_i32("merger_ds_idx_2", m_ds_2);
                 set_input_i32("merger_ds_idx_3", m_ds_3);
+            } break;
+        case PROJECTOR_TYPE_LFM3VL:
+            {
+                // patches in raster-scan order (no interleave before encoder layers)
+                const int pw = image_size_width  / patch_size;
+                const int ph = image_size_height / patch_size;
+                std::vector<int> positions(n_pos * 4);
+                int ptr = 0;
+                for (int y = 0; y < ph; y++) {
+                    for (int x = 0; x < pw; x++) {
+                        positions[                  ptr] = y;
+                        positions[    num_patches + ptr] = x;
+                        positions[2 * num_patches + ptr] = y;
+                        positions[3 * num_patches + ptr] = x;
+                        ptr++;
+                    }
+                }
+                set_input_i32("positions", positions);
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
@@ -6603,6 +6689,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_LFM3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_YOUTUVL:
