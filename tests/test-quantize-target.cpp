@@ -66,6 +66,12 @@ struct imatrix_data {
     std::vector<std::vector<float>> values;
     std::vector<std::vector<float>> activations;
     std::vector<std::vector<float>> statistics;
+    std::vector<std::string>        stats_schema;
+};
+
+// stats schema
+static const std::vector<std::string> default_stats_schema = {
+    "sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain", "h_norm", "l2_dist", "cossim", "pearson", "covariance"
 };
 
 static std::vector<float> make_stats(std::mt19937 & gen, const int64_t n_per_row) {
@@ -116,12 +122,18 @@ static imatrix_data make_imatrix(const std::string & fname_model, const uint32_t
         im.statistics.push_back(make_stats(gen, n_per_row));
     }
 
+    im.stats_schema = default_stats_schema;
+
     return im;
 }
 
 static std::vector<llama_model_imatrix_data> imatrix_list(const imatrix_data & im, const std::vector<std::vector<float>> & data) {
     std::vector<llama_model_imatrix_data> list;
-    for (size_t i = 0; i < im.names.size(); i++) { list.push_back({ im.names[i].c_str(), data[i].data(), data[i].size() }); }
+    for (size_t i = 0; i < im.names.size(); i++) {
+        if (data[i].empty()) { continue; }
+        list.push_back({ im.names[i].c_str(), data[i].data(), data[i].size() });
+    }
+
     list.push_back({ nullptr, nullptr, 0 });
 
     return list;
@@ -145,9 +157,13 @@ static quant_run quantize(const std::string & fname_inp, const std::string & fna
     const auto values      = imatrix_list(im, im.values);
     const auto activations = imatrix_list(im, im.activations);
     const auto statistics  = imatrix_list(im, im.statistics);
-    params.imatrix     = values.data();
-    params.activations = activations.data();
-    params.statistics  = statistics.data();
+    std::vector<const char *> stats_schema;
+    for (const auto & name : im.stats_schema) { stats_schema.push_back(name.c_str()); }
+    stats_schema.push_back(nullptr);
+    params.imatrix      = values.data();
+    params.activations  = activations.data();
+    params.statistics   = statistics.data();
+    params.stats_schema = im.stats_schema.empty() ? nullptr : stats_schema.data();
 
     quant_run run;
     // clear previous run's output
@@ -198,6 +214,28 @@ static size_t count_type_changes(const quant_run & a, const quant_run & b) {
         const auto other = b.types.find(it.first);
         n += other == b.types.end() || other->second != it.second;
     }
+
+    return n;
+}
+
+// tensor quantization mix rows
+static std::vector<std::string> mix_rows(const quant_run & run) {
+    std::vector<std::string> rows;
+    for (size_t pos = run.log.find("\terror: "); pos != std::string::npos; pos = run.log.find("\terror: ", pos + 1)) {
+        const size_t start = run.log.rfind('\n', pos) + 1;
+        rows.push_back(run.log.substr(start, run.log.find('\n', pos) - start));
+    }
+
+    return rows;
+}
+
+static size_t count_row_changes(const quant_run & a, const quant_run & b) {
+    const std::vector<std::string> rows_a = mix_rows(a);
+    const std::vector<std::string> rows_b = mix_rows(b);
+    if (rows_a.empty() || rows_a.size() != rows_b.size()) { return SIZE_MAX; }
+
+    size_t n = 0;
+    for (size_t i = 0; i < rows_a.size(); i++) { n += rows_a[i] != rows_b[i]; }
 
     return n;
 }
@@ -543,6 +581,67 @@ static void test_pruned_layer(testing & t, const fixture & f) {
     t.assert_equal("a checkpoint for another pruned block is scored again", count_matches(fresh.log, "processing tensor"), count_matches(other.log, "processing tensor"));
 }
 
+static void test_stats_order(testing & t, const fixture & f) {
+    // stats in reverse order
+    imatrix_data im = f.im;
+    std::reverse(im.stats_schema.begin(), im.stats_schema.end());
+    for (auto & stats : im.statistics) { std::reverse(stats.begin(), stats.end()); }
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = nullptr;
+    const quant_run run = quantize(f.fname_model, f.fname_out, im, params);
+    t.assert_equal("quantize succeeds", 0u, run.rc);
+    t.assert_equal("statistics in different order", (size_t) 0, count_matches(run.log, "skipping CNIF"));
+    t.assert_equal("statistics in different order, rows that changed", (size_t) 0, count_row_changes(f.base, run));
+}
+
+static void test_stats_missing(testing & t, const fixture & f) {
+    // tensor whose stats vector is cut short or left out
+    const size_t k = std::find(f.im.names.begin(), f.im.names.end(), "blk.1.ffn_down.weight") - f.im.names.begin();
+    t.assert_true("imatrix has blk.1.ffn_down.weight", k < f.im.names.size());
+    if (k == f.im.names.size()) { return; }
+
+    // pearson under another name
+    imatrix_data renamed = f.im;
+    std::replace(renamed.stats_schema.begin(), renamed.stats_schema.end(), std::string("pearson"), std::string("spearman"));
+    const std::string fname = sibling_path(f, "renamed.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+
+    llama_model_quantize_params params = base_params(f);
+    params.state_file = fname.c_str();
+    const quant_run missing = quantize(f.fname_model, f.fname_out, renamed, params);
+
+    // no names
+    imatrix_data unnamed = f.im;
+    unnamed.stats_schema.clear();
+    params.state_file = nullptr;
+    const quant_run no_names = quantize(f.fname_model, f.fname_out, unnamed, params);
+
+    // stats vector cut before pearson
+    imatrix_data cut = f.im;
+    cut.statistics[k].resize(10);
+    const quant_run short_stats = quantize(f.fname_model, f.fname_out, cut, params);
+    imatrix_data dropped = f.im;
+    dropped.statistics[k].clear();
+    const quant_run no_stats = quantize(f.fname_model, f.fname_out, dropped, params);
+
+    const size_t n_changed = count_row_changes(f.base, missing);
+    t.log(std::to_string(n_changed) + " mix rows change without CNIF");
+    t.assert_equal("quantize succeeds", 0u, missing.rc);
+    t.assert_true("missing metric changes the mix", n_changed > 0 && n_changed != SIZE_MAX);
+    t.assert_equal("missing metric is reported", (size_t) 1, count_matches(missing.log, "statistics have no pearson metric, skipping CNIF"));
+    t.assert_equal("checkpoint with different statistics names is reported", (size_t) 1, count_matches(missing.log, "state file does not match this model, imatrix or pruned layers, ignoring"));
+    t.assert_equal("checkpoint with different statistics names is scored again", count_matches(f.base.log, "processing tensor"), count_matches(missing.log, "processing tensor"));
+    t.assert_equal("quantize succeeds", 0u, no_names.rc);
+    t.assert_equal("statistics without names are reported", (size_t) 1, count_matches(no_names.log, "statistics have no sum_sq metric, skipping CNIF"));
+    t.assert_equal("statistics without names log one line", (size_t) 1, count_matches(no_names.log, "skipping CNIF"));
+    t.assert_equal("statistics without names, rows that differ from a missing metric", (size_t) 0, count_row_changes(missing, no_names));
+    t.assert_equal("quantize succeeds", 0u, short_stats.rc);
+    t.assert_equal("a short stats vector is not reported as a missing metric", (size_t) 0, count_matches(short_stats.log, "skipping CNIF"));
+    t.assert_equal("quantize succeeds", 0u, no_stats.rc);
+    t.assert_equal("a short stats vector, rows that differ from a left-out one", (size_t) 0, count_row_changes(no_stats, short_stats));
+}
+
 static int run_tests(testing & t, const std::filesystem::path & dir) {
     fixture f;
     f.fname_model = (dir / "model-f32.gguf").string();
@@ -580,6 +679,8 @@ static int run_tests(testing & t, const std::filesystem::path & dir) {
     t.test("imatrix_parts",    [&](testing & t) { test_imatrix_parts(t, f); });
     t.test("imatrix_order",    [&](testing & t) { test_imatrix_order(t, f); });
     t.test("pruned_layer",     [&](testing & t) { test_pruned_layer(t, f); });
+    t.test("stats_order",      [&](testing & t) { test_stats_order(t, f); });
+    t.test("stats_missing",    [&](testing & t) { test_stats_missing(t, f); });
 
     return t.summary();
 }
