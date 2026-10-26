@@ -54,9 +54,10 @@ export function resolveTabTarget(page: TabRoute): string | null {
 }
 
 /**
- * Tabs of the current route. The project view (`#/projects/<id>/chat/...`)
- * shows the chats of its project and keeps them in it; the regular view
- * shows every chat. Both read the same open tabs.
+ * Tabs of the current route. The project view (`#/projects/<id>` and its
+ * chats under `/chat/...`) shows the chats of its project and keeps them in
+ * it, the project home with none of them active; the regular view shows
+ * every chat. Both read the same open tabs.
  */
 export function resolveTabView(
 	page: TabRoute,
@@ -68,9 +69,9 @@ export function resolveTabView(
 	const projectOf = (id: string) =>
 		projectOfNewChatTab(id) ?? conversations.find((c) => c.id === id)?.projectId;
 
-	if (projectId && activeId !== PROJECT_HOME_TAB_ID) {
+	if (projectId) {
 		return {
-			activeId,
+			activeId: activeId === PROJECT_HOME_TAB_ID ? null : activeId,
 			fallbackHref: RouterService.project(projectId),
 			hrefFor: (id) =>
 				projectOfNewChatTab(id)

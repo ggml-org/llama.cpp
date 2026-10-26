@@ -152,6 +152,18 @@ describe('tab views', () => {
 		expect(view.hrefFor(projectNewChatTabId('p1'))).toBe('#/projects/p1/chat/new');
 	});
 
+	it('keeps the project tabs on the project home, none of them active', () => {
+		const view = resolveTabView(
+			{ params: { projectId: 'p1' }, route: { id: '/(chat)/projects/[projectId]' } },
+			open,
+			conversations
+		);
+
+		expect(view.activeId).toBeNull();
+		expect(view.ids).toEqual(['x', projectNewChatTabId('p1'), 'y']);
+		expect(view.hrefFor('x')).toBe('#/projects/p1/chat/x');
+	});
+
 	it('keeps project new-chat tabs out of the regular view', () => {
 		const view = resolveTabView(
 			{ params: { id: 'g' }, route: { id: '/(chat)/chat/[id]' } },
