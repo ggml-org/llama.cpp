@@ -95,13 +95,13 @@ void main() {
     const uint32_t col_tid = (gl_LocalInvocationIndex % threads_per_rowgroup) / D_split;
 
     if (LIMIT_OCCUPANCY_SHMEM > 0) {
-        // This just exists to avoid the occupancy_limiter array getting optimized out
-        occupancy_limiter[tid] = vec4(tid);
-
+        // Runtime-dependent index, otherwise RADV forwards the store and drops the array
+        const uint32_t li = (gl_WorkGroupID.x * gl_WorkGroupSize.x + tid) % LIMIT_OCCUPANCY_SHMEM;
+        occupancy_limiter[li] = vec4(tid);
         barrier();
-
-        if (occupancy_limiter[tid] == vec4(99999.0)) {
-            data_ov4[0] = D_TYPEV4(occupancy_limiter[tid]);
+        const uint32_t lr = (li + 1) % LIMIT_OCCUPANCY_SHMEM;
+        if (occupancy_limiter[lr] == vec4(99999.0)) {
+            data_ov4[0] = D_TYPEV4(occupancy_limiter[lr]);
         }
     }
 
