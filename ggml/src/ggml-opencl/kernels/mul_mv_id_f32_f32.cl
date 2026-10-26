@@ -31,9 +31,17 @@ kernel void kernel_mul_mv_id_f32_f32(
     const int token = get_group_id(2);
     const int tid = get_local_id(0);
     const int expert = *(global const int *) (ids + offset2 + slot*nb20 + token*nb21);
+    dst += offsetd + slot*nb1 + token*nb2;
+    if (expert == -1) {
+        if (tid == 0) {
+            for (int r = 0; r < 4 && row + r < nrows; ++r) {
+                ((global float *) dst)[row + r] = 0.0f;
+            }
+        }
+        return;
+    }
     src0 += offset0 + row*nb01 + expert*nb02;
     src1 += offset1 + (slot % ne11)*nb11 + token*nb12;
-    dst += offsetd + slot*nb1 + token*nb2;
     float sum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (int i = tid*4; i + 3 < ncols; i += 64*4) {
         const float4 b = vload4(0, (global const float *) src1 + i);
