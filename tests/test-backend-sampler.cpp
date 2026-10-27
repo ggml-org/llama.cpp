@@ -2060,6 +2060,55 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+static void test_token_only(const test_params & params) {
+    std::vector<llama_token> reference;
+    for (bool token_only : {false, true}) {
+        std::vector<llama_sampler_ptr> chains;
+        std::vector<llama_sampler_seq_config> configs;
+        for (int seq = 0; seq < 2; ++seq) {
+            llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(-1));
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_top_p(0.95f, 1));
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_temp(1.0f));
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(1234 + seq));
+            configs.push_back({seq, chain.get()});
+            chains.push_back(std::move(chain));
+        }
+        auto cp = llama_context_default_params();
+        cp.n_ctx = 512; cp.n_batch = 8; cp.n_ubatch = 2; cp.n_seq_max = 2;
+        cp.n_outputs_max = 8; cp.n_outputs_max_per_seq = 2;
+        cp.kv_unified = true; cp.swa_full = false;
+        cp.samplers = configs.data(); cp.n_samplers = configs.size();
+        cp.sampler_token_only = token_only;
+        llama_context_ptr ctx(llama_init_from_model(params.model.get(), cp));
+        GGML_ASSERT(ctx);
+        common_batch batch(ctx.get());
+        const auto * vocab = llama_model_get_vocab(params.model.get());
+        const auto bos = llama_vocab_bos(vocab);
+        for (int round = 0; round < 2; ++round) {
+            batch.clear();
+            batch.add(bos, 2*round, 1, true);
+            batch.add(bos, 2*round, 0, true);
+            batch.add(bos, 2*round+1, 1, true);
+            batch.add(bos, 2*round+1, 0, true);
+            GGML_ASSERT(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+            for (int i = 0; i < 4; ++i) {
+                const auto token = llama_get_sampled_token_ith(ctx.get(), i);
+                GGML_ASSERT(token != LLAMA_TOKEN_NULL);
+                if (!token_only) { reference.push_back(token); }
+                else { GGML_ASSERT(token == reference[4*round+i]); }
+                GGML_ASSERT((llama_get_sampled_logits_ith(ctx.get(), i) == nullptr) == token_only);
+                GGML_ASSERT((llama_get_sampled_probs_ith(ctx.get(), i) == nullptr) == token_only);
+                GGML_ASSERT((llama_get_sampled_candidates_ith(ctx.get(), i) == nullptr) == token_only);
+                GGML_ASSERT((llama_get_sampled_logits_count_ith(ctx.get(), i) == 0) == token_only);
+                GGML_ASSERT((llama_get_sampled_probs_count_ith(ctx.get(), i) == 0) == token_only);
+                GGML_ASSERT((llama_get_sampled_candidates_count_ith(ctx.get(), i) == 0) == token_only);
+                llama_sampler_accept(chains[i%2 == 0 ? 1 : 0].get(), token);
+            }
+        }
+    }
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2068,6 +2117,7 @@ struct backend_test_case {
 
 // note: test names are "test_<suffix>" and match the function implementing them
 static const backend_test_case BACKEND_TESTS[] = {
+    { "test_token_only", test_token_only, true },
     // single sampler
     { "test_greedy",                 test_greedy,                 true },
     { "test_greedy_filtered",        test_greedy_filtered,        true },

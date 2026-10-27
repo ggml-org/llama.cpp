@@ -2322,6 +2322,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling().set_env("LLAMA_ARG_BACKEND_SAMPLING"));
     add_opt(common_arg(
+        {"--sampler-token-only"},
+        "return only backend sampled tokens; omit sampler logits, probabilities and candidate arrays",
+        [](common_params & params) { params.sampling.sampler_token_only = true; }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_COMPLETION}));
+    add_opt(common_arg(
         {"--pooling"}, "{none,mean,cls,last,rank}",
         "pooling type for embeddings, use model default if unspecified",
         [](common_params & params, const std::string & value) {

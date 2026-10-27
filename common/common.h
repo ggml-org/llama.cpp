@@ -298,6 +298,7 @@ struct common_params_sampling {
     std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
     bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
+    bool sampler_token_only = false; // omit backend sampler arrays
     bool backend_sampling = false;
 
     // print the parameters into a string
