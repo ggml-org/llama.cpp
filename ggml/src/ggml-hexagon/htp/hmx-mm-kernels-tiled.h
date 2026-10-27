@@ -1224,15 +1224,19 @@ static inline void transfer_output_chunk_fp16_to_fp32(
     );
 }
 
+#define HMX_GLU_GELU_COEF_A    0.044715f
+#define HMX_GLU_SQRT_2_OVER_PI 0.79788456080286535587989211986876f
+#define HMX_GLU_EXP_LIMIT      87.0f // expf overflows f32 near 88.7
+
 static inline HVX_Vector hmx_glu_f32(HVX_Vector g, HVX_Vector u, uint32_t glu_op) {
     if (glu_op == HTP_OP_GLU_GEGLU) {
-        // gelu(x) = x * sigmoid(2 * sqrt(2/pi) * (x + 0.044715 * x^3))
+        // gelu(x) = x * sigmoid(2 * sqrt(2/pi) * (x + a * x^3))
         const HVX_Vector one = hvx_vec_splat_f32(1.0f);
         HVX_Vector y = hvx_vec_mul_f32_f32(g, g);
-        y = hvx_vec_mul_f32_f32(y, hvx_vec_splat_f32(2.0f * 0.044715f * 0.79788456080286535587989211986876f));
-        y = hvx_vec_add_f32_f32(y, hvx_vec_splat_f32(2.0f * 0.79788456080286535587989211986876f));
+        y = hvx_vec_mul_f32_f32(y, hvx_vec_splat_f32(2.0f * HMX_GLU_GELU_COEF_A * HMX_GLU_SQRT_2_OVER_PI));
+        y = hvx_vec_add_f32_f32(y, hvx_vec_splat_f32(2.0f * HMX_GLU_SQRT_2_OVER_PI));
         y = hvx_vec_mul_f32_f32(g, y);
-        y = hvx_vec_fast_sigmoid_f32_guard(y, one, hvx_vec_splat_f32(87.f), hvx_vec_splat_f32(-87.f));
+        y = hvx_vec_fast_sigmoid_f32_guard(y, one, hvx_vec_splat_f32(HMX_GLU_EXP_LIMIT), hvx_vec_splat_f32(-HMX_GLU_EXP_LIMIT));
         g = hvx_vec_mul_f32_f32(g, y);
     } else {
         g = hvx_vec_silu_f32(g);
