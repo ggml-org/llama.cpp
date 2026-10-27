@@ -8,9 +8,9 @@
 		DialogConversationRename,
 		DialogDiscoverModels,
 		DialogMcpServers,
-		DialogModelInformation,
 		DialogSettingsChat,
 		Logo,
+		ModelsManagerModelDrawer,
 		SidebarNavigationActions,
 		SidebarNavigationConversationList
 	} from '$lib/components/app';
@@ -642,7 +642,7 @@
 
 <DialogDiscoverModels bind:open={uiStore.discoverModelsOpen} />
 
-<DialogModelInformation />
+<ModelsManagerModelDrawer />
 
 <style>
 	aside {
