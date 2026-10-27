@@ -9061,6 +9061,108 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
 };
 
 // GGML_OP_CROSS_ENTROPY_LOSS
+struct test_spark_attention : public test_flash_attn_ext {
+    const int scenario;
+
+    test_spark_attention(int64_t length, int scenario, int64_t kv_heads = 4, ggml_type cache_type = GGML_TYPE_F16)
+        : test_flash_attn_ext(256, 256, kv_heads, {4, 1}, length, 1, true, false, 0, 0,
+                              GGML_PREC_F32, cache_type, cache_type), scenario(scenario) {}
+    std::string op_desc(ggml_tensor *) override { return "SPARK_ATTENTION"; }
+    std::string vars() override { return VARS_TO_STR3(kv, scenario, nh); }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+        auto * mask_tensor = ggml_get_tensor(ctx, "m");
+        std::vector<float> mask(kv, 0.0f);
+        for (int i = 0; i < kv; ++i) {
+            if ((scenario == 1 && (i < kv/2 || i >= kv-7)) ||
+                    (scenario == 2 && i >= 128 && i < kv-384) ||
+                    (scenario == 3 && i != kv-1)) {
+                mask[i] = -INFINITY;
+            }
+        }
+        std::vector<ggml_fp16_t> packed(kv);
+        ggml_fp32_to_fp16_row(mask.data(), packed.data(), kv);
+        ggml_backend_tensor_set(mask_tensor, packed.data(), 0, packed.size()*sizeof(ggml_fp16_t));
+    }
+};
+
+
+struct test_spark_full_attention : public test_flash_attn_ext {
+    const int scenario;
+
+    test_spark_full_attention(int64_t length, int scenario, bool use_mask = true, int64_t tokens = 1,
+            ggml_type cache_type = GGML_TYPE_F16, bool use_sinks = false, int64_t kv_heads = 4)
+        : test_flash_attn_ext(256, 256, kv_heads, {4, 1}, length, tokens, use_mask, use_sinks, 0, 0,
+                              GGML_PREC_F32, cache_type, cache_type), scenario(scenario) {}
+
+    std::string op_desc(ggml_tensor *) override { return "SPARK_FULL_ATTENTION"; }
+    std::string vars() override { return VARS_TO_STR7(kv, nb, scenario, mask, sinks, type_K, nh); }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+        if (!mask || scenario < 0) {
+            return;
+        }
+        auto * tensor = ggml_get_tensor(ctx, "m");
+        std::vector<float> values(kv, 0.0f);
+        for (int i = 0; i < kv; ++i) {
+            if ((scenario == 1 && (i < kv/2 || i >= kv-7)) ||
+                    (scenario == 2 && i >= 128 && i < kv-384) ||
+                    (scenario == 3 && i != kv-1)) {
+                values[i] = -INFINITY;
+            }
+        }
+        std::vector<ggml_fp16_t> packed(kv);
+        ggml_fp32_to_fp16_row(values.data(), packed.data(), kv);
+        ggml_backend_tensor_set(tensor, packed.data(), 0, packed.size()*sizeof(ggml_fp16_t));
+    }
+};
+
+
+struct test_spark_attention_projection : public test_spark_attention {
+    const bool escape;
+    const ggml_type cache_type;
+    const bool gathered;
+
+    test_spark_attention_projection(int64_t length, int scenario, bool escape = false, ggml_type cache_type = GGML_TYPE_F16, bool gathered = false)
+        : test_spark_attention(length,scenario,2,cache_type), escape(escape), cache_type(cache_type), gathered(gathered) {}
+    std::string op_desc(ggml_tensor *) override { return "SPARK_ATTN_PROJECTION"; }
+    std::string vars() override { return VARS_TO_STR5(kv, scenario, escape, cache_type, gathered); }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 5e-3; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        auto * gate_input = ggml_new_tensor_1d(ctx,GGML_TYPE_F32,8);
+        auto * gate = ggml_sigmoid(ctx,gate_input);
+        if (gf) ggml_build_forward_expand(gf,gate);
+        auto * attention = test_flash_attn_ext::build_graph(ctx);
+        if (escape) ggml_set_output(attention);
+        auto * flat = ggml_reshape_2d(ctx,attention,2048,1);
+        auto * shaped = ggml_reshape_3d(ctx,flat,256,8,1);
+        auto * gated = ggml_mul(ctx,shaped,ggml_reshape_3d(ctx,gate,1,8,1));
+        auto * weight = ggml_new_tensor_2d(ctx,GGML_TYPE_Q8_0,2048,2048);
+        auto * projection = ggml_mul_mat(ctx,weight,ggml_reshape_2d(ctx,gated,2048,1));
+        auto * residual = ggml_new_tensor_2d(ctx,GGML_TYPE_F32,2048,1);
+        if (gathered) {
+            auto * rows = ggml_new_tensor_1d(ctx,GGML_TYPE_I32,1);
+            ggml_set_name(rows,"attention_output_rows");
+            projection = ggml_get_rows(ctx,projection,rows);
+            residual = ggml_get_rows(ctx,residual,rows);
+        }
+        return ggml_add(ctx,projection,residual);
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        test_spark_attention::initialize_tensors(ctx);
+        if (gathered) {
+            const int32_t row = 0;
+            ggml_backend_tensor_set(ggml_get_tensor(ctx,"attention_output_rows"),&row,0,sizeof(row));
+        }
+    }
+
+};
+
+
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
@@ -12786,6 +12888,62 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_spark_head_norm(1));
     test_cases.emplace_back(new test_spark_head_norm(1, true));
     test_cases.emplace_back(new test_spark_head_norm(2));
+
+    for (int64_t kv : {512, 768, 1024, 4352}) {
+        for (bool mask : {false, true}) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {4, 1}, kv, 1, mask, false, 0, 0,
+                                                            GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+        for (int scenario : {0, 1, 2, 3}) {
+            test_cases.emplace_back(new test_spark_attention(kv, scenario));
+        }
+    }
+
+    for (int64_t kv : {4096, 4352, 4608, 8192}) {
+        for (int scenario : {0, 1, 2, 3}) {
+            test_cases.emplace_back(new test_spark_full_attention(kv, scenario));
+        }
+    }
+    test_cases.emplace_back(new test_spark_full_attention(1024, 0));
+    test_cases.emplace_back(new test_spark_full_attention(4352, -1, false));
+    test_cases.emplace_back(new test_spark_full_attention(4352, -1, true, 2));
+    test_cases.emplace_back(new test_spark_full_attention(4352, -1, true, 1, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_spark_full_attention(4352, -1, true, 1, GGML_TYPE_F16, true));
+    test_cases.emplace_back(new test_spark_full_attention(8448, -1));
+    for (int64_t kv : {32768, 131328, 262400}) {
+        for (int scenario : {0, 1, 2, 3}) {
+            test_cases.emplace_back(new test_spark_full_attention(kv, scenario, true, 1, GGML_TYPE_Q8_0));
+        }
+    }
+    test_cases.emplace_back(new test_spark_full_attention(32768, -1, false, 1, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_spark_full_attention(32768, -1, true, 2, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_spark_full_attention(32768, -1, true, 1, GGML_TYPE_Q8_0, true));
+    test_cases.emplace_back(new test_spark_full_attention(1024, -1, true, 1, GGML_TYPE_Q8_0));
+
+    for (int64_t kv : {32768, 131328, 262400}) {
+        for (int scenario : {0, 1, 2, 3}) {
+            test_cases.emplace_back(new test_spark_full_attention(kv, scenario, true, 1, GGML_TYPE_Q8_0, false, 2));
+        }
+    }
+    test_cases.emplace_back(new test_spark_full_attention(32768, -1, false, 1, GGML_TYPE_Q8_0, false, 2));
+    test_cases.emplace_back(new test_spark_full_attention(32768, -1, true, 2, GGML_TYPE_Q8_0, false, 2));
+    test_cases.emplace_back(new test_spark_full_attention(32768, -1, true, 1, GGML_TYPE_Q8_0, true, 2));
+    test_cases.emplace_back(new test_spark_full_attention(1024, -1, true, 1, GGML_TYPE_Q8_0, false, 2));
+    test_cases.emplace_back(new test_spark_full_attention(4352, -1, true, 1, GGML_TYPE_F16, false, 2));
+
+    for (int64_t length : {512,4096}) {
+        for (int scenario : {0,1,3}) {
+            test_cases.emplace_back(new test_spark_attention_projection(length,scenario));
+        }
+    }
+    test_cases.emplace_back(new test_spark_attention_projection(512,0,false,GGML_TYPE_F16,true));
+    test_cases.emplace_back(new test_spark_attention_projection(4096,1,false,GGML_TYPE_F16,true));
+    test_cases.emplace_back(new test_spark_attention_projection(512,0,true,GGML_TYPE_F16,true));
+    test_cases.emplace_back(new test_spark_attention_projection(512,0,true));
+    test_cases.emplace_back(new test_spark_attention_projection(512,0,false,GGML_TYPE_Q8_0));
+    for (int scenario : {0, 1, 2, 3}) {
+        test_cases.emplace_back(new test_spark_attention(1024, scenario, 2));
+    }
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
