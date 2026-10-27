@@ -95,7 +95,7 @@
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #include "ggml-backend-dl.h"
 #include <nvml.h>
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -295,7 +295,7 @@ static bool ggml_cuda_should_use_fp32_acc(const cudaDeviceProp & prop, const int
     }
 #else
     dl_handle_ptr library(dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL));
-#endif
+#endif // defined(_WIN32)
     if (!library) {
         return false;
     }
@@ -304,7 +304,7 @@ static bool ggml_cuda_should_use_fp32_acc(const cudaDeviceProp & prop, const int
         return GetProcAddress(library.get(), name);
 #else
         return dlsym(library.get(), name);
-#endif
+#endif // defined(_WIN32)
     };
     const auto init = reinterpret_cast<decltype(&nvmlInit_v2)>(get_symbol("nvmlInit_v2"));
     const auto shutdown = reinterpret_cast<decltype(&nvmlShutdown)>(get_symbol("nvmlShutdown"));
@@ -329,7 +329,7 @@ static bool ggml_cuda_should_use_fp32_acc(const cudaDeviceProp & prop, const int
     (void) shutdown();
     return prefer_fp32_acc;
 }
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
