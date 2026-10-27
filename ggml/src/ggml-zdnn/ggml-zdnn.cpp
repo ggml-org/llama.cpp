@@ -393,9 +393,9 @@ static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .cpy_tensor    = */ NULL,
     /* .clear         = */ ggml_backend_zdnn_buffer_clear,
     /* .reset         = */ ggml_backend_zdnn_buffer_reset,
-    /* .set_tensor_n = */ NULL,
-    /* .get_tensor_n = */ NULL,
-    /* .cpy_tensor_n = */ NULL,
+    /* .set_tensor_n  = */ NULL,
+    /* .get_tensor_n  = */ NULL,
+    /* .cpy_tensor_n  = */ NULL,
 };
 
 //

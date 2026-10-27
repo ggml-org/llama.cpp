@@ -402,8 +402,8 @@ size_t ggml_backend_get_max_size(ggml_backend_t backend) {
     return ggml_backend_buft_get_max_size(ggml_backend_get_default_buffer_type(backend));
 }
 
-template <typename GetBuffer>
-static void ggml_backend_tensor_buft_groups(size_t n_tensors, GetBuffer && get_buffer, std::vector<std::vector<size_t>> & groups) {
+template <typename cb_get_buffer>
+static void ggml_backend_tensor_buft_groups(size_t n_tensors, cb_get_buffer && get_buffer, std::vector<std::vector<size_t>> & groups) {
     std::unordered_map<ggml_backend_buffer_type_t, size_t> buft_idx;
     groups.clear();
     for (size_t i = 0; i < n_tensors; i++) {
@@ -1110,9 +1110,9 @@ static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
     /* .cpy_tensor      = */ NULL,
     /* .clear           = */ ggml_backend_multi_buffer_clear,
     /* .reset           = */ NULL,
-    /* .set_tensor_n = */ NULL,
-    /* .get_tensor_n = */ NULL,
-    /* .cpy_tensor_n = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
@@ -2792,9 +2792,9 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
     /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cpu_buffer_clear,
     /* .reset           = */ NULL,
-    /* .set_tensor_n = */ NULL,
-    /* .get_tensor_n = */ NULL,
-    /* .cpy_tensor_n = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
@@ -2809,9 +2809,9 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
     /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cpu_buffer_clear,
     /* .reset           = */ NULL,
-    /* .set_tensor_n = */ NULL,
-    /* .get_tensor_n = */ NULL,
-    /* .cpy_tensor_n = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 // CPU backend buffer type

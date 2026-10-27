@@ -415,7 +415,6 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
     }
 }
 
-
 bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     @autoreleasepool {
         struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(src);
