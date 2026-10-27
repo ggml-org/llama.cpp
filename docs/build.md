@@ -311,7 +311,7 @@ Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 Override the activation precision that the model requests for NVFP4 and MXFP4 matrix multiplications.
 Currently supported values: `auto`, `q8`, `fp8`, `q4`.
 
-NVFP4 and MXFP4 layers marked as W4A16 request 8-bit activations, so on Blackwell those layers run through the W4A8 path (q8) instead of the native W4A4 path. Unmarked layers use their default path: native W4A4 for NVFP4 and native fp8 W4A8 for MXFP4. Set `q4` to keep the native W4A4 path for faster prompt processing at the cost of accuracy, `q8` to use the Q8_1 W4A8 path for every layer, or `fp8` to use the native fp8 W4A8 path for MXFP4 (NVFP4 stays on W4A4); `auto` uses per-tensor prec metadata (this is the same behavior as when the environment variable is not set).
+NVFP4 and MXFP4 layers marked as W4A16 request 8-bit activations, so on Blackwell those layers run through the W4A8 path (q8) instead of the native W4A4 path. Unmarked layers use their default path: native W4A4 for NVFP4 and native fp8 W4A8 for MXFP4. Set `q4` to keep the native W4A4 path for faster prompt processing at the cost of accuracy, `q8` to use the Q8_1 W4A8 path for every layer, or `fp8` to use the native fp8 W4A8 path where the weights are MXFP4 (NVFP4 has no fp8 path, so it falls back to q8); `auto` uses per-tensor prec metadata (this is the same behavior as when the environment variable is not set).
 
 ### Unified Memory
 

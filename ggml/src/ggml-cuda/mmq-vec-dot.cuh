@@ -1235,7 +1235,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
-// mxfp4 weights x mxfp8 activations on Blackwell: kind::mxf8f6f4, m16n8k32, scale_vec::1X, ue8m0 scales.
+// mxfp4 weights x fp8 (e4m3) activations on Blackwell: kind::mxf8f6f4, m16n8k32, one ue8m0 scale per 32 values.
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_mxfp4_fp8_mma(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     typedef tile<16, 8, int>   tile_A;
@@ -1259,26 +1259,29 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int g = threadIdx.x / 4;
     const int t = threadIdx.x % 4;
 
+    // scale_vec::1X with byte-id 0 takes scale_A for rows g and g + 8 from the quad lanes with t%4 == 0 and 1
     const int tidx_A = g + (t % 2) * 8;
     const int i0     = (threadIdx.y / ntx) * rows_per_warp;
 
     tile_A   A[ntx][nfrags];
     uint32_t scaleA[ntx][nfrags];
 
-    static_assert(nfrags == 4, "the scale vector load covers all fragments");
+    static_assert(nfrags == FP8_SCALES_PER_WORD, "one scale word covers all fragments and one y block");
 
 #pragma unroll
     for (int n = 0; n < ntx; ++n) {
-        const uint4 sa = *(const uint4 *) (x_sc + (i0 + n * tile_A::I + tidx_A) * sram_stride + k00 / tile_A::J);
-        scaleA[n][0] = sa.x;
-        scaleA[n][1] = sa.y;
-        scaleA[n][2] = sa.z;
-        scaleA[n][3] = sa.w;
+        const uint32_t sa = x_sc[(i0 + n * tile_A::I + tidx_A) * sram_stride + k00 / (tile_A::J*FP8_SCALES_PER_WORD)];
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            // the mma only reads byte 0 of the scale operand, so shift each frag's scale byte down
+            scaleA[n][frag] = sa >> (8*frag);
+        }
 #pragma unroll
         for (int frag = 0; frag < nfrags; ++frag) {
             const int k0 = k00 + frag * tile_A::J;
             const int pi = 4*(k0 / 8) + t; // 32 mxfp4 values == 4 ints per frag
-            // byte j holds values j and j + 16, so the low nibbles are a0..a3 and the high nibbles a8..a11
+            // an mxfp4 byte holds value j in the low nibble and j + 16 in the high one, so the low nibbles of an
+            // int are a0 (A cols 4t..4t+3) and the high ones a2; kind::mxf8f6f4 wants e2m1 in bits [5:2]
             const uint32_t lo_mask = 0x0F0F0F0F;
             const uint32_t hi_mask = 0x3C3C3C3C;
             const uint32_t p0 = *(const uint32_t *) (x_qs + (i0 + n*tile_A::I + g    )*sram_stride + pi);
@@ -1302,11 +1305,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             B[frag].x[0] = y_qs[(j0 + g)*MMQ_TILE_Y_K + k0 + t];
             B[frag].x[1] = y_qs[(j0 + g)*MMQ_TILE_Y_K + k0 + 4 + t];
         }
-        const uint4 sb = *(const uint4 *) (y_sc + (j0 + g) * MMQ_TILE_Y_K);
-        scaleB[0] = sb.x;
-        scaleB[1] = sb.y;
-        scaleB[2] = sb.z;
-        scaleB[3] = sb.w;
+        const uint32_t sb = y_sc[(j0 + g) * MMQ_TILE_Y_K];
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            scaleB[frag] = sb >> (8*frag);
+        }
 
 #pragma unroll
         for (int n = 0; n < ntx; ++n) {

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <cctype>
 #include <cfloat>
 #include <cinttypes>
 #include <cstdarg>
@@ -5398,12 +5399,15 @@ static int graph_mul_mat_prec(ggml_cgraph * gf, ggml_op op) {
     return GGML_PREC_UNDEFINED;
 }
 
+// the precision the Blackwell MMQ resolves to for this graph, mirroring ggml_cuda_mmq_get_prec_src1
+// including the GGML_CUDA_MMQ_PREC override; -1 if the env value is one this helper does not model
 static int blackwell_mmq_effective_prec(ggml_cgraph * gf, ggml_op op) {
     const char * env = getenv("GGML_CUDA_MMQ_PREC");
     if (env == nullptr) {
         return graph_mul_mat_prec(gf, op);
     }
 
+    // same values and matching rules as ggml_cuda_mmq_get_prec_env
     std::string v = env;
     for (char & c : v) {
         c = std::tolower((unsigned char) c);
@@ -5423,6 +5427,7 @@ static int blackwell_mmq_effective_prec(ggml_cgraph * gf, ggml_op op) {
     return -1;
 }
 
+// nmse tolerance for FP4 MMQ activations on Blackwell by effective precision: fp8 -> 2e-3, fp4 -> 2e-2, -1 for the default
 static double max_nmse_err_blackwell_fp4(const ggml_type type_a, ggml_cgraph * gf, ggml_op op, ggml_backend_t backend) {
     if (!backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
         return -1.0;
@@ -5435,9 +5440,9 @@ static double max_nmse_err_blackwell_fp4(const ggml_type type_a, ggml_cgraph * g
     if (prec < 0) {
         return 2e-2;
     }
-    // NVFP4 has no FP8 path: an FP8 request falls back to the native W4A4 instructions
+    // NVFP4 has no FP8 path: the request is served by Q8_1 activations, never by 4-bit ones
     if (prec == GGML_PREC_FP8 && type_a != GGML_TYPE_MXFP4) {
-        prec = GGML_PREC_Q4;
+        prec = GGML_PREC_Q8;
     }
     if (prec == GGML_PREC_Q8) {
         return -1.0;
@@ -5669,8 +5674,9 @@ struct test_mul_mat_w4a8 : public test_mul_mat {
 };
 
 struct test_mul_mat_fp8 : public test_mul_mat {
-    test_mul_mat_fp8(int64_t m = 32, int64_t n = 32, int64_t k = 256)
-        : test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, m, n, k) {}
+    test_mul_mat_fp8(ggml_type type_a = GGML_TYPE_MXFP4, ggml_type type_b = GGML_TYPE_F32,
+            int64_t m = 32, int64_t n = 32, int64_t k = 256)
+        : test_mul_mat(type_a, type_b, m, n, k) {}
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * out = test_mul_mat::build_graph(ctx);
         test_set_prec_src1(ctx, GGML_OP_MUL_MAT, GGML_PREC_FP8);
@@ -5857,9 +5863,10 @@ struct test_mul_mat_id_w4a8 : public test_mul_mat_id {
 
 // FP4 with FP8 activations on the MoE path
 struct test_mul_mat_id_fp8 : public test_mul_mat_id {
-    test_mul_mat_id_fp8(int n_mats = 8, int n_used = 2, bool b = false,
+    test_mul_mat_id_fp8(ggml_type type_a = GGML_TYPE_MXFP4, ggml_type type_b = GGML_TYPE_F32,
+            int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 256)
-        : test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, n_mats, n_used, b, m, n, k) {}
+        : test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k) {}
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * out = test_mul_mat_id::build_graph(ctx);
         test_set_prec_src1(ctx, GGML_OP_MUL_MAT_ID, GGML_PREC_FP8);
@@ -11549,7 +11556,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 8192, 1, 8192));
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 1024, 7, 1024));  // many rows
 
-    // FP4 activation precision: NVFP4 defaults to native W4A4, MXFP4 to native W4A8; src1 Q4=mxfp4, Q8=Q8_1, FP8=mxfp8
+    // FP4 activation precision: NVFP4 defaults to native W4A4, MXFP4 to fp8 W4A8; src1 Q4=mxfp4, Q8=Q8_1, FP8=e4m3
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 64, 16, 512));
@@ -11562,12 +11569,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 64, 16, 512));
     test_cases.emplace_back(new test_mul_mat_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_fp8(32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_fp8(64, 16, 512));
+    test_cases.emplace_back(new test_mul_mat_fp8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_fp8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 64, 16, 512));
+    // k not a multiple of an fp8 src1 block: exercises the quantizer tail
+    test_cases.emplace_back(new test_mul_mat_fp8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 160));
+    // NVFP4 has no fp8 path, the request resolves to Q8_1
+    test_cases.emplace_back(new test_mul_mat_fp8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_id_fp8(8, 2, false, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_id_fp8(4, 2, true,  64, 16, 256));
+    test_cases.emplace_back(new test_mul_mat_id_fp8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_id_fp8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
 
     // small K at batch > 8, e.g. LoRA B matrices with K = rank
     for (ggml_type type_a : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {

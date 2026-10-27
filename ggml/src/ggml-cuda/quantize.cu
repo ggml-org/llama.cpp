@@ -100,6 +100,7 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, d * sum);
 }
 
+// emax is the unbiased exponent of the format max (e2m1: 6.0, e4m3: 448.0), keeping amax / 2^emax in range
 constexpr int E2M1_EMAX = 2;
 [[maybe_unused]] constexpr int E4M3_EMAX = 8; // used only by the Blackwell activation kernel
 
@@ -458,7 +459,9 @@ static __global__ void quantize_mmq_fp8(
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int ne1, const int ne2, const int n_expert_used) {
 #if defined(BLACKWELL_MMA_AVAILABLE)
-    constexpr int vals_per_warp = QK_FP8_MMQ;
+    constexpr int vals_per_lane   = 4;
+    constexpr int vals_per_warp   = QK_FP8_MMQ;
+    constexpr int lanes_per_scale = QK_MXFP4 / vals_per_lane; // 8 lanes of 4 values share one ue8m0
 
     const int warp_id = threadIdx.y;
     const int lane_id_32 = threadIdx.x;
@@ -484,10 +487,10 @@ static __global__ void quantize_mmq_fp8(
         base_pos = i3 * s03 + i2 * s02 + i01 * s01;
     }
 
-    const int64_t i0 = warp_start_offset + 4 * lane_id_32;
+    const int64_t i0 = warp_start_offset + vals_per_lane * lane_id_32;
 
     const float4 * x4 = (const float4 *) x;
-    const float4   xv = (i0 < ne00) ? x4[(base_pos + i0)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    const float4   xv = (i0 < ne00) ? x4[(base_pos + i0)/vals_per_lane] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     float amax = fmaxf(fmaxf(fabsf(xv.x), fabsf(xv.y)), fmaxf(fabsf(xv.z), fabsf(xv.w)));
 #pragma unroll
@@ -514,8 +517,8 @@ static __global__ void quantize_mmq_fp8(
             ib = ib0 + k_block*ne1 + blockIdx.x;
         }
         ((uint32_t *) y[ib].qs)[lane_id_32] = packed;
-        if (lane_id_32 % 8 == 0) {
-            y[ib].d4[lane_id_32 / 8] = e;
+        if (lane_id_32 % lanes_per_scale == 0) {
+            ((uint8_t *) &y[ib].d4[0])[lane_id_32 / lanes_per_scale] = e;
         }
     }
 #else

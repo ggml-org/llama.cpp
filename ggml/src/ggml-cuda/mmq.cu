@@ -119,9 +119,9 @@ static ggml_prec ggml_cuda_mmq_get_prec_env() {
     return GGML_PREC_UNDEFINED;
 }
 
-// src1 is quantized to Q8_1 unless the type can use native Blackwell instructions:
-// mxfp4: FP8, Q4 (FP4) or Q8 if requested
-// nvfp4: Q4 (FP4), Q8 if requested
+// Pick the src1 precision for the MMQ. A set prec is the lowest rank the caller allows (see ggml.h),
+// so a type with no path at that rank uses the next better one; off Blackwell src1 is always Q8_1.
+// mxfp4: FP8 by default, Q4 (FP4) or Q8_1 on request - nvfp4: Q4 by default, Q8_1 on request
 static ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_type type, const ggml_prec prec_requested, const int cc) {
     static const ggml_prec prec_env = ggml_cuda_mmq_get_prec_env();
 
@@ -139,8 +139,8 @@ static ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_type type, const ggml_pr
             return GGML_PREC_FP8;
         }
         if (type == GGML_TYPE_NVFP4) {
-            if (prec == GGML_PREC_Q4 || prec == GGML_PREC_Q8) {
-                return prec;
+            if (prec == GGML_PREC_Q8 || prec == GGML_PREC_FP8) {
+                return GGML_PREC_Q8;
             }
             return GGML_PREC_Q4;
         }

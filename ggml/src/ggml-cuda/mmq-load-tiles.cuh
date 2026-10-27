@@ -1711,7 +1711,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         const block_mxfp4 * bxi = (const block_mxfp4 *) x + kbx0 + i*stride + kbx;
 
         memcpy(x_qs + i*sram_stride + kbx*4, bxi->qs, 16);
-        x_sc[i*sram_stride + kbx] = bxi->e;
+        // one byte per store: gathering 4 scales onto one thread measured 15% slower here
+        ((uint8_t *) &x_sc[i*sram_stride + kbx / FP8_SCALES_PER_WORD])[kbx % FP8_SCALES_PER_WORD] = bxi->e;
     }
 }
 
