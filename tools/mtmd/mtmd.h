@@ -152,6 +152,20 @@ MTMD_API bool mtmd_support_vision(const mtmd_context * ctx);
 // whether the current model supports audio input
 MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
 
+// how the loaded projector wants audio to be fed
+enum mtmd_audio_stream_mode {
+    MTMD_AUDIO_STREAM_NONE     = 0,  // the whole file goes in behind one marker
+    MTMD_AUDIO_STREAM_REALTIME = 1,  // continuous chunk stream, answer while listening
+    MTMD_AUDIO_STREAM_TURN     = 2,  // one chunk per turn, answer each turn before the next
+};
+
+MTMD_API enum mtmd_audio_stream_mode mtmd_audio_stream_mode(const mtmd_context * ctx);
+
+// true if fname is a GGUF that itself contains a multimodal projector
+// (the projector can be packaged inside the text model file instead of living
+// in a separate mmproj file). only reads the GGUF metadata, no weights are loaded
+MTMD_API bool mtmd_has_projector(const char * fname);
+
 // get audio sample rate in Hz, for example 16000 for Whisper
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);

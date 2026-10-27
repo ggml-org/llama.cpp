@@ -1400,6 +1400,18 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 }
 
 void llama_model_loader::done_getting_tensors(bool partial) const {
+    if (n_created < n_tensors && !partial) {
+        // a multimodal projector (mmproj) can be packaged inside the same GGUF as the
+        // text model ("single file" layout). the leftover tensors then belong to the
+        // projector, not to the text model - that is expected, not a broken file.
+        // stock text models never carry these keys, so the strict check stays intact.
+        for (const char * key : { "clip.projector_type", "clip.has_vision_encoder", "clip.has_audio_encoder" }) {
+            if (metadata && gguf_find_key(metadata, key) >= 0) {
+                partial = true;
+                break;
+            }
+        }
+    }
     if (n_created > n_tensors) {
         throw std::runtime_error(format("%s: too many tensors created; expected %d, got %d", __func__, n_tensors, n_created));
     }

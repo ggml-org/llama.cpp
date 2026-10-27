@@ -1018,6 +1018,11 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_dots3note_a>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_HYV3_SPEECH:
+            {
+                builder = std::make_unique<clip_graph_hyv3_speech>(ctx, img);
+            }
+            break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
             {
@@ -2258,6 +2263,23 @@ struct clip_model_loader {
                         get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
                         // NOTE: feature layers loaded above in common path
                     } break;
+                case PROJECTOR_TYPE_HYV3_SPEECH:
+                    {
+                        // Whisper-style mel: 16 kHz, n_fft 400, hop 160, 128 bins
+                        hparams.audio_chunk_len   = 0;
+                        hparams.audio_sample_rate = 16000;
+                        hparams.audio_n_fft       = 400;
+                        hparams.audio_window_len  = 400;
+                        hparams.audio_hop_len     = 160;
+                        // mel frames, not ms: one turn is at most 1.6 s = 160 frames
+                        hparams.warmup_audio_size = 160;
+                        // FSK stack size
+                        get_u32(KEY_A_PROJ_DOWNSAMPLE_RATE, hparams.audio_proj_downsample_rate, false);
+                        if (hparams.audio_proj_downsample_rate <= 0) {
+                            hparams.audio_proj_downsample_rate = 2;
+                        }
+                    }
+                    break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
                         hparams.image_pad_color   = {127, 127, 127};
@@ -3151,6 +3173,29 @@ struct clip_model_loader {
                     model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "weight"));
                     model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "bias"));
                 } break;
+            case PROJECTOR_TYPE_HYV3_SPEECH:
+                {
+                    model.conv2d_1_w = get_tensor(string_format(TN_CONV2D, 1, "weight"));
+                    model.conv2d_1_b = get_tensor(string_format(TN_CONV2D, 1, "bias"));
+                    model.conv2d_2_w = get_tensor(string_format(TN_CONV2D, 2, "weight"));
+                    model.conv2d_2_b = get_tensor(string_format(TN_CONV2D, 2, "bias"));
+                    model.conv2d_3_w = get_tensor(string_format(TN_CONV2D, 3, "weight"));
+                    model.conv2d_3_b = get_tensor(string_format(TN_CONV2D, 3, "bias"));
+                    model.conv_out_w = get_tensor(string_format(TN_CONV_OUT, "weight"));  // no bias
+                    model.a_pos_embd = get_tensor(TN_A_POS_EMBD);
+                    model.a_proj1_w  = get_tensor(string_format(TN_A_PROJ1, "weight"));
+                    model.a_proj1_b  = get_tensor(string_format(TN_A_PROJ1, "bias"));
+                    model.a_proj2_w  = get_tensor(string_format(TN_A_PROJ2, "weight"));
+                    model.a_proj2_b  = get_tensor(string_format(TN_A_PROJ2, "bias"));
+                    // adapter: Linear -> SiLU -> Linear -> LayerNorm
+                    model.a_mm_0_w   = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "weight"));
+                    model.a_mm_0_b   = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "bias"));
+                    model.a_mm_3_w   = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "weight"));
+                    model.a_mm_3_b   = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "bias"));
+                    model.a_mm_ln_w  = get_tensor(string_format(TN_MM_A_OUT_NORM, "weight"));
+                    model.a_mm_ln_b  = get_tensor(string_format(TN_MM_A_OUT_NORM, "bias"));
+                }
+                break;
             case PROJECTOR_TYPE_ULTRAVOX:
                 {
                     model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
@@ -4642,6 +4687,14 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 // 3x stride-2 conv2d over mel frames
                 n_patches = (img->nx() + 7) / 8;
             } break;
+        case PROJECTOR_TYPE_HYV3_SPEECH:
+            {
+                const int fsk = ctx->model.hparams.audio_proj_downsample_rate > 0 ?
+                                    ctx->model.hparams.audio_proj_downsample_rate :
+                                    2;
+                n_patches     = clip_graph_hyv3_speech::n_tokens_from_mel(img->nx(), fsk);
+            }
+            break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
@@ -6384,6 +6437,11 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     }
                 }
             } break;
+        case PROJECTOR_TYPE_HYV3_SPEECH:
+            {
+                // no extra graph inputs: inp_raw is filled by the common audio path
+            }
+            break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -6587,6 +6645,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_DOTS3NOTE_V:
         case PROJECTOR_TYPE_DOTS3NOTE_A:
             return ctx->model.mm_2_w->ne[1];
+        case PROJECTOR_TYPE_HYV3_SPEECH:
+            return ctx->model.a_proj2_w->ne[1];
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
