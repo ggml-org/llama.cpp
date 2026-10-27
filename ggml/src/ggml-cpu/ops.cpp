@@ -10553,6 +10553,8 @@ static void ggml_compute_forward_add_rel_pos_f32(
     const int64_t ne12 = src1->ne[2];
     const int64_t ne13 = src1->ne[3];
 
+    GGML_ASSERT(ggml_nelements(src1) * ne10 <= ggml_nelements(dst));
+
     const int ith = params->ith;
     const int nth = params->nth;
 
