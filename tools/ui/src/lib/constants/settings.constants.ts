@@ -13,6 +13,7 @@ import {
 	Monitor,
 	Moon,
 	PencilRuler,
+	Radio,
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
@@ -34,6 +35,7 @@ export const SETTINGS_SECTIONS = {
 	DISPLAY: { slug: 'display', title: 'Display' },
 	GENERAL: { slug: 'general', title: 'General' },
 	IMPORT_EXPORT: { slug: 'import-export', title: 'Import/Export' },
+	REMOTE_ACCESS: { slug: 'remote-access', title: 'Remote Access' },
 	SAMPLING_PENALTIES: { slug: 'sampling-penalties', title: 'Sampling & Penalties' },
 	TOOLS: { slug: 'tools', title: 'Tools' }
 } as const;
@@ -44,6 +46,7 @@ export const SETTINGS_SECTION_SLUGS = {
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.slug,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.slug,
+	REMOTE_ACCESS: SETTINGS_SECTIONS.REMOTE_ACCESS.slug,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.slug,
 	TOOLS: SETTINGS_SECTIONS.TOOLS.slug
 } as const;
@@ -54,6 +57,7 @@ export const SETTINGS_SECTION_TITLES = {
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.title,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.title,
+	REMOTE_ACCESS: SETTINGS_SECTIONS.REMOTE_ACCESS.title,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.title,
 	TOOLS: SETTINGS_SECTIONS.TOOLS.title
 } as const;
@@ -416,6 +420,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		settings: [],
 		slug: SETTINGS_SECTION_SLUGS.IMPORT_EXPORT,
 		title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT
+	},
+	// Remote Access
+	{
+		icon: Radio,
+		settings: [],
+		slug: SETTINGS_SECTION_SLUGS.REMOTE_ACCESS,
+		title: SETTINGS_SECTION_TITLES.REMOTE_ACCESS
 	},
 	// Sampling
 	{

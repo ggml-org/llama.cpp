@@ -1,10 +1,13 @@
 <script lang="ts">
 	import '../app.css';
+	// Kept first: constructing the store restores a saved remote session and
+	// installs the fetch interceptor before any module issues its first API call.
+	import '$lib/stores/webrtc.svelte';
 	import { browser } from '$app/environment';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { SidebarNavigation } from '$lib/components/app';
+	import { ServerRemoteCodeSplash, SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
@@ -33,6 +36,7 @@
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
+	import { webrtcStore } from '$lib/stores/webrtc.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
@@ -57,6 +61,10 @@
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
 	);
+
+	// A web-only build reaches no server before the tunnel is up, so the app is
+	// replaced by the code prompt and every request below is held back.
+	let waitingForCode = $derived(webrtcStore.isBlocked);
 
 	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
 	const pwa = usePwa();
@@ -138,6 +146,8 @@
 	});
 
 	function checkApiKey() {
+		if (waitingForCode) return;
+
 		const apiKey = settingsStore.config.apiKey;
 
 		// Without a stored key there is nothing to re-validate here; the keyless
@@ -175,6 +185,9 @@
 
 	onMount(() => {
 		updateFavicon();
+
+		if (waitingForCode) return;
+
 		// snapshot of every backend running stream on first load, populates the sidebar spinners
 		// so the user sees each conv that has a live inference, even ones not opened yet
 		void chatStore.syncRemoteRunningStreams();
@@ -183,7 +196,7 @@
 	// refresh that snapshot when the tab returns to the foreground, a stream may have advanced
 	// or ended while it was hidden. snapshot only, no polling
 	function handleVisibilityChange() {
-		if (document.visibilityState !== 'visible') return;
+		if (document.visibilityState !== 'visible' || waitingForCode) return;
 
 		void chatStore.syncRemoteRunningStreams();
 	}
@@ -196,6 +209,8 @@
 
 	// Initialize server properties on app load (run once)
 	$effect(() => {
+		if (waitingForCode) return;
+
 		// Only fetch if we don't already have props
 		if (!serverStore.props) {
 			untrack(() => {
@@ -266,7 +281,7 @@
 	// keep their existing state, so adding or removing a server does not flash
 	// every other card back through skeleton state.
 	$effect(() => {
-		if (!browser) return;
+		if (!browser || waitingForCode) return;
 
 		const mcpServers = mcpStore.getServers();
 		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
@@ -306,40 +321,44 @@
 <svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
-<Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<div class="flex flex-col md:flex-row">
-		<SidebarNavigation
-			onSearchClick={() => {
-				if (deviceStore.isMobile) {
-					goto(ROUTES.SEARCH);
-				} else if (chatSidebar?.activateSearchMode) {
-					chatSidebar.activateSearchMode();
-				}
-			}}
-		/>
+{#if waitingForCode}
+	<ServerRemoteCodeSplash />
+{:else}
+	<Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
+		<div class="flex flex-col md:flex-row">
+			<SidebarNavigation
+				onSearchClick={() => {
+					if (deviceStore.isMobile) {
+						goto(ROUTES.SEARCH);
+					} else if (chatSidebar?.activateSearchMode) {
+						chatSidebar.activateSearchMode();
+					}
+				}}
+			/>
 
-		<!-- min-w-0 lets the chat column shrink below its content width, so wide
-		     code blocks and tables scroll inside their own containers instead of
-		     stretching the page into a horizontal scrollbar -->
-		<div class="min-w-0 flex-1">
-			{@render children?.()}
+			<!-- min-w-0 lets the chat column shrink below its content width, so wide
+			     code blocks and tables scroll inside their own containers instead of
+			     stretching the page into a horizontal scrollbar -->
+			<div class="min-w-0 flex-1">
+				{@render children?.()}
+			</div>
 		</div>
+
+		<Toaster closeButton richColors />
+	</Tooltip.Provider>
+
+	<!-- PWA update prompt + version -->
+	<div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
+		{#if showBuildVersion && versionStore.build}
+			<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
+		{/if}
+
+		<PwaRefreshAlert
+			forceReload={pwa.needRefreshByStorage}
+			needRefresh={$needRefresh || pwa.needRefreshByStorage}
+			{updateServiceWorker}
+		/>
 	</div>
+{/if}
 
-	<ModeWatcher />
-
-	<Toaster closeButton richColors />
-</Tooltip.Provider>
-
-<!-- PWA update prompt + version -->
-<div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
-	{#if showBuildVersion && versionStore.build}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
-	{/if}
-
-	<PwaRefreshAlert
-		forceReload={pwa.needRefreshByStorage}
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
-		{updateServiceWorker}
-	/>
-</div>
+<ModeWatcher />
