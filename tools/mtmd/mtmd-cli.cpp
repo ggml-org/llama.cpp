@@ -120,7 +120,8 @@ struct mtmd_cli_context {
         init_vision_context(params);
 
         mtmd_cap = mtmd_helper_get_capabilities(model, ctx_vision.get());
-        if (!mtmd_cap.chat) {
+        // a realtime transcription model has no chat, it streams the audio below
+        if (!mtmd_cap.chat && !mtmd_cap.audio_stream) {
             LOG_ERR("Model does not support chat mode\n");
             LOG_ERR("Hint: for TTS models, please use llama-tts\n");
             exit(1);
@@ -567,7 +568,10 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
-    if (ctx.mtmd_cap.audio_stream) {
+    // realtime transcription models (no chat) transcribe while they listen, the others answer after the audio
+    const bool transcribes = ctx.mtmd_cap.audio_stream && !ctx.mtmd_cap.chat;
+
+    if (transcribes) {
         if (params.image.size() != 1) {
             LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
             return 1;

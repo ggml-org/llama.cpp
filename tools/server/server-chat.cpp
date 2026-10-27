@@ -687,11 +687,11 @@ json convert_transcriptions_to_chatcmpl(
     if (response_format != "json") {
         throw std::invalid_argument("Only 'json' response_format is supported for transcription");
     }
-    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls);
+    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
     if (prompt.empty()) {
         prompt = preset.user;
     }
-    if (!language.empty()) {
+    if (!language.empty() && !preset.has_language) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
     prompt += get_media_marker();

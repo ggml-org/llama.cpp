@@ -316,6 +316,7 @@ struct common_chat_templates {
     bool has_explicit_template;  // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
+    std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -803,17 +804,68 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
     return tmpls->has_explicit_template;
 }
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates) {
+// renders a task template (e.g. "tts") with the given variables
+static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
+    jinja::context ctx(tmpl.source());
+    jinja::global_from_json(ctx, vars, false);
+    ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
+    ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
+    jinja::runtime runtime(ctx);
+    return jinja::runtime::gather_string_parts(runtime.execute(tmpl.prog))->as_string().str();
+}
+
+// LFM3 format detection: template renders deferred tools inside <additional_tools>...</additional_tools>
+static bool is_lfm3_template(const std::string & src) {
+    return src.find("<additional_tools>") != std::string::npos;
+}
+
+// LFM3-Audio: a known language code maps to its name, no language lets the model detect it
+static std::string lfm3_asr_system_prompt(const std::string & language) {
+    static const std::map<std::string, std::string> names = {
+        { "ar", "Arabic" }, { "da", "Danish" }, { "de", "German" }, { "el", "Greek" }, { "en", "English" },
+        { "es", "Spanish" }, { "fi", "Finnish" }, { "fr", "French" }, { "he", "Hebrew" }, { "it", "Italian" },
+        { "ja", "Japanese" }, { "ko", "Korean" }, { "nl", "Dutch" }, { "pl", "Polish" }, { "pt", "Portuguese" },
+        { "sv", "Swedish" }, { "tr", "Turkish" }, { "zh", "Chinese" },
+    };
+    if (language.empty()) {
+        return "Perform ASR.";
+    }
+    std::string code = language;
+    std::transform(code.begin(), code.end(), code.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    const auto it = names.find(code);
+    return "Perform ASR in " + (it != names.end() ? it->second : language) + ".";
+}
+
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language) {
     common_chat_prompt_preset asr_preset;
     asr_preset.system = "";
     asr_preset.user   = "Transcribe audio to text";
 
-    if (chat_templates && chat_templates->template_default && is_lfm2_template(chat_templates->template_default->source())) {
-        asr_preset.system = "Perform ASR.";
-        asr_preset.user   = "";
+    if (chat_templates && chat_templates->template_default) {
+        const std::string src = chat_templates->template_default->source();
+        if (is_lfm2_template(src)) {
+            asr_preset.system = "Perform ASR.";
+            asr_preset.user   = "";
+        } else if (is_lfm3_template(src)) {
+            asr_preset.system = lfm3_asr_system_prompt(language);
+            asr_preset.user   = "";
+            asr_preset.has_language = true;
+        }
     }
 
     return asr_preset;
+}
+
+std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
+                                       const std::string & language, const std::string & voice) {
+    if (!chat_templates || !chat_templates->template_tts) {
+        return "";
+    }
+    return common_chat_template_render(*chat_templates->template_tts, {
+        {"messages", json::array({{{"role", "user"}, {"content", text}}})},
+        {"language", language},
+        {"voice",    voice},
+    });
 }
 
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant) {
@@ -924,6 +976,16 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
             tmpls->template_tool_use = std::make_unique<common_chat_template>(template_tool_use_src, token_bos, token_eos);
         } catch (const std::exception & e) {
             LOG_ERR("%s: failed to parse tool use chat template (ignoring it): %s\n", __func__, e.what());
+        }
+    }
+    // task templates of the model, kept with a chat template override
+    if (model) {
+        if (const char * src = llama_model_chat_template(model, "tts")) {
+            try {
+                tmpls->template_tts = std::make_unique<common_chat_template>(src, token_bos, token_eos);
+            } catch (const std::exception & e) {
+                LOG_ERR("%s: failed to parse the tts chat template (ignoring it): %s\n", __func__, e.what());
+            }
         }
     }
     return tmpls;

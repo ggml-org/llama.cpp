@@ -501,6 +501,7 @@ class Keys:
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
+            HEAD_COUNT_KV   = "clip.audio.attention.head_count_kv"
             HEAD_DIM        = "clip.audio.attention.head_dim" # set when qkv width != n_embd
             LAYERNORM_EPS   = "clip.audio.attention.layer_norm_epsilon"
 
@@ -518,6 +519,11 @@ class Keys:
         FEED_FORWARD_LENGTH = "clip.gen.audio.feed_forward_length"
         BLOCK_COUNT         = "clip.gen.audio.block_count"
         PROJECTION_DIM      = "clip.gen.audio.projection_dim"
+        # sampling defaults of the generated audio, like general.sampling.* for text
+        SAMPLING_TEMP           = "clip.gen.audio.sampling.temp"
+        SAMPLING_TOP_K          = "clip.gen.audio.sampling.top_k"
+        SAMPLING_PENALTY_REPEAT = "clip.gen.audio.sampling.penalty_repeat"
+        SAMPLING_PENALTY_LAST_N = "clip.gen.audio.sampling.penalty_last_n"
 
         class Attention:
             HEAD_COUNT      = "clip.gen.audio.attention.head_count"
@@ -1176,6 +1182,8 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_ATTN_Q          = auto()
     A_ENC_ATTN_K          = auto()
     A_ENC_ATTN_V          = auto()
+    A_ENC_ATTN_Q_NORM     = auto() # lfm3a
+    A_ENC_ATTN_K_NORM     = auto() # lfm3a
     A_ENC_ATTN_POST_NORM  = auto()
     A_ENC_ATTN_PRE_NORM   = auto()
     A_ENC_ATTN_K_REL      = auto() # gemma4
@@ -1220,6 +1228,9 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_CODE_FFN_UP      = auto()
     A_GEN_CODE_FFN_DOWN    = auto()
     A_GEN_CODE_OUTPUT_NORM = auto()
+    A_GEN_CODE_ATTN_GATE   = auto() # lfm3a: per-head sigmoid gate on the attention output
+    A_GEN_CODE_HEAD_NORM   = auto() # lfm3a: per-codebook norm before the output head, merged 2D [n_codebooks, dim]
+    A_GEN_CODE_MASK_EMBD   = auto() # lfm3a: MaskGIT mask embedding
     # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj
@@ -1242,6 +1253,14 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_WAV_TFM_FFN_UP           = auto()
     A_GEN_WAV_TFM_FFN_DOWN         = auto()
     A_GEN_WAV_TFM_FFN_SCALE        = auto() # layer scale (gamma) on the FFN output
+    A_GEN_WAV_TFM_ATTN_Q_NORM      = auto() # lfm3a
+    A_GEN_WAV_TFM_ATTN_K_NORM      = auto() # lfm3a
+    A_GEN_WAV_TFM_CONV_PW1         = auto() # lfm3a: short conv in_proj
+    A_GEN_WAV_TFM_CONV_DW          = auto() # lfm3a: short conv depthwise kernel
+    A_GEN_WAV_TFM_CONV_PW2         = auto() # lfm3a: short conv out_proj
+    A_GEN_WAV_TFM_ATTN_GATE        = auto() # lfm3a: per-head sigmoid gate on the attention output
+    A_GEN_WAV_TFM_ATTN_POST_NORM   = auto() # lfm3a: sandwich norm after the operator
+    A_GEN_WAV_TFM_FFN_POST_NORM    = auto() # lfm3a: sandwich norm after the FFN
     A_GEN_WAV_UP_CONV              = auto() # causal ConvTranspose1d, 2x upsample
     A_GEN_WAV_UP_DWCONV            = auto() # ConvNeXt depthwise conv
     A_GEN_WAV_UP_NORM              = auto() # ConvNeXt LayerNorm
@@ -2004,6 +2023,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_ATTN_Q:              "a.blk.{bid}.attn_q",
     MODEL_TENSOR.A_ENC_ATTN_K:              "a.blk.{bid}.attn_k",
     MODEL_TENSOR.A_ENC_ATTN_V:              "a.blk.{bid}.attn_v",
+    MODEL_TENSOR.A_ENC_ATTN_Q_NORM:         "a.blk.{bid}.attn_q_norm",
+    MODEL_TENSOR.A_ENC_ATTN_K_NORM:         "a.blk.{bid}.attn_k_norm",
     MODEL_TENSOR.A_ENC_ATTN_POST_NORM:      "a.blk.{bid}.attn_post_norm",
     MODEL_TENSOR.A_ENC_ATTN_PRE_NORM:       "a.blk.{bid}.attn_pre_norm",
     MODEL_TENSOR.A_ENC_ATTN_K_REL:          "a.blk.{bid}.attn_k_rel",
@@ -2047,6 +2068,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_CODE_FFN_UP:         "a.gen.code.blk.{bid}.ffn_up",
     MODEL_TENSOR.A_GEN_CODE_FFN_DOWN:       "a.gen.code.blk.{bid}.ffn_down",
     MODEL_TENSOR.A_GEN_CODE_OUTPUT_NORM:    "a.gen.code.output_norm",
+    MODEL_TENSOR.A_GEN_CODE_ATTN_GATE:      "a.gen.code.blk.{bid}.attn_gate",
+    MODEL_TENSOR.A_GEN_CODE_HEAD_NORM:      "a.gen.code.head_norm",
+    MODEL_TENSOR.A_GEN_CODE_MASK_EMBD:      "a.gen.code.mask_embd",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN:  "a.gen.wav.quant.first.in_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT: "a.gen.wav.quant.first.out_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB:  "a.gen.wav.quant.first.codebook",
@@ -2068,6 +2092,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_WAV_TFM_FFN_UP:      "a.gen.wav.tfm.blk.{bid}.ffn_up",
     MODEL_TENSOR.A_GEN_WAV_TFM_FFN_DOWN:    "a.gen.wav.tfm.blk.{bid}.ffn_down",
     MODEL_TENSOR.A_GEN_WAV_TFM_FFN_SCALE:   "a.gen.wav.tfm.blk.{bid}.ls2",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q_NORM: "a.gen.wav.tfm.blk.{bid}.attn_q_norm",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K_NORM: "a.gen.wav.tfm.blk.{bid}.attn_k_norm",
+    MODEL_TENSOR.A_GEN_WAV_TFM_CONV_PW1:    "a.gen.wav.tfm.blk.{bid}.conv_pw1",
+    MODEL_TENSOR.A_GEN_WAV_TFM_CONV_DW:     "a.gen.wav.tfm.blk.{bid}.conv_dw",
+    MODEL_TENSOR.A_GEN_WAV_TFM_CONV_PW2:    "a.gen.wav.tfm.blk.{bid}.conv_pw2",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_GATE:   "a.gen.wav.tfm.blk.{bid}.attn_gate",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_POST_NORM: "a.gen.wav.tfm.blk.{bid}.attn_post_norm",
+    MODEL_TENSOR.A_GEN_WAV_TFM_FFN_POST_NORM:  "a.gen.wav.tfm.blk.{bid}.ffn_post_norm",
     MODEL_TENSOR.A_GEN_WAV_UP_CONV:         "a.gen.wav.up.blk.{bid}.conv",
     MODEL_TENSOR.A_GEN_WAV_UP_DWCONV:       "a.gen.wav.up.blk.{bid}.dwconv",
     MODEL_TENSOR.A_GEN_WAV_UP_NORM:         "a.gen.wav.up.blk.{bid}.norm",
@@ -2364,6 +2396,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_ATTN_Q,
         MODEL_TENSOR.A_ENC_ATTN_K,
         MODEL_TENSOR.A_ENC_ATTN_V,
+        MODEL_TENSOR.A_ENC_ATTN_Q_NORM,
+        MODEL_TENSOR.A_ENC_ATTN_K_NORM,
         MODEL_TENSOR.A_ENC_ATTN_POST_NORM,
         MODEL_TENSOR.A_ENC_ATTN_PRE_NORM,
         MODEL_TENSOR.A_ENC_ATTN_K_REL,
@@ -2431,6 +2465,9 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_CODE_FFN_UP,
         MODEL_TENSOR.A_GEN_CODE_FFN_DOWN,
         MODEL_TENSOR.A_GEN_CODE_OUTPUT_NORM,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_GATE,
+        MODEL_TENSOR.A_GEN_CODE_HEAD_NORM,
+        MODEL_TENSOR.A_GEN_CODE_MASK_EMBD,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB,
@@ -2452,6 +2489,14 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_WAV_TFM_FFN_UP,
         MODEL_TENSOR.A_GEN_WAV_TFM_FFN_DOWN,
         MODEL_TENSOR.A_GEN_WAV_TFM_FFN_SCALE,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q_NORM,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K_NORM,
+        MODEL_TENSOR.A_GEN_WAV_TFM_CONV_PW1,
+        MODEL_TENSOR.A_GEN_WAV_TFM_CONV_DW,
+        MODEL_TENSOR.A_GEN_WAV_TFM_CONV_PW2,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_GATE,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_POST_NORM,
+        MODEL_TENSOR.A_GEN_WAV_TFM_FFN_POST_NORM,
         MODEL_TENSOR.A_GEN_WAV_UP_CONV,
         MODEL_TENSOR.A_GEN_WAV_UP_DWCONV,
         MODEL_TENSOR.A_GEN_WAV_UP_NORM,
@@ -6547,6 +6592,8 @@ class VisionProjectorType:
     DEEPSEEK4V = "deepseek4v"
     DEEPSEEK41V = "deepseek41v"
     LFM2A = "lfm2a" # audio
+    LFM3A = "lfm3a" # audio
+    LFM3A_GEN = "lfm3a_gen" # audio generation: MaskGIT depthformer + liquid-codec decoder
     MUSIC_FLAMINGO = "musicflamingo" # audio
     GLM4V = "glm4v"
     GLM5V = "glm5v"

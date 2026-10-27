@@ -11,6 +11,7 @@
 #include "mtmd-helper.h"
 #include "mtmd-helper-common.h"
 #include "llama.h"
+#include "../src/llama-ext.h"
 
 #include "hash/hash.h"
 
@@ -1043,8 +1044,10 @@ mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mt
     cap.audio_gen_spk_ref = gen_audio_type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS
                          || gen_audio_type == MTMD_GEN_AUDIO_TYPE_POCKETTTS;
 
-    // tts-only model cannot be used for chat (no chat template)
-    cap.chat = !cap.audio_gen || llama_model_chat_template(model, nullptr) != nullptr;
+    // a tts model without a chat template only outputs audio, it cannot be used for chat
+    // neither can a realtime transcription model (e.g. Voxtral Realtime): its text follows the audio by a token delay
+    cap.text_gen = !cap.audio_gen || llama_model_chat_template(model, nullptr) != nullptr;
+    cap.chat     = cap.text_gen && llama_model_n_tokens_delay(model) == 0;
 
     return cap;
 }

@@ -772,6 +772,7 @@ struct common_params {
 
     // TTS params
     std::string tts_lang = "";
+    std::string tts_voice = "";
     std::string tts_speaker_file = "";
 
     bool is_gen_docs = false; // whether we are running inside llama-gen-docs

@@ -383,6 +383,11 @@ typedef struct mtmd_audio_stream mtmd_audio_stream;
 
 struct mtmd_audio_stream_params {
     int32_t step_ms; // audio encoded per encoder call, rounded up to the model step (default: 320)
+
+    // tokens that open the stream, they go out with the first rows (default: none)
+    // with the prompt of its "asr" chat template, LFM3-Audio transcribes live
+    const llama_token * prompt;
+    size_t              n_prompt;
 };
 MTMD_API struct mtmd_audio_stream_params mtmd_audio_stream_params_default(void);
 
@@ -412,11 +417,14 @@ MTMD_API int32_t mtmd_audio_stream_step(mtmd_audio_stream * stream, llama_token 
 // rows of the last step, the reading size (in bytes) is n_rows * llama_model_n_embd_inp(model) * sizeof(float)
 MTMD_API const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream * stream);
 
-// rows produced so far, the prefix rows included
+// true if the rows of the last step start a new sequence: the caller drops its sequence before decoding them
+MTMD_API bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * stream);
+
+// audio rows whose text has been sampled (prefix rows included), step() updates it from last_token
 MTMD_API int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * stream);
 
-// rows the stream produces up to the end of the last flush
-// once get_n_rows() reaches it, every row of the flushed audio has been produced
+// audio rows up to the end of the last flush
+// once get_n_rows() reaches it, the text of the flushed audio has been sampled
 MTMD_API int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * stream);
 
 /////////////////////////////////////////
@@ -428,6 +436,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_QWEN3TTS,
     MTMD_GEN_AUDIO_TYPE_POCKETTTS,
     MTMD_GEN_AUDIO_TYPE_SOPRANO,
+    MTMD_GEN_AUDIO_TYPE_LFM3A,
 };
 
 struct mtmd_gen_audio_info {
@@ -444,6 +453,7 @@ enum mtmd_gen_process_type {
     MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert semantic to PCM audio
                                     // for qwen3tts, this is code2wav
                                     // for pocket-tts, this is mimi decoder
+                                    // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
 };
 
 struct mtmd_gen_inp {
@@ -455,9 +465,12 @@ struct mtmd_gen_inp {
     int32_t top_k;
     float   top_p;
     float   temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
+    int32_t penalty_last_n; // frames the repetition penalty looks back on
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
+    // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
     int32_t * codes;
     size_t    n_codes;
     const float * feats;

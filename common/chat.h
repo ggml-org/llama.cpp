@@ -491,6 +491,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 struct common_chat_prompt_preset {
     std::string system;
     std::string user;
+    bool has_language = false; // the preset already names the requested language
 };
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language = "");
+
+// prompt of the model's "tts" chat template for the text to speak, empty if the model has none
+// language and voice are optional, the template defines their defaults
+std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
+                                       const std::string & language = "", const std::string & voice = "");

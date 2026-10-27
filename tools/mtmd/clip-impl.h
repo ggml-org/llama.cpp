@@ -106,6 +106,11 @@
 #define KEY_GEN_AUDIO_PROJ_TYPE    "clip.gen.audio.projector_type" // for models with mixed modalities
 // name of the weight variant, for settings that are not in the checkpoint
 #define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
+// sampling defaults of the generated audio, like general.sampling.* for text
+#define KEY_GEN_AUDIO_TEMP           "clip.gen.audio.sampling.temp"
+#define KEY_GEN_AUDIO_TOP_K          "clip.gen.audio.sampling.top_k"
+#define KEY_GEN_AUDIO_PENALTY_REPEAT "clip.gen.audio.sampling.penalty_repeat"
+#define KEY_GEN_AUDIO_PENALTY_LAST_N "clip.gen.audio.sampling.penalty_last_n"
 #define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
 
 //
@@ -245,6 +250,11 @@
 #define TN_A_GEN_CODE_HEAD     "a.gen.code.head.%s"
 #define TN_A_GEN_CODE_OUT_EMBD "a.gen.code.out_embd.%s"
 #define TN_A_GEN_CODE_NORM     "a.gen.code.output_norm.%s"
+
+// lfm3a depthformer (MaskGIT), the codec decoder uses the generic layer names with prefix "a.gen.wav.tfm"
+#define TN_A_GEN_CODE_HEAD_NORM "a.gen.code.head_norm.%s"
+#define TN_A_GEN_CODE_MASK_EMBD "a.gen.code.mask_embd"
+#define TN_ATTN_GATE            "%s.blk.%d.attn_gate.%s"
 
 // qwen3tts code2wav (RVQ codes -> raw PCM)
 // pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
@@ -474,6 +484,9 @@ struct clip_enc_state {
     ggml_backend_buffer_ptr buf;
     std::vector<ggml_tensor *> k; // per layer [n_embd_kv, n_ctx]
     std::vector<ggml_tensor *> v;
+
+    // lfm3a: same order as list_lfm3a_state_slots(), F32 [ne0, ne1], updated in place
+    std::vector<ggml_tensor *> slots;
 };
 
 // per-sequence state of audio generation, see clip_gen_state_init()
@@ -539,6 +552,7 @@ enum projector_type {
     PROJECTOR_TYPE_DEEPSEEK41V,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_D1OMNI_A,
+    PROJECTOR_TYPE_LFM3A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_GLM5V,
     PROJECTOR_TYPE_YOUTUVL,
@@ -562,6 +576,7 @@ enum projector_type {
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_SOPRANO,
+    PROJECTOR_TYPE_LFM3A_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
@@ -618,6 +633,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_DEEPSEEK41V,       "deepseek41v"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
     { PROJECTOR_TYPE_D1OMNI_A,          "d1omni_a"},
+    { PROJECTOR_TYPE_LFM3A,             "lfm3a"},
     { PROJECTOR_TYPE_GLM4V,             "glm4v"},
     { PROJECTOR_TYPE_GLM5V,             "glm5v"},
     { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
@@ -641,6 +657,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
+    { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
