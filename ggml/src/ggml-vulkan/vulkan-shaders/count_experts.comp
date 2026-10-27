@@ -40,6 +40,8 @@ layout (binding = 2) writeonly buffer DST {float data_dst[];};
 shared uint vals[EXPERTS_PER_CHUNK];
 shared uint offsets[EXPERTS_PER_CHUNK];
 shared uint cursors[EXPERTS_PER_CHUNK];
+shared uint skipped_rows;
+shared uint skip_count;
 
 // data_d[0] is the tile count. Each tile has (expert, valid rows).
 // Packed (token << 16) | slot row ids start at p.row_ids_offset, with each expert on a tile boundary.
@@ -51,23 +53,38 @@ void write_tiles(uint expert, uint count, uint tile_begin, uint n_tiles) {
     }
 }
 
-// the matmul writes only the rows that an expert owns, so zero the rows of the skipped slots
+// The matmul does not write skipped rows, so collect their offsets and zero them cooperatively.
 void zero_skipped_rows() {
     const uint num_elements = p.ne00 * p.ne01;
     const uint tid = gl_LocalInvocationID.x;
 
-    for (uint idx = 0; idx < num_elements; idx++) {
-        const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
-        const uint i00 = idx - i01 * p.ne00;
-
-        if (int(data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00]) != -1) {
-            continue;
+    // Reuse offsets[] as a queue, so each batch must fit in EXPERTS_PER_CHUNK.
+    for (uint base = 0; base < num_elements; base += EXPERTS_PER_CHUNK) {
+        const uint end = min(base + EXPERTS_PER_CHUNK, num_elements);
+        if (tid == 0) {
+            skip_count = 0;
         }
+        barrier();
 
-        const uint d_off = i00 * p.stride_dst + i01 * p.batch_stride_dst;
-        for (uint i = tid; i < p.ne0_dst; i += BLOCK_SIZE) {
-            data_dst[d_off + i] = 0.0f;
+        for (uint idx = base + tid; idx < end; idx += BLOCK_SIZE) {
+            const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+            const uint i00 = idx - i01 * p.ne00;
+
+            if (int(data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00]) == -1) {
+                const uint slot = atomicAdd(skip_count, 1);
+                offsets[slot] = i00 * p.stride_dst + i01 * p.batch_stride_dst;
+            }
         }
+        barrier();
+
+        const uint n_skipped = skip_count;
+        for (uint r = 0; r < n_skipped; ++r) {
+            const uint d_off = offsets[r];
+            for (uint i = tid; i < p.ne0_dst; i += BLOCK_SIZE) {
+                data_dst[d_off + i] = 0.0f;
+            }
+        }
+        barrier();
     }
 }
 
@@ -76,6 +93,11 @@ void main() {
     const uint tid = gl_LocalInvocationID.x;
     const uint tile_shift = findLSB(p.row_tile_size);
     uint total_tiles = 0;
+    uint local_skipped = 0;
+    if (tid == 0) {
+        skipped_rows = 0;
+    }
+    barrier();
 #ifdef USE_SUBGROUPS
     // Use the subgroup that contains invocation 0.
     const bool prefix_subgroup = subgroupAny(tid == 0);
@@ -135,7 +157,12 @@ void main() {
         for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
             const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
             const uint i00 = idx - i01 * p.ne00;
-            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00] - expert_base;
+            const uint id = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
+            // Count skipped slots only in the first expert chunk.
+            if (expert_base == 0 && int(id) == -1) {
+                local_skipped++;
+            }
+            const uint expert = id - expert_base;
             if (expert < n_experts) {
                 const uint row = atomicAdd(cursors[expert], 1);
                 data_d[p.row_ids_offset + offsets[expert] + row] = (i01 << 16) | i00;
@@ -144,9 +171,18 @@ void main() {
         // The next chunk clears vals. Scatter uses only offsets and cursors.
         expert_base += n_experts;
     }
+    if (local_skipped != 0) {
+        atomicAdd(skipped_rows, local_skipped);
+    }
+    // All scatter reads must finish before reusing offsets[] as a queue.
+    barrier();
+
     if (tid == 0) {
         data_d[0] = total_tiles;
     }
 
-    zero_skipped_rows();
+    // No experts means there is no first chunk to detect skipped slots.
+    if (skipped_rows != 0 || p.n_experts == 0) {
+        zero_skipped_rows();
+    }
 }
