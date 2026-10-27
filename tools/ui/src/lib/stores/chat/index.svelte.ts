@@ -951,7 +951,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
 
+		// a router serves the props the request options read once the model is loaded, so the
+		// request waits for the load, and a stop during the wait aborts it
+		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
+
 		if (serverStore.isRouterMode && effectiveModel) {
+			await modelsStore.status.ensureLoaded(effectiveModel);
+
+			if (abortController.signal.aborted) return;
+
 			if (!modelsStore.props.getModelProps(effectiveModel))
 				await modelsStore.props.fetchModelProps(effectiveModel);
 		}
@@ -1027,7 +1035,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		};
 
 		this.processing.setActiveConversation(convId);
-		const abortController = this.getOrCreateAbortController(convId);
 		const streamCallbacks: ChatStreamCallbacks = {
 			createAssistantMessage: async () => {
 				// Reset streaming state for new message

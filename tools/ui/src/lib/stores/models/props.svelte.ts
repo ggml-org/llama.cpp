@@ -25,7 +25,7 @@ import type { ReasoningEffortLevel } from '$lib/types';
 // into the stores, and going through it here would read a half-built module
 import { TTLCache } from '$lib/utils/cache-ttl';
 import { detectThinkingSupport } from '$lib/utils/chat-template-thinking-detector';
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap } from 'svelte/reactivity';
 
 /**
  * The slice of modelsStore the manager reads. Kept narrow on purpose so it
@@ -51,7 +51,8 @@ export class ModelPropsManager {
 		maxEntries: MODEL_PROPS_CACHE.MAX_ENTRIES,
 		ttlMs: MODEL_PROPS_CACHE.TTL_MS
 	});
-	private fetching = new SvelteSet<string>();
+	/** Props requests in flight, a second caller awaits the same request. */
+	private fetching = new SvelteMap<string, Promise<ApiLlamaCppServerProps | null>>();
 
 	/**
 	 * Whether the selected model's chat template supports thinking/reasoning.
@@ -166,24 +167,27 @@ export class ModelPropsManager {
 			return null;
 		}
 
-		if (this.fetching.has(modelId)) return null;
+		const inFlight = this.fetching.get(modelId);
 
-		this.fetching.add(modelId);
+		if (inFlight) return inFlight;
 
-		try {
-			const props = await PropsService.fetchForModel(modelId);
+		const request = PropsService.fetchForModel(modelId)
+			.then((props) => {
+				this.cache.set(modelId, props);
+				this.cacheVersion++;
 
-			this.cache.set(modelId, props);
-			this.cacheVersion++;
+				return props;
+			})
+			.catch((error) => {
+				console.warn(`Failed to fetch props for model ${modelId}:`, error);
 
-			return props;
-		} catch (error) {
-			console.warn(`Failed to fetch props for model ${modelId}:`, error);
+				return null;
+			})
+			.finally(() => this.fetching.delete(modelId));
 
-			return null;
-		} finally {
-			this.fetching.delete(modelId);
-		}
+		this.fetching.set(modelId, request);
+
+		return request;
 	}
 
 	getModelContextSize(modelId: string): number | null {
