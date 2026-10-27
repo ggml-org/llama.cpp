@@ -1,19 +1,8 @@
-export const AUTO_SCROLL_INTERVAL = 100;
-// How long after the reader's wheel, touch or scroll key an upward scroll
-// still counts as theirs. Scrolls with no such input (scroll anchoring,
-// blocks re-rendering, programmatic scrolls) never stop auto-scroll.
-export const USER_SCROLL_INTENT_MS = 250;
-// Conversation landing: the page keeps growing after the first bottom pin
-// (lazy rows mounting, content-visibility size realizations, syntax
-// highlight passes), so the pin holds until the page has not resized for
-// this long or the reader interacts.
-export const LANDING_QUIET_MS = 1000;
 // Rows at the end of the list that mount eagerly, so the first painted
 // frame of a conversation already shows real content at the bottom.
 export const LANDING_EAGER_ROWS = 8;
-// Chat main view: tight threshold because scroll-here events come from
-// discrete assistant-message appends.
-export const AUTO_SCROLL_AT_BOTTOM_THRESHOLD = 10;
+// Nested scroll areas that follow their own content while it streams. The page
+// itself is driven by `createStickToBottom()`, which needs no tuning knobs.
 // Reasoning block: stickier because reasoning fires many small
 // incremental DOM writes that easily drift a few pixels off bottom.
 export const REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX = 64;

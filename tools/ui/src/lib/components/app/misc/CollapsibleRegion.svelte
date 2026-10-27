@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { COLLAPSIBLE_TRANSITION_MS } from '$lib/constants';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -8,9 +9,8 @@
 
 	let { children, open }: Props = $props();
 
-	// rows stay mounted through the collapse transition so it can play
-	const EXPAND_TRANSITION_MS = 200;
-	// the initial state only: the effect below owns it afterwards
+	// rows stay mounted through the collapse transition so it can play; this is
+	// only the initial state, the effect below owns it afterwards
 	// svelte-ignore state_referenced_locally
 	let contentMounted = $state(open);
 
@@ -21,7 +21,7 @@
 			return;
 		}
 
-		const timer = setTimeout(() => (contentMounted = false), EXPAND_TRANSITION_MS);
+		const timer = setTimeout(() => (contentMounted = false), COLLAPSIBLE_TRANSITION_MS);
 
 		return () => clearTimeout(timer);
 	});

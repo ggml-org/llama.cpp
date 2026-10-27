@@ -8,7 +8,7 @@
 // default, in both directions.
 
 import ChatMessageAgenticContent from '$lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
-import { SETTINGS_KEYS } from '$lib/constants';
+import { COLLAPSIBLE_TRANSITION_MS, SETTINGS_KEYS } from '$lib/constants';
 import { MessageRole, MessageType } from '$lib/enums';
 import { settingsStore } from '$lib/stores';
 import type { DatabaseMessage } from '$lib/types';
@@ -21,9 +21,13 @@ const TOOL_NAME = 'custom_tool';
 const TOOL_CALL_ID = 'call-1';
 // Both markers sit inside the collapsible body, which CollapsibleContentBlock
 // only mounts while open - so their presence is exactly "the block is expanded".
+// The collapse is animated and the body unmounts once it ends, so assertions
+// that a block closed wait for the transition first.
 const PENDING_BODY = 'Waiting for result...';
 const RESULT_BODY = 'marker-tool-output';
 const TRIGGER_SELECTOR = '[data-slot="collapsible-trigger"]';
+// The collapse transition plus a frame of slack.
+const COLLAPSE_SETTLE_MS = COLLAPSIBLE_TRANSITION_MS + 50;
 
 function assistantMessage(): DatabaseMessage {
 	return {
@@ -66,6 +70,11 @@ function setSettings({
 
 function textOf(container: Element): string {
 	return container.textContent ?? '';
+}
+
+async function waitForCollapse(): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, COLLAPSE_SETTLE_MS));
+	await tick();
 }
 
 async function collapseBlock(screen: { container: Element }): Promise<void> {
@@ -130,7 +139,7 @@ describe('Show tool call in progress', () => {
 			message: assistantMessage(),
 			toolMessages: [toolResultMessage()]
 		});
-		await tick();
+		await waitForCollapse();
 
 		expect(textOf(screen.container)).toContain(TOOL_NAME);
 		expect(textOf(screen.container)).not.toContain(PENDING_BODY);
@@ -156,7 +165,7 @@ describe('Show tool call in progress', () => {
 			message: assistantMessage(),
 			toolMessages: [toolResultMessage()]
 		});
-		await tick();
+		await waitForCollapse();
 
 		expect(textOf(screen.container)).toContain(TOOL_NAME);
 		expect(textOf(screen.container)).not.toContain(RESULT_BODY);
@@ -190,6 +199,7 @@ describe('Show tool call in progress', () => {
 		expect(textOf(screen.container)).toContain(PENDING_BODY);
 
 		await collapseBlock(screen);
+		await waitForCollapse();
 
 		expect(textOf(screen.container)).not.toContain(PENDING_BODY);
 	});

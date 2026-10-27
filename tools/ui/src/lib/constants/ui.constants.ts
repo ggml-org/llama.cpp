@@ -8,6 +8,9 @@ import type { DesktopIconStripItem } from '$lib/types';
 /** Delay before a copied affordance resets from its check to the copy icon. */
 export const COPY_FEEDBACK_RESET_MS = 1500;
 
+/** How long a collapsible block's body takes to expand or collapse. */
+export const COLLAPSIBLE_TRANSITION_MS = 200;
+
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 
