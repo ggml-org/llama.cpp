@@ -446,7 +446,7 @@ struct llama_moe_cache::impl {
 
         // with misses on the CPU, the n_zero slots after the cached ones stay zero: the device computes these misses as zero
         // one extra slot at the end, CUDA MMQ can read past the last expert
-        n_zero = cpu_share > 0.0f ? std::min<int32_t>(n_expert_used, 64) : 0;
+        n_zero = this->cpu_share > 0.0f ? std::min<int32_t>(n_expert_used, 64) : 0;
         auto alloc_size = [&](const group & g, int32_t n_slots) {
             const size_t alignment = ggml_backend_buft_get_alignment(devices[g.id].buft);
             size_t res = 0;
@@ -487,7 +487,7 @@ struct llama_moe_cache::impl {
         }
 
         // within a device the budget is split by the size of the experts, so each group caches the same fraction of its experts
-        cpu_share_q = (uint32_t) std::lround(cpu_share*65536.0f);
+        cpu_share_q = (uint32_t) std::lround(this->cpu_share*65536.0f);
         if (const char * path = getenv("LLAMA_MOE_CACHE_TRACE"); path != nullptr && *path != '\0') {
             trace = fopen(path, "wb");
             if (trace == nullptr) {
@@ -617,7 +617,7 @@ struct llama_moe_cache::impl {
                 continue;
             }
             LLAMA_LOG_INFO("%s: %10s MoE cache size = %8.2f MiB for %.2f MiB of host experts, CPU share %s\n", __func__,
-                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, admit ? "auto" : format("%.0f%%", 100.0*cpu_share).c_str());
+                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, admit ? "auto" : format("%.0f%%", 100.0*this->cpu_share).c_str());
             for (const group & g : groups) {
                 if (g.id == (int32_t) id) {
                     LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%)\n", __func__,
