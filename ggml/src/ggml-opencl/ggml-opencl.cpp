@@ -3521,7 +3521,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     #endif
 
         const int gdn_sizes[4] = { 16, 32, 64, 128 };
-        const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : backend_ctx->gpu_family == GPU_FAMILY::POWERVR ? 128 : -1;
+        const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : backend_ctx->gpu_family == GPU_FAMILY::POWERVR ? 64 : -1;
         if (sg_size < 0) {
             GGML_LOG_ERROR("Unsupported GPU Family: only Adreno, Intel, and PowerVR are supported.\n");
             exit(1);
@@ -8792,10 +8792,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             }
         case GGML_OP_GATED_DELTA_NET:
             {
-                if (backend_ctx->gpu_family == POWERVR) {
-                    // Not supported on PowerVR GPUs as in development.
-                    return false;
-                }
                 // Match the Vulkan backend: only F32 -> F32, S_v in {16, 32, 64, 128}.
                 if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
                     return false;
@@ -28326,7 +28322,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),    &K));
 
     // Subgroup size is 64 for Adreno and 32 for Intel
-    const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : backend_ctx->gpu_family == GPU_FAMILY::POWERVR ? 128 : -1;
+    const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : backend_ctx->gpu_family == GPU_FAMILY::POWERVR ? 64 : -1;
     if (sg_size < 0) {
         GGML_LOG_ERROR("Unsupported GPU Family: only Adreno, Intel, and PowerVR are supported.\n");
         exit(1);
