@@ -141,16 +141,45 @@ struct moe_cache_lru {
         int32_t slot;
     };
 
-    // give a slot to each expert selected by ids (n_tokens tokens) in layer il
+    // a zero slot that no token of expert e uses yet: n_slots + z, or -1 if there is none
+    int32_t take_zero(int32_t e, const int32_t * ids, size_t n_tokens, int32_t n_used, int32_t n_zero) {
+        uint64_t used = 0;
+        for (size_t it = 0; it < n_tokens; ++it) {
+            for (int32_t k = 0; k < n_used; ++k) {
+                if (ids[it*n_used + k] == e) {
+                    used |= token_zero[it];
+                }
+            }
+        }
+        int32_t z = 0;
+        while (z < 64 && (used >> z & 1)) {
+            z++;
+        }
+        if (z >= n_zero) {
+            return -1;
+        }
+        for (size_t it = 0; it < n_tokens; ++it) {
+            for (int32_t k = 0; k < n_used; ++k) {
+                if (ids[it*n_used + k] == e) {
+                    token_zero[it] |= 1ull << z;
+                }
+            }
+        }
+        return n_slots + z;
+    }
+
+    // give a slot to each expert selected by ids (n_used per token) in layer il
     // n_cpu(n) of the n misses are left to the CPU and read a zero slot on the device, they are not cached
+    // with admit, a miss is left to the CPU instead if its CRF is not higher than the decayed CRF of its victim
     // a zero slot is used at most once per token, a miss that does not get one is cached instead
     // returns false if the ids select more distinct experts than there are slots
     template <typename F>
-    bool plan(int32_t il, const int32_t * ids, size_t n_ids, size_t n_tokens, int32_t n_used, int32_t n_zero, F && n_cpu, uint64_t & rng,
+    bool plan(int32_t il, const int32_t * ids, size_t n_ids, int32_t n_used, int32_t n_zero, F && n_cpu, bool admit, uint64_t & rng,
             std::vector<fill> & fills, std::vector<fill> & cpu, size_t & n_hit) {
         fills.clear();
         cpu.clear();
         n_hit = 0;
+        const size_t n_tokens = n_ids/n_used;
 
         if (++seen_gen == 0) {
             std::fill(seen.begin(), seen.end(), 0);
@@ -188,53 +217,45 @@ struct moe_cache_lru {
             rng = rng*6364136223846793005ull + 1442695040888963407ull;
             std::swap(misses[i], misses[i + (rng >> 33) % (misses.size() - i)]);
         }
-        if (n_c > 0) {
-            token_zero.assign(n_tokens, 0);
-            size_t n_keep = n_c;
-            for (size_t i = 0; i < n_keep; ) {
-                const int32_t e = misses[i];
-                uint64_t used = 0;
-                for (size_t it = 0; it < n_tokens; ++it) {
-                    for (int32_t k = 0; k < n_used; ++k) {
-                        if (ids[it*n_used + k] == e) {
-                            used |= token_zero[it];
-                        }
-                    }
-                }
-                int32_t z = 0;
-                while (z < 64 && (used >> z & 1)) {
-                    z++;
-                }
-                if (z >= n_zero) {
-                    std::swap(misses[i], misses[--n_keep]);
-                    continue;
-                }
-                for (size_t it = 0; it < n_tokens; ++it) {
-                    for (int32_t k = 0; k < n_used; ++k) {
-                        if (ids[it*n_used + k] == e) {
-                            token_zero[it] |= 1ull << z;
-                        }
-                    }
-                }
-                slots[e] = n_slots + z;
-                cpu.push_back({ e, n_slots + z });
-                i++;
+        token_zero.assign(n_tokens, 0);
+        size_t n_keep = n_c;
+        for (size_t i = 0; i < n_keep; ) {
+            const int32_t e = misses[i];
+            const int32_t z = take_zero(e, ids, n_tokens, n_used, n_zero);
+            if (z < 0) {
+                std::swap(misses[i], misses[--n_keep]);
+                continue;
             }
-            misses.erase(misses.begin(), misses.begin() + n_keep);
+            slots[e] = z;
+            cpu.push_back({ e, z });
+            i++;
         }
+        misses.erase(misses.begin(), misses.begin() + n_keep);
 
         // sorted misses usually get consecutive slots, so the uploads can be merged
         std::sort(misses.begin(), misses.end());
         for (int32_t e : misses) {
+            const int32_t key = il*n_expert + e;
             const int32_t s = victim(il);
+            if (admit && key_of[s] >= 0) {
+                const int32_t v = key_of[s];
+                if (crf[key] <= crf[v]*std::exp2(-(clock[v / n_expert] - last[v])/crf_half)) {
+                    const int32_t z = take_zero(e, ids, n_tokens, n_used, n_zero);
+                    if (z >= 0) {
+                        slots[e] = z;
+                        cpu.push_back({ e, z });
+                        continue;
+                    }
+                }
+            }
             if (key_of[s] >= 0) {
                 slot_map[key_of[s] / n_expert][key_of[s] % n_expert] = empty;
             } else {
                 n_filled++;
             }
-            key_of[s] = il*n_expert + e;
+            key_of[s] = key;
             slots[e] = s;
-            move(s, class_of(key_of[s]));
+            move(s, class_of(key));
             fills.push_back({ e, s });
         }
         clock[il] += n_tokens;
@@ -350,6 +371,7 @@ struct llama_moe_cache::impl {
     uint32_t cpu_share_q = 0; // cpu_share in 1/65536, integer so that a simulator can reproduce the rounding
     int32_t  n_zero    = 0; // zero slots per group
     uint64_t rng       = 0x853c49e6748fea9bull;
+    bool     admit     = false; // cpu_share < 0 (auto): a miss goes to the CPU if its CRF is not higher than the decayed CRF of its victim
 
     // the CPU part of the layer of a slot lookup
     struct cpu_part {
@@ -374,7 +396,7 @@ struct llama_moe_cache::impl {
     ggml_context_ptr ctx_views;
 
     impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
-            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()), cpu_share(std::clamp(cpu_share, 0.0f, 1.0f)) {
+            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()), cpu_share(cpu_share < 0.0f ? 1.0f : std::clamp(cpu_share, 0.0f, 1.0f)), admit(cpu_share < 0.0f) {
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
@@ -594,8 +616,8 @@ struct llama_moe_cache::impl {
             if (d.host_bytes == 0) {
                 continue;
             }
-            LLAMA_LOG_INFO("%s: %10s MoE cache size = %8.2f MiB for %.2f MiB of host experts, %.0f%% of the misses on the CPU\n", __func__,
-                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, 100.0*cpu_share);
+            LLAMA_LOG_INFO("%s: %10s MoE cache size = %8.2f MiB for %.2f MiB of host experts, CPU share %s\n", __func__,
+                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, admit ? "auto" : format("%.0f%%", 100.0*cpu_share).c_str());
             for (const group & g : groups) {
                 if (g.id == (int32_t) id) {
                     LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%)\n", __func__,
@@ -817,14 +839,14 @@ struct llama_moe_cache::impl {
         }
 
         // part of the misses is computed on the CPU once the cache is full, the carry keeps the share right on average
-        const uint32_t share_q = has_cpu && g.lru.n_filled == g.lru.n_slots ? cpu_share_q : 0;
+        const uint32_t share_q = has_cpu && !admit && g.lru.n_filled == g.lru.n_slots ? cpu_share_q : 0;
         auto n_cpu = [&](size_t n_miss) {
             const uint64_t acc = (uint64_t) n_miss*share_q + l.cpu_acc;
             l.cpu_acc = acc & 0xffff;
             return (size_t) (acc >> 16);
         };
         size_t n_hit = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), sel->ne[1], has_cpu ? it_cpu->second.n_used : 1, n_zero, n_cpu, rng, fills, cpu, n_hit)) {
+        if (!g.lru.plan(il, ids.data(), ids.size(), it_cpu != cpu_parts.end() ? it_cpu->second.n_used : n_expert_used, n_zero, n_cpu, has_cpu && admit, rng, fills, cpu, n_hit)) {
             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
         }
         if (has_cpu) {
