@@ -4606,6 +4606,10 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
         if (loader.has_gen_audio) {
             ctx_gen_audio = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_gen_audio->model, CLIP_MODALITY_GEN_AUDIO);
+            // TODO: CUDA has no flash attention kernel for the depthformer head dim 32, enable it once it does
+            if (ctx_gen_audio->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN && ctx_gen_audio->flash_attn_type == CLIP_FLASH_ATTN_TYPE_AUTO) {
+                ctx_gen_audio->flash_attn_type = CLIP_FLASH_ATTN_TYPE_DISABLED;
+            }
             loader.load_tensors(*ctx_gen_audio);
             // TODO: fix warmup
             ctx_gen_audio->buf_compute_meta.resize(ctx_gen_audio->max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
