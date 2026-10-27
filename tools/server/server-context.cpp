@@ -415,6 +415,7 @@ struct server_slot {
     bool      rt_responding = false;
     bool      rt_cancel     = false;
     int32_t   rt_n_predict  = 0;
+    llama_token rt_sampled  = LLAMA_TOKEN_NULL; // next text token of the response, sampled right after the slot's own decode
 
     server_slot_stats stats;
 
@@ -478,6 +479,7 @@ struct server_slot {
         rt_n_past     = 0;
         rt_responding = false;
         rt_cancel     = false;
+        rt_sampled    = LLAMA_TOKEN_NULL;
     }
 
     void init_sampler() const {
@@ -3749,6 +3751,17 @@ private:
         }
     }
 
+    // samples the next text token of a response from the logits of the slot's own last decode; several slots
+    // respond in turns on the same context, so this runs before any other slot decodes
+    void rt_sample_next(server_slot & slot) {
+        slot.rt_sampled = LLAMA_TOKEN_NULL;
+        if (slot.tts.is_supported() && !slot.tts.ctx.next_is_text()) {
+            return;
+        }
+        slot.rt_sampled = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
+        common_sampler_accept(slot.smpl.get(), slot.rt_sampled, true);
+    }
+
     bool rt_response_start(server_slot & slot, const server_slot::rt_op & op) {
         auto sparams = slot.task->params.sampling;
         for (llama_token t : op.response.banned) {
@@ -3795,6 +3808,8 @@ private:
                 return false;
             }
         }
+        // the logits of the last decode are this slot's only until another slot decodes
+        rt_sample_next(slot);
         slot.rt_responding = true;
         return true;
     }
@@ -3806,11 +3821,7 @@ private:
         std::vector<float> audio;
 
         if (slot.tts.is_supported()) {
-            llama_token tok = LLAMA_TOKEN_NULL;
-            if (slot.tts.ctx.next_is_text()) {
-                tok = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
-                common_sampler_accept(slot.smpl.get(), tok, true);
-            }
+            const llama_token tok = slot.rt_sampled;
             const float * h_next = nullptr;
             if (slot.tts.ctx.step_gen(tok, slot.tts.h_state, &h_next, &stop) != 0) {
                 send_error(slot, "response generation failed", ERROR_TYPE_SERVER);
@@ -3825,8 +3836,7 @@ private:
                 slot.tts.h_state = slot.tts.h_state_prompt.data();
             }
         } else {
-            const llama_token tok = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
-            common_sampler_accept(slot.smpl.get(), tok, true);
+            const llama_token tok = slot.rt_sampled;
             stop = llama_vocab_is_eog(vocab, tok);
             if (!stop) {
                 if (!llama_vocab_is_control(vocab, tok)) {
@@ -3844,6 +3854,9 @@ private:
             llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id) + 2 >= slot.n_ctx :
             slot.rt_n_past + 1 >= slot.n_ctx;
         const bool done = stop || slot.rt_cancel || ctx_full || (slot.rt_n_predict > 0 && slot.tts.n_decoded >= slot.rt_n_predict);
+        if (!done) {
+            rt_sample_next(slot);
+        }
         if (slot.tts.is_supported()) {
             if (done) {
                 slot.tts.ctx.flush();
