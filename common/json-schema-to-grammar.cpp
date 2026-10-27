@@ -299,11 +299,31 @@ static std::string replacePattern(const std::string & input, const std::regex & 
     return result;
 }
 
+// GBNF is parsed from a C string, so escape control bytes. Input is already
+// GBNF-escaped; bytes >= 0x80 pass through so UTF-8 stays intact.
+static std::string escape_control_chars(const std::string & text) {
+    static constexpr char HEX[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (uc < 0x20 || uc == 0x7F) {
+            out += "\\x";
+            out += HEX[uc >> 4];
+            out += HEX[uc & 0xF];
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 static std::string format_literal(const std::string & literal) {
     std::string escaped = replacePattern(literal, GRAMMAR_LITERAL_ESCAPE_RE, [&](const std::smatch & match) {
         char c = match.str()[0];
         return GRAMMAR_LITERAL_ESCAPES.at(c);
     });
+    escaped = escape_control_chars(escaped);
     return "\"" + escaped + "\"";
 }
 
@@ -540,7 +560,7 @@ private:
                     }
                     square_brackets += ']';
                     i++;
-                    seq.emplace_back(square_brackets, false);
+                    seq.emplace_back(escape_control_chars(square_brackets), false);
                 } else if (c == '|') {
                     seq.emplace_back("|", false);
                     i++;
@@ -640,7 +660,7 @@ private:
                     if (literal.empty()) { // nothing was consumed, ex. a stray ']' or '}'
                         throw unsupported_pattern(std::string("unsupported character: ") + c);
                     }
-                    seq.emplace_back(literal, true);
+                    seq.emplace_back(escape_control_chars(literal), true);
                 }
             }
             return join_seq();
