@@ -1068,8 +1068,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
     // absorb wk_b so the cache holds only the latent
     ggml_tensor * q_absorbed = ggml_permute(ctx0, q, 0, 2, 1, 3);
     q_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_absorbed);
-    // FIXME: -sm tensor cannot split the per-stream view of a permuted q in build_attn_mha (non-unified KV)
-    q_absorbed = ggml_cont(ctx0, ggml_permute(ctx0, q_absorbed, 0, 2, 1, 3));
+    q_absorbed = ggml_permute(ctx0, q_absorbed, 0, 2, 1, 3);
     cb(q_absorbed, "q_absorbed", il);
 
     ggml_tensor * kq_mask = inp_attn->get_kq_mask();
