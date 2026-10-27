@@ -677,7 +677,10 @@ struct case_rotation_buffers : ctx_test {
             CTX_REQUIRE(t->buffer != cache->buffer, "rotation matrix shares the mutable KV buffer");
             CTX_REQUIRE(!(t->flags & GGML_TENSOR_FLAG_INPUT), "rotation matrix is a graph input");
             const auto dev = ggml_backend_buft_get_device(buft);
-            if (dev) {
+            // CPU and pinned host buffers may have no CPU device association.
+            if (ggml_backend_buft_is_host(buft) && (!dev || buft != ggml_backend_dev_buffer_type(dev))) {
+                has_cpu = true;
+            } else if (dev) {
                 const auto type = ggml_backend_dev_type(dev);
                 has_cpu |= type == GGML_BACKEND_DEVICE_TYPE_CPU;
                 has_gpu |= type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
