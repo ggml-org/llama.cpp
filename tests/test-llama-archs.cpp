@@ -251,12 +251,18 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
-            || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_HY_V4) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
+    } else if (arch == LLM_ARCH_GLM5_NEXT) {
+        // enough KDA and MLA heads for tensor split mode to give every device whole heads, including uneven splits,
+        // alternating MLA and KDA layers so that both are covered with the dense FFN and with the MoE
+        n_embd  = 128;
+        n_head  = 8;
+        n_ff    = 192;
+        n_layer = 4;
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_CHAMELEON) {
@@ -322,12 +328,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             n_head_per_layer.push_back(il == 1 ? 0 : n_head);
         }
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
+        // As in the converted models, the MLA layers have a single KV head (the compressed latent) and the KDA layers none.
         if (arch == LLM_ARCH_GLM5_NEXT) {
+            std::vector<uint32_t> n_head_kv_per_layer;
+            n_head_kv_per_layer.reserve(n_layer);
+            for (uint32_t il = 0; il < n_layer; il++) {
+                n_head_kv_per_layer.push_back(il % 2 == 1 ? 0 : 1);
+            }
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
         } else {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
         }
-        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(1) : n_head_kv);

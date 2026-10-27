@@ -402,6 +402,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     const std::string tensor_name = tensor->name;
     const bool is_dsv4 = ud->model->arch == LLM_ARCH_DEEPSEEK4 || ud->model->arch == LLM_ARCH_DEEPSEEK41 ||
         (ud->model->arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0);
+    // GLM5-Next: KDA linear attention layers + nope MLA layers whose cache holds one shared latent (a single KV head)
+    const bool is_glm5_next = ud->model->arch == LLM_ARCH_GLM5_NEXT;
 
     static const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
     static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
@@ -422,6 +424,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_attn_out_b_weight("blk\\.\\d*\\.attn_output_b\\.weight");
     static const std::regex pattern_attn_q_b_weight ("blk\\.\\d*\\.attn_q_b\\.weight");
     static const std::regex pattern_attn_gate_weight("blk\\.\\d*\\.attn_gate.weight");
+    static const std::regex pattern_attn_kv_b_weight("blk\\.\\d*\\.attn_(k|v)_b\\.weight"); // absorbed MLA, {.., .., n_head}
 
     static const std::regex pattern_ssm_dt          ("blk\\.\\d*\\.ssm_dt.bias");
     static const std::regex pattern_ssm_a           ("blk\\.\\d*\\.ssm_a");
@@ -433,6 +436,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_s_cache         ("cache_s_l\\d*");
     static const std::regex pattern_ssm_conv1d      ("blk\\.\\d*\\.ssm_conv1d.weight");
     static const std::regex pattern_ssm_out_weight  ("blk\\.\\d*\\.ssm_out.weight");
+    static const std::regex pattern_ssm_conv1d_qkv  ("blk\\.\\d*\\.ssm_conv1d_(q|k|v)\\.weight"); // KDA, {d_conv, 1, d_inner(, 1)}
+    static const std::regex pattern_ssm_fg_b_weight ("blk\\.\\d*\\.ssm_(f|g)_b\\.weight");       // KDA, {head_dim, d_inner}
 
     static const std::regex pattern_ffn_up_weight     ("blk\\.\\d*\\.ffn_up(_exps)?.weight");
     static const std::regex pattern_ffn_up_bias       ("blk\\.\\d*\\.ffn_up(_exps)?.bias");
@@ -522,6 +527,41 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             if (std::regex_match(tensor_name, pattern_attn_out_b_weight)) {
                 return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
             }
+            if (std::regex_match(tensor_name, pattern_ffn_up_shexp_weight) ||
+                    std::regex_match(tensor_name, pattern_ffn_gate_shexp_weight)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "ffn_down_shexp.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_ffn_down_shexp_weight)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "ffn_down_shexp.weight");
+            }
+        }
+
+        if (is_glm5_next) {
+            // the MLA layers absorb wk_b so the cache holds only the compressed latent: one KV head shared by all query heads,
+            //     every device needs all of it, the query heads are split instead
+            if (std::regex_match(tensor_name, pattern_kv_cache)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            }
+            if (std::regex_match(tensor_name, pattern_attn_q_b_weight)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_attn_kv_b_weight)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_2, "attn_output.weight");
+            }
+
+            // KDA: everything with a d_inner or n_head dimension is split by head, aligned with attn_output
+            if (std::regex_match(tensor_name, pattern_ssm_conv1d_qkv)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_2, "attn_output.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_ssm_fg_b_weight) || std::regex_match(tensor_name, pattern_ssm_beta)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_ssm_dt) || std::regex_match(tensor_name, pattern_ssm_a) ||
+                    std::regex_match(tensor_name, pattern_r_cache) || std::regex_match(tensor_name, pattern_s_cache)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight");
+            }
+
+            // the shared expert is split like a dense FFN, the router, the indexer and the mHC weights stay mirrored
             if (std::regex_match(tensor_name, pattern_ffn_up_shexp_weight) ||
                     std::regex_match(tensor_name, pattern_ffn_gate_shexp_weight)) {
                 return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "ffn_down_shexp.weight");
@@ -696,6 +736,14 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return {{tensor->ne[axis], 1}};
         }
 
+        if (is_glm5_next && std::regex_match(tensor_name, pattern_r_cache)) {
+            // the KDA conv state packs Q, K and V back to back: [3][d_inner][d_conv - 1], split each of them by head
+            const int64_t d_inner         = int64_t(hparams.n_head(il)) * hparams.n_embd_head_kda;
+            const int64_t conv_state_size = int64_t(hparams.ssm_d_conv - 1) * d_inner;
+            GGML_ASSERT(tensor->ne[axis] == 3*conv_state_size);
+            return {{conv_state_size, 3}};
+        }
+
         if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_bias)) {
             const int64_t n_embd_q = hparams.n_head(il) * hparams.n_embd_head_k(il);
             const int64_t n_embd_k = hparams.n_embd_k_gqa(il);
@@ -726,7 +774,44 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
     auto get_split_granularity = [&](int64_t blck_size, uint32_t il, const std::vector<std::pair<int64_t, uint32_t>> & segments) -> std::vector<int64_t> {
         // for better performance it may make sense to round up blck_size to a higher power of 2 so that more efficient kernels can be used
-        if (hparams.is_recr(il)) {
+        if (is_glm5_next && hparams.is_recr(il)) {
+            // KDA: n_head heads of n_embd_head_kda, every device holds whole heads,
+            //     blck_size is that of attn_output which is the only KDA weight split along its rows (axis 0)
+            const int64_t head_dim         = hparams.n_embd_head_kda;
+            const int64_t granularity_qkv  = std::lcm(std::lcm(blck_size, int64_t(128)), head_dim);
+            const int64_t granularity_head = granularity_qkv / head_dim;
+            GGML_ASSERT(segments.size() == 1);
+            if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight) ||
+                    std::regex_match(tensor_name, pattern_ssm_conv1d_qkv) || std::regex_match(tensor_name, pattern_ssm_fg_b_weight) ||
+                    std::regex_match(tensor_name, pattern_ssm_dt) || std::regex_match(tensor_name, pattern_attn_out_weight)) {
+                return {granularity_qkv};
+            }
+            if (std::regex_match(tensor_name, pattern_ssm_beta) || std::regex_match(tensor_name, pattern_ssm_a)) {
+                return {granularity_head};
+            }
+            if (std::regex_match(tensor_name, pattern_r_cache)) {
+                return {granularity_qkv * (hparams.ssm_d_conv - 1)};
+            }
+            if (std::regex_match(tensor_name, pattern_s_cache)) {
+                return {granularity_qkv * head_dim};
+            }
+        } else if (is_glm5_next && (std::regex_match(tensor_name, pattern_attn_q_b_weight) ||
+                std::regex_match(tensor_name, pattern_attn_kv_b_weight) || std::regex_match(tensor_name, pattern_attn_out_weight))) {
+            // nope MLA: the query heads are split, blck_size is that of attn_output {n_head*n_embd_head_v_mla, n_embd},
+            //     keep at least 2 query heads per device: with a single KV head the per-device GQA ratio is the number of local
+            //     query heads and the CUDA FA kernels for the absorbed MLA head size (DKQ = DV = kv_lora_rank, 512) need a ratio >= 2
+            const int64_t head_k           = hparams.n_embd_head_k_mla();
+            const int64_t head_v           = hparams.n_embd_head_v_mla();
+            const int64_t granularity_head = std::lcm(std::lcm(blck_size, head_v) / head_v, int64_t(2));
+            GGML_ASSERT(segments.size() == 1);
+            if (std::regex_match(tensor_name, pattern_attn_q_b_weight)) {
+                return {granularity_head * head_k};
+            }
+            if (std::regex_match(tensor_name, pattern_attn_kv_b_weight)) {
+                return {granularity_head};
+            }
+            return {granularity_head * head_v};
+        } else if (hparams.is_recr(il)) {
             // linear attention
             const int64_t head_dim        = hparams.ssm_d_state;
             const int64_t blck_size_perf  = std::lcm(blck_size, 128);
