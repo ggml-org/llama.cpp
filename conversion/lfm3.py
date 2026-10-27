@@ -151,7 +151,8 @@ class LFM3D1Model(LFM3Model):
     _served = {"d1_codes": 2, "d1_attention": "set"}
 
     def set_vocab(self):
-        super().set_vocab()
+        # the vocab without the speech task templates of LFM3-Audio/Omni, d1 only decides
+        TextModel.set_vocab(self)
         # the d1 prompt of LFM2, the LFM3 template writes an empty thought before the answer
         self.gguf_writer.add_chat_template([{"name": "systemone", "template": D1Model._systemone_template() + "<think></think>"}])
 
