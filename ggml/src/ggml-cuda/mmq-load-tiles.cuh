@@ -4,16 +4,11 @@
 
 #include "mmq.cuh"
 
-template <ggml_type type, int J, bool fallback>
 static __device__ __forceinline__ void ggml_cuda_mmq_store_affine_metadata(
         half2 * dst, const int stride, const int row, const int block, const half2 value) {
-    if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
-        // Preserve the original half bits, separating eight scales and offsets.
-        ((half *) dst)[2*row*stride + block] = value.x;
-        ((half *) dst)[2*row*stride + block + 8] = value.y;
-    } else {
-        dst[row*stride + block] = value;
-    }
+    // Preserve the original half bits, separating eight scales and offsets.
+    ((half *) dst)[2*row*stride + block] = value.x;
+    ((half *) dst)[2*row*stride + block + 8] = value.y;
 }
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q1_0(
@@ -336,7 +331,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
-            ggml_cuda_mmq_store_affine_metadata<type, J, fallback>(x_dm, sram_stride, i, kbxd, bxi->dm);
+            ggml_cuda_mmq_store_affine_metadata(x_dm, sram_stride, i, kbxd, bxi->dm);
         } else {
             x_dm[i*sram_stride + kbxd] = bxi->dm;
         }
@@ -498,7 +493,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
-            ggml_cuda_mmq_store_affine_metadata<type, J, fallback>(x_dm, sram_stride, i, kbxd, bxi->dm);
+            ggml_cuda_mmq_store_affine_metadata(x_dm, sram_stride, i, kbxd, bxi->dm);
         } else {
             x_dm[i*sram_stride + kbxd] = bxi->dm;
         }
@@ -1159,7 +1154,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
-            ggml_cuda_mmq_store_affine_metadata<type, J, fallback>(x_ds, sram_stride, i, kqsx, make_half2(d1q, d1q*delta));
+            ggml_cuda_mmq_store_affine_metadata(x_ds, sram_stride, i, kqsx, make_half2(d1q, d1q*delta));
         } else {
             x_ds[i*sram_stride + kqsx] = make_half2(d1q, d1q*delta);
         }
