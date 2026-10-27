@@ -212,6 +212,7 @@ llama_context::llama_context(
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
+    cparams.sampler_token_only      = params.sampler_token_only;
     cparams.warmup                  = false;
 
     // +1: id n_layer() taps the output of the last layer ("input" of the head)
@@ -1225,6 +1226,9 @@ float * llama_context::get_sampled_logits_ith(int32_t idx) {
 
 const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
     output_reorder();
+    if (cparams.sampler_token_only && get_sampled_candidates_count(idx) == 0) {
+        return nullptr;
+    }
 
     try {
         const int64_t row = output_resolve_row(idx);
@@ -1262,6 +1266,9 @@ size_t llama_context::get_sampled_candidates_count(int32_t idx) {
 
 size_t llama_context::get_sampled_logits_count(int32_t idx) {
     output_reorder();
+    if (!sampling.logits.has_data() && cparams.sampler_token_only) {
+        return 0;
+    }
 
     if (!sampling.logits.has_data()) {
         return model.vocab.n_tokens();
@@ -2175,9 +2182,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
             // async copy the sampling data from the backend to the host
             copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    1,      n_outputs_prev, sched.get());
-            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
-            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
-            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            const bool all_sampled = std::all_of(res->t_sampled.begin(), res->t_sampled.end(), [](const ggml_tensor * t) { return t != nullptr; });
+            if (!cparams.sampler_token_only || !all_sampled) {
+                copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
+                copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
+                copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            }
         }
 
         n_outputs_prev += n_outputs;
@@ -4033,6 +4043,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.sampler_token_only          =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
