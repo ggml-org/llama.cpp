@@ -298,6 +298,7 @@ struct common_params_sampling {
     std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
     bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
+    bool sampler_token_only = false; // omit backend sampler arrays
     bool backend_sampling = false;
 
     // print the parameters into a string
@@ -596,6 +597,9 @@ struct common_params {
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+
+    ggml_type cache_type_k_swa = GGML_TYPE_COUNT;
+    ggml_type cache_type_v_swa = GGML_TYPE_COUNT;
 
     size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
 

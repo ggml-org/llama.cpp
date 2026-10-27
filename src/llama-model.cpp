@@ -3316,7 +3316,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                     nullptr,
                                     filter,
                                     reuse,
-                                    share);
+                                    share,
+                                    params.type_k_swa,
+                                    params.type_v_swa);
                         }
                     } else {
                         GGML_ASSERT(!hparams.is_swa_any());

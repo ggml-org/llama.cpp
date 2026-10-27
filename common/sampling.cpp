@@ -616,6 +616,13 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     auto & chain = gsmpl->chain;
     auto & cur_p = gsmpl->cur_p; // initialized by set_logits
 
+    const llama_token backend_token = llama_get_sampled_token_ith(ctx, idx);
+    if (backend_token != LLAMA_TOKEN_NULL && llama_get_sampled_logits_count_ith(ctx, idx) == 0 && llama_get_sampled_probs_count_ith(ctx, idx) == 0) {
+        GGML_ASSERT(!gsmpl->grmr && !gsmpl->rbudget);
+        gsmpl->cur.clear();
+        cur_p = {nullptr, 0, -1, false};
+        return backend_token;
+    }
     gsmpl->set_logits(ctx, idx);
 
     // Check if a backend sampler has already sampled a token in which case we

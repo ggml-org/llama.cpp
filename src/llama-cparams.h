@@ -54,6 +54,7 @@ struct llama_cparams {
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
     bool kv_unified;
+    bool sampler_token_only;
     bool pipeline_parallel;
     bool training;           // set by llama_opt_init()
 

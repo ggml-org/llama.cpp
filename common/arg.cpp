@@ -2322,6 +2322,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling().set_env("LLAMA_ARG_BACKEND_SAMPLING"));
     add_opt(common_arg(
+        {"--sampler-token-only"},
+        "return only backend sampled tokens; omit sampler logits, probabilities and candidate arrays",
+        [](common_params & params) { params.sampling.sampler_token_only = true; }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_COMPLETION}));
+    add_opt(common_arg(
         {"--pooling"}, "{none,mean,cls,last,rank}",
         "pooling type for embeddings, use model default if unspecified",
         [](common_params & params, const std::string & value) {
@@ -2471,6 +2476,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.cache_type_v = kv_cache_type_from_str(value);
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
+    add_opt(common_arg(
+        {"--cache-type-k-swa"}, "TYPE",
+        "override the SWA K cache type (default: same as --cache-type-k)",
+        [](common_params & params, const std::string & value) { params.cache_type_k_swa = kv_cache_type_from_str(value); }
+    ));
+    add_opt(common_arg(
+        {"--cache-type-v-swa"}, "TYPE",
+        "override the SWA V cache type (default: same as --cache-type-v)",
+        [](common_params & params, const std::string & value) { params.cache_type_v_swa = kv_cache_type_from_str(value); }
+    ));
     add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
