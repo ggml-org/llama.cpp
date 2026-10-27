@@ -2612,6 +2612,119 @@ struct test_mul_mat_reorder_then_big_batch : public test_case {
 };
 
 // GGML_OP_GET_ROWS_BACK
+struct test_sample_cdf : public test_case {
+    const int n;
+    const float uniform;
+    const bool gather;
+    const int profile;
+    const bool escape;
+    std::vector<ggml_tensor *> verify;
+
+    test_sample_cdf(int n, float uniform, bool gather, int profile = 0, bool escape = false)
+        : n(n), uniform(uniform), gather(gather), profile(profile), escape(escape) {}
+    std::string vars() override { return VARS_TO_STR5(n, uniform, gather, profile, escape); }
+    std::string op_desc(ggml_tensor *) override { return "SAMPLE_CDF"; }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 0; }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return verify; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        verify.clear();
+        auto * logits = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
+        ggml_set_name(logits, "cdf_logits");
+        auto * u = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        ggml_set_name(u, "cdf_uniform");
+        auto * cdf = ggml_cumsum(ctx, ggml_soft_max(ctx, logits));
+        auto * step = ggml_step(ctx, ggml_sub(ctx, cdf, u));
+        if (escape) {
+            ggml_set_output(step);
+            verify.push_back(step);
+        }
+        auto * sum = ggml_sum(ctx, step);
+        auto * index = ggml_cast(ctx, ggml_scale_bias(ctx, ggml_clamp(ctx, sum, 1, n), -1, n), GGML_TYPE_I32);
+        verify.push_back(index);
+        if (!gather) { return index; }
+        auto * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, n);
+        ggml_set_name(ids, "cdf_candidates");
+        auto * out = ggml_get_rows(ctx, ids, index);
+        verify.push_back(out);
+        return out;
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (auto * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "cdf_logits") == 0) {
+                std::vector<float> values(n, 0.0f);
+                for (int i = 0; i < n; ++i) {
+                    if (profile == 1) { values[i] = 0.125f*(i%33-16); }
+                    if (profile == 2) { values[i] = -INFINITY; }
+                }
+                ggml_backend_tensor_set(t, values.data(), 0, n*sizeof(float));
+            } else if (strcmp(t->name, "cdf_uniform") == 0) {
+                ggml_backend_tensor_set(t, &uniform, 0, sizeof(float));
+            } else if (strcmp(t->name, "cdf_candidates") == 0) {
+                std::vector<int32_t> ids(n);
+                for (int i = 0; i < n; ++i) { ids[i] = n-1-i; }
+                ggml_backend_tensor_set(t, ids.data(), 0, n*sizeof(int32_t));
+            }
+        }
+    }
+};
+
+
+struct test_top_p_mask : public test_case {
+    const int n;
+    const float p;
+    const bool varied;
+    const int escape;
+    std::vector<ggml_tensor *> verify;
+
+    test_top_p_mask(int n, float p, bool varied = false, int escape = 0)
+        : n(n), p(p), varied(varied), escape(escape) {}
+    std::string vars() override { return VARS_TO_STR4(n, p, varied, escape); }
+    std::string op_desc(ggml_tensor *) override { return "TOP_P_MASK"; }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 0; }
+    double err(const float * a, const float * b, size_t count) override {
+        for (size_t i = 0; i < count; ++i) {
+            if (a[i] != b[i]) { return 1; }
+        }
+        return 0;
+    }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return verify; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        verify.clear();
+        auto * logits = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
+        ggml_set_name(logits, "top_p_test_logits");
+        auto * cdf = ggml_cumsum(ctx, ggml_soft_max(ctx, logits));
+        auto * mask = ggml_step(ctx, ggml_scale_bias(ctx, cdf, -1, p));
+        if (escape == 1) {
+            ggml_set_output(mask);
+            verify.push_back(mask);
+        }
+        auto * cutoff = ggml_clamp(ctx, ggml_sum(ctx, mask), 0, n-1);
+        auto * ones = ggml_scale_bias(ctx, cutoff, 0, 1);
+        auto * index = ggml_cast(ctx, cutoff, GGML_TYPE_I32);
+        if (escape == 2) {
+            ggml_set_output(index);
+            verify.push_back(index);
+        }
+        auto * inclusive = ggml_set_rows(ctx, ggml_reshape_2d(ctx, mask, 1, n), ones, index);
+        auto * bias = ggml_log(ctx, ggml_reshape_1d(ctx, inclusive, n));
+        auto * out = ggml_add(ctx, logits, bias);
+        verify.push_back(out);
+        return out;
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (auto * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "top_p_test_logits") == 0) {
+                std::vector<float> values(n, 1.0f);
+                for (int i = 0; varied && i < n; ++i) { values[i] = 0.125f*(i%33-16); }
+                ggml_backend_tensor_set(t, values.data(), 0, n*sizeof(float));
+            }
+        }
+    }
+};
+
+
 struct test_get_rows_back : public test_case {
     const ggml_type type;
     const int n; // cols
@@ -12424,6 +12537,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q6_K,   GGML_GLU_OP_SWIGLU_OAI,   150, 40960, 256, false, 1, 1, false, false, true, false, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q8_0,   GGML_GLU_OP_SWIGLU_CLAMP, 150,  6912, 256, false, 1, 1, false, false, true, false, { 2, 3 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_IQ4_XS, GGML_GLU_OP_SWIGLU,       150, 40960, 512, false, 1, 1, false, false, true, false, { 1, 1 }));
+
+    for (int n : {1,32,256,131072}) {
+        for (float uniform : {0.0f,0.5f,0.375f,1.0f}) {
+            test_cases.emplace_back(new test_sample_cdf(n,uniform,false));
+            test_cases.emplace_back(new test_sample_cdf(n,uniform,true));
+        }
+    }
+    for (bool gather : {false, true}) {
+        test_cases.emplace_back(new test_sample_cdf(131072, 0.375f, gather, 1));
+        test_cases.emplace_back(new test_sample_cdf(256, NAN, gather));
+        test_cases.emplace_back(new test_sample_cdf(256, INFINITY, gather));
+        test_cases.emplace_back(new test_sample_cdf(256, 0.5f, gather, 2));
+        test_cases.emplace_back(new test_sample_cdf(256, 0.5f, gather, 0, true));
+    }
+    for (int n : {1, 32, 256, 131072}) {
+        for (float p : {0.0f, 0.375f, 0.5f, 1.0f}) {
+            test_cases.emplace_back(new test_top_p_mask(n, p));
+        }
+    }
+    for (int escape : {0, 1, 2}) {
+        test_cases.emplace_back(new test_top_p_mask(256, 0.95f, true, escape));
+    }
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
