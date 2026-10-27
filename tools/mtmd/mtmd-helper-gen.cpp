@@ -109,6 +109,8 @@ public:
     virtual bool supports_continue() const { return false; }
     virtual bool next_is_text() const { return false; }
 
+    std::vector<llama_logit_bias> logit_bias; // see mtmd_helper_gen_audio_get_logit_bias()
+
 protected:
     // one state per generation, so a fixed seed always gives the same output
     bool init_gen_state(uint32_t seed) {
@@ -1318,6 +1320,17 @@ public:
         if (!find_tokens()) {
             return 1;
         }
+        // a continued response opens with the token of the asked mode, a text-only one cannot switch to audio
+        if (continuing) {
+            switch (inp->out_mode) {
+                case MTMD_HELPER_GEN_AUDIO_OUT_AUDIO: prompt_tokens.push_back(tok_audio_start); break;
+                case MTMD_HELPER_GEN_AUDIO_OUT_MIXED: prompt_tokens.push_back(tok_mixed_start); break;
+                case MTMD_HELPER_GEN_AUDIO_OUT_TEXT:
+                    logit_bias = { { tok_audio_start, -INFINITY }, { tok_mixed_start, -INFINITY } };
+                    break;
+                default: break;
+            }
+        }
         // the last prompt token picks the mode, see generate() of the reference
         const llama_token last = prompt_tokens.back();
         mode = last == tok_audio_start ? MODE_AUDIO : last == tok_mixed_start ? MODE_MIXED : MODE_TEXT;
@@ -1761,6 +1774,7 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
         LOG_ERR("mtmd_helper_gen_audio: the pipeline cannot continue a sequence\n");
         return 1;
     }
+    ctx->pipeline->logit_bias.clear();
     return ctx->pipeline->set_input(inp);
 }
 
@@ -1773,6 +1787,30 @@ int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n
 
 bool mtmd_helper_gen_audio_next_is_text(mtmd_helper_gen_audio * ctx) {
     return ctx->pipeline && ctx->pipeline->next_is_text();
+}
+
+const llama_logit_bias * mtmd_helper_gen_audio_get_logit_bias(mtmd_helper_gen_audio * ctx, size_t * n_bias) {
+    *n_bias = ctx->pipeline ? ctx->pipeline->logit_bias.size() : 0;
+    return *n_bias ? ctx->pipeline->logit_bias.data() : nullptr;
+}
+
+int32_t mtmd_helper_audio_stream_get_logit_bias(const mtmd_context * mctx, const llama_model * model,
+                                                llama_logit_bias * out, int32_t n_max) {
+    std::vector<llama_logit_bias> bias;
+    if (mtmd_gen_audio_get_info(mctx).type == MTMD_GEN_AUDIO_TYPE_LFM3A) {
+        // LFM3-Audio live ASR: only <|text_end|> ends the text of a chunk, the stream adds the final <|mixed_end|>
+        const llama_vocab * vocab = llama_model_get_vocab(model);
+        for (const char * piece : { "<|mixed_end|>", "<|mixed_start|>", "<|audio_start|>", "<|im_start|>", "<|im_end|>", "<|endoftext|>" }) {
+            const llama_token tok = find_special_token(vocab, piece);
+            if (tok != LLAMA_TOKEN_NULL) {
+                bias.push_back({ tok, -INFINITY });
+            }
+        }
+    }
+    for (int32_t i = 0; i < n_max && i < (int32_t) bias.size(); i++) {
+        out[i] = bias[i];
+    }
+    return (int32_t) bias.size();
 }
 
 int32_t mtmd_helper_gen_audio_step_gen(mtmd_helper_gen_audio * ctx, llama_token sampled,

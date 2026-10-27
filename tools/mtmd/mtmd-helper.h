@@ -223,6 +223,13 @@ enum mtmd_helper_gen_audio_outtype {
     MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM, // raw PCM
     MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE, mono
 };
+// what a response that continues a sequence (n_past > 0) outputs
+enum mtmd_helper_gen_audio_out_mode {
+    MTMD_HELPER_GEN_AUDIO_OUT_AUTO,  // the model switches between text and audio itself
+    MTMD_HELPER_GEN_AUDIO_OUT_TEXT,
+    MTMD_HELPER_GEN_AUDIO_OUT_AUDIO,
+    MTMD_HELPER_GEN_AUDIO_OUT_MIXED, // interleaved text and audio
+};
 struct mtmd_helper_gen_audio_inp {
     bool stream; // if true, output() must be called after each step_gen()
     llama_seq_id seq_id;
@@ -234,6 +241,7 @@ struct mtmd_helper_gen_audio_inp {
     // > 0: the sequence already holds n_past positions (e.g. a conversation), the prompt is raw text appended
     // after them and the response follows the model's own text/audio switching (LFM3-Audio only)
     int32_t n_past;
+    enum mtmd_helper_gen_audio_out_mode out_mode; // n_past > 0 only (default: auto)
 
     mtmd_bitmap * speaker_ref; // optional, can be NULL
     const char * lang; // optional, can be NULL
@@ -281,6 +289,14 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
 // false if the next step generates an audio frame from h_state_in
 MTMD_API bool mtmd_helper_gen_audio_next_is_text(mtmd_helper_gen_audio * ctx);
 
+// bias for the text tokens the caller samples (e.g. no switch to audio in a text-only response), n_bias is set to its size
+MTMD_API const llama_logit_bias * mtmd_helper_gen_audio_get_logit_bias(mtmd_helper_gen_audio * ctx, size_t * n_bias);
+
+// bias for the text the caller samples while it transcribes an audio stream opened with a prompt (see mtmd_audio_stream_params)
+// writes up to n_max entries to out, returns the size of the bias
+MTMD_API int32_t mtmd_helper_audio_stream_get_logit_bias(const mtmd_context * mctx, const struct llama_model * model,
+                                                         llama_logit_bias * out, int32_t n_max);
+
 // out_data valid until next get_output() or reset() call
 // out_n_samples (optional, can be NULL) receives the number of generated PCM samples
 // if inp->stream is true: returns only audio produced since the previous call, and
@@ -303,6 +319,7 @@ MTMD_API int32_t mtmd_helper_gen_audio_flush(mtmd_helper_gen_audio * ctx);
 #ifdef __cplusplus
 #include <set>
 #include <memory>
+#include <vector>
 
 namespace mtmd_helper {
 
@@ -375,6 +392,11 @@ struct gen_audio {
     bool next_is_text() {
         return mtmd_helper_gen_audio_next_is_text(ctx.get());
     }
+    std::vector<llama_logit_bias> logit_bias() {
+        size_t n = 0;
+        const llama_logit_bias * bias = mtmd_helper_gen_audio_get_logit_bias(ctx.get(), &n);
+        return std::vector<llama_logit_bias>(bias, bias + n);
+    }
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples = nullptr) {
         return mtmd_helper_gen_audio_get_output(ctx.get(), out_sample_rate, out_data, out_data_len, out_n_samples);
     }
@@ -382,6 +404,12 @@ struct gen_audio {
         return mtmd_helper_gen_audio_flush(ctx.get());
     }
 };
+
+inline std::vector<llama_logit_bias> audio_stream_logit_bias(const mtmd_context * mctx, const llama_model * model) {
+    std::vector<llama_logit_bias> bias(mtmd_helper_audio_stream_get_logit_bias(mctx, model, nullptr, 0));
+    mtmd_helper_audio_stream_get_logit_bias(mctx, model, bias.data(), (int32_t) bias.size());
+    return bias;
+}
 
 } // namespace mtmd_helper
 #endif

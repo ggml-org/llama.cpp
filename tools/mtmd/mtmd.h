@@ -420,9 +420,6 @@ MTMD_API const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream
 // true if the rows of the last step start a new sequence: the caller drops its sequence before decoding them
 MTMD_API bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * stream);
 
-// tokens the caller must never sample from the rows of the stream, n_tokens is set to their count
-MTMD_API const llama_token * mtmd_audio_stream_get_banned_tokens(const mtmd_audio_stream * stream, size_t * n_tokens);
-
 // audio rows whose text has been sampled (prefix rows included), step() updates it from last_token
 MTMD_API int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * stream);
 

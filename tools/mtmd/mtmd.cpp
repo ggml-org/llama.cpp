@@ -3234,7 +3234,6 @@ struct mtmd_audio_stream {
     bool ended = false;
     bool seq_start = false;     // the rows of the last step start a new sequence
 
-    std::vector<llama_token> banned; // never sampled from the rows
 
     virtual ~mtmd_audio_stream() = default;
 
@@ -3397,10 +3396,6 @@ bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * s) {
     return s->seq_start;
 }
 
-const llama_token * mtmd_audio_stream_get_banned_tokens(const mtmd_audio_stream * s, size_t * n_tokens) {
-    *n_tokens = s->banned.size();
-    return s->banned.data();
-}
 
 //
 // Voxtral Realtime
@@ -3649,11 +3644,7 @@ bool mtmd_audio_stream_lfm3a::init(const mtmd_audio_stream_params & params) {
         };
         tok_text_end  = find_token("<|text_end|>");
         tok_mixed_end = find_token("<|mixed_end|>");
-        // only <|text_end|> ends a chunk, the stream adds the <|mixed_end|> of the final chunk
-        for (const char * piece : {"<|mixed_end|>", "<|mixed_start|>", "<|audio_start|>", "<|im_start|>", "<|im_end|>", "<|endoftext|>"}) {
-            banned.push_back(find_token(piece));
-        }
-        if (tok_text_end == LLAMA_TOKEN_NULL || std::find(banned.begin(), banned.end(), LLAMA_TOKEN_NULL) != banned.end()) {
+        if (tok_text_end == LLAMA_TOKEN_NULL || tok_mixed_end == LLAMA_TOKEN_NULL) {
             LOG_ERR("%s: the vocab lacks the tokens of LFM3-Audio live ASR\n", __func__);
             return false;
         }
