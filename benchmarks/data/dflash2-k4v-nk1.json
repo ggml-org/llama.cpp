@@ -1,0 +1,33 @@
+{
+  "stage": "NK1",
+  "status": "passed",
+  "source_base": "2d94f6a3d",
+  "qualified_tracked_diff_sha256": "e0668939db82224576a9a465d4882bbccb8bbbc82926c087d49e4ce5ba8c00d3",
+  "evidence": "benchmarks/results/dflash2-k4v-20261026-nk1-OlLbS0",
+  "tests": 18,
+  "assertions": 161,
+  "initial_behavior_red": {
+    "assertions": 143,
+    "failures": 29
+  },
+  "expanded_baseline_red": {
+    "source": "2d94f6a3d:common/ngram-map.cpp and common/ngram-map.h",
+    "exit_code": 1,
+    "assertions": 161,
+    "failures": 35
+  },
+  "green": {
+    "release_failures": 0,
+    "asan_ubsan_failures": 0,
+    "release_arguments_passed": true,
+    "asan_ubsan_arguments_passed": true,
+    "diff_check_passed": true
+  },
+  "source_sha256": {
+    "common/ngram-map.cpp": "c5b6ca8a807a7571fa298fdff4d131218a47803ff9e3adf51c9587531b38f191",
+    "common/ngram-map.h": "cd86ed766167750c0b26189e0a7689cdb594d26d539f4c82d32076671edb56d7",
+    "tests/test-speculative.cpp": "d71bd51ff26c55eb1de74857734ded67d92d323955db4e6f3d519d02e705ee0d",
+    "docs/speculative.md": "b6827dde9edb72a437433f399232774ec852b359fbc736d928178c07232efb0a"
+  },
+  "scope": "CPU selection/counting/reset correctness. No CUDA, mixed streaming admission, neural arithmetic, frequency heuristic change or performance result claimed."
+}

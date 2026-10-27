@@ -122,6 +122,19 @@ void common_ngram_map_begin(
     common_ngram_map & map, const llama_tokens & tokens) {
     size_t size_begin = tokens.size();
 
+    if (!map.key_only) {
+        // Continuation indices and acceptance feedback belong to this history only.
+        map.keys.clear();
+        std::fill(map.key_map.begin(), map.key_map.end(), 0);
+        map.key_map_last_idx = 0;
+        map.last_draft_created = false;
+        map.last_draft_key_idx = 0;
+        map.last_draft_value_idx = 0;
+        map.idx_last_check = size_begin;
+        map.size_last_begin = size_begin;
+        return;
+    }
+
     LOG_DBG("%s: begin, idx_last_draft=%zu, new begin=%zu, #keys=%zu\n", __func__,
             map.idx_last_check, size_begin, map.keys.size());
 
@@ -384,6 +397,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         // Fill in the draft with the m tokens following the key.
         // We work with value values[0] only.
         int n_draft_tokens = std::min((int) m, (int) curr_key.values[0].n_accepted);
+        if (n_draft_tokens <= 0) return;
 
         for (int i = 0; i < n_draft_tokens; ++i) {
             draft.push_back(inp[match_pos + n + i]);
@@ -409,7 +423,8 @@ void common_ngram_map_draft(common_ngram_map & map,
     //
 
     // determine all (max COMMON_NGRAM_MAX_VALUES) m-grams after the key n-gram.
-    for (size_t i = curr_key.stat_idx; i <= match_pos; ++i) {
+    const size_t last_complete = cur_len - n - m - 1;
+    for (size_t i = curr_key.stat_idx; i <= last_complete; ++i) {
         // begins the key n-gram at index i?
         bool match_key = true;
         for (size_t k = 0; k < n; ++k) {
@@ -454,8 +469,7 @@ void common_ngram_map_draft(common_ngram_map & map,
                     (int) COMMON_NGRAM_MAX_VALUE_COUNT);
         }
     }
-    // the statistics are updated up to match_pos.
-    curr_key.stat_idx = match_pos;
+    curr_key.stat_idx = last_complete + 1;
 
     // Do we have a value we could use for the draft?
     uint16_t max_occur = 0;
@@ -501,9 +515,10 @@ void common_ngram_map_draft(common_ngram_map & map,
     // We use the most frequent value values[slot_max] for the draft.
     // Fill in the draft with the m tokens following the key.
     int n_draft_tokens = std::min((int) m, (int) curr_key.values[slot_max].n_accepted);
+    if (n_draft_tokens <= 0) return;
 
     for (int i = 0; i < n_draft_tokens; ++i) {
-        draft.push_back(inp[match_pos + n + i]);
+        draft.push_back(inp[curr_key.values[slot_max].value_idx + i]);
     }
 
     LOG_DBG("%s: key_offset = %zu, slot_max = %d, key_num = %d, draft.size = %zu\n", __func__,

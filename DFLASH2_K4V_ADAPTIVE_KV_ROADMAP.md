@@ -1,6 +1,6 @@
 # DFlash2 + K4V adaptive KV streaming roadmap
 
-Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0 is complete; NK1-NK7 are pending. Mixed streaming admission remains closed, and no mixed-mode performance gain is claimed. Updated: 2026-10-26.
+Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK1 are complete; NK2-NK7 are pending. Mixed streaming admission remains closed, and no mixed-mode performance gain is claimed. Updated: 2026-10-26.
 
 Source baseline: `bcf1a81d641c478db5690d2f2c048c691801fcb2`. The mechanism investigation originally used `1b7c0f46e`; the relevant common, n-gram, context, rollback and server source files were verified unchanged between that revision and this baseline. Recheck those files before implementation if HEAD changes.
 
@@ -166,7 +166,7 @@ Do not multiply separate phase costs when they share mutually exclusive lifetime
 
 ### NK0 - Pin controls and observability
 
-Status: complete. See the [pinned NK0 report](benchmarks/data/dflash2-k4v-nk0.json).
+Status: complete, committed as `2d94f6a3d`. See the [pinned NK0 report](benchmarks/data/dflash2-k4v-nk0.json).
 
 Added read-only common-layer snapshots of existing source counters and last supplying implementation, plus a successful DFlash/DSpark prediction-forward counter. These are host observations, not new C inference APIs or backend synchronization. The forward count distinguishes a dispatcher call from a completed neural prediction, including context-end abstention.
 
@@ -184,7 +184,13 @@ Exit: reproducible controls, an inventory of reused test hooks, and fixtures tha
 
 ### NK1 - K4V CPU correctness
 
-Status: pending. Start here before full-model testing.
+Status: complete. See the [NK1 red/green report](benchmarks/data/dflash2-k4v-nk1.json).
+
+The initial behavioral suite reproduced 29 failures in 143 assertions before the fixes. The expanded 18-case/161-assertion suite reproduces 35 failures against the pinned NK0 n-gram implementation and passes with zero failures normally and under ASAN/UBSAN. Existing argument tests pass in both builds. Raw evidence is retained in `benchmarks/results/dflash2-k4v-20261026-nk1-OlLbS0/`.
+
+K4V now emits the selected value's tokens, scans newly completed historical occurrences even beyond an old hash match, and advances a next-unprocessed-position cursor so repeated calls do not recount occurrences. Empty acceptance-limited results no longer publish a created draft. A new K4V generation clears history indices and acceptance feedback, including equal-length prompt replacement; the key-only map keeps its existing cleanup policy. Constructor checks reject zero lengths/hits and continuation lengths that cannot fit the signed acceptance field. The four-value limit, dominance threshold, lookup-hit minimum and zero-acceptance suppression policy are preserved. Native continuation lengths through 48 remain covered; the proposed mixed-mode maximum is not applied to native n-gram configuration.
+
+This is CPU correctness qualification, not a fresh CUDA or mixed-driver pass. The startup/driver integration and its supported-mode regressions remain mandatory in NK2-NK6.
 
 Write failing tests before fixes for demonstrated defects. Cover:
 
@@ -353,7 +359,7 @@ CLI order must not change the existing K4V-before-DFlash priority. This fragment
 ## Completion checklist
 
 - [x] NK0: pinned controls and proof that both draft sources can be observed independently; actual mixed switching remains NK4.
-- [ ] NK1: CPU reds reproduced and demonstrated K4V defects fixed with regression coverage.
+- [x] NK1: CPU reds reproduced and demonstrated K4V defects fixed with regression coverage.
 - [ ] NK2: one consistent bounded target-workload calculation and narrow admission.
 - [ ] NK3: independent verification/prediction/injection measurement and exact quota coverage.
 - [ ] NK4: source switching, feature continuity and every accepted prefix are correct.

@@ -154,6 +154,10 @@ This experimental implementation looks for the current n-gram of size n (called 
 
 The number of accepted tokens is stored for each used n-gram.
 
+In this fork, each eligible historical occurrence contributes once to the continuation statistics, including newly completed occurrences after a cached lookup position. The selected continuation supplies both the emitted tokens and their acceptance feedback. A zero-acceptance result suppresses that continuation until the map is rebuilt; it is not counted as a generated draft on subsequent empty lookups.
+
+K4V maps are host-side acceleration state and are rebuilt at the beginning of a generation. This discards indices and acceptance feedback from a previous or replaced history, including equal-length prompt changes. Draft counts can therefore differ from an uninterrupted generation after a reset. This does not enable K4V with the adaptive DFlash2 arena yet; see the [mixed-mode roadmap](../DFLASH2_K4V_ADAPTIVE_KV_ROADMAP.md).
+
 **Example:** Server options to be used if there are a lot of longer repetitions.
 ```
 llama-server [...] --spec-type ngram-map-k4v --spec-ngram-map-k4v-size-n 8 --spec-ngram-map-k4v-size-m 8 --spec-ngram-map-k4v-min-hits 2 --spec-draft-n-max 64
