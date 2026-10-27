@@ -1231,7 +1231,7 @@ void server_decision_context::fill_task(
             task.decision.label_groups.push_back(group.size());
         }
         // the short convs of lfm3 d1 have no memory to separate the sequences of a batch
-        task.decision.alone = is_lfm3_d1();
+        task.decision.no_batching = is_lfm3_d1();
     }
     if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_VLLM_D3 || type == COMMON_DECISION_TYPE_LFM2_D1 ||
         type == COMMON_DECISION_TYPE_H2O_LIGHTNING || type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) {

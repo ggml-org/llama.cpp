@@ -531,7 +531,7 @@ struct server_slot {
 
         // lfm3 d1 has no memory, its prompt is read as one flat ubatch and the short convs would mix the sequences
         // TODO: batch them along the sequence dimension, this needs ubatches of sequences with unequal lengths
-        if (task->decision.alone || other_slot.task->decision.alone) {
+        if (task->decision.no_batching || other_slot.task->decision.no_batching) {
             return false;
         }
 
