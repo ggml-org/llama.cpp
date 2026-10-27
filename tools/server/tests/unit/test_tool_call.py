@@ -642,3 +642,54 @@ def do_test_hello_world(server: ServerProcess, **kwargs):
     code = actual_arguments["code"]
     assert isinstance(code, str), f"Expected code to be a string, got {type(code)}: {json.dumps(code)}"
     assert re.match(r'''print\(("[Hh]ello,? [Ww]orld!?"|'[Hh]ello,? [Ww]orld!?')\)''', re.sub(r'#.*\n?', '', code)), f'Expected hello world, got {code}'
+
+
+SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "tool_search",
+        "description": "Search for available tools by keyword",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+    },
+}
+PURCHASE_FUNCTION = {
+    "name": "markItemPurchased",
+    "description": "Mark an item as purchased",
+    "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "qty": {"type": "integer"}}},
+}
+
+PURCHASE_TOOL = {"type": "function", "function": PURCHASE_FUNCTION}
+
+
+def count_deferred_tokens(tools, tool_content):
+    res = server.make_request("POST", "/chat/completions/input_tokens", data={
+        "tools": tools,
+        "messages": [
+            {"role": "user", "content": "Mark item abc as purchased"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "tool_search", "arguments": "{\"query\": \"purchase\"}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": tool_content},
+        ],
+    })
+    assert res.status_code == 200, res.body
+    return res.body["input_tokens"]
+
+
+def test_deferred_tool_reference():
+    """A defer_loading tool is withheld from the system prompt, a tool_reference reveals its definition"""
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/LFM3.jinja'
+    server.start()
+
+    deferred = {"type": "function", "function": {**PURCHASE_FUNCTION, "defer_loading": True}}
+    tools = [SEARCH_TOOL, deferred]
+
+    # withheld from the system prompt
+    assert count_deferred_tokens(tools, "none") == count_deferred_tokens([SEARCH_TOOL], "none")
+
+    # the reference renders like the definition sent inline
+    by_reference = count_deferred_tokens(tools, [{"type": "tool_reference", "name": "markItemPurchased"}])
+    inline = count_deferred_tokens(tools, "<additional_tools>\n" + json.dumps(PURCHASE_FUNCTION) + "\n</additional_tools>")
+    assert by_reference == inline

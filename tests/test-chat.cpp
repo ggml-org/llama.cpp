@@ -986,8 +986,8 @@ const common_chat_msg message_user_parts{
     /* .content = */ "",
     /* .content_parts = */
     {
-     { "text", "Hey" },
-     { "text", "there" },
+     { "text", "Hey", "" },
+     { "text", "there", "" },
      },
     /* .tool_calls = */
     {                 },
@@ -3302,9 +3302,9 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 common_chat_msg message_parts;
                 message_parts.role          = "user";
                 message_parts.content_parts = {
-                    { /* .type = */ "text", /* .text = */ "First part.\n\n" },
-                    { /* .type = */ "media_marker", /* .text = */ "<__media__>" },
-                    { /* .type = */ "text", /* .text = */ "Second part.\n\n" },
+                    { /* .type = */ "text", /* .text = */ "First part.\n\n", /* .name = */ "" },
+                    { /* .type = */ "media_marker", /* .text = */ "<__media__>", /* .name = */ "" },
+                    { /* .type = */ "text", /* .text = */ "Second part.\n\n", /* .name = */ "" },
                 };
 
                 common_chat_templates_inputs inputs;
@@ -5627,6 +5627,44 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
+            .run();
+
+        // a deferred tool is left out of <tools>, a tool_reference renders it, and its schema types the call
+        const auto deferred_tools = common_chat_tools_parse_oaicompat(json::parse(R"([
+            {"type": "function", "function": {"name": "tool_search", "description": "Search for tools",
+             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}},
+            {"type": "function", "function": {"name": "buy", "description": "Buy an item", "defer_loading": true,
+             "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "qty": {"type": "integer"}}}}}
+        ])"));
+        {
+            auto tmpls = read_templates("models/templates/LFM3.jinja");
+            common_chat_templates_inputs inputs;
+            inputs.messages = common_chat_msgs_parse_oaicompat(json::parse(R"([
+                {"role": "user", "content": "Buy the blue one"},
+                {"role": "assistant", "tool_calls": [{"id": "c0", "type": "function",
+                 "function": {"name": "tool_search", "arguments": "{\"query\": \"buy\"}"}}]},
+                {"role": "tool", "tool_call_id": "c0", "name": "tool_search", "content": [{"type": "tool_reference", "name": "buy"}]}
+            ])"));
+            inputs.tools                 = deferred_tools;
+            inputs.add_generation_prompt = true;
+            const auto prompt = common_chat_templates_apply(tmpls.get(), inputs).prompt.str();
+            assert_contains(prompt, "<tool_response>\n<additional_tools>\n{\"name\": \"buy\"");
+            assert_equals(true, prompt.find("\"name\": \"buy\"") > prompt.find("</tools>"));
+            assert_not_contains(prompt, "defer_loading");
+            assert_not_contains(prompt, "tool_reference");
+        }
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=buy>\n"
+               "<parameter=id>\nblue\n</parameter>\n"
+               "<parameter=qty>\n2\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(deferred_tools)
+            .expect_tool_calls({ { "buy", R"({"id": "blue", "qty": 2})", {} } })
             .run();
     }
 

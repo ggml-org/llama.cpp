@@ -190,10 +190,17 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
         } else {
             auto & parts = jmsg["content"] = json::array();
             for (const auto & part : content_parts) {
-                parts.push_back({
-                    {"type", part.type},
-                    {"text", part.text},
-                });
+                if (part.type == "tool_reference") {
+                    parts.push_back({
+                        {"type", part.type},
+                        {"name", part.name},
+                    });
+                } else {
+                    parts.push_back({
+                        {"type", part.type},
+                        {"text", part.text},
+                    });
+                }
             }
         }
     } else {
@@ -370,12 +377,16 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Missing content part type: " + part.dump());
                         }
                         const auto & type = part.at("type");
-                        if (type != "text" && type != "media_marker") {
-                            throw std::invalid_argument("Unsupported content part type: " + type.dump());
-                        }
                         common_chat_msg_content_part msg_part;
                         msg_part.type = type;
-                        msg_part.text = part.at("text");
+                        if (type == "text" || type == "media_marker") {
+                            msg_part.text = part.at("text");
+                        } else if (type == "tool_reference") {
+                            // names a request tool, the template renders its definition
+                            msg_part.name = part.at("name");
+                        } else {
+                            throw std::invalid_argument("Unsupported content part type: " + type.dump());
+                        }
                         msg.content_parts.push_back(msg_part);
                     }
                 } else if (!content.is_null()) {
@@ -610,13 +621,17 @@ json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & t
 
     auto result = json::array();
     for (const auto & tool : tools) {
+        json function {
+            { "name",        tool.name },
+            { "description", tool.description },
+            { "parameters",  json::parse(tool.parameters) },
+        };
+        if (tool.defer_loading) {
+            function["defer_loading"] = true;
+        }
         result.push_back({
             { "type",     "function" },
-            { "function", {
-                { "name", tool.name },
-                { "description", tool.description },
-                { "parameters", json::parse(tool.parameters) },
-            }},
+            { "function", function },
         });
     }
     return result;
@@ -653,10 +668,19 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                 }
 
                 const auto & function = tool.at("function");
+
+                // "defer_loading" sits on the function, or on the tool next to "type"; the function wins
+                const json & defer = function.contains("defer_loading") ? function.at("defer_loading")
+                                                                        : tool.value("defer_loading", json(false));
+                if (!defer.is_boolean()) {
+                    throw std::invalid_argument("Expected 'defer_loading' to be a boolean, got " + defer.dump());
+                }
+
                 result.push_back({
                     /* .name = */ function.at("name"),
                     /* .description = */ function.value("description", ""),
                     /* .parameters = */ function.value("parameters", json::object()).dump(),
+                    /* .defer_loading = */ defer.get<bool>(),
                 });
             }
         }

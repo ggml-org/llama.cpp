@@ -2550,6 +2550,23 @@ static void test_caps(testing & t) {
         t.assert_true("does not support string content", !caps.supports_string_content);
         t.assert_true("supports typed content", caps.supports_typed_content);
     });
+
+    t.test("string and typed content, behind a truthiness check", [](testing & t) {
+        // an empty content array is falsy, the parts are only read when there are some (LFM3 case)
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{% if message['content'] %}"
+            "{% if message['content'] is string %}"
+            "{{ message['content'] }}"
+            "{% else %}"
+            "{% for part in message['content'] %}{{ part['text'] }}{% endfor %}"
+            "{% endif %}"
+            "{% endif %}"
+            "{% endfor %}"
+        );
+        t.assert_true("supports string content", caps.supports_string_content);
+        t.assert_true("supports typed content", caps.supports_typed_content);
+    });
 }
 
 static void test_string_parts(testing & t) {
