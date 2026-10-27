@@ -282,83 +282,22 @@ struct backend_consts {
     }
 };
 
-// Creates a vector which holds a chain of backend ids. There, every backend is sender to and receiver from every other backend, to test all data transfers.
-static std::vector<int> create_all_to_all_chain(int n_backends) {
-    std::vector<int> chain;
-    for (int i = 0; i < n_backends; i++) {
-        for (int j = i + 1; j < n_backends; j++) {
-            chain.push_back(i);
-            chain.push_back(j);
-        }
-    }
-    return chain;
-}
-
 // stress test: a tensor is incremented and sent back and forth between the backends in a ping-pong pattern.
-// One lap tests data transfers from any backend to any other backend, with and without user inputs.
+// One lap pairs every backend a with every other backend b: the counter is brought to a, then bounced to b
+// and back for every partner in turn. So one lap copies an activation across every ordered pair of backends.
 static test_result stress_test_linked_list(const std::vector<ggml_backend_t> & backends, int n_laps,
         int64_t tensor_len, bool use_device_host_buft) {
     const int n_backends = (int) backends.size();
 
-    const std::vector<int> chain     = create_all_to_all_chain(n_backends);
-    const int              chain_len = (int) chain.size();
-
-    // one node seeds the chain, two passes over the chain per lap follow. the extra node closes the
-    // wrap-around pair of every pass
-    const int n_nodes = 2*chain_len*n_laps + 1;
+    // per lap and backend a: one node to bring the counter to a, then two per partner for the ping-pong
+    const int n_nodes = n_laps*n_backends*(2*n_backends - 1);
 
     // see sched->hash_set FIXME, the set has to hold the nodes and the leafs: two constants per backend
-    // plus one user input per node of a second pass
-    const size_t graph_size = n_nodes + 2*n_backends + chain_len*n_laps;
+    const size_t graph_size = n_nodes + 2*n_backends;
 
     backend_consts consts(backends, tensor_len);
 
     ggml_backend_sched_ptr sched = create_test_scheduler(backends, graph_size, use_device_host_buft);
-
-    // the user input of a second pass node is placed on the backend that sends it the activation, so that the
-    // receiving split has to copy both of them
-    std::vector<std::vector<int>> inputs_of(n_backends);
-    std::vector<int>              input_value(n_nodes, 0);
-
-    for (int i = 1; i < n_nodes; i++) {
-        const int pass = (i - 1)/chain_len;
-        if (pass % 2 == 0) {
-            continue;
-        }
-
-        inputs_of[chain[(i - 1) % chain_len]].push_back(i);
-        input_value[i] = chain_len*(pass/2) + (i - 1) % chain_len + 1;
-    }
-
-    // the inputs are allocated separately so that they can be written before the graph is computed
-    std::vector<ggml_context_ptr>        ctxs_input(n_backends);
-    std::vector<ggml_backend_buffer_ptr> bufs_input(n_backends);
-    std::vector<ggml_tensor *>           input(n_nodes, nullptr);
-
-    std::vector<float> data(tensor_len);
-
-    for (int b = 0; b < n_backends; b++) {
-        ggml_init_params params_input = {
-            /*.mem_size   =*/ inputs_of[b].size()*ggml_tensor_overhead(),
-            /*.mem_buffer =*/ nullptr,
-            /*.no_alloc   =*/ true,
-        };
-        ctxs_input[b].reset(ggml_init(params_input));
-
-        for (int i : inputs_of[b]) {
-            input[i] = ggml_new_tensor_1d(ctxs_input[b].get(), GGML_TYPE_F32, tensor_len);
-            ggml_format_name(input[i], "input%d", i);
-            ggml_set_input(input[i]);
-        }
-
-        bufs_input[b].reset(ggml_backend_alloc_ctx_tensors(ctxs_input[b].get(), backends[b]));
-        GGML_ASSERT(bufs_input[b] != nullptr);
-
-        for (int i : inputs_of[b]) {
-            std::fill(data.begin(), data.end(), float(input_value[i]));
-            ggml_backend_tensor_set(input[i], data.data(), 0, ggml_nbytes(input[i]));
-        }
-    }
 
     ggml_init_params params_compute = {
         /*.mem_size   =*/ (n_nodes + 2)*ggml_tensor_overhead() + ggml_graph_overhead_custom(graph_size, false),
@@ -372,21 +311,27 @@ static test_result stress_test_linked_list(const std::vector<ggml_backend_t> & b
     int64_t       sum = 0;
     ggml_tensor * out = nullptr;
 
-    for (int i = 0; i < n_nodes; i++) {
-        const int b = chain[i % chain_len];
+    // increments the counter on backend b, which makes the scheduler copy it there from the previous backend
+    auto step = [&](int b) {
+        ggml_tensor * src = out == nullptr ? consts.zero[b] : out;
 
-        if (i == 0) {
-            out  = ggml_add(ctx_compute.get(), consts.zero[b], consts.one[b]);
-            sum += 1;
-        } else if (input[i] == nullptr) {
-            out  = ggml_add(ctx_compute.get(), out, consts.one[b]);
-            sum += 1;
-        } else {
-            out  = ggml_add(ctx_compute.get(), out, input[i]);
-            sum += input_value[i];
+        out  = g.add(ggml_add(ctx_compute.get(), src, consts.one[b]), b);
+        sum += 1;
+    };
+
+    for (int lap = 0; lap < n_laps; lap++) {
+        for (int a = 0; a < n_backends; a++) {
+            step(a);
+
+            for (int b = 0; b < n_backends; b++) {
+                if (b == a) {
+                    continue;
+                }
+
+                step(b);
+                step(a);
+            }
         }
-
-        g.add(out, b);
     }
     ggml_set_name(out, "out");
     ggml_set_output(out);
