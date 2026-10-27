@@ -227,6 +227,7 @@ struct mtmd_helper_gen_audio_inp {
     bool stream; // if true, output() must be called after each step_gen()
     llama_seq_id seq_id;
 
+    // the text to speak; for a model with a "tts" chat template (e.g. LFM3-Audio), the prompt rendered from it
     const char * prompt;
     size_t       prompt_len;
 
@@ -236,7 +237,7 @@ struct mtmd_helper_gen_audio_inp {
 
     mtmd_bitmap * speaker_ref; // optional, can be NULL
     const char * lang; // optional, can be NULL
-    const char * voice; // optional, can be NULL (LFM3-Audio: "female" or "male", default "female")
+    const char * voice; // optional, can be NULL, model-dependent
 
     int32_t  top_k;
     float    top_p;

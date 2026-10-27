@@ -42,11 +42,58 @@ class LFM3Model(TextModel):
         "{%- if add_generation_prompt -%}{{- '<|im_start|>assistant\\n' -}}{%- endif -%}"
     )
 
+    # TTS and ASR prompts of the model card: a language code is looked up, anything else is taken as the language name
+    _tts_langs = {
+        "ar": "Arabic", "da": "Danish", "de": "German", "el": "Greek", "en": "American English", "en-us": "American English",
+        "en-gb": "British English", "fi": "Finnish", "fr": "French", "he": "Hebrew", "it": "Italian", "ja": "Japanese",
+        "ko": "Korean", "nl": "Dutch", "pl": "Polish", "pt": "Portuguese", "es": "Spanish", "sv": "Swedish", "tr": "Turkish",
+        "zh": "Chinese",
+    }
+    _asr_langs = {
+        "ar": "Arabic", "da": "Danish", "de": "German", "el": "Greek", "en": "English", "es": "Spanish", "fi": "Finnish",
+        "fr": "French", "he": "Hebrew", "it": "Italian", "ja": "Japanese", "ko": "Korean", "nl": "Dutch", "pl": "Polish",
+        "pt": "Portuguese", "sv": "Swedish", "tr": "Turkish", "zh": "Chinese",
+    }
+
+    # "language" and "voice" are optional, the text to speak is the first message
+    def _tts_template(self, think: bool) -> str:
+        return (
+            "{%- set names = " + json.dumps(self._tts_langs) + " -%}"
+            "{%- set code = (language | lower) if language is defined and language else 'en' -%}"
+            "{%- set lang = names[code] if code in names else language -%}"
+            "{%- set v = (voice | lower) if voice is defined and voice and (voice | lower) in ['female', 'male'] else 'female' -%}"
+            "{{- bos_token -}}"
+            "{{- '<|im_start|>system\\nPerform TTS in ' + lang + ' using a ' + v + ' voice.<|im_end|>\\n' -}}"
+            "{{- '<|im_start|>user\\n' + messages[0]['content'] + '<|im_end|>\\n' -}}"
+            "{{- '<|im_start|>assistant\\n" + ("<think></think>" if think else "") + "<|audio_start|>' -}}"
+        )
+
+    # the system prompt of a transcription, without a language the model detects it
+    def _asr_system_template(self) -> str:
+        return (
+            "{%- set names = " + json.dumps(self._asr_langs) + " -%}"
+            "{%- if language is defined and language -%}"
+            "{%- set code = language | lower -%}"
+            "{{- 'Perform ASR in ' + (names[code] if code in names else language) + '.' -}}"
+            "{%- else -%}"
+            "{{- 'Perform ASR.' -}}"
+            "{%- endif -%}"
+        )
+
     def set_vocab(self):
         super().set_vocab()
-        # LFM3-Audio keeps the text config under "lfm"
-        if "lfm" in self.hparams:
-            self.gguf_writer.add_chat_template([{"name": "asr", "template": self._asr_template}])
+        # LFM3-Audio keeps the text config under "lfm", LFM3-Omni has an audio encoder config
+        is_audio = "lfm" in self.hparams
+        is_omni  = "audio_encoder_config" in self.hparams
+        templates = []
+        if is_audio:
+            templates.append({"name": "asr", "template": self._asr_template})
+        if is_audio or is_omni:
+            # LFM3-Omni opens every assistant turn with an empty think block
+            templates.append({"name": "tts", "template": self._tts_template(think=is_omni)})
+            templates.append({"name": "asr_system", "template": self._asr_system_template()})
+        if templates:
+            self.gguf_writer.add_chat_template(templates)
 
     def set_gguf_parameters(self):
         layer_types = self.hparams["layer_types"]

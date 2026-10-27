@@ -42,15 +42,6 @@ static std::string tts_resolve_lang(const std::string & lang) {
     return it != tts_lang_codes.end() ? it->second : lang;
 }
 
-// --tts-lang codes -> the languages of the LFM3-Audio TTS system prompt, other values are taken as the name
-static const std::unordered_map<std::string, std::string> lfm3a_tts_langs = {
-    { "ar", "Arabic"  }, { "da", "Danish"   }, { "de", "German"  }, { "el", "Greek"   }, { "en", "American English" },
-    { "en-us", "American English" }, { "en-gb", "British English" }, { "fi", "Finnish" }, { "fr", "French" },
-    { "he", "Hebrew"  }, { "it", "Italian"  }, { "ja", "Japanese" }, { "ko", "Korean" }, { "nl", "Dutch"    },
-    { "pl", "Polish"  }, { "pt", "Portuguese" }, { "es", "Spanish" }, { "sv", "Swedish" }, { "tr", "Turkish" },
-    { "zh", "Chinese" },
-};
-
 static llama_token find_special_token(const llama_vocab * vocab, const std::string & piece) {
     const int32_t n = llama_vocab_n_tokens(vocab);
     for (llama_token t = 0; t < n; t++) {
@@ -1311,25 +1302,10 @@ public:
             LOG_WRN("mtmd_helper_gen_audio: the model has no voice conditioning, the speaker file is ignored\n");
         }
 
-        // continuing: the prompt is appended to the sequence as is, otherwise it is the text to speak
+        // the prompt is rendered by the caller: the "tts" chat template of the model, or the next turn of a conversation
         continuing = inp->n_past > 0;
         pos        = continuing ? inp->n_past : 0;
-        std::string lang = inp->lang && inp->lang[0] ? inp->lang : "en";
-        std::transform(lang.begin(), lang.end(), lang.begin(), [](unsigned char c) { return (char) std::tolower(c); });
-        const auto it_lang = lfm3a_tts_langs.find(lang);
-        lang = it_lang != lfm3a_tts_langs.end() ? it_lang->second : inp->lang;
-        std::string voice = inp->voice && inp->voice[0] ? inp->voice : "female";
-        std::transform(voice.begin(), voice.end(), voice.begin(), [](unsigned char c) { return (char) std::tolower(c); });
-        if (voice != "female" && voice != "male") {
-            LOG_WRN("mtmd_helper_gen_audio: unknown voice '%s', the model has 'female' and 'male', using 'female'\n", inp->voice);
-            voice = "female";
-        }
-        // LFM3-Omni (LFM3-Audio with a vision tower) opens every assistant turn with an empty think block
-        const std::string think = mtmd_support_vision(mctx) ? "<think></think>" : "";
-        const std::string full = continuing ? std::string(inp->prompt, inp->prompt_len) :
-                                 "<|startoftext|><|im_start|>system\nPerform TTS in " + lang + " using a " + voice + " voice.<|im_end|>\n" +
-                                 "<|im_start|>user\n" + std::string(inp->prompt, inp->prompt_len) +
-                                 "<|im_end|>\n<|im_start|>assistant\n" + think + "<|audio_start|>";
+        const std::string full(inp->prompt, inp->prompt_len);
         prompt_tokens.resize(full.size() + 16);
         const int n_ids = llama_tokenize(vocab, full.c_str(), (int32_t) full.size(), prompt_tokens.data(),
                                          (int32_t) prompt_tokens.size(), false, true);
@@ -1346,6 +1322,10 @@ public:
         const llama_token last = prompt_tokens.back();
         mode = last == tok_audio_start ? MODE_AUDIO : last == tok_mixed_start ? MODE_MIXED : MODE_TEXT;
         slots_left = n_text_block;
+        if (!continuing && mode != MODE_AUDIO) {
+            LOG_ERR("mtmd_helper_gen_audio: the prompt must come from the \"tts\" chat template of the model\n");
+            return 1;
+        }
 
         // the sampling defaults of the model, the caller's top-k/top-p are not used
         const mtmd_gen_inp def = mtmd_gen_inp_default(mctx);

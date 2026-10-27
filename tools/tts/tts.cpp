@@ -1,4 +1,5 @@
 #include "arg.h"
+#include "chat.h"
 #include "common.h"
 #include "sampling.h"
 #include "log.h"
@@ -111,12 +112,19 @@ int main(int argc, char ** argv) {
         speaker_bitmap.reset(wrapper.bitmap);
     }
 
+    // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
+    auto tmpls = common_chat_templates_init(model, "");
+    std::string prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice);
+    if (prompt.empty()) {
+        prompt = params.prompt;
+    }
+
     mtmd_helper::gen_audio gen;
     gen.init(lctx, mctx.get());
     mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
-    inp.prompt      = params.prompt.c_str();
-    inp.prompt_len  = params.prompt.size();
+    inp.prompt      = prompt.c_str();
+    inp.prompt_len  = prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
     inp.lang        = params.tts_lang.c_str();
     inp.voice       = params.tts_voice.c_str();

@@ -6369,9 +6369,13 @@ void server_routes::init_routes() {
         server_task task(SERVER_TASK_TYPE_TTS);
         server_schema::eval_tts_schema(params, task, body);
         const bool stream = task.params.stream;
-        task.tts_inp.set_prompt(prompt);
-        task.tts_inp.set_lang(json_value(body, "lang", std::string()));
-        task.tts_inp.set_voice(json_value(body, "voice", std::string()));
+        // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
+        const std::string lang       = json_value(body, "lang", std::string());
+        const std::string voice      = json_value(body, "voice", std::string());
+        const std::string tts_prompt = common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
+        task.tts_inp.set_prompt(tts_prompt.empty() ? prompt : tts_prompt);
+        task.tts_inp.set_lang(lang);
+        task.tts_inp.set_voice(voice);
         task.tts_inp.data.stream    = stream;
         task.tts_inp.data.out_type  = response_format == "pcm"
             ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM
