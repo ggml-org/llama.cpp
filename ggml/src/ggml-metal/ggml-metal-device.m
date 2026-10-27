@@ -2463,7 +2463,7 @@ static bool ggml_metal_buffer_data_span(const void * const * data, const size_t 
     return found;
 }
 
-void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, const struct ggml_tensor * const * tensors, const void * const * data,
+void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor * const * tensors, const void * const * data,
         const size_t * offsets, const size_t * sizes, size_t n_tensors) {
     if (buf->is_shared) {
         for (size_t i = 0; i < n_tensors; i++) {

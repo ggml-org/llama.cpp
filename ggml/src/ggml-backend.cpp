@@ -602,7 +602,7 @@ void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor, void * data, 
     buf->iface.get_tensor_2d(buf, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
 }
 
-void ggml_backend_tensor_set_n(const struct ggml_tensor * const * tensors, const void * data,
+void ggml_backend_tensor_set_n(struct ggml_tensor * const * tensors, const void * data,
         const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors) {
     if (n_tensors == 0) {
         return;
@@ -642,7 +642,7 @@ void ggml_backend_tensor_set_n(const struct ggml_tensor * const * tensors, const
         }, groups);
 
         for (size_t g = 0; g < groups.size(); g++) {
-            std::vector<const ggml_tensor *> g_tensors;
+            std::vector<ggml_tensor *> g_tensors;
             std::vector<size_t> g_offsets;
             std::vector<size_t> g_sizes;
             std::vector<size_t> g_data_offsets;
@@ -666,13 +666,13 @@ void ggml_backend_tensor_set_n(const struct ggml_tensor * const * tensors, const
     size_t base_offset = 0, size = 0, stride_tensor = 0, stride_data = 0;
     if (ggml_backend_tensor_batch_is_2d(tensors, offsets, sizes, data_offsets, n_tensors,
                 &base_offset, &size, &stride_tensor, &stride_data)) {
-        ggml_backend_tensor_set_2d(const_cast<struct ggml_tensor *>(tensors[0]), data_ptrs[0], base_offset, size,
+        ggml_backend_tensor_set_2d(tensors[0], data_ptrs[0], base_offset, size,
                 n_tensors, stride_tensor, stride_data);
         return;
     }
 
     for (size_t i = 0; i < n_tensors; i++) {
-        ggml_backend_tensor_set(const_cast<struct ggml_tensor *>(tensors[i]), data_ptrs[i], offsets[i], sizes[i]);
+        ggml_backend_tensor_set(tensors[i], data_ptrs[i], offsets[i], sizes[i]);
     }
 }
 

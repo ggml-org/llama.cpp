@@ -15,7 +15,6 @@ static bool run_tensor_n_case(
         const std::vector<size_t> & data_offsets) {
     const size_t n = tensors.size();
 
-    std::vector<const ggml_tensor *> const_tensors(tensors.begin(), tensors.end());
     std::vector<uint8_t> data(256, 0);
     std::vector<uint8_t> out(256, 0);
 
@@ -26,9 +25,9 @@ static bool run_tensor_n_case(
         memset(data.data() + data_offsets[i], (int) (0x40 + i*0x10), sizes[i]);
     }
 
-    ggml_backend_tensor_set_n(const_tensors.data(), data.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
+    ggml_backend_tensor_set_n(tensors.data(), data.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
 
-    ggml_backend_tensor_get_n(const_tensors.data(), out.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
+    ggml_backend_tensor_get_n(tensors.data(), out.data(), offsets.data(), sizes.data(), data_offsets.data(), n);
 
     for (size_t i = 0; i < n; i++) {
         if (sizes[i] == 0) {
