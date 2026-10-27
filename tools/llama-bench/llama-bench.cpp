@@ -346,6 +346,8 @@ struct cmd_params {
     std::vector<int>                 n_ubatch;
     std::vector<ggml_type>           type_k;
     std::vector<ggml_type>           type_v;
+    ggml_type type_k_swa = GGML_TYPE_COUNT;
+    ggml_type type_v_swa = GGML_TYPE_COUNT;
     std::vector<int>                 n_threads;
     std::vector<std::string>         cpu_mask;
     std::vector<bool>                cpu_strict;
@@ -392,6 +394,8 @@ static const cmd_params cmd_params_defaults = {
     /* n_ubatch             */ { 512 },
     /* type_k               */ { GGML_TYPE_F16 },
     /* type_v               */ { GGML_TYPE_F16 },
+    /* type_k_swa           */ GGML_TYPE_COUNT,
+    /* type_v_swa           */ GGML_TYPE_COUNT,
     /* n_threads            */ { common_cpu_get_num_math() },
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
@@ -464,6 +468,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -d, --n-depth <n>                                 (default: %s)\n", join(cmd_params_defaults.n_depth, ",").c_str());
     printf("  -b, --batch-size <n>                              (default: %s)\n", join(cmd_params_defaults.n_batch, ",").c_str());
     printf("  -ub, --ubatch-size <n>                            (default: %s)\n", join(cmd_params_defaults.n_ubatch, ",").c_str());
+    printf("  --cache-type-k-swa <t>                          (default: same as K)\n");
+    printf("  --cache-type-v-swa <t>                          (default: same as V)\n");
     printf("  -ctk, --cache-type-k <t>                          (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
     printf("  -ctv, --cache-type-v <t>                          (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
     printf("  -t, --threads <n>                                 (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
@@ -632,6 +638,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_ubatch.insert(params.n_ubatch.end(), p.begin(), p.end());
+            } else if (arg == "--cache-type-k-swa" || arg == "--cache-type-v-swa") {
+                if (++i >= argc) { invalid_param = true; break; }
+                const auto type = ggml_type_from_name(argv[i]);
+                if (type == GGML_TYPE_COUNT) { invalid_param = true; break; }
+                if (arg == "--cache-type-k-swa") { params.type_k_swa = type; }
+                else { params.type_v_swa = type; }
             } else if (arg == "-ctk" || arg == "--cache-type-k") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1217,6 +1229,8 @@ struct cmd_params_instance {
     int                n_ubatch;
     ggml_type          type_k;
     ggml_type          type_v;
+    ggml_type          type_k_swa;
+    ggml_type          type_v_swa;
     int                n_threads;
     std::string        cpu_mask;
     bool               cpu_strict;
@@ -1310,6 +1324,8 @@ struct cmd_params_instance {
         cparams.n_ubatch        = n_ubatch;
         cparams.type_k          = type_k;
         cparams.type_v          = type_v;
+        cparams.type_k_swa      = type_k_swa;
+        cparams.type_v_swa      = type_v_swa;
         cparams.offload_kqv     = !no_kv_offload;
         cparams.flash_attn_type = flash_attn;
         cparams.embeddings      = embeddings;
@@ -1365,6 +1381,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_ubatch              = */ nub,
                 /* .type_k                = */ tk,
                 /* .type_v                = */ tv,
+                /* .type_k_swa            = */ params.type_k_swa,
+                /* .type_v_swa            = */ params.type_v_swa,
                 /* .n_threads             = */ nt,
                 /* .cpu_mask              = */ cm,
                 /* .cpu_strict            = */ cs,
@@ -1403,6 +1421,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_ubatch              = */ nub,
                 /* .type_k                = */ tk,
                 /* .type_v                = */ tv,
+                /* .type_k_swa            = */ params.type_k_swa,
+                /* .type_v_swa            = */ params.type_v_swa,
                 /* .n_threads             = */ nt,
                 /* .cpu_mask              = */ cm,
                 /* .cpu_strict            = */ cs,
@@ -1441,6 +1461,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_ubatch              = */ nub,
                 /* .type_k                = */ tk,
                 /* .type_v                = */ tv,
+                /* .type_k_swa            = */ params.type_k_swa,
+                /* .type_v_swa            = */ params.type_v_swa,
                 /* .n_threads             = */ nt,
                 /* .cpu_mask              = */ cm,
                 /* .cpu_strict            = */ cs,
@@ -1488,6 +1510,8 @@ struct test {
     int                      poll;
     ggml_type                type_k;
     ggml_type                type_v;
+    ggml_type                type_k_swa;
+    ggml_type                type_v_swa;
     int                      n_gpu_layers;
     int                      n_cpu_moe;
     llama_split_mode         split_mode;
@@ -1529,6 +1553,8 @@ struct test {
         poll           = inst.poll;
         type_k         = inst.type_k;
         type_v         = inst.type_v;
+        type_k_swa     = inst.type_k_swa == GGML_TYPE_COUNT ? type_k : inst.type_k_swa;
+        type_v_swa     = inst.type_v_swa == GGML_TYPE_COUNT ? type_v : inst.type_v_swa;
         n_gpu_layers   = inst.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
@@ -1600,7 +1626,7 @@ struct test {
             "build_commit",   "build_number",   "cpu_info",      "gpu_info",       "backends",
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
-            "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
+            "type_k",         "type_v",         "type_k_swa",    "type_v_swa",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
@@ -1688,6 +1714,8 @@ struct test {
                                             std::to_string(poll),
                                             ggml_type_name(type_k),
                                             ggml_type_name(type_v),
+                                            ggml_type_name(type_k_swa),
+                                            ggml_type_name(type_v_swa),
                                             std::to_string(n_gpu_layers),
                                             std::to_string(n_cpu_moe),
                                             split_mode_str(split_mode),
