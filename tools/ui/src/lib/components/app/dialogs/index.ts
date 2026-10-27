@@ -120,6 +120,23 @@ export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 export { default as DialogConfirmDownload } from './DialogConfirmDownload.svelte';
 
 /**
+ * **DialogConversationDelete** - Confirm deleting a conversation
+ *
+ * Destructive confirmation shared by every conversation delete entry point
+ * (keyboard shortcut, sidebar, mobile search).
+ *
+ * @example
+ * ```svelte
+ * <DialogConversationDelete
+ *   bind:open={showDelete}
+ *   onConfirm={handleDelete}
+ *   onCancel={() => (showDelete = false)}
+ * />
+ * ```
+ */
+export { default as DialogConversationDelete } from './DialogConversationDelete.svelte';
+
+/**
  * **DialogConversationRename** - Rename a conversation
  *
  * Modal dialog for renaming a conversation. Replaces the prior
@@ -402,17 +419,6 @@ export { default as DialogModelNotAvailable } from './DialogModelNotAvailable.sv
  * ```
  */
 export { default as DialogConversationSelection } from './DialogConversationSelection.svelte';
-
-/**
- *
- * MODEL INFORMATION DIALOGS
- *
- * Dialogs for displaying model and server information.
- *
- */
-
-/** **DialogModelInformation** - model details a phone opens instead of the manager pane. */
-export { default as DialogModelInformation } from './DialogModelInformation.svelte';
 
 /**
  * **DialogMcpResourcesBrowser** - MCP resources browser dialog
