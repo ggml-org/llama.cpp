@@ -219,11 +219,10 @@ public:
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
 
     ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
-    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
+    std::vector<ggml_tensor *> get_k_rot() const;
 
     void set_input_k_idxs(ggml_tensor * dst) const;
     void set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-    void set_input_k_rot(ggml_tensor * dst) const;
 
     // token history of the raw (window) cells, for host-side n-gram hashing (deepseek41 Engram)
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
@@ -266,8 +265,7 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
 
-    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
-    void set_input_k_rot(ggml_tensor * dst) const;
+    std::vector<ggml_tensor *> get_k_rot() const;
 
 private:
     llama_kv_cache * kv;

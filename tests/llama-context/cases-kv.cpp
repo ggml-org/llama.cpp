@@ -604,41 +604,91 @@ struct case_state_rotation : ctx_test {
 };
 
 struct case_rotation_buffers : ctx_test {
+    using rotations_t = std::vector<std::pair<std::string, ggml_tensor *>>;
+
     const char * name() const override { return "rot_buf"; }
 
     const char * description() const override {
-        return "resident GPU rotation matrices keep their values across a cache clear and graph rebuild";
+        return "per-layer rotation matrices match KV placement and survive a cache clear and graph rebuild";
     }
 
-    case_result run(model_run & mr) const override {
+    static ctx_opts options() {
         ctx_opts opts;
         opts.n_ctx = 32;
         opts.n_batch = opts.n_ubatch = opts.n_seq_max = 1;
         opts.type_k = opts.type_v = GGML_TYPE_Q8_0;
         opts.fa = LLAMA_FLASH_ATTN_TYPE_ENABLED;
         opts.quiet = true;
-        auto ctx = mr.ctx(opts);
+        return opts;
+    }
+
+    case_result run(model_run & mr) const override {
+        auto ctx = mr.ctx(options());
         if (!ctx) {
             return case_result::skip("quantized KV cache is not supported");
         }
+        return check(ctx.get(), false);
+    }
 
-        auto * graph = llama_graph_reserve(ctx.get(), 1, 1, 1);
-        CTX_REQUIRE(graph, "failed to reserve the rotation graph");
-        std::vector<std::pair<std::string, ggml_tensor *>> rotations;
-        for (const char * name : { "attn_inp_k_rot", "attn_inp_v_rot" }) {
-            auto * t = ggml_graph_get_tensor(graph, name);
-            if (t && t->buffer && !ggml_backend_buffer_is_host(t->buffer)) {
+    static rotations_t collect(ggml_cgraph * graph) {
+        rotations_t rotations;
+        for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+            auto * node = ggml_graph_node(graph, i);
+            for (auto * t : node->src) {
+                if (!t || std::strncmp(t->name, "cache_", 6) != 0) {
+                    continue;
+                }
+                std::string name = t->name;
+                const auto pos = name.find("_rot_l");
+                if (pos == std::string::npos || ggml_graph_get_tensor(graph, name.c_str()) != t) {
+                    continue;
+                }
+                if (std::find(rotations.begin(), rotations.end(), std::make_pair(name, t)) != rotations.end()) {
+                    continue;
+                }
                 rotations.emplace_back(name, t);
             }
         }
+        return rotations;
+    }
+
+    static case_result check(llama_context * ctx, bool require_mixed) {
+        auto * graph = llama_graph_reserve(ctx, 1, 1, 1);
+        CTX_REQUIRE(graph, "failed to reserve the rotation graph");
+        CTX_REQUIRE(!ggml_graph_get_tensor(graph, "attn_inp_k_rot") &&
+                !ggml_graph_get_tensor(graph, "attn_inp_v_rot"), "rotation matrix is still a shared graph input");
+        const auto rotations = collect(graph);
         if (rotations.empty()) {
-            return case_result::skip("no resident GPU rotation matrices");
+            CTX_REQUIRE(!require_mixed, "mixed-placement graph has no persistent rotation matrices");
+            return case_result::skip("model does not use attention rotation");
         }
+
+        bool has_cpu = false;
+        bool has_gpu = false;
+        for (const auto & rotation : rotations) {
+            auto * t = rotation.second;
+            std::string cache_name = rotation.first;
+            cache_name.erase(cache_name.find("_rot_l"), 4);
+            auto * cache = ggml_graph_get_tensor(graph, cache_name.c_str());
+            CTX_REQUIRE(t->buffer && cache && cache->buffer, "rotation or KV buffer is missing");
+            const auto buft = ggml_backend_buffer_get_type(cache->buffer);
+            CTX_REQUIRE(ggml_backend_buffer_get_type(t->buffer) == buft,
+                    "rotation matrix is on a different device from its KV layer");
+            CTX_REQUIRE(t->buffer != cache->buffer, "rotation matrix shares the mutable KV buffer");
+            CTX_REQUIRE(!(t->flags & GGML_TENSOR_FLAG_INPUT), "rotation matrix is a graph input");
+            const auto dev = ggml_backend_buft_get_device(buft);
+            if (dev) {
+                const auto type = ggml_backend_dev_type(dev);
+                has_cpu |= type == GGML_BACKEND_DEVICE_TYPE_CPU;
+                has_gpu |= type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
+            }
+        }
+        CTX_REQUIRE(!require_mixed || (has_cpu && has_gpu), "partial offload did not place rotated KV layers on both CPU and GPU");
 
         // Read the buffers directly: FWHT kernels do not read the matrix contents.
         for (bool clear : { false, true }) {
             if (clear) {
-                llama_memory_clear(llama_get_memory(ctx.get()), true);
+                llama_memory_clear(llama_get_memory(ctx), true);
             }
             for (const auto & rotation : rotations) {
                 auto * t = rotation.second;
@@ -661,13 +711,87 @@ struct case_rotation_buffers : ctx_test {
             }
         }
 
-        graph = llama_graph_reserve(ctx.get(), 1, 1, 1);
+        graph = llama_graph_reserve(ctx, 1, 1, 1);
         CTX_REQUIRE(graph, "failed to rebuild the rotation graph");
         for (const auto & rotation : rotations) {
             CTX_REQUIRE(ggml_graph_get_tensor(graph, rotation.first.c_str()) == rotation.second,
                     "rotation matrix was not reused across graphs");
         }
         return case_result::pass();
+    }
+};
+
+struct case_rotation_buffers_partial : case_rotation_buffers {
+    const char * name() const override { return "rot_mix"; }
+
+    const char * description() const override {
+        return "partial offload keeps rotation matrices on both CPU and GPU across a cache clear and graph rebuild";
+    }
+
+    case_result run(model_run & mr) const override {
+        if (mr.params.n_gpu_layers == 0) {
+            return case_result::skip("GPU offload is disabled");
+        }
+        ggml_backend_dev_t gpu = nullptr;
+        const size_t n_devices = mr.params.devices.empty() ? ggml_backend_dev_count() : mr.params.devices.size();
+        for (size_t i = 0; i < n_devices; ++i) {
+            auto * dev = mr.params.devices.empty() ? ggml_backend_dev_get(i) : mr.params.devices[i];
+            if (!dev) {
+                continue;
+            }
+            const auto type = ggml_backend_dev_type(dev);
+            if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                gpu = dev;
+                break;
+            }
+        }
+        if (!gpu) {
+            return case_result::skip("mixed CPU/GPU placement requires a GPU");
+        }
+
+        auto ctx = mr.ctx(options());
+        if (!ctx) {
+            return case_result::skip("quantized KV cache is not supported");
+        }
+        auto * graph = llama_graph_reserve(ctx.get(), 1, 1, 1);
+        CTX_REQUIRE(graph, "failed to reserve the rotation graph");
+        CTX_REQUIRE(!ggml_graph_get_tensor(graph, "attn_inp_k_rot") &&
+                !ggml_graph_get_tensor(graph, "attn_inp_v_rot"), "rotation matrix is still a shared graph input");
+        const int n_layer = llama_model_n_layer(mr.model) + llama_model_n_layer_nextn(mr.model);
+        int first = n_layer;
+        int last = -1;
+        for (const auto & rotation : collect(graph)) {
+            const auto pos = rotation.first.find("_rot_l");
+            int il = -1;
+            CTX_REQUIRE(std::sscanf(rotation.first.c_str() + pos + 6, "%d", &il) == 1 && il >= 0 && il < n_layer,
+                    "invalid rotation layer index");
+            first = std::min(first, il);
+            last = std::max(last, il);
+        }
+        if (first >= last) {
+            return case_result::skip("mixed placement requires two layers with attention rotation");
+        }
+        ctx.reset();
+
+        common_params params = mr.params;
+        params.no_kv_offload = false;
+        auto mparams = common_model_params_to_llama(params);
+        ggml_backend_dev_t devices[] = { gpu, nullptr };
+        mparams.devices = devices;
+        mparams.split_mode = LLAMA_SPLIT_MODE_LAYER;
+        mparams.main_gpu = 0;
+        mparams.tensor_split = nullptr;
+        mparams.tensor_buft_overrides = nullptr;
+        // n_gpu_layers includes the output layer; keep the earlier KV layers on CPU.
+        mparams.n_gpu_layers = n_layer + 1 - last;
+        CTX_REQUIRE(!params.model.path.empty(), "the model path is not known");
+        llama_model_ptr model(llama_model_load_from_file(params.model.path.c_str(), mparams));
+        CTX_REQUIRE(model, "failed to load the partial-offload model");
+        auto partial_ctx = make_ctx(model.get(), params, options());
+        if (!partial_ctx) {
+            return case_result::skip("quantized KV cache is not supported on the selected GPU");
+        }
+        return check(partial_ctx.get(), true);
     }
 };
 
@@ -903,6 +1027,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_restore_failure>());
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_rotation_buffers>());
+    cases.push_back(std::make_unique<case_rotation_buffers_partial>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
     cases.push_back(std::make_unique<case_noalloc>());
     cases.push_back(std::make_unique<case_comp_padding>());

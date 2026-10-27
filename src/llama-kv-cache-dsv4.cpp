@@ -2060,8 +2060,8 @@ ggml_tensor * llama_kv_cache_dsv4_raw_context::build_input_k_idxs(ggml_context *
     return k_idxs;
 }
 
-ggml_tensor * llama_kv_cache_dsv4_raw_context::build_input_k_rot(ggml_context * ctx) const {
-    return kv_swa->build_input_k_rot(ctx);
+std::vector<ggml_tensor *> llama_kv_cache_dsv4_raw_context::get_k_rot() const {
+    return kv_swa->get_k_rot();
 }
 
 void llama_kv_cache_dsv4_raw_context::set_input_k_idxs(ggml_tensor * dst) const {
@@ -2075,10 +2075,6 @@ void llama_kv_cache_dsv4_raw_context::set_input_kq_mask(ggml_tensor * dst, const
 void llama_kv_cache_dsv4_raw_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
     GGML_ASSERT(kv_swa != nullptr);
     kv_swa->get_prev_tokens(ubatch, n, res);
-}
-
-void llama_kv_cache_dsv4_raw_context::set_input_k_rot(ggml_tensor * dst) const {
-    kv_swa->set_input_k_rot(dst);
 }
 
 //
@@ -2132,12 +2128,8 @@ ggml_tensor * llama_kv_cache_dsv4_comp_context::cpy_k(ggml_context * ctx, ggml_t
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
 
-ggml_tensor * llama_kv_cache_dsv4_comp_context::build_input_k_rot(ggml_context * ctx) const {
-    return kv->build_input_k_rot(ctx);
-}
-
-void llama_kv_cache_dsv4_comp_context::set_input_k_rot(ggml_tensor * dst) const {
-    kv->set_input_k_rot(dst);
+std::vector<ggml_tensor *> llama_kv_cache_dsv4_comp_context::get_k_rot() const {
+    return kv->get_k_rot();
 }
 
 //
