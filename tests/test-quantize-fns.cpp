@@ -279,6 +279,50 @@ static int test_quantize_imatrix_degenerate(bool verbose) {
     return num_failed;
 }
 
+static int test_fp4_round_to_even(bool verbose) {
+    static const float inputs[] = {
+         0.25f,  0.75f,  1.25f,  1.75f,  2.5f,  3.5f,
+        -0.25f, -0.75f, -1.25f, -1.75f, -2.5f, -3.5f,
+    };
+    static const float expected[] = {
+         0.0f,  1.0f,  1.0f,  2.0f,  2.0f,  4.0f,
+         0.0f, -1.0f, -1.0f, -2.0f, -2.0f, -4.0f,
+    };
+
+    int num_failed = 0;
+
+    printf("Testing FP4 round-to-even:\n");
+    for (ggml_type type : {GGML_TYPE_MXFP4, GGML_TYPE_NVFP4}) {
+        const auto * qfns = ggml_get_type_traits(type);
+        const int64_t n = qfns->blck_size;
+        std::vector<float> data(n, 0.0f);
+        std::vector<float> output(n);
+        std::vector<uint8_t> quantized(ggml_row_size(type, n));
+
+        std::copy(std::begin(inputs), std::end(inputs), data.begin());
+        const int64_t subblock_size = type == GGML_TYPE_NVFP4 ? 16 : n;
+        for (int64_t i = subblock_size - 1; i < n; i += subblock_size) {
+            data[i] = 6.0f;
+        }
+
+        qfns->from_float_ref(data.data(), quantized.data(), n);
+        qfns->to_float(quantized.data(), output.data(), n);
+
+        bool type_failed = false;
+        for (size_t i = 0; i < std::size(inputs); ++i) {
+            const bool failed = output[i] != expected[i];
+            type_failed |= failed;
+            if (failed || verbose) {
+                printf("%6s round-to-even x=%5.2f:       %s (expected=%4.1f got=%4.1f)\n",
+                       ggml_type_name(type), inputs[i], RESULT_STR[failed], expected[i], output[i]);
+            }
+        }
+        num_failed += type_failed;
+    }
+
+    return num_failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -301,6 +345,7 @@ int main(int argc, char * argv[]) {
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_vec_dot_q(verbose);
     num_failed += test_quantize_imatrix_degenerate(verbose);
+    num_failed += test_fp4_round_to_even(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);

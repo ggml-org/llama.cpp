@@ -722,17 +722,24 @@ class MXFP4(__Quant, qtype=GGMLQuantizationType.MXFP4):
     def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
         n_blocks = blocks.shape[0]
 
-        d = abs(blocks).max(axis=-1, keepdims=True)
+        blocks_abs = np.abs(blocks)
+        d = blocks_abs.max(axis=-1, keepdims=True)
 
         with np.errstate(divide="ignore"):
             e = np.where(d > 0, np.floor(np.log2(d)) - 2 + 127, 0).astype(np.uint8)
 
         d = cls.e8m0_to_fp32_half(e)
 
-        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape((1, 1, 16))
+        # Search positive E2M1 values in round-to-even priority order, then restore the sign bit.
+        order = np.array((0, 2, 4, 6, 1, 3, 5, 7), dtype=np.uint8)
+        kvalues = np.array(cls.kvalues[:8], dtype=np.int8)[order].reshape((1, 1, 8))
 
-        errs = np.abs(d.reshape((n_blocks, 1, 1)) * kvalues.astype(np.float32) - blocks.reshape((n_blocks, cls.block_size, 1)))
-        best = np.argmin(errs, axis=-1, keepdims=True)
+        blocks_3d = blocks.reshape((n_blocks, cls.block_size, 1))
+        errs = np.abs(
+            d.reshape((n_blocks, 1, 1)) * kvalues.astype(np.float32)
+            - blocks_abs.reshape((n_blocks, cls.block_size, 1)))
+        best = order[np.argmin(errs, axis=-1, keepdims=True)]
+        best |= ((blocks_3d < 0) & (best != 0)).astype(np.uint8) << np.uint8(3)
 
         qs = best.reshape(n_blocks, 2, cls.block_size // 2).astype(np.uint8)
         qs = qs[:, 0] | (qs[:, 1] << np.uint8(4))

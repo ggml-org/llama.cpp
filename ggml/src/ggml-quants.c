@@ -335,16 +335,22 @@ void quantize_row_q8_1_ref(const float * GGML_RESTRICT x, block_q8_1 * GGML_REST
 }
 
 static inline int best_index_mxfp4(float x, float e) {
-    int best_index = 0;
-    float best_err = fabsf(kvalues_mxfp4[0]*e - x);
-    for (int i = 1; i < 16; i++) {
-        float err = fabsf(kvalues_mxfp4[i]*e - x);
+    static const uint8_t order[8] = { 0, 2, 4, 6, 1, 3, 5, 7 };
+
+    int best_index = order[0];
+    const float ax = fabsf(x);
+    float best_err = fabsf(kvalues_mxfp4[best_index]*e - ax);
+
+    // Visit even-mantissa encodings first so exact ties resolve to even.
+    for (int j = 1; j < 8; ++j) {
+        const int i = order[j];
+        float err = fabsf(kvalues_mxfp4[i]*e - ax);
         if (err < best_err) {
             best_index = i;
             best_err = err;
         }
     }
-    return best_index;
+    return best_index != 0 && x < 0.0f ? best_index | 8 : best_index;
 }
 
 void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RESTRICT y, int64_t k) {
