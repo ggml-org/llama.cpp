@@ -220,7 +220,7 @@ int main(int argc, char ** argv) {
     bool list_cases        = false;
     bool dump_logs_on_fail = true;
 
-    int parallel_workers = 1; // 0 = auto, same flag as in test-backend-ops
+    int parallel_workers = 0; // 0 = auto, same flag as in test-backend-ops
 
     auto parse_parallel_workers = [&](const char * flag, const char * value) {
         try {
@@ -361,12 +361,9 @@ int main(int argc, char ** argv) {
 
     llama_backend_init();
 
-    // the threads a context runs on, resolved by the common parser - in table mode every worker
-    //   builds a context of its own, so the run uses n_pool times this many
-    const int32_t n_threads = params.cpuparams.n_threads;
-
     // run the full suite for a single model
     if (models_dir.empty()) {
+        const int32_t n_threads = params.cpuparams.n_threads;
         LOG("threads: %d\n", n_threads);
 
         const model_result res = run_model(params.model.path, params, cases, logs_dir,
@@ -404,13 +401,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // the dummy models are tiny, but the same flag is meant to run sweeps of real checkpoints,
-    //   where every worker holds the weights it loaded - so do not scale with the cores
-    const unsigned n_hw   = std::thread::hardware_concurrency();
-    const size_t   n_auto = n_hw > 0 ? std::min<size_t>(n_hw, 4) : 1;
+    const unsigned n_hw_2 = std::thread::hardware_concurrency() / 2;
+    const size_t   n_auto = std::max<size_t>(1, std::min<size_t>(n_hw_2, 4));
     const size_t   n_pool = parallel_workers > 0
         ? std::min<size_t>((size_t) parallel_workers, models.size())
         : n_auto;
+
+    const int32_t n_threads = std::max<int32_t>(1, n_hw_2 / n_pool);
 
     // a column is as wide as its case name, but never narrower than the widest verdict
     const size_t verdict_width = std::max({ test_status_width(test_status::PASS),

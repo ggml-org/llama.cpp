@@ -125,7 +125,8 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
     if (tensor_name_match_token_embd(tensor_name.c_str())) {
         return tensor_category::TOKEN_EMBD;
     }
-    if (tensor_name.find("attn_qkv.weight") != std::string::npos) {
+    // attn_qkv_gate is [attn_qkv | attn_gate] in one weight, the qkv rows decide its type
+    if (tensor_name.find("attn_qkv.weight") != std::string::npos || tensor_name.find("attn_qkv_gate.weight") != std::string::npos) {
         return tensor_category::ATTENTION_QKV;
     }
     if (tensor_name.find("attn_kv_b.weight") != std::string::npos) {

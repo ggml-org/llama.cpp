@@ -742,50 +742,56 @@ static inline bool glob_class_match(const char c, const char * pattern, const ch
 }
 
 // simple glob: * matches non-/ chars, ** matches anything including /, [] matches character class
-static inline bool glob_match(const char * pattern, const char * str) {
-    if (*pattern == '\0') {
-        return *str == '\0';
-    }
-    if (pattern[0] == '*' && pattern[1] == '*') {
-        const char * p = pattern + 2;
-        if (glob_match(p, str)) return true;
-        if (*str != '\0') return glob_match(pattern, str + 1);
+// only wildcards recurse, too many wildcards: no match
+static bool glob_match(const char * pattern, const char * str, int depth = 0) {
+    if (depth >= COMMON_RECURSIVE_LIMIT) {
         return false;
     }
-    if (*pattern == '*') {
-        const char * p = pattern + 1;
-        for (; *str != '\0' && *str != '/'; str++) {
-            if (glob_match(p, str)) return true;
-        }
-        return glob_match(p, str);
-    }
-    if (*pattern == '?' && *str != '\0' && *str != '/') {
-        return glob_match(pattern + 1, str + 1);
-    }
-    if (*pattern == '[') {
-        const char * class_end = pattern + 1;
-        // If first character after '[' is ']' or '-', treat it as literal
-        if (*class_end == ']' || *class_end == '-') {
-            class_end++;
-        }
-        while (*class_end != '\0' && *class_end != ']') {
-            class_end++;
-        }
-        if (*class_end == ']') {
-            if (*str == '\0') return false;
-            bool matched = glob_class_match(*str, pattern + 1, class_end);
-            return matched && glob_match(class_end + 1, str + 1);
-        } else {
-            if (*str == '[') {
-                return glob_match(pattern + 1, str + 1);
+    while (*pattern != '\0') {
+        if (pattern[0] == '*' && pattern[1] == '*') {
+            const char * p = pattern + 2;
+            for (;; str++) {
+                if (glob_match(p, str, depth + 1)) return true;
+                if (*str == '\0') return false;
             }
-            return false;
         }
+        if (*pattern == '*') {
+            const char * p = pattern + 1;
+            for (; *str != '\0' && *str != '/'; str++) {
+                if (glob_match(p, str, depth + 1)) return true;
+            }
+            return glob_match(p, str, depth + 1);
+        }
+        if (*pattern == '?' && *str != '\0' && *str != '/') {
+            pattern++;
+            str++;
+            continue;
+        }
+        if (*pattern == '[') {
+            const char * class_end = pattern + 1;
+            // If first character after '[' is ']' or '-', treat it as literal
+            if (*class_end == ']' || *class_end == '-') {
+                class_end++;
+            }
+            while (*class_end != '\0' && *class_end != ']') {
+                class_end++;
+            }
+            if (*class_end == ']') {
+                if (*str == '\0' || !glob_class_match(*str, pattern + 1, class_end)) return false;
+                pattern = class_end + 1;
+                str++;
+                continue;
+            }
+            if (*str != '[') return false;
+            pattern++;
+            str++;
+            continue;
+        }
+        if (*pattern != *str) return false;
+        pattern++;
+        str++;
     }
-    if (*pattern == *str) {
-        return glob_match(pattern + 1, str + 1);
-    }
-    return false;
+    return *str == '\0';
 }
 
 bool glob_match(const std::string & pattern, const std::string & str) {
@@ -1181,6 +1187,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_LFM2_D1_OMNI,   "lfm2-d1-omni"  },
     { COMMON_DECISION_TYPE_GRANITE_SWITCH, "granite-switch"},
     { COMMON_DECISION_TYPE_H2O_LIGHTNING,  "h2o-lightning" },
+    { COMMON_DECISION_TYPE_MINICPM_OCR_JEV, "openbmb-minicpm-ocr-jev" },
     // for future models, ALWAYS add org name prefix to avoid name collisions, e.g. "orgname-modelname"
 };
 
@@ -1246,44 +1253,50 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     return info;
 }
 
+void common_fit_apply(common_params & params, llama_model_params & mparams, llama_context_params & cparams) {
+    if (!params.fit_params) {
+        return;
+    }
+
+    COM_TRC("%s", "fitting params to device memory ...\n");
+    COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
+
+    // the draft context is created from the same base params and follows the main context, fit both together
+    const bool has_draft = params.speculative.has_dft();
+    const bool spec_mtp  = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+
+    common_params params_dft = common_base_params_to_speculative(params);
+
+    auto mparams_dft = common_model_params_to_llama(params_dft);
+    auto cparams_dft = common_context_params_to_llama(params_dft);
+    if (spec_mtp) {
+        cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    }
+    cparams_dft.n_rs_seq = 0;
+
+    const common_fit_extra_model extra = {
+        /*.path_model   =*/ params_dft.model.path.c_str(),
+        /*.mparams      =*/ &mparams_dft,
+        /*.cparams      =*/ &cparams_dft,
+        /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
+    };
+
+    common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+        params.tensor_split,
+        params.tensor_buft_overrides.data(),
+        params.fit_params_target.data(),
+        params.fit_params_min_ctx,
+        has_draft || spec_mtp ? &extra : nullptr,
+        params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+}
+
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    if (params.fit_params) {
-        COM_TRC("%s", "fitting params to device memory ...\n");
-        COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
-
-        // the draft context is created from the same base params and follows the main context, fit both together
-        const bool has_draft = params.speculative.has_dft();
-        const bool spec_mtp  = std::find(params.speculative.types.begin(), params.speculative.types.end(),
-            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
-
-        common_params params_dft = common_base_params_to_speculative(params);
-
-        auto mparams_dft = common_model_params_to_llama(params_dft);
-        auto cparams_dft = common_context_params_to_llama(params_dft);
-        if (spec_mtp) {
-            cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-        }
-        cparams_dft.n_rs_seq = 0;
-
-        const common_fit_extra_model extra = {
-            /*.path_model   =*/ params_dft.model.path.c_str(),
-            /*.mparams      =*/ &mparams_dft,
-            /*.cparams      =*/ &cparams_dft,
-            /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
-        };
-
-        common_fit_params(params.model.path.c_str(), &mparams, &cparams,
-            params.tensor_split,
-            params.tensor_buft_overrides.data(),
-            params.fit_params_target.data(),
-            params.fit_params_min_ctx,
-            has_draft || spec_mtp ? &extra : nullptr,
-            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
-    }
+    common_fit_apply(params, mparams, cparams);
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
@@ -1301,13 +1314,17 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     // these decision models return a score for each token via the embeddings output
     // TODO: maybe improve this in the future
     const auto decision_type = common_get_decision_type(model);
+    // minicpm-ocr-jev reads its class scores from the pooled output, the pooling type is the one of the GGUF
     if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV || decision_type == COMMON_DECISION_TYPE_CLEF ||
-        decision_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI || decision_type == COMMON_DECISION_TYPE_VLLM_DECISION2) {
+        decision_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI || decision_type == COMMON_DECISION_TYPE_VLLM_DECISION2 ||
+        decision_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+        const auto pooling_type = decision_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV ? LLAMA_POOLING_TYPE_UNSPECIFIED : LLAMA_POOLING_TYPE_NONE;
+
         params.embedding    = true;
-        params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        params.pooling_type = pooling_type;
 
         cparams.embeddings            = true;
-        cparams.pooling_type          = LLAMA_POOLING_TYPE_NONE;
+        cparams.pooling_type          = pooling_type;
         cparams.n_outputs_max         = cparams.n_batch;
         cparams.n_outputs_max_per_seq = 1;
 

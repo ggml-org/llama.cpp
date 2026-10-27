@@ -6,17 +6,16 @@
 #include "ggml-cpp.h"
 #include "llama.h"
 #include "llama-cpp.h"
+#include "../src/llama-ext.h"
 
-// TODO: replace with #include "llama-ext.h" in the future
-#include "../src/llama-arch.h"
-#include "../src/llama-model-saver.h"
-
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <filesystem>
 #include <random>
 #include <regex>
 #include <stdexcept>
@@ -28,7 +27,7 @@ static bool arch_matches(const std::string & filter, llm_arch arch) {
     if (filter.empty()) {
         return true;
     }
-    return std::regex_search(llm_arch_name(arch), std::regex(filter));
+    return std::regex_search(llama_arch_name(arch), std::regex(filter));
 }
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
@@ -56,12 +55,34 @@ struct tensor_data_params {
 // fills the values of one tensor, the name carries whatever the property needs
 typedef void (*tensor_filler)(std::vector<float> & dst, const char * name, const tensor_data_params & params);
 
+// a pool of normal draws, generated once and reused for every model
+static std::vector<float> g_normal_pool;
+static const size_t NORMAL_POOL_SIZE = 16 * 1024 * 1024;
+
+// fill the pool once; each tensor copies a slice of it
+static void init_normal_pool(const size_t seed, const float stdev) {
+    g_normal_pool.resize(NORMAL_POOL_SIZE);
+    std::mt19937 gen(seed);
+    std::normal_distribution<float> dist(0.0f, stdev);
+    for (float & v : g_normal_pool) {
+        v = dist(gen);
+    }
+}
+
 // a normal draw keyed on a name, so that tensors which share a draw ask for the same key
-static void fill_normal(std::vector<float> & dst, const char * key, const tensor_data_params & params) {
-    std::mt19937 gen(params.seed ^ std::hash<std::string>{}(key));
-    std::normal_distribution<float> dis(0.0f, params.stdev);
-    for (float & v : dst) {
-        v = dis(gen);
+static void fill_normal(std::vector<float> & dst, const char * key, const tensor_data_params &) {
+    const size_t n = dst.size();
+    const size_t pool_size = g_normal_pool.size();
+    const size_t start = std::hash<std::string>{}(key) % pool_size;
+
+    // copy a cyclic slice of the pool, so a tensor larger than the pool still fills
+    size_t i = 0;
+    size_t pos = start;
+    while (i < n) {
+        const size_t chunk = std::min(pool_size - pos, n - i);
+        std::memcpy(dst.data() + i, g_normal_pool.data() + pos, chunk * sizeof(float));
+        i += chunk;
+        pos = 0;
     }
 }
 
@@ -164,9 +185,50 @@ static bool host_experts_test(const llm_arch arch) {
     }
 }
 
+// writes arch-resolved GGUF keys into the fixture context, the test-side equivalent of llama_model_saver
+struct kv_writer {
+    struct gguf_context * gguf_ctx;
+    const llm_arch        arch;
+
+    kv_writer(enum llm_arch arch, struct gguf_context * gguf_ctx) : gguf_ctx(gguf_ctx), arch(arch) {}
+
+    void add_kv(enum llm_kv key, uint32_t     value) { gguf_set_val_u32 (gguf_ctx, llama_arch_kv_name(arch, key).c_str(), value); }
+    void add_kv(enum llm_kv key, int32_t      value) { gguf_set_val_i32 (gguf_ctx, llama_arch_kv_name(arch, key).c_str(), value); }
+    void add_kv(enum llm_kv key, uint64_t     value) { gguf_set_val_u64 (gguf_ctx, llama_arch_kv_name(arch, key).c_str(), value); }
+    void add_kv(enum llm_kv key, float        value) { gguf_set_val_f32 (gguf_ctx, llama_arch_kv_name(arch, key).c_str(), value); }
+    void add_kv(enum llm_kv key, bool         value) { gguf_set_val_bool(gguf_ctx, llama_arch_kv_name(arch, key).c_str(), value); }
+    void add_kv(enum llm_kv key, const char * value) { gguf_set_val_str (gguf_ctx, llama_arch_kv_name(arch, key).c_str(), value); }
+
+    template <typename T>
+    void add_kv(enum llm_kv key, const std::vector<T> & value) {
+        if (value.empty()) {
+            return;
+        }
+        if (std::is_same<T, uint32_t>::value) {
+            gguf_set_arr_data(gguf_ctx, llama_arch_kv_name(arch, key).c_str(), GGUF_TYPE_UINT32, value.data(), value.size());
+        } else if (std::is_same<T, int32_t>::value) {
+            gguf_set_arr_data(gguf_ctx, llama_arch_kv_name(arch, key).c_str(), GGUF_TYPE_INT32, value.data(), value.size());
+        } else if (std::is_same<T, uint64_t>::value) {
+            gguf_set_arr_data(gguf_ctx, llama_arch_kv_name(arch, key).c_str(), GGUF_TYPE_UINT64, value.data(), value.size());
+        } else if (std::is_same<T, float>::value) {
+            gguf_set_arr_data(gguf_ctx, llama_arch_kv_name(arch, key).c_str(), GGUF_TYPE_FLOAT32, value.data(), value.size());
+        } else {
+            GGML_ABORT("fatal error");
+        }
+    }
+
+    void add_kv(enum llm_kv key, const std::vector<std::string> & value) {
+        std::vector<const char *> tmp(value.size());
+        for (size_t i = 0; i < value.size(); ++i) {
+            tmp[i] = value[i].c_str();
+        }
+        gguf_set_arr_str(gguf_ctx, llama_arch_kv_name(arch, key).c_str(), tmp.data(), tmp.size());
+    }
+};
+
 static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     gguf_context_ptr ret(gguf_init_empty());
-    llama_model_saver ms(arch, ret.get());
+    kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
 
     uint32_t n_vocab = 128;
@@ -243,7 +305,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     }
     const uint32_t n_embd_head = n_embd / n_head;
 
-    ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llm_arch_name(arch));
+    ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
     ms.add_kv(LLM_KV_VOCAB_SIZE,                n_vocab);
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,            n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
@@ -638,11 +700,16 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
     return true;
 }
 
-static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+static std::string get_tmp_gguf_path() {
+    static size_t id = 0;
+    return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
+}
+
+static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -651,6 +718,23 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+
+    tensor_data_params tensor_params = { seed, stdev };
+    llama_model_ptr model(gguf_ctx != nullptr ?
+        llama_model_init_from_user(gguf_ctx, set_tensor_data, &tensor_params, model_params) :
+        llama_model_load_from_file_ptr(file, model_params));
+    if (!model) {
+        throw std::runtime_error("failed to create llama model");
+    }
+    return model;
+}
+
+static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
+        const std::vector<ggml_backend_dev_t> & devs,
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -665,13 +749,6 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         ctx_params.n_ubatch = 2;
     }
 
-    tensor_data_params tensor_params = { seed, stdev };
-    llama_model_ptr model(gguf_ctx != nullptr ?
-        llama_model_init_from_user(gguf_ctx, set_tensor_data, &tensor_params, model_params) :
-        llama_model_load_from_file_ptr(file, model_params));
-    if (!model) {
-        throw std::runtime_error("failed to create llama model");
-    }
     llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
@@ -958,7 +1035,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
         }
     }, &ud);
 
-    for (const llm_arch & arch : llm_arch_all()) {
+    for (const llm_arch & arch : llama_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
         }
@@ -978,15 +1055,17 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            if (!llama_model_saver_supports_arch(arch) || !arch_supported(arch)) {
-                LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
+            if (!llama_arch_supports_save(arch) || !arch_supported(arch)) {
+                LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
-            const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
-            LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
-            llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
+            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
+            const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
+            LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
+            llama_model_save_to_file(model.get(), path.c_str());
+            const std::uintmax_t size = std::filesystem::file_size(path);
+            LOG_CNT(" (%.2f MB)\n", (double) size / (1024.0 * 1024.0));
         }
     }
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
@@ -1094,8 +1173,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     }
 
     size_t max_arch_name_length = 0;
-    for (const llm_arch & arch : llm_arch_all()) {
-        max_arch_name_length = std::max(max_arch_name_length, strlen(llm_arch_name(arch)));
+    for (const llm_arch & arch : llama_arch_all()) {
+        max_arch_name_length = std::max(max_arch_name_length, strlen(llama_arch_name(arch)));
     }
 
     const std::string template_header  = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|%15s|%9s|%15s|\n";
@@ -1116,7 +1195,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         LOG("-");
     }
     LOG("|------|---------------|---------|---------------|\n");
-    for (const llm_arch & arch : llm_arch_all()) {
+    for (const llm_arch & arch : llama_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
         }
@@ -1152,7 +1231,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 const llama_model_tensor_buft_override * overrides = dc.host_experts ? host_experts_overrides : nullptr;
 
                 // print test config first; should anything fail during model loading or inference, at least we know which test case caused it
-                LOG(template_row_cfg.c_str(), llm_arch_name(arch), dc.label.c_str(), config_name.c_str());
+                LOG(template_row_cfg.c_str(), llama_arch_name(arch), dc.label.c_str(), config_name.c_str());
                 fflush(stdout);
 
                 std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_dev;
@@ -1171,7 +1250,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
                     }
-                    if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
+                    if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
@@ -1194,7 +1273,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                             }
                             std::vector<float> logits_mixed;
                             std::vector<float> logits_chunks;
-                            if (llm_arch_supports_mixed_batch(arch)) {
+                            if (llama_arch_supports_mixed_batch(arch)) {
                                 if (get_logits_mixed(model_and_ctx_dev.first.get(), lctx_dev, tokens, embd_mixed, false, logits_chunks) != 0 ||
                                     get_logits_mixed(model_and_ctx_dev.first.get(), lctx_dev, tokens, embd_mixed, true,  logits_mixed)  != 0) {
                                     throw std::runtime_error("failed to decode mixed batch");
@@ -1227,30 +1306,33 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         }
                     }
 
-                    FILE * file = tmpfile(); // Can be null on Windows without administrator privileges.
-                    // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
-                    //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
-                    if (file != nullptr && llama_model_saver_supports_arch(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                    if (llama_arch_supports_save(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
                         test_executed = true;
                         GGML_ASSERT(model_and_ctx_dev.first && model_and_ctx_dev.second);
-                        llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
-                        ms.add_kv_from_model();
-                        ms.add_tensors_from_model();
-                        ms.save(file);
-                        rewind(file);
+                        // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
+                        //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
+                        const std::string path = get_tmp_gguf_path();
+                        llama_model_save_to_file(model_and_ctx_dev.first.get(), path.c_str());
+                        FILE * file = fopen(path.c_str(), "rb");
+                        GGML_ASSERT(file != nullptr);
 
-                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
-                        const std::vector<float> logits_roundtrip = get_logits(
-                            model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
-                        status_roundtrip = "\033[1;32mOK\033[0m";
-                        GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
-                        for (size_t i = 0; i < logits_roundtrip.size(); i++) {
-                            if (logits_roundtrip[i] != logits_dev[i]) {
-                                test_ok = false;
-                                status_roundtrip = "\033[1;31mFAIL\033[0m";
-                                break;
+                        {
+                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                            const std::vector<float> logits_roundtrip = get_logits(
+                                model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
+                            status_roundtrip = "\033[1;32mOK\033[0m";
+                            GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
+                            for (size_t i = 0; i < logits_roundtrip.size(); i++) {
+                                if (logits_roundtrip[i] != logits_dev[i]) {
+                                    test_ok = false;
+                                    status_roundtrip = "\033[1;31mFAIL\033[0m";
+                                    break;
+                                }
                             }
                         }
+
+                        fclose(file);
+                        std::filesystem::remove(path);
                     }
                 }
 
@@ -1303,7 +1385,7 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
             if (i + 1 < argc) {
                 const std::string arch_name = argv[++i];
-                if (llm_arch_from_string(arch_name) != LLM_ARCH_UNKNOWN) {
+                if (llama_arch_from_string(arch_name) != LLM_ARCH_UNKNOWN) {
                     // exact architecture name
                     arch_filter = "^" + arch_name + "$";
                 } else {
@@ -1371,6 +1453,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
+
+    init_normal_pool(seed, stdev);
 
     try {
         if (!out.empty()) {
