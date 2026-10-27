@@ -2611,9 +2611,7 @@ struct test_mul_mat_reorder_then_big_batch : public test_case {
     }
 };
 
-<<<<<<< ours
 // GGML_OP_GET_ROWS_BACK
-=======
 
 struct test_spark_projection_gemv : public test_case {
     const int64_t k, rows, tokens;
@@ -2664,7 +2662,252 @@ struct test_spark_decode_norm : public test_case {
 };
 
 
->>>>>>> theirs
+struct test_gated_attention_output_fusion : public test_case {
+    const bool small;
+    const ggml_type type;
+    explicit test_gated_attention_output_fusion(bool small = false, ggml_type type = GGML_TYPE_COUNT)
+        : small(small), type(type == GGML_TYPE_COUNT ? (small ? GGML_TYPE_Q4_K : GGML_TYPE_Q8_0) : type) {}
+    std::string vars() override {
+        return VARS_TO_STR2(type, small);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GATED_ATTN_OUTPUT_FUSION";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override { return small ? 5e-3 : 1e-6; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * activation = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, small ? 8 : 16, 1, 1);
+        ggml_tensor * gate       = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,   1, small ? 8 : 16, 1, 1);
+        ggml_tensor * weight     = ggml_new_tensor_2d(ctx, type, small ? 2048 : 4096, small ? 2048 : 2560);
+        ggml_tensor * residual   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, small ? 2048 : 2560, 1);
+
+        ggml_tensor * gated = ggml_mul(ctx, activation, gate);
+        gated = ggml_reshape_2d(ctx, gated, small ? 2048 : 4096, 1);
+        ggml_tensor * projected = ggml_mul_mat(ctx, weight, gated);
+        return ggml_add(ctx, projected, residual);
+    }
+};
+
+
+struct test_mmvq_residual_fusion : public test_case {
+    const ggml_type type;
+
+    explicit test_mmvq_residual_fusion(ggml_type type) : type(type) {}
+
+    std::string vars() override {
+        return VAR_TO_STR(type);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MMVQ_RESIDUAL_FUSION";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override { return type == GGML_TYPE_Q6_K ? 5e-3 : 1e-6; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * activation = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 1);
+        ggml_tensor * weight     = ggml_new_tensor_2d(ctx, type, 256, 256);
+        ggml_tensor * residual   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 1);
+        return ggml_add(ctx, ggml_mul_mat(ctx, weight, activation), residual);
+    }
+};
+
+
+struct test_spark_ffn_mmvq : public test_case {
+    const ggml_type down_type;
+    const int64_t n_tokens;
+    const bool escape_norm, escape_glu;
+    const int64_t hidden, intermediate;
+
+    test_spark_ffn_mmvq(ggml_type down_type, int64_t n_tokens, bool escape_norm = false, bool escape_glu = false, int64_t hidden = 2560, int64_t intermediate = 10240)
+        : down_type(down_type), n_tokens(n_tokens), escape_norm(escape_norm), escape_glu(escape_glu), hidden(hidden), intermediate(intermediate) {}
+
+    std::string vars() override {
+        return VARS_TO_STR6(down_type, n_tokens, escape_norm, escape_glu, hidden, intermediate);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SPARK_FFN_MMVQ";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override { return 5e-3; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * src      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, n_tokens);
+        ggml_tensor * gate_w   = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, hidden, intermediate);
+        ggml_tensor * up_w     = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, hidden, intermediate);
+        ggml_tensor * down_w   = ggml_new_tensor_2d(ctx, down_type, intermediate, hidden);
+        ggml_tensor * residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, n_tokens);
+        ggml_tensor * norm_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden);
+        ggml_tensor * norm = ggml_mul(ctx, ggml_rms_norm(ctx, src, 1e-6f), norm_w);
+        if (escape_norm) {
+            ggml_set_output(norm);
+        }
+        ggml_tensor * gate = ggml_mul_mat(ctx, gate_w, norm);
+        ggml_tensor * up   = ggml_mul_mat(ctx, up_w, norm);
+        ggml_tensor * glu  = ggml_geglu_split(ctx, gate, up);
+        if (escape_glu) {
+            ggml_set_output(glu);
+        }
+        return ggml_add(ctx, ggml_mul_mat(ctx, down_w, glu), residual);
+    }
+};
+
+
+struct test_spark_qkv_gate : public test_case {
+    const ggml_type type;
+    const int64_t n_tokens;
+    const bool escape;
+    const bool with_norm;
+    const int64_t hidden;
+    const ggml_type gate_type;
+
+    test_spark_qkv_gate(ggml_type type, int64_t n_tokens, bool escape = false, bool with_norm = false, int64_t hidden = 2560, ggml_type gate_type = GGML_TYPE_COUNT)
+        : type(type), n_tokens(n_tokens), escape(escape), with_norm(with_norm), hidden(hidden),
+          gate_type(gate_type == GGML_TYPE_COUNT ? (hidden == 2048 ? GGML_TYPE_Q4_K : GGML_TYPE_BF16) : gate_type) {}
+
+    std::string vars() override { return VARS_TO_STR6(type, n_tokens, escape, with_norm, hidden, gate_type); }
+    std::string op_desc(ggml_tensor *) override { return "SPARK_QKV_GATE"; }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 5e-3; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        auto * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, n_tokens);
+        if (with_norm) {
+            auto * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden);
+            input = ggml_mul(ctx, ggml_rms_norm(ctx, input, 1e-6f), weight);
+        }
+        auto * gate_w = ggml_new_tensor_2d(ctx, gate_type, hidden, hidden == 2048 ? 8 : 16);
+        auto * qkv_w = ggml_new_tensor_2d(ctx, type, hidden, hidden == 2048 ? 3072 : 6144);
+        auto * gate = ggml_mul_mat(ctx, gate_w, input);
+        if (escape) {
+            ggml_set_output(gate);
+        }
+        auto * sigmoid = ggml_sigmoid(ctx, gate);
+        auto * qkv = ggml_mul_mat(ctx, qkv_w, input);
+        return ggml_concat(ctx, sigmoid, qkv, 0);
+    }
+};
+
+
+struct test_spark_qkv_post : public test_case {
+    const ggml_type type;
+    const ggml_type cache_type;
+    const bool escape;
+    const int n_rot;
+    const int64_t hidden;
+    const ggml_type gate_type;
+
+    test_spark_qkv_post(ggml_type type, ggml_type cache_type = GGML_TYPE_F16, bool escape = false, int n_rot = 256, int64_t hidden = 2560, ggml_type gate_type = GGML_TYPE_COUNT)
+        : type(type), cache_type(cache_type), escape(escape), n_rot(n_rot), hidden(hidden),
+          gate_type(gate_type == GGML_TYPE_COUNT ? (hidden == 2048 ? GGML_TYPE_Q4_K : GGML_TYPE_BF16) : gate_type) {}
+    std::string vars() override { return VARS_TO_STR6(type, cache_type, escape, n_rot, hidden, gate_type); }
+    std::string op_desc(ggml_tensor *) override { return "SPARK_QKV_POST"; }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 5e-3; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int heads = hidden == 2048 ? 8 : 16;
+        const int nq = heads*256, nk = nq/4, rows = nq+2*nk;
+        auto * src = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden);
+        auto * norm_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden);
+        auto * norm = ggml_mul(ctx, ggml_rms_norm(ctx, src, 1e-6f), norm_w);
+        if (escape) {
+            ggml_set_output(norm);
+        }
+        auto * gw = ggml_new_tensor_2d(ctx, gate_type, hidden, hidden == 2048 ? 8 : 16);
+        auto * qw = ggml_new_tensor_2d(ctx, type, hidden, hidden == 2048 ? 3072 : 6144);
+        auto * gate = ggml_sigmoid(ctx, ggml_mul_mat(ctx, gw, norm));
+        auto * qkv = ggml_mul_mat(ctx, qw, norm);
+        auto * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+        ggml_set_name(pos, "post_position");
+        auto * indices = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+        ggml_set_name(indices, "post_indices");
+        auto * q = ggml_view_3d(ctx, qkv, 256, heads, 1, 256*4, rows*4, 0);
+        const float base = n_rot == 64 ? 5000000.0f : 10000.0f;
+        auto * qr = ggml_rope_ext(ctx, q, pos, nullptr, n_rot, GGML_ROPE_TYPE_NEOX, 1048576, base, 1, 0, 1, 32, 1);
+        auto * k = ggml_view_3d(ctx, qkv, 256, heads/4, 1, 256*4, rows*4, nq*4);
+        auto * kr = ggml_rope_ext(ctx, k, pos, nullptr, n_rot, GGML_ROPE_TYPE_NEOX, 1048576, base, 1, 0, 1, 32, 1);
+        auto * kc = ggml_new_tensor_2d(ctx, cache_type, nk, 4);
+        auto * ks = ggml_set_rows(ctx, kc, ggml_view_2d(ctx, kr, nk, 1, kr->nb[2], 0), indices);
+        auto * v = ggml_view_3d(ctx, qkv, 256, heads/4, 1, 256*4, rows*4, (nq+nk)*4);
+        auto * vc = ggml_new_tensor_2d(ctx, cache_type, nk, 4);
+        auto * vs = ggml_set_rows(ctx, vc, ggml_view_2d(ctx, v, nk, 1, v->nb[2], 0), indices);
+        if (gf) {
+            ggml_build_forward_expand(gf, gate);
+            ggml_build_forward_expand(gf, qr);
+            ggml_build_forward_expand(gf, ks);
+            ggml_build_forward_expand(gf, vs);
+        }
+        auto * read_index = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+        ggml_set_name(read_index, "post_read_index");
+        auto * k_out = ggml_get_rows(ctx, ks, read_index);
+        auto * v_out = ggml_get_rows(ctx, vs, read_index);
+        auto * q_flat = ggml_reshape_1d(ctx, qr, nq);
+        auto * k_flat = ggml_reshape_1d(ctx, k_out, nk);
+        auto * v_flat = ggml_reshape_1d(ctx, v_out, nk);
+        return ggml_concat(ctx, gate, ggml_concat(ctx, q_flat, ggml_concat(ctx, k_flat, v_flat, 0), 0), 0);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (auto * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "post_position") == 0) {
+                const int32_t pos = 4096;
+                ggml_backend_tensor_set(t, &pos, 0, sizeof(pos));
+            } else if (strcmp(t->name, "post_indices") == 0) {
+                const int64_t index = 3;
+                ggml_backend_tensor_set(t, &index, 0, sizeof(index));
+            } else if (strcmp(t->name, "post_read_index") == 0) {
+                const int32_t index = 3;
+                ggml_backend_tensor_set(t, &index, 0, sizeof(index));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+
+struct test_spark_head_norm : public test_case {
+    const int n_tokens;
+    const bool escape;
+    std::vector<ggml_tensor *> verify;
+
+    test_spark_head_norm(int n_tokens, bool escape = false) : n_tokens(n_tokens), escape(escape) {}
+    std::string vars() override { return VARS_TO_STR2(n_tokens, escape); }
+    std::string op_desc(ggml_tensor *) override { return "SPARK_HEAD_NORM"; }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 5e-3; }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return verify; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        verify.clear();
+        auto * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, n_tokens);
+        input = ggml_add(ctx, input, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, n_tokens));
+        auto * norm_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2048);
+        auto * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, 2048, 131072);
+        auto * norm = ggml_mul(ctx, ggml_rms_norm(ctx, input, 1e-6f), norm_weight);
+        if (escape) {
+            ggml_set_output(norm);
+            verify.push_back(norm);
+        }
+        auto * out = ggml_mul_mat(ctx, weight, norm);
+        verify.push_back(out);
+        return out;
+    }
+};
+
+
 struct test_get_rows_back : public test_case {
     const ggml_type type;
     const int n; // cols
@@ -12466,14 +12709,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             false, 16, 8, false, false, true, false, { 1, 1 }));
     }
 
-<<<<<<< ours
     // Fused gate/up + GLU on the MMQ path, only used if its tiling is efficient: ~1280 tiles per case, one case per type and GLU op.
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,        17, 81920, 256, false, 1, 1, false, false, true, false, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q5_K,   GGML_GLU_OP_GEGLU,        150, 40960, 256, false, 1, 1, false, false, true, false, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q6_K,   GGML_GLU_OP_SWIGLU_OAI,   150, 40960, 256, false, 1, 1, false, false, true, false, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q8_0,   GGML_GLU_OP_SWIGLU_CLAMP, 150,  6912, 256, false, 1, 1, false, false, true, false, { 2, 3 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_IQ4_XS, GGML_GLU_OP_SWIGLU,       150, 40960, 512, false, 1, 1, false, false, true, false, { 1, 1 }));
-=======
     test_cases.emplace_back(new test_spark_projection_gemv(4096, 2560, 1, false));
     test_cases.emplace_back(new test_spark_projection_gemv(4096, 2560, 1, true));
     test_cases.emplace_back(new test_spark_projection_gemv(4096, 2560, 2, true));
@@ -12489,7 +12730,62 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_spark_projection_gemv(2048, 131072, 1, true));
     test_cases.emplace_back(new test_spark_decode_norm(1));
     test_cases.emplace_back(new test_spark_decode_norm(2));
->>>>>>> theirs
+
+    test_cases.emplace_back(new test_gated_attention_output_fusion());
+    test_cases.emplace_back(new test_gated_attention_output_fusion(true));
+    test_cases.emplace_back(new test_gated_attention_output_fusion(true, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_mmvq_residual_fusion(GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_mmvq_residual_fusion(GGML_TYPE_Q6_K));
+    for (ggml_type down_type : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K}) {
+        for (int64_t n_tokens : {1, 2}) {
+            test_cases.emplace_back(new test_spark_ffn_mmvq(down_type, n_tokens));
+        }
+        test_cases.emplace_back(new test_spark_ffn_mmvq(down_type, 1, true));
+    }
+    for (auto down : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K}) {
+        test_cases.emplace_back(new test_spark_ffn_mmvq(down, 1, false, false, 2048, 6656));
+        test_cases.emplace_back(new test_spark_ffn_mmvq(down, 2, false, false, 2048, 6656));
+        test_cases.emplace_back(new test_spark_ffn_mmvq(down, 1, true, false, 2048, 6656));
+        test_cases.emplace_back(new test_spark_ffn_mmvq(down, 1, false, true, 2048, 6656));
+    }
+    test_cases.emplace_back(new test_spark_ffn_mmvq(GGML_TYPE_Q8_0, 1));
+    test_cases.emplace_back(new test_spark_ffn_mmvq(GGML_TYPE_Q4_K, 1, false, true));
+    test_cases.emplace_back(new test_spark_ffn_mmvq(GGML_TYPE_Q6_K, 1, false, true));
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K}) {
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1, false, false, 2048));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1, false, true, 2048));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1, true, false, 2048));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 2, false, true, 2048));
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_F16, false, 256, 2048));
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_F16, false, 64, 2048));
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_Q8_0, false, 256, 2048));
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_F16, true, 256, 2048));
+        for (bool with_norm : {false, true}) {
+            test_cases.emplace_back(new test_spark_qkv_gate(type, 1, false, with_norm, 2048, GGML_TYPE_BF16));
+        }
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1, true, true, 2048, GGML_TYPE_BF16));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 2, false, true, 2048, GGML_TYPE_BF16));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1, false, true, 2048, GGML_TYPE_F32));
+        for (int n_rot : {64, 256}) {
+            test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_F16, false, n_rot, 2048, GGML_TYPE_BF16));
+            test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_Q8_0, false, n_rot, 2048, GGML_TYPE_BF16));
+        }
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_F16, true, 256, 2048, GGML_TYPE_BF16));
+    }
+    for (auto type : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K}) {
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 2));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1, true));
+        test_cases.emplace_back(new test_spark_qkv_gate(type, 1, false, true));
+        test_cases.emplace_back(new test_spark_qkv_post(type));
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_F16, true));
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_Q8_0));
+        test_cases.emplace_back(new test_spark_qkv_post(type, GGML_TYPE_F16, false, 64));
+    }
+
+    test_cases.emplace_back(new test_spark_head_norm(1));
+    test_cases.emplace_back(new test_spark_head_norm(1, true));
+    test_cases.emplace_back(new test_spark_head_norm(2));
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
