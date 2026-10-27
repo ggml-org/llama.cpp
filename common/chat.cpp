@@ -309,7 +309,7 @@ struct common_chat_templates {
     bool has_explicit_template;  // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
-    std::unique_ptr<common_chat_template> template_tts;        // the prompt of a text to speak
+    std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -795,8 +795,7 @@ static bool is_lfm3_template(const std::string & src) {
     return src.find("<additional_tools>") != std::string::npos;
 }
 
-// LFM3-Audio names the language in the system prompt: a code of the model card languages is looked up, anything
-// else is taken as the name of the language; without one the model detects it
+// LFM3-Audio: a known language code maps to its name, no language lets the model detect it
 static std::string lfm3_asr_system_prompt(const std::string & language) {
     static const std::map<std::string, std::string> names = {
         { "ar", "Arabic" }, { "da", "Danish" }, { "de", "German" }, { "el", "Greek" }, { "en", "English" },

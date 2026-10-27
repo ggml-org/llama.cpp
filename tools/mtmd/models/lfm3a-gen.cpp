@@ -4,9 +4,8 @@
 
 // LFM3-Audio generation
 //
-// GEN_CODE: one MaskGIT pass of the bidirectional depthformer over the codebooks: backbone hidden state + the codes
-//           revealed so far (-1 = masked) -> per-codebook logits in out_feats. once every code is known, only the
-//           feedback embedding (sum of the codebook embeddings) is built
+// GEN_CODE: one MaskGIT pass of the depthformer, hidden state + known codes (-1 = masked) -> logits per codebook
+//           once all codes are known, only the feedback embedding is built
 // GEN_WAV : a window of frames -> polar STFT frames of the liquid-codec decoder, the ISTFT runs on the host
 
 // state carried between GEN_WAV calls: rope offset, short-conv taps and attention window of the codec decoder
@@ -47,8 +46,7 @@ ggml_tensor * clip_graph_lfm3a_gen::build_lfm_layer(ggml_tensor * inpL, const cl
     return ggml_add(ctx0, inpL, cur);
 }
 
-// GQA with q/k RMSNorm and NEOX rope, an optional cached K/V prefix in front of this call's keys (returned in
-// k_all/v_all), and the LFM3 per-head sigmoid gate before the output projection
+// GQA with q/k RMSNorm, NEOX rope, an optional cached K/V prefix and the LFM3 per-head sigmoid gate
 ggml_tensor * clip_graph_lfm3a_gen::build_lfm_attn(ggml_tensor * cur, const clip_layer & layer, int n_head, int n_head_kv,
                                                    float eps, float rope_theta, int il, ggml_tensor * inp_pos,
                                                    ggml_tensor * kq_mask, ggml_tensor * k_cache, ggml_tensor * v_cache,

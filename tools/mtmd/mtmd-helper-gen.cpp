@@ -1268,10 +1268,8 @@ private:
     bool sent    = false;
 };
 
-// LFM3-Audio TTS, see generate() and sample_audio_frame() in the reference: the prompt opens the assistant turn with
-// <|audio_start|>, every step samples one frame of codec codes from the backbone hidden state by MaskGIT over the
-// depthformer and feeds their codebook embedding back; a frame with the end-of-audio code stops. the backbone token
-// is not used. the codec is causal, every frame is decoded as soon as it exists
+// LFM3-Audio TTS, see generate() in the reference: each step samples a frame of codes by MaskGIT
+// and feeds its embedding back, the end-of-audio code stops
 class lfm3a_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
 public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
@@ -1388,8 +1386,7 @@ public:
         return mode == MODE_TEXT || (mode == MODE_MIXED && !speaking);
     }
 
-    // one slot of generate() of the reference: a text token taken from the caller, or an audio frame sampled from
-    // the hidden state; either is fed back to the backbone
+    // one generate() step: a text token from the caller or an audio frame from the hidden state
     int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
         const bool interleaving = mode == MODE_MIXED;
         if (next_is_text()) {
@@ -1679,8 +1676,7 @@ private:
         return true;
     }
 
-    // generate() of the reference: text by default, <|audio_start|> speaks until the end-of-audio frame,
-    // <|mixed_start|> interleaves blocks of text tokens and frames until <|text_end|>
+    // generate() modes: text, audio until end of audio, interleaved until <|text_end|>
     enum gen_mode { MODE_TEXT, MODE_AUDIO, MODE_MIXED };
     // checked by the converter
     static constexpr int n_text_block  = 6;  // interleaved_n_text

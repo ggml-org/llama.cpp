@@ -2160,8 +2160,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_LFM3A_GEN:
                     {
-                        // the converter checks the depthformer rope base and the codec width, the other codec
-                        // decoder constants are fixed by LiquidCodecConfig; the codec head counts come from the tensors
+                        // fixed by LiquidCodecConfig, head counts come from the tensors
                         hparams.rope_theta = 1000000.0f;
 
                         hparams.wav_tfm_n_layer    = 8;
@@ -5312,8 +5311,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         }
     };
 
-    // lfm3a encoder and codec decoder: positions continue from base, the keys are [cached window | this call] and
-    // the mask is causal with a sliding window; before the first call the cached rows are masked
+    // lfm3a encoder and codec: causal sliding window over [cached window | this call]
     auto set_lfm3a_window_inputs = [&](int base, int n_pos, int window) {
         std::vector<int32_t> positions(n_pos);
         for (int i = 0; i < n_pos; i++) {

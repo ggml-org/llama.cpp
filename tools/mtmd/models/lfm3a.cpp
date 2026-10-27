@@ -1,8 +1,7 @@
 #include "models.h"
 
-// state carried between calls of the streaming encoder: the base position, one column of left context per
-// stride-2 conv, and the short-conv taps and attention window of every layer.
-// an all-zero state (cold start) gives the same result as encoding the whole clip at once.
+// streaming encoder state: base position, conv left context, short-conv taps and attention window
+// a zero state gives the same result as encoding the whole clip
 std::vector<c2w_state_slot> list_lfm3a_state_slots(const clip_hparams & hparams, const clip_model & model) {
     std::vector<c2w_state_slot> slots;
 

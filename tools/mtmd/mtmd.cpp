@@ -2213,8 +2213,7 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
     }
 }
 
-// lfm3a GEN_WAV: the codec graph yields polar STFT frames, the ISTFT runs here; n_codes == 0 flushes the tail and
-// resets the state for the next utterance
+// lfm3a GEN_WAV: ISTFT of the codec output, n_codes == 0 flushes and resets the state
 static int32_t mtmd_gen_wav_lfm3a(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     clip_ctx * ctx_clip = ctx->ctx_gen_a;
     const auto & hparams = *clip_get_hparams(ctx_clip);
@@ -3248,8 +3247,7 @@ struct mtmd_audio_stream {
     }
 };
 
-// Voxtral Realtime: the model writes text while it listens, a row is an audio embedding plus the embedding
-// of the token sampled from the previous row
+// Voxtral Realtime: a row is an audio embedding plus the embedding of the previous token
 struct mtmd_audio_stream_voxtral_rt : mtmd_audio_stream {
     clip_enc_state * enc_state = nullptr;
 

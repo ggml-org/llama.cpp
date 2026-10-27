@@ -238,8 +238,7 @@ struct mtmd_helper_gen_audio_inp {
     const char * prompt;
     size_t       prompt_len;
 
-    // > 0: the sequence already holds n_past positions (e.g. a conversation), the prompt is raw text appended
-    // after them and the response follows the model's own text/audio switching (LFM3-Audio only)
+    // > 0: continue a sequence of n_past positions with raw text (LFM3-Audio only)
     int32_t n_past;
     enum mtmd_helper_gen_audio_out_mode out_mode; // n_past > 0 only (default: auto)
 
