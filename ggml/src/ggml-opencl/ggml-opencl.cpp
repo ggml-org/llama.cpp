@@ -1843,6 +1843,21 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         GGML_LOG_CONT(".");
     }
 
+    // mul_mat_id_utils
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mat_id_utils.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mat_id_utils.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_moe_zero_dst = clCreateKernel(prog, "kernel_moe_zero_dst", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
     // moe_add_id_glu
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
@@ -5890,7 +5905,6 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), CL_moe_compile_opts);
 
         CL_CHECK((backend_ctx->kernel_moe_histogram = clCreateKernel(prog, "kernel_moe_histogram", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_zero_dst = clCreateKernel(prog, "kernel_moe_zero_dst", &err), err));
         CL_CHECK((backend_ctx->kernel_moe_scan = clCreateKernel(prog, "kernel_moe_scan", &err), err));
         CL_CHECK((backend_ctx->kernel_moe_fill = clCreateKernel(prog, "kernel_moe_fill", &err), err));
         CL_CHECK((backend_ctx->kernel_moe_scatter = clCreateKernel(prog, "kernel_moe_scatter", &err), err));
@@ -28284,35 +28298,21 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
     // the matmul kernels only write the rows an expert owns, so zero the skipped rows here
     {
-        cl_int err;
-
-        cl_buffer_region region;
-        region.origin = offset2;
-        region.size   = nb21 * ne21;
-        cl_mem buf_ids = clCreateSubBuffer(extra2->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        region.origin = offsetd;
-        region.size   = (size_t) ne0 * ne1 * ne2 * sizeof(float);
-        cl_mem buf_dst = clCreateSubBuffer(extrad->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        const cl_uint ids_stride = nb21 / sizeof(int);
-
+        const cl_ulong nb1 = dst->nb[1];
+        const cl_ulong nb2 = dst->nb[2];
         cl_kernel kernel_zero = backend_ctx->kernel_moe_zero_dst;
-        CL_CHECK(clSetKernelArg(kernel_zero, 0, sizeof(cl_mem),  &buf_ids));
-        CL_CHECK(clSetKernelArg(kernel_zero, 1, sizeof(cl_mem),  &buf_dst));
-        CL_CHECK(clSetKernelArg(kernel_zero, 2, sizeof(cl_uint), &ne21));
-        CL_CHECK(clSetKernelArg(kernel_zero, 3, sizeof(cl_uint), &ne20));
-        CL_CHECK(clSetKernelArg(kernel_zero, 4, sizeof(cl_uint), &ids_stride));
-        CL_CHECK(clSetKernelArg(kernel_zero, 5, sizeof(cl_uint), &ne0));
+        CL_CHECK(clSetKernelArg(kernel_zero, 0, sizeof(cl_mem),   &extra2->data_device));
+        CL_CHECK(clSetKernelArg(kernel_zero, 1, sizeof(cl_ulong), &offset2));
+        CL_CHECK(clSetKernelArg(kernel_zero, 2, sizeof(cl_ulong), &nb21));
+        CL_CHECK(clSetKernelArg(kernel_zero, 3, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel_zero, 4, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel_zero, 5, sizeof(cl_ulong), &nb1));
+        CL_CHECK(clSetKernelArg(kernel_zero, 6, sizeof(cl_ulong), &nb2));
+        CL_CHECK(clSetKernelArg(kernel_zero, 7, sizeof(int),      &ne0));
 
         size_t zero_local[3]  = {1, 1, 64};
-        size_t zero_global[3] = {(size_t) ne21, (size_t) ne20, 64};
+        size_t zero_global[3] = {(size_t) ne20, (size_t) ne21, 64};
         backend_ctx->enqueue_ndrange_kernel(kernel_zero, 3, zero_global, zero_local, dst);
-
-        CL_CHECK(clReleaseMemObject(buf_ids));
-        CL_CHECK(clReleaseMemObject(buf_dst));
     }
 
     int sgs   = 32; // subgroup size
