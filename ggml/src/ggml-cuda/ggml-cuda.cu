@@ -2868,6 +2868,35 @@ static void ggml_cuda_graph_update_executable(cudaGraphExec_t & instance, cudaGr
     }
 }
 
+// thread block cluster dims of the kernel nodes in a captured graph as (node, x, y, z), e.g. cuBLAS sm90 GEMMs
+static std::vector<uint32_t> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph) {
+    std::vector<uint32_t> clusters;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+    size_t n_nodes = 0;
+    CUDA_CHECK(cudaGraphGetNodes(cuda_graph, nullptr, &n_nodes));
+    std::vector<cudaGraphNode_t> nodes(n_nodes);
+    CUDA_CHECK(cudaGraphGetNodes(cuda_graph, nodes.data(), &n_nodes));
+    for (size_t i = 0; i < n_nodes; ++i) {
+        cudaGraphNodeType type;
+        CUDA_CHECK(cudaGraphNodeGetType(nodes[i], &type));
+        if (type != cudaGraphNodeTypeKernel) {
+            continue;
+        }
+        cudaLaunchAttributeValue val = {};
+        if (cudaGraphKernelNodeGetAttribute(nodes[i], cudaLaunchAttributeClusterDimension, &val) != cudaSuccess) {
+            (void) cudaGetLastError();
+            continue;
+        }
+        if (val.clusterDim.x * val.clusterDim.y * val.clusterDim.z > 1) {
+            clusters.insert(clusters.end(), { (uint32_t) i, val.clusterDim.x, val.clusterDim.y, val.clusterDim.z });
+        }
+    }
+#else
+    GGML_UNUSED(cuda_graph);
+#endif
+    return clusters;
+}
+
 // number of ggml nodes per CUDA graph chunk, 0 captures the whole ggml graph as one CUDA graph
 static int ggml_cuda_graph_chunk_size() {
     static const int chunk_size = [] {
@@ -2882,11 +2911,22 @@ static void ggml_cuda_graph_launch_chunk(ggml_backend_cuda_context * cuda_ctx, g
     cudaGraph_t cuda_graph = nullptr;
     CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_graph));
 
-    if (idx < graph->instances.size()) {
+    std::vector<uint32_t> clusters = ggml_cuda_graph_get_clusters(cuda_graph);
+    if (idx < graph->instances.size() && graph->clusters[idx] == clusters) {
         ggml_cuda_graph_update_executable(graph->instances[idx], cuda_graph);
+    } else if (idx < graph->instances.size()) {
+        // cudaGraphExecUpdate keeps the old cluster dims -> illegal instruction or wrong results, so re-instantiate
+        if (ggml_cuda_graph_debug_enabled()) {
+            GGML_LOG_DEBUG("%s: cluster dims changed, re-instantiating chunk %zu\n", __func__, idx);
+        }
+        CUDA_CHECK(cudaGraphExecDestroy(graph->instances[idx]));
+        graph->instances[idx] = nullptr;
+        CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx], cuda_graph, nullptr, nullptr, 0));
+        graph->clusters[idx] = std::move(clusters);
     } else {
         GGML_ASSERT(idx == graph->instances.size());
         graph->instances.emplace_back(nullptr);
+        graph->clusters.push_back(std::move(clusters));
         CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx], cuda_graph, nullptr, nullptr, 0));
     }
     CUDA_CHECK(cudaGraphDestroy(cuda_graph));
@@ -4859,6 +4899,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 CUDA_CHECK(cudaGraphExecDestroy(graph->instances[i]));
             }
             graph->instances.resize(n_chunks);
+            graph->clusters.resize(n_chunks);
             graph_evaluated_or_captured = true; // CUDA graph has been captured
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);

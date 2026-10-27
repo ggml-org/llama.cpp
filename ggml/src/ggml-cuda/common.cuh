@@ -1270,6 +1270,8 @@ struct ggml_cuda_graph {
     }
     // the ggml graph is captured as a series of CUDA graphs, so the GPU can run one chunk while the next is enqueued
     std::vector<cudaGraphExec_t> instances;
+    // per instance: thread block cluster dims of its kernel nodes, cudaGraphExecUpdate does not update them
+    std::vector<std::vector<uint32_t>> clusters;
     size_t num_nodes = 0;
     std::vector<cudaGraphNode_t> nodes;
     bool disable_due_to_gpu_arch = false;
