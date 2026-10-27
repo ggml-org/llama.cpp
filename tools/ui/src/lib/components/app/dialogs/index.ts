@@ -120,6 +120,23 @@ export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 export { default as DialogConfirmDownload } from './DialogConfirmDownload.svelte';
 
 /**
+ * **DialogConversationDelete** - Confirm deleting a conversation
+ *
+ * Destructive confirmation shared by every conversation delete entry point
+ * (keyboard shortcut, sidebar, mobile search).
+ *
+ * @example
+ * ```svelte
+ * <DialogConversationDelete
+ *   bind:open={showDelete}
+ *   onConfirm={handleDelete}
+ *   onCancel={() => (showDelete = false)}
+ * />
+ * ```
+ */
+export { default as DialogConversationDelete } from './DialogConversationDelete.svelte';
+
+/**
  * **DialogConversationRename** - Rename a conversation
  *
  * Modal dialog for renaming a conversation. Replaces the prior

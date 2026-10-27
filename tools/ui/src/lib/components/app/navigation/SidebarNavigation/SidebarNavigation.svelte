@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import {
 		ActionIcon,
+		DialogConversationDelete,
 		DialogConversationRename,
 		DialogDiscoverModels,
 		DialogMcpServers,
@@ -280,18 +281,30 @@
 		renameOriginalTitle = '';
 	}
 
-	async function handleDeleteConversation(id: string) {
+	let deleteDialogOpen = $state(false);
+	let deleteTargetId = $state<string | null>(null);
+
+	function handleDeleteConversation(id: string) {
 		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
 
 		if (!conversation) return;
 
-		const confirmed = window.confirm(
-			`Delete "${conversation.name}"? This action cannot be undone.`
-		);
+		deleteTargetId = conversation.id;
+		deleteDialogOpen = true;
+	}
 
-		if (!confirmed) return;
+	async function handleDeleteConfirm() {
+		const id = deleteTargetId;
+
+		deleteDialogOpen = false;
+
+		if (!id) return;
 
 		await conversationsStore.deleteConversation(id, { deleteWithForks: false });
+	}
+
+	function handleDeleteCancel() {
+		deleteDialogOpen = false;
 	}
 
 	function handleStopGeneration(id: string) {
@@ -615,6 +628,12 @@
 	currentTitle={renameOriginalTitle}
 	onCancel={handleRenameCancel}
 	onConfirm={handleRenameConfirm}
+/>
+
+<DialogConversationDelete
+	bind:open={deleteDialogOpen}
+	onCancel={handleDeleteCancel}
+	onConfirm={handleDeleteConfirm}
 />
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
