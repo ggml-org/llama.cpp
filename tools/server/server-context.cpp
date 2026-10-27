@@ -6371,6 +6371,7 @@ void server_routes::init_routes() {
         const bool stream = task.params.stream;
         task.tts_inp.set_prompt(prompt);
         task.tts_inp.set_lang(json_value(body, "lang", std::string()));
+        task.tts_inp.set_voice(json_value(body, "voice", std::string()));
         task.tts_inp.data.stream    = stream;
         task.tts_inp.data.out_type  = response_format == "pcm"
             ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM

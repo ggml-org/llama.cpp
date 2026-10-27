@@ -89,7 +89,8 @@ python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --outtype f16 --ou
 
 Available params:
 - `--tts-lang` can be `ar`, `da`, `de`, `el`, `en`, `en-gb`, `es`, `fi`, `fr`, `he`, `it`, `ja`, `ko`, `nl`, `pl`, `pt`, `sv`, `tr`, `zh` (default: `en`), other values are used as the language name
-- Note: `--tts-speaker-file` is not used, the model has a single voice
+- `--tts-voice` can be `female` (default) or `male`
+- Note: `--tts-speaker-file` is not used, the model has no voice cloning
 - Note: `--top-k` and `--top-p` are not used, audio frames are sampled with the settings of the model card (LFM3-Audio: temperature 1.0, top-k 128, repetition penalty 1.1 over 4096 frames; LFM3-Omni: temperature 0.4, repetition penalty 1.2 over 64 frames), the `audio_*` keys of `generation_config.json` override them at conversion
 - Each frame is 80 ms, generation stops at the end-of-audio frame
 
@@ -99,6 +100,7 @@ Example usage:
 llama-tts -m lfm3-audio.gguf \
     -mm mmproj-lfm3-audio.gguf \
     -p "Hello world" \
+    --tts-voice male \
     --output out.wav
 ```
 

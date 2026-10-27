@@ -1318,10 +1318,16 @@ public:
         std::transform(lang.begin(), lang.end(), lang.begin(), [](unsigned char c) { return (char) std::tolower(c); });
         const auto it_lang = lfm3a_tts_langs.find(lang);
         lang = it_lang != lfm3a_tts_langs.end() ? it_lang->second : inp->lang;
+        std::string voice = inp->voice && inp->voice[0] ? inp->voice : "female";
+        std::transform(voice.begin(), voice.end(), voice.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+        if (voice != "female" && voice != "male") {
+            LOG_WRN("mtmd_helper_gen_audio: unknown voice '%s', the model has 'female' and 'male', using 'female'\n", inp->voice);
+            voice = "female";
+        }
         // LFM3-Omni (LFM3-Audio with a vision tower) opens every assistant turn with an empty think block
         const std::string think = mtmd_support_vision(mctx) ? "<think></think>" : "";
         const std::string full = continuing ? std::string(inp->prompt, inp->prompt_len) :
-                                 "<|startoftext|><|im_start|>system\nPerform TTS in " + lang + " using a female voice.<|im_end|>\n" +
+                                 "<|startoftext|><|im_start|>system\nPerform TTS in " + lang + " using a " + voice + " voice.<|im_end|>\n" +
                                  "<|im_start|>user\n" + std::string(inp->prompt, inp->prompt_len) +
                                  "<|im_end|>\n<|im_start|>assistant\n" + think + "<|audio_start|>";
         prompt_tokens.resize(full.size() + 16);

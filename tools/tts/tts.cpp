@@ -36,7 +36,7 @@ static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p \"text to speak\" -o output.wav", argv[0]);
     LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav\n", argv[0]);
-    LOG("\nnote: --tts-lang and --tts-speaker-file may not be supported in all models");
+    LOG("\nnote: --tts-lang, --tts-voice and --tts-speaker-file may not be supported in all models");
     LOG("\n      use -n to limit the output length");
     LOG("\n      see tts/README.md for per-model usage notes");
     LOG("\n\n");
@@ -119,6 +119,7 @@ int main(int argc, char ** argv) {
     inp.prompt_len  = params.prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
     inp.lang        = params.tts_lang.c_str();
+    inp.voice       = params.tts_voice.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
     inp.seed        = params.sampling.seed;
