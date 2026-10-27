@@ -118,7 +118,7 @@
 		{#if message.content.trim()}
 			<div class="relative max-w-[80%]">
 				<button
-					class="group/expand w-full text-left {!isExpanded && showExpandButton
+					class="group/expand block w-full text-left {!isExpanded && showExpandButton
 						? 'cursor-pointer'
 						: 'cursor-auto'}"
 					onclick={showExpandButton && !isExpanded ? toggleExpand : undefined}
