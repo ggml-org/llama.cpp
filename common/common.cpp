@@ -1265,6 +1265,35 @@ const char * common_streamed_kv_config_error(const common_params & params) {
     return nullptr;
 }
 
+static const char * streamed_dflash_verification_error(const common_params & params, uint32_t & depth) {
+    if (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 7) {
+        return "adaptive DFlash2 supports 1-7 draft tokens";
+    }
+    bool ngram = false;
+    for (auto type : params.speculative.types) {
+        if (type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) ngram = true;
+        else if (type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) {
+            return "adaptive DFlash2 verification supports only DFlash2 and K4V proposal sources";
+        }
+    }
+    const auto & map = params.speculative.ngram_map_k4v;
+    if (ngram && (!map.size_m || map.size_m > 7)) {
+        return "adaptive DFlash2+K4V requires --spec-ngram-map-k4v-size-m 1-7; longer continuations are not admitted";
+    }
+    if (ngram && (!map.size_n || map.size_n > 1024 || !map.min_hits)) {
+        return "adaptive DFlash2+K4V requires lookup length 1-1024 and positive minimum hits";
+    }
+    if (params.n_batch <= 0 || params.n_ubatch < 0) {
+        return "adaptive DFlash2 requires a positive batch and nonnegative microbatch limit";
+    }
+    depth = uint32_t(common_speculative_n_max(&params.speculative));
+    const int32_t microbatch = params.n_ubatch == 0 ? params.n_batch : std::min(params.n_batch, params.n_ubatch);
+    if (uint32_t(microbatch) < depth + 1) {
+        return "adaptive DFlash2 verification block must fit the effective target microbatch";
+    }
+    return nullptr;
+}
+
 const char * common_streamed_dflash_config_error(const common_params & params) {
     if (!common_params_uses_streamed_dflash(params)) return nullptr;
     if (const auto * error = common_streamed_kv_config_error(params)) return error;
@@ -1274,14 +1303,11 @@ const char * common_streamed_dflash_config_error(const common_params & params) {
             std::any_of(params.speculative.types.begin(),params.speculative.types.end(),[](auto type) {
                 return type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
             })) return "adaptive DFlash2 requires one serial slot, no auxiliary MTP layers and no other speculative mode";
-    if (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 7)
-        return "adaptive DFlash2 supports 1-7 draft tokens";
     if (!params.mmproj.path.empty()) return "adaptive DFlash2 currently supports text only, without mmproj";
-    if (params.n_batch <= 0 || params.n_ubatch < 0 || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
-        return "adaptive DFlash2 requires a positive batch, nonnegative microbatch limit and -fa on";
-    const int32_t microbatch=params.n_ubatch == 0 ? params.n_batch : std::min(params.n_batch,params.n_ubatch);
-    if (microbatch < params.speculative.draft.n_max+1)
-        return "adaptive DFlash2 verification block must fit the effective target microbatch";
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
+        return "adaptive DFlash2 requires -fa on";
+    uint32_t depth = 0;
+    if (const auto * error = streamed_dflash_verification_error(params, depth)) return error;
     const auto & draft=params.speculative.draft;
     const auto cache_type=[](ggml_type type) {
         switch (type) {
@@ -1846,6 +1872,13 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     const bool streamed_mtp = common_params_uses_streamed_mtp(params);
     cparams.n_rs_seq          = (params.kv_stream_auxiliary_layers && !streamed_mtp) || params.no_kv_stream_rs_rollback ?
                                 0 : params.speculative.need_n_rs_seq();
+    if (common_params_uses_streamed_dflash(params)) {
+        uint32_t depth = 0;
+        if (const auto * error = streamed_dflash_verification_error(params, depth)) {
+            throw std::invalid_argument(error);
+        }
+        cparams.n_rs_seq = depth;
+    }
     cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
     cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);
     cparams.n_batch           = params.n_batch;

@@ -1,0 +1,29 @@
+{
+  "stage": "NK2",
+  "status": "passed",
+  "source_base": "86fbbec7a",
+  "qualified_tracked_diff_sha256": "8fcdc05ab22adeea7b65d25db5460274a6e7085720072a586873e2fb597518b6",
+  "evidence": "benchmarks/results/dflash2-k4v-20261026-nk2-JrNWb9",
+  "limits_red": {
+    "tests": 3,
+    "assertions": 263,
+    "failures": 35
+  },
+  "green": {
+    "tests": 22,
+    "assertions": 425,
+    "release_failures": 0,
+    "asan_ubsan_failures": 0,
+    "independent_length_combinations": 49,
+    "release_and_sanitized_argument_tests": true,
+    "release_and_sanitized_ctest": true,
+    "finder_host_tests": 27,
+    "accepted_gates": 7
+  },
+  "preserved_failure": "Premature sidecar validation broke deferred artifact resolution; CTest failure and one-assertion ordering red preserved, guard removed and ordering regression green. Existing post-resolution server guard retained.",
+  "source_sha256": {
+    "common/common.cpp": "4b074ea675e9ae9faced29716137be43cd846e333c205d7ccb2bddad82ac2e72",
+    "tests/test-speculative.cpp": "ba25b9e566c15202154b700194f882c30182884dac121896625f3f1d4c270041"
+  },
+  "scope": "CPU common workload resolution and validation only. Native and single-drafter limits preserved. No new API, GPU qualification, mixed public admission or performance claim."
+}

@@ -49,6 +49,20 @@ static llama_tokens lookup(common_ngram_map & map, const llama_tokens & history)
     return result;
 }
 
+static common_params streamed_dflash_params(int predictions, uint16_t ngram) {
+    common_params params;
+    params.n_batch = params.n_ubatch = 256;
+    params.n_parallel = 1;
+    params.fit_params = false;
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    params.shared_device_memory_bytes = size_t(1024)*1024*1024;
+    params.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V};
+    params.speculative.draft.mparams.path = "matching-dflash.gguf";
+    params.speculative.draft.n_max = predictions;
+    params.speculative.ngram_map_k4v.size_m = ngram;
+    return params;
+}
+
 int main(int argc, char ** argv) {
     testing t;
     if (argc == 2) t.set_filter(argv[1]);
@@ -336,6 +350,82 @@ int main(int argc, char ** argv) {
             }
             t.assert_true(rejected);
         }
+    });
+
+    t.test("streamed_dflash_rollback_covers_both_independent_proposal_limits", [&](testing & t) {
+        for (int predictions = 1; predictions <= 7; ++predictions) {
+            for (uint16_t ngram = 1; ngram <= 7; ++ngram) {
+                const auto params = streamed_dflash_params(predictions, ngram);
+                const auto depth = uint32_t(std::max(predictions, int(ngram)));
+                const auto target = common_context_params_to_llama(params);
+                t.assert_equal(depth, target.n_rs_seq);
+                t.assert_equal(predictions, params.speculative.draft.n_max);
+                const auto limits = common_speculative_get_output_limits(params.n_batch, 1,
+                        common_speculative_n_max(&params.speculative));
+                t.assert_equal(int32_t(depth + 1), limits.total);
+                t.assert_equal(int32_t(depth + 1), limits.per_seq);
+                t.assert_true("mixed public admission must remain closed until the driver is qualified",
+                        common_streamed_dflash_config_error(params) != nullptr);
+            }
+        }
+    });
+
+    t.test("streamed_dflash_workload_rejects_invalid_limits_before_context_creation", [&](testing & t) {
+        const char * causes[] = {"1-7", "1-7", "size-m", "size-m", "size-m", "lookup", "lookup",
+                "microbatch", "microbatch", "positive batch", "positive batch", "proposal sources"};
+        for (int change = 0; change < 12; ++change) {
+            auto params = streamed_dflash_params(3, 7);
+            switch (change) {
+                case 0: params.speculative.draft.n_max = 0; break;
+                case 1: params.speculative.draft.n_max = 8; break;
+                case 2: params.speculative.ngram_map_k4v.size_m = 0; break;
+                case 3: params.speculative.ngram_map_k4v.size_m = 8; break;
+                case 4: params.speculative.ngram_map_k4v.size_m = 48; break;
+                case 5: params.speculative.ngram_map_k4v.size_n = 0; break;
+                case 6: params.speculative.ngram_map_k4v.min_hits = 0; break;
+                case 7: params.n_ubatch = 7; break;
+                case 8: params.n_batch = 7; break;
+                case 9: params.n_ubatch = -1; break;
+                case 10: params.n_batch = 0; break;
+                case 11: params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP); break;
+            }
+            bool rejected = false;
+            try {
+                common_context_params_to_llama(params);
+            } catch (const std::invalid_argument & error) {
+                rejected = std::string(error.what()).find(causes[change]) != std::string::npos;
+            }
+            t.assert_true(rejected);
+        }
+    });
+
+    t.test("streamed_workload_resolution_preserves_native_and_single_drafter_limits", [&](testing & t) {
+        auto params = streamed_dflash_params(3, 7);
+        params.shared_device_memory_bytes = 0;
+        t.assert_equal(uint32_t(3), common_context_params_to_llama(params).n_rs_seq);
+        params.shared_device_memory_bytes = size_t(1024)*1024*1024;
+        params.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+        t.assert_equal(uint32_t(3), common_context_params_to_llama(params).n_rs_seq);
+        params.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        t.assert_equal(uint32_t(3), common_context_params_to_llama(params).n_rs_seq);
+        params.speculative.types = {COMMON_SPECULATIVE_TYPE_NONE};
+        t.assert_equal(uint32_t(0), common_context_params_to_llama(params).n_rs_seq);
+        params = streamed_dflash_params(3, 7);
+        params.n_batch = 8;
+        params.n_ubatch = 0;
+        t.assert_equal(uint32_t(7), common_context_params_to_llama(params).n_rs_seq);
+        params.speculative.types = {COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
+                COMMON_SPECULATIVE_TYPE_NONE, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,
+                COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V};
+        t.assert_equal(uint32_t(7), common_context_params_to_llama(params).n_rs_seq);
+    });
+
+    t.test("streamed_dflash_model_presence_is_deferred_until_artifact_resolution", [&](testing & t) {
+        auto params = streamed_dflash_params(3, 7);
+        params.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+        params.speculative.draft.mparams = {};
+        // The server checks the resolved sidecar before loading target weights.
+        t.assert_true(common_streamed_dflash_config_error(params) == nullptr);
     });
 
     return t.summary();

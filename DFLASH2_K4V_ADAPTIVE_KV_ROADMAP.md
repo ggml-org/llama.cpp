@@ -1,6 +1,6 @@
 # DFlash2 + K4V adaptive KV streaming roadmap
 
-Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK1 are complete; NK2-NK7 are pending. Mixed streaming admission remains closed, and no mixed-mode performance gain is claimed. Updated: 2026-10-26.
+Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK2 are complete; NK3-NK7 are pending. Mixed streaming admission remains closed, and no mixed-mode performance gain is claimed. Updated: 2026-10-26.
 
 Source baseline: `bcf1a81d641c478db5690d2f2c048c691801fcb2`. The mechanism investigation originally used `1b7c0f46e`; the relevant common, n-gram, context, rollback and server source files were verified unchanged between that revision and this baseline. Recheck those files before implementation if HEAD changes.
 
@@ -184,7 +184,7 @@ Exit: reproducible controls, an inventory of reused test hooks, and fixtures tha
 
 ### NK1 - K4V CPU correctness
 
-Status: complete. See the [NK1 red/green report](benchmarks/data/dflash2-k4v-nk1.json).
+Status: complete, committed as `86fbbec7a`. See the [NK1 red/green report](benchmarks/data/dflash2-k4v-nk1.json).
 
 The initial behavioral suite reproduced 29 failures in 143 assertions before the fixes. The expanded 18-case/161-assertion suite reproduces 35 failures against the pinned NK0 n-gram implementation and passes with zero failures normally and under ASAN/UBSAN. Existing argument tests pass in both builds. Raw evidence is retained in `benchmarks/results/dflash2-k4v-20261026-nk1-OlLbS0/`.
 
@@ -209,7 +209,15 @@ Exit: correct emitted continuation and statistics attribution, no invalid histor
 
 ### NK2 - Common mixed-workload limits and admission
 
-Status: pending. Depends on NK1.
+Status: complete for common workload resolution and validation. See the [NK2 report](benchmarks/data/dflash2-k4v-nk2.json). Public mixed admission deliberately remains closed until the resource and driver gates pass.
+
+The existing `common_speculative_n_max` is reused to resolve the streamed target rollback depth from both sources; no new public API, allocation or independent limit registry was added. Shared validation checks neural/K4V bounds, allowed source families, lookup parameters and effective microbatch capacity. Native/non-streaming rollback parameters and standalone DFlash/MTP behavior remain unchanged.
+
+The initial width/invalid-limit suite reproduced 35 failures in 263 assertions. All 49 independent F/K combinations now pass, with DFlash's own requested maximum unchanged and target output rows consistent with the rollback maximum. The complete suite has 22 tests/425 assertions, green normally and under ASAN/UBSAN; both CTest registrations, existing argument tests and all 27 finder host tests pass. Raw evidence: `benchmarks/results/dflash2-k4v-20261026-nk2-JrNWb9/`.
+
+An attempted earlier missing-sidecar check caused a real argument-test regression: model/sidecar resolution may follow parsing. That failed CTest log and a focused one-assertion ordering red are preserved. The premature guard was removed; the existing server check after resolution still rejects a missing sidecar before target loading, and the new regression preserves this phase boundary. A metadata-only parser result is not a runnable model-pair qualification.
+
+No GPU or mixed-mode execution is claimed by NK2. NK3 must still separate actual child prediction/injection workloads, and NK4/NK6 must qualify the public combined path.
 
 - Add or extend a small common resolver for target proposal capacity, verification rows, rollback depth and output-row requirements. Avoid a new registry or speculative scheduler.
 - Apply it consistently in target parameter construction, common validation and server output sizing. Keep existing non-streaming parameter semantics unchanged.
@@ -360,7 +368,7 @@ CLI order must not change the existing K4V-before-DFlash priority. This fragment
 
 - [x] NK0: pinned controls and proof that both draft sources can be observed independently; actual mixed switching remains NK4.
 - [x] NK1: CPU reds reproduced and demonstrated K4V defects fixed with regression coverage.
-- [ ] NK2: one consistent bounded target-workload calculation and narrow admission.
+- [x] NK2: one consistent bounded target-workload calculation and validation; public mixed admission stays closed pending NK3/NK4.
 - [ ] NK3: independent verification/prediction/injection measurement and exact quota coverage.
 - [ ] NK4: source switching, feature continuity and every accepted prefix are correct.
 - [ ] NK5: cache reuse, restore/restart, cancellation, sampling and failure recovery pass.
