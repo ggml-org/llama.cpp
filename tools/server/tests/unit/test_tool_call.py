@@ -652,14 +652,13 @@ SEARCH_TOOL = {
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
     },
 }
-PURCHASE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "markItemPurchased",
-        "description": "Mark an item as purchased",
-        "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "qty": {"type": "integer"}}},
-    },
+PURCHASE_FUNCTION = {
+    "name": "markItemPurchased",
+    "description": "Mark an item as purchased",
+    "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "qty": {"type": "integer"}}},
 }
+
+PURCHASE_TOOL = {"type": "function", "function": PURCHASE_FUNCTION}
 
 
 def count_deferred_tokens(tools, tool_content):
@@ -684,7 +683,7 @@ def test_deferred_tool_reference():
     server.chat_template_file = '../../../models/templates/LFM3.jinja'
     server.start()
 
-    deferred = {**PURCHASE_TOOL, "function": {**PURCHASE_TOOL["function"], "defer_loading": True}}
+    deferred = {"type": "function", "function": {**PURCHASE_FUNCTION, "defer_loading": True}}
     tools = [SEARCH_TOOL, deferred]
 
     # withheld from the system prompt
@@ -692,5 +691,5 @@ def test_deferred_tool_reference():
 
     # the reference renders like the definition sent inline
     by_reference = count_deferred_tokens(tools, [{"type": "tool_reference", "name": "markItemPurchased"}])
-    inline = count_deferred_tokens(tools, "<additional_tools>\n" + json.dumps(PURCHASE_TOOL["function"]) + "\n</additional_tools>")
+    inline = count_deferred_tokens(tools, "<additional_tools>\n" + json.dumps(PURCHASE_FUNCTION) + "\n</additional_tools>")
     assert by_reference == inline
