@@ -5,11 +5,12 @@
 	import { settingsStore } from '$lib/stores';
 
 	interface Props {
+		hasChanges?: boolean;
 		onReset?: () => void;
 		onSave?: () => void;
 	}
 
-	let { onReset, onSave }: Props = $props();
+	let { hasChanges = true, onReset, onSave }: Props = $props();
 
 	let showResetDialog = $state(false);
 
@@ -31,14 +32,18 @@
 
 <div class="sticky bottom-0 mx-auto mt-4 flex w-full justify-between pb-4 md:pb-0">
 	<div class="flex gap-2">
-		<Button onclick={handleResetClick} variant="outline">
-			<RotateCcw class="h-3 w-3" />
+		{#if settingsStore.hasCustomSettings}
+			<Button onclick={handleResetClick} variant="outline">
+				<RotateCcw class="h-3 w-3" />
 
-			Reset to default
-		</Button>
+				Reset to default
+			</Button>
+		{/if}
 	</div>
 
-	<Button onclick={handleSave}>Save settings</Button>
+	{#if hasChanges}
+		<Button onclick={handleSave}>Save settings</Button>
+	{/if}
 </div>
 
 <AlertDialog.Root bind:open={showResetDialog}>

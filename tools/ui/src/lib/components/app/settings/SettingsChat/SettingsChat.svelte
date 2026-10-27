@@ -48,6 +48,20 @@
 
 	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
 
+	// inputs hand back strings for numeric fields, so compare stringified values
+	let hasChanges = $derived.by(() => {
+		const saved = settingsStore.config;
+		const keys = new Set([...Object.keys(saved), ...Object.keys(localConfig)]);
+
+		for (const key of keys) {
+			if (String(localConfig[key] ?? '') !== String(saved[key] ?? '')) {
+				return true;
+			}
+		}
+
+		return false;
+	});
+
 	let mobileHeader: { updateCarousel: () => void } | undefined;
 
 	let fetchInitiated = false;
@@ -184,7 +198,7 @@
 				</div>
 			</div>
 
-			<SettingsFooter onReset={handleReset} onSave={handleSave} />
+			<SettingsFooter {hasChanges} onReset={handleReset} onSave={handleSave} />
 		</div>
 	</div>
 </div>
