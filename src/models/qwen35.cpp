@@ -42,7 +42,7 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
     if (ml.load_mtp && mtp_only && d2t_meta) {
         n_vocab_out = d2t_meta->ne[0];
         d2t = create_tensor(tn(LLM_TENSOR_D2T), { n_vocab_out }, 0);
-        LLAMA_LOG_INFO("%s: QWEN35 MTP using d2t draft-vocab trim (n_vocab_out = %lld)\n",
+        LLAMA_LOG_INFO("%s: QWEN MTP using d2t draft-vocab trim (draft_vocab_size = %lld)\n",
                 __func__, (long long) n_vocab_out);
     }
 
@@ -56,11 +56,9 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
     cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), { n_embd, hparams.n_embd_out() }, TENSOR_NOT_REQUIRED);
     cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   { hparams.n_embd_out() },         TENSOR_NOT_REQUIRED);
 
-    // if output is NULL, init from the input tok embed (only when not using trimmed draft vocab)
+    // if output is NULL, init from the input tok embed
     if (output == NULL) {
-        if (!d2t) {
-            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
-        }
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
 
     auto load_block_trunk = [&](int il, int flags) {
@@ -135,17 +133,6 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
     }
     for (int i = n_layer; i < n_layer_all; ++i) {
         load_block_mtp(i);
-    }
-
-    if (d2t) {
-        bool has_valid_head = (output != nullptr);
-        for (int i = n_layer; i < n_layer_all; ++i) {
-            if (layers[i].nextn.shared_head_head != nullptr) {
-                has_valid_head = true;
-                break;
-            }
-        }
-        GGML_ASSERT(has_valid_head && "d2t draft-vocab trim requires output.weight or nextn.shared_head_head");
     }
 }
 
@@ -674,7 +661,7 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "QWEN35 MTP: missing LM head (nextn.shared_head_head or model.output)");
     if (model.d2t) {
-        GGML_ASSERT(head_w->ne[1] == model.d2t->ne[0] && "QWEN35 MTP: selected LM head output dimension must match d2t draft vocabulary size");
+        GGML_ASSERT(head_w->ne[1] == model.d2t->ne[0] && "QWEN MTP: selected LM head output dimension must match d2t draft vocabulary size");
     }
     cur = build_lora_mm(head_w, cur, head_s);
     cb(cur, "result_output", -1);
@@ -683,8 +670,6 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
         const int64_t n_draft_vocab = cur->ne[0];
         const int64_t n_outputs     = cur->ne[1];
         const int64_t n_vocab_full  = (int64_t) model.vocab.n_tokens();
-
-        GGML_ASSERT(model.d2t->ne[0] == n_draft_vocab);
 
         ggml_tensor * logits = ggml_fill(ctx0,
                 ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab_full, n_outputs), -INFINITY);
