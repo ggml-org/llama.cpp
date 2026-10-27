@@ -968,6 +968,11 @@ jobs:
           evict-old-files: 1d
           max-size: "1G"
 
+      - name: Tune ccache for ROCm
+        run: |
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
+
       # - name: Cache ROCm Installation
       #   id: cache-rocm
       #   uses: actions/cache@v5
@@ -1545,6 +1550,8 @@ jobs:
           # builds hit.
           ccache --set-config=compiler_check=content
           ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
 
       - name: Dependencies
         id: depends
