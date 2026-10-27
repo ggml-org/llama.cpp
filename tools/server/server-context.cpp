@@ -1721,7 +1721,7 @@ private:
             {
                 auto caps = common_chat_templates_get_caps(chat_params.tmpls.get());
                 auto it = params_base.default_template_kwargs.find("preserve_reasoning");
-                bool supported = caps.at("supports_preserve_reasoning");
+                bool supported = caps.at("supports_preserve_reasoning").get<bool>();
                 bool specified = params_base.preserve_reasoning_specified;
                 // note: the kwarg is enabled by default if not specified explicitly, so check the value
                 bool enabled = it != params_base.default_template_kwargs.end() && it->second == "true";

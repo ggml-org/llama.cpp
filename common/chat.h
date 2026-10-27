@@ -472,7 +472,7 @@ common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_to
 common_json common_chat_tool_parameters(const common_json & function);
 
 // get template caps, useful for reporting to server /props endpoint
-std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
+common_json common_chat_templates_get_caps(const common_chat_templates * chat_templates);
 
 common_chat_prompt common_chat_template_direct_apply(
     const common_chat_template & tmpl,

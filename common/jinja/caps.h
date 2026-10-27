@@ -1,9 +1,10 @@
 #pragma once
 
 #include "runtime.h"
+#include "json.h"
 
 #include <string>
-#include <map>
+#include <vector>
 
 namespace jinja {
 
@@ -19,6 +20,9 @@ struct caps {
     // supports reasoning effort levels
     bool supports_reasoning_effort = false;
 
+    // reasoning effort levels the template renders distinctly, from lowest to highest
+    std::vector<std::string> reasoning_effort_levels;
+
     // one of the 2 content capabilities must be true
     bool supports_string_content = true;
     bool supports_typed_content = false;
@@ -26,7 +30,7 @@ struct caps {
     bool supports_object_arguments = false;
 
     // for reporting on server
-    std::map<std::string, bool> to_map() const;
+    common_json to_json() const;
 
     // for debugging
     std::string to_string() const;

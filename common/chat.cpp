@@ -1940,12 +1940,12 @@ const common_chat_msg & common_chat_session::finish(const common_chat_input & ch
     return result;
 }
 
-std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
+common_json common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
     GGML_ASSERT(chat_templates != nullptr);
     GGML_ASSERT(chat_templates->template_default != nullptr);
     if (chat_templates->template_tool_use != nullptr) {
         // take the more expressive template when available
-        return chat_templates->template_tool_use->caps.to_map();
+        return chat_templates->template_tool_use->caps.to_json();
     }
-    return chat_templates->template_default->caps.to_map();
+    return chat_templates->template_default->caps.to_json();
 }

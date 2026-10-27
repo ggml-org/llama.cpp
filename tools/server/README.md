@@ -1019,7 +1019,7 @@ By default, it is read-only. To make POST request to change global properties, y
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
 - `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
-- `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info)
+- `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info), `reasoning_effort_levels` lists the `reasoning_effort` values the template renders distinctly, from lowest to highest
 - `modalities` - the list of supported modalities
 - `is_sleeping` - sleeping status, see [Sleeping on idle](#sleeping-on-idle)
 
