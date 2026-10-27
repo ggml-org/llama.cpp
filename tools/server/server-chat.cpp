@@ -596,6 +596,14 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         }
     }
 
+    // Handle Anthropic-specific effort param, passed on like reasoning.effort of the Responses API
+    if (body.contains("output_config")) {
+        json output_config = json_value(body, "output_config", json::object());
+        if (output_config.contains("effort")) {
+            oai_body["reasoning_effort"] = output_config.at("effort");
+        }
+    }
+
     // Handle Anthropic-specific thinking param
     if (body.contains("thinking")) {
         json thinking = json_value(body, "thinking", json::object());
@@ -603,6 +611,8 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         if (thinking_type == "enabled") {
             int budget_tokens = json_value(thinking, "budget_tokens", 10000);
             oai_body["thinking_budget_tokens"] = budget_tokens;
+        } else if (thinking_type == "disabled") {
+            oai_body["reasoning_effort"] = "none";
         }
     }
 
