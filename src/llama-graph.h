@@ -1336,15 +1336,10 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    // ggml_top_k_mask with top_k, score and extra viewed in the row layout of kq_mask, see ggml.h
-    // mask replaces kq_mask as the source of the kept values, it broadcasts to the rows
+    // ggml_top_k_mask with top_k viewed in the row layout of kq_mask, see ggml.h
     ggml_tensor * build_fused_top_k_mask(
             ggml_tensor * kq_mask, // [n_kv, n_tokens/n_stream, 1, n_stream]
             ggml_tensor * top_k,   // [n_top, n_tokens]
-            ggml_tensor * score,   // [n_pick, n_tokens], can be null
-            ggml_tensor * blocks,  // [n_blk, n_pick], can be null
-            ggml_tensor * extra,   // [n_extra, n_tokens], can be null
-            ggml_tensor * mask,    // [n_kv], kq_mask if null
                     int   il) const;
 
     llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
