@@ -3,7 +3,7 @@
 
 Start a server with an audio model, e.g. LFM3-Audio:
 
-    llama-server -hf LiquidAI/LFM3-Audio-2B-GGUF --port 8080
+    llama-server -hf LiquidAI/LFM3-Audio-2B-GGUF
 
 Spoken conversation, the audio of each wav file is one user turn. It is sent in chunks as it would come from a
 microphone, the server prefills it as it arrives so the response starts right after the last chunk:
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     p.add_argument("--chunk-ms", type=int, default=100, help="audio chunk size")
     p.add_argument("--realtime", action=argparse.BooleanOptionalAction, default=True, help="send the audio in real time")
     p.add_argument("--out", default="response.wav", help="where the audio of the responses goes")
-    p.add_argument("--url", default="http://127.0.0.1:8080/v1")
+    p.add_argument("--url", default="http://127.0.0.1:9931/v1")
     p.add_argument("--api-key", default="none")
     p.add_argument("--model", default="default", help="model name, used by the router")
     asyncio.run(main(p.parse_args()))
