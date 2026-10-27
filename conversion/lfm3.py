@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import math
 
+from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -177,6 +179,23 @@ class LFM3VLMmprojModel(LFM3VLVisionMixin):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
             yield from self._lfm3vl_tensors(data_torch, name, bid)
+
+
+def _is_lfm3_audio_checkpoint(dir_model: Path) -> bool:
+    if not (dir_model / "config.json").is_file():
+        return False
+    with open(dir_model / "config.json", encoding="utf-8") as f:
+        config = json.load(f)
+    return config.get("model_type") == "lfm3_audio" and "lfm" in config
+
+
+# read the release config.json as is: a transformers that knows lfm3_audio rewrites it into another layout
+@ModelBase.register_hparams_loader(_is_lfm3_audio_checkpoint)
+def _load_lfm3_audio_hparams(dir_model: Path) -> dict[str, Any]:
+    with open(dir_model / "config.json", encoding="utf-8") as f:
+        config = json.load(f)
+    config["text_config"] = config["lfm"]
+    return config
 
 
 @ModelBase.register("Lfm3AudioForConditionalGeneration")
