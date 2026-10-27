@@ -1,0 +1,42 @@
+{
+  "stage": "NK0",
+  "status": "passed",
+  "source_base": "bcf1a81d641c478db5690d2f2c048c691801fcb2",
+  "qualified_tracked_diff_sha256": "be0ce4965c5e6c4cfb497c67b39ca13df902f7c0e5c40213fa20be33bb8a5586",
+  "evidence": "benchmarks/results/dflash2-k4v-20261026-nk0-A53EiR",
+  "artifact_manifest": "benchmarks/data/dflash2-qwen27b-artifacts.json",
+  "artifact_manifest_sha256": "7ea38fb6f7ea0fd6cda70beb8dc3162eec9995273f9786405e5b7ea35d9d2c6e",
+  "corpus": "benchmarks/data/online-articles-262144-words.txt",
+  "corpus_sha256": "ca19e089c46f80c2f661d31a1312aeda21fbc73bd17ddf371e5f3a0befa9102e",
+  "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "checks": {
+    "baseline_missing_observation_api_red": true,
+    "cpu_assertions": 42,
+    "asan_ubsan_assertions": 42,
+    "cpu_arguments_passed": true,
+    "asan_ubsan_arguments_passed": true,
+    "preserved_dflash_control_assertions": 1075,
+    "observed_native_dflash_assertions": 1083,
+    "observed_shared_dflash_assertions": 1097,
+    "accepted_gates": 7,
+    "cleanup_selftest_passed": true,
+    "production_restored_healthy": true
+  },
+  "native_control": {
+    "context": 4096,
+    "batch": 256,
+    "ubatch": 256,
+    "target_kv": ["q8_0", "q4_0"],
+    "draft_predictions": 1,
+    "shared_arena_mib": 512,
+    "shared_target_rollback_depth": 3,
+    "uvm": false
+  },
+  "binaries": {
+    "test-kv-stream-context": "918c924b17625e5cb5ac9a2343626678556f4ac7108fedc40f1a8d0d842b934f",
+    "libllama-common.so.0": "7ed3d9a2ec8a2ddd0cbe9fecd0a419f58bf241bdb845eb43129d4403d2b6b25f",
+    "libllama.so.0": "b09747e29bb7e323c7483c2e631735c43f4e5a21e3d5ddcc242df68f8570b28f",
+    "libggml-cuda.so.0": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741"
+  },
+  "scope": "Host observability; independently observed K4V and DFlash. Existing core/CUDA libraries reused by hash with exact CMake host compile/link commands. No shader rebuild, numerical change, mixed admission, mixed-switch qualification, strict CUDA pass or performance gain claimed."
+}

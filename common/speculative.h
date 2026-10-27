@@ -102,6 +102,22 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 
+struct common_speculative_stats {
+    common_speculative_type type;
+    size_t n_call_begin;
+    size_t n_call_draft;
+    size_t n_call_accept;
+    size_t n_gen_drafts;
+    size_t n_acc_drafts;
+    size_t n_gen_tokens;
+    size_t n_acc_tokens;
+    size_t n_predict; // Successful DFlash/DSpark prediction forwards, not dispatcher calls.
+};
+
+// Snapshot host counters without synchronizing a backend.
+std::vector<common_speculative_stats> common_speculative_get_stats(const common_speculative * spec);
+common_speculative_type common_speculative_get_last_type(const common_speculative * spec, llama_seq_id seq_id);
+
 struct common_speculative_deleter {
     void operator()(common_speculative * s) { common_speculative_free(s); }
 };
