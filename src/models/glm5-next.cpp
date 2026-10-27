@@ -887,7 +887,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
 // Scores pools of kpool consecutive tokens, expands the selected pools and the incomplete tail into an additive mask
 
 ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
-        ggml_tensor * cur, ggml_tensor * qr, ggml_tensor * kq_mask, const llama_layer & layer,
+        ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
         const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il) {
 
     const auto * mctx_lid = mctx_hyb->get_idx();
@@ -918,6 +918,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
 
     auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, n_embd_indexer);
     const int64_t n_kv = mctx_lid->get_n_kv();
+
+    // flash attention requires an f16 mask
+    const ggml_type type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     // Pool the entries completed by this ubatch. The last one is a dummy when the ubatch completes none.
     ggml_tensor * rows = kpool_cache.gather_key_gate(inp_kpool->new_pool_idxs);
@@ -977,8 +980,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
             ggml_tensor * tail = hparams.indexer_kpool_select_tail ? inp_kpool->tail_idxs : nullptr;
             GGML_ASSERT(kpool*n_top_pool + (tail ? tail->ne[0] : 0) == (int64_t) inp_kpool->n_sel);
 
-            ggml_tensor * keep = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, kq_mask->type, n_kv), 0.0f);
-            ggml_tensor * sel  = build_fused_top_k_mask(kq_mask, top_k, score, inp_kpool->pool_idxs, tail, keep, il);
+            ggml_tensor * keep = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, type_mask, n_kv), 0.0f);
+            ggml_tensor * sel  = ggml_top_k_mask(ctx0, keep, top_k, score, inp_kpool->pool_idxs, tail); // [n_kv, n_tokens]
+            res->add_fused_node({LLM_FUSED_OP_TOP_K_MASK, sel, il});
             cb(sel, "indexer_sel", il);
 
             return sel;
@@ -1008,12 +1012,12 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
 
     ggml_build_forward_expand(gf, sel_idx);
 
-    ggml_tensor * mask_all = ggml_new_tensor_4d(ctx0, kq_mask->type, n_kv + n_sel, 1, 1, 1);
+    ggml_tensor * mask_all = ggml_new_tensor_4d(ctx0, type_mask, n_kv + n_sel, 1, 1, 1);
     mask_all = ggml_fill(ctx0, mask_all, -INFINITY);
     mask_all = ggml_repeat_4d(ctx0, mask_all, n_kv + n_sel, n_tokens, 1, 1);
     mask_all = ggml_reshape_3d(ctx0, mask_all, 1, n_kv + n_sel, n_tokens);
 
-    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, kq_mask->type, n_sel, 1, 1, 1);
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, type_mask, n_sel, 1, 1, 1);
     zeros = ggml_fill(ctx0, zeros, 0.0f);
     zeros = ggml_repeat_4d(ctx0, zeros, n_sel, n_tokens, 1, 1);
     zeros = ggml_reshape_3d(ctx0, zeros, 1, n_sel, n_tokens);
@@ -1029,11 +1033,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
 
     ggml_tensor * sel = ggml_set_rows(ctx0, mask_all, zeros, ggml_reshape_3d(ctx0, sel_idx, n_sel, n_tokens, 1));
 
-    // Fold causal visibility before shared-indexer reuse.
-    GGML_ASSERT(kq_mask->ne[0] == n_kv && kq_mask->ne[1]*kq_mask->ne[2]*kq_mask->ne[3] == n_tokens);
-    const size_t row = sel->nb[2];
-    sel = ggml_view_4d(ctx0, sel, n_kv, kq_mask->ne[1], kq_mask->ne[2], kq_mask->ne[3],
-            row, row*kq_mask->ne[1], row*kq_mask->ne[1]*kq_mask->ne[2], 0);
+    sel = ggml_view_2d(ctx0, sel, n_kv, n_tokens, sel->nb[2], 0);
     sel = ggml_cont(ctx0, sel);
     cb(sel, "indexer_sel", il);
 
@@ -1075,11 +1075,17 @@ llama_model_glm5_next::graph::build_dsa_layer(
     q_absorbed = ggml_permute(ctx0, q_absorbed, 0, 2, 1, 3);
     cb(q_absorbed, "q_absorbed", il);
 
-    ggml_tensor * kq_mask = inp_attn->get_kq_mask();
+    ggml_tensor * k = mctx_mla->get_k(ctx0, il);
+    ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * sel = prev_sel;
     if (il >= (int) hparams.n_layer() || hparams.is_indexer_full(il)) { // the NextN block always has a full indexer
-        sel = build_kpool_select(cur, qr, kq_mask, layer, mctx_hyb, inp_kpool, il);
+        sel = build_kpool_select(cur, qr, layer, mctx_hyb, inp_kpool, il);
+
+        // the selection replaces the kq_mask: split it into the streams of the K view
+        const int64_t n_stream = k->ne[3];
+        GGML_ASSERT(sel->ne[0] == k->ne[2] && sel->ne[1] % n_stream == 0);
+        sel = ggml_reshape_4d(ctx0, sel, sel->ne[0], sel->ne[1]/n_stream, 1, n_stream);
     } else {
         GGML_ASSERT(sel != nullptr && "shared indexer layer must follow a full indexer layer");
     }
@@ -1088,13 +1094,7 @@ llama_model_glm5_next::graph::build_dsa_layer(
     ggml_build_forward_expand(gf, kv_cmpr);
     ggml_build_forward_expand(gf, mctx_mla->cpy_k(ctx0, kv_cmpr, inp_attn->get_k_idxs(), il));
 
-    // the selection replaces the kq_mask and has the same shape
-    // with no layers reading it, the kq_mask isn't allocated
-    GGML_ASSERT(ggml_are_same_shape(sel, kq_mask));
     cb(sel, "kq_mask_dsa", il);
-
-    ggml_tensor * k = mctx_mla->get_k(ctx0, il);
-    ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
     cb(out, "kqv_out", il);
