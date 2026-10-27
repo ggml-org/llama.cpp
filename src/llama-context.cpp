@@ -1028,7 +1028,7 @@ enum llama_pooling_type llama_context::pooling_type() const {
 }
 
 float * llama_context::get_logits() {
-    output_reorder();
+    output_reorder_lazy();
 
     return logits.data;
 }
@@ -1063,7 +1063,7 @@ int64_t llama_context::output_resolve_row(int32_t i) const {
 }
 
 float * llama_context::get_logits_ith(int32_t i) {
-    output_reorder();
+    output_reorder_lazy();
 
     try {
         if (logits.data == nullptr) {
@@ -1083,7 +1083,7 @@ float * llama_context::get_logits_ith(int32_t i) {
 }
 
 float * llama_context::get_embeddings() {
-    output_reorder();
+    output_reorder_lazy();
 
     return embd.data;
 }
@@ -1093,7 +1093,7 @@ llama_token * llama_context::get_sampled_tokens()  const{
 }
 
 float * llama_context::get_embeddings_ith(int32_t i) {
-    output_reorder();
+    output_reorder_lazy();
 
     try {
         if (embd.data == nullptr) {
@@ -1123,13 +1123,13 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
 }
 
 float * llama_context::get_embeddings_nextn() {
-    output_reorder();
+    output_reorder_lazy();
 
     return embd_nextn.data;
 }
 
 float * llama_context::get_embeddings_nextn_ith(int32_t i) {
-    output_reorder();
+    output_reorder_lazy();
 
     try {
         if (embd_nextn.data == nullptr) {
@@ -1159,7 +1159,7 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
 }
 
 float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
-    output_reorder();
+    output_reorder_lazy();
 
     GGML_ASSERT(lid < embd_layer_inp.size() && embd_layer_inp[lid].has_data());
 
@@ -1167,7 +1167,7 @@ float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
 }
 
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
-    output_reorder();
+    output_reorder_lazy();
 
     if (!sampling.sampled.has_data()) {
         return LLAMA_TOKEN_NULL;
@@ -1184,7 +1184,7 @@ llama_token llama_context::get_sampled_token_ith(int32_t idx) {
 }
 
 float * llama_context::get_sampled_probs_ith(int32_t idx) {
-    output_reorder();
+    output_reorder_lazy();
 
     if (!sampling.probs.has_data()) {
         return nullptr;
@@ -1203,7 +1203,7 @@ float * llama_context::get_sampled_probs_ith(int32_t idx) {
 }
 
 float * llama_context::get_sampled_logits_ith(int32_t idx) {
-    output_reorder();
+    output_reorder_lazy();
 
     if (!sampling.logits.has_data()) {
         return nullptr;
@@ -1222,7 +1222,7 @@ float * llama_context::get_sampled_logits_ith(int32_t idx) {
 }
 
 const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
-    output_reorder();
+    output_reorder_lazy();
 
     try {
         const int64_t row = output_resolve_row(idx);
@@ -1240,7 +1240,7 @@ const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
 }
 
 size_t llama_context::get_sampled_candidates_count(int32_t idx) {
-    output_reorder();
+    output_reorder_lazy();
 
     if (!sampling.candidates.has_data()) {
         return 0;
@@ -1259,7 +1259,7 @@ size_t llama_context::get_sampled_candidates_count(int32_t idx) {
 }
 
 size_t llama_context::get_sampled_logits_count(int32_t idx) {
-    output_reorder();
+    output_reorder_lazy();
 
     if (!sampling.logits.has_data()) {
         return model.vocab.n_tokens();
@@ -1278,7 +1278,7 @@ size_t llama_context::get_sampled_logits_count(int32_t idx) {
 }
 
 size_t llama_context::get_sampled_probs_count(int32_t idx) {
-    output_reorder();
+    output_reorder_lazy();
 
     if (!sampling.probs.has_data()) {
         return 0;
@@ -1928,6 +1928,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     n_queued_tokens += n_tokens_all;
 
     output_swaps.clear();
+    output_reorder_pending.store(false, std::memory_order_relaxed);
     embd_batch_idxs.clear();
 
     sched_reserve();
@@ -2231,6 +2232,15 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             }
         }
     }
+    // Publish that a lazy reorder is pending. The release store makes the
+    // output_swaps pushes and the output_ids rewrite above visible to any
+    // thread that observes it with an acquire load in the getter.
+    // output_reorder() has two independent parts: the output_swaps row swaps
+    // and the embd_batch_idxs permutation for layer-input / unmasked NextN
+    // embeddings. Either one being pending requires the lazy reorder.
+    if (!output_swaps.empty() || !embd_batch_idxs.empty()) {
+        output_reorder_pending.store(true, std::memory_order_release);
+    }
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
@@ -2437,6 +2447,28 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
     return extracted;
 }
 
+// Applies the pending output reorder at most once per evaluation.
+// Fast path: a single acquire load when nothing is pending.
+// Slow path: take the lock, re-check, then reorder and publish completion.
+void llama_context::output_reorder_lazy() {
+    if (!output_reorder_pending.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(output_mutex);
+
+    if (!output_reorder_pending.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    output_reorder();
+
+    output_reorder_pending.store(false, std::memory_order_release);
+}
+
+// Applies output_swaps and the embd_batch_idxs permutation in place.
+// Callers must hold output_mutex (only output_reorder_lazy() does) so that
+// concurrent first reads cannot replay the same permutation twice.
 void llama_context::output_reorder() {
     const uint64_t n_vocab     = model.vocab.n_tokens();
     const uint64_t n_embd      = model.hparams.n_embd;

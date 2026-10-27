@@ -7,6 +7,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
+#include "../src/llama-context.h"
 
 #include <cinttypes>
 #include <cmath>
@@ -15,6 +16,8 @@
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
+#include <atomic>
+#include <thread>
 #include <random>
 #include <regex>
 #include <stdexcept>
@@ -133,6 +136,8 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --race                   Run the concurrent logits_ith regression test (CPU only)\n");
+    LOG("  --embed                  Run the embedding row-order regression test (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -686,7 +691,8 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0,
+        const uint32_t n_seq_max = 1) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -698,6 +704,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
+    ctx_params.n_seq_max = n_seq_max;
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
     if (!encode) {
@@ -1049,6 +1056,272 @@ static std::string get_device_label(ggml_backend_dev_t dev) {
     return std::string(desc) + " (" + name + ")";
 }
 
+
+// ---- #31158: concurrent first read, post-join re-read, and the pointer contract ----
+// llama_get_logits_ith() lazily applies output_reorder() in place on first read.
+// Several threads reading different rows at the same time all replay the same
+// swap list and can observe a partially permuted buffer.
+// The test returns non-zero on ANY mismatch so it is a real regression test.
+struct race_group_result {
+    int concurrent_mismatches = 0;
+    int post_join_mismatches  = 0;
+    int decode_errors         = 0;
+
+    bool ok() const {
+        return concurrent_mismatches == 0 && post_join_mismatches == 0 && decode_errors == 0;
+    }
+};
+
+static int test_logits_ith_race(const size_t seed) {
+    ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (dev_cpu == nullptr) {
+        LOG_ERR("%s: FAIL, no CPU backend\n", __func__);
+        return 2;   // do not silently pass
+    }
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_QWEN35, false);
+    auto pair = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, 0.1f, { dev_cpu },
+                                  LLAMA_SPLIT_MODE_LAYER, false, nullptr, 0, /*n_seq_max*/ 8);
+    llama_model   * model = pair.first.get();
+    llama_context * lctx  = pair.second.get();
+
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+
+    const int n_seq = 4;
+    const int n_per = 8;
+    const int n_out = n_seq * n_per;              // 32 output rows
+    const int n_rd  = 4;                          // concurrent readers per iteration
+    const std::vector<llama_token> toks = get_tokens(n_out, n_vocab, seed);
+
+    auto decode_once = [&]() -> int32_t {
+        llama_batch_ext * batch = llama_batch_ext_init(lctx);
+        for (int p = 0; p < n_per; ++p) {
+            for (int s = 0; s < n_seq; ++s) {
+                const int32_t idx = llama_batch_ext_add_token(batch, s, toks[p * n_seq + s]);
+                if (idx < 0) {
+                    LOG_ERR("%s: add_token failed %d\n", __func__, idx);
+                    llama_batch_ext_free(batch);
+                    return -1;
+                }
+                const llama_pos pos = (llama_pos) p;
+                llama_batch_ext_set_pos(batch, idx, &pos);
+                llama_batch_ext_set_output_logits(batch, idx, true);
+            }
+        }
+        llama_memory_clear(llama_get_memory(lctx), true);
+        const int32_t rc = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch);
+        llama_batch_ext_free(batch);
+        llama_synchronize(lctx);   // main thread: backend done before any reader
+        return rc;
+    };
+
+    auto read_row = [&](int i, std::vector<float> & dst) -> bool {
+        const float * p = llama_get_logits_ith(lctx, i);
+        if (!p) return false;
+        dst.assign(p, p + n_vocab);   // deep copy
+        return true;
+    };
+
+    // ---- reference: single-threaded, deep copies ----
+    std::vector<std::vector<float>> ref(n_out);
+    {
+        if (decode_once() != 0) { LOG_ERR("%s: FAIL, decode failed\n", __func__); return 1; }
+        for (int i = 0; i < n_out; ++i) {
+            if (!read_row(i, ref[i])) { LOG_ERR("%s: FAIL, no logits %d\n", __func__, i); return 1; }
+        }
+    }
+
+    // ---- group runner: returns explicit status, never swallows errors ----
+    auto run_group = [&](const char * name, int iters, bool pre_reorder) -> race_group_result {
+        race_group_result res;
+        for (int it = 0; it < iters; ++it) {
+            if (decode_once() != 0) { LOG_ERR("%s[%s]: decode failed\n", __func__, name); ++res.decode_errors; break; }
+
+            if (pre_reorder) {
+                volatile float * p = llama_get_logits_ith(lctx, 0);
+                (void) p;
+            }
+
+            std::vector<std::vector<float>> got(n_out);
+            std::vector<int> rows(n_rd);
+            for (int k = 0; k < n_rd; ++k) rows[k] = (it * n_rd + k) % n_out;
+
+            std::atomic<int> ready{0};
+            std::vector<std::thread> th;
+            for (int k = 0; k < n_rd; ++k) {
+                th.emplace_back([&, k]() {
+                    ready.fetch_add(1);
+                    while (ready.load() < n_rd) { }
+                    const float * p = llama_get_logits_ith(lctx, rows[k]);
+                    if (p) got[rows[k]].assign(p, p + n_vocab);
+                });
+            }
+            for (auto & t : th) t.join();
+
+            for (int k = 0; k < n_rd; ++k) {
+                if (got[rows[k]] != ref[rows[k]]) ++res.concurrent_mismatches;
+            }
+
+            // post-join: main thread reads ALL rows again and compares
+            for (int i = 0; i < n_out; ++i) {
+                std::vector<float> tmp;
+                if (!read_row(i, tmp) || tmp != ref[i]) ++res.post_join_mismatches;
+            }
+        }
+        LOG("%s: group=%s pre_reorder=%d iters=%d concurrent_mismatches=%d post_join_mismatches=%d decode_errors=%d\n",
+            __func__, name, (int) pre_reorder, iters,
+            res.concurrent_mismatches, res.post_join_mismatches, res.decode_errors);
+        return res;
+    };
+
+    const race_group_result g_first = run_group("concurrent_first_read",          100, false);
+    const race_group_result g_pre   = run_group("concurrent_after_prereorder",    100, true);
+
+    // ---- API contract: single thread, values AND documented offset relation ----
+    int api_value_mis = 0;
+    int api_ptr_mis   = 0;
+    int api_null      = 0;
+    {
+        if (decode_once() != 0) { LOG_ERR("%s: FAIL, decode failed\n", __func__); return 1; }
+        const float * base = llama_get_logits(lctx);   // completes the reorder
+        if (base == nullptr) { LOG_ERR("%s: FAIL, get_logits returned null\n", __func__); return 1; }
+        for (int i = 0; i < n_out; ++i) {
+            std::vector<float> tmp;
+            if (!read_row(i, tmp)) { ++api_null; continue; }
+            if (tmp != ref[i]) ++api_value_mis;
+            const float * p = llama_get_logits_ith(lctx, i);
+            if (p == nullptr) { ++api_null; continue; }
+            if (p != base + (size_t) i * n_vocab) ++api_ptr_mis;
+        }
+    }
+    LOG("%s: api_contract value_mismatches=%d ptr_offset_mismatches=%d nulls=%d\n",
+        __func__, api_value_mis, api_ptr_mis, api_null);
+
+    const bool pass = g_first.ok() && g_pre.ok() &&
+                      api_value_mis == 0 && api_ptr_mis == 0 && api_null == 0;
+    LOG("%s: RESULT=%s (first: conc=%d post=%d dec=%d | pre: conc=%d post=%d dec=%d | api: val=%d ptr=%d null=%d)\n",
+        __func__, pass ? "PASS" : "FAIL",
+        g_first.concurrent_mismatches, g_first.post_join_mismatches, g_first.decode_errors,
+        g_pre.concurrent_mismatches,   g_pre.post_join_mismatches,   g_pre.decode_errors,
+        api_value_mis, api_ptr_mis, api_null);
+    return pass ? 0 : 1;
+}
+
+
+
+// ---- #31158: layer-input embedding row order ----
+// Decodes the same tokens twice with two different batch layouts and checks
+// that every (seq, pos) row is identical element by element.
+//
+//   interleaved layout: ubatches are split by sequence, so embd_batch_idxs is
+//                       a non-identity permutation and output_swaps is empty
+//                       (only position 0 produces logits)
+//   grouped layout:     ubatch order == batch order, permutation is identity
+//
+// A build that skips the embd_batch_idxs part of output_reorder() returns the
+// interleaved rows in ubatch order and fails this test.
+static int test_embedding_reorder(const size_t seed) {
+    ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (dev_cpu == nullptr) { LOG_ERR("%s: FAIL, no CPU backend\n", __func__); return 2; }
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_QWEN35, false);
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
+    std::vector<ggml_backend_dev_t> devs = { dev_cpu, nullptr };
+    model_params.devices = devs.data();
+    model_params.split_mode = LLAMA_SPLIT_MODE_LAYER;
+
+    tensor_data_params tensor_params = { seed, 0.1f };
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tensor_params, model_params));
+    if (!model) { LOG_ERR("%s: FAIL, model\n", __func__); return 2; }
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx     = 0;
+    ctx_params.n_seq_max = 8;
+    ctx_params.n_threads = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.n_ubatch  = 64;
+    llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+    if (!lctx) { LOG_ERR("%s: FAIL, ctx\n", __func__); return 2; }
+
+    lctx->set_embeddings_layer_inp(0, true);
+
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
+    const int n_seq  = 4;
+    const int n_per  = 8;
+    const int n_out  = n_seq * n_per;
+    const int n_embd = (int) llama_model_n_embd(model.get());
+
+    const std::vector<llama_token> flat = get_tokens(n_out, n_vocab, seed);
+    auto tok = [&](int s, int p) { return flat[(size_t) (s * n_per + p) % flat.size()]; };
+
+    auto run = [&](bool interleaved, std::vector<float> & dst) -> bool {
+        llama_batch_ext * batch = llama_batch_ext_init(lctx.get());
+        auto add = [&](int s, int p) -> bool {
+            const int32_t idx = llama_batch_ext_add_token(batch, s, tok(s, p));
+            if (idx < 0) { return false; }
+            const llama_pos pos = (llama_pos) p;
+            llama_batch_ext_set_pos(batch, idx, &pos);
+            // only position 0 emits logits -> output_swaps stays empty
+            llama_batch_ext_set_output_logits(batch, idx, p == 0);
+            return true;
+        };
+        bool ok = true;
+        if (interleaved) {
+            for (int p = 0; p < n_per && ok; ++p) {
+                for (int s = 0; s < n_seq && ok; ++s) ok = add(s, p);
+            }
+        } else {
+            for (int s = 0; s < n_seq && ok; ++s) {
+                for (int p = 0; p < n_per && ok; ++p) ok = add(s, p);
+            }
+        }
+        if (!ok) { llama_batch_ext_free(batch); return false; }
+
+        llama_memory_clear(llama_get_memory(lctx.get()), true);
+        const int32_t rc = llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch);
+        llama_batch_ext_free(batch);
+        if (rc != 0) return false;
+        llama_synchronize(lctx.get());
+
+        const float * e = lctx->get_embeddings_layer_inp(0);
+        if (e == nullptr) return false;
+        dst.assign(e, e + (size_t) n_out * n_embd);
+        return true;
+    };
+
+    std::vector<float> inter, group;
+    if (!run(true,  inter)) { LOG_ERR("%s: FAIL, interleaved decode\n",  __func__); return 1; }
+    if (!run(false, group)) { LOG_ERR("%s: FAIL, grouped decode\n",      __func__); return 1; }
+
+    // row i of the interleaved layout holds (s = i % n_seq, p = i / n_seq)
+    // row j of the grouped layout holds     (s = j / n_per, p = j % n_per)
+    int mismatched_rows = 0;
+    int mismatched_elems = 0;
+    for (int s = 0; s < n_seq; ++s) {
+        for (int p = 0; p < n_per; ++p) {
+            const float * a = &inter[(size_t) (p * n_seq + s) * n_embd];
+            const float * b = &group[(size_t) (s * n_per + p) * n_embd];
+            int row_bad = 0;
+            for (int k = 0; k < n_embd; ++k) {
+                if (a[k] != b[k]) { ++row_bad; ++mismatched_elems; }
+            }
+            if (row_bad != 0) {
+                ++mismatched_rows;
+                if (mismatched_rows <= 3) {
+                    LOG_ERR("%s: row mismatch seq=%d pos=%d elems=%d\n", __func__, s, p, row_bad);
+                }
+            }
+        }
+    }
+
+    LOG("%s: rows=%d n_embd=%d mismatched_rows=%d mismatched_elems=%d RESULT=%s\n",
+        __func__, n_out, n_embd, mismatched_rows, mismatched_elems,
+        (mismatched_rows == 0) ? "PASS" : "FAIL");
+    return mismatched_rows == 0 ? 0 : 1;
+}
+
 static int test_backends(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * target_backend) {
     struct user_data_t {
         struct {
@@ -1340,6 +1613,8 @@ int main(int argc, char ** argv) {
     float stdev = 0.1f;
     std::string out;
     const char * target_backend = nullptr;
+    bool embed_test = false;
+    bool race_test = false;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -1387,6 +1662,10 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--race") == 0) {
+            race_test = true;
+        } else if (strcmp(argv[i], "--embed") == 0) {
+            embed_test = true;
         } else if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
             if (i + 1 < argc) {
                 out = argv[++i];
@@ -1420,6 +1699,12 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
 
     try {
+        if (embed_test) {
+            return test_embedding_reorder(seed);
+        }
+        if (race_test) {
+            return test_logits_ith_race(seed);
+        }
         if (!out.empty()) {
             return save_models(arch_filter, seed, stdev, verbosity, out);
         }

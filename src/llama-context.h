@@ -1,5 +1,7 @@
 #pragma once
 
+#include <mutex>
+#include <atomic>
 #include "llama.h"
 #include "llama-ext.h"
 #include "llama-cparams.h"
@@ -235,6 +237,12 @@ private:
     uint32_t output_reserve(int32_t n_outputs);
 
     void output_reorder();
+
+    // Reorders the outputs lazily; the fast path skips the mutex when nothing is pending.
+    void output_reorder_lazy();
+
+    std::mutex output_mutex;
+    std::atomic<bool> output_reorder_pending{false};
 
     // map the output row index `i` to batch index
     int64_t output_resolve_row(int32_t i) const;
