@@ -21,6 +21,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <random>
 #include <vector>
 
 
@@ -283,21 +284,75 @@ struct backend_consts {
 };
 
 // stress test: a tensor is incremented and sent back and forth between the backends in a ping-pong pattern.
-// One lap pairs every backend a with every other backend b: the counter is brought to a, then bounced to b
-// and back for every partner in turn. So one lap copies an activation across every ordered pair of backends.
+// One pass pairs every backend a with every other backend b via nested loops.
+// The counter is brought to a, then bounced to b and back for every partner in turn.
+// So one pass copies an activation across every ordered pair of backends.
+// Every lap runs two passes: one where the nodes add the constant 1, one where they add a user input
+// from the CPU backend, so that every transition is tested with and without an input next to the activation.
+// The input values come from a fixed seed.
 static test_result stress_test_linked_list(const std::vector<ggml_backend_t> & backends, int n_laps,
         int64_t tensor_len, bool use_device_host_buft) {
     const int n_backends = (int) backends.size();
 
-    // per lap and backend a: one node to bring the counter to a, then two per partner for the ping-pong
-    const int n_nodes = n_laps*n_backends*(2*n_backends - 1);
+    // per pass and backend a: one node to bring the counter to a, then two per partner for the ping-pong
+    const int n_nodes_pass = n_backends*(2*n_backends - 1);
+    const int n_nodes      = 2*n_laps*n_nodes_pass;
+    const int n_inputs     = n_laps*n_nodes_pass; // one per node of the pass that takes user inputs
+
+    // initial pseudo-random value draw so that the expected result is known before graph execution
+    std::mt19937                       rng(42);
+    std::uniform_int_distribution<int> draw_value(1, 10);
+
+    std::vector<int> input_value(n_inputs); // random values store
+    int64_t          sum_inputs = 0;
+
+    for (int i = 0; i < n_inputs; i++) {
+        input_value[i] = draw_value(rng);
+        sum_inputs    += input_value[i];
+    }
 
     // see sched->hash_set FIXME, the set has to hold the nodes and the leafs: two constants per backend
-    const size_t graph_size = n_nodes + 2*n_backends;
+    // plus the user inputs
+    const size_t graph_size = n_nodes + 2*n_backends + n_inputs;
 
     backend_consts consts(backends, tensor_len);
 
     ggml_backend_sched_ptr sched = create_test_scheduler(backends, graph_size, use_device_host_buft);
+
+    // the user inputs all live on the CPU backend, with the same buffer type the scheduler uses for it
+    ggml_init_params params_input = {
+        /*.mem_size   =*/ n_inputs*ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr        ctx_input(ggml_init(params_input));
+    ggml_backend_buffer_ptr buf_input;
+
+    std::vector<ggml_tensor *> input(n_inputs);
+    for (int i = 0; i < n_inputs; i++) {
+        input[i] = ggml_new_tensor_1d(ctx_input.get(), GGML_TYPE_F32, tensor_len);
+        ggml_format_name(input[i], "input%d", i);
+        ggml_set_input(input[i]);
+    }
+
+    // the inputs follow the buffer type the scheduler uses for the CPU backend (cf. create_test_scheduler)
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends.back());
+    if (use_device_host_buft) {
+        ggml_backend_buffer_type_t host = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backends[0]));
+        if (host != nullptr) {
+            buft = host;
+        }
+    }
+
+    buf_input.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_input.get(), buft));
+    GGML_ASSERT(buf_input != nullptr);
+
+    // write inputs before graph execution
+    std::vector<float> data(tensor_len);
+    for (int i = 0; i < n_inputs; i++) {
+        std::fill(data.begin(), data.end(), float(input_value[i]));
+        ggml_backend_tensor_set(input[i], data.data(), 0, ggml_nbytes(input[i]));
+    }
 
     ggml_init_params params_compute = {
         /*.mem_size   =*/ (n_nodes + 2)*ggml_tensor_overhead() + ggml_graph_overhead_custom(graph_size, false),
@@ -311,36 +366,50 @@ static test_result stress_test_linked_list(const std::vector<ggml_backend_t> & b
     int64_t       sum = 0;
     ggml_tensor * out = nullptr;
 
+    int i = 0; // next user input to consume
+
     // increments the counter on backend b, which makes the scheduler copy it there from the previous backend
-    auto step = [&](int b) {
+    auto step = [&](int b, bool with_input) {
         ggml_tensor * src = out == nullptr ? consts.zero[b] : out;
 
-        out  = g.add(ggml_add(ctx_compute.get(), src, consts.one[b]), b);
-        sum += 1;
+        if (with_input) {
+            out = g.add(ggml_add(ctx_compute.get(), src, input[i]), b);
+            i++;
+        } else {
+            out  = g.add(ggml_add(ctx_compute.get(), src, consts.one[b]), b);
+            sum += 1;
+        }
     };
 
     for (int lap = 0; lap < n_laps; lap++) {
-        for (int a = 0; a < n_backends; a++) {
-            step(a);
+        for (bool with_input : { false, true }) { // test each transition with and without input
+            for (int a = 0; a < n_backends; a++) {
+                step(a, with_input);
 
-            for (int b = 0; b < n_backends; b++) {
-                if (b == a) {
-                    continue;
+                for (int b = 0; b < n_backends; b++) {
+                    if (b == a) {
+                        continue;
+                    }
+
+                    step(b, with_input);
+                    step(a, with_input);
                 }
-
-                step(b);
-                step(a);
             }
         }
     }
     ggml_set_name(out, "out");
     ggml_set_output(out);
 
+    // every node adds either the constant 1 or its drawn user input
+    const int64_t expected = sum + sum_inputs;
+
+    note("%d of %d nodes take a user input, they contribute %" PRId64 " of %" PRId64, n_inputs, n_nodes, sum_inputs, expected);
+
     test_result ok;
-    if (sum >= (1 << 24)) { // the counter has to stay exact in f32
-        ok = fail("expected result %" PRId64 " does not fit into the f32 mantissa, lower n_laps", sum);
+    if (expected >= (1 << 24)) { // the counter has to stay exact in f32
+        ok = fail("expected result %" PRId64 " does not fit into the f32 mantissa, lower n_laps", expected);
     } else {
-        ok = run_and_check(sched.get(), g, backends, {{ out, float(sum) }}, tensor_len);
+        ok = run_and_check(sched.get(), g, backends, {{ out, float(expected) }}, tensor_len);
     }
 
     return ok;
