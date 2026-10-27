@@ -42,17 +42,12 @@ class LFM3Model(TextModel):
         "{%- if add_generation_prompt -%}{{- '<|im_start|>assistant\\n' -}}{%- endif -%}"
     )
 
-    # TTS and ASR prompts of the model card: a language code is looked up, anything else is taken as the language name
+    # TTS prompt of the model card: a language code is looked up, anything else is taken as the language name
     _tts_langs = {
         "ar": "Arabic", "da": "Danish", "de": "German", "el": "Greek", "en": "American English", "en-us": "American English",
         "en-gb": "British English", "fi": "Finnish", "fr": "French", "he": "Hebrew", "it": "Italian", "ja": "Japanese",
         "ko": "Korean", "nl": "Dutch", "pl": "Polish", "pt": "Portuguese", "es": "Spanish", "sv": "Swedish", "tr": "Turkish",
         "zh": "Chinese",
-    }
-    _asr_langs = {
-        "ar": "Arabic", "da": "Danish", "de": "German", "el": "Greek", "en": "English", "es": "Spanish", "fi": "Finnish",
-        "fr": "French", "he": "Hebrew", "it": "Italian", "ja": "Japanese", "ko": "Korean", "nl": "Dutch", "pl": "Polish",
-        "pt": "Portuguese", "sv": "Swedish", "tr": "Turkish", "zh": "Chinese",
     }
 
     # "language" and "voice" are optional, the text to speak is the first message
@@ -68,18 +63,6 @@ class LFM3Model(TextModel):
             "{{- '<|im_start|>assistant\\n" + ("<think></think>" if think else "") + "<|audio_start|>' -}}"
         )
 
-    # the system prompt of a transcription, without a language the model detects it
-    def _asr_system_template(self) -> str:
-        return (
-            "{%- set names = " + json.dumps(self._asr_langs) + " -%}"
-            "{%- if language is defined and language -%}"
-            "{%- set code = language | lower -%}"
-            "{{- 'Perform ASR in ' + (names[code] if code in names else language) + '.' -}}"
-            "{%- else -%}"
-            "{{- 'Perform ASR.' -}}"
-            "{%- endif -%}"
-        )
-
     def set_vocab(self):
         super().set_vocab()
         # hparams hold the merged text config, the checkpoint's own model_type is in config.json
@@ -93,7 +76,6 @@ class LFM3Model(TextModel):
         if is_audio or is_omni:
             # LFM3-Omni opens every assistant turn with an empty think block
             templates.append({"name": "tts", "template": self._tts_template(think=is_omni)})
-            templates.append({"name": "asr_system", "template": self._asr_system_template()})
         if templates:
             self.gguf_writer.add_chat_template(templates)
 
