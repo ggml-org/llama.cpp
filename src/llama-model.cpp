@@ -776,7 +776,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             }
         } else if (is_glm5_next) {
             // MLA, each device holds whole heads
-            const int64_t granularity_head = std::lcm(hparams.n_embd_head_v_mla(), blck_size) / hparams.n_embd_head_v_mla();
+            // an even number of heads per device, the HIP tile FA kernel for D=512 needs an even GQA ratio
+            const int64_t granularity_head = std::lcm(std::lcm(hparams.n_embd_head_v_mla(), blck_size) / hparams.n_embd_head_v_mla(), int64_t(2));
             if (std::regex_match(tensor_name, pattern_attn_q_b_weight)) {
                 return {granularity_head * hparams.n_embd_head_k_mla()};
             }
