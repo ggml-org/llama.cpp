@@ -80,32 +80,6 @@ __kernel void kernel_moe_scatter(
     emap[tile_idx] = val;
 }
 
-// the gemm only writes the rows an expert owns, so the skipped rows (negative ids) are zeroed here
-__kernel void kernel_moe_zero_dst(
-    __global const int * input,
-    __global float * dst,
-    uint N,
-    uint topK,
-    uint n_experts,
-    uint ne0
-) {
-    uint n = get_global_id(0);
-    uint k = get_global_id(1);
-
-    if (n >= N || k >= topK) {
-        return;
-    }
-
-    if (input[n * n_experts + k] != -1) {
-        return;
-    }
-
-    __global float * dst_row = dst + ((ulong)n * topK + k) * ne0;
-    for (uint i = get_local_id(2); i < ne0; i += get_local_size(2)) {
-        dst_row[i] = 0.0f;
-    }
-}
-
 // Deterministic replacement for kernel_moe_scatter.
 //
 // kernel_moe_scatter takes each token's slot from atomic_inc(slot_counter[expert]),

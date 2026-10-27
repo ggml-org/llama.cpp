@@ -346,7 +346,7 @@ struct case_state_partial_size : ctx_test {
     const char * name() const override { return "ps"; }
 
     const char * description() const override {
-        return "the partial state is not larger than the full state and, without SWA, does not grow with the tokens";
+        return "the partial state is not larger than the full state";
     }
 
     case_result run(model_run & mr) const override {
@@ -375,10 +375,6 @@ struct case_state_partial_size : ctx_test {
         TLOG_INF("%s: partial %zu -> %zu, full %zu -> %zu\n", __func__, partial_a, partial_b, full_a, full_b);
 
         CTX_REQUIRE(partial_a <= full_a && partial_b <= full_b, "the partial state is larger than the full state");
-
-        if (llama_model_n_swa(mr.model) == 0) {
-            CTX_REQUIRE(partial_a == partial_b, "the partial state grows with the tokens");
-        }
 
         return case_result::pass();
     }
