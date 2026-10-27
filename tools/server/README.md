@@ -1643,7 +1643,7 @@ LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its tu
 - `conversation.item.input_audio_transcription.delta` and `.completed`: in a transcription session
 - `error`: `error.message` describes the problem
 
-Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. A response either calls tools or answers; the client runs the calls, sends their results with `function_call_output` items and asks for the next response. `"required"` constrains the response with the tool call grammar, it cannot make a model call a tool it does not want to: LFM3-Audio and LFM3-Omni choose between calling and answering themselves (`"auto"`).
+Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
 
 See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
 

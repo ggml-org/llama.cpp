@@ -1,4 +1,5 @@
 #include "server-realtime.h"
+#include "server-chat.h"
 #include "server-common.h"
 #include "server-context.h"
 #include "server-task.h"
@@ -71,26 +72,10 @@ bool parse_max_output_tokens(const json & j, int32_t & n) {
     return true;
 }
 
-// realtime tools {type, name, description, parameters} -> chat tools
+// realtime tools have the format of the Responses API
 bool parse_tools(const json & j, std::vector<common_chat_tool> & tools, std::string & err) {
-    if (!j.is_array()) {
-        err = "tools must be an array";
-        return false;
-    }
-    json oai = json::array();
-    for (const auto & t : j) {
-        if (json_value(t, "type", std::string()) != "function" || json_value(t, "name", std::string()).empty()) {
-            err = "tools: only functions with a name are supported";
-            return false;
-        }
-        oai.push_back({{"type", "function"}, {"function", {
-            {"name",        t.at("name")},
-            {"description", t.value("description", std::string())},
-            {"parameters",  t.value("parameters", json::object())},
-        }}});
-    }
     try {
-        tools = common_chat_tools_parse_oaicompat(oai);
+        tools = common_chat_tools_parse_oaicompat(server_chat_convert_responses_tools(j));
     } catch (const std::exception & e) {
         err = std::string("tools: ") + e.what();
         return false;
@@ -157,8 +142,6 @@ struct realtime_conversation {
     std::string assistant_footer;
     std::string tool_header;  // around a tool result
     std::string tool_footer;
-
-    llama_token tok_tool_call = LLAMA_TOKEN_NULL; // banned with tool_choice "none"
 
     // conversation state, owned by the reader thread
     bool        started   = false; // something went into the slot, the session config is fixed
@@ -253,12 +236,9 @@ struct realtime_conversation {
         return res && res->success;
     }
 
-    // sampling of a response: the server defaults without the banned tokens, with the tool call grammar of chat
-    common_params_sampling response_sampling(const std::vector<llama_token> & banned, const common_chat_session * chat) const {
+    // sampling of a response: the server defaults, with the tool call grammar of chat
+    common_params_sampling response_sampling(const common_chat_session * chat) const {
         common_params_sampling sampling = deps.sampling;
-        for (llama_token t : banned) {
-            sampling.logit_bias.push_back({t, -INFINITY});
-        }
         if (chat) {
             chat->apply_sampling(sampling);
         }
@@ -269,16 +249,21 @@ struct realtime_conversation {
     // chat template
     //
 
-    std::string render(const std::vector<common_chat_msg> & messages, bool add_generation_prompt = false) const {
+    common_chat_templates_inputs chat_inputs(const std::vector<common_chat_msg> & messages, bool add_generation_prompt) const {
         const auto & chat = deps.meta.chat_params;
         common_chat_templates_inputs inputs;
         inputs.messages              = messages;
         inputs.add_generation_prompt = add_generation_prompt;
         inputs.use_jinja             = chat.use_jinja;
         inputs.enable_thinking       = false;
+        inputs.reasoning_format      = chat.reasoning_format;
         inputs.chat_template_kwargs  = chat.chat_template_kwargs;
         inputs.tools                 = tools;
-        return common_chat_templates_apply(chat.tmpls.get(), inputs).prompt.str();
+        return inputs;
+    }
+
+    std::string render(const std::vector<common_chat_msg> & messages, bool add_generation_prompt = false) const {
+        return common_chat_templates_apply(deps.meta.chat_params.tmpls.get(), chat_inputs(messages, add_generation_prompt)).prompt.str();
     }
 
     // the text around a user and an assistant turn, from placeholder messages
@@ -414,7 +399,7 @@ struct realtime_conversation {
         server_control_response response;
         response.n_predict = max_output_tokens;
         response.out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_TEXT;
-        response.sampling  = response_sampling({}, nullptr);
+        response.sampling  = response_sampling(nullptr);
         if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, user_footer + assistant_header, {}, response)) {
             return;
         }
@@ -529,34 +514,24 @@ struct realtime_conversation {
             return;
         }
         response.out_mode = mode;
-        std::vector<llama_token> banned;
 
         // with tools, the output goes through the tool call parser of the chat template and its grammar
         std::optional<common_chat_session> chat;
-        if (!tools.empty() && choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+        if (!tools.empty()) {
             common_chat_msg user;
             user.role    = "user";
             user.content = "@@USER@@";
-            common_chat_templates_inputs inputs;
-            inputs.messages              = {user};
-            inputs.tools                 = tools;
-            inputs.tool_choice           = choice;
-            inputs.parallel_tool_calls   = true;
-            inputs.add_generation_prompt = true;
-            inputs.use_jinja             = deps.meta.chat_params.use_jinja;
-            inputs.enable_thinking       = false;
-            inputs.reasoning_format      = deps.meta.chat_params.reasoning_format;
-            inputs.chat_template_kwargs  = deps.meta.chat_params.chat_template_kwargs;
+            common_chat_templates_inputs inputs = chat_inputs({user}, true);
+            inputs.tool_choice         = choice;
+            inputs.parallel_tool_calls = true;
             try {
                 chat.emplace(deps.meta.chat_params.tmpls.get(), deps.vocab, inputs);
             } catch (const std::exception & e) {
                 send_error(std::string("response.create: ") + e.what(), "server_error");
                 return;
             }
-        } else if (!tools.empty() && tok_tool_call != LLAMA_TOKEN_NULL) {
-            banned.push_back(tok_tool_call);
         }
-        response.sampling = response_sampling(banned, chat ? &*chat : nullptr);
+        response.sampling = response_sampling(chat ? &*chat : nullptr);
 
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -847,11 +822,6 @@ struct realtime_conversation {
         if (deps.cap.audio_gen) {
             output_rate = mtmd_gen_audio_get_info(deps.mctx).sample_rate;
         }
-        auto single = [&](const char * text) {
-            const llama_tokens t = common_tokenize(deps.vocab, text, false, true);
-            return t.size() == 1 ? t[0] : LLAMA_TOKEN_NULL;
-        };
-        tok_tool_call = single("<tool_call>");
         if (!configure()) {
             send_error("the chat template does not fit the realtime turn format", "server_error");
             conn.close();
