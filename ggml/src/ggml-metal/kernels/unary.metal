@@ -3,6 +3,24 @@
 constant short FC_unary_op [[function_constant(FC_UNARY + 0)]];
 constant bool  FC_unary_cnt[[function_constant(FC_UNARY + 1)]];
 
+template <typename T, typename U>
+inline constexpr T ggml_metal_unary_cast(U x) {
+    return (T) x;
+}
+
+#if defined(GGML_METAL_HAS_BF16)
+// MSL has no C-style cast from float vectors to bfloat vectors
+template <>
+inline constexpr bfloat4 ggml_metal_unary_cast<bfloat4, float4>(float4 x) {
+    return bfloat4(bfloat(x[0]), bfloat(x[1]), bfloat(x[2]), bfloat(x[3]));
+}
+
+template <>
+inline constexpr bfloat4 ggml_metal_unary_cast<bfloat4, float>(float x) {
+    return bfloat4(bfloat(x), bfloat(x), bfloat(x), bfloat(x));
+}
+#endif
+
 template <typename T0, typename T, typename TC>
 kernel void kernel_unary_impl(
         constant ggml_metal_kargs_unary & args,
@@ -48,79 +66,79 @@ kernel void kernel_unary_impl(
         const TC x = (TC) src0_ptr[i0];
 
         if (FC_OP == OP_UNARY_NUM_SCALE) {
-            dst_ptr[i0] = (T) (args.scale * x + args.bias);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(args.scale * x + args.bias);
         }
 
         if (FC_OP == OP_UNARY_NUM_FILL) {
-            dst_ptr[i0] = (T) args.val;
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(args.val);
         }
 
         if (FC_OP == OP_UNARY_NUM_CLAMP) {
-            dst_ptr[i0] = (T) clamp(x, args.min, args.max);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(clamp(x, args.min, args.max));
         }
 
         if (FC_OP == OP_UNARY_NUM_SQR) {
-            dst_ptr[i0] = (T) (x * x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(x * x);
         }
 
         if (FC_OP == OP_UNARY_NUM_SQRT) {
-            dst_ptr[i0] = (T) sqrt(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(sqrt(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_SIN) {
-            dst_ptr[i0] = (T) sin(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(sin(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_COS) {
-            dst_ptr[i0] = (T) cos(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(cos(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_LOG) {
-            dst_ptr[i0] = (T) log(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(log(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_LEAKY_RELU) {
-            dst_ptr[i0] = (T) (TC(x > 0)*x + TC(x <= 0)*(x * args.slope));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(TC(x > 0)*x + TC(x <= 0)*(x * args.slope));
         }
 
         if (FC_OP == OP_UNARY_NUM_TANH) {
-            dst_ptr[i0] = (T) precise::tanh(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(precise::tanh(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_RELU) {
-            dst_ptr[i0] = (T) fmax(0, x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(fmax(0, x));
         }
 
         if (FC_OP == OP_UNARY_NUM_SIGMOID) {
-            dst_ptr[i0] = (T) (1 / (1 + exp(-x)));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(1 / (1 + exp(-x)));
         }
 
         if (FC_OP == OP_UNARY_NUM_GELU) {
-            dst_ptr[i0] = (T) (0.5*x*(1 + precise::tanh(SQRT_2_OVER_PI*x*(1 + GELU_COEF_A*x*x))));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(0.5*x*(1 + precise::tanh(SQRT_2_OVER_PI*x*(1 + GELU_COEF_A*x*x))));
         }
 
         if (FC_OP == OP_UNARY_NUM_GELU_ERF) {
-            dst_ptr[i0] = (T) (0.5*x*(1 + erf_approx(SQRT_2_INV*x)));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(0.5*x*(1 + erf_approx(SQRT_2_INV*x)));
         }
 
         if (FC_OP == OP_UNARY_NUM_GELU_QUICK) {
-            dst_ptr[i0] = (T) (x * (1/(1 + exp(GELU_QUICK_COEF*x))));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(x * (1/(1 + exp(GELU_QUICK_COEF*x))));
         }
 
         if (FC_OP == OP_UNARY_NUM_SILU) {
-            dst_ptr[i0] = (T) (x / (1 + exp(-x)));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(x / (1 + exp(-x)));
         }
 
         if (FC_OP == OP_UNARY_NUM_ELU) {
-            dst_ptr[i0] = (T) elu_approx(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(elu_approx(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_NEG) {
-            dst_ptr[i0] = (T) -x;
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(-x);
         }
 
         if (FC_OP == OP_UNARY_NUM_ABS) {
-            dst_ptr[i0] = (T) fabs(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(fabs(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_SGN) {
@@ -132,40 +150,40 @@ kernel void kernel_unary_impl(
         }
 
         if (FC_OP == OP_UNARY_NUM_HARDSWISH) {
-            dst_ptr[i0] = (T) (x * fmax(0, fmin(1, x/6 + 0.5)));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(x * fmax(0, fmin(1, x/6 + 0.5)));
         }
 
         if (FC_OP == OP_UNARY_NUM_HARDSIGMOID) {
-            dst_ptr[i0] = (T) fmax(0, fmin(1, x/6 + 0.5));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(fmax(0, fmin(1, x/6 + 0.5)));
         }
 
         if (FC_OP == OP_UNARY_NUM_EXP) {
-            dst_ptr[i0] = (T) exp(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(exp(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_SOFTPLUS) {
-            dst_ptr[i0] = (T) select(log(1 + exp(x)), x, x > 20);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(select(log(1 + exp(x)), x, x > 20));
         }
 
         if (FC_OP == OP_UNARY_NUM_EXPM1) {
             // TODO: precise implementation
-            dst_ptr[i0] = (T) (exp(x) - 1);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(exp(x) - 1);
         }
 
         if (FC_OP == OP_UNARY_NUM_FLOOR) {
-            dst_ptr[i0] = (T) floor(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(floor(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_CEIL) {
-            dst_ptr[i0] = (T) ceil(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(ceil(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_ROUND) {
-            dst_ptr[i0] = (T) round(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(round(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_TRUNC) {
-            dst_ptr[i0] = (T) trunc(x);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(trunc(x));
         }
 
         if (FC_OP == OP_UNARY_NUM_XIELU) {
@@ -174,7 +192,7 @@ kernel void kernel_unary_impl(
             const TC clamped = fmin(xi, TC(args.val));
             const TC y_pos   = TC(args.scale) * xi * xi + TC(args.bias) * xi;
             const TC y_neg   = (exp(clamped) - TC(1.0f) - xi) * TC(args.slope) + TC(args.bias) * xi;
-            dst_ptr[i0] = (T) (gate * y_pos + (TC(1.0f) - gate) * y_neg);
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(gate * y_pos + (TC(1.0f) - gate) * y_neg);
         }
     }
 
@@ -188,6 +206,10 @@ template [[host_name("kernel_unary_f32_f32")]]   kernel kernel_unary_t kernel_un
 template [[host_name("kernel_unary_f32_f32_4")]] kernel kernel_unary_t kernel_unary_impl<float4, float4, float4>;
 template [[host_name("kernel_unary_f16_f16")]]   kernel kernel_unary_t kernel_unary_impl<half,   half,   float>;
 template [[host_name("kernel_unary_f16_f16_4")]] kernel kernel_unary_t kernel_unary_impl<half4,  half4,  float4>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_unary_bf16_bf16")]]   kernel kernel_unary_t kernel_unary_impl<bfloat,  bfloat,  float>;
+template [[host_name("kernel_unary_bf16_bf16_4")]] kernel kernel_unary_t kernel_unary_impl<bfloat4, bfloat4, float4>;
+#endif
 
 kernel void kernel_silu_back_f32(
         constant ggml_metal_kargs_silu_back & args,
