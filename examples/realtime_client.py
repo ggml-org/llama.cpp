@@ -11,7 +11,7 @@ microphone, the server prefills it as it arrives so the response starts right af
     python examples/realtime_client.py --instructions "Respond with interleaved text and audio." question.wav
 
 Output modalities: left out, the model picks; "text", "audio" or "text,audio" (interleaved) force the response.
-Without --instructions, a forced mode comes with the system prompt of the LFM3 model cards:
+Without --instructions, a forced mode comes with the system prompt of the LFM3-Audio or LFM3-Omni model card:
 
     python examples/realtime_client.py --output-modalities text,audio --out answer.wav question.wav
 
@@ -38,10 +38,10 @@ import numpy as np
 from openai import AsyncOpenAI
 
 
-# system prompts of the LFM3-Audio and LFM3-Omni model cards for a forced output mode
+# system prompts of the LiquidAI/LFM3-Audio-2B and LiquidAI/LFM3-Omni-2B model cards for a forced output mode
 MODE_INSTRUCTIONS = {
-    "text":       "Respond with text.",
-    "text,audio": "Respond with interleaved text and audio.",
+    "audio": {"text,audio": "Respond with interleaved text and audio."},
+    "omni":  {"text": "Respond in text.", "text,audio": "Respond in interleaved text and audio."},
 }
 
 
@@ -76,7 +76,9 @@ async def main(args):
             print("error:", ev.error.message)
             return
         # the audio goes in at the rate of the model, PCM16 mono
-        audio_fmt = ev.model_dump(warnings=False)["session"]["audio"]
+        session_info = ev.model_dump(warnings=False)["session"]
+        audio_fmt = session_info["audio"]
+        card = "omni" if "omni" in str(session_info.get("model", "")).lower() else "audio"
         in_rate = audio_fmt["input"]["format"]["rate"]
         out_rate = (audio_fmt.get("output") or {}).get("format", {}).get("rate", 24000)
 
@@ -84,7 +86,7 @@ async def main(args):
         if args.type == "realtime":
             instructions = args.instructions
             if instructions is None:
-                instructions = MODE_INSTRUCTIONS.get(args.output_modalities)
+                instructions = MODE_INSTRUCTIONS[card].get(args.output_modalities)
             if instructions is not None:
                 session["instructions"] = instructions
             if args.output_modalities:
