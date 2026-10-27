@@ -690,6 +690,52 @@ class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._try_set_pooling_type()
 
 
+@ModelBase.register("MiniCPMOCRForSequenceClassification")
+class MiniCPMOCRSeqClsModel(Qwen3_5TextModel):
+    # OCR consistency judge: Qwen3.5 VL trunk with a value head read at the last token
+    # the class scores are [inconsistent, consistent], the softmax temperature is 1
+    model_arch = gguf.MODEL_ARCH.QWEN35
+    no_mtp = True  # the checkpoint has no MTP head
+
+    CLASS_LABELS = ["inconsistent", "consistent"]
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    def _systemone_template(self) -> str:
+        # the prompt of the training data, the two images are the original page and the one
+        # rendered from the OCR text; the task is fixed, there is nothing to fill in
+        # the trailing newlines are in an expression, so the template does not drop them
+        return (
+            "<|im_start|>user\n{{ images[0] }}\nOCR文本：\n{{ state }}\n{{ images[1] }}\n"
+            "第一张图是原图，第二张图是上述 OCR 文本渲染得到的图片。\n"
+            "请判断该 OCR 文本及其对应渲染图是否与原图内容一致。\n"
+            "这是一个二分类任务：一致标为 1，不一致标为 0。"
+            "{{ '<|im_end|>\\n<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n' }}"
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # the config.json of the checkpoint keeps the one of the base model, it has no num_labels / id2label
+        if "score.weight" not in self.model_tensors:
+            raise ValueError("the checkpoint has no score.weight classification head")
+
+        self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+        self.gguf_writer.add_embedding_length_out(len(self.CLASS_LABELS))
+        self.gguf_writer.add_classifier_output_labels(self.CLASS_LABELS)
+        self.gguf_writer.add_decision_type(gguf.DecisionType.MINICPM_OCR_JEV)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "score.weight":
+            if data_torch.shape[0] != len(self.CLASS_LABELS):
+                raise ValueError(f"score.weight must have {len(self.CLASS_LABELS)} rows, got {data_torch.shape[0]}")
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight", data_torch)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 def _is_openjev_checkpoint(dir_model: Path) -> bool:
     return (dir_model / "helper" / "shim.py").is_file() and (dir_model / "config.json").is_file()
 

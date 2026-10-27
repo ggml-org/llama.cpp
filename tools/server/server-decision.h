@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -68,10 +69,17 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_LFM2_D1:
             case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
             case COMMON_DECISION_TYPE_H2O_LIGHTNING:
+            case COMMON_DECISION_TYPE_MINICPM_OCR_JEV:
                 return true;
             default:
                 return false;
         }
+    }
+
+    // false for a decision-only model, it serves no text generation
+    bool can_generate() const {
+        const auto out = server_model_output_modalities(type, true, false);
+        return std::find(out.begin(), out.end(), "text") != out.end();
     }
 
     // throw std::invalid_argument on bad input
