@@ -4904,6 +4904,43 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     ggml_cuda_set_device(cuda_ctx->device);
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    static const int spark_l2_mb = []() {
+        const char * value = getenv("GGML_CUDA_SPARK_HEAD_L2_MB");
+        return value ? atoi(value) : 0;
+    }();
+    if (spark_l2_mb > 0 && ggml_cuda_info().devices[cuda_ctx->device].cc == GGML_CUDA_CC_ADA_LOVELACE) {
+        bool prefill = false;
+        const ggml_tensor * head = nullptr;
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            const auto * node = cgraph->nodes[i];
+            if (node->op != GGML_OP_MUL_MAT) { continue; }
+            prefill |= node->ne[1] > 1;
+            const auto * weight = node->src[0];
+            if (weight->type == GGML_TYPE_Q8_0 && (weight->ne[0] == 2048 || weight->ne[0] == 2560) &&
+                    weight->ne[1] == 131072 && ggml_is_contiguous(weight)) {
+                head = weight;
+            }
+        }
+        int maximum = 0;
+        CUDA_CHECK(cudaDeviceGetAttribute(&maximum, cudaDevAttrMaxPersistingL2CacheSize, cuda_ctx->device));
+        const size_t bytes = !prefill && head ? std::min(size_t(spark_l2_mb)*1024*1024, size_t(maximum)) : 0;
+        size_t previous = 0;
+        CUDA_CHECK(cudaDeviceGetLimit(&previous, cudaLimitPersistingL2CacheSize));
+        if (previous != bytes) {
+            CUDA_CHECK(cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, bytes));
+            if (bytes == 0) { CUDA_CHECK(cudaCtxResetPersistingL2Cache()); }
+        }
+        cudaStreamAttrValue attr{};
+        attr.accessPolicyWindow.base_ptr = head && bytes ? head->data : nullptr;
+        attr.accessPolicyWindow.num_bytes = bytes;
+        attr.accessPolicyWindow.hitRatio = 1.0f;
+        attr.accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;
+        attr.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
+        CUDA_CHECK(cudaStreamSetAttribute(cuda_ctx->stream(), cudaStreamAttributeAccessPolicyWindow, &attr));
+    }
+#endif
+
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;
     const void * graph_key = nullptr;
