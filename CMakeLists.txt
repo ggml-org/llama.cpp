@@ -103,7 +103,7 @@ endif()
 
 # subprocess spawning isn't a supported/sandbox-friendly operation on mobile OSes or in WASM
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR ANDROID
-        OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
+        OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "WASI")
     set(LLAMA_SUBPROCESS_DEFAULT OFF)
 else()
     set(LLAMA_SUBPROCESS_DEFAULT ON)
