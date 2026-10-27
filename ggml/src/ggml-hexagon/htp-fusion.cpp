@@ -460,9 +460,13 @@ static bool fuse_mul_mat_glu(const ggml_hexagon_session * sess, htp_opnode & pre
     if (prev.opcode == HTP_OP_MUL_MAT_NX && kparams->n_chunk < 64) return false;
     if (htp_inputs_overlap_unsafe(prev, dst)) return false;
 
-    // auto: fuse only when the per-core N slice is no wider than K
+    // auto: fuse only when the per-core N slice is no wider than K, and not for MoE GEGLU
     if (opt_mmglu == 0) return false;
-    if (opt_mmglu < 0 && prev.src0()->ne[1] > (int64_t) htp_session_mdev_count(sess) * prev.src0()->ne[0]) return false;
+    if (opt_mmglu < 0) {
+        const bool moe = prev.opcode == HTP_OP_MUL_MAT_ID || prev.opcode == HTP_OP_MUL_MAT_ID_NX;
+        if (moe && cur.opcode == HTP_OP_GLU_GEGLU) return false;
+        if (prev.src0()->ne[1] > (int64_t) htp_session_mdev_count(sess) * prev.src0()->ne[0]) return false;
+    }
 
     kparams->glu_op = cur.opcode;
     if (prev.opcode == HTP_OP_MUL_MAT_NX) {

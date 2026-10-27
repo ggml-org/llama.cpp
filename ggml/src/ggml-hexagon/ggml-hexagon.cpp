@@ -150,7 +150,7 @@ int    opt_opqueue   = 8;    // max number of pending batches
 int    opt_optrace   = 0;    // trace buffer size per thread (0 means default)
 int    opt_oppoll    = 0;    // polling for batch completions
 int    opt_opfusion  = 1;    // enable/disable op fusion
-int    opt_mmglu     = -1;   // matmul+GLU fusion: -1 = auto (N <= cores * K), 0 = never, 1 = always
+int    opt_mmglu     = -1;   // matmul+GLU fusion: -1 = auto (N <= cores * K, no MoE GEGLU), 0 = never, 1 = always
 int    opt_rt_repack = 1;    // runtime repacking: 0 = disabled, 1 = all tileable weights (default)
 
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
