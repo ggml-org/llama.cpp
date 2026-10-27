@@ -1820,7 +1820,8 @@ bool llama_model_loader::load_all_data(
 
                     // tensors come biggest-first: shrink the buffer when it gets too large, so peak memory stays close to one tensor
                     if (read_buf.size() < buf_size || read_buf.size() > 2*buf_size) {
-                        read_buf = {};
+                        // free the old buffer first, `read_buf = {}` would keep its capacity
+                        read_buf = std::vector<no_init<uint8_t>>();
                         read_buf.resize(buf_size);
                     }
                     uint8_t * read_dst = (uint8_t *) GGML_PAD((uintptr_t) read_buf.data(), align);
