@@ -2097,7 +2097,7 @@ private:
         slot.sampled = result.tok;
 
         slot.generated.append(token_str, result.tok);
-        if (slot.task->params.return_tokens) {
+        if (slot.task->params.return_tokens || slot.task->params.stream) {
             slot.generated_tokens.push_back(result.tok);
         }
         slot.has_next_token = true;
@@ -2317,9 +2317,10 @@ private:
         }
         if (is_begin) {
             res->is_begin = true;
-        } else {
+        } else if (!is_progress) {
             res->content = slot.generated.substr(slot.n_sent_text - tkn.text_to_send.size(), tkn.text_to_send.size());
-            res->tokens.assign(1, tkn.tok);
+            // UTF-8 buffering can delay several tokens before a partial response.
+            res->tokens.swap(slot.generated_tokens);
         }
 
         res->n_decoded             = slot.stats.n_gen;
@@ -2370,14 +2371,13 @@ private:
             slot.debug_generated_text = slot.generated.text;
         }
 
-        // in stream mode, content and tokens are already in last partial chunk
+        // Text is sent in partial responses when streaming.
         if (slot.task->params.stream) {
             res->content     = {};
-            res->tokens      = llama_tokens{};
         } else {
             res->content     = std::move(slot.generated);
-            res->tokens      = std::move(slot.generated_tokens);
         }
+        res->tokens          = std::move(slot.generated_tokens);
         res->stats           = slot.stats;
         res->prompt          = slot.task->tokens.detokenize(ctx_tgt, true);
         res->response_fields = std::move(slot.task->params.response_fields);

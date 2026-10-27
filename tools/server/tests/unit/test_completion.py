@@ -93,6 +93,51 @@ def test_completion_stream_vs_non_stream():
     assert content_stream == res_non_stream.body["content"]
 
 
+@pytest.mark.parametrize("text,n_predict,options", [
+    ("AB", 16, {}),
+    ("A\u07ffB", 16, {}),
+    ("A\u20acB", 16, {}),
+    ("A\u20ac\u20acB", 16, {}),
+    ("A\U0001f642B", 16, {}),
+    ("\u20ac", 1, {}),
+    ("\u20ac", 2, {}),
+    ("\U0001f642", 3, {}),
+    ("A\u20acB", 16, {"return_progress": True}),
+    ("A\u20acB", 16, {"return_tokens": False}),
+    ("A\u20acB", 16, {"stop": ["\u20ac"]}),
+])
+def test_completion_stream_token_ids(text: str, n_predict: int, options: dict):
+    global server
+    server.start()
+    body = {
+        "prompt": "Hello " * 12,
+        "grammar": "root ::= " + json.dumps(text, ensure_ascii=False),
+        "id_slot": 0,
+        "n_predict": n_predict,
+        "temperature": 0,
+        "seed": 42,
+        "cache_prompt": False,
+        "return_tokens": True,
+        **options,
+    }
+    reference = server.make_request("POST", "/completion", data={**body, "return_tokens": True})
+    assert reference.status_code == 200
+    assert len(reference.body["tokens"]) == reference.body["tokens_predicted"]
+
+    # Reuse the slot to check that pending tokens are cleared between requests.
+    for _ in range(2):
+        chunks = list(server.make_stream_request("POST", "/completion", data={**body, "stream": True}))
+        assert chunks[-1]["stop"]
+        assert sum(chunk["stop"] for chunk in chunks) == 1
+        assert [token for chunk in chunks for token in chunk["tokens"]] == reference.body["tokens"]
+        if reference.body["stop_type"] != "limit":
+            assert "".join(chunk["content"] for chunk in chunks) == reference.body["content"]
+        if options.get("return_progress"):
+            progress = [chunk for chunk in chunks if "prompt_progress" in chunk]
+            assert progress
+            assert all(chunk["tokens"] == [] and chunk["content"] == "" for chunk in progress)
+
+
 def test_completion_with_openai_library():
     global server
     server.start()
