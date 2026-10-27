@@ -100,6 +100,46 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, sum);
 }
 
+__launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
+static __global__ void quantize_q8_1_gated(
+        const float * x_ptr, const float * gate_ptr, const int64_t gate_group_size, void * vy_ptr,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
+    ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT x    = x_ptr;
+    const float * GGML_CUDA_RESTRICT gate = gate_ptr;
+    void        * GGML_CUDA_RESTRICT vy   = vy_ptr;
+    const int64_t i0 = (int64_t) blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i0 >= ne0) {
+        return;
+    }
+
+    const int64_t i3 = fastdiv(blockIdx.z, ne2);
+    const int64_t i2 = blockIdx.z - i3*ne2.z;
+    const int64_t i1 = blockIdx.y;
+    const int64_t i_cont = ((i3*ne2.z + i2) * ne1 + i1) * ne0 + i0;
+
+    block_q8_1 * y = (block_q8_1 *) vy;
+    const int64_t ib  = i_cont / QK8_1;
+    const int64_t iqs = i_cont % QK8_1;
+
+    ggml_cuda_pdl_sync();
+    const float xi = i0 < ne00
+        ? x[i3*s03 + i2*s02 + i1*s01 + i0] * gate[i0 / gate_group_size]
+        : 0.0f;
+    float amax = warp_reduce_max<QK8_1>(fabsf(xi));
+    float sum  = warp_reduce_sum<QK8_1>(xi);
+
+    const float  d = amax / 127.0f;
+    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+    y[ib].qs[iqs] = q;
+
+    if (iqs == 0) {
+        y[ib].ds = make_half2(d, sum);
+    }
+}
+
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     if (!(amax > 0.0f)) {
         return 0;
@@ -568,6 +608,26 @@ void quantize_row_q8_1_cuda(
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
     ggml_cuda_kernel_launch(quantize_q8_1, launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    GGML_UNUSED(type_src0);
+}
+
+void quantize_row_q8_1_cuda_gated(
+        const float * x, const float * gate, const int64_t gate_group_size, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(gate);
+    GGML_ASSERT(gate_group_size > 0);
+    GGML_ASSERT(ne1 == 1 && ne2 == 1 && ne3 == 1);
+    GGML_ASSERT(ne00 == ne0 && ne0 % gate_group_size == 0);
+    GGML_ASSERT(ne0 % QK8_1 == 0);
+
+    const uint3 ne2_fastdiv = init_fastdiv_values(ne2);
+    const int64_t block_num_x = (ne0 + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
+    ggml_cuda_kernel_launch(quantize_q8_1_gated, launch_params,
+        x, gate, gate_group_size, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
     GGML_UNUSED(type_src0);
 }
 

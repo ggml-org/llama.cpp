@@ -2612,6 +2612,52 @@ struct test_mul_mat_reorder_then_big_batch : public test_case {
 };
 
 // GGML_OP_GET_ROWS_BACK
+
+struct test_spark_projection_gemv : public test_case {
+    const int64_t k, rows, tokens;
+    const bool residual, padded;
+
+    test_spark_projection_gemv(int64_t k, int64_t rows, int64_t tokens, bool residual, bool padded = false)
+        : k(k), rows(rows), tokens(tokens), residual(residual), padded(padded) {}
+
+    std::string vars() override { return VARS_TO_STR5(k, rows, tokens, residual, padded); }
+    std::string op_desc(ggml_tensor *) override { return "SPARK_PROJECTION_GEMV"; }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 1e-6; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, tokens);
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, k + (padded ? 32 : 0), rows);
+        if (padded) {
+            weight = ggml_view_2d(ctx, weight, k, rows, weight->nb[1], 0);
+        }
+        ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+        if (residual) {
+            output = ggml_add(ctx, output, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, rows, tokens));
+        }
+        return output;
+    }
+};
+
+
+struct test_spark_decode_norm : public test_case {
+    const int64_t n_tokens;
+
+    explicit test_spark_decode_norm(int64_t n_tokens) : n_tokens(n_tokens) {}
+
+    std::string vars() override { return VAR_TO_STR(n_tokens); }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SPARK_DECODE_NORM";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * src = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2560, n_tokens);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2560);
+        return ggml_mul(ctx, ggml_rms_norm(ctx, src, 1e-6f), weight);
 struct test_sample_cdf : public test_case {
     const int n;
     const float uniform;
@@ -12537,6 +12583,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q6_K,   GGML_GLU_OP_SWIGLU_OAI,   150, 40960, 256, false, 1, 1, false, false, true, false, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q8_0,   GGML_GLU_OP_SWIGLU_CLAMP, 150,  6912, 256, false, 1, 1, false, false, true, false, { 2, 3 }));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_IQ4_XS, GGML_GLU_OP_SWIGLU,       150, 40960, 512, false, 1, 1, false, false, true, false, { 1, 1 }));
+    test_cases.emplace_back(new test_spark_projection_gemv(4096, 2560, 1, false));
+    test_cases.emplace_back(new test_spark_projection_gemv(4096, 2560, 1, true));
+    test_cases.emplace_back(new test_spark_projection_gemv(4096, 2560, 2, true));
+    test_cases.emplace_back(new test_spark_projection_gemv(4096, 2560, 1, true, true));
+    test_cases.emplace_back(new test_spark_projection_gemv(2560, 131072, 1, false));
+    test_cases.emplace_back(new test_spark_projection_gemv(2560, 131072, 2, false));
+    test_cases.emplace_back(new test_spark_projection_gemv(2560, 131072, 1, false, true));
+    test_cases.emplace_back(new test_spark_projection_gemv(2048, 2048, 1, false));
+    test_cases.emplace_back(new test_spark_projection_gemv(2048, 2048, 1, true));
+    test_cases.emplace_back(new test_spark_projection_gemv(2048, 2048, 2, false));
+    test_cases.emplace_back(new test_spark_projection_gemv(2048, 2048, 1, false, true));
+    test_cases.emplace_back(new test_spark_projection_gemv(2048, 131072, 1, false));
+    test_cases.emplace_back(new test_spark_projection_gemv(2048, 131072, 1, true));
+    test_cases.emplace_back(new test_spark_decode_norm(1));
+    test_cases.emplace_back(new test_spark_decode_norm(2));
 
     for (int n : {1,32,256,131072}) {
         for (float uniform : {0.0f,0.5f,0.375f,1.0f}) {

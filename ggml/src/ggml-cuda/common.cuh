@@ -1568,6 +1568,13 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * gate_bias = nullptr;
     const ggml_tensor * x_scale = nullptr;
     const ggml_tensor * gate_scale = nullptr;
+    // Optional source-side gate folded into the F32 -> Q8_1 conversion. This
+    // is host-only state; the quantized activation passed to MMVQ already
+    // contains the gate.
+    const ggml_tensor * activation = nullptr;
+    const ggml_tensor * activation_gate = nullptr;
+    int64_t activation_gate_group_size = 0;
+    bool sigmoid = false;
     ggml_glu_op glu_op;
     float glu_limit = 0.0f;
     const ggml_tensor * shared_up = nullptr;
@@ -1580,6 +1587,7 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * gate_bias = nullptr;
     const void * x_scale = nullptr;
     const void * gate_scale = nullptr;
+    bool sigmoid = false;
     ggml_glu_op glu_op;
     float glu_limit = 0.0f;
     const void * shared_up = nullptr;
