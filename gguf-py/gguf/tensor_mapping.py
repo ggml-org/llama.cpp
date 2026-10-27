@@ -1889,7 +1889,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.k_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention.wk", # pixtral
-            "model.vision_tower.layers.{bid}.self_attn.k_proj",      # lfm3vl
+            "model.vision_tower.layers.{bid}.self_attn.k_proj", # lfm3vl
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
             "model.vision_model.transformer.layers.{bid}.self_attn.k_proj", # Deepseek-OCR CLIP, generated
@@ -1920,7 +1920,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.v_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention.wv", # pixtral
-            "model.vision_tower.layers.{bid}.self_attn.v_proj",      # lfm3vl
+            "model.vision_tower.layers.{bid}.self_attn.v_proj", # lfm3vl
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.v_proj",
@@ -1943,7 +1943,7 @@ class TensorNameMap:
             "vit.layers.{bid}.input_layernorm", # HunyuanVL
             "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention_norm", # pixtral
-            "model.vision_tower.layers.{bid}.operator_norm",             # lfm3vl
+            "model.vision_tower.layers.{bid}.operator_norm", # lfm3vl
             "vision_model.model.layers.{bid}.input_layernorm", # llama4, gemma4
             "visual.blocks.{bid}.norm1", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm0", # kimi-vl (norm0/norm1)
@@ -1973,7 +1973,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention.wo", # pixtral
-            "model.vision_tower.layers.{bid}.self_attn.out_proj",    # lfm3vl
+            "model.vision_tower.layers.{bid}.self_attn.out_proj", # lfm3vl
             "visual.blocks.{bid}.attn.proj", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.wo", # kimi-vl
             "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
@@ -2006,7 +2006,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.post_attention_layernorm", # llama4
             "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.ffn_norm", # pixtral
-            "model.vision_tower.layers.{bid}.ffn_norm",              # lfm3vl
+            "model.vision_tower.layers.{bid}.ffn_norm", # lfm3vl
             "visual.blocks.{bid}.norm2", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm1", # kimi-vl (norm0/norm1)
             "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
@@ -2034,7 +2034,7 @@ class TensorNameMap:
             "vit.layers.{bid}.mlp.dense_h_to_4h", # HunyuanVL
             "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w3", # pixtral
-            "model.vision_tower.layers.{bid}.feed_forward.w3",           # lfm3vl
+            "model.vision_tower.layers.{bid}.feed_forward.w3", # lfm3vl
             "vision_model.model.layers.{bid}.mlp.fc1", # llama4
             "visual.blocks.{bid}.mlp.fc1", # qwen2vl
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
@@ -2055,7 +2055,7 @@ class TensorNameMap:
             "vision_encoder.blocks.{bid}.mlp.fc1", # dots3note
             "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
-            "model.vision_tower.layers.{bid}.feed_forward.w1",           # lfm3vl
+            "model.vision_tower.layers.{bid}.feed_forward.w1", # lfm3vl
             "visual.blocks.{bid}.mlp.gate_proj", # qwen2.5vl
             "vision_model.model.layers.{bid}.mlp.gate_proj", # gemma4
             "model.qwen2_model.model.model.layers.{bid}.mlp.gate_proj", # Deepseek-OCR-2 qwen2
@@ -2074,7 +2074,7 @@ class TensorNameMap:
             "vit.layers.{bid}.mlp.dense_4h_to_h", # HunyuanVL
             "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w2", # pixtral
-            "model.vision_tower.layers.{bid}.feed_forward.w2",           # lfm3vl
+            "model.vision_tower.layers.{bid}.feed_forward.w2", # lfm3vl
             "vision_model.model.layers.{bid}.mlp.fc2", # llama4
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
