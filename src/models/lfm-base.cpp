@@ -84,6 +84,33 @@ ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
     return y;
 }
 
+ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
+                                                      ggml_tensor * cur,
+                                                      int il) {
+    const int64_t d_conv = hparams.n_shortconv_l_cache - 1;
+
+    auto * bcx = build_lora_mm(model.layers[il].shortconv.in_proj, cur);
+    cb(bcx, "model.layers.{}.conv.in_proj", il);
+
+    const int64_t chunk_size = bcx->ne[0] / 3;
+    auto * b = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 0 * chunk_size * ggml_element_size(bcx));
+    auto * c = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 1 * chunk_size * ggml_element_size(bcx));
+    auto * x = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 2 * chunk_size * ggml_element_size(bcx));
+
+    // causal from a zero state
+    auto * bx = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_mul(ctx0, b, x)));
+    bx = ggml_pad_ext(ctx0, bx, d_conv, 0, 0, 0, 0, 0, 0, 0);
+
+    auto * conv_out = ggml_ssm_conv(ctx0, bx, model.layers[il].shortconv.conv);
+    cb(conv_out, "model.layers.{}.conv.conv", il);
+
+    auto * y = ggml_mul(ctx0, c, ggml_reshape_2d(ctx0, conv_out, chunk_size, n_tokens));
+    y = build_lora_mm(model.layers[il].shortconv.out_proj, y);
+    cb(y, "model.layers.{}.conv.out_proj", il);
+
+    return y;
+}
+
 ggml_tensor * llm_build_lfm_base::build_lfm_dense_ffn(const llama_model & model,
                                                       ggml_tensor * cur,
                                                       int il) {

@@ -77,7 +77,9 @@ def _is_d1_checkpoint(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
     with open(dir_model / "config.json", encoding="utf-8") as f:
-        return json.load(f).get("auto_map", {}).get("AutoModel", "").endswith(".D1Model")
+        config = json.load(f)
+    # d1 on LFM3 is converted by conversion/lfm3.py
+    return config.get("auto_map", {}).get("AutoModel", "").endswith(".D1Model") and not config.get("model_type", "").startswith("lfm3")
 
 
 @ModelBase.register_hparams_loader(_is_d1_checkpoint)

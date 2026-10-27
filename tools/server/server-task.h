@@ -196,6 +196,8 @@ struct server_task {
         int32_t                  column = 0;
         // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
         int32_t                  pointer = -1;
+        // if set, the prompt must be the only sequence of its batch
+        bool                     no_batching = false;
 
         // if set, the outputs are the pooled embeddings of the sequence, one score per class
         bool                     pooled = false;
