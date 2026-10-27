@@ -348,7 +348,10 @@ static bool recv_msg(socket_ptr sock, std::vector<uint8_t> & input) {
     }
     try {
         input.resize(size);
-    } catch (const std::bad_alloc & e) {
+    } catch (const std::length_error &) {
+        LOG_ERROR("Failed to allocate input buffer of size %" PRIu64 "\n", size);
+        return false;
+    } catch (const std::bad_alloc &) {
         LOG_ERROR("Failed to allocate input buffer of size %" PRIu64 "\n", size);
         return false;
     }
