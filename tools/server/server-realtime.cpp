@@ -27,18 +27,10 @@
 
 namespace {
 
-// output_modalities of a response: unset, the model switches with its own tokens; audio and interleaved responses
-// open with the token of the mode, text-only responses cannot switch to audio
-enum realtime_out_mode {
-    REALTIME_OUT_AUTO,
-    REALTIME_OUT_TEXT,
-    REALTIME_OUT_AUDIO,
-    REALTIME_OUT_MIXED,
-};
-
-bool parse_output_modalities(const json & j, realtime_out_mode & mode, std::string & err) {
+// output_modalities of a response, unset: the model switches between text and audio itself
+bool parse_output_modalities(const json & j, mtmd_helper_gen_audio_out_mode & mode, std::string & err) {
     if (j.is_null()) {
-        mode = REALTIME_OUT_AUTO;
+        mode = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
         return true;
     }
     if (!j.is_array() || j.empty()) {
@@ -58,9 +50,9 @@ bool parse_output_modalities(const json & j, realtime_out_mode & mode, std::stri
         }
     }
     if (text && audio) {
-        mode = REALTIME_OUT_MIXED;
+        mode = MTMD_HELPER_GEN_AUDIO_OUT_MIXED;
     } else {
-        mode = audio ? REALTIME_OUT_AUDIO : REALTIME_OUT_TEXT;
+        mode = audio ? MTMD_HELPER_GEN_AUDIO_OUT_AUDIO : MTMD_HELPER_GEN_AUDIO_OUT_TEXT;
     }
     return true;
 }
@@ -77,11 +69,11 @@ bool parse_max_output_tokens(const json & j, int32_t & n) {
     return true;
 }
 
-json output_modalities_json(realtime_out_mode mode) {
+json output_modalities_json(mtmd_helper_gen_audio_out_mode mode) {
     switch (mode) {
-        case REALTIME_OUT_TEXT:  return json::array({"text"});
-        case REALTIME_OUT_AUDIO: return json::array({"audio"});
-        case REALTIME_OUT_MIXED: return json::array({"text", "audio"});
+        case MTMD_HELPER_GEN_AUDIO_OUT_TEXT:  return json::array({"text"});
+        case MTMD_HELPER_GEN_AUDIO_OUT_AUDIO: return json::array({"audio"});
+        case MTMD_HELPER_GEN_AUDIO_OUT_MIXED: return json::array({"text", "audio"});
         default:                 return nullptr;
     }
 }
@@ -93,13 +85,13 @@ struct realtime_conversation {
     std::string id = "sess_" + random_string();
 
     // session config
-    std::string       type = "realtime";
-    std::string       instructions;
-    std::string       language; // transcription
-    realtime_out_mode out_mode          = REALTIME_OUT_AUTO;
-    int32_t           max_output_tokens = -1; // "inf"
-    int               input_rate        = 16000;
-    int               output_rate       = 24000;
+    std::string                    type = "realtime";
+    std::string                    instructions;
+    std::string                    language; // transcription
+    mtmd_helper_gen_audio_out_mode out_mode          = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
+    int32_t                        max_output_tokens = -1; // "inf"
+    int                            input_rate        = 16000;
+    int                            output_rate       = 24000;
 
     // the text around a turn, from the chat template
     std::string first_header; // system prompt + first user header
@@ -108,8 +100,6 @@ struct realtime_conversation {
     std::string assistant_header;
     std::string assistant_footer;
 
-    llama_token tok_audio_start = LLAMA_TOKEN_NULL;
-    llama_token tok_mixed_start = LLAMA_TOKEN_NULL;
 
     // conversation state, owned by the reader thread
     bool        started   = false; // something went into the slot, the session config is fixed
@@ -327,11 +317,7 @@ struct realtime_conversation {
         }
         server_control_response response;
         response.n_predict = max_output_tokens;
-        for (llama_token t : {tok_audio_start, tok_mixed_start}) {
-            if (t != LLAMA_TOKEN_NULL) {
-                response.banned.push_back(t);
-            }
-        }
+        response.out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_TEXT;
         if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, user_footer + assistant_header, {}, response)) {
             return;
         }
@@ -380,7 +366,7 @@ struct realtime_conversation {
             send_error("response.create: commit audio or create a message first", "conversation_empty");
             return;
         }
-        realtime_out_mode mode = out_mode;
+        mtmd_helper_gen_audio_out_mode mode = out_mode;
         const json resp = ev.value("response", json::object());
         if (resp.contains("output_modalities")) {
             std::string err;
@@ -389,11 +375,11 @@ struct realtime_conversation {
                 return;
             }
         }
-        if (!deps.cap.audio_gen && mode != REALTIME_OUT_TEXT && mode != REALTIME_OUT_AUTO) {
+        if (!deps.cap.audio_gen && mode != MTMD_HELPER_GEN_AUDIO_OUT_TEXT && mode != MTMD_HELPER_GEN_AUDIO_OUT_AUTO) {
             send_error("response.create: the model cannot generate audio");
             return;
         }
-        if (!deps.cap.text_gen && mode != REALTIME_OUT_AUDIO && mode != REALTIME_OUT_AUTO) {
+        if (!deps.cap.text_gen && mode != MTMD_HELPER_GEN_AUDIO_OUT_AUDIO && mode != MTMD_HELPER_GEN_AUDIO_OUT_AUTO) {
             send_error("response.create: the model cannot generate text");
             return;
         }
@@ -402,27 +388,15 @@ struct realtime_conversation {
             return;
         }
 
-        // audio and interleaved responses open with the token of the mode, a text-only response cannot switch
-        std::string prompt = user_footer + assistant_header;
+        // the gen-audio pipeline opens the response in the asked mode
+        const std::string prompt = user_footer + assistant_header;
         server_control_response response;
         response.n_predict = max_output_tokens;
         if (resp.contains("max_output_tokens") && !parse_max_output_tokens(resp["max_output_tokens"], response.n_predict)) {
             send_error("response.create: max_output_tokens must be an integer or \"inf\"");
             return;
         }
-        auto piece = [&](llama_token t) { return common_token_to_piece(deps.vocab, t, true); };
-        switch (mode) {
-            case REALTIME_OUT_TEXT:
-                for (llama_token t : {tok_audio_start, tok_mixed_start}) {
-                    if (t != LLAMA_TOKEN_NULL) {
-                        response.banned.push_back(t);
-                    }
-                }
-                break;
-            case REALTIME_OUT_AUDIO: prompt += piece(tok_audio_start); break;
-            case REALTIME_OUT_MIXED: prompt += piece(tok_mixed_start); break;
-            default: break;
-        }
+        response.out_mode = mode;
 
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -633,12 +607,6 @@ struct realtime_conversation {
         if (deps.cap.audio_gen) {
             output_rate = mtmd_gen_audio_get_info(deps.mctx).sample_rate;
         }
-        auto single = [&](const char * text) {
-            const llama_tokens t = common_tokenize(deps.vocab, text, false, true);
-            return t.size() == 1 ? t[0] : LLAMA_TOKEN_NULL;
-        };
-        tok_audio_start = single("<|audio_start|>");
-        tok_mixed_start = single("<|mixed_start|>");
         if (!configure()) {
             send_error("the chat template does not fit the realtime turn format", "server_error");
             conn.close();
@@ -703,4 +671,279 @@ struct realtime_conversation {
 void server_realtime_conversation(const server_realtime_deps & deps, server_http_context::ws_conn & conn) {
     realtime_conversation session(deps, conn);
     session.run();
+}
+
+//
+// server_realtime_slot
+//
+
+server_realtime_slot::server_realtime_slot(llama_context * ctx, mtmd_context * mctx, llama_seq_id seq_id, int32_t n_ctx,
+                                           const common_params_sampling & sampling, server_response & queue_results, int id_task, int index)
+    : ctx(ctx), model(llama_get_model(ctx)), vocab(llama_model_get_vocab(llama_get_model(ctx))), mctx(mctx), seq_id(seq_id),
+      n_ctx(n_ctx), sampling(sampling), queue_results(queue_results), id_task(id_task), index(index) {
+    if (mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE) {
+        gen.init(ctx, mctx);
+    }
+}
+
+void server_realtime_slot::push(server_realtime_op && op) {
+    ops.push_back(std::move(op));
+}
+
+void server_realtime_slot::cancel() {
+    cancelled = responding;
+}
+
+bool server_realtime_slot::is_idle() const {
+    return ops.empty() && !responding;
+}
+
+bool server_realtime_slot::fail(const std::string & msg, enum error_type type) {
+    error      = msg;
+    error_type = type;
+    return false;
+}
+
+void server_realtime_slot::send_result(std::string text, std::vector<float> audio, bool response_done) {
+    auto res = std::make_unique<server_task_result_realtime>();
+    res->id            = id_task;
+    res->index         = index;
+    res->text          = std::move(text);
+    res->audio         = std::move(audio);
+    res->response_done = response_done;
+    res->cancelled     = response_done && cancelled;
+    res->n_decoded     = n_decoded;
+    queue_results.send(std::move(res));
+}
+
+// appends tokens or embedding rows to the conversation, logits of the last one if asked
+bool server_realtime_slot::decode(const llama_token * tokens, const float * rows, int32_t n, bool logits_last) {
+    const int32_t n_embd  = llama_model_n_embd_inp(model);
+    const int32_t n_batch = llama_n_batch(ctx);
+    if (n_past + n >= n_ctx) {
+        return fail("the conversation does not fit in the context", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+    }
+    for (int32_t i0 = 0; i0 < n; i0 += n_batch) {
+        const int32_t n_cur = std::min(n_batch, n - i0);
+        llama_batch b = llama_batch_init(n_cur, rows ? n_embd : 0, 1);
+        for (int32_t i = 0; i < n_cur; i++) {
+            if (rows) {
+                memcpy(b.embd + (size_t) i * n_embd, rows + (size_t) (i0 + i) * n_embd, n_embd * sizeof(float));
+            } else {
+                b.token[i] = tokens[i0 + i];
+            }
+            b.pos[i]       = n_past + i0 + i;
+            b.n_seq_id[i]  = 1;
+            b.seq_id[i][0] = seq_id;
+            b.logits[i]    = logits_last && i0 + i == n - 1;
+        }
+        b.n_tokens = n_cur;
+        const int ret = llama_decode(ctx, b);
+        llama_batch_free(b);
+        if (ret != 0) {
+            return fail("failed to decode the conversation");
+        }
+    }
+    n_past += n;
+    return true;
+}
+
+// decodes the rows the audio stream has ready
+bool server_realtime_slot::audio_rows() {
+    while (true) {
+        const int32_t n = mtmd_audio_stream_step(stream.get(), LLAMA_TOKEN_NULL);
+        if (n == -2) {
+            return fail("audio stream error");
+        }
+        if (n <= 0) {
+            return true;
+        }
+        if (!decode(nullptr, mtmd_audio_stream_get_output_embd(stream.get()), n, false)) {
+            return false;
+        }
+    }
+}
+
+// samples the next text token of a response from the logits of the slot's own last decode; several slots
+// respond in turns on the same context, so this runs before any other slot decodes
+void server_realtime_slot::sample_next() {
+    sampled = LLAMA_TOKEN_NULL;
+    if (gen.valid() && !gen.next_is_text()) {
+        return;
+    }
+    sampled = common_sampler_sample(smpl.get(), ctx, -1);
+    common_sampler_accept(smpl.get(), sampled, true);
+}
+
+bool server_realtime_slot::response_start(const server_realtime_op & op) {
+    auto sparams = sampling;
+    n_predict = op.response.n_predict;
+    n_decoded = 0;
+    cancelled = false;
+
+    if (gen.valid()) {
+        // the gen-audio pipeline continues the conversation and follows the model's text/audio switching
+        mtmd_helper::gen_audio::inp inp;
+        inp.set_prompt(op.text);
+        inp.data.seq_id   = seq_id;
+        inp.data.n_past   = n_past;
+        inp.data.seed     = sampling.seed;
+        inp.data.stream   = true;
+        inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+        inp.data.out_mode = op.response.out_mode;
+        if (gen.set_input(inp.get()) != 0) {
+            return fail("failed to start the response");
+        }
+        // the pipeline may bias some text tokens, e.g. the switch to audio of a text-only response
+        for (const auto & b : gen.logit_bias()) {
+            sparams.logit_bias.push_back(b);
+        }
+        int32_t ret;
+        while ((ret = gen.step_prompt(llama_n_batch(ctx))) > 0) {
+        }
+        if (ret < 0) {
+            return fail("failed to start the response");
+        }
+        const float * h = llama_get_embeddings_ith(ctx, -1);
+        h_state.assign(h, h + llama_model_n_embd(model));
+    } else {
+        const llama_tokens toks = common_tokenize(vocab, op.text, false, true);
+        if (toks.empty()) {
+            return fail("failed to start the response");
+        }
+        if (!decode(toks.data(), nullptr, (int32_t) toks.size(), true)) {
+            return false;
+        }
+    }
+    smpl.reset(common_sampler_init(model, sparams));
+    // the logits of the last decode are this slot's only until another slot decodes
+    sample_next();
+    responding = true;
+    return true;
+}
+
+// one text token or audio frame of the response being generated
+bool server_realtime_slot::response_step() {
+    bool        stop = false;
+    std::string text;
+    std::vector<float> audio;
+
+    if (gen.valid()) {
+        const float * h_next = nullptr;
+        if (gen.step_gen(sampled, h_state.data(), &h_next, &stop) != 0) {
+            return fail("response generation failed");
+        }
+        if (sampled != LLAMA_TOKEN_NULL && !stop && !llama_vocab_is_control(vocab, sampled)) {
+            text = common_token_to_piece(vocab, sampled, false);
+        }
+        if (h_next) {
+            h_state.assign(h_next, h_next + llama_model_n_embd(model));
+        }
+    } else {
+        stop = llama_vocab_is_eog(vocab, sampled);
+        if (!stop) {
+            if (!llama_vocab_is_control(vocab, sampled)) {
+                text = common_token_to_piece(vocab, sampled, false);
+            }
+            if (!decode(&sampled, nullptr, 1, true)) {
+                return false;
+            }
+        }
+    }
+    n_decoded++;
+
+    // the pipeline decodes on its own, the response ends before the context is full
+    const bool ctx_full = gen.valid() ?
+        llama_memory_seq_pos_max(llama_get_memory(ctx), seq_id) + 2 >= n_ctx :
+        n_past + 1 >= n_ctx;
+    const bool done = stop || cancelled || ctx_full || (n_predict > 0 && n_decoded >= n_predict);
+    if (!done) {
+        sample_next();
+    }
+    if (gen.valid()) {
+        if (done) {
+            gen.flush();
+        }
+        int32_t sample_rate = 0;
+        const char * data   = nullptr;
+        size_t data_len     = 0;
+        if (gen.get_output(&sample_rate, &data, &data_len) == 0 && data_len > 0) {
+            audio.assign((const float *) data, (const float *) data + data_len / sizeof(float));
+        }
+    }
+    if (!text.empty() || !audio.empty()) {
+        send_result(std::move(text), std::move(audio));
+    }
+    if (done) {
+        if (gen.valid()) {
+            // the pipeline decoded the response, the sequence ends where it stopped
+            n_past = llama_memory_seq_pos_max(llama_get_memory(ctx), seq_id) + 1;
+        }
+        send_result({}, {}, true);
+        responding = false;
+        cancelled  = false;
+    }
+    return true;
+}
+
+bool server_realtime_slot::update() {
+    llama_set_embeddings(ctx, true);
+
+    if (responding) {
+        return response_step();
+    }
+
+    while (!ops.empty() && !responding) {
+        server_realtime_op op = std::move(ops.front());
+        ops.pop_front();
+        switch (op.action) {
+            case SERVER_CONTROL_ACTION_TEXT_APPEND:
+                {
+                    const llama_tokens toks = common_tokenize(vocab, op.text, false, true);
+                    if (!toks.empty() && !decode(toks.data(), nullptr, (int32_t) toks.size(), false)) {
+                        return false;
+                    }
+                } break;
+            case SERVER_CONTROL_ACTION_AUDIO_APPEND:
+                {
+                    if (!stream) {
+                        stream.reset(mtmd_audio_stream_init(mctx, mtmd_audio_stream_params_default()));
+                        if (!stream) {
+                            return fail("failed to initialize the audio stream");
+                        }
+                    }
+                    mtmd_audio_stream_push(stream.get(), op.audio.data(), op.audio.size());
+                    if (!audio_rows()) {
+                        return false;
+                    }
+                } break;
+            case SERVER_CONTROL_ACTION_AUDIO_COMMIT:
+            case SERVER_CONTROL_ACTION_AUDIO_END:
+                {
+                    // the end of the audio of a turn
+                    if (stream) {
+                        mtmd_audio_stream_flush(stream.get(), true);
+                        if (!audio_rows()) {
+                            return false;
+                        }
+                        stream.reset();
+                    }
+                } break;
+            case SERVER_CONTROL_ACTION_RESPONSE_CREATE:
+                {
+                    if (!response_start(op)) {
+                        return false;
+                    }
+                } break;
+            case SERVER_CONTROL_ACTION_CLEAR:
+                {
+                    llama_memory_seq_rm(llama_get_memory(ctx), seq_id, -1, -1);
+                    stream.reset();
+                    n_past = 0;
+                } break;
+            default:
+                break;
+        }
+    }
+    return true;
 }

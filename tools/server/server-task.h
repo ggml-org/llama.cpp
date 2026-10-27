@@ -67,8 +67,8 @@ enum server_control_action {
 
 // a response of a realtime conversation
 struct server_control_response {
-    std::vector<llama_token> banned;           // tokens that must not be sampled (text-only responses)
-    int32_t                  n_predict = -1;   // text tokens and audio frames, -1: until the context is full
+    mtmd_helper_gen_audio_out_mode out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
+    int32_t                        n_predict = -1; // text tokens and audio frames, -1: until the context is full
 };
 
 struct task_params {
