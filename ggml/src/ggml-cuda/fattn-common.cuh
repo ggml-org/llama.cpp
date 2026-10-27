@@ -394,14 +394,23 @@ static __device__ __forceinline__ void dequantize_V_f16(const void * __restrict_
 
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
-    static_assert(std::is_same_v<T, float>, "BF16 V dequantization only supports float output");
     static_assert(ne % 2 == 0, "bad ne");
     __align__(16) nv_bfloat162 tmp[ne/2];
     ggml_cuda_memcpy_1<ne*sizeof(nv_bfloat16)>(tmp, (const nv_bfloat16 *) vx + i0);
-    float2 * dst_f2 = (float2 *) dst;
+    if constexpr (std::is_same_v<T, half>) {
+        half2 * dst_h2 = (half2 *) dst;
 #pragma unroll
-    for (int l = 0; l < ne/2; ++l) {
-        dst_f2[l] = ggml_cuda_cast<float2>(tmp[l]);
+        for (int l = 0; l < ne/2; ++l) {
+            dst_h2[l] = __float22half2_rn(ggml_cuda_cast<float2>(tmp[l]));
+        }
+    } else if constexpr (std::is_same_v<T, float>) {
+        float2 * dst_f2 = (float2 *) dst;
+#pragma unroll
+        for (int l = 0; l < ne/2; ++l) {
+            dst_f2[l] = ggml_cuda_cast<float2>(tmp[l]);
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "unsupported type");
     }
 }
 
@@ -659,7 +668,7 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
     } else if constexpr (type_V == GGML_TYPE_Q8_0) {
         return dequantize_V_q8_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_BF16) {
-        return dequantize_V_bf16<float, ne>;
+        return dequantize_V_bf16<T, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
