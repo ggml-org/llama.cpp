@@ -1,10 +1,11 @@
+import { isServerDecodableAudio } from './audio-format';
 import { convertToWav, createAudioFile } from './audio-recording';
 import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
 import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { SETTINGS_KEYS } from '$lib/constants';
-import { FileTypeCategory, MimeTypeAudio } from '$lib/enums';
+import { FileExtensionAudio, FileTypeCategory, MimeTypeAudio } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { getFileTypeCategory } from '$lib/utils';
@@ -130,8 +131,8 @@ export async function processFilesToChatUploaded(
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
 				let audioFile = file;
 
-				// Server can not decode OGG, so convert it to WAV in the browser
-				if (file.type.toLowerCase() === MimeTypeAudio.OGG) {
+				// Server only decodes WAV and MP3, so convert other audio (OGG, WEBM, MP4) to WAV in the browser
+				if (!isServerDecodableAudio(file.type)) {
 					const wavBlob = await convertToWav(file);
 
 					if (wavBlob.type !== MimeTypeAudio.WAV) {
@@ -140,7 +141,10 @@ export async function processFilesToChatUploaded(
 						continue;
 					}
 
-					audioFile = createAudioFile(wavBlob, file.name.replace(/\.[^.]*$/, '') + '.wav');
+					audioFile = createAudioFile(
+						wavBlob,
+						file.name.replace(/\.[^.]*$/, '') + FileExtensionAudio.WAV
+					);
 				}
 
 				// Generate preview URL for audio files
