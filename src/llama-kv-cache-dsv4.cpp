@@ -931,21 +931,24 @@ static void dsv4_make_k_only(llama_hparams & hparams) {
 
 llama_dsv4_comp_state::llama_dsv4_comp_state(
         const llama_model & model,
-                bool        offload,
-                bool        unified,
-            uint32_t        n_seq_max,
-            uint32_t        ratio,
-            uint32_t        state_size,
-            uint32_t        n_embd_state,
-            uint32_t        n_rs_seq,
-        const char    * name,
+                     bool   no_alloc,
+                     bool   offload,
+                     bool   unified,
+                 uint32_t   n_seq_max,
+                 uint32_t   ratio,
+                 uint32_t   state_size,
+                 uint32_t   n_embd_state,
+                 uint32_t   n_rs_seq,
+               const char * name,
         const llama_memory_i::layer_filter_cb & filter) :
-    hparams(model.hparams),
     ratio(ratio),
     state_size(state_size),
     n_embd_state(n_embd_state),
     n_stream(unified ? 1 : n_seq_max),
-    n_rs_seq(n_rs_seq) {
+    n_rs_seq(n_rs_seq),
+    ctxs_bufs(no_alloc) {
+    const llama_hparams & hparams = model.hparams;
+
     struct ggml_backend_buft_comparator {
         bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
             return strcmp(ggml_backend_buft_name(lhs), ggml_backend_buft_name(rhs)) < 0;
@@ -1020,25 +1023,10 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
     }
 
     for (auto & [buft, ctx] : ctx_map) {
-        ggml_backend_buffer_t buf;
-        if (hparams.no_alloc) {
-            buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
-                t->buffer = buf; // set dummy buffer for DSV4 state so that the backend scheduler won't try to allocate it
-            }
-        } else {
-            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft); // real buffer
-        }
-        if (!buf) {
-            throw std::runtime_error("failed to allocate buffer for DSV4 compressor state");
-        }
-
-        ggml_backend_buffer_clear(buf, 0);
+        ggml_backend_buffer_t buf = ctxs_bufs.emplace(std::move(ctx), buft, "DSV4 compressor state");
 
         LLAMA_LOG_INFO("%s: %10s DSV4 %s state buffer size = %8.2f MiB\n",
                 __func__, ggml_backend_buffer_name(buf), name, ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
-
-        ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
     LLAMA_LOG_INFO("%s: %s ratio = %u, state = %u x %u, streams = %u, rs_seq = %u, layers = %zu, size = %7.2f MiB\n",
@@ -1119,18 +1107,7 @@ uint32_t llama_dsv4_comp_state::get_n_rows() const {
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_dsv4_comp_state::memory_breakdown() const {
-    std::map<ggml_backend_buffer_type_t, size_t> ret;
-    for (const auto & [ctx, buf] : ctxs_bufs) {
-        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf.get());
-
-        if (hparams.no_alloc) {
-            GGML_ASSERT(ggml_backend_buffer_get_base(buf.get()) == nullptr);
-            ret[buft] += ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), buft);
-        } else {
-            ret[buft] += ggml_backend_buffer_get_size(buf.get());
-        }
-    }
-    return ret;
+    return ctxs_bufs.memory_breakdown();
 }
 
 void llama_dsv4_comp_state::state_write(
@@ -1265,6 +1242,7 @@ size_t llama_dsv4_comp_state::total_size() const {
 
 llama_kv_cache_dsv4::llama_kv_cache_dsv4(
         const llama_model & model,
+                     bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -1274,7 +1252,6 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
-                 uint32_t   n_pad,
                  uint32_t   n_rs_seq,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse) :
@@ -1309,8 +1286,8 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     dsv4_make_k_only(hparams_raw);
 
     kv_raw = std::make_unique<llama_kv_cache_iswa>(
-            model, hparams_raw, type_k, type_v,
-            v_trans, offload, swa_full, unified_raw, kv_size, n_seq_max, n_ubatch, n_pad,
+            model, no_alloc, hparams_raw, type_k, type_v,
+            v_trans, offload, swa_full, unified_raw, kv_size, n_seq_max, n_ubatch,
             nullptr, filter_raw, reuse, nullptr);
 
     // V4.1: CSA slot = ratio 2, HCA slot = ratio 1, no overlap and no indexer compressor; the index K is stored
@@ -1413,24 +1390,24 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
             __func__, dsv4_comp_size(kv_size, ratio_csa));
 
     kv_csa = std::make_unique<llama_kv_cache>(
-            model, hparams_csa, type_k, type_v,
-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, ratio_csa), 256u), n_seq_max, n_pad,
+            model, no_alloc, hparams_csa, type_k, type_v,
+            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, ratio_csa), 256u), n_seq_max,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressed KV cache, size = %u cells\n",
             __func__, dsv4_comp_size(kv_size, ratio_hca));
 
     kv_hca = std::make_unique<llama_kv_cache>(
-            model, hparams_hca, type_k, type_v,
-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, ratio_hca), 256u), n_seq_max, n_pad,
+            model, no_alloc, hparams_hca, type_k, type_v,
+            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, ratio_hca), 256u), n_seq_max,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_hca, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer KV cache, size = %u cells\n",
             __func__, dsv4_comp_size(kv_size, ratio_csa));
 
     kv_lid = std::make_unique<llama_kv_cache>(
-            model, hparams_lid, type_k, type_v,
-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, ratio_csa), 256u), n_seq_max, n_pad,
+            model, no_alloc, hparams_lid, type_k, type_v,
+            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, ratio_csa), 256u), n_seq_max,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_lid, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 CSA compressor state\n", __func__);
@@ -1439,19 +1416,19 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     const uint32_t csa_state_embd = is_v41 ? model.hparams.n_embd_head_k() : 2*model.hparams.n_embd_head_k();
 
     csa_state = std::make_unique<llama_dsv4_comp_state>(
-            model, offload, unified_compressed, n_seq_max, ratio_csa, csa_state_size,
+            model, no_alloc, offload, unified_compressed, n_seq_max, ratio_csa, csa_state_size,
             csa_state_embd, n_rs_seq, "csa", filter_csa_state);
 
     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressor state\n", __func__);
 
     hca_state = std::make_unique<llama_dsv4_comp_state>(
-            model, offload, unified_compressed, n_seq_max, ratio_hca, ratio_hca,
+            model, no_alloc, offload, unified_compressed, n_seq_max, ratio_hca, ratio_hca,
             model.hparams.n_embd_head_k(), n_rs_seq, "hca", filter_hca_state);
 
     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer compressor state\n", __func__);
 
     lid_state = std::make_unique<llama_dsv4_comp_state>(
-            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
+            model, no_alloc, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
             2*model.hparams.indexer_head_size, n_rs_seq, "lid", filter_lid);
 
     // DSV4 attention reads compressed-K / compressor-state rows that the current

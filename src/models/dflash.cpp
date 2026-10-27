@@ -1204,14 +1204,12 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         const auto & layer = model.layers[il];
 
         ggml_tensor * residual = inpL;
-        ggml_tensor * post = nullptr;
-        ggml_tensor * comb = nullptr;
-
-        ggml_tensor * cur = build_hc_pre(inpL,
+        hc_pre attn_hc = build_hc_pre(inpL,
                 layer.hc_attn_fn,
                 layer.hc_attn_scale,
                 layer.hc_attn_base,
-                &post, &comb, il);
+                il);
+        ggml_tensor * cur = attn_hc.cur;
         cb(cur, "hc_attn_pre", il);
 
         cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
@@ -1219,15 +1217,16 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 
         cur = build_attention(model, inp_attn, cur, inp_pos, il);
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, attn_hc.post, attn_hc.comb, il);
         cb(inpL, "hc_attn_post", il);
 
         residual = inpL;
-        cur = build_hc_pre(inpL,
+        hc_pre ffn_hc = build_hc_pre(inpL,
                 layer.hc_ffn_fn,
                 layer.hc_ffn_scale,
                 layer.hc_ffn_base,
-                &post, &comb, il);
+                il);
+        cur = ffn_hc.cur;
         cb(cur, "hc_ffn_pre", il);
 
         cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
@@ -1256,7 +1255,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
         cb(cur, "ffn_out", il);
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, ffn_hc.post, ffn_hc.comb, il);
         cb(inpL, "l_out", il);
     }
 
@@ -1403,10 +1402,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
         const auto & layer = model.layers[il];
 
         ggml_tensor * residual = inpL;
-        ggml_tensor * post = nullptr;
-        ggml_tensor * comb = nullptr;
-
-        ggml_tensor * attn_pre = build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, il);
+        const hc_mixes attn_mix = build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, il);
 
         ggml_tensor * cur;
         if (pre_prev == nullptr) {
@@ -1461,13 +1457,14 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
             cb(cur, "attn_out", il);
         }
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, attn_mix.post, attn_mix.comb, il);
         cb(inpL, "hc_attn_post", il);
 
         residual = inpL;
-        ggml_tensor * ffn_pre = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, il);
+        const hc_mixes ffn_mix = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, il);
+        pre_prev = ffn_mix.pre;
 
-        cur = build_hc_pre(inpL, attn_pre, il);
+        cur = build_hc_pre(inpL, attn_mix.pre, il);
         cb(cur, "hc_ffn_pre", il);
 
         cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
@@ -1496,13 +1493,11 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
         cb(cur, "ffn_out", il);
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, ffn_mix.post, ffn_mix.comb, il);
 
         ggml_tensor * l_out = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
         cb(l_out, "l_out", il);
         ggml_build_forward_expand(gf, l_out);
-
-        pre_prev = ffn_pre;
     }
 
     // no hc_head: collapse with the last FFN's pre-mix

@@ -3822,6 +3822,11 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             return false;
         }
 
+        // TODO: make the fused softcap kernel stride aware, it reads src and writes dst as dense
+        if (!ggml_is_contiguous(scale->src[0]) || !ggml_is_contiguous(scale2)) {
+            return false;
+        }
+
         if (ggml_get_unary_op(tanh) != GGML_UNARY_OP_TANH) {
             return false;
         }
@@ -5972,7 +5977,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_LOG:
             return true;
         case GGML_OP_SCALE:
-            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_BF16) && op->type == op->src[0]->type;
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_BF16) && op->type == op->src[0]->type &&
+                   ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_CLAMP:
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_ADD:
