@@ -411,6 +411,56 @@ struct ggml_backend_meta_simple_tensor_container {
         }
     }
     ggml_backend_meta_simple_tensor_container() {}
+
+    // Contexts that ran out of space but still hold live tensor metadata, freed on reset().
+    std::vector<ggml_context_ptr> ctxs_full;
+
+    size_t mem_size() const {
+        size_t ret = 0;
+        for (const ggml_context_ptr & ctx : ctxs) {
+            ret = std::max(ret, ggml_get_mem_size(ctx.get()));
+        }
+        return ret;
+    }
+
+    // Get the context for simple buffer j. If it is full and growing is allowed (load/reserve phase),
+    // replace it with one twice the size; already created tensors stay valid until reset().
+    ggml_context * get_ctx(size_t j, bool allow_grow) {
+        ggml_context * ctx = ctxs[j].get();
+        if (ggml_get_mem_size(ctx) - ggml_used_mem(ctx) < ggml_tensor_overhead()) {
+            if (!allow_grow) {
+                GGML_ABORT("%s: meta compute view context full (%zu bytes) after load; "
+                    "a graph created more views than any graph seen during reserve/warmup", __func__, ggml_get_mem_size(ctx));
+            }
+            const ggml_init_params params = {
+                /*.mem_size   =*/ 2*ggml_get_mem_size(ctx),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            ctxs_full.push_back(std::move(ctxs[j]));
+            ctxs[j].reset(ggml_init(params));
+            ctx = ctxs[j].get();
+        }
+        return ctx;
+    }
+
+    // Clear all tensors, (re)creating the contexts with at least min_mem_size bytes.
+    void reset(size_t min_mem_size) {
+        ctxs_full.clear();
+        for (ggml_context_ptr & ctx : ctxs) {
+            if (ggml_get_mem_size(ctx.get()) < min_mem_size) {
+                const ggml_init_params params = {
+                    /*.mem_size   =*/ min_mem_size,
+                    /*.mem_buffer =*/ nullptr,
+                    /*.no_alloc   =*/ true,
+                };
+                ctx.reset(ggml_init(params));
+            } else {
+                ggml_reset(ctx.get());
+            }
+        }
+        simple_tensors.clear();
+    }
 };
 
 struct ggml_backend_meta_buffer_context {
@@ -425,6 +475,9 @@ struct ggml_backend_meta_buffer_context {
     ggml_backend_meta_simple_tensor_container stc_compute[2];
     int stc_compute_index      = 0;
     int stc_compute_index_next = 0;
+    // The compute contexts may only grow before the first graph_compute (i.e. during load: graph reserve + warmup),
+    // afterwards both are sized to the high-water mark and running out of space is a hard error.
+    bool stc_compute_sized = false;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
     // FIXME
@@ -1222,7 +1275,7 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
     std::vector<ggml_tensor *> simple_tensors;
     simple_tensors.reserve(n_simple_bufs);
     for (size_t j = 0; j < n_simple_bufs; j++) {
-        ggml_context          * simple_ctx = stc.ctxs[j].get();
+        ggml_context          * simple_ctx = stc.get_ctx(j, /*allow_grow =*/ !buf_ctx->stc_compute_sized);
         ggml_backend_buffer_t   simple_buf = buf_ctx->bufs[j].get();
 
         if (split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
@@ -1743,7 +1796,9 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
-    constexpr size_t compute_headroom = 64; // Maximum number of views per statically allocated tensor that can be created between evals. (16 was too small for GLM5-Next KV/RS caches with MTP, n_rs_seq > 1)
+    constexpr size_t compute_headroom = 16; // Initial number of views per statically allocated tensor that can be created between evals.
+    // The compute contexts grow during load (graph reserve + warmup) to cover graphs that need more (e.g. GLM5-Next + MTP),
+    // then stay fixed. TODO: derive the bound from the graph instead.
     const ggml_init_params params_static = {
         /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
@@ -2028,11 +2083,9 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         for (ggml_backend_buffer_t buf : used_buffers) {
             ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buf->context;
             buf_ctx->stc_compute_index_next = buf_ctx->stc_compute_index ^ 1;
-            ggml_backend_meta_simple_tensor_container & stc = buf_ctx->stc_compute[buf_ctx->stc_compute_index_next];
-            for (ggml_context_ptr & ctx : stc.ctxs) {
-                ggml_reset(ctx.get());
-            }
-            stc.simple_tensors.clear();
+            const size_t mem_size = std::max(buf_ctx->stc_compute[0].mem_size(), buf_ctx->stc_compute[1].mem_size());
+            buf_ctx->stc_compute[buf_ctx->stc_compute_index_next].reset(mem_size);
+            buf_ctx->stc_compute_sized = true;
         }
         size_t n_subgraphs  = 0;
         size_t max_tmp_size = 0;
