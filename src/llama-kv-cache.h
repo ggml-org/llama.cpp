@@ -107,7 +107,6 @@ public:
                          bool   unified,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
-                     uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
                llama_memory_t   mem_other,
@@ -271,9 +270,6 @@ private:
 
     const uint32_t n_seq_max = 1;
     const uint32_t n_stream  = 1;
-
-    // required padding
-    const uint32_t n_pad = 1;
 
     // SWA
     const uint32_t n_swa = 0;
