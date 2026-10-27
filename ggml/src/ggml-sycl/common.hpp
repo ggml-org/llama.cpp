@@ -163,12 +163,6 @@ extern int g_ggml_sycl_graph_eviction_timeout;
 
 #define GGML_SYCL_MAX_NODES 8192 // TODO: adapt to hardwares
 
-// define for XMX in Intel GPU
-// TODO: currently, it's not used for XMX really.
-#if !defined(GGML_SYCL_FORCE_MMQ)
-    #define SYCL_USE_XMX
-#endif
-
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32
 

@@ -211,10 +211,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
     int64_t total_vram = 0;
 /* This is a bit misleading;  reserved for later */
-// #if defined(SYCL_USE_XMX)
-//     GGML_LOG_INFO("%s: SYCL_USE_XMX: yes\n", __func__);
+// #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
+//     GGML_LOG_INFO("%s: GGML_SYCL_SUPPORT_XMX: yes\n", __func__);
 // #else
-//     GGML_LOG_INFO("%s: SYCL_USE_XMX: no\n", __func__);
+//     GGML_LOG_INFO("%s: GGML_SYCL_SUPPORT_XMX: no\n", __func__);
 // #endif
     for (int i = 0; i < info.device_count; ++i) {
         dpct::device_info prop;
@@ -507,6 +507,12 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: no\n");
 #endif
 
+#if defined(GGML_SYCL_SUPPORT_XMX)
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_XMX: yes\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_XMX: no\n");
+#endif
+
 #if defined(GGML_SYCL_GRAPH)
         GGML_LOG_INFO("  GGML_SYCL_GRAPH: yes\n");
 #else
@@ -614,10 +620,10 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_SPARSE_FA_MARGIN: %d\n", g_ggml_sycl_sparse_fa_margin);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
-#if defined(SYCL_USE_XMX)
-        fprintf(stderr, "%s: SYCL_USE_XMX: yes\n", __func__);
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
+        fprintf(stderr, "%s: GGML_SYCL_SUPPORT_XMX: yes\n", __func__);
 #else
-        fprintf(stderr, "%s: SYCL_USE_XMX: no\n", __func__);
+        fprintf(stderr, "%s: GGML_SYCL_SUPPORT_XMX: no\n", __func__);
 #endif
 */
 #ifdef GGML_SYCL_GRAPH
@@ -5268,11 +5274,11 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     if (!ggml_sycl_supports_mmq(src0->type) || src0->type == GGML_TYPE_IQ2_XXS) {
         return false;
     }
-#ifdef SYCL_USE_XMX
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
     if (src1->ne[1] > MMQ_MAX_BATCH_SIZE) {
         return false;
     }
-#endif // SYCL_USE_XMX
+#endif // GGML_SYCL_SUPPORT_XMX && !GGML_SYCL_FORCE_MMQ
     return src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 }
 

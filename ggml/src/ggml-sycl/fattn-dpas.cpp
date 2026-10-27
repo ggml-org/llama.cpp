@@ -5,20 +5,22 @@
 #include "fattn-common.hpp"
 #include "fattn-dpas.hpp"
 
-// spir64_gen builds for sub-group 8 targets (Xe-HPG) or mixed target lists cannot compile the DPAS below
-#if defined(GGML_SYCL_XMX_AOT_SG) && GGML_SYCL_XMX_AOT_SG != 16
+// GGML_SYCL_SUPPORT_XMX=OFF builds skip the DPAS below, as do spir64_gen builds for sub-group 8
+// targets (Xe-HPG) or mixed target lists, which cannot compile it
+#if !defined(GGML_SYCL_SUPPORT_XMX) || (defined(GGML_SYCL_XMX_AOT_SG) && GGML_SYCL_XMX_AOT_SG != 16)
 #define GGML_SYCL_FA_DPAS_BUILD 0
 #else
 #define GGML_SYCL_FA_DPAS_BUILD 1
 #endif
 
+#if GGML_SYCL_FA_DPAS_BUILD
 static constexpr int   FA_DPAS_WG    = 256;      // work-group size
 static constexpr int   FA_DPAS_NSG   = 16;       // sub-groups of 16 lanes
 static constexpr int   FA_DPAS_MAX_Q = 31;       // larger batches go to the prefill kernels
 static constexpr int   FA_DPAS_MAX_G = 32;       // query heads per KV head
 static constexpr float FA_DPAS_MINF  = -1.0e30f; // finite start value of the running max
 
-static bool fattn_dpas_arch_ok(gpu_arch arch) {
+static bool fattn_dpas_support_arch(gpu_arch arch) {
     return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31 ||
            arch == gpu_arch::intel_gpu_lnl_m   || arch == gpu_arch::intel_gpu_ptl_h   ||
            arch == gpu_arch::intel_gpu_ptl_u   || arch == gpu_arch::intel_gpu_wcl;
@@ -28,6 +30,7 @@ static bool fattn_dpas_arch_ok(gpu_arch arch) {
 static bool fattn_dpas_head_ok(int64_t d) {
     return d == 64 || d == 96 || d == 128 || d == 256 || d == 512;
 }
+#endif // GGML_SYCL_FA_DPAS_BUILD
 
 bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst) {
 #if !GGML_SYCL_FA_DPAS_BUILD
@@ -35,7 +38,7 @@ bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst
     GGML_UNUSED(dst);
     return false;
 #else
-    if (!g_ggml_sycl_fa_dpas || !fattn_dpas_arch_ok(ggml_sycl_info().devices[device].hw_info.arch)) {
+    if (!g_ggml_sycl_fa_dpas || !fattn_dpas_support_arch(ggml_sycl_info().devices[device].hw_info.arch)) {
         return false;
     }
 

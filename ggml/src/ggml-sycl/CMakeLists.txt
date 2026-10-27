@@ -200,6 +200,10 @@ if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
+if (GGML_SYCL_SUPPORT_XMX)
+    add_compile_definitions(GGML_SYCL_SUPPORT_XMX)
+endif()
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     if (NOT GGML_SYCL_DEVICE_ARCH)
