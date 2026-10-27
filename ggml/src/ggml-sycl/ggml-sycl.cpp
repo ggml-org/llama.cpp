@@ -812,6 +812,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
             case GGML_TYPE_Q6_K:
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ4_XS:
             case GGML_TYPE_MXFP4:{
                 ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
                 tensor->extra                 = extra;
@@ -4381,6 +4382,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_XS:
             return true;
         default:
             return false;
@@ -4990,6 +4992,18 @@ static bool reorder_qw_iq3_xxs(uint8_t * data_device, size_t size, dpct::queue_p
         }, stream);
 }
 
+static bool reorder_qw_iq4_xs(uint8_t * data_device, size_t size, dpct::queue_ptr stream) {
+    return reorder_qw_planar<block_iq4_xs>(__func__, data_device, size, offsetof(block_iq4_xs, qs), QK_K / 2,
+        [](const block_iq4_xs & x, int64_t ib, uint8_t * tail, int64_t) {
+            uint8_t * meta = tail + ib * (sizeof(block_iq4_xs) - QK_K / 2);
+            reinterpret_cast<ggml_half *>(meta)[0] = x.d;
+            reinterpret_cast<uint16_t *>(meta + sizeof(ggml_half))[0] = x.scales_h;
+            for (int j = 0; j < QK_K / 64; ++j) {
+                meta[sizeof(ggml_half) + sizeof(uint16_t) + j] = x.scales_l[j];
+            }
+        }, stream);
+}
+
 static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     uint8_t * data_device = (uint8_t *) src0->data;
     size_t ncols = src0->ne[0];
@@ -5035,6 +5049,8 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
             return reorder_qw_iq3_xxs(data_device, size, stream);
         case GGML_TYPE_IQ3_S:
             return reorder_qw_iq3_s(data_device, size, stream);
+        case GGML_TYPE_IQ4_XS:
+            return reorder_qw_iq4_xs(data_device, size, stream);
         default:
             return false;
     }
@@ -5409,9 +5425,10 @@ static bool ggml_sycl_mul_mat_glu_fused(ggml_backend_sycl_context & ctx, ggml_cg
     }
 
     // quant pairs the reorder kernel does not serve (mixed gate/up types, q5_K off BMG) take the
-    // standard-layout fused path instead; same-type q4_K / q5_K keep the reorder path below
+    // standard-layout fused path instead; same-type q4_K / iq4_xs / q5_K keep the reorder path below
     const bool reorder_pair = wg->type == wu->type &&
-        (wu->type == GGML_TYPE_Q4_K || (wu->type == GGML_TYPE_Q5_K && ggml_sycl_q5_k_mmvq_reuse(ctx.device)));
+        (wu->type == GGML_TYPE_Q4_K || wu->type == GGML_TYPE_IQ4_XS ||
+         (wu->type == GGML_TYPE_Q5_K && ggml_sycl_q5_k_mmvq_reuse(ctx.device)));
     if (!reorder_pair) {
         const auto is_plain_type = [](ggml_type type) {
             return type == GGML_TYPE_Q5_K || type == GGML_TYPE_IQ4_XS;

@@ -476,6 +476,21 @@ static void dequantize_row_iq3_s_sycl_reorder(const void * vx, dst_t * y, const 
 }
 
 template <typename dst_t>
+static void dequantize_row_iq4_xs_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
+                                               dpct::queue_ptr stream) {
+    const int64_t nb = (k + QK_K - 1) / QK_K;
+    dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
+            [=](sycl::nd_item<3> item_ct1) {
+                dequantize_block_iq4_xs_reorder(vx, y, nb, item_ct1);
+            });
+    });
+}
+
+template <typename dst_t>
 static void dequantize_row_iq4_xs_sycl(const void *vx, dst_t *y, const int64_t k,
                                        dpct::queue_ptr stream) {
     const int64_t nb = (k + QK_K - 1) / QK_K;
@@ -746,6 +761,9 @@ static to_t_sycl_t<dst_t> ggml_get_dequant_sycl(ggml_type type, ggml_tensor * ds
                 return dequantize_row_iq3_s_sycl;
             }
         case GGML_TYPE_IQ4_XS:
+            if (is_reordered_src0(dst)) {
+                return dequantize_row_iq4_xs_sycl_reorder;
+            }
             return dequantize_row_iq4_xs_sycl;
         case GGML_TYPE_IQ4_NL:
             return dequantize_row_iq4_nl_sycl;

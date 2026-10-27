@@ -13,6 +13,9 @@
 #ifndef GGML_SYCL_VECDOTQ_HPP
 #define GGML_SYCL_VECDOTQ_HPP
 
+#include <array>
+#include <utility>
+
 #include "dpct/helper.hpp"
 #include "ggml.h"
 #include "type.hpp"
@@ -1955,5 +1958,135 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
     assert(false);
 #endif
 }
+
+// Two 4-bit codes per lookup: pair[c0 | c1 << 4] = v(c0) | v(c1) << 8, v from kvalues_iq4nl.
+// The scalar table path needs eight indexed byte loads per weight word and is the bottleneck of
+// the IQ4_XS GEMV on Intel GPUs, where there is no byte permute instruction to emulate it with.
+static const uint16_t kvalues_iq4nl_pair[256] = {
+    33153, 33176, 33197, 33215, 33231, 33245, 33258, 33270,
+    33025, 33037, 33049, 33062, 33077, 33093, 33113, 33137,
+    39041, 39064, 39085, 39103, 39119, 39133, 39146, 39158,
+    38913, 38925, 38937, 38950, 38965, 38981, 39001, 39025,
+    44417, 44440, 44461, 44479, 44495, 44509, 44522, 44534,
+    44289, 44301, 44313, 44326, 44341, 44357, 44377, 44401,
+    49025, 49048, 49069, 49087, 49103, 49117, 49130, 49142,
+    48897, 48909, 48921, 48934, 48949, 48965, 48985, 49009,
+    53121, 53144, 53165, 53183, 53199, 53213, 53226, 53238,
+    52993, 53005, 53017, 53030, 53045, 53061, 53081, 53105,
+    56705, 56728, 56749, 56767, 56783, 56797, 56810, 56822,
+    56577, 56589, 56601, 56614, 56629, 56645, 56665, 56689,
+    60033, 60056, 60077, 60095, 60111, 60125, 60138, 60150,
+    59905, 59917, 59929, 59942, 59957, 59973, 59993, 60017,
+    63105, 63128, 63149, 63167, 63183, 63197, 63210, 63222,
+    62977, 62989, 63001, 63014, 63029, 63045, 63065, 63089,
+    385, 408, 429, 447, 463, 477, 490, 502,
+    257, 269, 281, 294, 309, 325, 345, 369,
+    3457, 3480, 3501, 3519, 3535, 3549, 3562, 3574,
+    3329, 3341, 3353, 3366, 3381, 3397, 3417, 3441,
+    6529, 6552, 6573, 6591, 6607, 6621, 6634, 6646,
+    6401, 6413, 6425, 6438, 6453, 6469, 6489, 6513,
+    9857, 9880, 9901, 9919, 9935, 9949, 9962, 9974,
+    9729, 9741, 9753, 9766, 9781, 9797, 9817, 9841,
+    13697, 13720, 13741, 13759, 13775, 13789, 13802, 13814,
+    13569, 13581, 13593, 13606, 13621, 13637, 13657, 13681,
+    17793, 17816, 17837, 17855, 17871, 17885, 17898, 17910,
+    17665, 17677, 17689, 17702, 17717, 17733, 17753, 17777,
+    22913, 22936, 22957, 22975, 22991, 23005, 23018, 23030,
+    22785, 22797, 22809, 22822, 22837, 22853, 22873, 22897,
+    29057, 29080, 29101, 29119, 29135, 29149, 29162, 29174,
+    28929, 28941, 28953, 28966, 28981, 28997, 29017, 29041
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_XS> {
+    static constexpr ggml_type gtype = GGML_TYPE_IQ4_XS;
+
+    using iq4_xs_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_IQ4_XS>;
+    using iq4_xs_traits = typename iq4_xs_block::traits;
+
+    // One 32-weight sub-block per lane: four words of nibbles, the same four as the non-reordered dot.
+    struct weights {
+        int   v1[iq4_xs_traits::vdr_mmvq];
+        int   v2[iq4_xs_traits::vdr_mmvq];
+        float d;  // d * (scale - 32)
+    };
+
+    struct activations {
+        int   u[8];
+        float d8;
+    };
+
+    __dpct_inline__ static weights load(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                        const std::pair<int, int> d_offset, const int & iqs) {
+        const uint8_t *  base = static_cast<const uint8_t *>(vbq);
+        const uint32_t * q4   = reinterpret_cast<const uint32_t *>(base + ibx_offset.first) + iqs;
+        const uint8_t *  meta = base + d_offset.first;
+
+        weights w;
+#pragma unroll
+        for (int j = 0; j < iq4_xs_traits::vdr_mmvq; ++j) {
+            const uint32_t t0 = kvalues_iq4nl_pair[q4[j] & 0xff];
+            const uint32_t t1 = kvalues_iq4nl_pair[(q4[j] >> 8) & 0xff];
+            const uint32_t t2 = kvalues_iq4nl_pair[(q4[j] >> 16) & 0xff];
+            const uint32_t t3 = kvalues_iq4nl_pair[(q4[j] >> 24) & 0xff];
+
+            w.v1[j] = (int) ((t0 & 0xff) | ((t1 & 0xff) << 8) | ((t2 & 0xff) << 16) | ((t3 & 0xff) << 24));
+            w.v2[j] = (int) (((t0 >> 8) & 0xff) | (((t1 >> 8) & 0xff) << 8) | (((t2 >> 8) & 0xff) << 16) |
+                             (((t3 >> 8) & 0xff) << 24));
+        }
+
+        const int sub = iqs / iq4_xs_traits::vdr_mmvq;
+        const int ls  = ((meta[4 + sub / 2] >> 4 * (sub % 2)) & 0xf) |
+                        (((*(const uint16_t *) (meta + 2) >> 2 * sub) & 3) << 4);
+        w.d = (float) (*(const ggml_half *) meta) * (float) (ls - 32);
+
+        return w;
+    }
+
+    __dpct_inline__ static activations load_activations(const int8_t * q8_1_quant_ptr,
+                                                        const sycl::half2 * q8_1_ds, const int & iqs) {
+        const int sub = iqs / iq4_xs_traits::vdr_mmvq;
+        const int * u = reinterpret_cast<const int *>(q8_1_quant_ptr) + sub * (QK8_1 / sizeof(int));
+
+        activations a;
+#pragma unroll
+        for (int j = 0; j < 8; ++j) {
+            a.u[j] = u[j];
+        }
+        a.d8 = (*(q8_1_ds + sub))[0];
+
+        return a;
+    }
+
+    __dpct_inline__ static float apply(const weights & w, const activations & a) {
+        int sumi1 = 0;
+        int sumi2 = 0;
+#pragma unroll
+        for (int j = 0; j < iq4_xs_traits::vdr_mmvq; ++j) {
+            sumi1 = dpct::dp4a(w.v1[j], a.u[j + 0], sumi1);
+            sumi2 = dpct::dp4a(w.v2[j], a.u[j + 4], sumi2);
+        }
+
+        return w.d * a.d8 * (float) (sumi1 + sumi2);
+    }
+
+    __dpct_inline__ static float dot(const weights & w, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        return apply(w, load_activations(q8_1_quant_ptr, q8_1_ds, iqs));
+    }
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        return dot(load(vbq, ibx_offset, d_offset, iqs), q8_1_quant_ptr, q8_1_ds, iqs);
+    }
+};
+
+template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_IQ4_XS> {
+    static constexpr bool value = true;
+};
+
+template <> struct reorder_vec_dot_shared_activations<GGML_TYPE_IQ4_XS> {
+    static constexpr bool value = true;
+};
 
 #endif // GGML_SYCL_VECDOTQ_HPP

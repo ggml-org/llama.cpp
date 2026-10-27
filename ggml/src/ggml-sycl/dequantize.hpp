@@ -1718,6 +1718,32 @@ dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
     }
 }
 
+// Same math as dequantize_block_iq4_xs, but reading the reordered SoA layout:
+// qs is contiguous per block and the header (d, scales_h, scales_l) lives in a trailing array.
+template<typename dst_t>
+static void dequantize_block_iq4_xs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, const int64_t nblocks,
+                                            const sycl::nd_item<3> & item_ct1) {
+    const int64_t i = item_ct1.get_group(2);
+
+    const uint8_t * base = (const uint8_t *) vx;
+    const uint8_t * qs   = base + i * (QK_K / 2);
+    const uint8_t * meta = base + nblocks * (QK_K / 2) + i * (sizeof(block_iq4_xs) - QK_K / 2);
+
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int64_t il  = tid / 8;  // 0...3
+    const int64_t ib  = tid % 8;  // 0...7
+    dst_t * y = yy + i * QK_K + 32 * ib + 4 * il;
+    const uint8_t * q4 = qs + 16 * ib + 4 * il;
+    const int       ls = ((meta[4 + ib / 2] >> 4 * (ib % 2)) & 0xf) |
+                         (((*(const uint16_t *) (meta + 2) >> 2 * ib) & 3) << 4);
+    const float d = (float) (*(const ggml_half *) meta) * (ls - 32);
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        y[j + 0]  = d * kvalues_iq4nl[q4[j] & 0xf];
+        y[j + 16] = d * kvalues_iq4nl[q4[j] >> 4];
+    }
+}
+
 template<typename dst_t>
 static void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restrict__ yy,
                                    const sycl::nd_item<3> &item_ct1) {

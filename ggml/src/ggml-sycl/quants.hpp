@@ -225,6 +225,28 @@ template <> struct block_q_t<GGML_TYPE_IQ3_S> {
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
 
+template <> struct block_q_t<GGML_TYPE_IQ4_XS> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QI4_XS;
+        static constexpr uint32_t qr       = QR4_XS;
+        static constexpr uint32_t vdr_mmvq = 4;
+    };
+
+    // Reordered layout: [qs][{d, scales_h, scales_l} per block]. The 8-byte metadata record stays
+    // packed so the dot product reaches both scale fields from the single d offset.
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK_K / 2), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        const int nblocks = nrows * (ncols / QK_K);
+        return { nblocks * (QK_K / 2) + block_index * (sizeof(block_iq4_xs) - QK_K / 2), 0 };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
 template <> struct block_q_t<GGML_TYPE_Q8_0> {
     struct traits {
         static constexpr uint32_t qk       = QK8_0;      // 32
