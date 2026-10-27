@@ -2792,13 +2792,12 @@ struct llama_model_qwen4exp : public llama_model_base {
         // the QSA layers share one set of k-pool inputs, see llama_memory_hybrid_idx
         llm_graph_input_kpool * build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb);
 
-        // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail, kq_mask included
+        // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail, independent of the kq_mask shape
         ggml_tensor * build_qsa_sel(
   const llama_memory_hybrid_idx_context * mctx_hyb,
           llm_graph_input_kpool * inp_kpool,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
-                    ggml_tensor * kq_mask,
                             int * sections,
                             int   il);
 
@@ -3026,7 +3025,7 @@ struct llama_model_glm5_next : public llama_model_base {
                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
                                       int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
 
-        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, ggml_tensor * kq_mask, const llama_layer & layer,
+        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
                                          const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
 
         // attention output (cur) and the selection to carry to the next shared layer (sel)
