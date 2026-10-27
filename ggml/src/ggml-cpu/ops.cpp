@@ -7434,6 +7434,8 @@ static void ggml_compute_forward_conv_3d_impl(const ggml_compute_params * params
     const int32_t n  = dst->op_params[10];
     const int32_t oc = dst->op_params[11];
 
+    GGML_ASSERT((int64_t) n * oc <= dst->ne[3]);
+
     const int64_t src_w = src->ne[0];
     const int64_t src_h = src->ne[1];
     const int64_t src_d = src->ne[2];
