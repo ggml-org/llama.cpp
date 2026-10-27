@@ -2472,6 +2472,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--cache-type-k-swa"}, "TYPE",
+        "override the SWA K cache type (default: same as --cache-type-k)",
+        [](common_params & params, const std::string & value) { params.cache_type_k_swa = kv_cache_type_from_str(value); }
+    ));
+    add_opt(common_arg(
+        {"--cache-type-v-swa"}, "TYPE",
+        "override the SWA V cache type (default: same as --cache-type-v)",
+        [](common_params & params, const std::string & value) { params.cache_type_v_swa = kv_cache_type_from_str(value); }
+    ));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {
