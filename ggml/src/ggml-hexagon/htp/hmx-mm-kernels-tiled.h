@@ -1224,6 +1224,59 @@ static inline void transfer_output_chunk_fp16_to_fp32(
     );
 }
 
+static inline HVX_Vector hmx_glu_f32(HVX_Vector g, HVX_Vector u, uint32_t glu_op) {
+    if (glu_op == HTP_OP_GLU_GEGLU) {
+        // gelu(x) = x * sigmoid(2 * sqrt(2/pi) * (x + 0.044715 * x^3))
+        const HVX_Vector one = hvx_vec_splat_f32(1.0f);
+        HVX_Vector y = hvx_vec_mul_f32_f32(g, g);
+        y = hvx_vec_mul_f32_f32(y, hvx_vec_splat_f32(2.0f * 0.044715f * 0.79788456080286535587989211986876f));
+        y = hvx_vec_add_f32_f32(y, hvx_vec_splat_f32(2.0f * 0.79788456080286535587989211986876f));
+        y = hvx_vec_mul_f32_f32(g, y);
+        y = hvx_vec_fast_sigmoid_f32_guard(y, one, hvx_vec_splat_f32(87.f), hvx_vec_splat_f32(-87.f));
+        g = hvx_vec_mul_f32_f32(g, y);
+    } else {
+        g = hvx_vec_silu_f32(g);
+    }
+    return hvx_vec_mul_f32_f32(g, u);
+}
+
+// output : fp16 [gate | up] column tiles (n_cols each, 32-aligned) -> f32 glu(gate, up)
+static void transfer_output_chunk_fp16_glu(
+    float *restrict dst,
+    const __fp16 *restrict vtcm_src,
+    uint32_t start_row,
+    uint32_t n_rows,
+    uint32_t n_cols,
+    uint32_t dst_stride,
+    uint32_t glu_op
+) {
+    const uint32_t n_ctiles        = n_cols / HTP_MM_HMX_TILE_N_COLS;
+    const size_t   tile_row_stride = 2 * n_ctiles * HTP_MM_HMX_TILE_N_ELMS;
+
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+
+    for (uint32_t r = 0; r < n_rows; r += 2) {
+        const uint32_t ri = start_row + r;
+        const __fp16 * row_base = vtcm_src + (ri / HTP_MM_HMX_TILE_N_ROWS) * tile_row_stride;
+        const uint32_t r1       = (ri % HTP_MM_HMX_TILE_N_ROWS) / 2;
+        float * out             = dst + r * dst_stride;
+
+        for (uint32_t c0 = 0; c0 < n_ctiles; c0++) {
+            HVX_Vector g = ((const HVX_Vector *) (row_base + c0 * HTP_MM_HMX_TILE_N_ELMS))[r1];
+            HVX_Vector u = ((const HVX_Vector *) (row_base + (c0 + n_ctiles) * HTP_MM_HMX_TILE_N_ELMS))[r1];
+            HVX_VectorPair gp = Q6_Wqf32_vmpy_VhfVhf(g, one);
+            HVX_VectorPair up = Q6_Wqf32_vmpy_VhfVhf(u, one);
+
+            hvx_vmemu(out + c0 * HTP_MM_HMX_TILE_N_COLS) =
+                hmx_glu_f32(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(gp)), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(up)), glu_op);
+            if (r + 1 < n_rows) {
+                hvx_vmemu(out + dst_stride + c0 * HTP_MM_HMX_TILE_N_COLS) =
+                    hmx_glu_f32(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(gp)), Q6_Vsf_equals_Vqf32(Q6_V_hi_W(up)), glu_op);
+            }
+        }
+    }
+}
+
 typedef struct {
     const __fp16  *vtcm_src;
     float         *dst;
@@ -1667,9 +1720,12 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
             uint32_t mapping_stride,
             size_t dst_nb1,
             size_t dst_nb2,
-            uint32_t cne1) {
+            uint32_t cne1,
+            uint32_t glu_op) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
-    const size_t tile_row_stride = (n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
+    // glu: vtcm holds [gate | up] column tiles, n_cols each
+    const size_t n_ctiles        = n_cols / HTP_MM_HMX_TILE_N_COLS;
+    const size_t tile_row_stride = (glu_op ? 2 : 1) * n_ctiles * HTP_MM_HMX_TILE_N_ELMS;
 
     const HVX_Vector one = hvx_vec_splat_f16(1.0);
 
@@ -1698,10 +1754,19 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
             const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
             HVX_Vector v = ((const HVX_Vector *) tile)[r1];
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
+            HVX_Vector out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            HVX_Vector out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
 
-            hvx_vmemu(output_row0 + c) = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            if (glu_op) {
+                HVX_Vector u = ((const HVX_Vector *) (tile + n_ctiles * HTP_MM_HMX_TILE_N_ELMS))[r1];
+                HVX_VectorPair up = Q6_Wqf32_vmpy_VhfVhf(u, one);
+                out0 = hmx_glu_f32(out0, Q6_Vsf_equals_Vqf32(Q6_V_lo_W(up)), glu_op);
+                out1 = hmx_glu_f32(out1, Q6_Vsf_equals_Vqf32(Q6_V_hi_W(up)), glu_op);
+            }
+
+            hvx_vmemu(output_row0 + c) = out0;
             if (output_row1) {
-                hvx_vmemu(output_row1 + c) = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                hvx_vmemu(output_row1 + c) = out1;
             }
         }
     }

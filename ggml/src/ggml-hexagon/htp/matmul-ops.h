@@ -76,6 +76,7 @@ struct htp_mm_kernel_params {
     int32_t  act_row_size;       // Row size for activation scratchpad
     int32_t  vtcm_size;          // Total required scratchpad size in VTCM
     int32_t  vtcm_bias_size;     // bias scratchpad size in VTCM (fused only)
+    int32_t  glu_op;             // HMX NX epilogue: dst = glu(src[0] out, src[1] out), 0 = none
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;
