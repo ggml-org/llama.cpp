@@ -299,6 +299,7 @@ private:
 
     const llama_model & model;
 
+    bool spark_decode_graph = false;
     llama_cparams cparams;
 
     llama_adapter_cvec_ptr  cvec;

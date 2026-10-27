@@ -1538,6 +1538,17 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
+    if (model.arch == LLM_ARCH_SPARK2_5 && spark_decode_graph && ubatch.n_tokens > 1 && memory) {
+        // Decode reordering can replace the full-context allocation plan with a smaller one.
+        // Restore the prompt plan once so growing KV masks do not force an allocation per ubatch.
+        const auto full = memory->init_full();
+        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+        if (!full || !graph_reserve(n_tokens, cparams.n_seq_max, std::min(n_tokens, cparams.n_outputs_max), full.get())) {
+            ret = GGML_STATUS_ALLOC_FAILED;
+            return nullptr;
+        }
+    }
+    spark_decode_graph = ubatch.n_tokens == 1;
     auto * res = get_gf_res_prev();
     auto * gf  = res->get_gf();
 
