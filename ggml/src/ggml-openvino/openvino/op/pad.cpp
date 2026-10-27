@@ -20,13 +20,15 @@ namespace {
 
 ov::Output<ov::Node> translate_circular_pad(ov::Output<ov::Node> input,
                                             const std::array<int32_t, 8> & pads,
-                                            const ov::Shape & input_shape) {
+                                            const ov::Shape & input_shape,
+                                            bool stateful) {
     ov::Output<ov::Node> result = std::move(input);
 
     const std::array<int32_t, 4> pads_begin = {pads[6], pads[4], pads[2], pads[0]};
     const std::array<int32_t, 4> pads_end = {pads[7], pads[5], pads[3], pads[1]};
-    // input can have rank < 4 (leading dims dropped); align pads to the trailing input axes
-    const size_t dropped = input_shape.size() < pads_begin.size() ? pads_begin.size() - input_shape.size() : 0;
+    // Stateful models drop leading dims, so the input can have rank < 4; align pads to the trailing input axes
+    const size_t dropped =
+        stateful && input_shape.size() < pads_begin.size() ? pads_begin.size() - input_shape.size() : 0;
 
     for (size_t i = 0; i < dropped; ++i) {
         FRONT_END_CHECK_IMPLEMENTED(pads_begin[i] == 0 && pads_end[i] == 0,
@@ -79,7 +81,7 @@ OutputVector translate_pad(const NodeContext & context) {
     const bool circular = op_params[8] != 0;
 
     if (circular) {
-        auto res = translate_circular_pad(input, pads, context.get_input_shape(0).to_shape());
+        auto res = translate_circular_pad(input, pads, context.get_input_shape(0).to_shape(), context.is_stateful());
         return rename_outputs_with_suffix({res}, context.get_name());
     }
 
@@ -88,7 +90,7 @@ OutputVector translate_pad(const NodeContext & context) {
 
     // Stateful models drop leading dims, so the input can have rank < 4.
     const auto input_rank = input.get_partial_shape().rank();
-    if (input_rank.is_static() && input_rank.get_length() < 4) {
+    if (context.is_stateful() && input_rank.is_static() && input_rank.get_length() < 4) {
         const size_t dropped = 4 - static_cast<size_t>(input_rank.get_length());
         for (size_t i = 0; i < dropped; ++i) {
             FRONT_END_OP_CONVERSION_CHECK(pads_begin[i] == 0 && pads_end[i] == 0,
