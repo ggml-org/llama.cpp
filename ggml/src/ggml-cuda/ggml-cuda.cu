@@ -3861,6 +3861,47 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // try and fuse nodes and return the number of nodes to skip
+static __global__ void sample_cdf_index(const float * cdf, const float * uniform,
+        const int32_t * candidates, int32_t * dst, int n, int32_t * index_out) {
+    const int lane = threadIdx.x;
+    const float u = uniform[0];
+    int index = n-1;
+    if (isfinite(cdf[n-1]) && isfinite(u)) {
+        int lo = 0, hi = n;
+        while (hi-lo > 32) {
+            const int step = (hi-lo+31)/32;
+            const int pos = min(lo+lane*step,hi-1);
+            const unsigned mask = __ballot_sync(0xffffffff,cdf[pos]-u > 0);
+            const int first = mask ? __ffs(mask)-1 : 32;
+            const int end = __shfl_sync(0xffffffff,pos,min(first,31));
+            const int begin = __shfl_sync(0xffffffff,pos,max(first-1,0))+1;
+            if (first < 32) hi = end+1;
+            if (first > 0) lo = begin;
+        }
+        const int pos = lo+lane;
+        const unsigned mask = __ballot_sync(0xffffffff,pos < hi && cdf[pos]-u > 0);
+        if (mask) index = lo+__ffs(mask)-1;
+    } else {
+        int count = 0;
+        for (int i = lane; i < n; i += 32) count += cdf[i]-u > 0;
+        count = warp_reduce_sum<32>(count);
+        index = n-max(1,min(n,count));
+    }
+    if (lane == 0) {
+        const int32_t token = candidates ? candidates[index] : index;
+        if (index_out) index_out[0] = index;
+        dst[0] = token;
+    }
+}
+
+static __global__ void top_p_mask_logits(const float * cdf, const float * logits, float * dst, int n, float p) {
+    const int index = blockIdx.x*blockDim.x+threadIdx.x;
+    if (index < n) {
+        const bool keep = index == 0 || p-cdf[index-1] > 0;
+        dst[index] = logits[index]+(keep ? 0.0f : -INFINITY);
+    }
+}
+
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     if (ggml_cuda_fusion_disabled()) {
@@ -3868,6 +3909,113 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+    static const bool sample_cdf = []() {
+        const char * value = getenv("GGML_CUDA_FUSE_SAMPLE_CDF");
+        return value && std::atoi(value) != 0;
+    }();
+    if (sample_cdf && ggml_cuda_info().devices[cuda_ctx->device].cc == GGML_CUDA_CC_ADA_LOVELACE &&
+            node->op == GGML_OP_SCALE && node->type == GGML_TYPE_F32 && ggml_is_vector(node) &&
+            node->src[0]->op == GGML_OP_CUMSUM && node->src[0]->src[0]->op == GGML_OP_SOFT_MAX &&
+            ggml_nelements(node) <= (1<<24) && ggml_is_contiguous(node->src[0])) {
+        float threshold[2];
+        memcpy(threshold,node->op_params,sizeof(threshold));
+        auto unwrap=[](ggml_tensor * t) {
+            while (t->op==GGML_OP_RESHAPE) t=t->src[0];
+            return t;
+        };
+        const int n=ggml_nelements(node);
+        for (int end=i+1;end<std::min(i+16,cgraph->n_nodes);++end) {
+            auto * add=cgraph->nodes[end];
+            if (add->op!=GGML_OP_ADD || add->type!=GGML_TYPE_F32 || ggml_nelements(add)!=n) continue;
+            auto * logits=node->src[0]->src[0]->src[0];
+            auto * bias=add->src[0]==logits ? add->src[1] : add->src[0];
+            if (add->src[0]!=logits && add->src[1]!=logits) continue;
+            if (bias->op!=GGML_OP_LOG) continue;
+            auto * set=unwrap(bias->src[0]);
+            if (set->op!=GGML_OP_SET_ROWS) continue;
+            auto * mask=unwrap(set->src[2]);
+            auto * ones=set->src[0];
+            auto * cast=set->src[1];
+            if (mask->op!=GGML_OP_UNARY || ggml_get_unary_op(mask)!=GGML_UNARY_OP_STEP || mask->src[0]!=node ||
+                    cast->op!=GGML_OP_CPY || cast->type!=GGML_TYPE_I32 || ggml_nelements(cast)!=1) continue;
+            auto * clamp=cast->src[0];
+            if (clamp->op!=GGML_OP_CLAMP || clamp->src[0]->op!=GGML_OP_SUM || clamp->src[0]->src[0]!=mask ||
+                    ones->op!=GGML_OP_SCALE || ones->src[0]!=clamp) continue;
+            float bounds[2],fill[2];
+            memcpy(bounds,clamp->op_params,sizeof(bounds));
+            memcpy(fill,ones->op_params,sizeof(fill));
+            auto overlaps=[](const ggml_tensor * a,const ggml_tensor * b) {
+                const uintptr_t x=(uintptr_t)a->data,y=(uintptr_t)b->data;
+                return x<y+ggml_nbytes(b) && y<x+ggml_nbytes(a);
+            };
+            int cast_index=-1;
+            std::vector<ggml_op> ops;
+            bool matched = true;
+            for (int j=i;j<=end;++j) {
+                auto * t = cgraph->nodes[j];
+                auto * root = unwrap(t);
+                matched &= t==node || root==mask || t==clamp->src[0] || t==clamp || t==ones ||
+                    t==cast || root==set || t==bias || t==add;
+                ops.push_back(t->op);
+                if (t==cast) cast_index=j;
+            }
+            // CPY references itself; its other user is SET_ROWS, and both are removed.
+            const int outputs[]={cast_index,end};
+            if (matched && set->ne[0]==1 && ggml_nelements(set)==n && ggml_nelements(mask)==n &&
+                    ones->type==GGML_TYPE_F32 && ggml_nelements(ones)==1 &&
+                    threshold[0]==-1 && threshold[1]>=0 && threshold[1]<=1 && bounds[0]==0 && bounds[1]==n-1 &&
+                    fill[0]==0 && fill[1]==1 && cast_index>=0 &&
+                    !(cast->flags & GGML_TENSOR_FLAG_OUTPUT) && ggml_node_get_use_count(cgraph,cast_index)==2 &&
+                    cast->src[1]==cast && ggml_is_contiguous(logits) && ggml_is_contiguous(add) &&
+                    !overlaps(node->src[0],add) &&
+                    (!overlaps(logits,add) || logits->data==add->data) &&
+                    ggml_can_fuse_subgraph(cgraph,i,end-i+1,ops.data(),outputs,2)) {
+                top_p_mask_logits<<<(n+255)/256,256,0,cuda_ctx->stream()>>>((const float *)node->src[0]->data,
+                    (const float *)logits->data,(float *)add->data,n,threshold[1]);
+                return end-i;
+            }
+        }
+    }
+    if (sample_cdf && ggml_cuda_info().devices[cuda_ctx->device].cc == GGML_CUDA_CC_ADA_LOVELACE &&
+            i+5 < cgraph->n_nodes && node->op == GGML_OP_SUB &&
+            node->type == GGML_TYPE_F32 && node->src[0]->op == GGML_OP_CUMSUM &&
+            node->src[0]->src[0]->op == GGML_OP_SOFT_MAX && ggml_is_vector(node) &&
+            ggml_is_contiguous(node->src[0]) && ggml_nelements(node) <= (1<<24) &&
+            node->src[1]->type == GGML_TYPE_F32 && ggml_nelements(node->src[1]) == 1) {
+        auto * step = cgraph->nodes[i+1];
+        auto * sum = cgraph->nodes[i+2];
+        auto * clamp = cgraph->nodes[i+3];
+        auto * scale = cgraph->nodes[i+4];
+        auto * cast = cgraph->nodes[i+5];
+        const int n = ggml_nelements(node);
+        float bounds[2], transform[2];
+        memcpy(bounds,clamp->op_params,sizeof(bounds));
+        memcpy(transform,scale->op_params,sizeof(transform));
+        int end = i+6;
+        while (end < cgraph->n_nodes && (cgraph->nodes[end]->op == GGML_OP_RESHAPE || cgraph->nodes[end]->op == GGML_OP_VIEW)) ++end;
+        auto * gather = end < cgraph->n_nodes ? cgraph->nodes[end] : nullptr;
+        const bool has_gather = gather && gather->op == GGML_OP_GET_ROWS && gather->type == GGML_TYPE_I32 &&
+            gather->src[1] == cast && gather->src[0]->type == GGML_TYPE_I32 &&
+            gather->src[0]->ne[0] == 1 && ggml_nelements(gather->src[0]) == n && ggml_is_contiguous(gather->src[0]);
+        std::vector<int> indices;
+        std::vector<ggml_op> ops;
+        for (int j = i; j < i+6; ++j) { indices.push_back(j); ops.push_back(cgraph->nodes[j]->op); }
+        if (has_gather) { indices.push_back(end); ops.push_back(gather->op); }
+        const int outputs[] = {i+5,has_gather ? end : i+5};
+        if (step->op == GGML_OP_UNARY && ggml_get_unary_op(step) == GGML_UNARY_OP_STEP && step->src[0] == node &&
+                sum->op == GGML_OP_SUM && sum->src[0] == step && clamp->op == GGML_OP_CLAMP && clamp->src[0] == sum &&
+                bounds[0] == 1 && bounds[1] == n && scale->op == GGML_OP_SCALE && scale->src[0] == clamp &&
+                transform[0] == -1 && transform[1] == n && cast->op == GGML_OP_CPY && cast->src[0] == scale &&
+                cast->type == GGML_TYPE_I32 && ggml_nelements(cast) == 1 &&
+                ggml_can_fuse_subgraph_ext(cgraph,indices.data(),indices.size(),ops.data(),outputs,has_gather ? 2 : 1)) {
+            sample_cdf_index<<<1,32,0,cuda_ctx->stream()>>>((const float *) node->src[0]->data,
+                (const float *) node->src[1]->data,has_gather ? (const int32_t *) gather->src[0]->data : nullptr,
+                (int32_t *) (has_gather ? gather : cast)->data,n,has_gather ? (int32_t *) cast->data : nullptr);
+            return has_gather ? end-i : 5;
+        }
+    }
+
+
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&

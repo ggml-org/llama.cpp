@@ -1559,6 +1559,26 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
     const T mask_keep = llama_cast<T>(0.0f);
     const T mask_drop = llama_cast<T>(-INFINITY);
 
+    if constexpr (!swa && !is_2d && !alibi) {
+        static const bool fast_single = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_17B_MASK");
+            return value && std::atoi(value) != 0;
+        }();
+        if (fast_single && args.hparams.n_embd == 2048 && n_stream == 1 && n_tps == 1 && ubatch->n_seq_id[0] == 1) {
+            const auto id = ubatch->seq_id[0][0];
+            const auto & cells = v_cells.at(seq_to_stream[id]);
+            const auto begin = cells.used_min(), end = cells.used_max_p1(), count = cells.get_used();
+            // One distinct position per used cell proves all cells contain this sequence.
+            if (count > 0 && end <= n_kv && end-begin == count && cells.seq_pos_count(id) == count &&
+                    (!causal || cells.seq_pos_max(id) <= ubatch->pos[0])) {
+                std::fill(data,data+begin,mask_drop);
+                std::fill(data+begin,data+end,mask_keep);
+                std::fill(data+end,data+n_kv,mask_drop);
+                return;
+            }
+        }
+    }
+
     // the min position in the batch for each sequence
     llama_pos seq_pos_min[LLAMA_MAX_SEQ];
     std::fill(seq_pos_min, seq_pos_min + LLAMA_MAX_SEQ, INT32_MAX);
