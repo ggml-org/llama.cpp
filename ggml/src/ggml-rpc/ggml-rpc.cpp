@@ -2046,7 +2046,9 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
 
     LOG_DBG2("[%s] src: %s -> dst: %s\n", __func__, rpc_log_format_tensor(src).c_str(), rpc_log_format_tensor(dst).c_str());
 
-    response.result = ggml_backend_buffer_copy_tensor(src, dst);
+    ggml_backend_tensor_copy(src, dst);
+    response.result = true;
+
     return true;
 }
 

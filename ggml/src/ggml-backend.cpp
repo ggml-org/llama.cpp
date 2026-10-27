@@ -353,7 +353,7 @@ void ggml_backend_buffer_reset(ggml_backend_buffer_t buffer) {
     }
 }
 
-bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst) {
+static bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst) {
     ggml_backend_buffer_t dst_buf = dst->view_src ? dst->view_src->buffer : dst->buffer;
     if (dst_buf->iface.cpy_tensor) {
         return dst_buf->iface.cpy_tensor(dst_buf, src, dst);

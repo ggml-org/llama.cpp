@@ -84,9 +84,6 @@ extern "C" {
                    void *                     context,
                    size_t                     size);
 
-    // do not use directly, use ggml_backend_tensor_copy instead
-    GGML_API bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst);
-
     // multi-buffer
     // buffer that contains a collection of buffers
     GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers);
