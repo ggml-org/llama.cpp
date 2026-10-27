@@ -916,9 +916,9 @@ constant bool FC_top_k_mask_vec        [[function_constant(FC_TOP_K_MASK + 3)]];
 template <typename T, typename T4>
 kernel void kernel_top_k_mask_fill(
         constant ggml_metal_kargs_top_k_mask & args,
-        device         char * dst,
-        uint    tid  [[thread_position_in_grid]],
-        uint   ntot  [[threads_per_grid]]) {
+        device char * dst,
+        uint  tid[[thread_position_in_grid]],
+        uint ntot[[threads_per_grid]]) {
     const T ninf = T(-INFINITY);
 
     if (FC_top_k_mask_vec) {
@@ -934,6 +934,12 @@ kernel void kernel_top_k_mask_fill(
     }
 }
 
+typedef decltype(kernel_top_k_mask_fill<half,  half4>)  kernel_top_k_mask_fill_h_t;
+typedef decltype(kernel_top_k_mask_fill<float, float4>) kernel_top_k_mask_fill_f_t;
+
+template [[host_name("kernel_top_k_mask_fill_f16")]] kernel kernel_top_k_mask_fill_h_t kernel_top_k_mask_fill<half,  half4>;
+template [[host_name("kernel_top_k_mask_fill_f32")]] kernel kernel_top_k_mask_fill_f_t kernel_top_k_mask_fill<float, float4>;
+
 // one threadgroup per row: copy the mask cells of the live picks and of the extra cells over the fill
 template <typename T, typename T4>
 kernel void kernel_top_k_mask(
@@ -943,7 +949,7 @@ kernel void kernel_top_k_mask(
         device const  char * score,
         device const  char * blocks,
         device const  char * extra,
-        device         char * dst,
+        device        char * dst,
         uint3   tgpig[[threadgroup_position_in_grid]],
         uint3   tpitg[[thread_position_in_threadgroup]],
         uint3 ntg_max[[threads_per_threadgroup]]) {
@@ -991,12 +997,8 @@ kernel void kernel_top_k_mask(
     }
 }
 
-typedef decltype(kernel_top_k_mask_fill<half,  half4>)  kernel_top_k_mask_fill_h_t;
-typedef decltype(kernel_top_k_mask_fill<float, float4>) kernel_top_k_mask_fill_f_t;
-typedef decltype(kernel_top_k_mask<half,  half4>)       kernel_top_k_mask_h_t;
-typedef decltype(kernel_top_k_mask<float, float4>)      kernel_top_k_mask_f_t;
+typedef decltype(kernel_top_k_mask<half,  half4>)  kernel_top_k_mask_h_t;
+typedef decltype(kernel_top_k_mask<float, float4>) kernel_top_k_mask_f_t;
 
-template [[host_name("kernel_top_k_mask_fill_f16")]] kernel kernel_top_k_mask_fill_h_t kernel_top_k_mask_fill<half,  half4>;
-template [[host_name("kernel_top_k_mask_fill_f32")]] kernel kernel_top_k_mask_fill_f_t kernel_top_k_mask_fill<float, float4>;
-template [[host_name("kernel_top_k_mask_f16")]]      kernel kernel_top_k_mask_h_t       kernel_top_k_mask<half,  half4>;
-template [[host_name("kernel_top_k_mask_f32")]]      kernel kernel_top_k_mask_f_t       kernel_top_k_mask<float, float4>;
+template [[host_name("kernel_top_k_mask_f16")]] kernel kernel_top_k_mask_h_t kernel_top_k_mask<half,  half4>;
+template [[host_name("kernel_top_k_mask_f32")]] kernel kernel_top_k_mask_f_t kernel_top_k_mask<float, float4>;
