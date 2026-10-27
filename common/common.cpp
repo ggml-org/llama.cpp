@@ -1302,31 +1302,21 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     // these decision models return a score for each token via the embeddings output
     // TODO: maybe improve this in the future
     const auto decision_type = common_get_decision_type(model);
+    // minicpm-ocr-jev reads its class scores from the pooled output, the pooling type is the one of the GGUF
     if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV || decision_type == COMMON_DECISION_TYPE_CLEF ||
-        decision_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI || decision_type == COMMON_DECISION_TYPE_VLLM_DECISION2) {
+        decision_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI || decision_type == COMMON_DECISION_TYPE_VLLM_DECISION2 ||
+        decision_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+        const auto pooling_type = decision_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV ? LLAMA_POOLING_TYPE_UNSPECIFIED : LLAMA_POOLING_TYPE_NONE;
+
         params.embedding    = true;
-        params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        params.pooling_type = pooling_type;
 
         cparams.embeddings            = true;
-        cparams.pooling_type          = LLAMA_POOLING_TYPE_NONE;
+        cparams.pooling_type          = pooling_type;
         cparams.n_outputs_max         = cparams.n_batch;
         cparams.n_outputs_max_per_seq = 1;
 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
-    }
-
-    // the class scores are the pooled output of the last token, the LM head is skipped
-    if (decision_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
-        params.embedding    = true;
-        params.pooling_type = LLAMA_POOLING_TYPE_LAST;
-
-        cparams.embeddings   = true;
-        cparams.pooling_type = LLAMA_POOLING_TYPE_LAST;
-        // same output limits as --embedding, every prompt token is an output
-        cparams.n_outputs_max         = cparams.n_batch;
-        cparams.n_outputs_max_per_seq = 1;
-
-        LOG_INF("%s", "decision model reads the pooled embeddings output, enabling embedding mode with last pooling\n");
     }
 
     // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch

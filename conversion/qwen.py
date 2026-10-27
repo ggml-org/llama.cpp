@@ -718,17 +718,12 @@ class MiniCPMOCRSeqClsModel(Qwen3_5TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        # the head is the only source of the number of classes: the config.json of the checkpoint
-        # keeps the one of the base model, it has no num_labels / id2label
-        head = self.model_tensors.get("score.weight")
-        if head is None:
+        # the config.json of the checkpoint keeps the one of the base model, it has no num_labels / id2label
+        if "score.weight" not in self.model_tensors:
             raise ValueError("the checkpoint has no score.weight classification head")
-        n_classes = head().shape[0]
-        if n_classes != len(self.CLASS_LABELS):
-            raise ValueError(f"expected {len(self.CLASS_LABELS)} classes, the head has {n_classes}")
 
         self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
-        self.gguf_writer.add_embedding_length_out(n_classes)
+        self.gguf_writer.add_embedding_length_out(len(self.CLASS_LABELS))
         self.gguf_writer.add_classifier_output_labels(self.CLASS_LABELS)
         self.gguf_writer.add_decision_type(gguf.DecisionType.MINICPM_OCR_JEV)
 

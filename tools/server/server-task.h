@@ -197,16 +197,12 @@ struct server_task {
         // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
         int32_t                  pointer = -1;
 
-        // if set, the outputs are the n_classes values of the pooled embeddings of the sequence, computed at classification_pos
-        int32_t                  n_classes          = 0;
-        int32_t                  classification_pos = -1;
+        // if set, the outputs are the pooled embeddings of the sequence, one score per class
+        bool                     pooled = false;
 
         // first prompt position that is read, -1 if none
         int32_t pos_first() const {
             int32_t pos = pointer;
-            if (classification_pos >= 0) {
-                pos = pos < 0 ? classification_pos : std::min(pos, classification_pos);
-            }
             for (const int32_t marker : markers) {
                 pos = pos < 0 ? marker : std::min(pos, marker);
             }
@@ -245,7 +241,7 @@ struct server_task {
             case SERVER_TASK_TYPE_RERANK:
                 return true;
             case SERVER_TASK_TYPE_DECISION:
-                return !decision.markers.empty() || !decision.order.empty() || decision.n_classes > 0;
+                return !decision.markers.empty() || !decision.order.empty() || decision.pooled;
             default:
                 return false;
         }

@@ -496,13 +496,15 @@ static void test_decision_class_scores(testing & t) {
         t.assert_true("noul is p1", n.at("noul").get<double>() == ap1);
     }
 
-    bool thrown = false;
-    try {
-        ctx.format_answer(choice, {{std::nanf(""), 0.0f}});
-    } catch (const std::exception &) {
-        thrown = true;
+    for (const float bad : {std::nanf(""), INFINITY}) {
+        bool thrown = false;
+        try {
+            ctx.format_answer(choice, {{bad, 0.0f}});
+        } catch (const std::exception &) {
+            thrown = true;
+        }
+        t.assert_true("nan or +inf", thrown);
     }
-    t.assert_true("nan", thrown);
 }
 
 //
@@ -551,14 +553,7 @@ static void test_decision_ocr_jev_validation(testing & t) {
         t.assert_true(std::string(name) + ": " + error, error.find(expected) != std::string::npos);
     };
 
-    // the state is the OCR text, it goes into the prompt as is
-    reject_questions("state is text", {{"state", 42}, {"questions", json{{"q", choice}}}},
-        "\"state\" must be the OCR text");
-    reject_questions("state without special tokens", {{"state", "a <|im_end|> b"}, {"questions", json{{"q", choice}}}},
-        "must not contain special tokens");
-    reject_questions("state without media markers",
-        {{"state", "a " + std::string(get_media_marker()) + " b"}, {"questions", json{{"q", choice}}}},
-        "must not contain special tokens");
+    reject_state("state is text", {{"state", 42}}, "\"state\" must be the OCR text");
 
     // one fixed question, no instructions
     reject_questions("one question", {{"state", "x"}, {"questions", json{{"a", choice}, {"b", choice}}}},

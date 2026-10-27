@@ -240,19 +240,8 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
     if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
         throw std::invalid_argument("\"questions\" must be a non-empty object");
     }
-    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
-        // the OCR text goes in the prompt as is, so it must not be read as special tokens
-        const json & state = body.at("state");
-        if (!state.is_string()) {
-            throw std::invalid_argument("\"state\" must be the OCR text");
-        }
-        const std::string text = state.get<std::string>();
-        if (server_decision_escape_special_tokens(text) != text || text.find(get_media_marker()) != std::string::npos) {
-            throw std::invalid_argument("\"state\" must not contain special tokens or media markers");
-        }
-        if (body.at("questions").size() != 1) {
-            throw std::invalid_argument("this model answers exactly one question");
-        }
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV && body.at("questions").size() != 1) {
+        throw std::invalid_argument("this model answers exactly one question");
     }
 
     std::vector<server_decision_question> questions;
@@ -405,6 +394,9 @@ static void decision_load_audio(const json & data, std::vector<raw_buffer> & fil
 }
 
 json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV && !body.at("state").is_string()) {
+        throw std::invalid_argument("\"state\" must be the OCR text");
+    }
     if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
         throw std::invalid_argument("\"videos\" is not supported");
     }
@@ -1090,6 +1082,11 @@ std::string server_decision_context::render(
         inp["instructions"] = decision_kev_text(question.instructions);
     }
 
+    // the OCR text must not be parsed as special tokens
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+        inp["state"] = server_decision_escape_special_tokens(state.get<std::string>());
+    }
+
     // the input must not contain the marker of the options
     if (!text_marker.empty()) {
         inp = decision_replace_text(inp, text_marker, " ");
@@ -1143,13 +1140,8 @@ void server_decision_context::fill_task(
     const std::string prompt = render(state, questions, question, variant, files.size());
 
     if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
-        // the class scores are the pooled output, computed at the last token of the prompt
-        task.tokens = process_mtmd_prompt(mctx, prompt, files, init_opt);
-        if (task.n_tokens() == 0 || task.tokens[task.n_tokens() - 1] == LLAMA_TOKEN_NULL) {
-            throw std::runtime_error("unexpected layout of the decision prompt");
-        }
-        task.decision.n_classes          = (int32_t) n_options_max;
-        task.decision.classification_pos = task.n_tokens() - 1;
+        task.tokens          = process_mtmd_prompt(mctx, prompt, files, init_opt);
+        task.decision.pooled = true;
         return;
     }
 
@@ -1592,8 +1584,8 @@ json server_decision_context::format_answer(const server_decision_question & que
         if (s.size() != n) {
             throw std::runtime_error("decision result does not match the number of options");
         }
-        // a joint head returns NaN if it could not use the decision order
-        if (std::any_of(s.begin(), s.end(), [](float v) { return std::isnan(v); })) {
+        // a joint head returns NaN if it could not use the decision order, +inf would make the softmax NaN
+        if (std::any_of(s.begin(), s.end(), [](float v) { return std::isnan(v) || v == INFINITY; })) {
             throw std::runtime_error("the model could not evaluate the decision");
         }
         std::vector<double> logits(s.begin(), s.end());

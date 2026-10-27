@@ -13,7 +13,7 @@ from .qwen import Qwen3Model, Qwen3MoeModel
 from .qwenvl import Qwen25AudioModel
 
 
-@ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "MiniCPMOCRForSequenceClassification", "OpenJevModel")
+@ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "OpenJevModel")
 @ModelBase.example("Qwen/Qwen3-VL-4B-Instruct", "Qwen/Qwen3-VL-30B-A3B-Instruct", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-35B-A3B")
 class Qwen3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
@@ -52,25 +52,12 @@ class Qwen3VLVisionModel(MmprojModel):
             if merge_size is not None:
                 self.gguf_writer.add_vision_spatial_merge_size(int(merge_size))
 
-        # MiniCPM-OCR-Jev was trained with the processor budget of its preprocessor config, which is
-        # wider than the Qwen-VL default in mtmd (4096 merged tokens). Export it so that a page is not
-        # downscaled below the resolution the model saw in training.
-        if self._is_minicpm_ocr_jev():
-            pc = self.preprocessor_config
-            if (min_px := pc.get("size", {}).get("shortest_edge")) is not None:
-                self.gguf_writer.add_vision_min_pixels(int(min_px))
-            if (max_px := pc.get("size", {}).get("longest_edge")) is not None:
-                self.gguf_writer.add_vision_max_pixels(int(max_px))
-
         # Use text config's rms_norm_eps for vision attention layernorm eps
         rms_norm_eps = self.global_config.get("text_config", {}).get("rms_norm_eps", 1e-6)
         self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
 
         if self.is_deepstack_layers:
             self.gguf_writer.add_vision_is_deepstack_layers(self.is_deepstack_layers)
-
-    def _is_minicpm_ocr_jev(self) -> bool:
-        return "MiniCPMOCRForSequenceClassification" in (self.global_config.get("architectures") or [])
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -155,6 +142,16 @@ class Qwen3VLVisionModel(MmprojModel):
             return
 
         yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
+
+
+@ModelBase.register("MiniCPMOCRForSequenceClassification")
+class MiniCPMOCRSeqClsVisionModel(Qwen3VLVisionModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # trained with the image budget of its processor, wider than the mtmd default of Qwen-VL
+        size = self.preprocessor_config["size"]
+        self.gguf_writer.add_vision_min_pixels(int(size["shortest_edge"]))
+        self.gguf_writer.add_vision_max_pixels(int(size["longest_edge"]))
 
 
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")

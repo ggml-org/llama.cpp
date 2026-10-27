@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -75,9 +76,10 @@ struct server_decision_context {
         }
     }
 
-    // false if the model has no trained LM head, text generation is then not available
+    // false for a decision-only model, it serves no text generation
     bool can_generate() const {
-        return type != COMMON_DECISION_TYPE_MINICPM_OCR_JEV;
+        const auto out = server_model_output_modalities(type, true, false);
+        return std::find(out.begin(), out.end(), "text") != out.end();
     }
 
     // throw std::invalid_argument on bad input
