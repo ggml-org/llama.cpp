@@ -72,8 +72,7 @@ void llama_model_lfm3::load_arch_tensors(llama_model_loader &) {
             layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_head}, 0);
 
             if (!hparams.is_swa(i)) {
-                layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i),
-                                                 {n_embd_head_k / 2}, rope_freqs_flag);
+                layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_embd_head_k / 2}, rope_freqs_flag);
                 rope_freqs_flag = TENSOR_DUPLICATED;
             }
         } else {

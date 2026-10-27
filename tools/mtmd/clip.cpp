@@ -2624,8 +2624,8 @@ struct clip_model_loader {
 
             // lfm3vl conv layers
             layer.conv2d_in_proj_w  = get_tensor(string_format(TN_LFM3VL_CONV2D_IN_PROJ,  prefix, il, "weight"), false);
-            layer.conv2d_spatial_w  = get_tensor(string_format(TN_LFM3VL_CONV2D_SPATIAL,   prefix, il, "weight"), false);
-            layer.conv2d_out_proj_w = get_tensor(string_format(TN_LFM3VL_CONV2D_OUT_PROJ,  prefix, il, "weight"), false);
+            layer.conv2d_spatial_w  = get_tensor(string_format(TN_LFM3VL_CONV2D_SPATIAL,  prefix, il, "weight"), false);
+            layer.conv2d_out_proj_w = get_tensor(string_format(TN_LFM3VL_CONV2D_OUT_PROJ, prefix, il, "weight"), false);
 
             // some models already exported with legacy (incorrect) naming which is quite messy, let's fix it here
             // note: Qwen model converted from the old surgery script has n_ff = 0, so we cannot use n_ff to check!
