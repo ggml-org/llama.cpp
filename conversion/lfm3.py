@@ -82,9 +82,11 @@ class LFM3Model(TextModel):
 
     def set_vocab(self):
         super().set_vocab()
-        # LFM3-Audio keeps the text config under "lfm", LFM3-Omni has an audio encoder config
-        is_audio = "lfm" in self.hparams
-        is_omni  = "audio_encoder_config" in self.hparams
+        # hparams hold the merged text config, the checkpoint's own model_type is in config.json
+        with open(self.dir_model / "config.json", encoding="utf-8") as f:
+            model_type = json.load(f).get("model_type")
+        is_audio = model_type == "lfm3_audio"
+        is_omni  = model_type == "lfm3_omni"
         templates = []
         if is_audio:
             templates.append({"name": "asr", "template": self._asr_template})
