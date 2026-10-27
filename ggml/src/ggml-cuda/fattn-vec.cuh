@@ -16,8 +16,8 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpass-failed"
 #endif // __clang__
-template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap> // D == head size
-__launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, int spark = 0> // D == head size
+__launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), spark == 3 ? 4 : 1)
 static __global__ void flash_attn_ext_vec(
         const char * Q_ptr,
         const char * K_ptr,
@@ -79,7 +79,8 @@ static __global__ void flash_attn_ext_vec(
 #endif // RDNA
     constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);
 #else
-    constexpr int nthreads_KQ_q = (D/4 < 32 ? D/4 : 32);
+    // Use two independent K rows per warp in the Q8 specialization.
+    constexpr int nthreads_KQ_q = spark == 4 && type_K == GGML_TYPE_Q8_0 ? 16 : (D/4 < 32 ? D/4 : 32);
     constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);
 #endif // GGML_USE_HIP
 
@@ -264,7 +265,7 @@ static __global__ void flash_attn_ext_vec(
             KQ_max_new[j] = KQ_max[j];
         }
 
-#pragma unroll
+#pragma unroll (spark == 0 ? nthreads_KQ : spark == 2 || spark == 4 ? 4 : spark == 3 ? 1 : 2)
         for (int i_KQ_0 = 0; i_KQ_0 < nthreads_KQ; ++i_KQ_0) {
             const int i_KQ = threadIdx.y*WARP_SIZE + (nthreads_KQ == WARP_SIZE ? 0 : (threadIdx.x & ~(nthreads_KQ-1))) + i_KQ_0;
 
@@ -319,7 +320,7 @@ static __global__ void flash_attn_ext_vec(
 
         ggml_cuda_syncwarp(); // Needed for KQ synchronization.
 
-#pragma unroll
+#pragma unroll (spark == 0 ? nthreads_V : spark == 2 || spark == 4 ? 4 : spark == 3 ? 1 : 2)
         for (int k0 = 0; k0 < WARP_SIZE; k0 += V_cols_per_iter) {
             const int k = threadIdx.y*WARP_SIZE + k0 + (nthreads_V == WARP_SIZE ? 0 : threadIdx.x / nthreads_V);
 
@@ -537,6 +538,19 @@ void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggm
     const int nthreads = ggml_cuda_fattn_vec_get_nthreads_host(cc);
     const int nwarps   = nthreads / WARP_SIZE;
     fattn_kernel_t fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap>;
+    if constexpr (D == 256 && cols_per_block == 1 && type_K == GGML_TYPE_Q8_0 && type_V == GGML_TYPE_Q8_0 && !use_logit_softcap) {
+        static const int spark_q8_profile = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_Q8_FULL_ATTN");
+            return value ? std::atoi(value) : 0;
+        }();
+        const auto * q = dst->src[0];
+        const auto * k = dst->src[1];
+        const bool spark_heads = (q->ne[2] == 16 && k->ne[2] == 4) || (q->ne[2] == 8 && k->ne[2] == 2);
+        if (spark_q8_profile > 0 && cc == GGML_CUDA_CC_ADA_LOVELACE && q->ne[1] == 1 && q->ne[3] == 1 &&
+                spark_heads && k->ne[3] == 1 && k->ne[1] >= 32768 && !dst->src[4]) {
+            fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, 4>;
+        }
+    }
     const bool need_f16_K = type_K == GGML_TYPE_F16;
     const bool need_f16_V = type_V == GGML_TYPE_F16;
     constexpr size_t nbytes_shared = 0;

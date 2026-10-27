@@ -32,6 +32,7 @@
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
+#include "ggml-cuda/spark-attn.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/moe-weighted-reduction.cuh"
 #include "ggml-cuda/norm.cuh"
@@ -4156,6 +4157,58 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     //RoPE + view + set-rows
+    static const bool spark_attention_quant = []() {
+        const char * value = getenv("GGML_CUDA_SPARK_ATTN_QUANT");
+        return value && std::atoi(value) != 0;
+    }();
+    if (spark_attention_quant && node->op == GGML_OP_FLASH_ATTN_EXT && node->type == GGML_TYPE_F32 &&
+            ggml_nelements(node) == 2048 && node->src[0]->ne[1] == 1) {
+        int j = i+1;
+        while (j < cgraph->n_nodes && (cgraph->nodes[j]->op == GGML_OP_RESHAPE || cgraph->nodes[j]->op == GGML_OP_VIEW)) ++j;
+        if (j+2 < cgraph->n_nodes && cgraph->nodes[j]->op == GGML_OP_MUL &&
+                cgraph->nodes[j+1]->op == GGML_OP_RESHAPE && cgraph->nodes[j+2]->op == GGML_OP_MUL_MAT) {
+            auto unwrap = [](ggml_tensor * t) {
+                while (t->op == GGML_OP_RESHAPE || t->op == GGML_OP_VIEW) t = t->src[0];
+                return t;
+            };
+            auto * gated = cgraph->nodes[j];
+            auto * projection = cgraph->nodes[j+2];
+            auto * add = j+3 < cgraph->n_nodes && cgraph->nodes[j+3]->op == GGML_OP_ADD ? cgraph->nodes[j+3] : nullptr;
+            auto * dst = add ? add : projection;
+            auto * gate = unwrap(gated->src[0]) == node ? gated->src[1] : gated->src[0];
+            auto * activation = gate == gated->src[1] ? gated->src[0] : gated->src[1];
+            auto * residual = add ? (add->src[0] == projection ? add->src[1] : add->src[1] == projection ? add->src[0] : nullptr) : nullptr;
+            auto * weight = projection->src[0];
+            const int count = j+3+(add ? 1 : 0)-i;
+            std::vector<int> indices;
+            std::vector<ggml_op> ops;
+            for (int n = i; n < i+count; ++n) {
+                if (n < j && n != i && unwrap(cgraph->nodes[n]) != node) continue;
+                indices.push_back(n);
+                ops.push_back(cgraph->nodes[n]->op);
+            }
+            const int outputs[] = {i+count-1};
+            if (unwrap(activation) == node && activation->data == node->data && ggml_is_contiguous(activation) &&
+                    activation->ne[0] == 256 && activation->ne[1] == 8 && ggml_nelements(activation) == 2048 &&
+                    gated->type == GGML_TYPE_F32 && ggml_are_same_shape(gated, activation) &&
+                    gate->type == GGML_TYPE_F32 && gate->ne[0] == 1 && gate->ne[1] == 8 && ggml_nelements(gate) == 8 &&
+                    ggml_is_contiguous(gate) && cgraph->nodes[j+1]->src[0] == gated && projection->src[1] == cgraph->nodes[j+1] &&
+                    weight->type == GGML_TYPE_Q8_0 && weight->ne[0] == 2048 && weight->ne[1] == 2048 &&
+                    ggml_nelements(projection) == 2048 && (!add || residual) &&
+                    ggml_can_fuse_subgraph_ext(cgraph,indices.data(),indices.size(),ops.data(),outputs,1) &&
+                    ggml_cuda_spark_gated_memory_safe(weight,dst,residual) &&
+                    ggml_cuda_should_fuse_mul_mat_vec_q(projection)) {
+                ggml_cuda_pool_alloc<block_q8_1> quantized(cuda_ctx->pool(),64);
+                if (ggml_cuda_spark_attention(*cuda_ctx,node,quantized.get(),(const float *) gate->data)) {
+                    ggml_cuda_mm_fusion_args_host fusion{};
+                    fusion.x_bias = residual;
+                    ggml_cuda_mul_mat_vec_q(*cuda_ctx,weight,projection->src[1],nullptr,dst,&fusion,quantized.get());
+                    return count-1;
+                }
+            }
+        }
+    }
+
     static const bool spark_small_qkv = []() {
         const char * value = getenv("GGML_CUDA_SPARK_17B_QKV");
         return value && std::atoi(value) != 0;
