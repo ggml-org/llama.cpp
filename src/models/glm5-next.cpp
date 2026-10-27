@@ -919,8 +919,8 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, n_embd_indexer);
     const int64_t n_kv = mctx_lid->get_n_kv();
 
-    // the selection is over the cells of the cache, independent of the kq_mask shape
-    const ggml_type mask_type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    // flash attention requires an f16 mask
+    const ggml_type type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     // Pool the entries completed by this ubatch. The last one is a dummy when the ubatch completes none.
     ggml_tensor * rows = kpool_cache.gather_key_gate(inp_kpool->new_pool_idxs);
@@ -980,7 +980,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
             ggml_tensor * tail = hparams.indexer_kpool_select_tail ? inp_kpool->tail_idxs : nullptr;
             GGML_ASSERT(kpool*n_top_pool + (tail ? tail->ne[0] : 0) == (int64_t) inp_kpool->n_sel);
 
-            ggml_tensor * keep = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, mask_type, n_kv), 0.0f);
+            ggml_tensor * keep = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, type_mask, n_kv), 0.0f);
             ggml_tensor * sel  = ggml_top_k_mask(ctx0, keep, top_k, score, inp_kpool->pool_idxs, tail); // [n_kv, n_tokens]
             res->add_fused_node({LLM_FUSED_OP_TOP_K_MASK, sel, il});
             cb(sel, "indexer_sel", il);
@@ -1012,12 +1012,12 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
 
     ggml_build_forward_expand(gf, sel_idx);
 
-    ggml_tensor * mask_all = ggml_new_tensor_4d(ctx0, mask_type, n_kv + n_sel, 1, 1, 1);
+    ggml_tensor * mask_all = ggml_new_tensor_4d(ctx0, type_mask, n_kv + n_sel, 1, 1, 1);
     mask_all = ggml_fill(ctx0, mask_all, -INFINITY);
     mask_all = ggml_repeat_4d(ctx0, mask_all, n_kv + n_sel, n_tokens, 1, 1);
     mask_all = ggml_reshape_3d(ctx0, mask_all, 1, n_kv + n_sel, n_tokens);
 
-    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, mask_type, n_sel, 1, 1, 1);
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, type_mask, n_sel, 1, 1, 1);
     zeros = ggml_fill(ctx0, zeros, 0.0f);
     zeros = ggml_repeat_4d(ctx0, zeros, n_sel, n_tokens, 1, 1);
     zeros = ggml_reshape_3d(ctx0, zeros, 1, n_sel, n_tokens);
