@@ -327,11 +327,25 @@ May cause crashes or corrupted outputs for some motherboards and BIOS settings (
 
 The following compilation options are also available to tweak performance:
 
+#### FlashAttention KV quantization
+
+By default, only the following `(K,V)` type combinations are compiled for the FlashAttention CUDA kernels: `q4_0-q4_0`, `q8_0-q8_0`, `f16-f16`, `bf16-bf16`. This keeps compile times and binary size reasonable.
+
+Using other combinations at runtime (e.g. `-ctk q8_0 -ctv q4_0`, or different quant types for K and V) is supported, but if no compiled kernel exists for that combination, llama.cpp may use a slower path that upcasts the quantized K/V cache to FP16. This can significantly reduce decode performance and increase VRAM usage, especially on long contexts.
+
+To compile kernels for all supported combinations:
+
+```bash
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA_FA_QUANTS=all
+```
+
+Note that this will increase compile time substantially. For most use cases, the default set is sufficient.
+
 | Option                        | Legal values           | Default | Description                                                                                                                                                                                                                                                                                                                                                                      |
 |-------------------------------|------------------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, CDNA and RDNA3+). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower. |
 | GGML_CUDA_FORCE_CUBLAS        | Boolean                | false   | Force the use of FP16 cuBLAS instead of custom matrix multiplication kernels for quantized models. There may be issues with numerical overflows (except for V100, CDNA and RDNA4 which use FP32 compute type by default) and memory use will be higher. Prompt processing may become faster on recent datacenter GPUs (the custom kernels were tuned primarily for RTX 3000/4000).   |
-| GGML_CUDA_FA_QUANTS           | `all` or `type_K-type_V` list | q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16 | Select which K/V type combinations to compile the FlashAttention CUDA kernels for. `all` compiles every combination, but compilation takes much longer. Otherwise a `;`-separated list of `type_K-type_V` pairs; f16-f16 is always compiled. Combinations that were not compiled fall back to f16-f16 kernel with a warning. Legal types: f16, bf16, q4_0, q4_1, q5_0, q5_1, q8_0. |
+| GGML_CUDA_FA_QUANTS           | `all` or `type_K-type_V` list | q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16 | Select which K/V type combinations to compile the FlashAttention CUDA kernels for. `all` compiles every combination, but compilation takes much longer. Otherwise a `;`-separated list of `type_K-type_V` pairs; f16-f16 is always compiled. Combinations that were not compiled may fall back to a path that upcasts K/V to FP16 (increasing VRAM usage and reducing performance), especially for decode. Legal types: f16, bf16, q4_0, q4_1, q5_0, q5_1, q8_0. |
 | GGML_CUDA_FA_ALL_QUANTS       | Boolean                | false   | Deprecated alias for `GGML_CUDA_FA_QUANTS=all`.                                                                                                                                                                                                                                                                                                                               |
 
 ## MUSA
