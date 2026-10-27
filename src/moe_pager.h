@@ -39,6 +39,16 @@ struct moe_lru {
     void prefill_miss(size_t s);
 };
 
+struct moe_batch_target {
+    int expert;
+    void * dst_gate;
+    size_t gate_bytes;
+    void * dst_up;
+    size_t up_bytes;
+    void * dst_down;
+    size_t down_bytes;
+};
+
 class moe_pager {
 public:
     ~moe_pager();
@@ -62,6 +72,13 @@ public:
     bool fetch(int il, int e, void * dst_gate, size_t gate_bytes,
                                   void * dst_up,     size_t up_bytes,
                                   void * dst_down,   size_t down_bytes);
+    // Batched fetch: submit all n_targets in one io_uring_submit (QD = n_targets).
+    // DMAs each expert as its CQE arrives and synchronizes stream once at the end.
+    bool fetch_batch(int il, const moe_batch_target * targets, int n_targets, void * stream = nullptr, bool sync_gpu = true);
+
+    bool fetch_direct_io(int il, int e, void * dst_gate, size_t gate_bytes,
+                         void * dst_up, size_t up_bytes,
+                         void * dst_down, size_t down_bytes, void * stream, int slot_idx);
     // Non-blocking prefetch: queue a read. Returns true if it was queued
     // (or already in flight).
     bool prefetch(int il, int e);

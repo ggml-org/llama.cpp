@@ -1,9 +1,12 @@
 #include "llama-context.h"
 #include "moe_predictor.h"
+#include "moe_doorbell.h"
 #include "ggml-cuda.h"
 #include <thread>
 #include <atomic>
-
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 #include "ggml.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
@@ -28,6 +31,7 @@
 #include <thread>
 #include <unistd.h>
 #include <cuda_runtime.h>
+#include <liburing.h>
 
 static thread_local double moe_diag_publish_ms = 0.0;
 #include <cmath>
@@ -42,9 +46,6 @@ static thread_local double moe_diag_publish_ms = 0.0;
 static inline int moe_get_layer_slots(int il, int n_layer);
 static inline int moe_get_layer_base_slot(int il, int n_layer);
 
-static inline int moe_get_layer_slots(int il, int n_layer);
-static inline int moe_get_layer_base_slot(int il, int n_layer);
-
 static bool moe_doorbell_on(const llama_context * ctx) {
     static int on = -1;
     if (on < 0) {
@@ -55,6 +56,460 @@ static bool moe_doorbell_on(const llama_context * ctx) {
 }
 
 static llama_context * g_moe_resolve_ctx = nullptr;
+
+// Per-layer batch plan published by the resolve kernel. Keep in sync with
+// src/moe_doorbell.cu.
+#define MOE_DOORBELL_PLAN_MAX 256
+struct DoorbellPlan {
+    volatile uint32_t state;
+    volatile uint32_t gpu_ready;
+    uint32_t n;
+    uint32_t n_miss;
+    uint32_t n_copy;
+    uint32_t stage_stride;
+    uint32_t gate_bytes;
+    uint32_t up_bytes;
+    uint32_t down_bytes;
+    uint32_t s_pl;
+    uint32_t pad0;
+    uint32_t pad1;
+    int32_t  sel[MOE_DOORBELL_PLAN_MAX];
+    int32_t  assigned[MOE_DOORBELL_PLAN_MAX];
+    int32_t  evicted[MOE_DOORBELL_PLAN_MAX];
+    int32_t  copy_slot[MOE_DOORBELL_PLAN_MAX];
+    uint32_t copy_pre[MOE_DOORBELL_PLAN_MAX];
+    volatile uint32_t copy_ready[MOE_DOORBELL_PLAN_MAX];
+    uint64_t dst_gate;
+    uint64_t dst_up;
+    uint64_t dst_down;
+    uint64_t stage;
+};
+
+extern "C" {
+void * moe_doorbell_plan_host(int il);
+void * moe_doorbell_plan_dev(int il);
+int moe_doorbell_plan_cap();
+bool moe_doorbell_stage_init(size_t stride, int n_slots);
+void * moe_doorbell_stage_host();
+void * moe_doorbell_stage_dev();
+size_t moe_doorbell_stage_stride();
+int moe_doorbell_stage_cap();
+}
+
+static std::atomic<bool> g_doorbell_running{false};
+static std::thread g_doorbell_thread;
+
+static void start_doorbell_worker(llama_context * ctx) {
+    if (g_doorbell_running.load()) return;
+    g_doorbell_running.store(true);
+    g_doorbell_thread = std::thread([ctx]() {
+        LayerDoorbell * dbs = moe_doorbell_get_host_ptr();
+        if (!dbs) {
+            g_doorbell_running.store(false);
+            return;
+        }
+        const int n_layer = ctx->moe.n_layer;
+        const int n_exp   = ctx->moe.n_expert;
+        const int n_used  = ctx->moe.n_used;
+        char * stage_host = (char *) moe_doorbell_stage_host();
+        const size_t stride = moe_doorbell_stage_stride();
+        const int stage_cap = moe_doorbell_stage_cap();
+        if (!stage_host || stride == 0 || stage_cap <= 0) {
+            fprintf(stderr, "[doorbell_worker] no pinned stage, worker disabled\n");
+            g_doorbell_running.store(false);
+            return;
+        }
+        int fd_gguf = -1;
+        if (!ctx->pager.pack_mode()) {
+            fd_gguf = open(ctx->pager.path(), O_RDONLY);
+        }
+        // Buffered reads: the page cache holds the hot expert set, and io_uring
+        // submits the whole layer at once so the reads overlap.
+        struct io_uring ring;
+        bool ring_ok = io_uring_queue_init(512, &ring, 0) == 0;
+        fprintf(stderr, "[doorbell_worker] STARTED for %d layers, stage %d x %zu, uring=%d\n",
+                n_layer, stage_cap, stride, ring_ok ? 1 : 0);
+
+        std::vector<char>    pinned;
+        std::vector<int32_t> old_keys, misses, sel;
+        std::vector<moe_pager::moe_pack_loc> locs;
+        std::vector<int>     left;
+        std::vector<uint32_t> exp_len;
+        std::vector<char>    read_fail, done;
+        long served = 0, failed = 0;
+        long n_hit = 0, n_sel = 0;
+        double t_read = 0.0, t_wait = 0.0;
+        long n_read = 0;
+
+        while (g_doorbell_running.load(std::memory_order_relaxed)) {
+            bool handled = false;
+            for (int il = 0; il < n_layer; ++il) {
+                if (dbs[il].state != 1) continue;
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+                dbs[il].state = 2;
+
+                DoorbellPlan * pl = (DoorbellPlan *) moe_doorbell_plan_host(il);
+                if (!pl) continue;
+
+                const int s_pl = moe_get_layer_slots(il, n_layer);
+                const int base = moe_get_layer_base_slot(il, n_layer);
+                int n = (int) pl->n;
+                if (n < 0) n = 0;
+                if (n > MOE_DOORBELL_PLAN_MAX) n = MOE_DOORBELL_PLAN_MAX;
+
+                // real LRU: the tick was frozen in doorbell mode before
+                if (++ctx->moe.lru.tick == 0) {
+                    ctx->moe.lru.init(ctx->moe.lru.last.size(), 1);
+                    ctx->moe.lru.tick = 2;
+                }
+
+                pinned.assign((size_t) s_pl, 0);
+                old_keys.resize((size_t) s_pl);
+                for (int s = 0; s < s_pl; ++s) {
+                    old_keys[(size_t) s] = ctx->moe.slot_key[(size_t) base + s];
+                }
+
+                sel.resize((size_t) n);
+                misses.clear();
+                misses.reserve((size_t) n);
+                for (int j = 0; j < n; ++j) {
+                    const int32_t e = pl->sel[j];
+                    sel[(size_t) j] = e;
+                    if (e < 0 || e >= n_exp) continue;
+                    n_sel++;
+                    const int cur = ctx->moe.slot_of[(size_t) il * n_exp + e];
+                    if (cur >= base && cur < base + s_pl) {
+                        pinned[(size_t) cur - (size_t) base] = 1;
+                        ctx->moe.lru.hit((size_t) cur);
+                        n_hit++;
+                    } else {
+                        misses.push_back(e);
+                    }
+                }
+                std::sort(misses.begin(), misses.end());
+                misses.erase(std::unique(misses.begin(), misses.end()), misses.end());
+
+                const size_t gb = ctx->moe.host_gate[il];
+                const size_t ub = ctx->moe.host_up[il];
+                const size_t db = ctx->moe.host_down[il];
+                pl->stage        = (uint64_t) (uintptr_t) moe_doorbell_stage_dev();
+                pl->stage_stride = (uint32_t) stride;
+                pl->gate_bytes   = (uint32_t) gb;
+                pl->up_bytes     = (uint32_t) ub;
+                pl->down_bytes   = (uint32_t) db;
+                pl->s_pl         = (uint32_t) s_pl;
+                pl->dst_gate     = (uint64_t) (uintptr_t) ctx->moe.pool_gate[il]->data;
+                pl->dst_up       = (uint64_t) (uintptr_t) ctx->moe.pool_up[il]->data;
+                pl->dst_down     = (uint64_t) (uintptr_t) ctx->moe.pool_down[il]->data;
+
+                // pick victims and publish the read plan before the reads start,
+                // so the kernel can copy each expert as soon as its read lands
+                locs.clear();
+                int ncopy = 0;
+                for (size_t mi = 0; mi < misses.size() && ncopy < stage_cap; ++mi) {
+                    const int e = misses[mi];
+                    const size_t v = ctx->moe.lru.victim(pinned.data(), (size_t) base, (size_t) s_pl);
+                    if (v == (size_t) -1) break;
+                    pinned[v - (size_t) base] = 1;
+                    const int old_key = ctx->moe.slot_key[v];
+                    if (old_key >= 0) ctx->moe.slot_of[(size_t) old_key] = -1;
+                    ctx->moe.slot_of[(size_t) il * n_exp + e] = (int) v;
+                    ctx->moe.slot_key[v] = il * n_exp + e;
+                    ctx->moe.lru.miss(v);
+                    pl->copy_slot[ncopy] = (int32_t) (v - (size_t) base);
+                    pl->copy_ready[ncopy] = 0;
+                    if (ctx->pager.pack_mode()) {
+                        const moe_pager::moe_pack_loc loc = ctx->pager.pack_loc(il, e);
+                        locs.push_back(loc);
+                        pl->copy_pre[ncopy] = loc.pre;
+                    } else {
+                        locs.push_back(moe_pager::moe_pack_loc{-1, 0, 0, 0});
+                        pl->copy_pre[ncopy] = 0;
+                    }
+                    ncopy++;
+                }
+                pl->n_copy = (uint32_t) ncopy;
+
+                for (int j = 0; j < n; ++j) {
+                    const int32_t e = sel[(size_t) j];
+                    const int key = il * n_exp + e;
+                    int cur = -1;
+                    if (e >= 0 && e < n_exp) {
+                        cur = ctx->moe.slot_of[(size_t) key];
+                    }
+                    const int local = (cur >= base && cur < base + s_pl) ? cur - base : s_pl;
+                    pl->assigned[j] = local;
+                    const int old = (local >= 0 && local < s_pl) ? old_keys[(size_t) local] : -1;
+                    pl->evicted[j] = (old >= 0 && old != key) ? old - il * n_exp : -1;
+                }
+
+                if (n == n_used) {
+                    for (int j = 0; j < n; ++j) {
+                        const int32_t e = sel[(size_t) j];
+                        if (e < 0 || e >= n_exp) continue;
+                        ctx->moe.step_sel[(size_t) il * n_used + j] = e;
+                        ctx->moe.dec_freq[(size_t) il * n_exp + e]++;
+                    }
+                }
+
+                // publish the plan and ring the doorbell
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+                moe_doorbell_signal_unblock(il, nullptr);
+
+                left.assign((size_t) ncopy, 0);
+                exp_len.assign((size_t) ncopy * 3, 0);
+                read_fail.assign((size_t) ncopy, 0);
+                done.assign((size_t) ncopy, 0);
+
+                auto publish_ready = [&](int ci) {
+                    pl->copy_ready[ci] = 1;
+#if defined(__x86_64__) || defined(_M_X64)
+                    _mm_clflush((const void *) (uintptr_t) &pl->copy_ready[ci]);
+                    _mm_sfence();
+#endif
+                    done[(size_t) ci] = 1;
+                };
+                auto fail_ci = [&](int ci) {
+                    if (done[(size_t) ci]) return;
+                    // drop the mapping and make this expert read the sentinel
+                    // row instead of stale pool bytes
+                    const int e = misses[(size_t) ci];
+                    const int cslot = pl->copy_slot[ci];
+                    ctx->moe.slot_of[(size_t) il * n_exp + e] = -1;
+                    if (cslot >= 0 && cslot < s_pl) {
+                        ctx->moe.slot_key[(size_t) cslot + (size_t) base] = -1;
+                    }
+                    for (int j = 0; j < n; ++j) {
+                        if (sel[(size_t) j] == e) pl->assigned[j] = s_pl;
+                    }
+                    pl->copy_slot[ci] = -1;
+#if defined(__x86_64__) || defined(_M_X64)
+                    _mm_clflush((const void *) &pl->copy_slot[ci]);
+                    for (int j = 0; j < n; ++j) {
+                        if (sel[(size_t) j] == e) _mm_clflush((const void *) &pl->assigned[j]);
+                    }
+                    _mm_sfence();
+#endif
+                    failed++;
+                    publish_ready(ci);
+                };
+
+                // validate and fill the per-expert geometry first, so a bad
+                // entry never leaves a hole the kernel would spin on
+                for (int ci = 0; ci < ncopy; ++ci) {
+                    if (ctx->pager.pack_mode()) {
+                        const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
+                        if (loc.fd < 0 || loc.len > stride) { read_fail[(size_t) ci] = 1; continue; }
+                        exp_len[(size_t) ci * 3] = loc.len;
+                        left[(size_t) ci] = 1;
+                    } else if (fd_gguf >= 0) {
+                        exp_len[(size_t) ci * 3 + 0] = (uint32_t) gb;
+                        exp_len[(size_t) ci * 3 + 1] = (uint32_t) ub;
+                        exp_len[(size_t) ci * 3 + 2] = (uint32_t) db;
+                        left[(size_t) ci] = 3;
+                    } else {
+                        read_fail[(size_t) ci] = 1;
+                    }
+                }
+
+                const auto t_read0 = std::chrono::high_resolution_clock::now();
+                if (!ring_ok) {
+                    // no io_uring: serve the layer with synchronous reads
+                    for (int ci = 0; ci < ncopy; ++ci) {
+                        if (left[(size_t) ci] == 0) { fail_ci(ci); continue; }
+                        char * dst = stage_host + (size_t) ci * stride;
+                        bool ok = true;
+                        if (ctx->pager.pack_mode()) {
+                            const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
+                            size_t got = 0;
+                            while (got < loc.len) {
+                                const ssize_t r = pread(loc.fd, dst + got, loc.len - got,
+                                        (off_t) (loc.off + got));
+                                if (r <= 0) break;
+                                got += (size_t) r;
+                            }
+                            ok = got == loc.len;
+                        } else {
+                            const moe_expert_slice * s = ctx->pager.slices(il, misses[(size_t) ci]);
+                            const size_t want[3] = { gb, ub, db };
+                            const size_t off[3] = { 0, gb, gb + ub };
+                            for (int r = 0; r < 3 && ok; ++r) {
+                                size_t got = 0;
+                                while (got < want[r]) {
+                                    const ssize_t rr = pread(fd_gguf, dst + off[r] + got,
+                                            want[r] - got, (off_t) (s[r].off + s[r].pre + got));
+                                    if (rr <= 0) break;
+                                    got += (size_t) rr;
+                                }
+                                ok = got == want[r];
+                            }
+                        }
+                        if (ok) publish_ready(ci);
+                        else { read_fail[(size_t) ci] = 1; fail_ci(ci); }
+                    }
+                } else {
+                    int n_sqe = 0;
+                    bool submit_ok = true;
+                    for (int ci = 0; ci < ncopy && submit_ok; ++ci) {
+                        if (left[(size_t) ci] == 0) continue;
+                        char * dst = stage_host + (size_t) ci * stride;
+                        if (ctx->pager.pack_mode()) {
+                            const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
+                            struct io_uring_sqe * sqe = io_uring_get_sqe(&ring);
+                            if (!sqe) { submit_ok = false; break; }
+                            io_uring_prep_read(sqe, loc.fd, dst, loc.len, (off_t) loc.off);
+                            io_uring_sqe_set_data(sqe, (void *) (uintptr_t) ((size_t) ci * 3));
+                            n_sqe++;
+                        } else {
+                            const moe_expert_slice * s = ctx->pager.slices(il, misses[(size_t) ci]);
+                            const size_t want[3] = { gb, ub, db };
+                            const size_t off[3] = { 0, gb, gb + ub };
+                            for (int r = 0; r < 3; ++r) {
+                                struct io_uring_sqe * sqe = io_uring_get_sqe(&ring);
+                                if (!sqe) { submit_ok = false; break; }
+                                io_uring_prep_read(sqe, fd_gguf, dst + off[r], want[r],
+                                        (off_t) (s[r].off + s[r].pre));
+                                io_uring_sqe_set_data(sqe, (void *) (uintptr_t) ((size_t) ci * 3 + (size_t) r));
+                                n_sqe++;
+                            }
+                        }
+                    }
+                    bool submit_fail = !submit_ok;
+                    if (!submit_fail && n_sqe > 0) {
+                        int submitted = 0;
+                        while (submitted < n_sqe) {
+                            const int r = io_uring_submit(&ring);
+                            if (r <= 0) { submit_fail = true; break; }
+                            submitted += r;
+                        }
+                        if (submitted < n_sqe) submit_fail = true;
+                    }
+                    if (submit_fail) {
+                        for (int ci = 0; ci < ncopy; ++ci) {
+                            if (left[(size_t) ci] > 0) { read_fail[(size_t) ci] = 1; left[(size_t) ci] = 0; }
+                        }
+                        io_uring_queue_exit(&ring);
+                        ring_ok = false;
+                        fprintf(stderr, "[doorbell_worker] io_uring submit failed, falling back to pread\n");
+                    }
+
+                    // pre-failed experts must release the kernel now
+                    for (int ci = 0; ci < ncopy; ++ci) {
+                        if (left[(size_t) ci] == 0) fail_ci(ci);
+                    }
+
+                    // reap completions and publish each expert as it lands; the
+                    // kernel copies it while the later reads are still in flight
+                    int remaining = n_sqe;
+                    while (remaining > 0 && ring_ok) {
+                        struct io_uring_cqe * cqe = nullptr;
+                        if (io_uring_wait_cqe(&ring, &cqe) < 0) break;
+                        const uint64_t ud = (uint64_t) (uintptr_t) io_uring_cqe_get_data(cqe);
+                        const int ci = (int) (ud / 3);
+                        const int r  = (int) (ud % 3);
+                        const int res = cqe->res;
+                        io_uring_cqe_seen(&ring, cqe);
+                        remaining--;
+                        if (ci < 0 || ci >= ncopy) continue;
+                        if (left[(size_t) ci] == 0) continue;
+                        if (res != (int) exp_len[(size_t) ci * 3 + (size_t) r]) {
+                            // rare short read: retry this range synchronously
+                            // once before dropping the expert to the sentinel
+                            bool ok = false;
+                            const size_t want = exp_len[(size_t) ci * 3 + (size_t) r];
+                            char * dst = stage_host + (size_t) ci * stride;
+                            if (ctx->pager.pack_mode()) {
+                                const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
+                                size_t got = 0;
+                                while (got < want) {
+                                    const ssize_t rr = pread(loc.fd, dst + got, want - got,
+                                            (off_t) (loc.off + got));
+                                    if (rr <= 0) break;
+                                    got += (size_t) rr;
+                                }
+                                ok = got == want;
+                            } else {
+                                const moe_expert_slice * s = ctx->pager.slices(il, misses[(size_t) ci]);
+                                const size_t off[3] = { 0, gb, gb + ub };
+                                size_t got = 0;
+                                while (got < want) {
+                                    const ssize_t rr = pread(fd_gguf, dst + off[r] + got, want - got,
+                                            (off_t) (s[r].off + s[r].pre + got));
+                                    if (rr <= 0) break;
+                                    got += (size_t) rr;
+                                }
+                                ok = got == want;
+                            }
+                            if (!ok) {
+                                fprintf(stderr, "[doorbell] short read layer=%d expert=%d role=%d res=%d want=%zu\n",
+                                        il, misses[(size_t) ci], r, res, want);
+                                read_fail[(size_t) ci] = 1;
+                            }
+                        }
+                        if (--left[(size_t) ci] == 0) {
+                            if (read_fail[(size_t) ci]) fail_ci(ci);
+                            else publish_ready(ci);
+                        }
+                    }
+                }
+                // a failed wait must still release the kernel
+                for (int ci = 0; ci < ncopy; ++ci) {
+                    if (!done[(size_t) ci]) fail_ci(ci);
+                }
+                const auto t_read1 = std::chrono::high_resolution_clock::now();
+                t_read += std::chrono::duration<double, std::milli>(t_read1 - t_read0).count();
+                n_read += ncopy;
+
+                handled = true;
+                served++;
+
+                // The kernel copies from the stage buffer. Wait until it is done
+                // before the next layer reuses those slots.
+                while (dbs[il].state != 0) {
+#if defined(__x86_64__) || defined(_M_X64)
+                    _mm_pause();
+#else
+                    std::this_thread::yield();
+#endif
+                }
+                t_wait += std::chrono::duration<double, std::milli>(
+                        std::chrono::high_resolution_clock::now() - t_read1).count();
+
+                if ((served % 512) == 0) {
+                    fprintf(stderr, "[doorbell] served=%ld layer=%d n=%d miss=%zu copy=%d failed=%ld "
+                            "hit=%.1f%% read=%.2f ms/expert wait=%.2f ms/expert\n",
+                            served, il, n, misses.size(), ncopy, failed,
+                            n_sel ? 100.0 * (double) n_hit / (double) n_sel : 0.0,
+                            n_read ? t_read / n_read : 0.0,
+                            n_read ? t_wait / n_read : 0.0);
+                    t_read = t_wait = 0.0;
+                    n_read = 0;
+                }
+            }
+            if (!handled) {
+#if defined(__x86_64__) || defined(_M_X64)
+                _mm_pause();
+#else
+                std::this_thread::yield();
+#endif
+            }
+        }
+        if (ring_ok) {
+            io_uring_queue_exit(&ring);
+        }
+        if (fd_gguf >= 0) {
+            close(fd_gguf);
+        }
+    });
+}
+
+static void stop_doorbell_worker() {
+    if (!g_doorbell_running.load()) return;
+    g_doorbell_running.store(false);
+    if (g_doorbell_thread.joinable()) {
+        g_doorbell_thread.join();
+    }
+}
 
 static void moe_slot_resolve_sync(
     void * stream,
@@ -115,7 +570,7 @@ static void moe_slot_resolve_sync(
     }
     (void) full; (void) fnk; (void) fnt; (void) full_nb1;
     static long s_nres = 0, s_nmiss = 0, s_ntok = 0, s_host = 0;
-    static double s_tres = 0.0, s_tpg = 0.0, s_ta = 0.0, s_tio = 0.0;
+    static double s_tres = 0.0, s_ta = 0.0, s_tio = 0.0;
     cudaStream_t st = (cudaStream_t) stream;
     auto t_a = std::chrono::high_resolution_clock::now();
     cudaStreamSynchronize(st);
@@ -293,15 +748,57 @@ static void moe_slot_resolve_sync(
     s_tio += std::chrono::duration<double, std::milli>(
         std::chrono::high_resolution_clock::now() - t_res0).count();
     if (!host_ok) {
-        for (size_t i = 0; i < uniq.size(); i++) {
-            ctx->pager.prefetch(il, uniq[i]);
+        std::vector<moe_batch_target> batch_targets;
+        std::vector<int> target_slots;
+        batch_targets.reserve(uniq.size());
+        target_slots.reserve(uniq.size());
+
+        const size_t g_slot = ggml_nbytes(ctx->moe.pool_gate[il]) / (size_t) (s_pl + 1);
+        const size_t u_slot = ggml_nbytes(ctx->moe.pool_up[il])   / (size_t) (s_pl + 1);
+        const size_t d_slot = ggml_nbytes(ctx->moe.pool_down[il]) / (size_t) (s_pl + 1);
+
+        for (size_t i = 0; i < uniq.size(); ++i) {
+            const int32_t e = uniq[i];
+            const size_t v = ctx->moe.lru.victim((const char *) pinned.data(), (size_t) base, (size_t) s_pl);
+            if (v == (size_t) -1) continue;
+            int slot = (int) v;
+            pinned[(size_t) slot - (size_t) base] = 1;
+
+            const int local = slot - base;
+            moe_batch_target tgt;
+            tgt.expert = e;
+            tgt.dst_gate = (char *) ctx->moe.pool_gate[il]->data + (size_t) local * g_slot;
+            tgt.gate_bytes = g_slot;
+            tgt.dst_up   = (char *) ctx->moe.pool_up[il]->data   + (size_t) local * u_slot;
+            tgt.up_bytes = u_slot;
+            tgt.dst_down = (char *) ctx->moe.pool_down[il]->data + (size_t) local * d_slot;
+            tgt.down_bytes = d_slot;
+            batch_targets.push_back(tgt);
+            target_slots.push_back(slot);
         }
-        for (size_t i = 0; i < uniq.size(); i++) {
-            auto t_pg0 = std::chrono::high_resolution_clock::now();
-            const int got = ctx->moe_page_pinned(il, uniq[i], (const bool *) pinned.data());
-            s_tpg += std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - t_pg0).count();
-            if (got >= base && got < base + s_pl) pinned[(size_t) got - (size_t) base] = 1;
+
+        if (!batch_targets.empty()) {
+            for (size_t i = 0; i < batch_targets.size(); ++i) {
+                int slot = target_slots[i];
+                int e = batch_targets[i].expert;
+                if (!ctx->pager.fetch_direct_io(il, e,
+                    (char *) ctx->moe.pool_gate[il]->data + (size_t) slot * g_slot, g_slot,
+                    (char *) ctx->moe.pool_up[il]->data   + (size_t) slot * u_slot, u_slot,
+                    (char *) ctx->moe.pool_down[il]->data + (size_t) slot * d_slot, d_slot,
+                    nullptr, slot)) {
+                    ctx->moe.prefill_miss++;
+                    continue;
+                }
+                ctx->moe.prefill_miss++;
+                if (ctx->moe.count_freq) {
+                    ctx->moe.slot_freq[(size_t) slot]++;
+                    ctx->moe.lru.miss((size_t) slot);
+                } else {
+                    ctx->moe.lru.prefill_miss((size_t) slot);
+                }
+                ctx->moe_publish(il, e, slot);
+                ctx->moe.n_miss++;
+            }
         }
     }
     s_tres += std::chrono::duration<double, std::milli>(
@@ -320,7 +817,7 @@ static void moe_slot_resolve_sync(
                 "[moe_res] n=%ld tok=%ld nt=%ld sync_ms=%.1f io_ms=%.1f tot_ms=%.1f miss=%ld host=%ld warm=%ld/%ld warm_ms=%.2f cold_ms=%.2f\n",
                 s_nres, s_ntok, nt, s_ta, s_tio, s_tres, s_nmiss, s_host, d_warm, d_warm + d_pack,
                 wn ? (double) wus / wn / 1000.0 : 0.0, cn ? (double) cus / cn / 1000.0 : 0.0);
-        s_tres = 0.0; s_tpg = 0.0; s_ta = 0.0; s_tio = 0.0; s_nres = 0; s_ntok = 0; s_nmiss = 0; s_host = 0;
+        s_tres = 0.0; s_ta = 0.0; s_tio = 0.0; s_nres = 0; s_ntok = 0; s_nmiss = 0; s_host = 0;
     }
     if (!uniq.empty()) {
         cudaStream_t ws = (cudaStream_t) moe_pager::worker_stream();
@@ -418,8 +915,6 @@ static void moe_io_worker(llama_context * ctx) {
             if (!ctx->io_run.load()) return;
             seen = ctx->io_gen;
         }
-        const int pfd = ctx->io_pfd;
-        const int il = ctx->io_il;
         const size_t stride = ctx->io_stride;
         const size_t per = ctx->io_per;
         const size_t nth = ctx->io_nth;
@@ -604,10 +1099,12 @@ llama_context::llama_context(
     cparams.moe_chunk_max = params.moe_chunk_max;
     cparams.moe_gguf_path = params.moe_gguf_path;
     cparams.moe_profile_path = params.moe_profile_path;
-    if (params.moe_direct_io && params.moe_slots > 0 && params.moe_slots != 4096) {
-        g_moe_slots_total = params.moe_slots;
-    } else {
-        g_moe_slots_total = 0;
+    if (params.moe_direct_io) {
+        if (params.moe_slots > 0 && params.moe_slots != 4096) {
+            g_moe_slots_total = params.moe_slots;
+        } else {
+            g_moe_slots_total = 0;
+        }
     }
 
     cparams.n_seq_max = std::max(1u, params.n_seq_max);
@@ -761,6 +1258,21 @@ llama_context::llama_context(
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
     if (params.moe_direct_io) {
         cparams.n_ubatch = std::min(cparams.n_ubatch, 64u);
+        // The slot table is static for the whole ubatch, so the widest batch
+        // must fit the smallest layer pool: min_slots >= n_tokens * top-k.
+        // Larger user ubatches are split into these safe chunks internally.
+        const int n_layer = (int) hparams.n_layer();
+        const int n_used  = std::max(1, (int) hparams.n_expert_used());
+        int min_slots = INT_MAX;
+        for (int il = 0; il < n_layer; ++il) {
+            min_slots = std::min(min_slots, moe_get_layer_slots(il, n_layer));
+        }
+        const uint32_t safe = (uint32_t) std::max(1, min_slots / n_used);
+        if (cparams.n_ubatch > safe) {
+            LLAMA_LOG_INFO("%s: moe slot pool caps n_ubatch at %u (requested %u, min slots %d, top-k %d)\n",
+                    __func__, safe, cparams.n_ubatch, min_slots, n_used);
+            cparams.n_ubatch = safe;
+        }
     }
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
@@ -881,7 +1393,6 @@ llama_context::llama_context(
             const int n_layer = (int) model.hparams.n_layer();
             const int n_exp   = (int) model.hparams.n_expert;
             const int n_used  = (int) model.hparams.n_expert_used();
-            const int s_pl    = std::max(1, (int) cparams.moe_slots / std::max(1, n_layer));
 
             std::string perr;
             if (!pager.init(cparams.moe_gguf_path, n_layer, n_exp, n_used, perr)) {
@@ -1081,6 +1592,16 @@ llama_context::llama_context(
                                     moe.host_pool = nullptr;
                                     LLAMA_LOG_WARN("%s: moe host pool unavailable, NVMe direct only\n", __func__);
                                 }
+                                if (moe_doorbell_on(this)) {
+                                    int min_slots = INT_MAX;
+                                    for (int il = 0; il < n_layer; ++il) {
+                                        min_slots = std::min(min_slots, moe_get_layer_slots(il, n_layer));
+                                    }
+                                    const int stage_slots = std::max(min_slots, n_used) + n_used;
+                                    if (!moe_doorbell_stage_init(per, stage_slots)) {
+                                        LLAMA_LOG_WARN("%s: doorbell pinned stage unavailable\n", __func__);
+                                    }
+                                }
                             }
                             moe_seed_hot();
                             // RouterPredictorV2 measured 1.2% top-16 hit rate on this
@@ -1096,7 +1617,15 @@ llama_context::llama_context(
                             } else {
                                 LLAMA_LOG_WARN("%s: RouterPredictorV2 skipped (MOE_PRED=0), +120 MiB for slots\n", __func__);
                             }
-                            moe_slot_resolve_register_ctx(this);
+                            if (moe_doorbell_on(this)) {
+                                if (moe_doorbell_init(moe.n_layer, moe.n_expert, moe.s_per_layer)) {
+                                    LLAMA_LOG_INFO("%s: Zero-Split Stream-Ordered Doorbell armed (%d layers, n_splits = 1)\n",
+                                                   __func__, moe.n_layer);
+                                    start_doorbell_worker(this);
+                                }
+                            } else {
+                                moe_slot_resolve_register_ctx(this);
+                            }
                             moe_oracle_start(this);
                             io_run.store(true);
                             for (int i = 0; i < 16; i++) io_thr.emplace_back(moe_io_worker, this);
@@ -1247,6 +1776,10 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
+    stop_doorbell_worker();
+    if (moe_doorbell_is_active()) {
+        moe_doorbell_free();
+    }
     moe_oracle_stop(this);
     io_run.store(false);
     io_cv.notify_all();
@@ -2195,7 +2728,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // Direction 1's table is static by design: never refresh it mid-run
         static int keep_static = -1;
         if (keep_static < 0) keep_static = getenv("MOE_STATIC_HOT") ? atoi(getenv("MOE_STATIC_HOT")) : 0;
-        if (!keep_static) moe_reseed_decode();
+        // the doorbell LRU already adapts to the prefill's routing, and the
+        // reseed would stall the first token for seconds; skip it there
+        if (!keep_static && !moe_doorbell_on(this)) moe_reseed_decode();
     }
     if (moe_ready) moe.last_ntok = ubatch.n_tokens;
     auto * res = get_gf_res_prev();
@@ -4834,6 +5369,9 @@ uint32_t llama_n_seq_max(const llama_context * ctx) {
 }
 
 uint32_t llama_n_rs_seq(const llama_context * ctx) {
+    if (ctx && ctx->get_cparams().moe_direct_io) {
+        return 1;
+    }
     return ctx->get_cparams().n_rs_seq;
 }
 
@@ -5394,9 +5932,6 @@ llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
 }
 
-// round-robin victim cursor shared by all layers (decorrelates neighbours)
-static thread_local int moe_rr = 0;
-
 // ----------------------------------------------------------------------------
 // Ensure expert `e` of layer `il` is resident in that layer's pool and publish
 // the mapping. `pinned[local]` marks slots that must not be evicted (experts
@@ -5618,15 +6153,66 @@ void llama_context::moe_page_batch_sorted(int il, const int32_t * sel, int n) {
         }
     }
     std::sort(uniq.begin(), uniq.end());
+    std::vector<moe_batch_target> batch_targets;
+    std::vector<int> target_slots;
+    batch_targets.reserve(uniq.size());
+    target_slots.reserve(uniq.size());
+
+    const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) (s_pl + 1);
+    const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) (s_pl + 1);
+    const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) (s_pl + 1);
+
     for (size_t k = 0; k < uniq.size(); k++) {
         const int32_t e = uniq[k];
         if (moe.slot_of[(size_t) il * n_exp + e] >= 0) continue;
-        moe.prefill_miss++;
-        const int got = moe_page_pinned(il, e, (const bool *) pinned.data());
-        if (got >= 0) {
-            const int local = got - base;
-            if (local >= 0 && local < s_pl) pinned[(size_t) local] = 1;
+        const size_t v = moe.lru.victim((const char *) pinned.data(), (size_t) base, (size_t) s_pl);
+        if (v == (size_t) -1) continue;
+        int slot = (int) v;
+        pinned[(size_t) slot - (size_t) base] = 1;
+
+        const int local = slot - base;
+        moe_batch_target tgt;
+        tgt.expert = e;
+        tgt.dst_gate = (char *) moe.pool_gate[il]->data + (size_t) local * g_slot;
+        tgt.gate_bytes = g_slot;
+        tgt.dst_up   = (char *) moe.pool_up[il]->data   + (size_t) local * u_slot;
+        tgt.up_bytes = u_slot;
+        tgt.dst_down = (char *) moe.pool_down[il]->data + (size_t) local * d_slot;
+        tgt.down_bytes = d_slot;
+        batch_targets.push_back(tgt);
+        target_slots.push_back(slot);
+    }
+
+    if (!batch_targets.empty()) {
+        for (size_t i = 0; i < batch_targets.size(); ++i) {
+            int slot = target_slots[i];
+            int e = batch_targets[i].expert;
+            if (!this->pager.fetch_direct_io(il, e,
+                (char *) moe.pool_gate[il]->data + (size_t) slot * g_slot, g_slot,
+                (char *) moe.pool_up[il]->data   + (size_t) slot * u_slot, u_slot,
+                (char *) moe.pool_down[il]->data + (size_t) slot * d_slot, d_slot,
+                nullptr, slot)) {
+                moe.prefill_miss++;
+                continue;
+            }
+            moe.prefill_miss++;
+            if (moe.count_freq) {
+                moe.slot_freq[(size_t) slot]++;
+                moe.lru.miss((size_t) slot);
+            } else {
+                moe.lru.prefill_miss((size_t) slot);
+            }
+            moe_publish(il, e, slot);
+            moe.n_miss++;
         }
+        std::vector<int32_t> tab((size_t) n_exp, s_pl);
+        for (int e = 0; e < n_exp; ++e) {
+            int s = moe.slot_of[(size_t) il * n_exp + e];
+            if (s >= base && s < base + s_pl) {
+                tab[e] = s - base;
+            }
+        }
+        ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0, n_exp * sizeof(int32_t));
     }
 }
 
@@ -5672,9 +6258,12 @@ void llama_context::moe_seed_hot() {
     // file profile (--moe-profile) wins; else learned profile; else built-in.
     // format: u32 n_layer, u32 per_layer, then u16 expert ids in rank order.
     std::vector<uint16_t> file_hot;
-    int file_nl = 0, file_nt = 0;
+    int file_nt = 0;
     const char * learned = getenv("MOE_HOT_PROFILE");
-    const char * lpath = (learned && learned[0]) ? learned : "data/moe_hot_profile.bin";
+    const char * lpath = (learned && learned[0]) ? learned : "/home/zyxciss/llama.cpp/data/moe_hot_profile.bin";
+    FILE * test_f = fopen(lpath, "rb");
+    if (test_f) { fclose(test_f); }
+    else { lpath = "/home/zyxciss/fluxaeros-data/data/moe_hot_profile.bin"; }
     if ((!cparams.moe_profile_path || !cparams.moe_profile_path[0])) {
         FILE * lf = fopen(lpath, "rb");
         if (lf) {
@@ -5687,7 +6276,7 @@ void llama_context::moe_seed_hot() {
             }
             fclose(lf);
             if (ok) {
-                file_nl = (int) nl; file_nt = (int) nt;
+                file_nt = (int) nt;
                 LLAMA_LOG_INFO("%s: using learned profile %s\n", __func__, lpath);
             }
         }
@@ -5706,7 +6295,7 @@ void llama_context::moe_seed_hot() {
                 ok = fread(file_hot.data(), 2, file_hot.size(), f) == file_hot.size();
             }
             fclose(f);
-            if (ok) { file_nl = (int) nl; file_nt = (int) nt; }
+            if (ok) { file_nt = (int) nt; }
             else LLAMA_LOG_WARN("%s: bad profile %s, using built-in\n", __func__, cparams.moe_profile_path);
         }
     }
@@ -5730,6 +6319,9 @@ void llama_context::moe_seed_hot() {
     const int max_slots = 240;
     int seeded = 0;
     const int total = moe_get_total_slots(moe.n_layer);
+    // seeded experts are a prior, not recent use: rank them below any real
+    // access so the LRU drops the coldest seed first
+    moe.lru.tick = (uint64_t) max_slots + 8;
     for (int k = 0; k < max_slots; k++) {
         for (int il = 0; il < moe.n_layer; il++) {
             const int s_pl_il = moe_get_layer_slots(il, moe.n_layer);
@@ -5764,6 +6356,7 @@ void llama_context::moe_seed_hot() {
                 continue;
             }
             moe_publish(il, e, slot);
+            moe.lru.last[(size_t) slot] = (uint64_t) (max_slots - k) + 1;
             seeded++;
         }
     }
@@ -6105,18 +6698,8 @@ void llama_context::moe_publish(int il, int e, int slot) {
         const int k = moe.slot_key[(size_t) base + s];
         if (k >= 0) tab[k - il * n_exp] = s;
     }
-    {
-        static const bool diag = [] {
-            static int v = -1;
-            if (v < 0) v = getenv("MOE_DIAG") ? atoi(getenv("MOE_DIAG")) : 0;
-            return v != 0;
-        }();
-        const auto tp0 = std::chrono::high_resolution_clock::now();
+    if (!moe_doorbell_on(this)) {
         ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0, n_exp * sizeof(int32_t));
-        if (diag) {
-            moe_diag_publish_ms += std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - tp0).count();
-        }
     }
 }
 
@@ -6177,6 +6760,8 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         return false;
     }
     if (moe_doorbell_on(ctx)) {
+        // The resolve kernel runs on the compute stream and pages cold experts
+        // through the host doorbell. No graph split is needed for any batch.
         return false;
     }
     if (ask) {
@@ -6198,6 +6783,9 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     // (slot remap engages for decode and for micro-chunks <= 8 tokens.)
     {
         static int m2 = -1;
+        if (t->ne[1] == 1) {
+            return true; // Decode: page experts on host during graph build so GPU kernel finds them resident → fast path → no doorbell → no deadlock
+        }
         if (m2 < 0) {
             if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) m2 = 3;
             else if (getenv("MOE_ADAPT") && atoi(getenv("MOE_ADAPT"))) m2 = 4;
@@ -6217,18 +6805,13 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     std::vector<int32_t> ids((size_t) nw * ntok);
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
     if (moe_doorbell_on(ctx)) {
+        if (ntok == 1) {
+            return true;
+        }
+        ctx->moe_page_batch_sorted(il, ids.data(), (int) (nw * ntok));
         return true;
     }
-    if (ntok == 1 || (ntok > 1 && ntok <= ctx->get_cparams().moe_chunk_max)) {
-        // decode, or prefill micro-chunk the graph routed through the pool.
-        // sorted path dedups the whole chunk and pages misses in ascending
-        // expert order for sequential NVMe reads. resident hits need no I/O.
-        if (ntok == 1) {
-            ctx->moe_page_batch_sorted(il, ids.data(), (int) nw);
-        } else {
-            ctx->moe_page_batch_sorted(il, ids.data(), (int) (nw * ntok));
-        }
-    }
+    ctx->moe_page_batch_sorted(il, ids.data(), (int) (nw * ntok));
     // else: large prefill batch runs on the full tensors; skip paging so no
     // QD1 fetch stalls land on the prompt path
     // layer-ahead + token-ahead async reads for the layers after this one;

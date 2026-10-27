@@ -1500,6 +1500,10 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
             tmp.push_back(decoder_start_token_id);
         }
         if (llama_model_has_decoder(model)) {
+            std::vector<llama_token> tmp1 = { bos != LLAMA_TOKEN_NULL ? bos : 0 };
+            common_batch batch1 = common_batch_get_one(lctx, tmp1);
+            llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch1.get());
+
             tmp.resize(std::min(tmp.size(), (size_t) params.n_batch));
             common_batch batch = common_batch_get_one(lctx, tmp);
             llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
