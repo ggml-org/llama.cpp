@@ -71,13 +71,22 @@ export function getAttachmentDisplayItems(
 	for (const [index, attachment] of attachments.entries()) {
 		const isImage = isImageFile(attachment);
 
+		let preview: string | undefined;
+
+		if (isImage && 'base64Url' in attachment) {
+			preview = attachment.base64Url;
+		} else if (attachment.type === AttachmentType.PDF && attachment.processedAsImages) {
+			// first rendered page is the thumbnail of a PDF sent as images
+			preview = attachment.images?.[0];
+		}
+
 		items.push({
 			attachment,
 			attachmentIndex: index,
 			id: `attachment-${index}`,
 			isImage,
 			name: attachment.name,
-			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
+			preview,
 			size: 'size' in attachment ? attachment.size : undefined,
 			textContent: 'content' in attachment ? attachment.content : undefined
 		});

@@ -10,6 +10,7 @@
 		isImage: boolean;
 		isAudio: boolean;
 		isVideo: boolean;
+		isPdf: boolean;
 		preview?: string;
 	}
 
@@ -46,7 +47,7 @@
 					]}
 					onclick={() => onNavigate(index)}
 				>
-					{#if item.isImage && item.preview}
+					{#if (item.isImage || item.isPdf) && item.preview}
 						<img alt={item.name} class="h-12 w-12 object-cover" src={item.preview} />
 					{:else}
 						<div
