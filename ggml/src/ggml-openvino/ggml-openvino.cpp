@@ -1646,7 +1646,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         }
 
         if (op->src[4] != nullptr) {
-            return {false, "FLASH_ATTN_EXT with sinks is not supported"};
+            if (op->src[4] != nullptr && op->src[3] == nullptr) {
+               return {false, "FLASH_ATTN_EXT with sinks but no mask is not supported"};
+            }
         }
         if (!is_supported_flash_attn_pattern(op)) {
             return {false, "FLASH_ATTN_EXT unsupported attention pattern"};
