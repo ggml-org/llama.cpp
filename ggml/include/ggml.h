@@ -450,6 +450,7 @@ extern "C" {
         GGML_PREC_BF16      = 15,
         GGML_PREC_F16       = 20,
         GGML_PREC_Q8        = 30,
+        GGML_PREC_FP8       = 35,
         GGML_PREC_Q4        = 40,
     };
 
@@ -1453,6 +1454,7 @@ extern "C" {
     //  - GGML_PREC_BF16 - can accumulate the results in BF16, F32
     //  - GGML_PREC_F16  - can accumulate the results in F16, F32
     //  - GGML_PREC_Q8   - not allowed
+    //  - GGML_PREC_FP8  - not allowed
     //  - GGML_PREC_Q4   - not allowed
     //
     // return false on faliure
@@ -1467,6 +1469,7 @@ extern "C" {
     //  - GGML_PREC_BF16 - GGML_TYPE_BF16
     //  - GGML_PREC_F16  - GGML_TYPE_F16,
     //  - GGML_PREC_Q8   - GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_K, etc.
+    //  - GGML_PREC_FP8  - e4m3 values with ue8m0 block scales, there is no GGML_TYPE for these
     //  - GGML_PREC_Q4   - GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4, GGML_TYPE_MXFP4, etc.
     //
     // for example:
