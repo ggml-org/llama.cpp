@@ -119,6 +119,50 @@ class TestFP8Conversion(unittest.TestCase):
                         np.testing.assert_array_equal(gguf.dequantize(data, dtype), weight.float().numpy())
                         np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
 
+    def test_mixed_compressed_fp8_block_scale(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        scale = torch.tensor([[0.25, 0.5], [1.0, 2.0]])
+        tensors = {
+            name: torch.ones((3, 32)).to(torch.float8_e4m3fn),
+            name + "_scale": scale,
+        }
+        config = {
+            "quant_method": "compressed-tensors",
+            "format": "mixed-precision",
+            "config_groups": {
+                "nvfp4": {"format": "nvfp4-pack-quantized"},
+                "fp8": {"format": "float-quantized", "weights": {
+                    "type": "float", "num_bits": 8, "strategy": "block", "block_structure": [2, 16],
+                }},
+            },
+        }
+        result = self.convert(Qwen2MoeModel, tensors, check_lazy=True, hparams_override={"quantization_config": config})
+        self.assertEqual(set(result), {"blk.0.attn_q.weight"})
+        dtype, data = result["blk.0.attn_q.weight"]
+        self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+        expected = scale.repeat_interleave(2, 0).repeat_interleave(16, 1)[:3, :32]
+        np.testing.assert_array_equal(data, expected.numpy())
+
+    def test_mixed_compressed_fp8_block_layout_errors(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        tensors = {
+            name: torch.ones((3, 32)).to(torch.float8_e4m3fn),
+            name + "_scale": torch.ones((2, 2)),
+        }
+        for configs, message in (
+            ([], "requires a block layout"),
+            ([{"strategy": "block"}], "requires a block layout"),
+            ([{"strategy": "block", "block_structure": [2, 16], "group_size": 16}], "requires a block layout"),
+            ([{"strategy": "block", "block_structure": [2, 16]}, {"strategy": "block", "block_structure": [2, 32]}], "ambiguous block layouts"),
+        ):
+            with self.subTest(configs=configs):
+                groups: dict[str, dict[str, object]] = {"nvfp4": {"format": "nvfp4-pack-quantized"}}
+                for i, config in enumerate(configs):
+                    groups[str(i)] = {"format": "float-quantized", "weights": {"type": "float", "num_bits": 8, **config}}
+                config = {"quant_method": "compressed-tensors", "format": "mixed-precision", "config_groups": groups}
+                with self.assertRaisesRegex(ValueError, message):
+                    self.convert(Qwen2MoeModel, tensors, hparams_override={"quantization_config": config})
+
     def test_mla_scale_fallback(self):
         weight = torch.arange(16, dtype=torch.float32).reshape(4, 4).to(torch.float8_e4m3fn)
         prefix = "model.layers.0.self_attn."
