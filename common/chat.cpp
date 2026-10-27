@@ -1943,9 +1943,10 @@ const common_chat_msg & common_chat_session::finish(const common_chat_input & ch
 common_json common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
     GGML_ASSERT(chat_templates != nullptr);
     GGML_ASSERT(chat_templates->template_default != nullptr);
-    if (chat_templates->template_tool_use != nullptr) {
-        // take the more expressive template when available
-        return chat_templates->template_tool_use->caps.to_json();
-    }
-    return chat_templates->template_default->caps.to_json();
+    // take the more expressive template when available
+    const auto & caps = chat_templates->template_tool_use != nullptr ? chat_templates->template_tool_use->caps
+                                                                      : chat_templates->template_default->caps;
+    common_json result = caps.to_map();
+    result["reasoning_effort_levels"] = caps.reasoning_effort_levels;
+    return result;
 }

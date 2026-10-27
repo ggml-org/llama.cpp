@@ -2,11 +2,14 @@
 #include "runtime.h"
 #include "caps.h"
 
+// note: the json dependency is only for defining input in a convenient way
+// we can remove it in the future when we figure out a better way to define inputs using jinja::value
 #include "json.h"
 
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <sstream>
 
 #define FILENAME "jinja-caps"
 
@@ -102,7 +105,7 @@ static void caps_print_stats(value & v, const std::string & path) {
                 ops.c_str());
 }
 
-json caps::to_json() const {
+std::map<std::string, bool> caps::to_map() const {
     return {
         {"supports_string_content", supports_string_content},
         {"supports_typed_content", supports_typed_content},
@@ -113,12 +116,17 @@ json caps::to_json() const {
         {"supports_preserve_reasoning", supports_preserve_reasoning},
         {"supports_reasoning_effort", supports_reasoning_effort},
         {"supports_object_arguments", supports_object_arguments},
-        {"reasoning_effort_levels", reasoning_effort_levels},
     };
 }
 
 std::string caps::to_string() const {
-    return to_json().dump(2);
+    std::ostringstream ss;
+    ss << "Caps(\n";
+    for (const auto & [key, value] : to_map()) {
+        ss << "  " << key << "=" << (value ? "true" : "false") << "\n";
+    }
+    ss << ")";
+    return ss.str();
 }
 
 caps caps_get(jinja::program & prog) {

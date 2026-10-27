@@ -1,9 +1,9 @@
 #pragma once
 
 #include "runtime.h"
-#include "json.h"
 
 #include <string>
+#include <map>
 #include <vector>
 
 namespace jinja {
@@ -30,7 +30,7 @@ struct caps {
     bool supports_object_arguments = false;
 
     // for reporting on server
-    common_json to_json() const;
+    std::map<std::string, bool> to_map() const;
 
     // for debugging
     std::string to_string() const;
