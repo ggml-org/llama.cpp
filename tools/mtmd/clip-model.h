@@ -325,6 +325,11 @@ struct clip_layer {
     ggml_tensor * deepstack_fc2_w = nullptr;
     ggml_tensor * deepstack_fc2_b = nullptr;
 
+    // lfm3vl conv layers
+    ggml_tensor * conv2d_in_proj_w  = nullptr;
+    ggml_tensor * conv2d_spatial_w  = nullptr; // may be nullptr
+    ggml_tensor * conv2d_out_proj_w = nullptr;
+
     // sam rel_pos
     ggml_tensor * rel_pos_w = nullptr;
     ggml_tensor * rel_pos_h = nullptr;
@@ -785,6 +790,9 @@ struct clip_model {
     ggml_tensor * yasa_backbone_ln_b = nullptr;
     ggml_tensor * yasa_vision_pos_embed = nullptr;
     std::vector<yasa2_stage> yasa_stages;
+
+    // lfm3vl
+    ggml_tensor * lfm3vl_embedding_norm_w = nullptr;
 
     // pixtral, glm4v
     ggml_tensor * token_embd_img_break = nullptr;

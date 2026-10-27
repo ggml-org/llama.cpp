@@ -5589,6 +5589,47 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         test_lfm2_parser(tmpl, detailed_debug);
     }
 
+    {
+        auto tst = peg_tester("models/templates/LFM3.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "I'm\nthinking</think>"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+    }
+
     // Thinking cases only apply to LFM2.5-8B-A1B, the one LFM2 template that emits <think>
     {
         auto tst = peg_tester("models/templates/LFM2.5-8B-A1B.jinja", detailed_debug);
