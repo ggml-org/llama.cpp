@@ -91,7 +91,7 @@ async def main(args):
                 session["output_modalities"] = args.output_modalities.split(",")
         elif args.language:
             session["audio"] = {"input": {"transcription": {"language": args.language}}}
-        await conn.session.update(session=session)  # type: ignore[arg-type]
+        await conn.session.update(session=session)  # ty: ignore[invalid-argument-type]
         ev = await conn.recv()
         if ev.type == "error":
             print("error:", ev.error.message)
@@ -114,7 +114,7 @@ async def main(args):
                             await asyncio.sleep(len(chunk) / in_rate)
                     if args.type == "transcription":
                         # "final" ends the input, models that transcribe with a delay then complete the last item
-                        await conn.send({"type": "input_audio_buffer.commit", "final": i == len(args.wav) - 1})  # type: ignore[arg-type]
+                        await conn.send({"type": "input_audio_buffer.commit", "final": i == len(args.wav) - 1})  # ty: ignore[invalid-argument-type]
                 else:
                     await conn.conversation.item.create(item={
                         "type": "message", "role": "user", "content": [{"type": "input_text", "text": src}]})
