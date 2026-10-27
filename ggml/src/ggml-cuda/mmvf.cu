@@ -385,11 +385,7 @@ static __global__ void mul_mat_vec_f(
     dst[tid*stride_col_dst + row] = value;
 
     if constexpr (!has_fusion) {
-<<<<<<< ours
-        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, glu_op, glu_limit, gate_x, x_bias, gate_bias, sumf_gate);
-=======
-        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, use_sigmoid, glu_op, gate_x, x_bias, gate_bias, sumf_gate);
->>>>>>> theirs
+        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, use_sigmoid, glu_op, glu_limit, gate_x, x_bias, gate_bias, sumf_gate);
     }
 }
 

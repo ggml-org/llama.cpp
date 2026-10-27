@@ -18,7 +18,18 @@ struct spark_q6_activation {
         const block_q6_K & w = ((const block_q6_K *) weights)[b];
         const int vl = get_int_b2(w.ql, iqs);
         const int vh = get_int_b2(w.qh, 8*(iqs/16)+iqs%8) >> (2*((iqs%16)/8));
-        return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, w.scales+8*(iqs/16)+(iqs%16)/4, w.d, d);
+        const int8_t * scales = w.scales+8*(iqs/16)+(iqs%16)/4;
+        float sum = 0.0f;
+        // Keep one packed chunk per lane; the generic Q6 helper now uses two.
+        #pragma unroll
+        for (int i = 0; i < QR6_K; ++i) {
+            const int low = (vl >> (4*i)) & 0x0f0f0f0f;
+            const int high = ((vh >> (4*i)) << 4) & 0x30303030;
+            int dot = ggml_cuda_dp4a(low | high, u[i], 0);
+            dot = ggml_cuda_dp4a(0xe0e0e0e0, u[i], dot);
+            sum += d[i]*(dot*scales[4*i]);
+        }
+        return float(w.d)*sum;
     }
 };
 
