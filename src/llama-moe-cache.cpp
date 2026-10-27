@@ -175,7 +175,10 @@ struct moe_cache_slru {
                         }
                     }
                 }
-                const int32_t z = used == ~0ull ? 64 : __builtin_ctzll(~used);
+                int32_t z = 0;
+                while (z < 64 && (used >> z & 1)) {
+                    z++;
+                }
                 if (z >= n_zero) {
                     std::swap(misses[i], misses[--n_keep]);
                     continue;
