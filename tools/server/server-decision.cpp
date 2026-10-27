@@ -23,9 +23,6 @@ static const size_t DECISION_LEV_N_RATINGS = 9;
 // a longer state keeps its head and its tail
 static const size_t DECISION_H2O_MAX_STATE_TOKENS = 32000;
 
-// the value head has one score per class: [inconsistent, consistent]
-static const int32_t OCR_JEV_N_CLASSES = 2;
-
 // the recursive functions of this file walk request JSON, a deeper value would overflow the stack
 static const int RECURSIVE_LIMIT = 128;
 
@@ -208,11 +205,13 @@ void server_decision_context::init(const llama_model * model) {
         n_options_max   = labels.size();
         noul_true_first = true;
     } else if (model_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
-        // one score per class
-        if (llama_model_n_embd_out(model) != (uint32_t) OCR_JEV_N_CLASSES) {
-            throw std::runtime_error(string_format("decision model must output %d class scores, got %d", OCR_JEV_N_CLASSES, (int) llama_model_n_embd_out(model)));
+        // the classes come from the GGUF classifier labels, the request API is binary: [inconsistent, consistent]
+        const uint32_t n_classes = llama_model_n_cls_out(model);
+        if (n_classes != 2 || llama_model_n_embd_out(model) != (int32_t) n_classes) {
+            throw std::runtime_error(string_format("decision model must have 2 classifier labels and output one score per class, got %u labels and %d scores",
+                n_classes, llama_model_n_embd_out(model)));
         }
-        n_options_max = OCR_JEV_N_CLASSES;
+        n_options_max = n_classes;
         choice_sorted = true;
     } else {
         throw std::runtime_error("unsupported decision model type: " + type_name);
@@ -1149,7 +1148,7 @@ void server_decision_context::fill_task(
         if (task.n_tokens() == 0 || task.tokens[task.n_tokens() - 1] == LLAMA_TOKEN_NULL) {
             throw std::runtime_error("unexpected layout of the decision prompt");
         }
-        task.decision.n_classes          = OCR_JEV_N_CLASSES;
+        task.decision.n_classes          = (int32_t) n_options_max;
         task.decision.classification_pos = task.n_tokens() - 1;
         return;
     }

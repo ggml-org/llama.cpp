@@ -697,7 +697,7 @@ class MiniCPMOCRSeqClsModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
     no_mtp = True  # the checkpoint has no MTP head
 
-    N_CLASSES = 2
+    CLASS_LABELS = ["inconsistent", "consistent"]
 
     def set_vocab(self):
         super().set_vocab()
@@ -724,17 +724,18 @@ class MiniCPMOCRSeqClsModel(Qwen3_5TextModel):
         if head is None:
             raise ValueError("the checkpoint has no score.weight classification head")
         n_classes = head().shape[0]
-        if n_classes != self.N_CLASSES:
-            raise ValueError(f"expected {self.N_CLASSES} classes, the head has {n_classes}")
+        if n_classes != len(self.CLASS_LABELS):
+            raise ValueError(f"expected {len(self.CLASS_LABELS)} classes, the head has {n_classes}")
 
         self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
-        self.gguf_writer.add_embedding_length_out(self.N_CLASSES)
+        self.gguf_writer.add_embedding_length_out(n_classes)
+        self.gguf_writer.add_classifier_output_labels(self.CLASS_LABELS)
         self.gguf_writer.add_decision_type(gguf.DecisionType.MINICPM_OCR_JEV)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "score.weight":
-            if data_torch.shape[0] != self.N_CLASSES:
-                raise ValueError(f"score.weight must have {self.N_CLASSES} rows, got {data_torch.shape[0]}")
+            if data_torch.shape[0] != len(self.CLASS_LABELS):
+                raise ValueError(f"score.weight must have {len(self.CLASS_LABELS)} rows, got {data_torch.shape[0]}")
             yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight", data_torch)
             return
         yield from super().modify_tensors(data_torch, name, bid)
