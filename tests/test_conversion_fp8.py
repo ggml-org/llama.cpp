@@ -47,57 +47,59 @@ class OffsetNormModel(Qwen2MoeModel):
 class TestFP8Conversion(unittest.TestCase):
     def convert(self, model_class, tensors, eager=False, check_lazy=False, scan_nvfp4=False, ftype=gguf.LlamaFileType.GUESSED, hparams_override=None, **kwargs):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)
-            hparams = {
-                "model_type": "qwen2_moe",
-                "architectures": ["Qwen2MoeForCausalLM"],
-                "num_hidden_layers": 1,
-                "hidden_size": 4,
-                "num_attention_heads": 1,
-                "num_key_value_heads": 1,
-                "num_experts": 2,
-                "qk_nope_head_dim": 2,
-                "v_head_dim": 2,
-                "quantization_config": {"quant_method": "modelopt"},
+            return self._convert(Path(directory), model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs)
+
+    def _convert(self, path, model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs):
+        hparams = {
+            "model_type": "qwen2_moe",
+            "architectures": ["Qwen2MoeForCausalLM"],
+            "num_hidden_layers": 1,
+            "hidden_size": 4,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "num_experts": 2,
+            "qk_nope_head_dim": 2,
+            "v_head_dim": 2,
+            "quantization_config": {"quant_method": "modelopt"},
+        }
+        hparams.update(hparams_override or {})
+        (path / "config.json").write_text(json.dumps(hparams))
+        save_file(tensors, str(path / "model.safetensors"))
+        model = model_class(path, ftype, path / "out.gguf", hparams=hparams, eager=eager, **kwargs)
+        reads: list[str] = []
+        if check_lazy:
+            self.assertFalse(eager)
+
+            def track(name, gen):
+                tensor = gen()
+
+                def load(source):
+                    reads.append(name)
+                    return LazyTorchTensor.to_eager(source())
+
+                return LazyTorchTensor(meta=torch.empty(tuple(tensor.shape), dtype=tensor.dtype, device="meta"), args=(gen,), func=load)
+
+            model.model_tensors = {
+                name: lambda name=name, gen=gen: track(name, gen)
+                for name, gen in model.model_tensors.items()
             }
-            hparams.update(hparams_override or {})
-            (path / "config.json").write_text(json.dumps(hparams))
-            save_file(tensors, str(path / "model.safetensors"))
-            model = model_class(path, ftype, path / "out.gguf", hparams=hparams, eager=eager, **kwargs)
-            reads: list[str] = []
-            if check_lazy:
-                self.assertFalse(eager)
-
-                def track(name, gen):
-                    tensor = gen()
-
-                    def load(source):
-                        reads.append(name)
-                        return LazyTorchTensor.to_eager(source())
-
-                    return LazyTorchTensor(meta=torch.empty(tuple(tensor.shape), dtype=tensor.dtype, device="meta"), args=(gen,), func=load)
-
-                model.model_tensors = {
-                    name: lambda name=name, gen=gen: track(name, gen)
-                    for name, gen in model.model_tensors.items()
-                }
-            if scan_nvfp4:
-                model._generate_nvfp4_tensors()
-                self.assertEqual(reads, [])
-            model.prepare_tensors()
-            if check_lazy:
-                deferred = {name for name, tensor in tensors.items() if tensor.numel() != 1 or name.endswith((".weight", ".bias"))}
-                self.assertFalse(deferred.intersection(reads), f"Materialized during preparation: {reads}")
-                for name, info in model.gguf_writer.tensors[0].items():
-                    if name.endswith((".weight", ".bias")):
-                        self.assertIsInstance(info.tensor, gguf.LazyNumpyTensor)
-            result = {
-                name: (info.dtype, gguf.LazyNumpyTensor.to_eager(info.tensor))
-                for name, info in model.gguf_writer.tensors[0].items()
-            }
-            if check_lazy:
-                self.assertTrue(deferred.intersection(reads))
-            return result
+        if scan_nvfp4:
+            model._generate_nvfp4_tensors()
+            self.assertEqual(reads, [])
+        model.prepare_tensors()
+        if check_lazy:
+            deferred = {name for name, tensor in tensors.items() if tensor.numel() != 1 or name.endswith((".weight", ".bias"))}
+            self.assertFalse(deferred.intersection(reads), f"Materialized during preparation: {reads}")
+            for name, info in model.gguf_writer.tensors[0].items():
+                if name.endswith((".weight", ".bias")):
+                    self.assertIsInstance(info.tensor, gguf.LazyNumpyTensor)
+        result = {
+            name: (info.dtype, gguf.LazyNumpyTensor.to_eager(info.tensor).copy())
+            for name, info in model.gguf_writer.tensors[0].items()
+        }
+        if check_lazy:
+            self.assertTrue(deferred.intersection(reads))
+        return result
 
     def test_lazy_fp8_export(self):
         name = "model.layers.0.self_attn.q_proj.weight"
