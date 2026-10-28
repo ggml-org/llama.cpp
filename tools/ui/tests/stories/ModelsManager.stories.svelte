@@ -71,7 +71,7 @@
 	const isFavorite = (picked: ModelOption) => modelsStore.favoriteModelIds.has(picked.model);
 </script>
 
-<Story name="Manager">
+<Story name="Default">
 	<div class="h-[36rem] bg-background p-4">
 		<ModelsManagerModelsTable
 			groups={[
@@ -80,28 +80,6 @@
 				section(ModelsTableGroupKind.LOCAL, [repo(qwen, [qwen, qwenQ8])]),
 				section(ModelsTableGroupKind.HIDDEN, [repo(hiddenRepo, [hiddenRepo])])
 			]}
-			{isFavorite}
-			onSelect={(picked: ModelOption) => (selectedId = picked.id)}
-			{selectedId}
-		/>
-	</div>
-</Story>
-
-<Story name="QuantsFolded">
-	<div class="h-[24rem] bg-background p-4">
-		<ModelsManagerModelsTable
-			groups={[section(ModelsTableGroupKind.LOCAL, [repo(qwen, [qwen, qwenQ8])])]}
-			{isFavorite}
-			onSelect={(picked: ModelOption) => (selectedId = picked.id)}
-			{selectedId}
-		/>
-	</div>
-</Story>
-
-<Story name="Empty">
-	<div class="h-[24rem] bg-background p-4">
-		<ModelsManagerModelsTable
-			groups={[]}
 			{isFavorite}
 			onSelect={(picked: ModelOption) => (selectedId = picked.id)}
 			{selectedId}

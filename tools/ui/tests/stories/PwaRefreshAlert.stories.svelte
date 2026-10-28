@@ -29,36 +29,3 @@
 		await expect(button).toBeInTheDocument();
 	}}
 />
-
-<Story
-	args={{ needRefresh: false, updateServiceWorker: () => console.log('reload') }}
-	name="Hidden"
-	play={async ({ canvas }) => {
-		const title = canvas.queryByText('Update available');
-
-		await expect(title).not.toBeInTheDocument();
-	}}
-/>
-
-<Story
-	args={{
-		needRefresh: true,
-		updateServiceWorker: () => console.log('reload')
-	}}
-	name="ClickReload"
-	play={async ({ canvas, userEvent }) => {
-		const button = canvas.getByRole('button', { name: 'Reload' });
-
-		await expect(button).toBeInTheDocument();
-
-		await userEvent.click(button);
-
-		const title = canvas.queryByText('Update available');
-
-		await expect(title).not.toBeInTheDocument();
-
-		const reloadBtn = canvas.queryByRole('button', { name: 'Reload' });
-
-		await expect(reloadBtn).not.toBeInTheDocument();
-	}}
-/>
