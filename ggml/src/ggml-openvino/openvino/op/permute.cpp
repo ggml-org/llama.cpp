@@ -12,6 +12,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <openvino/op/variadic_split.hpp>
 #include <vector>
 
@@ -47,6 +48,11 @@ OutputVector translate_permute(const NodeContext & context) {
         }
     }
     if (op_case == 1 || context.is_stateful()) {
+        if (op_case == 2 && src.get_partial_shape().rank() == 3) {
+            // Stateful RoPE lifts Q to rank 4 (see translate_rope). Do the same for Q of a layer without RoPE (NoPE)
+            src = std::make_shared<ov::op::v0::Unsqueeze>(src,
+                                                          ov::op::v0::Constant::create(ov::element::i64, Shape{}, {0}));
+        }
         // The stateful path carries hidden-state tensors in a rank-3 layout (the
         // leading batch dim is dropped, e.g. Gemma4's per-layer-embedding path). The
         // perm above is rank-4; when the actual input is rank-3, drop the batch axis
