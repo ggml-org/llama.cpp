@@ -47,10 +47,27 @@ static __global__ void ggml_cuda_batch_get_kernel(const ggml_cuda_batch_get_desc
 
 struct ggml_cuda_batch_get_mapping {
     void * host = nullptr;
+    unsigned char * device = nullptr;
+
+    ggml_cuda_batch_get_mapping(void * host, size_t size) {
+        if (cudaHostRegister(host, size, cudaHostRegisterMapped | cudaHostRegisterPortable) != cudaSuccess) {
+            (void) cudaGetLastError();
+            return;
+        }
+        this->host = host;
+        if (cudaHostGetDevicePointer((void **) &device, host, 0) != cudaSuccess) {
+            (void) cudaGetLastError();
+            device = nullptr;
+            return;
+        }
+    }
+
+    ggml_cuda_batch_get_mapping(const ggml_cuda_batch_get_mapping &) = delete;
+    ggml_cuda_batch_get_mapping & operator=(const ggml_cuda_batch_get_mapping &) = delete;
 
     ~ggml_cuda_batch_get_mapping() {
         if (host) {
-            // Unregister and unpin the CPU destination on scope exit; the caller still owns its storage.
+            // Release only the registration acquired by this object.
             CUDA_CHECK(cudaHostUnregister(host));
         }
     }
@@ -81,9 +98,8 @@ bool ggml_cuda_get_tensor_n(int device,
             continue;
         }
         const uintptr_t address = (uintptr_t) data[i];
-        if (address > UINTPTR_MAX - sizes[i] || payload_bytes > SIZE_MAX - sizes[i]) {
-            return false;
-        }
+        GGML_ASSERT(address <= UINTPTR_MAX - sizes[i]);
+        GGML_ASSERT(payload_bytes <= SIZE_MAX - sizes[i]);
         payload_bytes += sizes[i];
         ranges.emplace_back(address, address + sizes[i]);
     }
@@ -127,15 +143,8 @@ bool ggml_cuda_get_tensor_n(int device,
         return false;
     }
     // Register and map the existing CPU destination so the kernel can write to it directly.
-    ggml_cuda_batch_get_mapping mapping;
-    if (cudaHostRegister((void *) begin, end - begin, cudaHostRegisterMapped | cudaHostRegisterPortable) != cudaSuccess) {
-        (void) cudaGetLastError();
-        return false;
-    }
-    mapping.host = (void *) begin;
-    unsigned char * destination = nullptr;
-    if (cudaHostGetDevicePointer((void **) &destination, mapping.host, 0) != cudaSuccess) {
-        (void) cudaGetLastError();
+    ggml_cuda_batch_get_mapping mapping((void *) begin, end - begin);
+    if (!mapping.device) {
         return false;
     }
     auto * copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(host_descriptors.get()));
@@ -147,7 +156,7 @@ bool ggml_cuda_get_tensor_n(int device,
             continue;
         }
         copies[count++] = {(const unsigned char *) tensors[i]->data + offsets[i],
-                destination + ((uintptr_t) data[i] - begin), sizes[i]};
+                mapping.device + ((uintptr_t) data[i] - begin), sizes[i]};
     }
     // Upload descriptors, then launch the kernel to copy payload bytes into mapped CPU memory.
     CUDA_CHECK(cudaMemcpyAsync(device_copies, copies, bytes, cudaMemcpyHostToDevice, cudaStreamPerThread));

@@ -148,6 +148,29 @@ static bool test_tensor_n(ggml_backend_buffer_type_t buft) {
         }
     }
 
+    const auto dev = ggml_backend_buft_get_device(buft);
+    if (dev && strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev)), "CUDA") == 0) {
+        uint8_t input[24], expected[128], out[128] = {};
+        for (size_t i = 0; i < sizeof(input); i++) {
+            input[i] = (uint8_t) (i + 1);
+        }
+        ggml_backend_tensor_set(t_big, input, 0, sizeof(input));
+
+        // 128 non-empty reads reach the CUDA gather dispatch threshold.
+        std::vector<ggml_tensor *> tensors(128, t_big);
+        std::vector<size_t> offsets(128), sizes(128, 1), data_offsets(128);
+        for (size_t i = 0; i < tensors.size(); i++) {
+            offsets[i] = (i * 5) % sizeof(input);
+            data_offsets[i] = i;
+            expected[i] = input[offsets[i]];
+        }
+
+        ggml_backend_tensor_get_n(tensors.data(), out, offsets.data(), sizes.data(), data_offsets.data(), tensors.size());
+        if (memcmp(out, expected, sizeof(out)) != 0) {
+            return false;
+        }
+    }
+
     return true;
 }
 
