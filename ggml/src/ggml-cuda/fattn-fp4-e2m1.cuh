@@ -26,3 +26,4 @@ void ggml_cuda_flash_attn_fp4_e2m1_via_mma_f16(const ggml_cuda_context & ctx, gg
 
 // Native FP4 MMA kernel (requires MXFP4 format, not yet implemented)
 void ggml_cuda_flash_attn_fp4_e2m1_mma(const ggml_cuda_context & ctx, ggml_tensor * dst);
+

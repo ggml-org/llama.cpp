@@ -128,3 +128,4 @@ void ggml_cuda_flash_attn_fp4_e2m1_mma(const ggml_cuda_context & ctx, ggml_tenso
     GGML_UNUSED(dst);
     GGML_ABORT("Native MXFP4 MMA kernel not yet implemented. Use fallback path (BEST_FATTN_KERNEL_MMA_FP4_FALLBACK).");
 }
+
