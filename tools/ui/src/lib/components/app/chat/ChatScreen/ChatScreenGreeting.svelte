@@ -3,10 +3,18 @@
 	import { serverStore } from '$lib/stores';
 
 	interface Props {
+		/** Wait before fading in, by default until the moving form is halfway in. */
+		enterDelayMs?: number;
+		/** Transparent but still in place, e.g. behind the expanded chat form. */
+		faded?: boolean;
 		isEmpty: boolean;
 	}
 
-	let { isEmpty = false }: Props = $props();
+	let {
+		enterDelayMs = CHAT_GREETING_ENTER_DELAY_MS,
+		faded = false,
+		isEmpty = false
+	}: Props = $props();
 
 	let hasEntered = $state(false);
 
@@ -29,20 +37,22 @@
 
 	let enterClass = $derived([
 		'transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]',
-		!hasEntered && 'opacity-0'
+		(!hasEntered || faded) && 'opacity-0'
 	]);
 </script>
 
 <div
 	class={[
 		'pointer-events-none mb-4 hidden px-4 text-center text-balance',
-		isEmpty && 'mb-[calc(50dvh-8rem)] md:mb-8 pointer-events-auto block!',
+		isEmpty && 'mb-[calc(50dvh-8rem)] md:mb-8 block!',
+		isEmpty && !faded && 'pointer-events-auto',
 		// out of the page flow on desktop, just above the form: inside the form
 		// wrapper's top padding, so showing it never changes the wrapper's height
 		isEmpty && 'md:absolute md:inset-x-0 md:bottom-[calc(100%-var(--chat-form-padding-top))]'
 	]}
 >
-	<div style:transition-delay="{CHAT_GREETING_ENTER_DELAY_MS}ms" class={enterClass}>
+	<!-- fading out goes right away; fading (back) in waits for the form to settle -->
+	<div style:transition-delay="{faded ? 0 : enterDelayMs}ms" class={enterClass}>
 		<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
 
 		<p class="text-muted-foreground md:text-lg">

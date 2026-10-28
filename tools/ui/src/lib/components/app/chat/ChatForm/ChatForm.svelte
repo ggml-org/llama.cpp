@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
+	import { Maximize, Minimize } from '@lucide/svelte';
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
@@ -10,8 +11,13 @@
 		ChatFormPickers,
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
+	import { hasMarkdownStructure } from '$lib/components/app/content/MarkdownEditor/markdown-structure';
+	import { Button } from '$lib/components/ui/button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
+		CHAT_FORM_EXPAND_MIN_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
+		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
 		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
@@ -59,7 +65,8 @@
 		createAudioFile,
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
+	import type { ClassValue } from 'svelte/elements';
 
 	interface Props {
 		// Data
@@ -68,8 +75,10 @@
 		value?: string;
 
 		// UI State
-		class?: string;
+		class?: ClassValue;
 		disabled?: boolean;
+		/** Grow into a large editor once the message holds markdown or several lines. */
+		expandable?: boolean;
 		isLoading?: boolean;
 		placeholder?: string;
 		showAddButton?: boolean;
@@ -90,6 +99,7 @@
 		attachments = [],
 		class: className = '',
 		disabled = false,
+		expandable = false,
 		isLoading = false,
 		onAttachmentRemove,
 		onFilesAdd,
@@ -202,6 +212,53 @@
 		(attachments && attachments.length > 0) || (uploadedFiles && uploadedFiles.length > 0)
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
+
+	// Expanded editor: entered once the message holds a markdown block or several lines,
+	// or by hand from the maximize button. Kept while the message has text (deleting a
+	// line does not make it jump back) and left once it is cleared or sent. Collapsing by
+	// hand holds until then too.
+	let isExpanded = $state(false);
+	let isCollapsedByUser = $state(false);
+	let hadText = false;
+
+	$effect(() => {
+		if (!expandable) return;
+
+		const text = value ?? '';
+
+		if (!text.trim()) {
+			if (hadText) {
+				isExpanded = false;
+				isCollapsedByUser = false;
+			}
+
+			hadText = false;
+
+			return;
+		}
+
+		hadText = true;
+
+		if (untrack(() => isExpanded || isCollapsedByUser)) return;
+
+		isExpanded =
+			text.split('\n').length >= CHAT_FORM_EXPAND_MIN_LINES || hasMarkdownStructure(text);
+	});
+
+	$effect(() => {
+		if (expandable) uiStore.isComposerExpanded = isExpanded;
+	});
+
+	onDestroy(() => {
+		if (expandable) uiStore.isComposerExpanded = false;
+	});
+
+	function toggleExpanded() {
+		isExpanded = !isExpanded;
+		// collapsing an empty form leaves the next message free to expand it again
+		isCollapsedByUser = !isExpanded && !!(value ?? '').trim();
+		inputRef?.focus();
+	}
 
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
@@ -490,7 +547,17 @@
 <ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
-	class="relative grid {className}"
+	class={[
+		// one flex column in both states, so expanding or collapsing changes only
+		// sizes, which ease, never the layout
+		'relative flex flex-col',
+		// Expanded: the whole form (card plus the chips below it) never outgrows the room
+		// under the conversation tabs and the form's top padding, so the page itself never
+		// scrolls; past that the card shrinks to fit and the editor scrolls inside
+		isExpanded &&
+			'max-h-[calc(100dvh-var(--chat-tabs-offset,0px)-var(--chat-form-padding-top)-2rem)]',
+		className
+	]}
 	onsubmit={(event) => {
 		event.preventDefault();
 
@@ -528,11 +595,51 @@
 	></div>
 
 	<div
-		class="{INPUT_CLASSES} overflow-hidden rounded-4xl md:rounded-3xl backdrop-blur-md {disabled
-			? 'cursor-not-allowed opacity-60'
-			: ''}"
+		class={[
+			INPUT_CLASSES,
+			'group/chat-form relative flex shrink flex-col overflow-hidden rounded-4xl backdrop-blur-md transition-[min-height] duration-400 ease-[cubic-bezier(0.3,1.12,0.5,1)] md:rounded-3xl',
+			// Expanded, it opens to about half the screen (or as the page sets it, see
+			// ChatScreen) and grows from there with the text. Collapsed, the minimum is its
+			// one-line height, so expanding starts from where the card already is
+			isExpanded
+				? 'min-h-[min(var(--chat-form-expanded-min-height,50dvh),calc(100dvh-var(--chat-tabs-offset,0px)-var(--chat-form-padding-top)-5rem))]'
+				: 'min-h-0 md:min-h-(--chat-form-collapsed-height)',
+			disabled && 'cursor-not-allowed opacity-60'
+		]}
 		data-slot="input-area"
 	>
+		<!-- Shown on hover (always on touch screens) while collapsed, always while expanded -->
+		{#if expandable}
+			<Tooltip.Root>
+				<Tooltip.Trigger
+					class={[
+						'absolute top-2.5 right-2.5 z-10 transition-opacity duration-150',
+						!isExpanded &&
+							'opacity-0 group-hover/chat-form:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100'
+					]}
+				>
+					<Button
+						class="h-8 w-8 rounded-full p-0 text-muted-foreground"
+						onclick={toggleExpanded}
+						type="button"
+						variant="ghost"
+					>
+						<span class="sr-only">{isExpanded ? 'Collapse editor' : 'Expand editor'}</span>
+
+						{#if isExpanded}
+							<Minimize class={ICON_CLASS_DEFAULT} />
+						{:else}
+							<Maximize class={ICON_CLASS_DEFAULT} />
+						{/if}
+					</Button>
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>{isExpanded ? 'Collapse editor' : 'Expand editor'}</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/if}
+
 		<ChatAttachmentsList
 			bind:uploadedFiles
 			activeModelId={activeModelId ?? undefined}
@@ -544,13 +651,16 @@
 		/>
 
 		<div
-			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
+			class={[
+				'relative flex min-h-12 flex-1 flex-col rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!'
+			]}
 		>
 			<ChatFormInput
 				bind:this={inputRef}
 				bind:value
-				class="px-5 py-1.5 md:pt-0"
+				class={['px-5 py-1.5 md:pt-0', expandable && 'pr-12']}
 				{disabled}
+				expanded={isExpanded}
 				onInput={() => {
 					pickers.handleInput();
 					onValueChange?.(value);
@@ -573,7 +683,7 @@
 			<ChatFormActions
 				bind:this={chatFormActionsRef}
 				canSend={canSubmit}
-				class="px-3"
+				class="mt-auto px-3"
 				{disabled}
 				{isLoading}
 				isReasoning={chatStore.isReasoning}
@@ -594,6 +704,7 @@
 	{#if conversationsStore.preferences.hasEnabledCwdTools()}
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
+			class="self-start"
 			customAnchor={mentionAnchor}
 			directory={cwd}
 			{disabled}

@@ -78,6 +78,8 @@
 	--chat-form-area-height: 8rem;
 	--chat-form-area-offset: 2rem;
 	--chat-form-padding-top: 6rem;
+	/* the chat form card holding one line of text, as it rests on a new chat */
+	--chat-form-collapsed-height: 6.375rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
 

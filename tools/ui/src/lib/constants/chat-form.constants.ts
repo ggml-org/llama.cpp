@@ -3,6 +3,8 @@ export const PROMPT_CONTENT_SEPARATOR = '\n\n';
 export const CLIPBOARD_CONTENT_QUOTE_PREFIX = '"';
 export const PROMPT_TRIGGER_PREFIX = '/';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
+/** Lines of text from which the main chat form expands into its large editor. */
+export const CHAT_FORM_EXPAND_MIN_LINES = 4;
 
 /**
  * The chat form moving between its centered (new chat) and bottom positions:
@@ -25,3 +27,10 @@ export const CHAT_FORM_MOVE_IN_EASING = 'cubic-bezier(0.23, 1, 0.32, 1)';
  * halfway through the form's fade-in so both read as one motion.
  */
 export const CHAT_GREETING_ENTER_DELAY_MS = CHAT_FORM_MOVE_IN_MS / 2;
+
+/**
+ * The main chat form growing into its expanded editor and back (the
+ * `duration-400` of its height and position transitions). After a collapse
+ * the greeting waits for it, so it fades in over a form that has settled.
+ */
+export const CHAT_FORM_RESIZE_MS = 400;

@@ -20,6 +20,8 @@
 		CHAT_FORM_MOVE_SHIFT_PX,
 		CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
 		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
+		CHAT_FORM_RESIZE_MS,
+		CHAT_GREETING_ENTER_DELAY_MS,
 		ROUTES
 	} from '$lib/constants';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
@@ -32,7 +34,8 @@
 		conversationsStore,
 		deviceStore,
 		serverStore,
-		settingsStore
+		settingsStore,
+		uiStore
 	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { tick, untrack } from 'svelte';
@@ -47,7 +50,32 @@
 	);
 	// where the form is drawn: follows `isEmpty` once the form has faded out
 	let isFormCentered = $state(untrack(() => isEmpty));
-	let isFormMoving = false;
+
+	// Collapsing the expanded form brings the greeting back: it waits for the form to
+	// shrink back first instead of fading in over it
+	let greetingEnterDelayMs = $state(CHAT_GREETING_ENTER_DELAY_MS);
+	let wasComposerExpanded = untrack(() => uiStore.isComposerExpanded);
+
+	$effect(() => {
+		const expanded = uiStore.isComposerExpanded;
+
+		if (expanded === wasComposerExpanded) return;
+
+		wasComposerExpanded = expanded;
+		greetingEnterDelayMs = expanded ? CHAT_GREETING_ENTER_DELAY_MS : CHAT_FORM_RESIZE_MS;
+
+		const timer = setTimeout(
+			() => (greetingEnterDelayMs = CHAT_GREETING_ENTER_DELAY_MS),
+			CHAT_FORM_RESIZE_MS * 2
+		);
+
+		return () => clearTimeout(timer);
+	});
+	// While the form moves between its centered and bottom positions it fades (see
+	// moveForm); otherwise its position eases, in step with the form expanding and
+	// collapsing, which settles it at the bottom while expanded
+	let isFormMoving = $state(false);
+	let isFormHeldAtBottom = $state(false);
 	let formWrapper: HTMLElement | undefined = $state();
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
 	let isServerLoading = $derived(serverStore.loading);
@@ -98,6 +126,19 @@
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
+		// called before the cleared form collapses: a send from the expanded form keeps it
+		// at the bottom, where it fades into the conversation instead of heading back up
+		isFormHeldAtBottom = isEmpty && uiStore.isComposerExpanded;
+
+		try {
+			return await sendMessage(message, files);
+		} finally {
+			// the send failed or was refused: the new chat stays, and so may the centering
+			if (isEmpty) isFormHeldAtBottom = false;
+		}
+	}
+
+	async function sendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
 		const plainFiles = files ? $state.snapshot(files) : undefined;
 		const result = plainFiles
 			? await parseFilesToMessageExtras(plainFiles, activeModel.activeModelId ?? undefined)
@@ -196,6 +237,7 @@
 
 		isFormCentered = isEmpty;
 		isFormMoving = false;
+		isFormHeldAtBottom = false;
 	}
 
 	$effect(() => {
@@ -220,6 +262,12 @@
 		stick.attach(document.documentElement, document.body, stickPin);
 
 		return () => stick.detach();
+	});
+
+	// the form growing (the editor expanding, more lines) keeps the latest message
+	// in view above it while the reader sits at the bottom
+	$effect(() => {
+		if (formWrapper) return stick.followGrowthOf(formWrapper);
 	});
 </script>
 
@@ -266,12 +314,24 @@
 						? 'bottom-1 left-2 right-2'
 						: 'bottom-2 right-2 left-2',
 				'md:bottom-4',
-				isFormCentered
-					? 'md:translate-y-[calc(-50dvh+7rem)] 2xl:translate-y-[calc(-50dvh+4rem)]'
-					: ''
+				// Centered on a new chat. Expanded, the form settles at the bottom and its card
+				// grows by exactly the distance it drops (the min height below), so its top
+				// edge stays where the collapsed card's was, through the whole transition
+				isFormCentered && !isFormHeldAtBottom
+					? [
+							'md:[--chat-form-expanded-min-height:calc(50dvh-7rem+var(--chat-form-collapsed-height))] 2xl:[--chat-form-expanded-min-height:calc(50dvh-4rem+var(--chat-form-collapsed-height))]',
+							!uiStore.isComposerExpanded &&
+								'md:translate-y-[calc(-50dvh+7rem)] 2xl:translate-y-[calc(-50dvh+4rem)]'
+						]
+					: '',
+				!isFormMoving && 'transition-[translate] duration-400 ease-[cubic-bezier(0.3,1.12,0.5,1)]'
 			]}
 		>
-			<ChatScreenGreeting isEmpty={isFormCentered} />
+			<ChatScreenGreeting
+				enterDelayMs={greetingEnterDelayMs}
+				faded={uiStore.isComposerExpanded}
+				isEmpty={isFormCentered && !isFormHeldAtBottom}
+			/>
 
 			<ChatScreenServerError />
 

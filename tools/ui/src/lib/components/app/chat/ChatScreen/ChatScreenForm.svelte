@@ -142,6 +142,7 @@
 		bind:value={message}
 		class="mx-auto max-w-3xl {className}"
 		{disabled}
+		expandable
 		{isLoading}
 		onFilesAdd={handleFilesAdd}
 		{onStop}
