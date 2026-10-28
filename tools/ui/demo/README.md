@@ -1,56 +1,70 @@
 # Demo videos
 
-Scripted Playwright walkthroughs of the UI, exported as mp4 for pull requests and documentation.
+Scripted Playwright walkthroughs of the UI, exported as mp4 with an animated GIF preview, for pull requests and documentation. The harness lives here; the demo scripts don't:
+
+- **PR demos** live in the PR description, as a `ts demo` code block.
+- **Docs demos** live in the storage target, under `scripts/docs/`.
 
 ```
 demo/
-├── docs/       demos for documentation
-├── pr/         demos for pull requests, named <pr-number>-<slug>.demo.ts
-├── fixtures/   fixture MCP servers and seeded settings
+├── cli.ts      demo:pr and demo:docs
+├── storage.ts  storage targets (hf://, file://)
 ├── helpers.ts  `test` with a `demo` fixture: cursor, captions, mp4 export
+├── fixtures/   fixture MCP servers and seeded settings
 └── videos/     output (git-ignored)
 ```
 
-## Recording
+## Setup
+
+Set the storage target in `tools/ui/.env` (see `.env.example`):
 
 ```bash
-npm run demo:record                      # all demos
-npm run demo:record -- demo/pr/31303     # one demo
-DEMO_COLOR_SCHEME=dark npm run demo:record -- demo/docs
+DEMO_STORAGE='hf://buckets/<owner>/<bucket>'   # or file:///some/dir
+DEMO_STORAGE_PUBLIC_URL='https://...'          # public base URL of the same location
 ```
 
-The config starts or reuses, if already running:
+`hf://` uses the `hf` CLI login. Without `DEMO_STORAGE`, videos stay in `demo/videos/`; without `DEMO_STORAGE_PUBLIC_URL`, they are uploaded but not linked in the PR.
 
-- fixture MCP servers on `:8765` (Weather, Notes), seeded into the UI's `mcpServers` setting
-- `llama-server` on `:9931` in router mode with `--tools all` (from `build/bin`)
-- the UI's vite dev server on `:5180`
-
-Each demo is written to `videos/<file-name>.mp4` (H.264, page load trimmed). `ffmpeg` is required for the mp4 export; without it the raw `.webm` is kept.
+`ffmpeg` is required for the mp4 and GIF exports.
 
 ## Recording a pull request
 
-Point `DEMO_UI_DIR` at a checkout of the PR so the demo records its UI:
+Add the script to the PR description:
 
-```bash
-git fetch origin pull/31303/head:pr-31303
-git worktree add ../pr-31303 pr-31303
-ln -s "$PWD/node_modules" ../pr-31303/tools/ui/node_modules
-DEMO_UI_DIR=../pr-31303/tools/ui npm run demo:record -- demo/pr/31303
-```
+````md
+<details>
+<summary>Demo script</summary>
 
-Stop any vite server already on `:5180` first, or set `DEMO_UI_PORT`, since an existing server is reused.
-
-## Writing a demo
-
-```ts
-import { test } from '../helpers.ts';
-
+```ts demo
 test('demo', async ({ demo, page }) => {
 	await demo.click(page.getByRole('button', { exact: true, name: 'Settings' }));
 	await demo.caption('What this shows');
 });
 ```
 
-`demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting; `demo.caption` shows a caption at the bottom of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+</details>
+````
 
-`npm run demo:codegen` opens Playwright codegen against `:5180` to record a first draft; then switch it to the `demo` helpers.
+Then run:
+
+```bash
+npm run demo:pr -- 31303
+```
+
+It checks out the PR head in a temporary worktree, records the script against it, uploads `videos/pr/<number>/<sha>.{mp4,gif,demo.ts}` and adds or updates a `## Demo` section in the PR description with the preview linking to the video. GitHub has no API for attachments, so for an inline player drag `demo/videos/pr-<number>.mp4` into the description instead.
+
+## Recording docs
+
+```bash
+npm run demo:docs
+```
+
+Records every `scripts/docs/*.demo.ts` from the storage target and uploads `videos/docs/<name>.{mp4,gif}`.
+
+## Writing a demo
+
+Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting; `demo.caption` shows a caption at the bottom of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+
+To try a script locally, put it in `demo/` as `<name>.demo.ts`, importing from `./helpers.ts`, and run `npm run demo:record -- demo/<name>`. `npm run demo:codegen` opens Playwright codegen against `:5180` for a first draft.
+
+The config starts, or reuses when already running, the fixture MCP servers on `:8765`, `llama-server` on `:9931` (router mode, `--tools all`) and the UI's vite dev server.

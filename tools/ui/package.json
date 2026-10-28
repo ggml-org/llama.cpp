@@ -19,6 +19,8 @@
 		"test:e2e": "playwright test",
 		"test:e2e:pwa": "playwright test tests/e2e/pwa.e2e.ts",
 		"demo:codegen": "playwright codegen --target=playwright-test --viewport-size=1440,900 --output=demo/recording.demo.ts http://localhost:5180/",
+		"demo:docs": "node demo/cli.ts docs",
+		"demo:pr": "node demo/cli.ts pr",
 		"demo:record": "playwright test --config=demo/playwright.config.ts",
 		"test:client": "vitest --project=client",
 		"test:unit": "vitest --project=unit",

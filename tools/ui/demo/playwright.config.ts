@@ -1,14 +1,20 @@
 import { DEMO_MCP_PORT } from './fixtures/demo-config.ts';
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+const ENV_FILE = resolve(import.meta.dirname, '../.env');
+
+if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
 /**
  * Demo video recordings.
  *
- * Env:
+ * Env (also read from tools/ui/.env):
  *   DEMO_UI_DIR         tools/ui checkout to record (default: this one), e.g. a PR worktree
  *   DEMO_UI_PORT        port for that checkout's vite dev server (default: 5180)
  *   DEMO_SERVER_ORIGIN  llama-server the UI proxies to (default: http://localhost:9931)
+ *   DEMO_LLAMA_SERVER   llama-server binary started when none runs there (default: build/bin)
  *   DEMO_COLOR_SCHEME   light | dark (default: light)
  */
 
@@ -16,6 +22,8 @@ const UI_DIR = resolve(process.env.DEMO_UI_DIR ?? resolve(import.meta.dirname, '
 const UI_PORT = Number(process.env.DEMO_UI_PORT ?? 5180);
 const SERVER_ORIGIN = process.env.DEMO_SERVER_ORIGIN ?? 'http://localhost:9931';
 const SERVER_PORT = Number(new URL(SERVER_ORIGIN).port || 80);
+const LLAMA_SERVER =
+	process.env.DEMO_LLAMA_SERVER ?? resolve(import.meta.dirname, '../../../build/bin/llama-server');
 
 export const VIEWPORT = { height: 900, width: 1440 };
 
@@ -50,8 +58,7 @@ export default defineConfig({
 			url: `http://localhost:${DEMO_MCP_PORT}/health`
 		},
 		{
-			command: `../../build/bin/llama-server --host 127.0.0.1 --port ${SERVER_PORT} --tools all`,
-			cwd: UI_DIR,
+			command: `${LLAMA_SERVER} --host 127.0.0.1 --port ${SERVER_PORT} --tools all`,
 			reuseExistingServer: true,
 			timeout: 60000,
 			url: `${SERVER_ORIGIN}/health`
