@@ -23,8 +23,8 @@ function installCursorOverlay(): void {
 				margin: -18px 0 0 -18px; border-radius: 50%; background: rgba(59, 130, 246, 0.35);
 				animation: demo-ripple 450ms ease-out forwards; }
 			@keyframes demo-ripple { from { transform: scale(0.3); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
-			#demo-caption { position: fixed; left: 50%; bottom: 48px; z-index: 2147483647; pointer-events: none;
-				transform: translate(-50%, 8px); opacity: 0; transition: opacity 200ms ease, transform 200ms ease;
+			#demo-caption { position: fixed; left: 50%; top: 72px; z-index: 2147483647; pointer-events: none;
+				transform: translate(-50%, -8px); opacity: 0; transition: opacity 200ms ease, transform 200ms ease;
 				max-width: 80%; padding: 10px 18px; border-radius: 10px; background: rgba(17, 17, 17, 0.88);
 				color: #fff; font: 500 18px/1.4 system-ui, sans-serif; text-align: center; }
 			#demo-caption.visible { opacity: 1; transform: translate(-50%, 0); }
@@ -82,7 +82,7 @@ function seedSettings(config: Record<string, unknown>): void {
 }
 
 export class Demo {
-	/** Shows a caption at the bottom of the frame for `ms`. */
+	/** Shows a caption at the top of the frame for `ms`, clear of the chat form. */
 	async caption(text: string, ms = 2200): Promise<void> {
 		await this.page.evaluate((t) => {
 			const el = document.getElementById('demo-caption');

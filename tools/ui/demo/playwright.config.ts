@@ -18,6 +18,10 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
  *   DEMO_COLOR_SCHEME   light | dark (default: light)
  */
 
+// Playwright clears outputDir when a run starts, so concurrent recordings each get
+// their own; workers inherit the env, so they resolve the same directory
+process.env.DEMO_RUN_ID ??= String(process.pid);
+
 const UI_DIR = resolve(process.env.DEMO_UI_DIR ?? resolve(import.meta.dirname, '..'));
 const UI_PORT = Number(process.env.DEMO_UI_PORT ?? 5180);
 const SERVER_ORIGIN = process.env.DEMO_SERVER_ORIGIN ?? 'http://localhost:9931';
@@ -32,7 +36,7 @@ export default defineConfig({
 		timeout: 10000
 	},
 	fullyParallel: false,
-	outputDir: 'test-results',
+	outputDir: `test-results/${process.env.DEMO_RUN_ID}`,
 	projects: [
 		{
 			name: 'chromium',
