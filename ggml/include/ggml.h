@@ -428,9 +428,10 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
-        GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_FP4_E2M1 = 41, // FP4 E2M1 (per-block FP32 scale)
+        GGML_TYPE_Q1_0    = 42,
+        GGML_TYPE_Q2_0    = 43,
+        GGML_TYPE_COUNT   = 44,
     };
 
     // [TAG_GGML_PREC]

@@ -62,6 +62,10 @@ void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_nvfp4_ref(x, y, k);
 }
 
+void quantize_row_fp4_e2m1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_fp4_e2m1_ref(x, y, k);
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -360,6 +364,46 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         }
     }
     *s = sumf;
+}
+
+// FP4 E2M1: block of 32 elements = 1 FP32 scale + 16 bytes packed E2M1 codes
+// Dot product with Q8_0
+void ggml_vec_dot_fp4_e2m1_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_FP4_E2M1 == 0);
+    static_assert(QK_FP4_E2M1 == QK8_0, "QK_FP4_E2M1 and QK8_0 must be the same");
+
+    const block_fp4_e2m1 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_FP4_E2M1;
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = x[ib].scale;
+
+        int sumi1 = 0;
+        int sumi2 = 0;
+        for (int j = 0; j < QK_FP4_E2M1/2; ++j) {
+            uint8_t packed = x[ib].qs[j];
+            uint8_t high = (packed >> 4) & 0x0F;
+            uint8_t low  = packed & 0x0F;
+
+            sumi1 += y[ib].qs[j +          0] * kvalues_fp4_e2m1[high];
+            sumi2 += y[ib].qs[j + QK_FP4_E2M1/2] * kvalues_fp4_e2m1[low];
+        }
+        sumf += d * 0.5f * (sumi1 + sumi2);  // kvalues are doubled, so multiply by 0.5
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_fp4_e2m1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_fp4_e2m1_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 }
 
 void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {

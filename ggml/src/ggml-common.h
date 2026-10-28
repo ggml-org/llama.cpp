@@ -112,6 +112,9 @@ typedef sycl::half2 ggml_half2;
 #define QI_NVFP4 (QK_NVFP4 / (4 * QR_NVFP4))
 #define QR_NVFP4 2
 
+#define QI_FP4_E2M1 (QK_FP4_E2M1 / (4 * QR_FP4_E2M1))
+#define QR_FP4_E2M1 2
+
 #define QI5_0 (QK5_0 / (4 * QR5_0))
 #define QR5_0 2
 
@@ -225,6 +228,16 @@ typedef struct {
     uint8_t qs[QK_NVFP4/2];           // packed 4-bit E2M1 values (32 bytes)
 } block_nvfp4;
 static_assert(sizeof(block_nvfp4) == sizeof(uint8_t)*(QK_NVFP4/QK_NVFP4_SUB) + QK_NVFP4/2, "wrong nvfp4 block size/padding");
+
+// FP4 E2M1 (OCP microscaling e2m1) with per-block FP32 scale
+// Block: 32 elements = 1 FP32 scale (4 bytes) + 16 bytes packed E2M1 codes (2 per byte)
+// Grid: {0, 0.5, 1, 1.5, 2, 3, 4, 6} and negatives
+#define QK_FP4_E2M1 32
+typedef struct {
+    float scale;           // FP32 scale per block
+    uint8_t qs[QK_FP4_E2M1/2]; // packed 4-bit E2M1 codes (16 bytes)
+} block_fp4_e2m1;
+static_assert(sizeof(block_fp4_e2m1) == sizeof(float) + QK_FP4_E2M1/2, "wrong fp4_e2m1 block size/padding");
 
 #define QK5_0 32
 typedef struct {
@@ -1121,12 +1134,13 @@ GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
 GGML_TABLE_END()
 
-// e2m1 values (doubled), shared by MXFP4 and NVFP4
+// e2m1 values (doubled), shared by MXFP4, NVFP4, and FP4_E2M1
 // ref: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 GGML_TABLE_BEGIN(int8_t, kvalues_fp4, 16)
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
 GGML_TABLE_END()
 #define kvalues_mxfp4 kvalues_fp4
+#define kvalues_fp4_e2m1 kvalues_fp4
 
 #define NGRID_IQ1S 2048
 #define IQ1S_DELTA 0.125f

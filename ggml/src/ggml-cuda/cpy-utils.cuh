@@ -1,4 +1,16 @@
 #pragma once
+// FP4 E2M1 quantization helper
+static __device__ __forceinline__ int quantize_to_fp4_e2m1_idx(float val) {
+    if (val >= 10.0f) return 7;
+    if (val >= 7.0f) return 6;
+    if (val >= 5.0f) return 5;
+    if (val >= 3.5f) return 4;
+    if (val >= 2.5f) return 3;
+    if (val >= 1.5f) return 2;
+    if (val >= 0.5f) return 1;
+    return 0;
+}
+
 
 #include "ggml-common.h"
 #include "convert.cuh"
@@ -209,6 +221,38 @@ static __device__ void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
 
 static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     quantize_f32_iq4_nl_block((const float *)cxi, (block_iq4_nl *)cdsti);
+}
+
+static __device__ void quantize_f32_fp4_e2m1_block(const float * __restrict__ x, block_fp4_e2m1 * __restrict__ y) {
+    float amax = 0.0f;
+
+    for (int j = 0; j < QK_FP4_E2M1; ++j) {
+        float v = fabsf(x[j]);
+        if (v > amax) amax = v;
+    }
+
+    float scale = amax / 6.0f;
+    if (scale < 1e-30f) scale = 1e-30f;
+    float inv_scale = 1.0f / scale;
+
+    y->scale = scale;
+
+    for (int j = 0; j < QK_FP4_E2M1/2; ++j) {
+        float v0 = x[j] * inv_scale;
+        float v1 = x[QK_FP4_E2M1/2 + j] * inv_scale;
+
+        int idx0 = quantize_to_fp4_e2m1_idx(fabsf(v0) * 2.0f);
+        int idx1 = quantize_to_fp4_e2m1_idx(fabsf(v1) * 2.0f);
+
+        if (v0 < 0) idx0 |= 0x8;
+        if (v1 < 0) idx1 |= 0x8;
+
+        y->qs[j] = (idx0 << 4) | idx1;
+    }
+}
+
+static __device__ void cpy_blck_f32_fp4_e2m1(const char * cxi, char * cdsti) {
+    quantize_f32_fp4_e2m1_block((const float *)cxi, (block_fp4_e2m1 *)cdsti);
 }
 
 template<typename src_t, typename dst_t>

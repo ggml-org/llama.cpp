@@ -3,6 +3,7 @@
 #include "fattn-mma-f16.cuh"
 #include "fattn-tile.cuh"
 #include "fattn-vec.cuh"
+#include "fattn-fp4-e2m1.cuh"
 #include "fattn.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
@@ -514,10 +515,12 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
 
 // Best FlashAttention kernel for a specific GPU:
 enum best_fattn_kernel {
-    BEST_FATTN_KERNEL_NONE    =   0,
-    BEST_FATTN_KERNEL_TILE    = 200,
-    BEST_FATTN_KERNEL_VEC     = 100,
-    BEST_FATTN_KERNEL_MMA_F16 = 400,
+    BEST_FATTN_KERNEL_NONE             =   0,
+    BEST_FATTN_KERNEL_TILE             = 200,
+    BEST_FATTN_KERNEL_VEC              = 100,
+    BEST_FATTN_KERNEL_MMA_F16          = 400,
+    BEST_FATTN_KERNEL_MMA_FP4_FALLBACK = 500, // FP4 E2M1 -> FP16 -> F16 MMA fallback
+    BEST_FATTN_KERNEL_MMA_MXFP4        = 600, // Native MXFP4 MMA (Blackwell sm_120+)
 };
 
 // K/V types for which there is a vector kernel template instance, other kernels convert these to f16:
@@ -531,6 +534,7 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_FP4_E2M1:
             return true;
         default:
             return false;
@@ -623,6 +627,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     if (!ggml_cuda_fattn_kv_type_supported(K->type) || !ggml_cuda_fattn_kv_type_supported(V->type)) {
         return BEST_FATTN_KERNEL_NONE;
+    }
+
+    // FP4 E2M1 KV cache: use native MXFP4 MMA kernel on Blackwell (sm_120+), fallback to FP16 MMA otherwise
+    if (K->type == GGML_TYPE_FP4_E2M1 && V->type == GGML_TYPE_FP4_E2M1) {
+        if (cc >= GGML_CUDA_CC_BLACKWELL) {
+            // Use fallback path for now (native MXFP4 MMA requires MXFP4 format conversion, not yet implemented)
+            return BEST_FATTN_KERNEL_MMA_FP4_FALLBACK;
+        }
+        // Fallback: FP4 E2M1 -> FP16 -> F16 MMA for older architectures
+        return BEST_FATTN_KERNEL_MMA_F16;
     }
 
     if (mask && mask->ne[2] != 1) {
@@ -736,6 +750,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     switch (kernel) {
         case BEST_FATTN_KERNEL_TILE:
         case BEST_FATTN_KERNEL_MMA_F16:
+        case BEST_FATTN_KERNEL_MMA_FP4_FALLBACK:
             need_f16_K = true;
             need_f16_V = true;
             break;
@@ -744,6 +759,11 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
             need_f16_K = K->type == GGML_TYPE_F32 || f16_fallback;
             need_f16_V = V->type == GGML_TYPE_F32 || f16_fallback;
         } break;
+        case BEST_FATTN_KERNEL_MMA_MXFP4:
+            // Native MXFP4 MMA kernel operates directly on MXFP4 data, no FP16 conversion needed
+            need_f16_K = false;
+            need_f16_V = false;
+            break;
         case BEST_FATTN_KERNEL_NONE:
             break;
     }
@@ -767,6 +787,12 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             break;
         case BEST_FATTN_KERNEL_MMA_F16:
             ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_MMA_FP4_FALLBACK:
+            ggml_cuda_flash_attn_fp4_e2m1_via_mma_f16(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_MMA_MXFP4:
+            ggml_cuda_flash_attn_fp4_e2m1_mma(ctx, dst);
             break;
     }
 }
