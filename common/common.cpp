@@ -1473,7 +1473,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
 
-        const auto cvec = common_control_vector_load(params.control_vectors);
+        const auto cvec = common_control_vector_load(params.control_vectors, llama_model_n_layer(model));
         if (cvec.n_embd == -1) {
             return res;
         }
@@ -1995,7 +1995,7 @@ float common_embd_similarity_cos(const float * embd1, const float * embd2, int n
 // Control vector utils
 //
 
-static common_control_vector_data common_control_vector_load_one(const common_control_vector_load_info & load_info) {
+static common_control_vector_data common_control_vector_load_one(const common_control_vector_load_info & load_info, int32_t n_layer) {
     common_control_vector_data result = { -1, {} };
 
     ggml_context * ctx = nullptr;
@@ -2036,6 +2036,10 @@ static common_control_vector_data common_control_vector_load_one(const common_co
             COM_ERR("invalid (zero) direction tensor layer index in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
+        } else if (layer_idx > n_layer) {
+            COM_ERR("direction tensor layer index %d exceeds the model layer count %d in %s\n", layer_idx, n_layer, load_info.fname.c_str());
+            result.n_embd = -1;
+            break;
         }
 
         struct ggml_tensor * tensor = ggml_get_tensor(ctx, name.c_str());
@@ -2059,10 +2063,10 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         }
 
         // extend if necessary - do not store data for layer 0 (it's not used)
-        result.data.resize(std::max(result.data.size(), static_cast<size_t>(result.n_embd * layer_idx)), 0.0f);
+        result.data.resize(std::max(result.data.size(), (size_t) result.n_embd * layer_idx), 0.0f);
 
         const float * src = (const float *) tensor->data;
-        float * dst = result.data.data() + result.n_embd * (layer_idx - 1);  // layer 1 at [0]
+        float * dst = result.data.data() + (size_t) result.n_embd * (layer_idx - 1);  // layer 1 at [0]
         for (int j = 0; j < result.n_embd; j++) {
             dst[j] += src[j] * load_info.strength;  // allows multiple directions for same layer in same file
         }
@@ -2080,11 +2084,11 @@ static common_control_vector_data common_control_vector_load_one(const common_co
     return result;
 }
 
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos) {
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer) {
     common_control_vector_data result = { -1, {} };
 
     for (const auto & info : load_infos) {
-        auto cur = common_control_vector_load_one(info);
+        auto cur = common_control_vector_load_one(info, n_layer);
 
         if (cur.n_embd == -1) {
             result.n_embd = -1;

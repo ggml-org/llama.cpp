@@ -1237,8 +1237,9 @@ struct common_control_vector_load_info {
 };
 
 // Load control vectors, scale each by strength, and add them together.
+// Direction layer indices must be in [1, n_layer].
 // On error, returns {-1, empty}
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer);
 
 //
 // Split utils
