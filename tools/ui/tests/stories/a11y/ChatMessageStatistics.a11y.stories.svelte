@@ -9,7 +9,7 @@
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Components/ChatMessageStatistics/Accessibility'
+		title: 'Chat/ChatMessageStatistics/Accessibility'
 	});
 </script>
 

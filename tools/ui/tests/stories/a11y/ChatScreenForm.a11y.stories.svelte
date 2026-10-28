@@ -10,7 +10,7 @@
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Components/ChatScreen/ChatScreenForm/Accessibility'
+		title: 'Chat/ChatScreen/ChatScreenForm/Accessibility'
 	});
 </script>
 

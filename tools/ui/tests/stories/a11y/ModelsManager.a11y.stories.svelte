@@ -10,7 +10,7 @@
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Components/ModelsManager/Accessibility'
+		title: 'Models/ModelsManager/Accessibility'
 	});
 
 	const option: ModelOption = {

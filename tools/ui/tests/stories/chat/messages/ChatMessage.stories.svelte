@@ -46,7 +46,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatMessages/ChatMessage'
+		title: 'Chat/ChatScreen/ChatMessages/ChatMessage'
 	});
 
 	const STREAM_ANSWER =

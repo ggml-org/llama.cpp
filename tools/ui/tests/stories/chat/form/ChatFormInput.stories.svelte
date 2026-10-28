@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatForm/ChatFormInput'
+		title: 'Chat/ChatScreen/ChatForm/ChatFormInput'
 	});
 
 	const common = {

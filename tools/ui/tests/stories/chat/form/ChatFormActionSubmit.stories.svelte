@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatForm/ChatFormActionSubmit'
+		title: 'Chat/ChatScreen/ChatForm/ChatFormActionSubmit'
 	});
 </script>
 
