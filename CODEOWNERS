@@ -3,19 +3,20 @@
 #
 # ggml-org/ci               : CISC, danbev, ggerganov, netrunnereve, ngxson, taronaeo
 # ggml-org/ggml-cann        : hipudding
-# ggml-org/ggml-cuda        : JohannesGaessler, am17an, IMbackK, ORippler
+# ggml-org/ggml-cuda        : am17an, gaugarg-nv, IMbackK, JohannesGaessler, ORippler, thelittlefireman, ynankani
 # ggml-org/ggml-hexagon     : lhez, max-krasnyansky
-# ggml-org/ggml-metal       : ggerganov
+# ggml-org/ggml-metal       : forforever73, ggerganov, jhen0409, masterFoad
 # ggml-org/ggml-opencl      : lhez, max-krasnyansky
-# ggml-org/ggml-rpc         : rgerganov
-# ggml-org/ggml-sycl        : arthw
+# ggml-org/ggml-rpc         : am17an, rgerganov
+# ggml-org/ggml-sycl        : arthw, Titaniumtown
 # ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
 # ggml-org/ggml-webgpu      : reeselevine, yomaytk
-# ggml-org/ggml-zdnn        : taronaeo
-# ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
+# ggml-org/ggml-zdnn        : AlekseiNikiforovIBM, Andreas-Krebbel, taronaeo
+# ggml-org/llama-common     : aldehir, angt, bartowski1182, danbev, ggerganov, ngxson, nikwen, pwilkin, ruixiang63, sanmai
+# ggml-org/llama-models     : CISC, danbev, ggerganov, ngxson
 # ggml-org/llama-mtmd       : ngxson
-# ggml-org/llama-server     : ggerganov, ngxson, allozaur, angt, ServeurpersoCom
-# ggml-org/llama-ui           : allozaur
+# ggml-org/llama-server     : allozaur, angt, ggerganov, ngxson, ServeurpersoCom
+# ggml-org/llama-ui         : allozaur
 
 /.devops/*.Dockerfile                   @ngxson
 /.github/actions/                       @ggml-org/ci
@@ -94,7 +95,7 @@
 /src/llama-graph.*                      @CISC
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
-/src/models/                            @CISC
+/src/models/                            @CISC @ggml-org/llama-models
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
 /tests/test-server-component.cpp        @ggml-org/llama-server
