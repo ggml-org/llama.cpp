@@ -1,7 +1,11 @@
 <script lang="ts">
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
+	import SidebarNavigationSectionHeading from './SidebarNavigationSectionHeading.svelte';
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
 	import { Pin } from '@lucide/svelte';
+	import { CollapsibleRegion } from '$lib/components/app';
+	import { SIDEBAR_SECTION_IDS } from '$lib/constants';
+	import { uiStore } from '$lib/stores';
 	import { buildConversationTree } from '$lib/utils';
 
 	interface Props {
@@ -69,90 +73,51 @@
 
 <div class="flex min-h-0 flex-1 flex-col">
 	{#if pinnedConversations.length > 0}
-		<div class="py-2 flex whitespace-nowrap {className}">
-			<div
-				class="text-muted-foreground inline-flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium gap-1"
-			>
-				<Pin class="h-3.5 w-3.5" />
-
-				<span>Pinned</span>
-			</div>
+		<div class="py-2 whitespace-nowrap {className}">
+			<SidebarNavigationSectionHeading
+				icon={Pin}
+				label="Pinned"
+				onToggle={() => uiStore.toggleSidebarSection(SIDEBAR_SECTION_IDS.PINNED)}
+				open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.PINNED)}
+			/>
 		</div>
 
-		<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-1 {className}">
-			{#each pinnedConversations as { conversation, depth } (conversation.id)}
-				<li class="group/item relative mb-1 p-0">
-					<SidebarNavigationConversationItem
-						conversation={{
-							currNode: conversation.currNode,
-							forkedFromConversationId: conversation.forkedFromConversationId,
-							id: conversation.id,
-							lastModified: conversation.lastModified,
-							name: conversation.name,
-							pinned: conversation.pinned
-						}}
-						{depth}
-						isActive={currentChatId === conversation.id}
-						isSelected={selectedIds.has(conversation.id)}
-						{isSelectionMode}
-						{onDelete}
-						{onEdit}
-						{onEnterSelectionMode}
-						{onRowMouseDown}
-						{onSelect}
-						{onSelectionClick}
-						{onStop}
-						{onToggleSelect}
-					/>
-				</li>
-			{/each}
-		</ul>
+		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.PINNED)}>
+			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-1 {className}">
+				{#each pinnedConversations as { conversation, depth } (conversation.id)}
+					<li class="group/item relative mb-1 p-0">
+						{@render conversationItem(conversation, depth)}
+					</li>
+				{/each}
+			</ul>
+		</CollapsibleRegion>
 	{/if}
 
 	<div class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-0 whitespace-nowrap {className}">
 		{#if conversations.length > 0}
-			<div
-				class="text-muted-foreground flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium"
-			>
-				Recent conversations
-			</div>
+			<SidebarNavigationSectionHeading
+				label="Recent conversations"
+				onToggle={() => uiStore.toggleSidebarSection(SIDEBAR_SECTION_IDS.RECENT)}
+				open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}
+			/>
 		{/if}
 
 		<div class="min-h-0 flex-1 md:overflow-y-auto">
-			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0">
-				{#each unpinnedConversations as { conversation, depth } (conversation.id)}
-					<li class="group/item relative mb-1 p-0">
-						<SidebarNavigationConversationItem
-							conversation={{
-								currNode: conversation.currNode,
-								forkedFromConversationId: conversation.forkedFromConversationId,
-								id: conversation.id,
-								lastModified: conversation.lastModified,
-								name: conversation.name,
-								pinned: conversation.pinned
-							}}
-							{depth}
-							isActive={currentChatId === conversation.id}
-							isSelected={selectedIds.has(conversation.id)}
-							{isSelectionMode}
-							{onDelete}
-							{onEdit}
-							{onEnterSelectionMode}
-							{onRowMouseDown}
-							{onSelect}
-							{onSelectionClick}
-							{onStop}
-							{onToggleSelect}
-						/>
-					</li>
-				{/each}
+			<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}>
+				<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0">
+					{#each unpinnedConversations as { conversation, depth } (conversation.id)}
+						<li class="group/item relative mb-1 p-0">
+							{@render conversationItem(conversation, depth)}
+						</li>
+					{/each}
 
-				{#if unpinnedConversations.length === 0}
-					<li class="px-2 py-4 text-center">
-						<p class="mb-4 p-4 text-sm text-muted-foreground">No conversations yet</p>
-					</li>
-				{/if}
-			</ul>
+					{#if unpinnedConversations.length === 0}
+						<li class="px-2 py-4 text-center">
+							<p class="mb-4 p-4 text-sm text-muted-foreground">No conversations yet</p>
+						</li>
+					{/if}
+				</ul>
+			</CollapsibleRegion>
 		</div>
 	</div>
 
@@ -173,3 +138,28 @@
 		/>
 	{/if}
 </div>
+
+{#snippet conversationItem(conversation: DatabaseConversation, depth = 0)}
+	<SidebarNavigationConversationItem
+		conversation={{
+			currNode: conversation.currNode,
+			forkedFromConversationId: conversation.forkedFromConversationId,
+			id: conversation.id,
+			lastModified: conversation.lastModified,
+			name: conversation.name,
+			pinned: conversation.pinned
+		}}
+		{depth}
+		isActive={currentChatId === conversation.id}
+		isSelected={selectedIds.has(conversation.id)}
+		{isSelectionMode}
+		{onDelete}
+		{onEdit}
+		{onEnterSelectionMode}
+		{onRowMouseDown}
+		{onSelect}
+		{onSelectionClick}
+		{onStop}
+		{onToggleSelect}
+	/>
+{/snippet}

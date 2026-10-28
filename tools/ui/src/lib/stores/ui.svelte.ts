@@ -13,6 +13,7 @@ import {
 	MODELS_ROUTE_ID,
 	ROUTES,
 	SETTINGS_KEYS,
+	SIDEBAR_COLLAPSED_SECTIONS_LOCALSTORAGE_KEY,
 	SIDEBAR_EXPANDED_LOCALSTORAGE_KEY,
 	SIDEBAR_MAX_WIDTH,
 	SIDEBAR_MIN_WIDTH,
@@ -21,8 +22,28 @@ import {
 import { deviceStore } from '$lib/stores/device.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { remToPx } from '$lib/utils/css';
+import { SvelteSet } from 'svelte/reactivity';
+
+/** Sidebar sections the user folded, read once on load. */
+function loadCollapsedSidebarSections(): SvelteSet<string> {
+	if (!browser) return new SvelteSet<string>();
+
+	try {
+		const raw = localStorage.getItem(SIDEBAR_COLLAPSED_SECTIONS_LOCALSTORAGE_KEY);
+		const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+
+		return new SvelteSet(
+			Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []
+		);
+	} catch {
+		return new SvelteSet<string>();
+	}
+}
 
 class UiStore {
+	/** Sidebar conversation sections the user folded, kept across reloads. */
+	collapsedSidebarSections = loadCollapsedSidebarSections();
+
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
 	composerFocusRequested = $state(false);
 
@@ -91,6 +112,10 @@ class UiStore {
 		this.modelsSelectorCloseSignal++;
 	}
 
+	isSidebarSectionOpen(id: string): boolean {
+		return !this.collapsedSidebarSections.has(id);
+	}
+
 	/** Open the model details drawer over the current page, without leaving it. */
 	openModelDetails(focus: string): void {
 		this.modelDetailsFocus = focus;
@@ -122,7 +147,6 @@ class UiStore {
 	requestComposerFocus(): void {
 		this.composerFocusRequested = true;
 	}
-
 	/** Set the expanded sidebar width in px, or null to go back to the default. */
 	setSidebarWidth(width: number | null): void {
 		this.sidebarWidth = width;
@@ -133,6 +157,24 @@ class UiStore {
 			localStorage.removeItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY);
 		} else {
 			localStorage.setItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY, String(width));
+		}
+	}
+
+	/** Fold or unfold a sidebar conversation section and remember it. */
+	toggleSidebarSection(id: string): void {
+		if (this.collapsedSidebarSections.has(id)) {
+			this.collapsedSidebarSections.delete(id);
+		} else {
+			this.collapsedSidebarSections.add(id);
+		}
+
+		try {
+			localStorage.setItem(
+				SIDEBAR_COLLAPSED_SECTIONS_LOCALSTORAGE_KEY,
+				JSON.stringify([...this.collapsedSidebarSections])
+			);
+		} catch {
+			// the fold still applies for this session
 		}
 	}
 

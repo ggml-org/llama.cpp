@@ -24,6 +24,12 @@ export const COLLAPSIBLE_TRANSITION_MS = 200;
 export const NATIVE_CONTEXT_MENU_SELECTOR =
 	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
 
+/** Ids of the sidebar's conversation sections, for their folded state. */
+export const SIDEBAR_SECTION_IDS = {
+	PINNED: 'pinned',
+	RECENT: 'recent'
+} as const;
+
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 
