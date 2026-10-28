@@ -1,4 +1,5 @@
-numpy~=2.2.6
+numpy~=2.2.6; python_version < "3.14"
+numpy>=2.3.0; python_version >= "3.14"
 sentencepiece>=0.1.98,<0.3.0
 
 transformers==4.57.6
