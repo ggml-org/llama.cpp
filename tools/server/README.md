@@ -1587,6 +1587,10 @@ Returns a JSON object with a boolean `success` field, and an optional `message` 
 
 Transcribes streamed audio, for models with a streaming audio encoder. Compatible with OAI `/v1/realtime` schema.
 
+Models that write the text while they listen use this endpoint: Voxtral Realtime, and live ASR models, which carry the prompt of their transcription in a chat template named `asr` (e.g. the LFM3-Audio live ASR checkpoints, the text of every 0.96 s of audio follows it). A live ASR model restarts its context at a pause after 15 s and always after 30 s, the transcript then goes on in a new line. A commit completes the audio with silence, so that its text comes out.
+
+Live ASR models can also hold a conversation, so they transcribe live only in sessions opened with `/v1/realtime?intent=transcription`, as OpenAI transcription sessions are; other sessions are a [realtime conversation](#realtime-conversation).
+
 Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `audio.input.format.rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
 
 *Client events:*
@@ -1607,6 +1611,38 @@ Closing the websocket also ends the input.
 - `error`: `error.message` describes the problem
 
 Note that words held back by the model's delay at the time of a commit are attributed to the next item.
+
+#### Realtime conversation
+
+Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono at the model sample rate (`audio.input.format.rate` of `session.created`), audio output is PCM16 mono at `audio.output.format.rate`.
+
+`session.type` selects the session, it can be changed with `session.update` before the first audio or message:
+
+- `realtime` (default): a conversation, every response stays in context for the next turns
+- `transcription`: each committed audio buffer is transcribed on its own, `audio.input.transcription.language` picks the language
+
+*Client events:*
+
+- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default)
+- `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
+- `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
+- `conversation.item.create`: a user message with `input_text` content
+- `response.create`: ends the user turn and generates the response, `response.output_modalities` and `response.max_output_tokens` override the session
+- `response.cancel`: stops the response being generated
+
+LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its turns open with an empty think block.
+
+`output_modalities` picks the mode of the responses: left out, the model switches between text and audio on its own; `["text"]` keeps the response in text, `["audio"]` makes it speech and `["text", "audio"]` interleaves text with the speech.
+
+*Server events:*
+
+- `session.created` and `session.updated`: carry the `session` object
+- `input_audio_buffer.committed`, `conversation.item.added`, `conversation.item.done`: the user item
+- `response.created`, `response.output_item.added`, `response.content_part.added`, then `response.output_text.delta` and `response.output_audio.delta` (base64 PCM16) as they are generated, then the `.done` events and `response.done`
+- `conversation.item.input_audio_transcription.delta` and `.completed`: in a transcription session
+- `error`: `error.message` describes the problem
+
+See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
 
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
