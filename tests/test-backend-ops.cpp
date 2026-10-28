@@ -10956,6 +10956,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // full reversal: contiguous src dim lands on dst dim 3 (dim_k == 3), no dims merge
+    for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
+                {33, 5, 7, 9},          // small dst dim-3 stride
+                {33, 64, 32, 16} }) {   // dst dim-3 stride >= 64 KB, over the 16-bit DMA stride limit
+            test_cases.emplace_back(new test_cont(type_dst, ne, false, {3, 2, 1, 0}));
+        }
+    }
+
     auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr, bool perm1 = false, bool src_overlap = false) {
         for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
             test_cases.emplace_back(new test_bin_bcast(op, type, ne, nr, 1, perm1, src_overlap));

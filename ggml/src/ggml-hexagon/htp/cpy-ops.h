@@ -156,12 +156,14 @@ static inline bool htp_copy_transpose_layout_build(
 
     uint32_t blk0;
     uint32_t blkk;
+    bool     packed = false;
     if (k_is_dim1 && ne0 < lanes && lanes % ne0 == 0) {
         // One vector holds lanes / ne0 whole dst rows, and with dim k right after dim 0
         // the transposed tile is one contiguous dst run.
+        packed = true;
         blk0 = ne0;
         blkk = blk_bytes / (ne0 * type_size);
-        // vgather halfword offsets: (ne0 - 1) * in_stride + 128 must fit in 15 bits
+        // vgather halfword offsets are unsigned 16-bit; cap keeps them under 32 KB since larger tiles measured slower
         if (type_size == 2 && blkk > 16384 / ne0 - 64) {
             blkk = 16384 / ne0 - 64;
         }
@@ -189,7 +191,7 @@ static inline bool htp_copy_transpose_layout_build(
         }
         blkk = blk_bytes / (blk0 * type_size);
         blkk -= blkk % lanes;
-        // vgather halfword offsets: lane * in_stride must fit in 16 bits
+        // vgather halfword offsets are unsigned 16-bit (f16 blkk up to 512); f16 cap is 256 since larger tiles measured slower
         const uint32_t max_blkk = type_size == 2 ? 256 : 1024;
         if (blkk > max_blkk) {
             blkk = max_blkk;
@@ -202,7 +204,7 @@ static inline bool htp_copy_transpose_layout_build(
         }
     }
 
-    tp->packed       = blk0 == ne0 && blk0 < lanes;
+    tp->packed       = packed;
     tp->blk0         = blk0;
     tp->blkk         = blkk;
     tp->n0b          = (ne0 + blk0 - 1) / blk0;
