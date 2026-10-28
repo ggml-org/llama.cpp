@@ -136,6 +136,4 @@ llama_model_orion::graph::graph(const llama_model & model, const llm_graph_param
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

@@ -1,6 +1,10 @@
 #pragma once
 #include "ggml-vulkan-push-constants.h"
 
+inline std::ostream & operator<<(std::ostream & os, vk::Buffer buffer) {
+    return os << static_cast<VkBuffer>(buffer);
+}
+
 // shared globals
 extern ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface;
 extern bool vk_memory_logger_enabled;
@@ -41,8 +45,8 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
 vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk::MemoryPropertyFlags req_flags, vk::MemoryPropertyFlags fallback_flags = vk::MemoryPropertyFlags(0));
 vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size);
 void ggml_vk_destroy_buffer(vk_buffer& buf);
-void * ggml_vk_host_malloc(vk_device& device, size_t size);
-void ggml_vk_host_free(vk_device& device, void* ptr);
+void * ggml_vk_host_malloc(size_t size);
+void ggml_vk_host_free(void * ptr);
 void ggml_vk_host_get(const vk_device& device, const void * ptr, vk_buffer& buf, size_t& buf_offset);
 void ggml_vk_ensure_sync_staging_buffer(vk_device& device, size_t size);
 void ggml_vk_ensure_sync_staging_buffer(ggml_backend_vk_context * ctx, size_t size);
@@ -90,14 +94,14 @@ void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<vk_stagi
 
 // matmul
 vk_pipeline ggml_vk_get_to_fp16(ggml_backend_vk_context * ctx, ggml_type type);
-void ggml_vk_matmul(ggml_backend_vk_context * ctx, vk_context& subctx, vk_pipeline& pipeline, vk_subbuffer&& a, vk_subbuffer&& b, vk_subbuffer&& d, vk_subbuffer&& split_k_buffer, uint32_t m, uint32_t n, uint32_t k, uint32_t stride_a, uint32_t stride_b, uint32_t stride_d, uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d, uint32_t split_k, uint32_t batch, uint32_t ne02, uint32_t ne12, uint32_t broadcast2, uint32_t broadcast3, uint32_t padded_n);
+void ggml_vk_matmul(ggml_backend_vk_context * ctx, vk_context& subctx, vk_pipeline& pipeline, vk_subbuffer&& a, vk_subbuffer&& b, vk_subbuffer&& d, vk_subbuffer&& split_k_buffer, uint32_t m, uint32_t n, uint32_t k, uint32_t stride_a, uint32_t stride_b, uint32_t stride_d, uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d, uint32_t split_k, uint32_t batch, uint32_t ne02, uint32_t ne12, uint32_t broadcast2, uint32_t broadcast3, uint32_t padded_n, uint64_t b_col_bytes, uint64_t d_col_bytes);
 bool ggml_vk_dim01_contiguous(const ggml_tensor * tensor);
 vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src, const ggml_tensor * dst, ggml_type to);
 vk_pipeline ggml_vk_get_quantize_pipeline(ggml_backend_vk_context * ctx, ggml_type type);
 void ggml_vk_quantize_q8_1(ggml_backend_vk_context * ctx, vk_context& subctx, const vk_subbuffer & in, const vk_subbuffer & out, uint32_t ne);
 void ggml_vk_dsv4_hc_comb(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * mixes, const ggml_tensor * scale, const ggml_tensor * base, ggml_tensor * dst);
 void ggml_vk_dsv4_hc_pre(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * weights, ggml_tensor * dst);
-void ggml_vk_dsv4_hc_post(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * residual, const ggml_tensor * post, const ggml_tensor * comb, ggml_tensor * dst);
+void ggml_vk_dsv4_hc_post(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * residual, const ggml_tensor * post, const ggml_tensor * comb, ggml_tensor * dst, const ggml_tensor * gate_scale_in = nullptr);
 void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx);
 bool ggml_vk_use_mul_mat_vec_id(const struct ggml_cgraph * cgraph, int node_idx);
 void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx);
@@ -233,6 +237,18 @@ ggml_backend_reg_t ggml_backend_vk_reg();
 
 // debug
 int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op);
+#ifdef GGML_VULKAN_RUN_TESTS
+template <typename X_TYPE, typename Y_TYPE>
+void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, int split_k, int shader_size);
+void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant);
+void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, size_t split_k, size_t shader_size, ggml_type quant, bool mmq = false);
+#endif
+#ifdef GGML_VULKAN_CHECK_RESULTS
+extern size_t vk_skip_checks;
+extern size_t vk_output_tensor;
+void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx);
+void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx);
+#endif
 
 // ggml-vulkan.cpp (residual)
 bool ggml_vk_lightning_indexer_k_type_supported(ggml_type type);
@@ -263,9 +279,36 @@ inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     GGML_ASSERT(pipeline->parameter_count == descriptor_buffer_infos.size());
     GGML_ASSERT(pipeline->push_constant_size == push_constant_size(push_constants));
 
-    vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
-    vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
-    ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
+    const uint32_t descriptor_set_idx = ctx->descriptor_set_idx++;
+    vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[descriptor_set_idx];
+
+    // a new buffer can get the handle of a destroyed one, so drop all cached bindings after any destroy
+    const uint64_t destroy_count = ctx->device->buffer_destroy_count.load(std::memory_order_acquire);
+    if (ctx->descriptor_set_bindings_destroy_count != destroy_count) {
+        for (auto & b : ctx->descriptor_set_bindings) {
+            b.clear();
+        }
+        ctx->descriptor_set_bindings_destroy_count = destroy_count;
+    }
+
+    // skip the write if this set already holds these bindings from the last graph
+    std::vector<vk::DescriptorBufferInfo> & bindings = ctx->descriptor_set_bindings[descriptor_set_idx];
+    bool same = !ctx->device->disable_descriptor_reuse && bindings.size() == descriptor_buffer_infos.size();
+    if (same) {
+        size_t i = 0;
+        for (const vk::DescriptorBufferInfo & info : descriptor_buffer_infos) {
+            const vk::DescriptorBufferInfo & prev = bindings[i++];
+            if (prev.buffer != info.buffer || prev.offset != info.offset || prev.range != info.range) {
+                same = false;
+                break;
+            }
+        }
+    }
+    if (!same) {
+        vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
+        ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
+        bindings.assign(descriptor_buffer_infos.begin(), descriptor_buffer_infos.end());
+    }
 
     subctx->s->buffer->buf.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
     subctx->s->buffer->buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);

@@ -42,8 +42,11 @@ __kernel void kernel_moe_combine_bias_f32(
     float4 acc = (float4)(0.0f);
     for (int e = 0; e < k; ++e) {
         const int i11 = *((__global const int *)(I + (ulong)e*sizeof(int)));
-        __global const float * Brow = (__global const float *)(B + (ulong)i11*nb_b1) + r4*4u;
-        const float4 v = vload4(0, E + (uint)e*e1) + vload4(0, Brow);
+        float4 v = vload4(0, E + (uint)e*e1);
+        if (i11 != -1) {
+            __global const float * Brow = (__global const float *)(B + (ulong)i11*nb_b1) + r4*4u;
+            v += vload4(0, Brow);
+        }
         acc = mad(v, (float4)(W[(uint)e*w1]), acc);
     }
 

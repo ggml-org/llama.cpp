@@ -24,12 +24,10 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     if (inputs.is_inference && !inputs.add_generation_prompt) {
         static constexpr std::string_view return_token = "<|return|>";
         static constexpr std::string_view end_token    = "<|end|>";
-        if (size_t pos = prompt.rfind(return_token); pos != std::string::npos) {
-            prompt.replace(pos, return_token.length(), end_token);
-        }
+        prompt.replace_last(std::string(return_token), std::string(end_token));
     }
 
-    data.prompt            = prompt;
+    data.prompt            = std::move(prompt);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
     data.message_delimiters = {
         { COMMON_CHAT_ROLE_ASSISTANT, "<|start|>assistant" },
@@ -45,8 +43,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     data.thinking_start_tag = "<|channel|>analysis<|message|>";
     data.thinking_end_tags  = {"<|end|>"};
 
-    // These special tokens are required to parse properly, so we include them
-    // even if parse_tool_calls is false.
+    // These special tokens are required to parse properly
     data.preserved_tokens = {
         "<|channel|>", "<|constrain|>", "<|message|>", "<|start|>", "<|end|>",
     };
@@ -60,7 +57,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
             data.generation_prompt += "<|end|><|start|>assistant<|channel|>final<|message|>" + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
@@ -68,7 +65,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start           = p.rule("start", p.literal("<|start|>assistant"));
         auto end             = p.rule("end", p.literal("<|end|>"));
         auto content         = p.rule("message-content", p.until("<|end|>"));
@@ -106,14 +103,14 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto tool_choice = p.choice();
 
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
                 const auto   params   = common_chat_tool_parameters(function);
 
                 auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
                 auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
-                auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
+                auto args       = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", params));
 
                 // recipient in role header
                 //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS
@@ -123,7 +120,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
                 //   <|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
                 auto tool_in_channel = p.tool(p.tool_open(channel + func_name + constraint + p.literal("<|message|>")) + args);
 
-                tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_in_role | tool_in_channel);
             });
 
             auto tool_call  = p.trigger_rule("tool-call", tool_choice);
@@ -138,12 +135,10 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
         return p.zero_or_more(start + any) + start + (final_msg | unsolicited);
     });
 
-    data.parser = parser.save();
-
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

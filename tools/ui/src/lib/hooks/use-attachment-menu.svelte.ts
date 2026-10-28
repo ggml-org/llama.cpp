@@ -23,7 +23,7 @@ export interface UseAttachmentMenuReturn {
  *
  * Encapsulates the modality-flag checks and callback wrapping that is
  * identical across the desktop dropdown (`ChatFormActionAddDropdown`)
- * and the mobile sheet (`ChatFormActionAddSheet`).
+ * and the mobile drawer (`ChatFormActionAddDrawer`).
  *
  * @param getFlags   - Getter returning the current modality capability flags.
  * @param getCallbacks - Getter returning the raw action callbacks from props.

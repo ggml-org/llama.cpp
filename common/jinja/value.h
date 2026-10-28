@@ -119,7 +119,7 @@ struct value_t {
         // ops can be builtin calls or operators: "array_access", "object_access"
         std::set<std::string> ops;
         // utility to recursively mark value and its children as used
-        static void mark_used(value & val, bool deep = false);
+        static void mark_used(value & val, bool deep = false, int depth = 0);
     } stats;
 
     value_t() = default;
@@ -432,6 +432,12 @@ struct value_array_t : public value_t {
             throw std::runtime_error("Index " + std::to_string(index) + " out of bounds for array of size " + std::to_string(val_arr.size()));
         }
         return val_arr[index];
+    }
+    virtual value & at(const value & index, value & default_val) override {
+        if (!is_val<value_int>(index) && !is_val<value_bool>(index)) {
+            return default_val;
+        }
+        return at(index->as_int(), default_val);
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {

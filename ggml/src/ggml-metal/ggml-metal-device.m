@@ -110,8 +110,24 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 //   X(suffix, name): name is both the kernels/<name>.metal basename and the
 //   ggml_metallib_<name>_{start,end} embed-symbol stem.
 #define GGML_METAL_LIBS \
-    X(FA,              fa)             \
+    X(FA_AUX,          fa_aux)         \
+    X(FA_F16,          fa_f16)         \
+    X(FA_F32,          fa_f32)         \
+    X(FA_Q4_0,         fa_q4_0)        \
+    X(FA_Q4_1,         fa_q4_1)        \
+    X(FA_Q5_0,         fa_q5_0)        \
+    X(FA_Q5_1,         fa_q5_1)        \
+    X(FA_Q8_0,         fa_q8_0)        \
+    X(FA_TENSOR,       fa_tensor)      \
+    X(FA_VEC_F16,      fa_vec_f16)     \
+    X(FA_VEC_F32,      fa_vec_f32)     \
+    X(FA_VEC_Q4_0,     fa_vec_q4_0)    \
+    X(FA_VEC_Q4_1,     fa_vec_q4_1)    \
+    X(FA_VEC_Q5_0,     fa_vec_q5_0)    \
+    X(FA_VEC_Q5_1,     fa_vec_q5_1)    \
+    X(FA_VEC_Q8_0,     fa_vec_q8_0)    \
     X(MUL_MV,          mul_mv)         \
+    X(MUL_MV_MMA,      mul_mv_mma)     \
     X(MUL_MM,          mul_mm)         \
     X(QUANTIZE,        quantize)       \
     X(SOFTMAX,         softmax)        \
@@ -1253,7 +1269,7 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 #endif
 
                 dev->props.use_shared_buffers = dev->props.has_unified_memory;
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX && TARGET_CPU_X86_64
                 // In case of eGPU, shared memory may be preferable.
                 dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
 #endif
@@ -1263,8 +1279,6 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                 if (getenv("GGML_METAL_SHARED_BUFFERS_ENABLE") != NULL) {
                     dev->props.use_shared_buffers = true;
                 }
-
-                dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
 
                 dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
 
@@ -1320,12 +1334,14 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                         }
                     }
 
+#if TARGET_CPU_X86_64
                     for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
                         if ([dev->mtl_device supportsFamily:i]) {
                             GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
                             break;
                         }
                     }
+#endif
 
                     for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
                         if ([dev->mtl_device supportsFamily:i]) {
@@ -1539,6 +1555,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
 
     switch (op->op) {
         case GGML_OP_SCALE:
+            return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16);
         case GGML_OP_FILL:
         case GGML_OP_CLAMP:
         case GGML_OP_SQR:
@@ -1697,13 +1714,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_POOL_2D:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_PAD:
-            // TODO: add circular padding support for metal, see https://github.com/ggml-org/llama.cpp/pull/16985
-            if (ggml_get_op_params_i32(op, 8) != 0) {
-                return false;
-            }
-
-            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
-                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_TIMESTEP_EMBEDDING:
             return op->src[0]->type == GGML_TYPE_F32;
@@ -1733,10 +1743,13 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->ne[0] != 576) {
                 return false;
             }
-            if (op->src[1]->ne[0] == 72 && op->src[1]->ne[0] != op->src[2]->ne[0]) {
-                return false;
-            }
-            if (op->src[1]->ne[0] < op->src[2]->ne[0]) {
+            // the kernels exist for K == V and for these K > V pairs only
+            if (op->src[1]->ne[0] != op->src[2]->ne[0] &&
+                !(op->src[1]->ne[0] ==  96 && op->src[2]->ne[0] ==  64) &&
+                !(op->src[1]->ne[0] == 128 && op->src[2]->ne[0] ==  96) &&
+                !(op->src[1]->ne[0] == 192 && op->src[2]->ne[0] == 128) &&
+                !(op->src[1]->ne[0] == 320 && op->src[2]->ne[0] == 256) &&
+                !(op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512)) {
                 return false;
             }
             if (op->src[1]->type != op->src[2]->type) {
@@ -1761,8 +1774,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             }
             return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_LIGHTNING_INDEXER:
-            if (op->src[0]->ne[0] != OP_LIGHTNING_INDEXER_DK ||
-                op->src[0]->ne[1] != OP_LIGHTNING_INDEXER_NH) {
+            if (op->src[0]->ne[0] != OP_LIGHTNING_INDEXER_DK) {
                 return false;
             }
             if (!has_simdgroup_mm ||
@@ -1807,7 +1819,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1]->type == GGML_TYPE_F32 &&
                 op->type         == GGML_TYPE_F32 &&
-                op->src[0]->ne[1] == 4 &&
                 ggml_is_contiguous_rows(op->src[0]) &&
                 ggml_is_contiguous_rows(op->src[1]);
         case GGML_OP_DSV4_HC_POST:
@@ -1824,6 +1835,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 ggml_is_contiguous_rows(op->src[1]) &&
                 ggml_is_contiguous_rows(op->src[2]) &&
                 (op->src[3] == NULL || ggml_is_contiguous_rows(op->src[3]));
+        case GGML_OP_TOP_K_MASK:
+            return (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32) &&
+                op->src[0]->type == op->type &&
+                op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) &&
+                op->nb[0] == ggml_type_size(op->type) &&
+                op->src[1]->type == GGML_TYPE_I32 &&
+                (op->src[2] == NULL || op->src[2]->type == GGML_TYPE_F32) &&
+                (op->src[3] == NULL || op->src[3]->type == GGML_TYPE_I32) &&
+                (op->src[4] == NULL || op->src[4]->type == GGML_TYPE_I32);
         case GGML_OP_SSM_SCAN:
             return has_simdgroup_reduction;
         case GGML_OP_SSM_CONV:
@@ -1839,7 +1859,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             // the FWHT kernels read an F16 source directly; every other F16 src1 path
             // still goes through ggml_metal_supports_mul_mat_op
             if (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F16 &&
-                ggml_metal_op_mul_mat_use_fwht(op)) {
+                ggml_metal_op_mul_mat_use_fwht(op, dev->props.max_theadgroup_memory_size)) {
                 return has_simdgroup_reduction;
             }
             return ggml_metal_supports_mul_mat_op(
@@ -2371,6 +2391,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
         dispatch_release(completion_semaphore);
 
         //[cmd_buf waitUntilCompleted];
+
+        [buf_src release];
     }
 }
 
@@ -2409,6 +2431,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
 
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
+
+        [buf_dst release];
     }
 }
 

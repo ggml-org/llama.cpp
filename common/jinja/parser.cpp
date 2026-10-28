@@ -21,6 +21,17 @@ static bool is_type(const statement_ptr & ptr) {
 class parser {
     const std::vector<token> & tokens;
     size_t current = 0;
+    int depth = 0;
+
+    struct depth_guard {
+        parser & p;
+        depth_guard(parser & p) : p(p) {
+            if (++p.depth > JINJA_RECURSIVE_LIMIT) {
+                throw parser_exception("Parser Error: template is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep", p.source, p.peek().pos);
+            }
+        }
+        ~depth_guard() { p.depth--; }
+    };
 
     std::string source; // for error reporting
 
@@ -94,6 +105,7 @@ private:
     }
 
     statement_ptr parse_any() {
+        depth_guard guard(*this);
         size_t start_pos = current;
         switch (peek().t) {
             case token::comment:
@@ -254,6 +266,7 @@ private:
             size_t pos0 = current;
             ++current; // consume {%
             ++current; // consume 'elif'
+            depth_guard guard(*this);
             alternate.push_back(parse_if_statement(pos0)); // nested If
         } else if (is_statement({"else"})) {
             ++current; // consume {%
@@ -330,6 +343,7 @@ private:
     }
 
     statement_ptr parse_if_expression() {
+        depth_guard guard(*this);
         auto a = parse_logical_or_expression();
         if (is_identifier("if")) {
             // Ternary expression
@@ -373,6 +387,7 @@ private:
     statement_ptr parse_logical_negation_expression() {
         // Try parse unary operators
         if (is_identifier("not")) {
+            depth_guard guard(*this);
             size_t start_pos = current;
             auto op = next();
             return mk_stmt<unary_expression>(start_pos, op, parse_logical_negation_expression());
@@ -429,15 +444,23 @@ private:
             bool negate = false;
             if (is_identifier("not")) { ++current; negate = true; }
             auto test_id = parse_primary_expression();
-            // FIXME: tests can also be expressed like this: if x is eq 3
-            if (is(token::open_paren)) test_id = parse_call_expression(std::move(test_id));
+            if (is(token::open_paren)) {
+                test_id = parse_call_expression(std::move(test_id));
+            } else if (is(token::numeric_literal) || is(token::string_literal) || is(token::open_curly_bracket) || is(token::open_square_bracket) ||
+                    (is(token::identifier) && !is_identifier("and") && !is_identifier("or") && !is_identifier("else"))) {
+                size_t call_pos = current;
+                statements args;
+                args.push_back(parse_unary_expression());
+                test_id = mk_stmt<call_expression>(call_pos, std::move(test_id), std::move(args));
+            }
             operand = mk_stmt<test_expression>(start_pos, std::move(operand), negate, std::move(test_id));
         }
         return operand;
     }
 
     statement_ptr parse_filter_expression() {
-        auto operand = parse_call_member_expression();
+        // Filters/tests bind outside unary so -n|abs is (-n)|abs, not -(n|abs).
+        auto operand = parse_unary_expression();
         while (is(token::pipe)) {
             size_t start_pos = current;
             ++current; // consume pipe
@@ -446,6 +469,16 @@ private:
             operand = mk_stmt<filter_expression>(start_pos, std::move(operand), std::move(filter));
         }
         return operand;
+    }
+
+    statement_ptr parse_unary_expression() {
+        if (is(token::unary_operator)) {
+            depth_guard guard(*this);
+            size_t start_pos = current;
+            auto op = next();
+            return mk_stmt<unary_expression>(start_pos, op, parse_unary_expression());
+        }
+        return parse_call_member_expression();
     }
 
     statement_ptr parse_call_member_expression() {
@@ -460,9 +493,11 @@ private:
         size_t start_pos = current;
         auto expr = mk_stmt<call_expression>(start_pos, std::move(callee), parse_args());
         auto member = parse_member_expression(std::move(expr)); // foo.x().y
-        return is(token::open_paren)
-            ? parse_call_expression(std::move(member)) // foo.x()()
-            : std::move(member);
+        if (!is(token::open_paren)) {
+            return member;
+        }
+        depth_guard guard(*this);
+        return parse_call_expression(std::move(member)); // foo.x()()
     }
 
     statements parse_args() {

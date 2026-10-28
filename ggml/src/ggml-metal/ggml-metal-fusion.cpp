@@ -1,7 +1,9 @@
 #include "ggml-metal-fusion.h"
 
-#include "ggml-backend-impl.h"
+#include "ggml-metal-common.h"
 #include "ggml-metal-device.h"
+
+#include "ggml-backend-impl.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -10,10 +12,23 @@
 #include <string>
 #include <vector>
 
+// derive the non-empty op sequence from the raw `ops_all` sequence
+static std::vector<ggml_op> ggml_metal_fusion_filter_ops(const std::vector<ggml_op> & ops_all) {
+    std::vector<ggml_op> ops;
+
+    for (ggml_op op : ops_all) {
+        if (!ggml_op_is_empty(op)) {
+            ops.push_back(op);
+        }
+    }
+
+    return ops;
+}
+
 struct ggml_metal_fusion {
     ggml_metal_fusion_id id;
 
-    std::vector<ggml_op> ops;     // op sequence (fixed length, non-empty nodes)
+    std::vector<ggml_op> ops;     // non-empty op sequence, derived from ops_all
     std::vector<ggml_op> ops_all; // full raw op sequence (may include empty RESHAPE/VIEW nodes)
     std::vector<int>     outs;    // additional fused output nodes, relative to ops
 
@@ -30,6 +45,25 @@ struct ggml_metal_fusion {
                   const int                        * node_idxs,
                         int                          idx,
                         ggml_metal_fusion_mode       mode);
+
+    ggml_metal_fusion(
+            ggml_metal_fusion_id id,
+            const std::vector<ggml_op> & ops_all,
+            const std::vector<int> & outs,
+            bool unsafe,
+            bool (*check)(const struct ggml_metal_fusion   * fusion,
+                          const struct ggml_tensor * const * nodes,
+                          const struct ggml_cgraph         * gf,
+                          const int                        * node_idxs,
+                                int                          idx,
+                                ggml_metal_fusion_mode       mode))
+        : id(id),
+          ops(ggml_metal_fusion_filter_ops(ops_all)),
+          ops_all(ops_all),
+          outs(outs),
+          unsafe(unsafe),
+          check(check) {
+    }
 };
 
 ggml_metal_fusion_id ggml_metal_fusion_get_id(const ggml_metal_fusion * fusion) {
@@ -53,17 +87,34 @@ static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tens
     return ggml_metal_buffer_get_id(ca, a).metal == ggml_metal_buffer_get_id(cb, b).metal;
 }
 
+// true if the memory of two tensors overlaps in the same Metal buffer
+static bool ggml_metal_fusion_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    ggml_backend_buffer_t ba = a->view_src ? a->view_src->buffer : a->buffer;
+    ggml_backend_buffer_t bb = b->view_src ? b->view_src->buffer : b->buffer;
+
+    const ggml_metal_buffer_id bid_a = ggml_metal_buffer_get_id((ggml_metal_buffer_t) ba->context, a);
+    const ggml_metal_buffer_id bid_b = ggml_metal_buffer_get_id((ggml_metal_buffer_t) bb->context, b);
+
+    if (bid_a.metal == nullptr || bid_a.metal != bid_b.metal) {
+        return false;
+    }
+
+    return bid_a.offs <= bid_b.offs
+        ? bid_b.offs - bid_a.offs < ggml_nbytes(a)
+        : bid_a.offs - bid_b.offs < ggml_nbytes(b);
+}
+
 // ---- pattern checks ------------------------------------------------------
 
 // NORM/RMS_NORM + MUL + ADD: the weight/bias of each fused step must match the norm input
 // width, be contiguous rows, and the fused outputs must stay F32
 static bool ggml_metal_fusion_check_norm(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
     GGML_UNUSED(mode);
     GGML_UNUSED(gf);
     GGML_UNUSED(node_idxs);
@@ -108,12 +159,12 @@ static bool ggml_metal_fusion_check_norm(
 
 // SSM_CONV + UNARY (silu)
 static bool ggml_metal_fusion_check_ssm_conv_silu(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
     GGML_UNUSED(fusion);
     GGML_UNUSED(gf);
     GGML_UNUSED(node_idxs);
@@ -141,12 +192,12 @@ static bool ggml_metal_fusion_check_ssm_conv_silu(
 // ADD x N: each ADD reads the previous ADD as src0, and all addends must share layout
 // (and, in FULL mode, live in the same Metal buffer)
 static bool ggml_metal_fusion_check_add_chain(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
     GGML_UNUSED(gf);
     GGML_UNUSED(node_idxs);
     GGML_UNUSED(idx);
@@ -177,11 +228,11 @@ static bool ggml_metal_fusion_check_add_chain(
 // attn scores view), so unlike the other patterns this is not an elision chain: the structural
 // checks live entirely in this callback (unsafe = true).
 static bool ggml_metal_fusion_check_gdn_cache(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
               ggml_metal_fusion_mode    mode) {
     GGML_UNUSED(fusion);
     GGML_UNUSED(gf);
@@ -239,12 +290,12 @@ static bool ggml_metal_fusion_check_gdn_cache(
 
 // MUL + SIN + SQR + MUL + ADD (snake activation)
 static bool ggml_metal_fusion_check_snake(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
     GGML_UNUSED(fusion);
     GGML_UNUSED(mode);
     GGML_UNUSED(gf);
@@ -297,28 +348,28 @@ static bool ggml_metal_fusion_check_snake(
 // SOFT_MAX + ARGSORT + GET_ROWS (plus optional norm/scale) for MoE routing.
 // This is a multi-output elision chain: the fused kernel writes both the selected
 // expert ids and the gathered/normalized routing weights.
-static const std::vector<ggml_op> ops_topk_moe_all = {
+static const std::vector<ggml_op> ops_topk_moe = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS
 };
-static const std::vector<ggml_op> ops_topk_moe_scale_all = {
+static const std::vector<ggml_op> ops_topk_moe_scale = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS, GGML_OP_SCALE
 };
-static const std::vector<ggml_op> ops_topk_moe_norm_all = {
+static const std::vector<ggml_op> ops_topk_moe_norm = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE
 };
-static const std::vector<ggml_op> ops_topk_moe_norm_scale_all = {
+static const std::vector<ggml_op> ops_topk_moe_norm_scale = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
 
 static bool ggml_metal_fusion_check_topk_moe(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
     GGML_ASSERT(fusion->ops.size() >= 3);
     GGML_UNUSED(nodes);
 
@@ -386,7 +437,8 @@ static bool ggml_metal_fusion_check_topk_moe(
     const int64_t n_tokens      = logits->ne[1];
     const int64_t n_expert_used = ids->ne[0];
 
-    if (n_expert <= 0 || n_tokens <= 0 || n_expert_used <= 0 || n_expert_used > n_expert ||
+    // note: n_tokens == 0 (no-output batch) must match so that the packing stays shape-independent
+    if (n_expert <= 0 || n_expert_used <= 0 || n_expert_used > n_expert ||
         n_expert > GGML_METAL_TOPK_MOE_MAX_EXPERTS || n_expert_used > GGML_METAL_TOPK_MOE_MAX_EXPERTS) {
         return false;
     }
@@ -513,7 +565,8 @@ static bool ggml_metal_fusion_match_moe_reduce(
     const int64_t n_embd   = experts->ne[0];
     const int64_t n_tokens = experts->ne[2];
 
-    if (n_embd <= 0 || n_tokens <= 0 || experts->ne[1] != n_expert_used || experts->ne[3] != 1 ||
+    // note: n_tokens == 0 (no-output batch) must match so that the packing stays shape-independent
+    if (n_embd <= 0 || experts->ne[1] != n_expert_used || experts->ne[3] != 1 ||
         weights->ne[0] != 1 || weights->ne[1] != n_expert_used || weights->ne[2] != n_tokens || weights->ne[3] != 1 ||
         dst->ne[0] != n_embd || dst->ne[1] != n_tokens || dst->ne[2] != 1 || dst->ne[3] != 1) {
         return false;
@@ -557,12 +610,12 @@ static bool ggml_metal_fusion_match_moe_reduce(
 }
 
 static bool ggml_metal_fusion_check_moe_reduce(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
     GGML_UNUSED(nodes);
 
     ggml_metal_moe_reduce_match match;
@@ -583,9 +636,79 @@ static bool ggml_metal_fusion_check_moe_reduce(
         if (!match.experts->data || !match.weights->data || !match.dst->data) {
             return false;
         }
+
+        // the fused kernel reads experts and weights while writing dst, so dst must not overlap either input
+        if (ggml_metal_fusion_overlap(match.dst, match.experts) || ggml_metal_fusion_overlap(match.dst, match.weights)) {
+            return false;
+        }
     }
 
     return true;
+}
+
+// true if t is or views a tensor in a buffer marked as weights, such as a bias; the model loader marks its buffers before
+// any graph is optimized, and tensors in unmarked or not yet allocated buffers count as non-weights in both phases
+static bool ggml_metal_tensor_is_weight(const struct ggml_tensor * t) {
+    const ggml_tensor * base = t->view_src != NULL ? t->view_src : t;
+
+    return base->buffer != NULL && ggml_backend_buffer_get_usage(base->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+}
+
+static const struct ggml_tensor * ggml_metal_mul_mat_add_operand(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
+    if (add->op != GGML_OP_ADD || (add->src[0] == mm) == (add->src[1] == mm)) {
+        return NULL;
+    }
+
+    const ggml_tensor * other = add->src[0] == mm ? add->src[1] : add->src[0];
+
+    const bool ok = other->type == GGML_TYPE_F32 && add->type == GGML_TYPE_F32 && !ggml_metal_tensor_is_weight(other);
+
+    return ok ? other : NULL;
+}
+
+static const struct ggml_tensor * ggml_metal_mul_mat_add_residual(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
+    const ggml_tensor * res = ggml_metal_mul_mat_add_operand(mm, add);
+
+    const bool ok = res != NULL && ggml_are_same_shape(res, mm) &&
+        ggml_is_contiguous(res) && ggml_is_contiguous(mm) && ggml_is_contiguous(add);
+
+    return ok ? res : NULL;
+}
+
+// MUL_MAT + ADD of an f32 non-weight: the reorder packs it without reading row counts, so ubatch sizes share one order;
+// the encoder fuses only a same-shape residual in the few-row MMA store, which the sum may overlap only in place
+static bool ggml_metal_fusion_check_mul_mat_add(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    GGML_UNUSED(gf);
+    GGML_UNUSED(node_idxs);
+    GGML_UNUSED(idx);
+    GGML_UNUSED(fusion);
+
+    const ggml_tensor * mm  = nodes[0];
+    const ggml_tensor * add = nodes[1];
+
+    if (ggml_metal_mul_mat_add_operand(mm, add) == nullptr ||
+        !ggml_metal_op_mul_mat_may_use_mma(mm)) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSION_STRUCTURAL) {
+        return true;
+    }
+
+    const ggml_tensor * res = ggml_metal_mul_mat_add_residual(mm, add);
+
+    if (res == nullptr || !ggml_metal_op_mul_mat_use_mma(mm)) {
+        return false;
+    }
+
+    return !ggml_metal_fusion_overlap(add, mm->src[0]) && !ggml_metal_fusion_overlap(add, mm->src[1]) &&
+        (add->data == res->data || !ggml_metal_fusion_overlap(add, res));
 }
 
 // ---- patterns ------------------------------------------------------------
@@ -607,86 +730,66 @@ static const std::vector<ggml_op> ops_snake = { GGML_OP_MUL, GGML_OP_SIN, GGML_O
 
 static const std::vector<ggml_op> ops_gdn_cache = { GGML_OP_GATED_DELTA_NET, GGML_OP_CPY };
 
-static const std::vector<ggml_op> ops_topk_moe = {
-    GGML_OP_SOFT_MAX, GGML_OP_ARGSORT, GGML_OP_GET_ROWS
-};
-static const std::vector<ggml_op> ops_topk_moe_scale = {
-    GGML_OP_SOFT_MAX, GGML_OP_ARGSORT, GGML_OP_GET_ROWS, GGML_OP_SCALE
-};
-static const std::vector<ggml_op> ops_topk_moe_norm = {
-    GGML_OP_SOFT_MAX, GGML_OP_ARGSORT, GGML_OP_GET_ROWS,
-    GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV
-};
-static const std::vector<ggml_op> ops_topk_moe_norm_scale = {
-    GGML_OP_SOFT_MAX, GGML_OP_ARGSORT, GGML_OP_GET_ROWS,
-    GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_SCALE
-};
-
 static const std::vector<ggml_op> ops_ssm_conv_silu = { GGML_OP_SSM_CONV, GGML_OP_UNARY };
 
-static const std::vector<ggml_op> ops_moe_reduce_2 = { GGML_OP_MUL, GGML_OP_ADD };
-static const std::vector<ggml_op> ops_moe_reduce_3 = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD };
-static const std::vector<ggml_op> ops_moe_reduce_4 = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const std::vector<ggml_op> ops_moe_reduce_5 = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const std::vector<ggml_op> ops_moe_reduce_6 = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const std::vector<ggml_op> ops_moe_reduce_7 = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const std::vector<ggml_op> ops_moe_reduce_8 = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-
-static const std::vector<ggml_op> ops_moe_reduce_all_2 = {
+static const std::vector<ggml_op> ops_moe_reduce_2 = {
     GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_ADD
 };
-static const std::vector<ggml_op> ops_moe_reduce_all_3 = {
+static const std::vector<ggml_op> ops_moe_reduce_3 = {
     GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_ADD, GGML_OP_ADD
 };
-static const std::vector<ggml_op> ops_moe_reduce_all_4 = {
+static const std::vector<ggml_op> ops_moe_reduce_4 = {
     GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW,
     GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD
 };
-static const std::vector<ggml_op> ops_moe_reduce_all_5 = {
+static const std::vector<ggml_op> ops_moe_reduce_5 = {
     GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW,
     GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD
 };
-static const std::vector<ggml_op> ops_moe_reduce_all_6 = {
+static const std::vector<ggml_op> ops_moe_reduce_6 = {
     GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW,
     GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD
 };
-static const std::vector<ggml_op> ops_moe_reduce_all_7 = {
+static const std::vector<ggml_op> ops_moe_reduce_7 = {
     GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW,
     GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD
 };
-static const std::vector<ggml_op> ops_moe_reduce_all_8 = {
+static const std::vector<ggml_op> ops_moe_reduce_8 = {
     GGML_OP_MUL,
     GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_VIEW,
     GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD
 };
 
+static const std::vector<ggml_op> ops_mul_mat_add = { GGML_OP_MUL_MAT, GGML_OP_ADD };
+
 static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
-    { GGML_METAL_FUSION_NORM_MUL,       ops_norm_mul,               ops_norm_mul,                   {},     false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_norm_mul_add,           ops_norm_mul_add,               {},     false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_SCALE,     ops_norm_scale,             ops_norm_scale,                 {},     false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL,       ops_rms_norm_mul,           ops_rms_norm_mul,               {},     false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_rms_norm_mul_add,       ops_rms_norm_mul_add,           {},     false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_SCALE,     ops_rms_norm_scale,         ops_rms_norm_scale,             {},     false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_2,                  ops_add_2,                      {},     false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_3,                  ops_add_3,                      {},     false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_4,                  ops_add_4,                      {},     false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_5,                  ops_add_5,                      {},     false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_6,                  ops_add_6,                      {},     false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_7,                  ops_add_7,                      {},     false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_SNAKE,          ops_snake,                  ops_snake,                      {},     false, ggml_metal_fusion_check_snake },
-    { GGML_METAL_FUSION_GDN_CACHE,      ops_gdn_cache,              ops_gdn_cache,                  {},     true,  ggml_metal_fusion_check_gdn_cache },
-    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe,               ops_topk_moe_all,               {1},    true,  ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_scale,         ops_topk_moe_scale_all,         {1},    true,  ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm,          ops_topk_moe_norm_all,          {1},    true,  ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm_scale,    ops_topk_moe_norm_scale_all,    {1},    true,  ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_2,           ops_moe_reduce_all_2,           {},     true,  ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_3,           ops_moe_reduce_all_3,           {},     true,  ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_4,           ops_moe_reduce_all_4,           {},     true,  ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_5,           ops_moe_reduce_all_5,           {},     true,  ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_6,           ops_moe_reduce_all_6,           {},     true,  ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_7,           ops_moe_reduce_all_7,           {},     true,  ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_8,           ops_moe_reduce_all_8,           {},     true,  ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          ops_ssm_conv_silu,              {},     false, ggml_metal_fusion_check_ssm_conv_silu },
+    { GGML_METAL_FUSION_NORM_MUL,       ops_norm_mul,               {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_norm_mul_add,           {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_SCALE,     ops_norm_scale,             {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL,       ops_rms_norm_mul,           {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_rms_norm_mul_add,       {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_SCALE,     ops_rms_norm_scale,         {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_2,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_3,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_4,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_5,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_6,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_7,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_SNAKE,          ops_snake,                  {},     false, ggml_metal_fusion_check_snake },
+    { GGML_METAL_FUSION_GDN_CACHE,      ops_gdn_cache,              {},     true,  ggml_metal_fusion_check_gdn_cache },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe,               {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_scale,         {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm,          {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm_scale,    {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_2,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_3,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_4,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_5,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_6,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_7,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_8,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          {},     false, ggml_metal_fusion_check_ssm_conv_silu },
+    { GGML_METAL_FUSION_MUL_MAT_ADD,    ops_mul_mat_add,            {},     false, ggml_metal_fusion_check_mul_mat_add },
 };
 
 // ---- alloc deps -----------------------------------------------------------
@@ -1070,16 +1173,17 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
 // transparent) node sequence that the compute phase uses, so the returned count is the raw index
 // span from idx to the last matched node (intermediate views are packed along).
 int ggml_metal_fusion_max(const ggml_cgraph * gf, int idx) {
-    // an empty/view node cannot start a pattern - pack it alone
-    if (ggml_op_is_empty(gf->nodes[idx]->op) || ggml_is_empty(gf->nodes[idx])) {
+    // a view node cannot start a pattern - pack it alone
+    if (ggml_op_is_empty(gf->nodes[idx]->op)) {
         return 1;
     }
 
-    // collect the non-empty node indices starting at idx
+    // collect the non-view node indices starting at idx; 0-element tensors are included so
+    // that empty graphs pack like their non-empty counterparts (see ggml_metal_fusion_filter_ops)
     int idxs[GGML_METAL_FUSION_MAX];
     int n_idxs = 0;
     for (int i = idx; i < gf->n_nodes && n_idxs < GGML_METAL_FUSION_MAX; i++) {
-        if (!ggml_op_is_empty(gf->nodes[i]->op) && !ggml_is_empty(gf->nodes[i])) {
+        if (!ggml_op_is_empty(gf->nodes[i]->op)) {
             idxs[n_idxs++] = i;
         }
     }

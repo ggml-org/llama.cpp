@@ -6,7 +6,9 @@
 // we can remove it in the future when we figure out a better way to define inputs using jinja::value
 #include "json.h"
 
+#include <algorithm>
 #include <functional>
+#include <optional>
 #include <sstream>
 
 #define FILENAME "jinja-caps"
@@ -37,38 +39,57 @@ static void caps_try_execute(jinja::program & prog,
                              const caps_ctx_fn & ctx_fn,
                              const caps_json_fn & tools_fn,
                              const caps_analyze_fn & analyze_fn) {
-    context ctx;
-    ctx.is_get_stats = true;
-    jinja::global_from_json(ctx, json{
-        {"messages", messages_fn()},
-        {"tools", tools_fn ? tools_fn() : json::array()},
-        {"bos_token", ""},
-        {"eos_token", ""},
-        {"add_generation_prompt", true}
-    }, true);
+    json msgs = messages_fn();
+    for (int attempt = 0; attempt < 2; attempt++) {
+        context ctx;
+        ctx.is_get_stats = true;
+        jinja::global_from_json(ctx, json{
+            {"messages", msgs},
+            {"tools", tools_fn ? tools_fn() : json::array()},
+            {"bos_token", ""},
+            {"eos_token", ""},
+            {"add_generation_prompt", true}
+        }, true);
 
-    if (ctx_fn) {
-        ctx_fn(ctx);
+        if (ctx_fn) {
+            ctx_fn(ctx);
+        }
+
+        auto messages = ctx.get_val("messages");
+        auto tools = ctx.get_val("tools");
+
+        bool success = false;
+        std::string result;
+        try {
+            jinja::runtime runtime(ctx);
+            auto results = runtime.execute(prog);
+            auto parts = jinja::runtime::gather_string_parts(results);
+            result = parts->as_string().str();
+            success = true;
+        } catch (const std::exception & e) {
+            JJ_DEBUG("Exception during execution: %s", e.what());
+            result = "";
+            // ignore exceptions during capability analysis
+        }
+
+        // some templates require a thinking field on every assistant turn (e.g. K2 Horizon):
+        // retry once with an empty reasoning_content on the assistant turns that lack one
+        if (!success && attempt == 0) {
+            bool added = false;
+            for (auto & msg : msgs) {
+                if (msg.is_object() && msg.value("role", "") == "assistant" && !msg.contains("reasoning_content")) {
+                    msg["reasoning_content"] = "";
+                    added = true;
+                }
+            }
+            if (added) {
+                continue;
+            }
+        }
+
+        analyze_fn(ctx, success, messages, tools, result);
+        return;
     }
-
-    auto messages = ctx.get_val("messages");
-    auto tools = ctx.get_val("tools");
-
-    bool success = false;
-    std::string result;
-    try {
-        jinja::runtime runtime(ctx);
-        auto results = runtime.execute(prog);
-        auto parts = jinja::runtime::gather_string_parts(results);
-        result = parts->as_string().str();
-        success = true;
-    } catch (const std::exception & e) {
-        JJ_DEBUG("Exception during execution: %s", e.what());
-        result = "";
-        // ignore exceptions during capability analysis
-    }
-
-    analyze_fn(ctx, success, messages, tools, result);
 }
 
 // for debugging only
@@ -165,6 +186,10 @@ caps caps_get(jinja::program & prog) {
                     {
                         {"role", "user"},
                         {"content", json::array({
+                            {
+                                {"type", "text"},
+                                {"text", content_marker}
+                            }
                         })}
                     }
                 });
@@ -564,6 +589,58 @@ caps caps_get(jinja::program & prog) {
             result.supports_reasoning_effort = effort->stats.used;
         }
     );
+
+    if (result.supports_reasoning_effort) {
+        JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort levels");
+
+        static const std::vector<std::string> candidates = { "minimal", "low", "medium", "high", "xhigh", "max" };
+
+        // renders a single user turn with the given effort, nothing when the template raises
+        const auto render = [&](const std::string & effort) {
+            std::optional<std::string> rendered;
+            caps_try_execute(
+                prog,
+                [&]() {
+                    // messages
+                    return json::array({
+                        {
+                            {"role", "user"},
+                            {"content", "User message"}
+                        },
+                    });
+                },
+                [&](context & ctx) {
+                    ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+                    caps_apply_reasoning_effort(ctx, effort);
+                },
+                nullptr, // tools_fn
+                [&](context &, bool success, value &, value &, const std::string & output) {
+                    if (success) {
+                        rendered = output;
+                    }
+                }
+            );
+            return rendered;
+        };
+
+        // an unknown level shows the render of the template fallback, a level that renders the same is not honored
+        // levels sharing a render are aliases and the highest one is kept
+        const auto unknown = render("REASONING_EFFORT_UNKNOWN");
+        std::vector<std::string> renders;
+        for (const auto & level : candidates) {
+            const auto rendered = render(level);
+            if (!rendered || rendered == unknown) {
+                continue;
+            }
+            const auto it = std::find(renders.begin(), renders.end(), *rendered);
+            if (it != renders.end()) {
+                result.reasoning_effort_levels[it - renders.begin()] = level;
+            } else {
+                renders.push_back(*rendered);
+                result.reasoning_effort_levels.push_back(level);
+            }
+        }
+    }
 
     JJ_DEBUG("%s\n", result.to_string().c_str());
 

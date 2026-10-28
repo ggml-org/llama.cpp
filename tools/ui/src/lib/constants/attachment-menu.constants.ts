@@ -53,3 +53,20 @@ export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 ];
 
 export const ATTACHMENT_TOOLTIP_TEXT = 'Add files, prompts, tools or MCP Servers';
+
+/** Text shared by the add menu's two surfaces: the desktop dropdown and the mobile drawer. */
+export const ATTACHMENT_MENU_TEXT = {
+	ADD_FILES: 'Add files',
+	ADD_TO_CHAT: 'Add to chat',
+	DESCRIPTION: 'Add files, system prompt or pick the tools the model may call',
+	SYSTEM_MESSAGE: 'System Message',
+	TOOLS: 'Tools'
+} as const;
+
+/** Modality labels behind the file-upload row's enabled-when flags, both surfaces. */
+export const ATTACHMENT_MODALITY_TEXT: Record<AttachmentItemEnabledWhen, string> = {
+	[AttachmentItemEnabledWhen.ALWAYS]: '',
+	[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: 'Audio',
+	[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: 'Video',
+	[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: 'Vision'
+};

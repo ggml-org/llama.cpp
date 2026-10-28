@@ -14,19 +14,6 @@
 #include <vector>
 #include <algorithm>
 
-#if defined(_WIN32)
-#    define WIN32_LEAN_AND_MEAN
-#    ifndef NOMINMAX
-#       define NOMINMAX
-#    endif
-#    include <io.h>
-#    include <windows.h>
-#    define isatty _isatty
-#    define fileno _fileno
-#else
-#    include <unistd.h>
-#endif // defined(_WIN32)
-
 int common_log_verbosity_thold = LOG_DEFAULT_LLAMA;
 
 int common_log_get_verbosity_thold(void) {
@@ -157,11 +144,15 @@ struct common_log_entry {
             }
         }
 
-        fprintf(fcur, "%s", msg.data());
+        // the reset goes before the trailing newlines, so that every line carries its own colors
+        const bool reset = level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_DEBUG;
 
-        if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_DEBUG) {
-            fprintf(fcur, "%s", g_col[COMMON_LOG_COL_DEFAULT]);
+        size_t end = strlen(msg.data());
+        while (end > 0 && msg[end - 1] == '\n') {
+            end--;
         }
+
+        fprintf(fcur, "%.*s%s%s", (int) end, msg.data(), reset ? g_col[COMMON_LOG_COL_DEFAULT] : "", msg.data() + end);
 
         fflush(fcur);
     }
@@ -171,6 +162,8 @@ struct common_log {
     // default capacity
     common_log(size_t capacity = 512) {
         file       = nullptr;
+        stdo       = true;
+        colors     = false;
         prefix     = false;
         timestamps = false;
         running    = false;
@@ -198,6 +191,8 @@ private:
 
     FILE * file;
 
+    bool stdo;
+    bool colors;
     bool prefix;
     bool timestamps;
     bool running;
@@ -212,7 +207,9 @@ private:
     bool print_entry(const common_log_entry & e) const {
         if (e.is_end) return true;
 
-        e.print();
+        if (stdo) {
+            e.print();
+        }
         if (file) {
             e.print(file);
         }
@@ -407,10 +404,24 @@ public:
         resume();
     }
 
+    void set_stdo(bool enabled) {
+        pause();
+
+        stdo = enabled;
+
+        resume();
+    }
+
+    bool get_colors() const {
+        return colors;
+    }
+
     void set_colors(bool colors) {
         pause();
 
-        if (colors) {
+        this->colors = colors && tty_enable_ansi();
+
+        if (this->colors) {
             g_col[COMMON_LOG_COL_DEFAULT] = LOG_COL_DEFAULT;
             g_col[COMMON_LOG_COL_BOLD]    = LOG_COL_BOLD;
             g_col[COMMON_LOG_COL_RED]     = LOG_COL_RED;
@@ -498,6 +509,10 @@ void common_log_set_file(struct common_log * log, const char * file) {
     log->set_file(file);
 }
 
+void common_log_set_stdo(struct common_log * log, bool enabled) {
+    log->set_stdo(enabled);
+}
+
 void common_log_set_colors(struct common_log * log, log_colors colors) {
     if (colors == LOG_COLORS_AUTO) {
         log->set_colors(tty_can_use_colors());
@@ -511,6 +526,10 @@ void common_log_set_colors(struct common_log * log, log_colors colors) {
 
     GGML_ASSERT(colors == LOG_COLORS_ENABLED);
     log->set_colors(true);
+}
+
+bool common_log_get_colors(struct common_log * log) {
+    return log->get_colors();
 }
 
 void common_log_set_prefix(struct common_log * log, bool prefix) {

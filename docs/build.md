@@ -116,6 +116,20 @@ This provides BLAS acceleration using only the CPU. Make sure to have OpenBLAS i
 
 Check [BLIS.md](./backend/BLIS.md) for more information.
 
+### AMD AOCL-BLAS
+
+For AMD CPU inference, the [ZenDNN backend](#zendnn) is recommended. AOCL-BLAS is also available as a vendor option for the generic `GGML_BLAS` backend.
+
+Source `amd-libs.cfg` from your AOCL install (MT tree by default), then build (CMake 3.27+ recommended for the `AOCL` / `AOCL_mt` vendors):
+
+```bash
+source /opt/aocl/<version>/aocc/MT/amd-libs.cfg   # adjust path; ST tree uses .../ST/amd-libs.cfg
+cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=AOCL_mt -DBLAS_INCLUDE_DIRS="${AOCL_ROOT}/include" -DGGML_NATIVE=ON
+cmake --build build --config Release
+```
+
+Full steps, threading notes, and a fallback for older CMake: [AOCL.md](./backend/AOCL.md).
+
 ### Intel oneMKL
 
 Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU**. For Intel GPU support, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
@@ -180,6 +194,16 @@ Make sure to read the notes about the CPU build for general instructions for e.g
 cmake -B build -DGGML_CUDA=ON
 cmake --build build --config Release
 ```
+
+To use a specific CCCL version instead of the one bundled with the installed CUDA Toolkit, add `-DGGML_CUDA_CCCL_VERSION=vMAJOR.MINOR.PATCH`. CUB DeviceTopK requires CCCL 3.4.3 or newer; older versions use the sort fallback.
+
+Note that this also builds the CPU backend by default. On Windows on ARM, MSVC's
+support for the ARM NEON intrinsics used by the CPU backend may be incomplete, so
+a CUDA build produced entirely with MSVC might have a slower CPU backend. If CPU
+performance matters, try following the split build used in our release workflow
+([.github/workflows/release.yml](../.github/workflows/release.yml)): the CPU backend
+is built with clang (`cmake/arm64-windows-llvm.cmake`) and the CUDA backend with MSVC
+(`cmake/arm64-windows-msvc-cuda.cmake`), and the artifacts are merged afterwards.
 
 ### Non-Native Builds
 
@@ -282,6 +306,13 @@ Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command
 Override default, speed-optimized compute types for cuBLAS matrix multiplications.
 Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 
+#### GGML_CUDA_MMQ_PREC
+
+Override the activation precision that the model requests for NVFP4 and MXFP4 matrix multiplications.
+Currently supported values: `auto`, `q8`, `q4`.
+
+NVFP4 and MXFP4 layers marked as W4A16 request 8-bit activations, so on Blackwell those layers run through the W4A8 path instead of the native W4A4 path. Set `q4` to keep the native W4A4 path for faster prompt processing at the cost of accuracy, or `q8` to use the W4A8 path for every layer, `auto` uses per-tensor prec metadata (this is the same behavior as when the environment variable is not set).
+
 ### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
@@ -320,14 +351,14 @@ cmake --build build --config Release
 
 #### Override Compute Capability Specifications
 
-By default, all supported compute capabilities are enabled. To customize this behavior, you can specify the `MUSA_ARCHITECTURES` option in the CMake command:
+By default, compute capabilities `2.2` (MTT S4000) and `3.1` (MTT S5000) are enabled, compute capability `2.1` (MTT S70, MTT S80, MTT S3000) is deprecated and has to be enabled explicitly. To customize this behavior, you can specify the `MUSA_ARCHITECTURES` option in the CMake command:
 
 ```bash
-cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="21"
+cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="31"
 cmake --build build --config Release
 ```
 
-This configuration enables only compute capability `2.1` (MTT S80) during compilation, which can help reduce compilation time.
+This configuration enables only compute capability `3.1` (MTT S5000) during compilation, which can help reduce compilation time.
 
 #### Compilation options
 
@@ -820,6 +851,36 @@ cmake --build build --config Release
 WebGPU allows cross-platform access to the GPU from supported browsers. We utilize [Emscripten](https://emscripten.org/) to compile ggml's WebGPU backend to WebAssembly. Emscripten does not officially support WebGPU bindings yet, but Dawn currently maintains its own WebGPU bindings called emdawnwebgpu.
 
 Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/src/emdawnwebgpu/) to download or build the emdawnwebgpu package (Note that it might be safer to build the emdawnwebgpu package locally, so that it stays in sync with the version of Dawn you have installed above). When building using CMake, the path to the emdawnwebgpu port file needs to be set with the flag `EMDAWNWEBGPU_DIR`.
+
+## WASI
+
+Requires [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) 34+ with `WASI_SDK_PATH` set. Only the libraries build (`llama-common` does not support WASI yet), so link your program against them:
+
+```bash
+FLAGS="-msimd128 -D_WASI_EMULATED_SIGNAL -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"
+cmake -B build-wasi -DCMAKE_TOOLCHAIN_FILE=$WASI_SDK_PATH/share/cmake/wasi-sdk-p2.cmake \
+    -DCMAKE_C_FLAGS="$FLAGS" -DCMAKE_CXX_FLAGS="$FLAGS" -DCMAKE_HAVE_LIBC_PTHREAD=1 \
+    -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_BUILD_COMMON=OFF
+cmake --build build-wasi --target llama
+
+$WASI_SDK_PATH/bin/clang++ --target=wasm32-wasip3 -O3 $FLAGS -I include -I ggml/include examples/simple/simple.cpp \
+    build-wasi/src/libllama.a build-wasi/ggml/src/libggml*.a -lunwind -ldl -Wl,-z,stack-size=8388608 -o llama-simple.wasm
+wasmtime run -W exceptions=y --dir models llama-simple.wasm -m models/model.gguf "Hello"
+```
+
+### wasi:webgpu
+
+The WebGPU backend can target [wasi:webgpu](https://github.com/WebAssembly/wasi-webgpu) via [wasi-webgpu-headers](https://github.com/wasi-gfx/wasi-webgpu-headers) (with its submodule) and Dawn's `dawn-headers` release. Point `Dawn_DIR` at a directory containing this `DawnConfig.cmake` next to both:
+
+```cmake
+set(_wasi_webgpu "${CMAKE_CURRENT_LIST_DIR}/wasi-webgpu-headers")
+add_library(dawn::webgpu_dawn INTERFACE IMPORTED)
+set_target_properties(dawn::webgpu_dawn PROPERTIES
+    INTERFACE_SOURCES "${_wasi_webgpu}/webgpu.c;${_wasi_webgpu}/async_futures.c;${_wasi_webgpu}/imports.c;${_wasi_webgpu}/imports_component_type.o"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/dawn-headers/include/webgpu_upstream;${_wasi_webgpu}")
+```
+
+Then build as above, but with `wasi-sdk-p3.cmake` / `--target=wasm32-wasip3`, `-DGGML_WEBGPU=ON -DDawn_DIR=...` at configure, and `build-wasi/ggml/src/ggml-webgpu/libggml-webgpu.a` added at link. See `.github/workflows/build-wasi.yml` for a more complete example.
 
 ## IBM Z & LinuxONE
 

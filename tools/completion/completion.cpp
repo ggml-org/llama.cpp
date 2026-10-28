@@ -267,7 +267,7 @@ int llama_completion(int argc, char ** argv) {
                 inputs.add_generation_prompt = !params.prompt.empty();
                 inputs.force_pure_content = params.force_pure_content_parser;
 
-                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt.str();
             }
         } else {
             // otherwise use the prompt as is
@@ -525,10 +525,9 @@ int llama_completion(int argc, char ** argv) {
     }
 
     if (llama_model_has_encoder(model)) {
-        int enc_input_size = embd_inp.size();
-        llama_token * enc_input_buf = embd_inp.data();
+        common_batch batch = common_batch_get_one(ctx, embd_inp);
 
-        if (llama_encode(ctx, llama_batch_get_one(enc_input_buf, enc_input_size))) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get())) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return 1;
         }

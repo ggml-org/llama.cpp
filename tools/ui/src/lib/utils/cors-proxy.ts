@@ -4,6 +4,7 @@
 
 import { base } from '$app/paths';
 import { CORS_PROXY, CORS_PROXY_ENDPOINT } from '$lib/constants';
+import { UrlProtocol } from '$lib/enums';
 
 /**
  * Build a proxied URL that routes through llama-server's CORS proxy.
@@ -17,6 +18,20 @@ export function buildProxiedUrl(targetUrl: string): URL {
 	proxyUrl.searchParams.set(CORS_PROXY.URL_PARAM, targetUrl);
 
 	return proxyUrl;
+}
+
+/**
+ * Route a remote icon through the CORS proxy so it renders inside the UI's
+ * cross-origin isolation. Inline data URLs are left alone, and with the proxy
+ * off the origin URL stands in, so the caller keeps its own fallback.
+ */
+export function buildProxiedIconUrl(
+	iconUrl: string | null,
+	proxyAvailable: boolean
+): string | null {
+	if (!iconUrl || !proxyAvailable || iconUrl.startsWith(UrlProtocol.DATA)) return iconUrl;
+
+	return buildProxiedUrl(iconUrl).toString();
 }
 
 /**

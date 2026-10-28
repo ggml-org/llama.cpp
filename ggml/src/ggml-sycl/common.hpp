@@ -16,7 +16,10 @@
 #include <cstddef>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 
 #include "base.hpp"
 #include "dpct/helper.hpp"
@@ -26,7 +29,6 @@
 #include "presets.hpp"
 #include "type.hpp"
 #include "sycl_hw.hpp"
-#include "fattn-buffers.hpp"
 #include "memtrace.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
@@ -36,6 +38,10 @@ namespace syclexp = sycl::ext::oneapi::experimental;
     #ifndef GGML_SYCL_HAS_BF16
         #define GGML_SYCL_HAS_BF16
     #endif
+#endif
+
+#if defined(__INTEL_LLVM_COMPILER)
+    #define GGML_SYCL_DMMV_HAS_ESIMD
 #endif
 
 #if GGML_SYCL_DNNL
@@ -64,7 +70,66 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
+extern int g_ggml_sycl_mmvq_wide;
+extern int g_ggml_sycl_enable_xmx_esimd;
+extern int g_ggml_sycl_xmx_max_cols;
+extern int g_ggml_sycl_xmx_glu_max_cols;
 extern int g_ggml_sycl_prioritize_dmmv;
+
+// Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
+// flag per path, so a format can be enabled or measured on its own and adding a format is one bit.
+enum ggml_sycl_xmx_gather_type {
+    GGML_SYCL_XMX_GATHER_IQ4_NL   = 1 << 0,
+    GGML_SYCL_XMX_GATHER_IQ3_S    = 1 << 1,
+    GGML_SYCL_XMX_GATHER_IQ4_XS   = 1 << 2,
+    GGML_SYCL_XMX_GATHER_IQ3_XXS  = 1 << 3,
+    GGML_SYCL_XMX_GATHER_IQ2_XXS  = 1 << 4,
+    GGML_SYCL_XMX_GATHER_IQ2_XS   = 1 << 5,
+    GGML_SYCL_XMX_GATHER_IQ2_S    = 1 << 6,
+    GGML_SYCL_XMX_GATHER_IQ1_S    = 1 << 7,
+    GGML_SYCL_XMX_GATHER_IQ1_M    = 1 << 8,
+    GGML_SYCL_XMX_GATHER_Q8_0     = 1 << 9,
+    GGML_SYCL_XMX_GATHER_Q4_K     = 1 << 10,
+    GGML_SYCL_XMX_GATHER_Q5_K     = 1 << 11,
+    GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
+};
+static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
+extern int g_ggml_sycl_xmx_gather_types;
+// Which joint_matrix combinations the XMX dequant-GEMM paths may use, one bit each (see fused-gemm.cpp).
+// GGML_SYCL_DYNAMIC_PRECISION picks the operand type, this mask the combinations of that type.
+static constexpr int GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT = 0xff;
+extern int g_ggml_sycl_xmx_gather_shapes;
+
+// GGML_SYCL_DYNAMIC_PRECISION: operand type of the XMX dequant-GEMM paths. F32 turns them off and
+// keeps the library GEMM in f32. A src1 precision request of an op [TAG_GGML_PREC] is always met.
+enum ggml_sycl_dynamic_precision {
+    GGML_SYCL_DYNAMIC_PRECISION_F16,
+    GGML_SYCL_DYNAMIC_PRECISION_BF16,
+    GGML_SYCL_DYNAMIC_PRECISION_TF32,
+    GGML_SYCL_DYNAMIC_PRECISION_F32,
+};
+#ifdef GGML_SYCL_F16
+static constexpr int GGML_SYCL_DYNAMIC_PRECISION_DEFAULT = GGML_SYCL_DYNAMIC_PRECISION_F16;
+#else
+static constexpr int GGML_SYCL_DYNAMIC_PRECISION_DEFAULT = GGML_SYCL_DYNAMIC_PRECISION_F32;
+#endif
+extern int g_ggml_sycl_dynamic_precision;
+// GGML_SYCL_DYNAMIC_REQUIRED_PRECISION: the XMX type an F32 src1 request may run on instead of f32
+// (TF32, or BF16 which also allows tf32). F32 (default): none. F16: src1 requests are ignored.
+extern int g_ggml_sycl_dynamic_required_precision;
+
+// [TAG_GGML_PREC] src1 precision request of the MUL_MAT/MUL_MAT_ID op dst
+static inline int32_t ggml_sycl_src1_prec(const ggml_tensor * dst) {
+    return g_ggml_sycl_dynamic_required_precision == GGML_SYCL_DYNAMIC_PRECISION_F16 ? GGML_PREC_UNDEFINED :
+                                                                                       dst->op_params[3];
+}
+
+// [TAG_GGML_PREC] the library GEMM and dmmv may convert src1 of the MUL_MAT/MUL_MAT_ID op dst to f16
+static inline bool ggml_sycl_src1_f16_ok(const ggml_tensor * dst) {
+    const int32_t src1_prec = ggml_sycl_src1_prec(dst);
+    return g_ggml_sycl_dynamic_precision != GGML_SYCL_DYNAMIC_PRECISION_F32 &&
+           (src1_prec == GGML_PREC_UNDEFINED || src1_prec >= GGML_PREC_F16);
+}
 extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
 extern int g_ggml_sycl_fa_onednn;
@@ -72,6 +137,7 @@ extern int g_ggml_sycl_fa_onednn_max_kv;
 extern int g_ggml_sycl_enable_mkl_fa;
 extern int g_ggml_sycl_memtrace;
 extern int g_ggml_sycl_memtrace_step;
+extern int g_ggml_sycl_graph_eviction_timeout;
 
 
 #define CHECK_TRY_ERROR(expr)                                            \
@@ -168,6 +234,41 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
+#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
+#    define GGML_SYCL_MMVQ_HAS_XMX
+#endif // __INTEL_LLVM_COMPILER
+
+// default of the most columns the XMX mul_mat_vec_q handles (GGML_SYCL_XMX_MAX_COLS), wider batches use other kernels
+#define GGML_SYCL_XMX_MAX_COLS_DEFAULT 80
+
+// most columns the fused gate and up XMX kernel is built for, GGML_SYCL_XMX_GLU_MAX_COLS can only lower this limit
+#define GGML_SYCL_XMX_GLU_MAX_COLS 16
+
+static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// the DPAS shapes and 2D block loads used by the XMX kernel are those of Xe2
+static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31 ||
+           arch == gpu_arch::intel_gpu_lnl_m;
+}
+
+// fewest columns for which the XMX kernel is faster than the other kernels
+static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
+    return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K ? 1 : 2;
+}
+
 static int g_all_sycl_device_count = -1;
 static bool g_ggml_backend_sycl_buffer_type_initialized = false;
 
@@ -214,9 +315,11 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 //////////////////////
 struct optimize_feature {
     bool reorder=false;
+    bool onednn_optimized_gemm=false;
 };
 
 struct sycl_device_info {
+    bool active; //the device is activated/used in application.
     int cc;  // compute capability
     int nsm; // number of streaming multiprocessors (CUDA) maps to the maximum
              // number of compute units on a SYCL device.
@@ -233,10 +336,15 @@ struct sycl_device_info {
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
     bool    usm_system_support; // support for USM system allocations
+#ifdef GGML_SYCL_GRAPH
+    bool    graph_support;        // command graphs can be recorded and replayed
+    bool    graph_update_support; // a finalized command graph can be updated
+#endif
 };
 
 
 struct ggml_sycl_device_info {
+    int active_device_count; //the number of active devices in the application
     int device_count;
 
     sycl_device_info devices[GGML_SYCL_MAX_DEVICES] = {};
@@ -248,7 +356,11 @@ struct ggml_sycl_device_info {
     bool ext_oneapi_level_zero = true; // sycl::backend::ext_oneapi_level_zero used by all enumerated GPU devices
 };
 
-const ggml_sycl_device_info & ggml_sycl_info();
+ggml_sycl_device_info & ggml_sycl_info();
+
+static inline bool ggml_sycl_xmx_enabled(int device) {
+    return g_ggml_sycl_enable_xmx_esimd && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
+}
 
 static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 
@@ -332,7 +444,39 @@ struct mmid_row_mapping {
     int32_t i2;
 };
 
+struct ggml_sycl_gg_tile {
+    int32_t expert;
+    int32_t n0;
+    int32_t n1;
+};
+
 namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+#ifdef GGML_SYCL_GRAPH
+struct ggml_sycl_graph {
+    // src data/ne/nb are kept next to the node copy: the scheduler can hand back the same src
+    // pointer with different contents or shape, see https://github.com/ggml-org/llama.cpp/pull/21736
+    struct node_properties {
+        ggml_tensor node;
+        void *      node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t     node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t      node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    };
+
+    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    std::vector<node_properties> node_props;
+    bool     warmup_complete = false;
+    uint64_t uid             = 0;
+    int64_t  last_used_time  = 0;
+
+    // result of check_graph_compatibility() and the uid it was made for
+    bool     compatible     = false;
+    uint64_t compatible_uid = 0;
+};
+
+static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
+#endif
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
@@ -406,17 +550,14 @@ struct ggml_backend_sycl_context {
     // pool
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
 
-    std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
-
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     std::vector<mmid_row_mapping> mmid_row_mapping_host;
+    std::vector<ggml_sycl_gg_tile> mmid_tile_schedule_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_host(queue_ptr qptr, int device);
-
-    static std::unique_ptr<ggml_sycl_fattn_kv_buffers> new_fattn_kv_buffers(queue_ptr qptr, int device);
 
     ggml_sycl_pool & pool(int device) {
         if (pools[device] == nullptr) {
@@ -429,19 +570,37 @@ struct ggml_backend_sycl_context {
         return pool(device);
     }
 
-    ggml_sycl_fattn_kv_buffers & fattn_buffers(int device) {
-        if (fattn_bufs[device] == nullptr) {
-            fattn_bufs[device] = new_fattn_kv_buffers(stream(device, 0), device);
-        }
-        return *fattn_bufs[device];
-    }
-
-    ggml_sycl_fattn_kv_buffers & fattn_buffers() {
-        return fattn_buffers(device);
-    }
-
 #ifdef GGML_SYCL_GRAPH
-    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    // Map from first node pointer to graph - allows multiple graphs per context when the
+    // computation is split across CPU/GPU (e.g. with --n-cpu-moe)
+    std::unordered_map<const void *, std::unique_ptr<ggml_sycl_graph>> sycl_graphs;
+
+    int64_t last_graph_eviction_sweep = 0;
+    std::optional<bool> graph_compatible;
+
+    ggml_sycl_graph * sycl_graph(const void * first_node_ptr) {
+        const int64_t time_now = ggml_time_us();
+        const int64_t eviction_timeout_us = g_ggml_sycl_graph_eviction_timeout * 1'000'000LL;
+
+        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout
+        if (time_now - last_graph_eviction_sweep >= eviction_timeout_us / 2) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
+                if (time_now - it->second->last_used_time >= eviction_timeout_us) {
+                    it = sycl_graphs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        auto it = sycl_graphs.find(first_node_ptr);
+        if (it == sycl_graphs.end()) {
+            it = sycl_graphs.emplace(first_node_ptr, std::make_unique<ggml_sycl_graph>()).first;
+        }
+        it->second->last_used_time = time_now;
+        return it->second.get();
+    }
 #endif
 
     ggml_sycl_pool & host_pool(int device) {
@@ -636,6 +795,14 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+#if GGML_SYCL_DNNL
+// oneDNN builds JIT kernels only for some GPU architectures. On the rest it falls back to
+// reference kernels, which are much slower than the SYCL kernels here.
+inline bool ggml_sycl_dnnl_has_optimized_gemm(int device) {
+    return ggml_sycl_info().devices[device].opt_feature.onednn_optimized_gemm;
+}
+#endif
 
 int ggml_sycl_get_env(const char *env_name, int default_val);
 

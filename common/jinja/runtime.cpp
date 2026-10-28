@@ -3,6 +3,7 @@
 #include "value.h"
 #include "utils.h"
 
+#include <exception>
 #include <string>
 #include <vector>
 #include <memory>
@@ -51,36 +52,43 @@ static void ensure_key_type_allowed(const value & val) {
 }
 
 // execute with error handling
-value statement::execute(context & ctx) {
+value statement::execute(context & ctx) const {
+    std::exception_ptr pending;
+    std::string message;
     try {
         return execute_impl(ctx);
     } catch (const continue_statement::signal & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const break_statement::signal & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const rethrown_exception & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const not_implemented_exception & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const std::exception & e) {
         const std::string & source = *ctx.src;
         if (source.empty()) {
             std::ostringstream oss;
             oss << "\nError executing " << type() << " at position " << pos << ": " << e.what();
-            throw rethrown_exception(oss.str());
+            message = oss.str();
         } else {
             std::ostringstream oss;
             oss << "\n------------\n";
             oss << "While executing " << type() << " at " << get_line_col(source, pos) << " in source:\n";
             oss << peak_source(source, pos) << "\n";
             oss << "Error: " << e.what();
-            // throw as another exception to avoid repeated formatting
-            throw rethrown_exception(oss.str());
+            message = oss.str();
         }
     }
+    // throw outside the catch: MSVC keeps the unwound frames on the stack while a catch block runs
+    if (pending) {
+        std::rethrow_exception(pending);
+    }
+    // throw as another exception to avoid repeated formatting
+    throw rethrown_exception(message);
 }
 
-value identifier::execute_impl(context & ctx) {
+value identifier::execute_impl(context & ctx) const {
     auto it = ctx.get_val(val);
     auto builtins = global_builtins();
     if (!it->is_undefined()) {
@@ -98,7 +106,7 @@ value identifier::execute_impl(context & ctx) {
     }
 }
 
-value object_literal::execute_impl(context & ctx) {
+value object_literal::execute_impl(context & ctx) const {
     auto obj = mk_val<value_object>();
     for (const auto & pair : val) {
         value key = pair.first->execute(ctx);
@@ -109,7 +117,7 @@ value object_literal::execute_impl(context & ctx) {
     return obj;
 }
 
-value binary_expression::execute_impl(context & ctx) {
+value binary_expression::execute_impl(context & ctx) const {
     value left_val = left->execute(ctx);
 
     // Logical operators
@@ -317,9 +325,7 @@ static value try_builtin_func(context & ctx, const std::string & name, value & i
     throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
 }
 
-value filter_expression::execute_impl(context & ctx) {
-    value input = operand ? operand->execute(ctx) : val;
-
+static value apply_filter(context & ctx, const statement_ptr & filter, value input) {
     JJ_DEBUG("Applying filter to %s", input->type().c_str());
 
     auto set_filter_alias = [](auto & filter_id) {
@@ -375,22 +381,21 @@ value filter_expression::execute_impl(context & ctx) {
     }
 }
 
-value filter_statement::execute_impl(context & ctx) {
+value filter_expression::execute_impl(context & ctx) const {
+    return apply_filter(ctx, filter, operand->execute(ctx));
+}
+
+value filter_statement::execute_impl(context & ctx) const {
     // eval body as string, then apply filter
     auto body_val = exec_statements(body, ctx);
     value_string parts = mk_val<value_string>();
     gather_string_parts_recursive(body_val, parts);
 
     JJ_DEBUG("FilterStatement: applying filter to body string of length %zu", parts->val_str.length());
-    filter_expression filter_expr(std::move(parts), std::move(filter));
-    value out = filter_expr.execute(ctx);
-
-    // this node can be reused later, make sure filter is preserved
-    this->filter = std::move(filter_expr.filter);
-    return out;
+    return apply_filter(ctx, filter, parts);
 }
 
-value test_expression::execute_impl(context & ctx) {
+value test_expression::execute_impl(context & ctx) const {
     // NOTE: "value is something" translates to function call "test_is_something(value)"
     const auto & builtins = global_builtins();
 
@@ -439,7 +444,7 @@ value test_expression::execute_impl(context & ctx) {
     }
 }
 
-value unary_expression::execute_impl(context & ctx) {
+value unary_expression::execute_impl(context & ctx) const {
     value operand_val = argument->execute(ctx);
     JJ_DEBUG("Executing unary expression with operator '%s'", op.value.c_str());
 
@@ -453,12 +458,17 @@ value unary_expression::execute_impl(context & ctx) {
         } else {
             throw std::runtime_error("Unary - operator requires numeric operand");
         }
+    } else if (op.value == "+") {
+        if (is_val<value_int>(operand_val) || is_val<value_float>(operand_val)) {
+            return operand_val;
+        }
+        throw std::runtime_error("Unary + operator requires numeric operand");
     }
 
     throw std::runtime_error("Unknown unary operator '" + op.value + "'");
 }
 
-value if_statement::execute_impl(context & ctx) {
+value if_statement::execute_impl(context & ctx) const {
     value test_val = test->execute(ctx);
 
     auto out = mk_val<value_array>();
@@ -479,20 +489,14 @@ value if_statement::execute_impl(context & ctx) {
     return str;
 }
 
-value for_statement::execute_impl(context & ctx) {
+value for_statement::execute_impl(context & ctx) const {
     context scope(ctx); // new scope for loop variables
 
-    jinja::select_expression * select_expr = cast_stmt<select_expression>(iterable);
+    const jinja::select_expression * select_expr = cast_stmt<select_expression>(iterable);
     statement_ptr test_expr_nullptr;
 
-    statement_ptr & iter_expr = [&]() -> statement_ptr & {
-        auto tmp = cast_stmt<select_expression>(iterable);
-        return tmp ? tmp->lhs : iterable;
-    }();
-    statement_ptr & test_expr = [&]() -> statement_ptr & {
-        auto tmp = cast_stmt<select_expression>(iterable);
-        return tmp ? tmp->test : test_expr_nullptr;
-    }();
+    const statement_ptr & iter_expr = select_expr ? select_expr->lhs : iterable;
+    const statement_ptr & test_expr = select_expr ? select_expr->test : test_expr_nullptr;
 
     JJ_DEBUG("Executing for statement, iterable type: %s", iter_expr->type().c_str());
 
@@ -541,8 +545,6 @@ value for_statement::execute_impl(context & ctx) {
 
     std::vector<value> filtered_items;
     for (size_t i = 0; i < items.size(); ++i) {
-        context loop_scope(scope);
-
         value current = items[i];
 
         std::function<void(context&)> scope_update_fn = [](context &) { /* no-op */};
@@ -588,6 +590,7 @@ value for_statement::execute_impl(context & ctx) {
         }
 
         if (select_expr && test_expr) {
+            context loop_scope(scope);
             scope_update_fn(loop_scope);
             value test_val = test_expr->execute(loop_scope);
             if (!test_val->as_bool()) {
@@ -605,6 +608,7 @@ value for_statement::execute_impl(context & ctx) {
     bool noIteration = true;
     for (size_t i = 0; i < filtered_items.size(); i++) {
         JJ_DEBUG("For loop iteration %zu/%zu", i + 1, filtered_items.size());
+        context loop_scope(scope);
         value_object loop_obj = mk_val<value_object>();
         loop_obj->has_builtins = false; // loop object has no builtins
         loop_obj->insert("index", mk_val<value_int>(i + 1));
@@ -616,11 +620,11 @@ value for_statement::execute_impl(context & ctx) {
         loop_obj->insert("length", mk_val<value_int>(filtered_items.size()));
         loop_obj->insert("previtem", i > 0 ? filtered_items[i - 1] : mk_val<value_undefined>("previtem"));
         loop_obj->insert("nextitem", i < filtered_items.size() - 1 ? filtered_items[i + 1] : mk_val<value_undefined>("nextitem"));
-        scope.set_val("loop", loop_obj);
-        scope_update_fns[i](scope);
+        loop_scope.set_val("loop", loop_obj);
+        scope_update_fns[i](loop_scope);
         try {
             for (auto & stmt : body) {
-                value val = stmt->execute(scope);
+                value val = stmt->execute(loop_scope);
                 result->push_back(val);
             }
         } catch (const continue_statement::signal &) {
@@ -645,7 +649,7 @@ value for_statement::execute_impl(context & ctx) {
     return str;
 }
 
-value set_statement::execute_impl(context & ctx) {
+value set_statement::execute_impl(context & ctx) const {
     auto rhs = val ? val->execute(ctx) : exec_statements(body, ctx);
 
     if (is_stmt<identifier>(assignee)) {
@@ -744,14 +748,18 @@ static inline void bind_parameters(const std::string & name, const statements & 
     }
 }
 
-value macro_statement::execute_impl(context & ctx) {
+value macro_statement::execute_impl(context & ctx) const {
     if (!is_stmt<identifier>(this->name)) {
         throw std::runtime_error("Macro name must be an identifier");
     }
     std::string name = cast_stmt<identifier>(this->name)->val;
 
     const func_handler func = [this, name](const func_args & args) -> value {
+        if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
+            throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+        }
         context macro_ctx(args.ctx); // new scope for macro execution
+        macro_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters(name, this->args, args, macro_ctx);
 
@@ -767,7 +775,7 @@ value macro_statement::execute_impl(context & ctx) {
     return mk_val<value_undefined>();
 }
 
-value call_statement::execute_impl(context & ctx) {
+value call_statement::execute_impl(context & ctx) const {
     auto call_expr = cast_stmt<call_expression>(this->call);
     if (!call_expr) {
         throw std::runtime_error("Call statement requires a valid call expression");
@@ -782,7 +790,11 @@ value call_statement::execute_impl(context & ctx) {
     context caller_ctx(ctx); // new scope for caller execution
 
     const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+        if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
+            throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+        }
         context block_ctx(caller_ctx); // new scope for block execution
+        block_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters("caller", this->caller_args, args, block_ctx);
 
@@ -807,7 +819,7 @@ value call_statement::execute_impl(context & ctx) {
     return callee_func->invoke(args);
 }
 
-value member_expression::execute_impl(context & ctx) {
+value member_expression::execute_impl(context & ctx) const {
     value object = this->object->execute(ctx);
 
     value property;
@@ -892,7 +904,7 @@ value member_expression::execute_impl(context & ctx) {
         JJ_DEBUG("Accessed property '%s' value, got type: %s", key.c_str(), val->type().c_str());
 
     } else if (is_val<value_array>(object) || is_val<value_string>(object)) {
-        if (is_val<value_int>(property)) {
+        if (is_val<value_int>(property) || is_val<value_bool>(property)) {
             int64_t index = property->as_int();
             JJ_DEBUG("Accessing %s index %d", object->type().c_str(), (int)index);
             if (is_val<value_array>(object)) {
@@ -915,8 +927,6 @@ value member_expression::execute_impl(context & ctx) {
             JJ_DEBUG("Accessing %s built-in '%s'", is_val<value_array>(object) ? "array" : "string", key.c_str());
             val = try_builtin_func(ctx, key, object, true);
 
-        } else {
-            throw std::runtime_error("Cannot access property with non-string/non-number: got " + property->type());
         }
     } else {
         if (!is_val<value_string>(property)) {
@@ -930,17 +940,17 @@ value member_expression::execute_impl(context & ctx) {
         value_t::stats_t::mark_used(val);
         value_t::stats_t::mark_used(object);
         value_t::stats_t::mark_used(property);
-        if (is_val<value_int>(property)) {
-            object->stats.ops.insert("array_access");
-        } else if (is_val<value_string>(property)) {
+        if (is_val<value_object>(object) || is_val<value_string>(property) || is_val<value_float>(property) || is_val<value_array>(property) || is_val<value_none>(property)) {
             object->stats.ops.insert("object_access");
+        } else if (is_val<value_int>(property) || is_val<value_bool>(property)) {
+            object->stats.ops.insert("array_access");
         }
     }
 
     return val;
 }
 
-value call_expression::execute_impl(context & ctx) {
+value call_expression::execute_impl(context & ctx) const {
     // gather arguments
     func_args args(ctx);
     for (auto & arg_stmt : this->args) {
@@ -958,7 +968,7 @@ value call_expression::execute_impl(context & ctx) {
     return callee_func->invoke(args);
 }
 
-value keyword_argument_expression::execute_impl(context & ctx) {
+value keyword_argument_expression::execute_impl(context & ctx) const {
     if (!is_stmt<identifier>(key)) {
         throw std::runtime_error("Keyword argument key must be identifiers");
     }
@@ -982,7 +992,7 @@ std::string runtime::debug_dump_program(const program & prog, const std::string 
         return std::string(lvl * 2, ' ');
     };
 
-    ctx.visitor = [&](bool is_leaf, statement * node, std::vector<visitor_pair> children) {
+    ctx.visitor = [&](bool is_leaf, const statement * node, std::vector<visitor_pair> children) {
         oss << indent(lvl) << node->type() << ":\n";
         lvl++;
         if (is_leaf) {

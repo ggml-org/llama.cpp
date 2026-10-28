@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { SidebarNavigation } from '$lib/components/app';
@@ -11,8 +11,8 @@
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
+		MODELS_ROUTE_ID,
 		NEW_CHAT_TAB_ID,
-		ROUTES,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
@@ -28,6 +28,7 @@
 		serverStore,
 		settingsStore,
 		tabsStore,
+		uiStore,
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
@@ -45,12 +46,7 @@
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
-	let chatSidebar:
-		| {
-				activateSearchMode?: () => void;
-				editActiveConversation?: () => void;
-		  }
-		| undefined = $state();
+	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
@@ -123,20 +119,9 @@
 		}
 	}
 
-	// navigating away from the new-chat screen drops its tab, so it does not
-	// linger once the user moves to a real conversation or another route
-	let previousChatId = $state<string | undefined>(undefined);
+	// the models page returns to wherever it was reached from, by any kind of navigation
+	afterNavigate(() => uiStore.rememberModelsReturnRoute());
 
-	$effect(() => {
-		const id = page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
-		const prev = untrack(() => previousChatId);
-
-		previousChatId = id;
-
-		if (id !== prev && prev && settingsStore.config.conversationTabs && prev === NEW_CHAT_TAB_ID) {
-			untrack(() => tabsStore.removeTabs([NEW_CHAT_TAB_ID]));
-		}
-	});
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
@@ -158,7 +143,9 @@
 
 		untrack(() => {
 			if (
-				(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+				(page.route.id === '/(chat)' ||
+					page.route.id === '/(chat)/chat/[id]' ||
+					page.route.id === MODELS_ROUTE_ID) &&
 				page.status !== 401 &&
 				page.status !== 403
 			) {
@@ -315,15 +302,7 @@
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
-		<SidebarNavigation
-			onSearchClick={() => {
-				if (deviceStore.isMobile) {
-					goto(ROUTES.SEARCH);
-				} else if (chatSidebar?.activateSearchMode) {
-					chatSidebar.activateSearchMode();
-				}
-			}}
-		/>
+		<SidebarNavigation />
 
 		<!-- min-w-0 lets the chat column shrink below its content width, so wide
 		     code blocks and tables scroll inside their own containers instead of
@@ -335,7 +314,7 @@
 
 	<ModeWatcher />
 
-	<Toaster richColors />
+	<Toaster closeButton richColors />
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->

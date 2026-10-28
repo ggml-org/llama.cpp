@@ -1,14 +1,16 @@
 #include "llama-impl.h"
+#include "llama-mmap.h"
 
+#include "ggml-backend.h"
 #include "gguf.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
 #include <cstring>
 #include <vector>
-#include <sstream>
 
 struct llama_logger_state {
     ggml_log_callback log_callback = llama_log_callback_default;
@@ -16,6 +18,26 @@ struct llama_logger_state {
 };
 
 static llama_logger_state g_logger_state;
+
+void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows) {
+    if (!tensor || !tensor->data || !tensor->buffer || !ggml_backend_buffer_is_host(tensor->buffer) || n_rows == 0) {
+        return;
+    }
+
+    GGML_ASSERT(ggml_is_matrix(tensor));
+
+    const size_t row_bytes = ggml_row_size(tensor->type, tensor->ne[0]);
+    const auto * base = (const char *) tensor->data;
+
+    std::vector<llama_memory_range> mr;
+    mr.reserve(n_rows);
+    for (size_t i = 0; i < n_rows; ++i) {
+        GGML_ASSERT(rows[i] >= 0 && rows[i] < tensor->ne[1]);
+        mr.push_back({ base + (size_t) rows[i] * tensor->nb[1], row_bytes });
+    }
+
+    llama_prefetch(std::move(mr));
+}
 
 time_meas::time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
 
@@ -64,6 +86,16 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
     (void) user_data;
     fputs(text, stderr);
     fflush(stderr);
+}
+
+void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size) {
+    static const std::vector<uint8_t> zeros(1024*1024, 0);
+
+    // not all backend buffers implement ggml_backend_tensor_memset(), so write zeros instead
+    // TODO: make this a generic fallback in `ggml_backend_tensor_memset` when `set_tensor` is available
+    for (size_t ofs = 0; ofs < size; ofs += zeros.size()) {
+        ggml_backend_tensor_set(t, zeros.data(), offset + ofs, std::min(size - ofs, zeros.size()));
+    }
 }
 
 void replace_all(std::string & s, const std::string & search, const std::string & replace) {
@@ -116,7 +148,7 @@ std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
     return buf;
 }
 
-static std::string gguf_data_to_str(enum gguf_type type, const void * data, int i) {
+static std::string gguf_data_to_str(enum gguf_type type, const void * data, size_t i) {
     switch (type) {
         case GGUF_TYPE_UINT8:   return std::to_string(((const uint8_t  *)data)[i]);
         case GGUF_TYPE_INT8:    return std::to_string(((const int8_t   *)data)[i]);
@@ -133,7 +165,7 @@ static std::string gguf_data_to_str(enum gguf_type type, const void * data, int 
     }
 }
 
-std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
+std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i, size_t max_len) {
     const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
 
     switch (type) {
@@ -142,28 +174,38 @@ std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
         case GGUF_TYPE_ARRAY:
             {
                 const enum gguf_type arr_type = gguf_get_arr_type(ctx_gguf, i);
-                int arr_n = gguf_get_arr_n(ctx_gguf, i);
+                const size_t arr_n = gguf_get_arr_n(ctx_gguf, i);
                 const void * data = arr_type == GGUF_TYPE_STRING ? nullptr : gguf_get_arr_data(ctx_gguf, i);
-                std::stringstream ss;
-                ss << "[";
-                for (int j = 0; j < arr_n; j++) {
-                    if (arr_type == GGUF_TYPE_STRING) {
-                        std::string val = gguf_get_arr_str(ctx_gguf, i, j);
-                        // escape quotes
-                        replace_all(val, "\\", "\\\\");
-                        replace_all(val, "\"", "\\\"");
-                        ss << '"' << val << '"';
-                    } else if (arr_type == GGUF_TYPE_ARRAY) {
-                        ss << "???";
-                    } else {
-                        ss << gguf_data_to_str(arr_type, data, j);
+                std::string res = "[";
+                size_t j = 0;
+                for (; j < arr_n && res.size() <= max_len; j++) {
+                    if (j > 0) {
+                        res += ", ";
                     }
-                    if (j < arr_n - 1) {
-                        ss << ", ";
+                    if (arr_type == GGUF_TYPE_STRING) {
+                        const char * s = gguf_get_arr_str(ctx_gguf, i, j);
+                        const size_t need = res.size() + 2 * strlen(s) + 2;
+                        if (res.capacity() < need) {
+                            res.reserve(std::max(need, 2 * res.capacity()));
+                        }
+                        res += '"';
+                        for (; *s; s++) {
+                            if (*s == '\\' || *s == '"') {
+                                res += '\\';
+                            }
+                            res += *s;
+                        }
+                        res += '"';
+                    } else if (arr_type == GGUF_TYPE_ARRAY) {
+                        res += "???";
+                    } else {
+                        res += gguf_data_to_str(arr_type, data, j);
                     }
                 }
-                ss << "]";
-                return ss.str();
+                if (j == arr_n) {
+                    res += "]";
+                }
+                return res;
             }
         default:
             return gguf_data_to_str(type, gguf_get_val_data(ctx_gguf, i), 0);

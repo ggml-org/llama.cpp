@@ -13,7 +13,13 @@ export enum ServerRole {
  * Used as the `value` field in the status object from /models endpoint
  */
 export enum ServerModelStatus {
+	DOWNLOAD_FAILED = 'download_failed',
+	DOWNLOAD_FINISHED = 'download_finished',
+	DOWNLOADED = 'downloaded',
+	DOWNLOADING = 'downloading',
 	FAILED = 'failed',
+	/** A download that never finished: listed by the server without an instance, resumable. */
+	INCOMPLETE = 'incomplete',
 	LOADED = 'loaded',
 	LOADING = 'loading',
 	SLEEPING = 'sleeping',
@@ -26,6 +32,8 @@ export enum ServerModelStatus {
  * tools/server/server-models.cpp from the C++ server.
  */
 export enum ServerModelsSseEventType {
+	DOWNLOAD_FAILED = 'download_failed',
+	DOWNLOAD_FINISHED = 'download_finished',
 	DOWNLOAD_PROGRESS = 'download_progress',
 	MODEL_REMOVE = 'model_remove',
 	MODEL_STATUS = 'model_status',

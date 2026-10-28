@@ -2,9 +2,11 @@
 
 #include "json-schema.h"
 #include "json.h"
+#include "llama.h"
 
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <unordered_map>
 #include <string>
 #include <string_view>
@@ -72,6 +74,12 @@ enum common_peg_parse_result_type {
 
 const char * common_peg_parse_result_type_name(common_peg_parse_result_type type);
 
+// A run of input bytes that does not decode as UTF-8
+struct common_peg_invalid_utf8 {
+    size_t pos;
+    size_t len;
+};
+
 struct common_peg_ast_node {
     common_peg_ast_id id;
     std::string rule;
@@ -82,6 +90,12 @@ struct common_peg_ast_node {
     std::vector<common_peg_ast_id> children;
 
     bool is_partial = false;
+
+    // Invalid UTF-8 inside the node, in ascending order
+    std::vector<common_peg_invalid_utf8> invalid_utf8;
+
+    // Returns the text with every invalid run replaced by U+FFFD
+    std::string sanitized_text() const;
 };
 
 struct common_peg_parse_result;
@@ -98,10 +112,11 @@ class common_peg_ast_arena {
         size_t end,
         std::string_view text,
         std::vector<common_peg_ast_id> children,
-        bool is_partial = false
+        bool is_partial = false,
+        std::vector<common_peg_invalid_utf8> invalid_utf8 = {}
     ) {
         common_peg_ast_id id = nodes_.size();
-        nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial});
+        nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial, std::move(invalid_utf8)});
         return id;
     }
 
@@ -127,6 +142,9 @@ struct common_peg_parse_result {
 
     std::vector<common_peg_ast_id> nodes;
 
+    // Invalid UTF-8 consumed by this result, carried up to the enclosing AST nodes
+    std::vector<common_peg_invalid_utf8> invalid_utf8;
+
     common_peg_parse_result() = default;
 
     common_peg_parse_result(common_peg_parse_result_type type, size_t start)
@@ -135,8 +153,8 @@ struct common_peg_parse_result {
     common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
-    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes)
-        : type(type), start(start), end(end), nodes(std::move(nodes)) {}
+    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes, std::vector<common_peg_invalid_utf8> invalid_utf8 = {})
+        : type(type), start(start), end(end), nodes(std::move(nodes)), invalid_utf8(std::move(invalid_utf8)) {}
 
     bool fail() const { return type == COMMON_PEG_PARSE_RESULT_FAIL; }
     bool need_more_input() const { return type == COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT; }
@@ -144,9 +162,10 @@ struct common_peg_parse_result {
 };
 
 enum common_peg_parse_flags {
-    COMMON_PEG_PARSE_FLAG_NONE    = 0,
-    COMMON_PEG_PARSE_FLAG_LENIENT = 1 << 0,
-    COMMON_PEG_PARSE_FLAG_DEBUG   = 1 << 1,
+    COMMON_PEG_PARSE_FLAG_NONE     = 0,
+    COMMON_PEG_PARSE_FLAG_LENIENT  = 1 << 0,
+    COMMON_PEG_PARSE_FLAG_DEBUG    = 1 << 1,
+    COMMON_PEG_PARSE_FLAG_COMPLETE = 1 << 2,
 };
 
 inline common_peg_parse_flags operator|(common_peg_parse_flags a, common_peg_parse_flags b) {
@@ -165,12 +184,18 @@ inline common_peg_parse_flags operator~(common_peg_parse_flags a) {
     return static_cast<common_peg_parse_flags>(~int(a));
 }
 
+struct common_peg_recursion_error : std::invalid_argument {
+    using std::invalid_argument::invalid_argument;
+};
+
 struct common_peg_parse_context {
-    std::string input;
+    std::string input;               // [h,   e,  l,  l,  o,  _,  w,  o,  r,  l,  d]
+    std::vector<llama_token> tokens; // [id, -1, -1, -1, -1, id, -1, -1, -1, -1, -1]
     common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
     int parse_depth;
+    std::vector<int> rule_depth; // index: rule child id
 
     common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : flags(flags), parse_depth(0) {}
@@ -178,8 +203,14 @@ struct common_peg_parse_context {
     common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : input(input), flags(flags), parse_depth(0) {}
 
+    common_peg_parse_context(std::string input, std::vector<llama_token> tokens, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(std::move(input)), tokens(std::move(tokens)), flags(flags), parse_depth(0) {
+        GGML_ASSERT(this->tokens.empty() || this->tokens.size() == this->input.size());
+    }
+
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
     bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
+    bool is_complete() const { return flags & COMMON_PEG_PARSE_FLAG_COMPLETE; }
 };
 
 class common_peg_arena;
@@ -334,12 +365,6 @@ class common_peg_arena {
 
     std::string dump(common_peg_parser_id id) const;
 
-    common_json to_json() const;
-    static common_peg_arena from_json(const common_json & j);
-
-    std::string save() const;
-    void load(const std::string & data);
-
     friend class common_peg_parser_builder;
 
   private:
@@ -430,6 +455,7 @@ class common_peg_parser_builder {
     common_peg_parser space() { return add(common_peg_space_parser{}); }
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
+    // Invalid UTF-8 is consumed and recorded on the AST nodes.
     //   S -> (!delim .)*
     common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
 

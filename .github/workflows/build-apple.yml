@@ -26,6 +26,10 @@ on:
       'ggml/src/ggml-rpc/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -33,6 +37,7 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
@@ -49,7 +54,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: apple-arm64
+          restore: false
           save: false
 
       - name: ccache-buckets-restore
@@ -98,66 +103,16 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main -E "test-llama-archs" --verbose --timeout 900
-
-  macos-latest-x64:
-    runs-on: macos-15-intel
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.24
-        with:
-          key: apple-x64
-          save: false
-
-      - name: ccache-buckets-restore
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
-        with:
-          key: apple-x64
-          folder: llama.cpp
-          hf_bucket: ggml-org/cache
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          # Metal is disabled due to intermittent failures with Github runners not having a GPU:
-          # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
-          cmake -B build \
-            -DCMAKE_BUILD_RPATH="@loader_path" \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_BUILD_BORINGSSL=ON \
-            -DGGML_METAL=OFF \
-            -DGGML_RPC=ON \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
-          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: ccache-buckets-save
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
-        with:
-          key: apple-x64
-          folder: llama.cpp
-          evict-old-files: 1d
-          hf_bucket: ggml-org/cache
-          save: true
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
+          # Metal Paravirtual devices are difficult to support -> disable
+          # ref: https://github.com/ggml-org/llama.cpp/pull/19802#issuecomment-4013704023
+          ctest -L main -E "test-llama-archs|test-llama-context|test-speculative-rejection-sampling" --verbose --timeout 900
 
   macos-latest-ios-xcode:
     runs-on: macos-latest
+
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - name: Checkout code
@@ -255,6 +210,10 @@ jobs:
   macos-latest-swift:
     runs-on: macos-latest
     needs: macos-latest-ios-xcode
+
+    permissions:
+      actions: read
+      contents: read
 
     strategy:
       matrix:

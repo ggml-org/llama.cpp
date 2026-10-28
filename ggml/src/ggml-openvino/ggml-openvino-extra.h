@@ -63,12 +63,16 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL();
 
 struct ggml_openvino_device_config {
     std::string device_name = "CPU";
+    std::vector<std::string> available_devices;
     bool is_npu = false;
     bool initialized = false;
     std::optional<ov::RemoteContext> remote_context;
+    size_t max_alloc_size = SIZE_MAX;
     ov::AnyMap compile_config;
     std::unordered_map<std::string, std::string> environment_variables;
     cl_command_queue cl_queue = nullptr;
+    clEnqueueMemFillINTEL_fn cl_mem_fill_fn = nullptr;
+    clEnqueueMemcpyINTEL_fn cl_mem_cpy_fn = nullptr;
 
     void init();
     ~ggml_openvino_device_config();
@@ -82,6 +86,12 @@ void ggml_openvino_init_device_config();
 
 // Get the device name
 const std::string & ggml_openvino_get_device_name();
+
+// Get all available physical OpenVINO devices
+std::vector<std::string> ggml_openvino_get_available_devices();
+
+// Human-readable device name, e.g. "Intel(R) AI Boost (NPU 4000)"; the device id if unavailable
+std::string ggml_openvino_get_device_description(const std::string & device_name);
 
 // Environment variable accessors. All GGML_OPENVINO_* env vars are read once
 // during backend init and cached on the device config; consumers must go
@@ -102,10 +112,16 @@ int ggml_openvino_getenv_int(const char * var, int default_value = 0);
 // Memory optimization toggles. GGML_OPENVINO_MEMORY_OPTIMIZE is an umbrella
 // switch; the fine-grained env vars still override it when explicitly set.
 bool ggml_openvino_reduce_compile_mem_enabled();
-bool ggml_openvino_release_weights_enabled(const std::string & device);
+bool ggml_openvino_release_weights_enabled();
 
 // Check if running on NPU
 bool ggml_openvino_is_npu();
+
+// Check if running on a GPU (GPU, GPU.0, GPU.1, ...)
+bool ggml_openvino_is_gpu();
+
+// Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
+size_t ggml_openvino_max_alloc_size();
 
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only).
 // register: record a host weight buffer (idempotent per data pointer).

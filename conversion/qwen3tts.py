@@ -218,8 +218,10 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
         hparams["text_config"] = {"hidden_size": hparams["talker_config"]["hidden_size"]}
-        # ECAPA-TDNN has a fixed 4-stage backbone, but MmprojModel.__init__ needs a n_block_keys
-        hparams["speaker_encoder_config"]["n_layers"] = 4
+        # ECAPA-TDNN has a fixed 4-stage backbone, but MmprojModel.__init__ needs a n_block_keys.
+        # The CustomVoice variant ships no speaker encoder, so its config lacks this key entirely.
+        if "speaker_encoder_config" in hparams:
+            hparams["speaker_encoder_config"]["n_layers"] = 4
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self._wav_config_cache = None
 

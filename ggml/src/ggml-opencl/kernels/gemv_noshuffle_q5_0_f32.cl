@@ -209,6 +209,8 @@ __kernel void kernel_gemv_noshuffle_q5_0_f32(
     uint M = ne01;
 
     uint LINE_STRIDE_A    = M / 2;
+    // Keep tail lanes active for subgroup ops, but read a valid weight row.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
     uint BLOCK_STRIDE_A  = NSUBGROUPS * M;
 
     private uint4     regA;
@@ -218,13 +220,13 @@ __kernel void kernel_gemv_noshuffle_q5_0_f32(
     private float2 totalSum = (float2)(0.0f);
 
     for (uint k = groupId; k < (K / QK5_0); k += NSUBGROUPS) {
-        regS = src0_d[gid + k * LINE_STRIDE_A];
+        regS = src0_d[gid_s + k * LINE_STRIDE_A];
 
         ushort4 qh_raw;
-        qh_raw.s0 = src0_qh[gid + (4*k + 0) * LINE_STRIDE_A];
-        qh_raw.s1 = src0_qh[gid + (4*k + 1) * LINE_STRIDE_A];
-        qh_raw.s2 = src0_qh[gid + (4*k + 2) * LINE_STRIDE_A];
-        qh_raw.s3 = src0_qh[gid + (4*k + 3) * LINE_STRIDE_A];
+        qh_raw.s0 = src0_qh[gid_s + (4*k + 0) * LINE_STRIDE_A];
+        qh_raw.s1 = src0_qh[gid_s + (4*k + 1) * LINE_STRIDE_A];
+        qh_raw.s2 = src0_qh[gid_s + (4*k + 2) * LINE_STRIDE_A];
+        qh_raw.s3 = src0_qh[gid_s + (4*k + 3) * LINE_STRIDE_A];
 
         uchar8 raw = as_uchar8(qh_raw);
         uchar8 qh_bytes = (uchar8)(raw.s0, raw.s2, raw.s4, raw.s6,
@@ -236,10 +238,10 @@ __kernel void kernel_gemv_noshuffle_q5_0_f32(
             regB.s4567 = read_imagef(src1, (1 + slid * 2 + k * 8));
         }
 
-        regA.s0 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
-        regA.s1 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
-        regA.s2 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
-        regA.s3 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s0 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
 
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_q5_0_sgbroadcast_8_hi(totalSum, as_ushort8(regA), qh_bytes, regS, regB);
@@ -247,10 +249,10 @@ __kernel void kernel_gemv_noshuffle_q5_0_f32(
         dequantizeBlockAccum_ns_q5_0_sgbroadcast_1_hi(totalSum, as_ushort8(regA), qh_bytes, regS, regB);
 #endif // VECTOR_SUB_GROUP_BROADCAST
 
-        regA.s0 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
-        regA.s1 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
-        regA.s2 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
-        regA.s3 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+        regA.s0 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA.s1 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA.s2 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA.s3 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_q5_0_sgbroadcast_8_lo(totalSum, as_ushort8(regA), qh_bytes, regS, regB);
 #else
