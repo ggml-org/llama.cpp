@@ -2,11 +2,17 @@
 # multiple collaborators per item can be specified
 #
 # ggml-org/ci               : CISC, danbev, ggerganov, netrunnereve, ngxson, taronaeo
+# ggml-org/ggml-base        : aendk, fairydreaming, ggerganov
 # ggml-org/ggml-cann        : hipudding
+# ggml-org/ggml-cpu         : angt, chaxu01, ggerganov, max-krasnyansky, taronaeo
 # ggml-org/ggml-cuda        : am17an, gaugarg-nv, IMbackK, JohannesGaessler, ORippler, thelittlefireman, ynankani
+# ggml-org/ggml-et          : marty1885
 # ggml-org/ggml-hexagon     : lhez, max-krasnyansky
+# ggml-org/ggml-hip         : IMbackK, thelittlefireman
 # ggml-org/ggml-metal       : forforever73, ggerganov, jhen0409, masterFoad
 # ggml-org/ggml-opencl      : lhez, max-krasnyansky
+# ggml-org/ggml-openvino    : ravi9, wine99
+# ggml-org/ggml-riscv       : xctan
 # ggml-org/ggml-rpc         : am17an, rgerganov
 # ggml-org/ggml-sycl        : arthw, Titaniumtown
 # ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
