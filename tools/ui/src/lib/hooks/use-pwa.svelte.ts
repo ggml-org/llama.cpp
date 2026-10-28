@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import { BUILD_VERSION_LOCALSTORAGE_KEY, SW_CONFIG } from '$lib/constants';
+import { PreferencesService } from '$lib/services/preferences.service';
 import { versionStore } from '$lib/stores';
 import { useRegisterSW } from 'virtual:pwa-register/svelte';
 
@@ -63,10 +64,10 @@ export function usePwa() {
 		if (!currentVersion) return;
 
 		try {
-			const storedVersion = localStorage.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
+			const storedVersion = PreferencesService.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
 
 			needRefreshByStorage = !!storedVersion && storedVersion !== currentVersion;
-			localStorage.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
+			PreferencesService.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
 		} catch {
 			needRefreshByStorage = false;
 		}

@@ -1,3 +1,4 @@
+import { PreferencesService } from './preferences.service';
 import { browser } from '$app/environment';
 import { CONFIG_LOCALSTORAGE_KEY, USER_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
 
@@ -27,11 +28,11 @@ export class SettingsService {
 		}
 
 		try {
-			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+			const storedConfigRaw = PreferencesService.getItem(CONFIG_LOCALSTORAGE_KEY);
 			const isFirstVisit = storedConfigRaw === null;
 			const config = JSON.parse(storedConfigRaw || '{}') as Record<string, unknown>;
 			const userOverrides = JSON.parse(
-				localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
+				PreferencesService.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
 			) as string[];
 
 			return { config, isFirstVisit, userOverrides };
@@ -49,10 +50,10 @@ export class SettingsService {
 	static migrateLegacyTheme(): string | null {
 		if (!browser) return null;
 
-		const legacyTheme = localStorage.getItem('theme');
+		const legacyTheme = PreferencesService.getItem('theme');
 
 		if (legacyTheme) {
-			localStorage.removeItem('theme');
+			PreferencesService.removeItem('theme');
 
 			return legacyTheme;
 		}
@@ -67,8 +68,8 @@ export class SettingsService {
 		if (!browser) return;
 
 		try {
-			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
-			localStorage.setItem(USER_OVERRIDES_LOCALSTORAGE_KEY, JSON.stringify(userOverrides));
+			PreferencesService.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+			PreferencesService.setItem(USER_OVERRIDES_LOCALSTORAGE_KEY, JSON.stringify(userOverrides));
 		} catch (error) {
 			console.error('Failed to save config to localStorage:', error);
 		}

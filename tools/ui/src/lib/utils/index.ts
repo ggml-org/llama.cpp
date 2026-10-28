@@ -29,6 +29,14 @@ export {
 	buildSiblingInfoMap
 } from './branching';
 
+// Conversation fork tree
+export {
+	buildForkedConversation,
+	collectForkDescendantIds,
+	groupMessagesByConversation,
+	reparentDirectForks
+} from './conversation-tree';
+
 // Code
 export {
 	highlightCode,

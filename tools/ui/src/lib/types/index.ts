@@ -98,7 +98,8 @@ export type {
 	DatabaseMessageExtra,
 	DatabaseMessage,
 	ExportedConversation,
-	ExportedConversations
+	ExportedConversations,
+	StorageBackend
 } from './database';
 
 // Model types
