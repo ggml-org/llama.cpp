@@ -189,6 +189,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
+    bool filtered = false;
+    int n_tokens_cur = n_tokens;
+
     for (int il = 0; il < n_layer; ++il) {
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
@@ -220,14 +223,14 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
             cb(qkv_fused, "wqkv", il);
             const int64_t q_dim = n_embd_head * n_head;
-            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_tokens, qkv_fused->nb[1], 0));
+            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_tokens_cur, qkv_fused->nb[1], 0));
         } else {
             Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
         }
         {
             cb(Qcur, "Qcur", il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens_cur);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
@@ -246,8 +249,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                 const int64_t k_dim = n_embd_head * n_head_kv;
                 const int64_t v_dim = n_embd_head * n_head_kv;
                 const size_t  esize = ggml_element_size(qkv_fused);
-                Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens, qkv_fused->nb[1], q_dim * esize));
-                Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens, qkv_fused->nb[1], (q_dim + k_dim) * esize));
+                Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens_cur, qkv_fused->nb[1], q_dim * esize));
+                Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens_cur, qkv_fused->nb[1], (q_dim + k_dim) * esize));
             } else {
                 Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
                 Vcur = model.layers[il].wv
@@ -257,8 +260,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens_cur);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens_cur);
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
             Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
@@ -281,15 +284,16 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
-        if(!(hparams.has_kv(il)) && (*inp_out_ids).ne[0] == 0) {
-            continue;
-        }
-
-        // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
-        // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
-        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+        if (!filtered && !hparams.has_kv(il) && crop_before_nextn(inp_out_ids)) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+
+            ggml_tensor *pos_row = ggml_reshape_2d(ctx0, inp_pos, 1, inp_pos->ne[0]);
+            pos_row = ggml_get_rows(ctx0, pos_row, inp_out_ids);
+            inp_pos = ggml_reshape_1d(ctx0, pos_row, pos_row->ne[1]);
+
+            n_tokens_cur = cur->ne[1];
+            filtered = true;
         }
         cur = build_norm(cur,
                 model.layers[il].attn_post_norm, nullptr,
@@ -387,7 +391,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
             // TODO @ngxson : improve this
-            if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+            if (filtered) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
