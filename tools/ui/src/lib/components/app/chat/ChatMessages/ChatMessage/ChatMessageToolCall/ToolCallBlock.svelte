@@ -25,6 +25,7 @@
 		isPending: boolean;
 		isStreamingCall: boolean;
 		isCodeStreaming: boolean;
+		isInterrupted: boolean;
 	}
 
 	interface Props {
@@ -81,6 +82,13 @@
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming) || extraLiveStreaming);
 	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
+	// A finished call with no result message was stopped before it returned
+	// (user abort or the page went away mid-execution).
+	const isInterrupted = $derived(
+		section.type === AgenticSectionType.TOOL_CALL &&
+			section.toolResult === undefined &&
+			!showSpinner
+	);
 
 	const toolUi: ToolUiEntry | null = $derived(getToolUi(section.toolName));
 	const toolIcon: Component = $derived(
@@ -107,6 +115,8 @@
 
 		if (isStreamingCall && !isStreaming) return 'incomplete';
 
+		if (isInterrupted) return 'interrupted';
+
 		return undefined;
 	}
 
@@ -126,6 +136,7 @@
 >
 	{@render children(meta, {
 		isCodeStreaming,
+		isInterrupted,
 		isPending,
 		isStreaming,
 		isStreamingCall

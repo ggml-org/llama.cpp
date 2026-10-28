@@ -8,7 +8,7 @@
 
 	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
+	import { AlertTriangle, Check, CircleStop, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
 	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { AgenticSectionType, AttachmentType } from '$lib/enums';
@@ -247,6 +247,12 @@
 			<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
 				<Loader2 class="h-3 w-3 animate-spin" />
 				Executing command...
+			</div>
+		{:else if ctx.isInterrupted}
+			<div class="flex items-start gap-2 text-xs text-muted-foreground/70 italic">
+				<CircleStop class="mt-0.5 h-3 w-3 shrink-0" />
+
+				<span>Command interrupted before it returned output</span>
 			</div>
 		{:else if execShellError}
 			<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
