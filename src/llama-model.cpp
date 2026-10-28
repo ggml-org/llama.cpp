@@ -27,14 +27,17 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cfloat>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <map>
 #include <numeric>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1905,7 +1908,19 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     // per-tensor activation precision policy
     prec_policy.load(ml, *this);
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    std::set<ggml_context *> stream_contexts;
+    for (const auto & [ctx_key, ctx_ptr] : ml.ctx_map) {
+        if (ggml_get_first_tensor(ctx_ptr.get()) && ml.can_stream(ctx_key.buft)) {
+            stream_contexts.insert(ctx_ptr.get());
+        }
+    }
+    if (!stream_contexts.empty()) {
+        for (auto & file : ml.files) {
+            file->prepare_read_at();
+        }
+    }
+    // Streamed weights do not need to be prefaulted into the mappings.
+    ml.init_mappings(stream_contexts.empty(), use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -1916,6 +1931,16 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     // reserve hint: each context creates one buffer per file, or more when its tensors are spread
     //     across disjoint ranges of a file (see get_mapping_ranges)
     pimpl->ctxs_bufs.reserve(ml.ctx_map.size() * ml.files.size());
+
+    std::map<ggml_context *, std::future<ggml_backend_buffer_ptr>> allocations;
+    for (const auto & [ctx_key, ctx_ptr] : ml.ctx_map) {
+        auto * ctx = ctx_ptr.get();
+        if (stream_contexts.count(ctx)) {
+            allocations.emplace(ctx, std::async(std::launch::async, [ctx, buft = ctx_key.buft] {
+                return ggml_backend_buffer_ptr(ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft));
+            }));
+        }
+    }
 
     for (auto & [ctx_key, ctx_ptr] : ml.ctx_map) {
         ggml_backend_buffer_type_t buft = ctx_key.buft;
@@ -1973,6 +1998,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
                     t->buffer = buf; // set dummy buffer for weights so that the backend scheduler won't try to allocate them
                 }
+            } else if (allocations.count(ctx)) {
+                buf = allocations.at(ctx).get().release();
             } else {
                 buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
             }
@@ -2049,11 +2076,76 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         });
     }
 
-    // load tensor data
-    for (auto & [ctx, bufs] : ctx_bufs) {
+    std::vector<decltype(ctx_bufs)::value_type *> stream_loads;
+    for (auto & item : ctx_bufs) {
+        auto & [ctx, bufs] = item;
+        if (stream_contexts.count(ctx)) {
+            stream_loads.push_back(&item);
+            continue;
+        }
         if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
             return false;
         }
+    }
+
+    if (stream_loads.size() == 1) {
+        auto & [ctx, bufs] = *stream_loads.front();
+        if (!ml.load_all_data(ctx, bufs, nullptr, params.progress_callback, params.progress_callback_user_data, true)) {
+            return false;
+        }
+    } else if (!stream_loads.empty()) {
+        size_t reported = ml.size_done.load();
+        if (params.progress_callback && !params.progress_callback((float) reported / ml.size_data, params.progress_callback_user_data)) {
+            return false;
+        }
+        std::atomic_bool cancelled = false;
+        std::vector<std::future<bool>> loads;
+        loads.reserve(stream_loads.size());
+        try {
+            for (auto * item : stream_loads) {
+                loads.emplace_back(std::async(std::launch::async, [&ml, item, &cancelled] {
+                    auto check_cancel = [](float, void * data) {
+                        return !((std::atomic_bool *) data)->load();
+                    };
+                    try {
+                        return ml.load_all_data(item->first, item->second, nullptr, check_cancel, &cancelled, true);
+                    } catch (...) {
+                        cancelled = true;
+                        throw;
+                    }
+                }));
+            }
+            for (auto & load : loads) {
+                while (load.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready) {
+                    const size_t done = ml.size_done.load();
+                    // Keep user callbacks on the loading thread. Report completion after all workers finish.
+                    if (!cancelled && params.progress_callback && done != reported && done < ml.size_data) {
+                        reported = done;
+                        if (!params.progress_callback((float) done / ml.size_data, params.progress_callback_user_data)) {
+                            cancelled = true;
+                        }
+                    }
+                }
+                if (!load.get()) {
+                    cancelled = true;
+                }
+            }
+        } catch (...) {
+            cancelled = true;
+            for (auto & load : loads) {
+                if (load.valid()) {
+                    load.wait();
+                }
+            }
+            throw;
+        }
+        if (cancelled) {
+            return false;
+        }
+    }
+
+    if (!ml.finish_loading(params.progress_callback, params.progress_callback_user_data)) {
+        return false;
     }
 
     if (use_mmap_buffer) {
