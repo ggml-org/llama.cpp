@@ -15,6 +15,8 @@
  * scroll position instead, before the frame is painted.
  */
 
+import { untrack } from 'svelte';
+
 /** Distance from the bottom that still counts as being at the bottom. */
 const AT_BOTTOM_PX = 24;
 /**
@@ -35,6 +37,7 @@ export class StickToBottom {
 	private container: HTMLElement | undefined;
 	private enabled = true;
 	private graceTimer: ReturnType<typeof setTimeout> | undefined;
+	private lastScrollHeight = 0;
 	private lastScrollTop = 0;
 	private markPressed = (): void => {
 		this.pressedAt = performance.now();
@@ -75,8 +78,11 @@ export class StickToBottom {
 			passive: true
 		});
 
+		this.lastScrollHeight = container.scrollHeight;
 		this.lastScrollTop = container.scrollTop;
-		this.measure();
+		// untracked: callers attach from an effect, and reading the state here
+		// would re-attach on every flip and re-measure away a release
+		untrack(() => this.measure());
 	}
 
 	detach(): void {
@@ -109,7 +115,7 @@ export class StickToBottom {
 
 	setEnabled(enabled: boolean): void {
 		this.enabled = enabled;
-		this.syncAnchor();
+		untrack(() => this.syncAnchor());
 	}
 
 	private distanceFromBottom(el: HTMLElement): number {
@@ -137,10 +143,13 @@ export class StickToBottom {
 	}
 
 	/**
-	 * Only a scroll that moves up while away from the bottom stops following:
-	 * the browser also fires scroll events for the landing jump, for anchoring
-	 * adjustments and for clamping, and those must not unstick a reader who
-	 * never touched the page.
+	 * Only the reader moving up stops following. Following only ever moves the
+	 * viewport down, and content shrinking lowers scrollHeight, so moving up
+	 * without shrinkage is the reader. It releases right away, even inside
+	 * AT_BOTTOM_PX: a trackpad or smooth wheel scrolls in smaller steps, and
+	 * staying stuck would snap each of them back while a response streams.
+	 * The landing jump, anchoring adjustments and clamping must not unstick a
+	 * reader who never touched the page, and none of them moves up that way.
 	 */
 	private measure(): void {
 		const el = this.container;
@@ -148,15 +157,17 @@ export class StickToBottom {
 		if (!el) return;
 
 		const top = el.scrollTop;
+		const height = el.scrollHeight;
 
 		this.atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
 
-		if (this.atBottom) {
-			this.stick = true;
-		} else if (top < this.lastScrollTop) {
+		if (top < this.lastScrollTop && height >= this.lastScrollHeight) {
 			this.stick = false;
+		} else if (this.atBottom) {
+			this.stick = true;
 		}
 
+		this.lastScrollHeight = height;
 		this.lastScrollTop = top;
 		this.syncAnchor();
 	}
