@@ -4,6 +4,8 @@
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -298,6 +300,82 @@ MAKE_TEST(test_temporal_merge_grouping) {
             n_bitmap_parts += p.bitmap != nullptr ? 1 : 0;
         }
         t.assert_equal("remaining bitmap parts for " + name, groups.size(), n_bitmap_parts);
+    }
+}
+
+//
+// mtmd decoder positions
+//
+
+MAKE_TEST(test_decoder_pos_minicpmv4_7) {
+    // reference: transformers 5.19, MiniCPMV4_7Model.get_rope_index(downsample_mode="16x") on
+    //   5 text tokens, <image>, the chunk, 3 text tokens
+    // the chunk is laid out like the processor does:
+    //   [ov] </image> <slice> [S00] </slice> <slice> [S01] </slice> \n <slice> [S10] </slice> <slice> [S11] </slice>
+    // <image> is at position 5, the canvas origin, so the chunk starts at pos_0 = 6
+    // the expected values are the reference positions for this exact prompt, without any token between the image and
+    // the text. note: for an image followed by text, the chat template of the model puts a "\n" there, which the
+    // reference counts to the image at [origin, origin, origin]; llama.cpp does not emit it, so on such prompts it stays
+    // one token short of the reference. with that token, the reference gives the same positions as below to all the
+    // other tokens and to the text after the image
+    struct test_case {
+        int ov_nx, ov_ny, n_col, n_row, nx, ny;
+        llama_pos pos_text; // T = H = W of the first text token after the image
+        std::vector<std::array<uint32_t, 3>> pos; // T, H, W of each token of the chunk
+    };
+    const llama_pos pos_0 = 6;
+    const std::vector<test_case> cases = {
+        // overview 5x2 tokens (w x h), 2x2 slices of 7x2 tokens, canvas 14x4
+        { 5, 2, 2, 2, 7, 2, 20, {
+            {5, 5, 5}, {5, 5, 8}, {5, 5, 11}, {5, 5, 15}, {5, 5, 18}, {5, 8, 5}, {5, 8, 8}, {5, 8, 11}, // ov ov ov ov ov ov ov ov
+            {5, 8, 15}, {5, 8, 18}, {5, 9, 19}, {5, 5, 5}, {5, 5, 5}, {5, 5, 6}, {5, 5, 7}, {5, 5, 8}, // ov ov </image> <slice> slice slice slice slice
+            {5, 5, 9}, {5, 5, 10}, {5, 5, 11}, {5, 6, 5}, {5, 6, 6}, {5, 6, 7}, {5, 6, 8}, {5, 6, 9}, // slice slice slice slice slice slice slice slice
+            {5, 6, 10}, {5, 6, 11}, {5, 6, 11}, {5, 5, 12}, {5, 5, 12}, {5, 5, 13}, {5, 5, 14}, {5, 5, 15}, // slice slice </slice> <slice> slice slice slice slice
+            {5, 5, 16}, {5, 5, 17}, {5, 5, 18}, {5, 6, 12}, {5, 6, 13}, {5, 6, 14}, {5, 6, 15}, {5, 6, 16}, // slice slice slice slice slice slice slice slice
+            {5, 6, 17}, {5, 6, 18}, {5, 6, 18}, {5, 6, 19}, {5, 7, 5}, {5, 7, 5}, {5, 7, 6}, {5, 7, 7}, // slice slice </slice> \n <slice> slice slice slice
+            {5, 7, 8}, {5, 7, 9}, {5, 7, 10}, {5, 7, 11}, {5, 8, 5}, {5, 8, 6}, {5, 8, 7}, {5, 8, 8}, // slice slice slice slice slice slice slice slice
+            {5, 8, 9}, {5, 8, 10}, {5, 8, 11}, {5, 8, 11}, {5, 7, 12}, {5, 7, 12}, {5, 7, 13}, {5, 7, 14}, // slice slice slice </slice> <slice> slice slice slice
+            {5, 7, 15}, {5, 7, 16}, {5, 7, 17}, {5, 7, 18}, {5, 8, 12}, {5, 8, 13}, {5, 8, 14}, {5, 8, 15}, // slice slice slice slice slice slice slice slice
+            {5, 8, 16}, {5, 8, 17}, {5, 8, 18}, {5, 8, 18}, // slice slice slice </slice>
+        } },
+        // overview 4x3 tokens, no slices
+        { 4, 3, 0, 0, 0, 0, 10, {
+            {5, 5, 5}, {5, 5, 6}, {5, 5, 7}, {5, 5, 8}, {5, 6, 5}, {5, 6, 6}, {5, 6, 7}, {5, 6, 8}, // ov ov ov ov ov ov ov ov
+            {5, 7, 5}, {5, 7, 6}, {5, 7, 7}, {5, 7, 8}, {5, 8, 9}, // ov ov ov ov </image>
+        } },
+    };
+
+    for (const auto & tc : cases) {
+        const std::string name = "overview " + std::to_string(tc.ov_nx) + "x" + std::to_string(tc.ov_ny) + ", " +
+            std::to_string(tc.n_col) + "x" + std::to_string(tc.n_row) + " slices of " + std::to_string(tc.nx) + "x" + std::to_string(tc.ny);
+        mtmd::input_chunk_ptr chunk(mtmd_test_create_canvas_chunk(tc.ov_nx, tc.ov_ny, tc.n_col, tc.n_row, tc.nx, tc.ny));
+        const mtmd_image_tokens * image_tokens = mtmd_input_chunk_get_tokens_image(chunk.get());
+
+        const size_t n_tokens = mtmd_image_tokens_get_n_tokens(image_tokens);
+        t.assert_equal(name + ": n_tokens", tc.pos.size(), n_tokens);
+        std::vector<mtmd_decoder_pos> pos(n_tokens);
+        for (size_t i = 0; i < n_tokens; i++) {
+            pos[i] = mtmd_image_tokens_get_decoder_pos(image_tokens, pos_0, i);
+        }
+        for (size_t i = 0; i < std::min(n_tokens, tc.pos.size()); i++) {
+            // T is in z, H in y, W in x
+            const auto & e = tc.pos[i];
+            t.assert_equal(name + ": T, H, W of token " + std::to_string(i),
+                std::to_string(e[0]) + ", " + std::to_string(e[1]) + ", " + std::to_string(e[2]),
+                std::to_string(pos[i].z) + ", " + std::to_string(pos[i].y) + ", " + std::to_string(pos[i].x));
+        }
+        const llama_pos n_pos = mtmd_image_tokens_get_n_pos(image_tokens);
+        t.assert_equal(name + ": position of the text after the image", tc.pos_text, pos_0 + n_pos);
+
+        // the KV cache position t has to keep the chunk causal: the mask orders the cells by t, then by (y, x)
+        // (llama_kv_cell_ext::is_2d_gt), and the text after the image has to see the whole chunk
+        for (size_t i = 1; i < n_tokens; i++) {
+            const auto & a = pos[i - 1];
+            const auto & b = pos[i];
+            t.assert_true(name + ": token " + std::to_string(i) + " comes after token " + std::to_string(i - 1) + " in the causal mask",
+                std::tie(a.t, a.y, a.x) < std::tie(b.t, b.y, b.x));
+        }
+        t.assert_true(name + ": the chunk ends before the text", n_tokens > 0 && (llama_pos) pos[n_tokens - 1].t < pos_0 + n_pos);
     }
 }
 
