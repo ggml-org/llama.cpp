@@ -99,6 +99,7 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatPerformanceTime,
+	formatRelativeTime,
 	formatAttachmentText
 } from './formatters';
 

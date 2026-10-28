@@ -8,6 +8,7 @@
 		DialogConversationRename,
 		DialogDiscoverModels,
 		DialogMcpServers,
+		DialogSearch,
 		DialogSettingsChat,
 		Logo,
 		ModelsManagerModelDrawer,
@@ -23,7 +24,7 @@
 		SIDEBAR_OVERSTRETCH_PX,
 		SIDEBAR_SETTLE_MS
 	} from '$lib/constants';
-	import { TooltipSide } from '$lib/enums';
+	import { SidebarAction, TooltipSide } from '$lib/enums';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
@@ -33,14 +34,10 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
 
-	interface Props {
-		onSearchClick?: () => void;
-	}
-
-	let { onSearchClick = () => {} }: Props = $props();
-
 	const { handleKeydown } = useKeyboardShortcuts({
-		activateSearchMode: () => onSearchClick(),
+		openModelsManager: () => handleSidebarAction(SidebarAction.MANAGE_MODELS),
+		openSearch: () => handleSidebarAction(SidebarAction.SEARCH),
+		openSettings: () => handleSidebarAction(SidebarAction.SETTINGS),
 		toggleSidebar: () => toggleExpandedMode()
 	});
 
@@ -67,9 +64,6 @@
 
 	$effect(() => {
 		if (!uiStore.isSidebarExpanded) {
-			isSearchModeActive = false;
-			searchQuery = '';
-
 			if (isSelectionMode) exitSelectionMode();
 
 			cancelMobileCollapse();
@@ -83,22 +77,18 @@
 	});
 
 	let currentChatId = $derived(page.params.id);
-	let isSearchModeActive = $state(false);
-	let searchQuery = $state('');
+	let searchOpen = $state(false);
 
-	let filteredConversations = $derived.by(() => {
-		if (isSearchModeActive) {
-			if (searchQuery.trim().length > 0) {
-				return conversationsStore.conversations.filter((conversation: { name: string }) =>
-					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
-				);
-			}
+	// a phone shows the search page instead of the spotlight overlay
+	function openSearch() {
+		if (deviceStore.isMobile) {
+			void goto(ROUTES.SEARCH);
 
-			return [];
+			return;
 		}
 
-		return conversationsStore.conversations;
-	});
+		searchOpen = true;
+	}
 
 	let isSelectionMode = $state(false);
 	let selectedIds = new SvelteSet<string>();
@@ -111,7 +101,7 @@
 	let renameOriginalTitle = $state('');
 
 	const renderedOrderIds = $derived(
-		buildConversationTree(filteredConversations).map((t) => t.conversation.id)
+		buildConversationTree(conversationsStore.conversations).map((t) => t.conversation.id)
 	);
 
 	const allSelectedArePinned = $derived.by(() => {
@@ -151,7 +141,7 @@
 	});
 
 	const visibleSelectionStats = $derived.by(() => {
-		const visibleIds = filteredConversations.map((c) => c.id);
+		const visibleIds = conversationsStore.conversations.map((c) => c.id);
 
 		let selectedVisible = 0;
 
@@ -187,7 +177,7 @@
 	}
 
 	function toggleSelectAllVisible() {
-		const visibleIds = filteredConversations.map((c) => c.id);
+		const visibleIds = conversationsStore.conversations.map((c) => c.id);
 		const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
 		if (allSelected) {
@@ -454,6 +444,36 @@
 
 		open();
 	}
+
+	/** Runs a sidebar action, whether picked from the icon strip, the search dialog or a shortcut. */
+	function handleSidebarAction(action: SidebarAction): void {
+		switch (action) {
+			case SidebarAction.NEW_CHAT:
+				if (deviceStore.isMobile) {
+					scheduleMobileCollapse();
+				}
+
+				void conversationsStore.openNewChat();
+
+				break;
+			case SidebarAction.SEARCH:
+				openSearch();
+
+				break;
+			case SidebarAction.MANAGE_MODELS:
+				openDialog(() => uiStore.openModelsManager());
+
+				break;
+			case SidebarAction.MCP:
+				openDialog(() => (mcpDialogOpen = true));
+
+				break;
+			case SidebarAction.SETTINGS:
+				openDialog(() => (settingsDialogOpen = true));
+
+				break;
+		}
+	}
 </script>
 
 <svelte:window bind:innerWidth onkeydown={handleKeydown} />
@@ -505,7 +525,7 @@
 				/>
 			</div>
 
-			{#if isOnMobile || (uiStore.isSidebarExpanded && !alwaysShowOnDesktop)}
+			{#if isOnMobile || uiStore.isSidebarExpanded}
 				<div
 					in:fade={{ delay: 50, duration: 150, easing: circIn }}
 					out:fade={{ duration: 100 }}
@@ -514,16 +534,18 @@
 						? 'opacity-0 h-0!'
 						: ''}"
 				>
-					<ActionIcon
-						ariaLabel="Collapse navigation"
-						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 max-md:-mr-1 max-md:-mt-1 hover:bg-accent!"
-						icon={deviceStore.isMobile ? X : PanelLeftClose}
-						iconSize="h-4 w-4"
-						onclick={toggleExpandedMode}
-						size="lg"
-						tooltip="Close Sidebar"
-						tooltipSide={TooltipSide.LEFT}
-					/>
+					{#if isOnMobile || !alwaysShowOnDesktop}
+						<ActionIcon
+							ariaLabel="Collapse navigation"
+							class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 max-md:-mr-1 max-md:-mt-1 hover:bg-accent!"
+							icon={deviceStore.isMobile ? X : PanelLeftClose}
+							iconSize="h-4 w-4"
+							onclick={toggleExpandedMode}
+							size="lg"
+							tooltip="Close Sidebar"
+							tooltipSide={TooltipSide.LEFT}
+						/>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -536,26 +558,14 @@
 				: ''} {deviceStore.isMobile && !uiStore.isSidebarExpanded ? 'opacity-0 !h-0' : ''}"
 		>
 			<SidebarNavigationActions
-				bind:isSearchModeActive
-				bind:searchQuery
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
-				onManageModelsClick={() => openDialog(() => uiStore.openModelsManager())}
-				onMcpClick={() => openDialog(() => (mcpDialogOpen = true))}
-				onNewChat={() => {
+				onAction={handleSidebarAction}
+				onNavigate={() => {
 					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
 					}
 				}}
-				onSearchClick={() => {
-					uiStore.isSidebarExpanded = true;
-					isSearchModeActive = true;
-				}}
-				onSearchDeactivated={() => {
-					isSearchModeActive = false;
-					searchQuery = '';
-				}}
-				onSettingsClick={() => openDialog(() => (settingsDialogOpen = true))}
 			/>
 
 			{#if uiStore.isSidebarExpanded || isOnMobile}
@@ -565,9 +575,8 @@
 						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
 							visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
 						class="px-2"
+						conversations={conversationsStore.conversations}
 						{currentChatId}
-						{filteredConversations}
-						{isSearchModeActive}
 						{isSelectionMode}
 						onBulkDelete={handleBulkDelete}
 						onBulkExport={handleBulkExport}
@@ -583,7 +592,6 @@
 						onStop={handleStopGeneration}
 						onToggleSelect={toggleSelected}
 						{pinStateIsMixed}
-						{searchQuery}
 						{selectedIds}
 						someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
 							visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
@@ -637,6 +645,8 @@
 />
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
+
+<DialogSearch bind:open={searchOpen} onAction={handleSidebarAction} />
 
 <DialogMcpServers bind:open={mcpDialogOpen} />
 

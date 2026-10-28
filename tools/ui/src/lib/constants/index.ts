@@ -30,6 +30,7 @@ export * from './css-classes.constants';
 export * from './formatters.constants';
 export * from './headers.constants';
 export * from './key-value-pairs.constants';
+export * from './keyboard-shortcuts.constants';
 export * from './latex-protection.constants';
 export * from './literal-html.constants';
 export * from './markdown.constants';
