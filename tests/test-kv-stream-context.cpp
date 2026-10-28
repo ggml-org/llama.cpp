@@ -54,6 +54,7 @@ static bool dflash_independent_rows = false;
 static bool dflash_independent_quotas = false;
 static bool dflash_independent_small_batch = false;
 static bool dflash_mixed_switching = false;
+static bool dflash_mixed_all_widths = false;
 static bool dflash_mixed_recovery = false;
 static bool test_cache_explicit = false;
 static ggml_type test_cache_k = GGML_TYPE_Q8_0, test_cache_v = GGML_TYPE_Q4_0;
@@ -3525,6 +3526,7 @@ int main(int argc,char ** argv) {
         }
         if (!std::strcmp(argv[i], "--dflash-independent-quotas")) dflash_independent_quotas = true;
         if (!std::strcmp(argv[i], "--dflash-mixed-switching")) dflash_mixed_switching = true;
+        if (!std::strcmp(argv[i], "--dflash-mixed-all-widths")) dflash_mixed_all_widths = dflash_mixed_switching = true;
         if (!std::strcmp(argv[i], "--dflash-mixed-recovery")) dflash_mixed_recovery = true;
         if (!std::strcmp(argv[i], "--dflash-lifecycle")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-context-end")) dflash_exact_control = true;
@@ -3755,7 +3757,7 @@ int main(int argc,char ** argv) {
             }
         }
         t.test("mixed_K4V_DFlash_switching_matches_native_and_independent_feature_maintenance",[&](testing & t) {
-            test_dflash_mixed_switching(t,model.get(),dflash_native_model,test_cache_k,test_cache_v,export_native,import_native);
+            test_dflash_mixed_switching(t,model.get(),dflash_native_model,test_cache_k,test_cache_v,export_native,import_native,dflash_mixed_all_widths);
         });
         return t.summary();
     }

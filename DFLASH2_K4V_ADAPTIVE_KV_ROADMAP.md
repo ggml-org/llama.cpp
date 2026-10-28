@@ -1,6 +1,6 @@
 # DFlash2 + K4V adaptive KV streaming roadmap
 
-Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK5 are complete; NK6-NK7 are pending. Mixed streaming admission is open only for the bounded serial DFlash2/K4V configuration below. Focused lifecycle, recovery and stock sampling/termination checks pass; the final whole-path/format matrix and performance promotion remain pending. No mixed-mode speedup is claimed. Updated: 2026-10-27.
+Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK6 are complete; NK7 is pending. Mixed streaming admission is open only for the bounded serial DFlash2/K4V configuration below. Whole-path numerical, lifecycle, three-format server and strict memory qualification pass. Performance promotion and faithful mixed-mode sizing remain pending. No mixed-mode speedup is claimed. Updated: 2026-10-28.
 
 Source baseline: `bcf1a81d641c478db5690d2f2c048c691801fcb2`. The mechanism investigation originally used `1b7c0f46e`; the relevant common, n-gram, context, rollback and server source files were verified unchanged between that revision and this baseline. Recheck those files before implementation if HEAD changes.
 
@@ -318,7 +318,17 @@ Exit: no stale map/cache/feature state after reset or failure, no leaked borrowe
 
 ### NK6 - Whole-path numerical and safety qualification
 
-Status: pending. Depends on NK1-NK5.
+Status: complete. See the [audited NK6 report](benchmarks/data/dflash2-k4v-nk6.json). Only the existing actual-model test and its private entry flag changed; production arithmetic, scheduling, CUDA code and arena ownership are unchanged.
+
+The coverage red failed exactly one assertion after valid native execution: the existing 21-round source-switching program did not exercise TG5-TG7. Seven descending K4V proposal limits extend it to 28 rounds and explicitly require all target verification widths TG1-TG8. Across Q8_0/Q4_0, Q8_0/Q8_0 and Q5_1/Q5_1, each native hybrid, independent native DFlash feature-maintenance reference and streamed hybrid matches all 3175 full records, plus 919 independent continuity records. The respective record extents are 7289091972, 8018873220 and 7106646660 bytes. This fitting profile uses capacity 8192, prefix 2047, target microbatch 256, child microbatch eight and F=3/K=7/N=2/minimum hits one; streamed executions use a 228 MiB arena. Each streamed run observes real ring use and reaches the context boundary.
+
+Fresh separate-process strict CUDA memcheck imports the complete current ordinary native data for every KV pair. All three pass 2603 assertions with zero errors, default PDL, API reporting `all`, exit code 99 and no filters. Eager execution is tool-only; normal graph-enabled comparisons remain mandatory. The three-format full-server lifecycle matrix passes 162 requests and all 10857 paired greedy output-token comparisons, source draft/acceptance counts, actual cache counters and termination outcomes. Save/restore/restart checks observe a saved frontier of 3071 beyond the 2048-row window and 2304 physical cells; complete native/streamed state files are byte-identical within each KV pair. Nonzero-temperature cases retain their scoped same-variant reset/replay checks rather than assuming cross-layout random identity.
+
+The long streamed-only lifecycle passes eight requests and three complete state actions at capacity 131072, 65536 prompt tokens, 256 requested high-profile outputs, F=3/K=7, Q8_0/Q4_0, batch/microbatch 256 and a 1 GiB parent. Both initial and restarted servers observe 256 active pages and 144 ring slots, with exact physical parent accounting and no unused bytes. Fresh/reset/restart and matched cached/restore continuations agree. Both draft suppliers execute. This is long-history ring/state/cache self-consistency, not long native equivalence or full-capacity prefill: measured target plus draft weights and full-capacity native target KV alone total 17133.96 MiB, above this device's 16303 MiB before recurrent/compute/driver costs.
+
+Seven Release and seven ASAN/UBSAN CTest suites pass with 51 CPU test/library hashes checked before/after, along with 175 benchmark host tests, ten fresh supported-mode GPU regressions and nine extra operator/independent-neural gates. All-64 D512 span, tile and progressive controls pass normally and under three additional strict zero-error runs. Qwen target-only, MTP, all-64 reader pairs, Gemma target/assistant, DFlash-only and serial arena regressions pass. Source, model, executable and loaded-library hashes are retained; unchanged core/CUDA/backend objects are reused by hash, not relabelled as rebuilt.
+
+The user removed the host RAM/swap ceiling during qualification. Earlier capped runs and the transition are retained explicitly; later runs are uncapped with monitoring, timeouts and owned descendant cleanup unchanged. Peak monitored system working-memory-plus-swap usage was 19392016384 bytes. All test scopes drained, and all four existing services were restored with unchanged identities/configuration and healthy port 1234. Raw controls, reds, complete state files, closed-output artifact hashes and the pre-ledger qualified patch are retained in `benchmarks/results/dflash2-k4v-20261027-nk6-hci8IQ/`. This stage makes no performance or maximum-fit deployment claim.
 
 Use two different comparisons and do not confuse their invariants:
 
@@ -408,7 +418,7 @@ CLI order must not change the existing K4V-before-DFlash priority. This fragment
 - [x] NK3: independent verification/prediction/injection measurement, actual TG1-TG8 controls and exact quota coverage.
 - [x] NK4: source switching, feature continuity and every accepted prefix are correct; scoped public admission, ordinary paired outputs and fresh strict memory checks pass.
 - [x] NK5: declared cache/window/state/restart/cancellation, stock sampling/termination and failure/reconstruction cases pass; no new probabilistic-rejection or performance claim.
-- [ ] NK6: matched native/streamed exactness, strict safety and supported-mode regressions pass.
+- [x] NK6: matched native/streamed exactness across three server KV formats, strict safety, long ring/state lifecycle and supported-mode regressions pass.
 - [ ] NK7: meaningful performance scope, faithful finder, examples and limitations are documented.
 
 ## Primary references

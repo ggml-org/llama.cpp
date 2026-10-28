@@ -3,6 +3,8 @@
 #include "kv-stream-bit-exact-test.h"
 #include "../src/llama-kv-cache-iswa.h"
 
+#include <set>
+
 static llama_context_params dflash_independent_child_params(llama_context_params target, llama_context * parent) {
     target.shared_device_memory_bytes = 0;
     target.n_rs_seq = 0;
@@ -503,7 +505,7 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
 
 static void test_dflash_mixed_switching(testing & t,llama_model * model,const char * sidecar,
         ggml_type key=GGML_TYPE_Q8_0,ggml_type value=GGML_TYPE_Q4_0,
-        const char * export_native=nullptr,const char * import_native=nullptr) {
+        const char * export_native=nullptr,const char * import_native=nullptr,bool all_widths=false) {
     if (!t.assert_true(!(export_native && import_native))) return;
     struct round {
         std::string name;
@@ -528,6 +530,8 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
     program.push_back({"suppressed_1",-3,3});
     program.push_back({"short_ngram",8,1,2});
     program.push_back({"short_neural",-1,0,1});
+    if (all_widths) for (int limit=7;limit>=1;--limit)
+        program.push_back({"verification_width_"+std::to_string(limit+1),7,size_t(limit),limit});
     program.push_back({"both_empty",-4,0});
     llama_tokens pattern;
     for (int group=0;group<9;++group) {
@@ -587,6 +591,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
         auto * stream=hybrid->get_mem_attn()->get_kv_stream();
         auto * allocation=streamed ? target->get_compute_memory()->shared_parent() : nullptr;
         bool ring=false;
+        std::set<size_t> verified_widths;
         size_t position=0;
         llama_tokens history;
         const auto pair_bytes=[&](const std::string & label,const void * data,size_t bytes) {
@@ -719,6 +724,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
             const auto first=position;
             llama_tokens verified{anchor}; verified.insert(verified.end(),proposed.begin(),proposed.end());
             if (!submit(step.name+"/verify",verified,true,true,index==0)) return;
+            verified_widths.insert(verified.size());
             position=first+step.accepted+1;
             if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(target.get()),0,llama_pos(position),-1) &&
                     llama_memory_seq_rm(llama_get_memory(draft->context()),0,llama_pos(position),-1))) return;
@@ -741,6 +747,8 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
                 if (!record_state(step.name+"/after_probe")) return;
             }
         }
+        if (all_widths && !t.assert_true("mixed sources execute every verification width TG1-TG8",
+                verified_widths==std::set<size_t>({1,2,3,4,5,6,7,8}))) return;
         if (reference) continuity.finish();
         if (mode==0 && export_native) {
             std::unique_ptr<FILE,kv_stream_exact_file_free> output(std::fopen(export_native,"wbx"));
@@ -753,6 +761,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
         }
         t.out << "DFlash mixed mode=" << mode << " rounds=" << program.size() << " position=" << position
               << " ring=" << ring << " matched_records=" << matched.records() << " matched_bytes=" << matched.byte_count()
-              << " continuity_records=" << continuity.records() << " continuity_bytes=" << continuity.byte_count() << '\n';
+              << " continuity_records=" << continuity.records() << " continuity_bytes=" << continuity.byte_count()
+              << " verification_widths=" << verified_widths.size() << '\n';
     }
 }
