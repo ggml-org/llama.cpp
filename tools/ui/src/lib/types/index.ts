@@ -211,9 +211,6 @@ export type {
 	GlobSearchChildResult
 } from './glob';
 
-// ChatFormInputRich token types (chat form)
-export type { ChatFormInputRichToken } from './chat-form-input-rich';
-
 // Agentic types
 export type {
 	AgenticConfig,

@@ -1,10 +1,7 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX, UI_DATA_ATTRS } from '$lib/constants';
-	import { BooleanString, ColorMode } from '$lib/enums';
-	import { highlightCode } from '$lib/utils';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
+	import { ColorMode } from '$lib/enums';
+	import { highlightCode, loadHighlightTheme } from '$lib/utils';
 	import { mode } from 'mode-watcher';
 
 	interface Props {
@@ -34,23 +31,6 @@
 	let lastScrollTop = 0;
 	const SCROLL_BOTTOM_THRESHOLD_PX = SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX;
 	let pendingFrame: number | null = null;
-
-	function loadHighlightTheme(isDark: boolean) {
-		if (!browser) return;
-
-		const existingThemes = document.querySelectorAll(
-			`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`
-		);
-
-		existingThemes.forEach((style) => style.remove());
-
-		const style = document.createElement('style');
-
-		style.setAttribute(UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW, BooleanString.TRUE);
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
-
-		document.head.appendChild(style);
-	}
 
 	function isAtBottom(): boolean {
 		if (!scrollEl) return false;
