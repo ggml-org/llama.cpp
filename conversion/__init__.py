@@ -294,6 +294,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "SmolLM3ForCausalLM": "llama",
     "SopranoTextModel": "soprano",
     "Spark2_5ForCausalLM": "spark2_5",
+    "SparkX25DesparkDraftModel": "spark2_5",
     "SolarOpenForCausalLM": "glm",
     "StableLMEpochForCausalLM": "stablelm",
     "StableLmForCausalLM": "stablelm",

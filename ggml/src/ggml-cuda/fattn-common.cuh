@@ -1214,6 +1214,38 @@ void launch_fattn(
             }
         }
 
+        static const int spark_swa_split = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_SWA_SPLIT");
+            return value ? std::atoi(value) : 0;
+        }();
+        static const int spark_full_split = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_FULL_SPLIT");
+            return value ? std::atoi(value) : 0;
+        }();
+        if (cc == GGML_CUDA_CC_ADA_LOVELACE && Q->ne[0] == 256 && Q->ne[1] == 1 && Q->ne[2] == 16 && Q->ne[3] == 1 &&
+                K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && gqa_ratio == 4) {
+            const int requested = K->ne[1] <= 1024 ? spark_swa_split : spark_full_split;
+            if (requested > 0 && requested <= 32) {
+                parallel_blocks = std::min(requested, ntiles_KV);
+            }
+        }
+        static const int spark_q8_split = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_Q8_FULL_SPLIT");
+            return value ? std::atoi(value) : 0;
+        }();
+        static const bool spark_q8 = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_Q8_FULL_ATTN");
+            return value && std::atoi(value) != 0;
+        }();
+        const bool spark_q8_heads = (Q->ne[2] == 16 && K->ne[2] == 4) || (Q->ne[2] == 8 && K->ne[2] == 2);
+        if (cc == GGML_CUDA_CC_ADA_LOVELACE && Q->ne[0] == 256 && Q->ne[1] == 1 && spark_q8_heads && Q->ne[3] == 1 &&
+                K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_Q8_0 && gqa_ratio == 4 && K->ne[1] >= 32768) {
+            const int requested = spark_q8_split > 0 ? spark_q8_split : spark_q8 ? 64 : 0;
+            if (requested > 0 && requested <= 256) {
+                parallel_blocks = std::min(requested, ntiles_KV);
+            }
+        }
+
         blocks_num.x = ntiles_x;
         blocks_num.y = parallel_blocks;
         blocks_num.z = ntiles_z_gqa*K->ne[2]*Q->ne[3];

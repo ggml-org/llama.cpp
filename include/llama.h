@@ -396,6 +396,9 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
+        enum ggml_type type_k_swa; // SWA K type, GGML_TYPE_COUNT uses type_k [EXPERIMENTAL]
+        enum ggml_type type_v_swa; // SWA V type, GGML_TYPE_COUNT uses type_v [EXPERIMENTAL]
+
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
 
         // Abort callback
@@ -415,6 +418,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+
+        bool sampler_token_only; // omit arrays when all backend outputs have sampled tokens; array getters return NULL and counts return 0
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)

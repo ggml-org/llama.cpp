@@ -67,6 +67,7 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
         ggml_tensor * inpSA = inpL;
         ggml_tensor * cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
@@ -78,6 +79,25 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
         const float freq_scale_i = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * attn_inp = cur;
+        static const bool pair_gate = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_QKV_GATE_PAIR");
+                return value && std::atoi(value) != 0;
+        }();
+        static const bool pair_small = []() {
+            const char * value = getenv("GGML_CUDA_SPARK_17B_QKV");
+            return value && std::atoi(value) != 0;
+        }();
+        const bool pair_gate_shape = (hparams.n_embd == 2560 && hparams.n_head(il) == 16 &&
+                model.layers[il].wqkv_gate->type == GGML_TYPE_BF16) ||
+                (pair_small && hparams.n_embd == 2048 && hparams.n_head(il) == 8 &&
+                (model.layers[il].wqkv_gate->type == GGML_TYPE_Q4_K ||
+                 model.layers[il].wqkv_gate->type == GGML_TYPE_BF16));
+        ggml_tensor * gate = nullptr;
+        if (pair_gate && pair_gate_shape && ubatch.n_tokens == 1) {
+            gate = ggml_sigmoid(ctx0, build_lora_mm(model.layers[il].wqkv_gate, attn_inp));
+            cb(gate, "attn_gate", il);
+            ggml_build_forward_expand(gf, gate);
+        }
         auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur, n_embd_head, n_head_i, n_head_kv_i, il);
 
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
@@ -94,9 +114,11 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         cb(cur, "attn_out", il);
 
-        ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
-        gate = ggml_sigmoid(ctx0, gate);
-        cb(gate, "attn_gate", il);
+        if (!gate) {
+            gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
+            gate = ggml_sigmoid(ctx0, gate);
+            cb(gate, "attn_gate", il);
+        }
 
         const int64_t n_tokens_i = cur->ne[1];
         cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head_i, n_tokens_i);

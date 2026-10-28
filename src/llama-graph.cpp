@@ -3515,6 +3515,19 @@ ggml_tensor * llm_graph_context::build_attn(
     auto * k_rot = is_swa ? inp->self_k_rot_swa : inp->self_k_rot;
     auto * v_rot = is_swa ? inp->self_v_rot_swa : inp->self_v_rot;
 
+    static const bool spark_kv_fusion = []() {
+        const char * value = getenv("GGML_CUDA_SPARK_KV_FUSION");
+        return value && std::atoi(value) != 0;
+    }();
+    static const bool small_qkv = []() {
+        const char * value = getenv("GGML_CUDA_SPARK_17B_QKV");
+        return value && std::atoi(value) != 0;
+    }();
+    const bool spark_shape = (hparams.n_embd == 2560 && hparams.n_head(il) == 16) ||
+        (small_qkv && hparams.n_embd == 2048 && hparams.n_head(il) == 8);
+    const bool defer_kv = spark_kv_fusion && arch == LLM_ARCH_SPARK2_5 && spark_shape &&
+        ubatch.n_tokens == 1 && !k_rot && !v_rot;
+
     if (k_rot) {
         q_cur = llama_mul_mat_hadamard(ctx0, q_cur, k_rot);
         if (k_cur) {
@@ -3531,11 +3544,11 @@ ggml_tensor * llm_graph_context::build_attn(
     // by doing so, the number of splits in the graph is reduced
     ggml_build_forward_expand(gf, q_cur);
 
-    if (k_cur) {
+    if (k_cur && !defer_kv) {
         ggml_build_forward_expand(gf, k_cur);
     }
 
-    if (v_cur) {
+    if (v_cur && !defer_kv) {
         ggml_build_forward_expand(gf, v_cur);
     }
 

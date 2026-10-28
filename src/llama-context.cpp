@@ -212,6 +212,7 @@ llama_context::llama_context(
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
+    cparams.sampler_token_only      = params.sampler_token_only;
     cparams.warmup                  = false;
 
     // +1: id n_layer() taps the output of the last layer ("input" of the head)
@@ -486,6 +487,8 @@ llama_context::llama_context(
         llama_memory_params params_mem = {
             /*.type_k    =*/ params.type_k,
             /*.type_v    =*/ params.type_v,
+            /*.type_k_swa=*/ params.type_k_swa,
+            /*.type_v_swa=*/ params.type_v_swa,
             /*.swa_full  =*/ params.swa_full,
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
@@ -1223,6 +1226,9 @@ float * llama_context::get_sampled_logits_ith(int32_t idx) {
 
 const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
     output_reorder();
+    if (cparams.sampler_token_only && get_sampled_candidates_count(idx) == 0) {
+        return nullptr;
+    }
 
     try {
         const int64_t row = output_resolve_row(idx);
@@ -1260,6 +1266,9 @@ size_t llama_context::get_sampled_candidates_count(int32_t idx) {
 
 size_t llama_context::get_sampled_logits_count(int32_t idx) {
     output_reorder();
+    if (!sampling.logits.has_data() && cparams.sampler_token_only) {
+        return 0;
+    }
 
     if (!sampling.logits.has_data()) {
         return model.vocab.n_tokens();
@@ -1529,6 +1538,17 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
+    if (model.arch == LLM_ARCH_SPARK2_5 && spark_decode_graph && ubatch.n_tokens > 1 && memory) {
+        // Decode reordering can replace the full-context allocation plan with a smaller one.
+        // Restore the prompt plan once so growing KV masks do not force an allocation per ubatch.
+        const auto full = memory->init_full();
+        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+        if (!full || !graph_reserve(n_tokens, cparams.n_seq_max, std::min(n_tokens, cparams.n_outputs_max), full.get())) {
+            ret = GGML_STATUS_ALLOC_FAILED;
+            return nullptr;
+        }
+    }
+    spark_decode_graph = ubatch.n_tokens == 1;
     auto * res = get_gf_res_prev();
     auto * gf  = res->get_gf();
 
@@ -2177,9 +2197,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
             // async copy the sampling data from the backend to the host
             copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    1,      n_outputs_prev, sched.get());
-            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
-            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
-            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            const bool all_sampled = std::all_of(res->t_sampled.begin(), res->t_sampled.end(), [](const ggml_tensor * t) { return t != nullptr; });
+            if (!cparams.sampler_token_only || !all_sampled) {
+                copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
+                copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
+                copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            }
         }
 
         n_outputs_prev += n_outputs;
@@ -2528,7 +2551,9 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     uint32_t res;
-    if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_GLM5_NEXT) {
+    if (model.arch == LLM_ARCH_DFLASH && !model.dspark_fc_norms.empty()) {
+        res = std::max<uint32_t>(n_tokens * 128, 64u * model.n_tensors());
+    } else if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_GLM5_NEXT) {
         // the n_tokens*40 budget below is exhausted at ubatch 3840
         res = std::max<uint32_t>(n_tokens * 160, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_HRM_TEXT) {
@@ -4024,6 +4049,8 @@ llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.type_k_swa                  =*/ GGML_TYPE_COUNT,
+        /*.type_v_swa                  =*/ GGML_TYPE_COUNT,
         /*.moe_cache_size              =*/ 0,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
@@ -4033,6 +4060,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.sampler_token_only          =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
@@ -4078,12 +4106,20 @@ llama_context * llama_init_from_model(
         }
     }
 
+    const bool override_swa = params.type_k_swa != GGML_TYPE_COUNT || params.type_v_swa != GGML_TYPE_COUNT;
+    if (override_swa && model->arch != LLM_ARCH_SPARK2_5) {
+        LLAMA_LOG_ERROR("%s: separate SWA cache types currently require Spark\n", __func__);
+        return nullptr;
+    }
+    const auto type_k_swa = params.type_k_swa == GGML_TYPE_COUNT ? params.type_k : params.type_k_swa;
+    const auto type_v_swa = params.type_v_swa == GGML_TYPE_COUNT ? params.type_v : params.type_v_swa;
+
     if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.type_k != params.type_v) {
         LLAMA_LOG_ERROR("%s: model does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
         return nullptr;
     }
 
-    if (ggml_is_quantized(params.type_v) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+    if ((ggml_is_quantized(params.type_v) || ggml_is_quantized(type_v_swa)) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
         if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
             LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for quantized V cache\n", __func__);
             params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
@@ -4094,27 +4130,16 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
-        const uint32_t blck_size = ggml_blck_size(params.type_k);
-        for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
-            if (model->hparams.n_embd_head_k(il) % blck_size != 0) {
-                LLAMA_LOG_ERROR("%s: K cache type %s with block size %u does not divide n_embd_head_k=%u\n",
-                    __func__, ggml_type_name(params.type_k), blck_size, model->hparams.n_embd_head_k(il));
-                return nullptr;
-            }
+    for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
+        const auto k_type = model->hparams.is_swa(il) ? type_k_swa : params.type_k;
+        const auto v_type = model->hparams.is_swa(il) ? type_v_swa : params.type_v;
+        if (model->hparams.n_embd_head_k(il) % ggml_blck_size(k_type) != 0 ||
+            model->hparams.n_embd_head_v(il) % ggml_blck_size(v_type) != 0) {
+            LLAMA_LOG_ERROR("%s: cache block size does not divide head dimension in layer %u\n", __func__, il);
+            return nullptr;
         }
     }
 
-    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
-        const uint32_t blck_size = ggml_blck_size(params.type_v);
-        for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
-            if (model->hparams.n_embd_head_v(il) % blck_size != 0) {
-                LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_head_v=%u\n",
-                    __func__, ggml_type_name(params.type_v), blck_size, model->hparams.n_embd_head_v(il));
-                return nullptr;
-            }
-        }
-    }
 
     if (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED &&
         params.pooling_type != model->hparams.pooling_type) {
