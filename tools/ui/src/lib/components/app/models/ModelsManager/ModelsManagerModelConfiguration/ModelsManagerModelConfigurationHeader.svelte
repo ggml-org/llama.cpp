@@ -57,15 +57,16 @@
 	});
 
 	let statusDot = $derived.by(() => {
-		if (isDownload) return isDownloadPaused ? 'bg-yellow-500' : 'bg-blue-500 animate-pulse';
+		if (isDownload)
+			return isDownloadPaused ? 'status-lamp orb-yellow' : 'status-lamp orb-blue animate-pulse';
 
-		if (status === ServerModelStatus.FAILED) return 'bg-red-500';
+		if (status === ServerModelStatus.FAILED) return 'status-lamp orb-red';
 
 		if (status === ServerModelStatus.LOADING) return 'bg-muted-foreground/50 animate-pulse';
 
-		if (status === ServerModelStatus.SLEEPING) return 'bg-orange-400';
+		if (status === ServerModelStatus.SLEEPING) return 'status-lamp orb-yellow';
 
-		if (isLoaded) return 'bg-green-500';
+		if (isLoaded) return 'status-lamp orb-green';
 
 		return 'bg-muted-foreground/50';
 	});
