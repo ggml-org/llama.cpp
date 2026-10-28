@@ -64,7 +64,7 @@ OutputVector translate_mulmat(const NodeContext & context) {
         const auto * A_reshape = ov::as_type<ov::op::v1::Reshape>(A.get_node());
         const auto * A_target =
             A_reshape != nullptr ? ov::as_type<ov::op::v0::Constant>(A_reshape->get_input_node_ptr(1)) : nullptr;
-        if (A_target != nullptr && A_reshape->get_special_zero() &&
+        if (context.is_stateful() && A_target != nullptr && A_reshape->get_special_zero() &&
             A_target->cast_vector<int64_t>() == std::vector<int64_t>{0, batch_large, -1, 0} &&
             A_reshape->get_input_partial_shape(0)[1] == batch_small) {
             A_grouped = A_reshape->input_value(0);
