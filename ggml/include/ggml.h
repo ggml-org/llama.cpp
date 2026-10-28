@@ -511,15 +511,20 @@ extern "C" {
         GGML_OP_MEAN,
         GGML_OP_ARGMAX,
         GGML_OP_COUNT_EQUAL,
+        GGML_OP_COUNT_EQUAL_MASKED,
         GGML_OP_REPEAT,
         GGML_OP_REPEAT_BACK,
         GGML_OP_CONCAT,
         GGML_OP_SILU_BACK,
+        GGML_OP_GELU_BACK,
+        GGML_OP_GEGLU_BACK,
+        GGML_OP_SIGMOID_BACK,
         GGML_OP_NORM, // normalize
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
         GGML_OP_GROUP_NORM,
         GGML_OP_L2_NORM,
+        GGML_OP_L2_NORM_BACK,
 
         GGML_OP_MUL_MAT,
         GGML_OP_MUL_MAT_ID,
@@ -571,6 +576,8 @@ extern "C" {
         GGML_OP_FLASH_ATTN_EXT,
         GGML_OP_FLASH_ATTN_BACK,
         GGML_OP_SSM_CONV,
+        GGML_OP_SSM_CONV_BACK_SX,
+        GGML_OP_SSM_CONV_BACK_C,
         GGML_OP_SSM_SCAN,
         GGML_OP_WIN_PART,
         GGML_OP_WIN_UNPART,
@@ -581,6 +588,7 @@ extern "C" {
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
+        GGML_OP_GATED_DELTA_NET_BACK,
         GGML_OP_LIGHTNING_INDEXER,
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
@@ -597,6 +605,8 @@ extern "C" {
 
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
+        GGML_OP_CROSS_ENTROPY_LOSS_MASKED,
+        GGML_OP_CROSS_ENTROPY_LOSS_MASKED_BACK,
         GGML_OP_OPT_STEP_ADAMW,
         GGML_OP_OPT_STEP_SGD,
 
@@ -1082,6 +1092,13 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // count number of equal elements in a and b, but only where mask=1
+    GGML_API struct ggml_tensor * ggml_count_equal_masked(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // predictions
+            struct ggml_tensor  * b,  // targets
+            struct ggml_tensor  * c); // mask (1 for positions to count, 0 to skip)
+
     // if a is the same shape as b, and a is not parameter, return a
     // otherwise, return a new tensor: repeat(a) to fit in b
     GGML_API struct ggml_tensor * ggml_repeat(
@@ -1217,6 +1234,26 @@ extern "C" {
     // a - dy
     // b - x
     GGML_API struct ggml_tensor * ggml_silu_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // a - dy
+    // b - x
+    GGML_API struct ggml_tensor * ggml_gelu_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // grad - dy multiplied by the up projection, g - gate input
+    GGML_API struct ggml_tensor * ggml_geglu_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * grad,
+            struct ggml_tensor  * g);
+
+    // a - dy
+    // b - x
+    GGML_API struct ggml_tensor * ggml_sigmoid_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
@@ -1432,6 +1469,14 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_l2_norm_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            float                 eps);
+
+    // a - dy
+    // b - x
+    GGML_API struct ggml_tensor * ggml_l2_norm_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
             float                 eps);
 
     // a - x
@@ -2544,6 +2589,20 @@ extern "C" {
             struct ggml_tensor  * sx,
             struct ggml_tensor  * c);
 
+    // Backward of ggml_ssm_conv w.r.t. `sx` (conv input).
+    GGML_API struct ggml_tensor * ggml_ssm_conv_back_sx(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * grad_out,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * sx_like);
+
+    // Backward of ggml_ssm_conv w.r.t. `c` (conv weight).
+    GGML_API struct ggml_tensor * ggml_ssm_conv_back_c(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * grad_out,
+            struct ggml_tensor  * sx,
+            struct ggml_tensor  * c_like);
+
     GGML_API struct ggml_tensor * ggml_ssm_scan(
             struct ggml_context * ctx,
             struct ggml_tensor  * s,
@@ -2677,6 +2736,19 @@ extern "C" {
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
             int64_t               K);
+
+    // backward of ggml_gated_delta_net: given the inputs and the gradient `d` of
+    // the forward result, returns a packed 1D tensor holding the gradients of
+    // (q, k, v, g, beta, state) as contiguous MEM_ALIGN-padded slices in that order.
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * d);
 
     // DSA lightning indexer
     //
@@ -2858,6 +2930,19 @@ extern "C" {
             struct ggml_tensor  * a,  // logits
             struct ggml_tensor  * b,  // labels
             struct ggml_tensor  * c); // gradients of cross_entropy_loss result
+
+    // Masked cross-entropy loss for instruction fine-tuning (assistant-only loss)
+    GGML_API struct ggml_tensor * ggml_cross_entropy_loss_masked(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // logits
+            struct ggml_tensor  * b,  // labels
+            struct ggml_tensor  * c); // mask (1 for assistant tokens, 0 for masked)
+    GGML_API struct ggml_tensor * ggml_cross_entropy_loss_masked_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // logits
+            struct ggml_tensor  * b,  // labels
+            struct ggml_tensor  * c,  // mask
+            struct ggml_tensor  * d); // gradients of cross_entropy_loss result
 
     // AdamW optimizer step
     // Paper: https://arxiv.org/pdf/1711.05101v3.pdf

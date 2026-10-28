@@ -31,6 +31,7 @@ extern "C" {
         GGML_OPT_LOSS_TYPE_MEAN,
         GGML_OPT_LOSS_TYPE_SUM,
         GGML_OPT_LOSS_TYPE_CROSS_ENTROPY,
+        GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED,
         GGML_OPT_LOSS_TYPE_MEAN_SQUARED_ERROR,
     };
 
@@ -43,12 +44,23 @@ extern "C" {
             int64_t        ne_label,     // number of elements per label
             int64_t        ndata,        // total number of datapoints/labels
             int64_t        ndata_shard); // number of datapoints/labels per shard (unit at which the dataset is shuffled/copied)
+
+    GGML_API ggml_opt_dataset_t ggml_opt_dataset_init_with_masks(
+            enum ggml_type type_data,    // the type for the internal data tensor
+            enum ggml_type type_label,   // the type for the internal labels tensor
+            enum ggml_type type_mask,    // the type for the internal masks tensor
+            int64_t        ne_datapoint, // number of elements per datapoint
+            int64_t        ne_label,     // number of elements per label
+            int64_t        ne_mask,      // number of elements per mask
+            int64_t        ndata,        // total number of datapoints/labels
+            int64_t        ndata_shard); // number of datapoints/labels per shard
     GGML_API void ggml_opt_dataset_free(ggml_opt_dataset_t dataset);
 
     // get underlying tensors that store the data
     GGML_API int64_t              ggml_opt_dataset_ndata (ggml_opt_dataset_t dataset);
     GGML_API struct ggml_tensor * ggml_opt_dataset_data  (ggml_opt_dataset_t dataset); // shape = [ne_datapoint, ndata]
     GGML_API struct ggml_tensor * ggml_opt_dataset_labels(ggml_opt_dataset_t dataset); // shape = [nd_label,     ndata]
+    GGML_API struct ggml_tensor * ggml_opt_dataset_masks (ggml_opt_dataset_t dataset); // shape = [ne_datapoint, ndata], can be null
 
     // shuffle idata first datapoints from dataset with RNG from opt_ctx, shuffle all datapoints if idata is negative
     GGML_API void ggml_opt_dataset_shuffle(ggml_opt_context_t opt_ctx, ggml_opt_dataset_t dataset, int64_t idata);
@@ -64,6 +76,13 @@ extern "C" {
             void               * data_batch,
             size_t               nb_data_batch,
             void               * labels_batch,
+            int64_t              ibatch);
+    GGML_API void ggml_opt_dataset_get_batch_host_with_masks(
+            ggml_opt_dataset_t   dataset,
+            void               * data_batch,
+            size_t               nb_data_batch,
+            void               * labels_batch,
+            void               * masks_batch,
             int64_t              ibatch);
 
     // ====== Model / Context ======
@@ -148,12 +167,22 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_inputs(  ggml_opt_context_t opt_ctx); // forward graph input tensor
     GGML_API struct ggml_tensor * ggml_opt_outputs( ggml_opt_context_t opt_ctx); // forward graph output tensor
     GGML_API struct ggml_tensor * ggml_opt_labels(  ggml_opt_context_t opt_ctx); // labels to compare outputs against
+    GGML_API struct ggml_tensor * ggml_opt_masks(   ggml_opt_context_t opt_ctx); // assistant masks for instruction tuning, can be null
     GGML_API struct ggml_tensor * ggml_opt_loss(    ggml_opt_context_t opt_ctx); // scalar tensor that contains the loss
     GGML_API struct ggml_tensor * ggml_opt_pred(    ggml_opt_context_t opt_ctx); // predictions made by outputs
     GGML_API struct ggml_tensor * ggml_opt_ncorrect(ggml_opt_context_t opt_ctx); // number of matching predictions between outputs and labels
 
     // get the gradient accumulator for a node from the forward graph
     GGML_API struct ggml_tensor * ggml_opt_grad_acc(ggml_opt_context_t opt_ctx, struct ggml_tensor * node);
+
+    // optimizer iteration counter, saved with the optimizer state
+    GGML_API int64_t ggml_opt_get_iter(ggml_opt_context_t opt_ctx);
+
+    // ====== Optimizer State Persistence ======
+
+    GGML_API bool ggml_opt_save_state(ggml_opt_context_t opt_ctx, const char* filename);
+    GGML_API bool ggml_opt_load_state(ggml_opt_context_t opt_ctx, const char* filename);
+    GGML_API bool ggml_opt_load_tensors(ggml_opt_context_t opt_ctx, const char* filename);
 
     GGML_API enum ggml_opt_optimizer_type ggml_opt_context_optimizer_type(ggml_opt_context_t); //TODO consistent naming scheme
 

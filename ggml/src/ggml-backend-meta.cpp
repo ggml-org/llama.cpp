@@ -916,7 +916,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_CONCAT: {
                 split_state = handle_concat(src_ss);
             } break;
-            case GGML_OP_SILU_BACK: {
+            case GGML_OP_SILU_BACK:
+            case GGML_OP_SIGMOID_BACK: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;
             case GGML_OP_NORM:
