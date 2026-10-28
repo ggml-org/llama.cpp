@@ -769,6 +769,7 @@ struct mtmd_helper_video {
         }
         const std::string rate_str = std::to_string(rate);
         std::vector<const char *> cmd = {ffmpeg_bin.c_str(), "-nostdin"};
+        cmd.reserve(20); // GCC 11 -Wstringop-overflow false positive on the inserts below otherwise
         if (is_buf_input()) {
             cmd.insert(cmd.end(), {"-read_ahead_limit", "-1"});
         }
