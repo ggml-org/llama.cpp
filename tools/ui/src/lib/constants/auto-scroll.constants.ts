@@ -1,6 +1,10 @@
 // Rows at the end of the list that mount eagerly, so the first painted
 // frame of a conversation already shows real content at the bottom.
 export const LANDING_EAGER_ROWS = 8;
+// Notebook textarea: polling interval and bottom threshold for following
+// streamed text while the reader stays at the bottom.
+export const AUTO_SCROLL_INTERVAL = 100;
+export const AUTO_SCROLL_AT_BOTTOM_THRESHOLD = 10;
 // Nested scroll areas that follow their own content while it streams. The page
 // itself is driven by `createStickToBottom()`, which needs no tuning knobs.
 // Reasoning block: stickier because reasoning fires many small

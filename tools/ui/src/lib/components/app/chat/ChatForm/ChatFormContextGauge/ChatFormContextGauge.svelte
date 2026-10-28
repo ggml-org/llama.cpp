@@ -11,15 +11,27 @@
 	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
 	import { untrack } from 'svelte';
 
+	interface Props {
+		notebookMode?: boolean;
+	}
+
+	let { notebookMode = false }: Props = $props();
+
 	const gauge = useContextGauge();
 
 	$effect(() => {
+		if (notebookMode) return;
+
 		const conv = conversationsStore.activeConversation;
 
-		untrack(() => chatStore.processing.setActiveConversation(conv?.id ?? null));
+		if (conv) {
+			untrack(() => chatStore.processing.setActiveConversation(conv.id));
+		}
 	});
 
 	$effect(() => {
+		if (notebookMode) return;
+
 		const conv = conversationsStore.activeConversation;
 		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 

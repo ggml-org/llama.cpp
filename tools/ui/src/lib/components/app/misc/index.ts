@@ -45,6 +45,18 @@ export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
 export { default as ScrollCarousel } from './ScrollCarousel.svelte';
 
 /**
+ * **ProcessingText** - Display for simple processing text using shine animation
+ */
+export { default as ProcessingText } from './ProcessingText.svelte';
+
+/**
+ * **ProcessingInfo** - Display for generation/processing details
+ *
+ * Shows details like tokens/sec during parsing and generation.
+ */
+export { default as ProcessingInfo } from './ProcessingInfo.svelte';
+
+/**
  * **CodeBlockActions** - Actions bar for code blocks (copy, preview)
  *
  * Displays copy-to-clipboard and preview buttons for code blocks.

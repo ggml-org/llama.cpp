@@ -840,6 +840,45 @@ export class ChatService {
 	}
 
 	/**
+	 * Parses error response and creates appropriate error with context information
+	 * @param response - HTTP response object
+	 * @returns Promise<Error> - Parsed error with context info if available
+	 */
+	public static async parseErrorResponse(
+		response: Response
+	): Promise<Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }> {
+		try {
+			const errorText = await response.text();
+			const errorData: ApiErrorResponse = JSON.parse(errorText);
+			const message = errorData.error?.message || 'Unknown server error';
+			const error = new Error(message) as Error & {
+				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
+			};
+
+			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
+
+			if (errorData.error && 'n_prompt_tokens' in errorData.error && 'n_ctx' in errorData.error) {
+				error.contextInfo = {
+					n_ctx: errorData.error.n_ctx,
+					n_prompt_tokens: errorData.error.n_prompt_tokens
+				};
+			}
+
+			return error;
+		} catch {
+			const fallback = new Error(
+				`Server error (${response.status}): ${response.statusText}`
+			) as Error & {
+				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
+			};
+
+			fallback.name = 'HttpError';
+
+			return fallback;
+		}
+	}
+
+	/**
 	 * Fire-and-forget request to pre-encode the conversation in the server's KV cache.
 	 * Re-submits the full conversation with n_predict=0 so the server processes the prompt
 	 * without generating tokens, warming the cache for the next turn. The tools the next
@@ -1620,45 +1659,6 @@ export class ChatService {
 		if (!onTimingsCallback || (!timings && !promptProgress)) return;
 
 		onTimingsCallback(timings, promptProgress);
-	}
-
-	/**
-	 * Parses error response and creates appropriate error with context information
-	 * @param response - HTTP response object
-	 * @returns Promise<Error> - Parsed error with context info if available
-	 */
-	private static async parseErrorResponse(
-		response: Response
-	): Promise<Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }> {
-		try {
-			const errorText = await response.text();
-			const errorData: ApiErrorResponse = JSON.parse(errorText);
-			const message = errorData.error?.message || 'Unknown server error';
-			const error = new Error(message) as Error & {
-				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
-			};
-
-			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
-
-			if (errorData.error && 'n_prompt_tokens' in errorData.error && 'n_ctx' in errorData.error) {
-				error.contextInfo = {
-					n_ctx: errorData.error.n_ctx,
-					n_prompt_tokens: errorData.error.n_prompt_tokens
-				};
-			}
-
-			return error;
-		} catch {
-			const fallback = new Error(
-				`Server error (${response.status}): ${response.statusText}`
-			) as Error & {
-				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
-			};
-
-			fallback.name = 'HttpError';
-
-			return fallback;
-		}
 	}
 
 	/**

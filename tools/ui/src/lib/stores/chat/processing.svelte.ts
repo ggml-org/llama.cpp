@@ -21,10 +21,11 @@ import type {
 import { lastContextBearingMessage } from '$lib/utils/compaction';
 import { SvelteMap } from 'svelte/reactivity';
 
-interface ProcessingTimingData {
+export interface ProcessingTimingData {
 	cache_n: number;
+	predicted_ms?: number;
 	predicted_n: number;
-	predicted_per_second: number;
+	predicted_per_second?: number;
 	prompt_ms?: number;
 	prompt_n: number;
 	prompt_progress?: ChatMessagePromptProgress;
@@ -76,6 +77,55 @@ export class ChatProcessingStore {
 
 	getState(conversationId: string): ApiProcessingState | null {
 		return this.states.get(conversationId) ?? null;
+	}
+
+	parseTimingData(timingData: ProcessingTimingData): ApiProcessingState {
+		const cacheTokens = timingData.cache_n || 0,
+			predictedTokens = timingData.predicted_n || 0,
+			rawPredictedMs = timingData.predicted_ms || undefined,
+			// a sub-millisecond predicted_ms on the first token yields a bogus tokens/s
+			predictedMs =
+				predictedTokens <= 1 && rawPredictedMs !== undefined && rawPredictedMs < 0.01
+					? undefined
+					: rawPredictedMs,
+			promptMs = timingData.prompt_ms || undefined,
+			promptTokens = timingData.prompt_n || 0,
+			tokensPerSecond =
+				timingData.predicted_per_second ||
+				(predictedMs && predictedTokens ? (predictedTokens / predictedMs) * 1000 : 0);
+		const promptProgress = timingData.prompt_progress;
+		const contextTotal = this.getContextTotal();
+		const currentConfig = settingsStore.config;
+		const outputTokensMax = currentConfig.max_tokens || -1;
+		const contextUsed = promptTokens + cacheTokens + predictedTokens,
+			outputTokensUsed = predictedTokens;
+		const progressCache = promptProgress?.cache || 0,
+			progressActualDone = (promptProgress?.processed ?? 0) - progressCache,
+			progressActualTotal = (promptProgress?.total ?? 0) - progressCache;
+		const progressPercent = promptProgress
+			? Math.round((progressActualDone / progressActualTotal) * 100)
+			: undefined;
+
+		return {
+			cacheTokens,
+			contextTotal,
+			contextUsed,
+			hasNextToken: predictedTokens > 0,
+			outputTokensMax,
+			outputTokensUsed,
+			predictedMs,
+			progressPercent,
+			promptMs,
+			promptProgress,
+			promptTokens,
+			speculative: false,
+			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
+			temperature: currentConfig.temperature ?? 0.8,
+			tokensDecoded: predictedTokens,
+			tokensPerSecond,
+			tokensRemaining: outputTokensMax - predictedTokens,
+			topP: currentConfig.top_p ?? 0.95
+		};
 	}
 
 	restoreFromMessages(messages: DatabaseMessage[], conversationId: string): void {
@@ -142,46 +192,6 @@ export class ChatProcessingStore {
 		}
 
 		return null;
-	}
-
-	private parseTimingData(timingData: ProcessingTimingData): ApiProcessingState {
-		const cacheTokens = timingData.cache_n || 0,
-			predictedTokens = timingData.predicted_n || 0,
-			promptMs = timingData.prompt_ms || undefined,
-			promptTokens = timingData.prompt_n || 0,
-			tokensPerSecond = timingData.predicted_per_second || 0;
-		const promptProgress = timingData.prompt_progress;
-		const contextTotal = this.getContextTotal();
-		const currentConfig = settingsStore.config;
-		const outputTokensMax = currentConfig.max_tokens || -1;
-		const contextUsed = promptTokens + cacheTokens + predictedTokens,
-			outputTokensUsed = predictedTokens;
-		const progressCache = promptProgress?.cache || 0,
-			progressActualDone = (promptProgress?.processed ?? 0) - progressCache,
-			progressActualTotal = (promptProgress?.total ?? 0) - progressCache;
-		const progressPercent = promptProgress
-			? Math.round((progressActualDone / progressActualTotal) * 100)
-			: undefined;
-
-		return {
-			cacheTokens,
-			contextTotal,
-			contextUsed,
-			hasNextToken: predictedTokens > 0,
-			outputTokensMax,
-			outputTokensUsed,
-			progressPercent,
-			promptMs,
-			promptProgress,
-			promptTokens,
-			speculative: false,
-			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
-			temperature: currentConfig.temperature ?? 0.8,
-			tokensDecoded: predictedTokens,
-			tokensPerSecond,
-			tokensRemaining: outputTokensMax - predictedTokens,
-			topP: currentConfig.top_p ?? 0.95
-		};
 	}
 }
 
