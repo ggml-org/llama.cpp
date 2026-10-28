@@ -32,9 +32,15 @@ For models with a per-layer embedding (PLE) table, export the backbone and table
 ```sh
 python3 convert_hf_to_gguf.py /path/to/model --no-ple --outfile model-no-ple.gguf
 python3 convert_hf_to_gguf.py /path/to/model --ple-only --outfile model-ple.gguf
-llama-completion -m model-no-ple.gguf --ple model-ple.gguf
+llama-cli -m model-no-ple.gguf --shard model-ple.gguf
 ```
 
 `--no-ple` excludes only `per_layer_token_embd.weight` and keeps the PLE metadata and projection weights. `--ple-only` exports only that table, without a tokenizer. Each export supports `--outtype`, so the table and backbone can use different precisions. Default output names start with `no-ple-` and `ple-` respectively.
 
 These modes are mutually exclusive and require a model with a PLE table, such as Qwen3.8 Flash Next or Gemma 4. They cannot be combined with vocabulary, multimodal projector, MTP-only, or DSpark-only export. `--no-ple` can be combined with `--no-mtp`.
+
+`--ple` is an alias for `--shard`. Extra shards can be comma separated or supplied with repeated options, for example `-m backbone.gguf --shard /fast/ple.gguf,/other/token-embd.gguf`. Paths may be on different drives. Tensor names must be unique across all files.
+
+A numbered backbone is auto-discovered and checked as usual; explicitly supplied paths outside that numbered set are appended as extra shards. Their split numbering is ignored, and the loader uses the actual combined tensor count. Paths already in the discovered set are loaded once. If the main filename does not follow the numbered naming scheme, an explicit backbone list must still match its declared split count and order.
+
+For an assembly with incompatible shard numbering, use `-isnm` / `--ignore-shard-num-mismatch`. It loads only `-m` followed by the `--shard` paths, in the given order, with no auto-discovery or validation of `split.count`, `split.no`, or `split.tensors.count`. `--no-ignore-shard-num-mismatch` restores the default. Duplicate tensors and invalid files still fail. All model metadata comes from the main file; extra-file architecture and metadata compatibility are not checked.

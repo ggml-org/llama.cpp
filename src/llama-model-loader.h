@@ -181,7 +181,8 @@ struct llama_model_loader {
         bool no_alloc,
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        bool ignore_shard_num_mismatch = false);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
@@ -219,8 +220,6 @@ struct llama_model_loader {
     enum llm_arch get_arch() const;
 
     const llama_tensor_weight * get_weight(const char * name) const;
-
-    void add_ple_file(const std::string & fname);
 
     const llama_tensor_weight & require_weight(const char * name) const;
 
