@@ -39,7 +39,7 @@
 
 	<Popover.Content
 		align="start"
-		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl {className}"
+		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl p-0 {className}"
 		onOpenAutoFocus={(event) => event.preventDefault()}
 		onkeydown={onKeydown}
 		preventScroll={false}
