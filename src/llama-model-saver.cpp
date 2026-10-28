@@ -395,6 +395,8 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_TIME_STEP_RANK,                hparams.ssm_dt_rank);
     add_kv(LLM_KV_SSM_GROUP_COUNT,                   hparams.ssm_n_group);
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
+    add_kv(LLM_KV_CLOVER_CORESET_ENABLED,            hparams.clover_coreset);
+    add_kv(LLM_KV_CLOVER_CORESET_TOP_P,              hparams.clover_coreset_top_p);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
     add_kv(LLM_KV_KDA_SAFE_GATE,                     hparams.kda_safe_gate);

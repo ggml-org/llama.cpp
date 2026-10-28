@@ -908,6 +908,14 @@ class TensorNameMap:
             "model.layers.{bid}.linear_attn.in_proj_qkvz",  # qwen3next
         ),
 
+        MODEL_TENSOR.SSM_BD_LOGIT_SCALE: (
+            "model.layers.{bid}.linear_attn.bd_softmax_logit_scale", # clover
+        ),
+
+        MODEL_TENSOR.SSM_BD_HISTORY: (
+            "model.layers.{bid}.linear_attn.bd_softmax_history", # clover (normalized by converter)
+        ),
+
         MODEL_TENSOR.SSM_CONV1D: (
             "model.layers.{bid}.conv1d",               # mamba-hf
             "backbone.layers.{bid}.mixer.conv1d",      # mamba
