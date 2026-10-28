@@ -180,6 +180,8 @@ jobs:
             os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
+          - build: '26.04-s390x'
+            os: ubuntu-26.04-s390x
 
     runs-on: ${{ matrix.os }}
 
@@ -200,7 +202,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
+          sudo apt-get install -y build-essential libssl-dev
 
       - name: Toolchain workaround (GCC 14)
         if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
@@ -210,7 +212,7 @@ jobs:
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: ccache
-        if: ${{ matrix.build != 's390x' }}
+        if: ${{ !contains(matrix.os, 's390x') }}
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-cpu
@@ -242,7 +244,7 @@ jobs:
           archive: false
 
       - name: ccache-clear
-        if: ${{ matrix.build != 's390x' }}
+        if: ${{ !contains(matrix.os, 's390x') }}
         uses: ./.github/actions/ccache-clear
         with:
           key: release-${{ matrix.os }}-cpu
@@ -1625,6 +1627,60 @@ jobs:
         uses: ./.github/actions/ccache-clear
         with:
           key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+
+  ubuntu-26-zdnn:
+    needs: [check-release, ui-build]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    runs-on: ubuntu-26.04-s390x
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download UI build
+        uses: actions/download-artifact@v8
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libzdnn-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_VXE=ON \
+            -DGGML_ZDNN=ON \
+            -DCMAKE_C_FLAGS="-march=arch15" \
+            -DCMAKE_CXX_FLAGS="-march=arch15" \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-zdnn-s390x.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-zdnn-s390x.tar.gz
+          archive: false
 
   ios-xcode:
     needs: [check-release]
