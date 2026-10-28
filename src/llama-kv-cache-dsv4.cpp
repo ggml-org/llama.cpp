@@ -501,7 +501,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
     std::map<std::pair<llama_seq_id, llama_pos>, int64_t> curr_token_idx_map;
     std::map<llama_seq_id, uint32_t> state_write_counts;
-    std::map<llama_seq_id, uint32_t> seq_token_counts;
 
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
@@ -541,7 +540,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
         for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
             const llama_seq_id seq_id = ubatch.seq_id[i][s];
-            ++seq_token_counts[seq_id];
             const int64_t stream_off = dsv4_stream_offset(n_stream, seq_id, state_size);
             const int32_t state_idx = (int32_t) (stream_off + pos%state_size);
 
@@ -617,10 +615,10 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
                 append_dummy_block(ubatch.seq_id[i][0], i);
             }
         } else {
+            const uint32_t n_blocks = (std::max<uint32_t>(1, ubatch.n_seq_tokens) + ratio - 1)/ratio;
+
             for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                 const llama_seq_id seq_id = ubatch.seq_id_unq[s];
-                // split_simple() can put several tokens of one sequence in a ubatch with n_seq_tokens == 1.
-                const uint32_t n_blocks = (std::max<uint32_t>(1, seq_token_counts[seq_id]) + ratio - 1)/ratio;
                 const uint32_t n_writes = state_write_counts[seq_id];
                 if (n_writes >= n_blocks) {
                     continue;
@@ -1538,35 +1536,8 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_batch(
                 std::move(ubatches_raw));
     };
 
-    // Match llama_kv_cache_iswa splitting when DSV4 compressed state does not
-    // require per-sequence graph layout.
-    do {
-        if (raw_per_seq || comp_per_seq) {
-            break;
-        }
-
-        balloc.split_reset();
-
-        std::vector<llama_ubatch> ubatches;
-        while (true) {
-            auto ubatch = balloc.split_simple(n_ubatch);
-            if (ubatch.n_tokens == 0) {
-                break;
-            }
-            ubatches.push_back(std::move(ubatch)); // NOLINT
-        }
-
-        if (balloc.get_n_used() < balloc.get_n_tokens()) {
-            break;
-        }
-
-        if (auto ctx = make_context(std::move(ubatches))) {
-            return ctx;
-        }
-    } while (false);
-
-    // When raw or compressed state is per-sequence, independent sequences can
-    // share an equal-length ubatch. Coupled sequence sets still serialize until
+    // Independent sequences can share an equal-length ubatch.
+    // Coupled sequence sets still serialize until
     // DSV4 has explicit shared-state handling for compressed streams.
     do {
         balloc.split_reset();

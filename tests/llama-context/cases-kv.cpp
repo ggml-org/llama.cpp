@@ -766,7 +766,7 @@ struct case_comp_padding : ctx_test {
     const char * name() const override { return "comp_padding"; }
 
     const char * description() const override {
-        return "odd-sized DeepSeek batches reuse the compressed-cache graph";
+        return "fixed-sized DeepSeek batches reuse the compressed-cache graph";
     }
 
     std::string skip_reason(model_run & mr) const override {
@@ -786,7 +786,7 @@ struct case_comp_padding : ctx_test {
             opts.n_seq_max  = n_seq;
             opts.kv_unified = n_seq == 1;
 
-            for (const uint32_t n_tokens : { 3u, 5u, 7u }) {
+            for (const uint32_t n_tokens : { 3u, 5u, 6u, 7u }) {
                 auto ctx = mr.ctx(opts);
                 CTX_REQUIRE(ctx, "failed to create the context");
                 std::vector<llama_pos> pos(n_seq);
