@@ -393,9 +393,13 @@ static void test(void) {
     std::vector<std::string> argv;
 
     {
-        for (const auto & mode : {"draft-mtp", "draft-dflash"}) {
+        for (const auto & mode : {"draft-mtp", "draft-dflash", "ngram-map-k4v,draft-dflash"}) {
             std::vector<std::string> base = {"binary_name", "--kv-stream-arena-mib", "2240", "--spec-type", mode,
                 "--fit", "off", "--parallel", "1", "--flash-attn", "on", "--cache-type-k", "q5_1", "--cache-type-v", "q8_0"};
+            const bool mixed = std::string(mode) == "ngram-map-k4v,draft-dflash";
+            if (mixed) {
+                base.insert(base.end(), {"--spec-ngram-map-k4v-size-m", "7", "--spec-draft-n-max", "3"});
+            }
             for (const auto & option : {"--spec-draft-type-k", "-ctkd", "--cache-type-k-draft",
                     "--spec-draft-type-v", "-ctvd", "--cache-type-v-draft"}) for (bool before : {false, true}) {
                 auto overridden = base;
@@ -408,6 +412,10 @@ static void test(void) {
             assert(common_params_parse(base.size(), list_str_to_char(base).data(), automatic, LLAMA_EXAMPLE_SERVER));
             const auto draft = common_base_params_to_speculative(automatic);
             assert(draft.cache_type_k == GGML_TYPE_Q5_1 && draft.cache_type_v == GGML_TYPE_Q8_0);
+            if (mixed) {
+                assert(common_context_params_to_llama(automatic).n_rs_seq == 7);
+                assert(draft.n_outputs_max == 4);
+            }
 #ifndef _WIN32
             for (const auto & name : {"LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K", "LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V"}) {
                 const std::string saved = common_get_env(name);

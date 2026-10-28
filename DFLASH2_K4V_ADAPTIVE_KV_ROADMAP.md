@@ -1,6 +1,6 @@
 # DFlash2 + K4V adaptive KV streaming roadmap
 
-Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK3 are complete; NK4-NK7 are pending. Mixed streaming admission remains closed, and no mixed-mode performance gain is claimed. Updated: 2026-10-27.
+Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK4 are complete; NK5-NK7 are pending. Mixed streaming admission is open only for the bounded serial DFlash2/K4V configuration below. Whole-path lifecycle/sampling qualification and mixed-mode performance promotion remain pending; no mixed-mode speedup is claimed. Updated: 2026-10-27.
 
 Source baseline: `bcf1a81d641c478db5690d2f2c048c691801fcb2`. The mechanism investigation originally used `1b7c0f46e`; the relevant common, n-gram, context, rollback and server source files were verified unchanged between that revision and this baseline. Recheck those files before implementation if HEAD changes.
 
@@ -209,7 +209,7 @@ Exit: correct emitted continuation and statistics attribution, no invalid histor
 
 ### NK2 - Common mixed-workload limits and admission
 
-Status: complete for common workload resolution and validation. See the [NK2 report](benchmarks/data/dflash2-k4v-nk2.json). Public mixed admission deliberately remains closed until the resource and driver gates pass.
+Status: complete for common workload resolution and validation. See the [NK2 report](benchmarks/data/dflash2-k4v-nk2.json). Admission was deliberately kept closed at this stage; NK4 records its later scoped opening.
 
 The existing `common_speculative_n_max` is reused to resolve the streamed target rollback depth from both sources; no new public API, allocation or independent limit registry was added. Shared validation checks neural/K4V bounds, allowed source families, lookup parameters and effective microbatch capacity. Native/non-streaming rollback parameters and standalone DFlash/MTP behavior remain unchanged.
 
@@ -232,7 +232,7 @@ Exit: one tested source of verification limits; invalid combinations fail before
 
 ### NK3 - Target and child workspace sizing
 
-Status: complete for independent resource sizing and its qualified controls. See the [NK3 qualification report](benchmarks/data/dflash2-k4v-nk3.json). Public mixed admission remains closed pending the switching and lifecycle gates.
+Status: complete for independent resource sizing and its qualified controls. See the [NK3 qualification report](benchmarks/data/dflash2-k4v-nk3.json). Admission was still closed at this stage; see NK4 for the switching qualification and scoped opening, and NK5/NK6 for remaining lifecycle and whole-path work.
 
 A private C++ constructor/factory overload now declares the neural prediction rows independently of target verification. The existing C factory, two-argument constructor and public C parameter layout are preserved. Common startup reuses the resolved target-depth validation before loading the child or mutating target features. Token prediction uses the measured neural block, while embedding injection follows the actual target phase rather than inferring it from the prediction row count. The existing serial owner, physical arena and bounded-cache admission are reused; no kernel, arithmetic, allocator or cache format was added. Bounded-draft admission now retains the existing structured required/available/additional-byte result.
 
@@ -257,7 +257,19 @@ Exit: every admitted workload is measured and executes inside the declared owner
 
 ### NK4 - Switching, feature continuity and rollback
 
-Status: pending. Depends on NK3.
+Status: complete for source switching, feature continuity and forced rollback. See the [NK4 qualification report](benchmarks/data/dflash2-k4v-nk4.json). NK5-NK7 remain required before whole-path qualification and performance promotion.
+
+The dispatcher now clears the selected-source pointer only for sequences starting a new draft attempt. A both-empty attempt therefore reports no supplier and cannot charge acceptance feedback to an earlier source; inactive sequences retain pending acceptance. The focused CPU red reproduced three failures, and the actual mixed-model test against archived NK3 libraries reproduced exactly the late both-empty supplier failure after valid native/reference controls. Public common admission now permits optional K4V alongside DFlash2, while preserving the single-slot, text-only, no-MTP/media/other-drafter, inherited-cache-type and bounded-limit guards. All 49 independent F/K combinations and the mixed CLI/environment override tests pass; the old K4V M=48 default receives an actionable size-m error rather than clamping.
+
+The actual Qwen/DFlash2 protocol uses Q8_0/Q4_0, context 8192, initial history 2047, target microbatch 256, draft microbatch eight, F=3, K=7, lookup N=2/minimum hits one and a 228 MiB physical arena. Twenty-one rounds cover consecutive K4V hits, miss/ambiguity fallback, switching back, every accepted prefix 0-7, source-local suppression, shortened proposals and both-empty context-end fallback. Native and streamed execution match all 2433 records/5617808960 bytes of full verification logits, extracted features, complete visible KV, recurrent state and source counters. An independent DFlash-only maintenance reference matches 702 records/407127644 bytes after identical committed history, including several skipped neural forwards. Stale feature positions reject before child writes; physical parent ownership and target/draft frontiers remain checked. The final streamed round observes actual ring use at position 8192.
+
+Ordinary public-server testing exposed a real exact-boundary startup abort: the admitted eight-row microbatch was rejected when the retained rollback tail was also eight. A CPU assertion red proved the issue. The one-character host splitter correction permits equality, without changing the split algorithm or allowing an oversized tail. The new tail/order/progress/replay matrix passes 7964 assertions; the complete batch suite passes 8370. Six ordinary native/streamed public requests then match all 192 output-token pairs and draft/accept counts, with both K4V and DFlash demonstrably supplying proposals. These are normal greedy outputs, separate from the forced-decision protocol.
+
+Fresh final-library CUDA memcheck passes all 2433 exact records with zero errors, default PDL, all API errors reported and error exit 99; only the sanitizer disables graphs. Its fresh streamed process imports the framed ordinary native data under explicit source/profile/library equivalence checks, with a separate fresh ordinary imported-data comparison and full native/reference/streamed rerun. Native data reuse is not reuse of an old sanitizer pass: the earlier pass predating the splitter correction remains archived, and the final library was checked again. The existing disk oracle gained bounded version/profile/manifest framing, exact signed-zero comparisons and transactional malformed-input rejection; no runtime serialization format was added. UBSan found a null zero-length fwrite in the new CPU malformed-frame fixture; that fixture was corrected without changing its assertions, and both final CPU suites are clean.
+
+Release and ASAN/UBSAN each pass six selected CTests, with 49 CPU test/library hashes verified before/after. Nine fresh GPU regressions pass: context owner, serial workspace, managed D256/D512, all-64 Qwen reader pairs, Qwen embedded MTP, Gemma target and shared assistant startup, and standalone DFlash. Native compilation rebuilt only affected host objects, including the splitter; all CUDA/backend libraries remain byte-identical. Guarded qualification peaked at 18596413440 bytes of conservative system working-memory-plus-swap usage, below the user's 32 GB ceiling. Test-only host soft throttling was adjusted within the unchanged 4 GB command hard cap for public serialization and the final checker; model/GPU arena/protocol/API checks were unchanged. All owned test cgroups drained, and all four existing services were restored with unchanged identities/configuration and healthy host port 1234.
+
+Raw source snapshots, expected reds, the public abort, fixture/harness findings, exact native data, current strict/regression evidence and restoration checks remain in `benchmarks/results/dflash2-k4v-20261027-nk4-ykCAyE/`. The report preserves the actual pre-commit compiled cohort and file hashes; the stage commit does not relabel binaries. Other mixed KV pairs, state/restart/cancellation/sampling/failure coverage and performance/finder documentation remain NK5-NK7. No new allocator, device kernel, backend arithmetic or independent draft arena was introduced.
 
 Exercise real driver sequences:
 
@@ -376,11 +388,11 @@ CLI order must not change the existing K4V-before-DFlash priority. This fragment
 
 ## Completion checklist
 
-- [x] NK0: pinned controls and proof that both draft sources can be observed independently; actual mixed switching remains NK4.
+- [x] NK0: pinned controls and proof that both draft sources can be observed independently; actual switching is recorded in NK4.
 - [x] NK1: CPU reds reproduced and demonstrated K4V defects fixed with regression coverage.
-- [x] NK2: one consistent bounded target-workload calculation and validation; public mixed admission stays closed pending NK3/NK4.
-- [x] NK3: independent verification/prediction/injection measurement, actual TG1-TG8 controls and exact quota coverage; public mixed admission remains closed.
-- [ ] NK4: source switching, feature continuity and every accepted prefix are correct.
+- [x] NK2: one consistent bounded target-workload calculation and validation; admission was held closed until NK4.
+- [x] NK3: independent verification/prediction/injection measurement, actual TG1-TG8 controls and exact quota coverage.
+- [x] NK4: source switching, feature continuity and every accepted prefix are correct; scoped public admission, ordinary paired outputs and fresh strict memory checks pass.
 - [ ] NK5: cache reuse, restore/restart, cancellation, sampling and failure recovery pass.
 - [ ] NK6: matched native/streamed exactness, strict safety and supported-mode regressions pass.
 - [ ] NK7: meaningful performance scope, faithful finder, examples and limitations are documented.

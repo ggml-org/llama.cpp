@@ -740,6 +740,54 @@ static void test_keep_tail(testing & t) {
         }
     };
 
+    t.test("microbatch_equal_to_retained_tail_preserves_rows_and_progress", [&](testing & t) {
+        for (uint32_t tail=1;tail<=8;++tail) for (bool sequential : {false,true}) {
+            for (const auto & lengths : {std::vector<int>{1},std::vector<int>{int(tail)},
+                    std::vector<int>{int(tail+1)},std::vector<int>{int(2*tail-1)},
+                    std::vector<int>{int(2*tail)},std::vector<int>{int(2*tail+1)},
+                    std::vector<int>(std::min(3u,tail),int(tail+1))}) {
+                batch_builder bb;
+                std::vector<int> starts;
+                int total=0;
+                for (size_t seq=0;seq<lengths.size();++seq) {
+                    starts.push_back(total);
+                    for (int pos=0;pos<lengths[seq];++pos) bb.add(pos,{llama_seq_id(seq)},pos+1==lengths[seq]);
+                    total+=lengths[seq];
+                }
+                llama_batch_allocr ba(1);
+                if (!t.assert_true(ba.init(bb.b,vocab,false))) return;
+                for (int replay=0;replay<2;++replay) {
+                    ba.split_reset();
+                    std::vector<int> seen(lengths.size(),0);
+                    int used=0;
+                    while (used<total) {
+                        const auto ub=ba.split_equal(tail,sequential,tail);
+                        if (!t.assert_true("equal-tail split makes bounded progress",ub.n_tokens>0 && ub.n_tokens<=tail)) return;
+                        for (uint32_t seq=0;seq<ub.n_seqs;++seq) {
+                            const auto id=ub.seq_id[seq][0];
+                            if (!t.assert_true(id>=0 && size_t(id)<seen.size())) return;
+                            for (uint32_t pos=0;pos<ub.n_seq_tokens;++pos) {
+                                const auto row=seq*ub.n_seq_tokens+pos;
+                                t.assert_equal(seen[id],ub.pos[row]);
+                                t.assert_equal(float(100*(starts[id]+seen[id])),ub.embd[2*row]);
+                                t.assert_equal(int(seen[id]+1==lengths[id]),int(ub.output[row]));
+                                ++seen[id];
+                            }
+                            const auto remaining=lengths[id]-seen[id];
+                            t.assert_true("unfinished sequence retains the entire rollback tail",remaining==0 || remaining>=int(tail));
+                            if (!remaining && lengths[id]>=int(tail))
+                                t.assert_true("final tail stays in one microbatch",ub.n_seq_tokens>=tail);
+                        }
+                        used+=ub.n_tokens;
+                        t.assert_equal(uint32_t(used),ba.get_n_used());
+                    }
+                    t.assert_true(seen==lengths);
+                    t.assert_equal(0u,ba.split_equal(tail,sequential,tail).n_tokens);
+                }
+            }
+        }
+    });
+
     t.test("noop_when_seqs_complete", [&](testing & t) {
         batch_builder bb;
         make_batch(bb, {2, 2});

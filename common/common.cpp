@@ -1301,8 +1301,9 @@ const char * common_streamed_dflash_config_error(const common_params & params) {
         return "adaptive DFlash2 requires a declared --kv-stream-arena-mib budget and --fit off";
     if (params.n_parallel != 1 || params.kv_stream_auxiliary_layers ||
             std::any_of(params.speculative.types.begin(),params.speculative.types.end(),[](auto type) {
-                return type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
-            })) return "adaptive DFlash2 requires one serial slot, no auxiliary MTP layers and no other speculative mode";
+                return type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH &&
+                    type != COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
+            })) return "adaptive DFlash2 requires one serial slot, no auxiliary MTP layers and optional ngram-map-k4v only";
     if (!params.mmproj.path.empty()) return "adaptive DFlash2 currently supports text only, without mmproj";
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
         return "adaptive DFlash2 requires -fa on";

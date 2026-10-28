@@ -126,6 +126,60 @@ int main(int argc, char ** argv) {
         t.assert_equal(COMMON_SPECULATIVE_TYPE_NONE, common_speculative_get_last_type(spec.get(), 0));
     });
 
+    t.test("empty_round_does_not_reuse_previous_source_or_acceptance_feedback", [&](testing & t) {
+        auto params=ngram_params();
+        common_speculative_ptr spec(common_speculative_init(params,1));
+        llama_tokens history{99,10,20,30,40,50,98,10};
+        common_speculative_begin(spec.get(),0,history);
+        llama_tokens result;
+        draft(spec.get(),history,result);
+        t.assert_true(result==llama_tokens({30,40,50}));
+        common_speculative_accept(spec.get(),0,1);
+        history.insert(history.end(),{20,30});
+        result.clear();
+        auto & request=common_speculative_get_draft_params(spec.get(),0);
+        request.drafting=true; request.id_last=77; request.pos0=llama_pos(history.size());
+        common_speculative_draft(spec.get());
+        t.assert_true(result.empty());
+        t.assert_equal(COMMON_SPECULATIVE_TYPE_NONE,common_speculative_get_last_type(spec.get(),0));
+        common_speculative_accept(spec.get(),0,0);
+        const auto stats=common_speculative_get_stats(spec.get());
+        t.assert_equal(size_t(1),stats[0].n_call_accept);
+        t.assert_equal(size_t(1),stats[0].n_acc_tokens);
+        t.assert_equal(size_t(1),stats[0].n_gen_drafts);
+        common_speculative_draft(spec.get());
+        t.assert_equal(size_t(2),common_speculative_get_stats(spec.get())[0].n_call_draft);
+    });
+
+    t.test("new_round_source_reset_preserves_another_sequence_pending_acceptance", [&](testing & t) {
+        auto params=ngram_params();
+        common_speculative_ptr spec(common_speculative_init(params,2));
+        llama_tokens history[2]={{99,10,20,30,40,50,98,10},{99,10,20,31,41,51,98,10}};
+        llama_tokens result[2];
+        for (llama_seq_id seq=0;seq<2;++seq) {
+            common_speculative_begin(spec.get(),seq,history[seq]);
+            auto & request=common_speculative_get_draft_params(spec.get(),seq);
+            request.drafting=true; request.n_max=-1; request.pos0=llama_pos(history[seq].size());
+            request.id_last=20; request.prompt=&history[seq]; request.result=&result[seq];
+        }
+        common_speculative_draft(spec.get());
+        t.assert_true(result[0]==llama_tokens({30,40,50}));
+        t.assert_true(result[1]==llama_tokens({31,41,51}));
+        common_speculative_accept(spec.get(),0,1);
+        history[0].insert(history[0].end(),{20,30});
+        result[0].clear();
+        auto & request=common_speculative_get_draft_params(spec.get(),0);
+        request.drafting=true; request.id_last=77; request.pos0=llama_pos(history[0].size());
+        common_speculative_draft(spec.get());
+        t.assert_true(result[0].empty());
+        t.assert_equal(COMMON_SPECULATIVE_TYPE_NONE,common_speculative_get_last_type(spec.get(),0));
+        t.assert_equal(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,common_speculative_get_last_type(spec.get(),1));
+        common_speculative_accept(spec.get(),1,2);
+        const auto stats=common_speculative_get_stats(spec.get());
+        t.assert_equal(size_t(2),stats[0].n_call_accept);
+        t.assert_equal(size_t(3),stats[0].n_acc_tokens);
+    });
+
     t.test("earlier_empty_implementation_allows_ngram", [&](testing & t) {
         auto params = ngram_params();
         params.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
@@ -364,10 +418,38 @@ int main(int argc, char ** argv) {
                         common_speculative_n_max(&params.speculative));
                 t.assert_equal(int32_t(depth + 1), limits.total);
                 t.assert_equal(int32_t(depth + 1), limits.per_seq);
-                t.assert_true("mixed public admission must remain closed until the driver is qualified",
-                        common_streamed_dflash_config_error(params) != nullptr);
+                t.assert_true("qualified DFlash and K4V limits admit the shared path",
+                        common_streamed_dflash_config_error(params) == nullptr);
             }
         }
+    });
+
+    t.test("mixed_streaming_admission_preserves_other_source_and_configuration_guards", [&](testing & t) {
+        for (int type=0;type<COMMON_SPECULATIVE_TYPE_COUNT;++type) {
+            if (type==COMMON_SPECULATIVE_TYPE_NONE || type==COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ||
+                    type==COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) continue;
+            auto params=streamed_dflash_params(3,7);
+            params.speculative.types.push_back(common_speculative_type(type));
+            t.assert_true(common_streamed_dflash_config_error(params)!=nullptr);
+        }
+        for (int change=0;change<8;++change) {
+            auto params=streamed_dflash_params(3,7);
+            switch (change) {
+                case 0: params.n_parallel=2; break;
+                case 1: params.kv_stream_auxiliary_layers=1; break;
+                case 2: params.fit_params=true; break;
+                case 3: params.mmproj.path="vision.gguf"; break;
+                case 4: params.n_ubatch=7; break;
+                case 5: params.speculative.draft.cache_type_k_explicit=true; break;
+                case 6: params.speculative.draft.cache_type_v_explicit=true; break;
+                case 7: params.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_DISABLED; break;
+            }
+            t.assert_true(common_streamed_dflash_config_error(params)!=nullptr);
+        }
+        auto params=streamed_dflash_params(3,48);
+        const auto * error=common_streamed_dflash_config_error(params);
+        t.assert_true("default 48-token K4V continuation needs an actionable rejection",
+                error && std::string(error).find("size-m")!=std::string::npos);
     });
 
     t.test("streamed_dflash_workload_rejects_invalid_limits_before_context_creation", [&](testing & t) {

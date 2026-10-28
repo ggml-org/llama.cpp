@@ -3017,10 +3017,12 @@ void common_speculative_draft(common_speculative * spec) {
     {
         int n_drafting = 0;
 
-        for (auto & dp : dparams) {
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
+            auto & dp = dparams[seq_id];
             GGML_ASSERT(!dp.drafting || dp.result->empty());
 
             if (dp.drafting) {
+                spec->impl_last[seq_id] = nullptr;
                 n_drafting++;
             }
         }

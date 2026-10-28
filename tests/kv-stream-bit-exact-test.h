@@ -107,7 +107,75 @@ public:
     size_t records() const { return entries.size(); }
     uint64_t byte_count() const { return total; }
 
+    void save_control(FILE * dest, const std::array<uint64_t,16> & profile) {
+        if (!dest || comparing || entries.size()>100000 || std::fflush(file.get()) || std::fseek(file.get(),0,SEEK_SET))
+            throw std::runtime_error("cannot export bit-exact control");
+        write(dest,"KVBIT001",8);
+        for (auto word:profile) write_word(dest,word);
+        write_word(dest,entries.size());write_word(dest,total);
+        size_t label_bytes=0;
+        for (const auto & item:entries) {
+            if (item.label.size()>4096 || item.label.size()>(size_t(16)<<20)-label_bytes)
+                throw std::runtime_error("bit-exact manifest is too large");
+            label_bytes+=item.label.size();
+            write_word(dest,item.label.size());write_word(dest,item.bytes);
+            write(dest,item.label.data(),item.label.size());
+        }
+        for (uint64_t offset=0;offset<total;) {
+            const auto count=size_t(std::min(uint64_t(chunk_bytes),total-offset));
+            read(file.get(),actual.data(),count);write(dest,actual.data(),count);offset+=count;
+        }
+        if (std::fflush(dest)) throw std::runtime_error("cannot flush bit-exact control");
+    }
+
+    void load_control(FILE * source, const std::array<uint64_t,16> & profile) {
+        if (!source || comparing) throw std::runtime_error("cannot import bit-exact control");
+        char magic[8];read(source,magic,sizeof(magic));
+        if (std::memcmp(magic,"KVBIT001",sizeof(magic))) throw std::runtime_error("invalid bit-exact control version");
+        for (auto word:profile) {
+            if (read_word(source)!=word) throw std::runtime_error("bit-exact control profile differs");
+        }
+        const auto count=read_word(source),bytes=read_word(source);
+        if (count>100000 || bytes>(uint64_t(32)<<30)) throw std::runtime_error("bit-exact control exceeds limits");
+        std::vector<entry> manifest;
+        uint64_t sum=0,label_bytes=0;
+        for (uint64_t i=0;i<count;++i) {
+            const auto label_size=read_word(source),size=read_word(source);
+            if (label_size>4096 || label_size>(uint64_t(16)<<20)-label_bytes || size>bytes-sum || size>SIZE_MAX)
+                throw std::runtime_error("invalid bit-exact control manifest");
+            std::string label(size_t(label_size),'\0');read(source,label.data(),label.size());
+            manifest.push_back({std::move(label),size_t(size)});sum+=size;label_bytes+=label_size;
+        }
+        if (sum!=bytes) throw std::runtime_error("bit-exact control extent differs");
+        std::unique_ptr<FILE,kv_stream_exact_file_free> imported(std::tmpfile());
+        if (!imported) throw std::runtime_error("cannot create imported bit-exact control");
+        for (uint64_t offset=0;offset<bytes;) {
+            const auto size=size_t(std::min(uint64_t(chunk_bytes),bytes-offset));
+            read(source,actual.data(),size);write(imported.get(),actual.data(),size);offset+=size;
+        }
+        if (std::fgetc(source)!=EOF || std::ferror(source) || std::fflush(imported.get()))
+            throw std::runtime_error("trailing data or I/O error in bit-exact control");
+        file=std::move(imported);entries=std::move(manifest);total=bytes;cursor=0;
+    }
+
 private:
+    static void read(FILE * source, void * dest, size_t bytes) {
+        if (std::fread(dest,1,bytes,source)!=bytes) throw std::runtime_error("truncated bit-exact control");
+    }
+    static void write(FILE * dest, const void * source, size_t bytes) {
+        if (std::fwrite(source,1,bytes,dest)!=bytes) throw std::runtime_error("cannot write bit-exact control");
+    }
+    static uint64_t read_word(FILE * source) {
+        std::array<uint8_t,8> bytes;read(source,bytes.data(),bytes.size());
+        uint64_t result=0;
+        for (size_t i=0;i<bytes.size();++i) result|=uint64_t(bytes[i])<<(8*i);
+        return result;
+    }
+    static void write_word(FILE * dest, uint64_t value) {
+        std::array<uint8_t,8> bytes;
+        for (size_t i=0;i<bytes.size();++i) bytes[i]=uint8_t(value>>(8*i));
+        write(dest,bytes.data(),bytes.size());
+    }
     struct entry { std::string label; size_t bytes; };
     std::unique_ptr<FILE, kv_stream_exact_file_free> file;
     std::vector<entry> entries;

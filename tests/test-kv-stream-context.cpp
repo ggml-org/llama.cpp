@@ -53,6 +53,7 @@ static bool dflash_short_control = false;
 static bool dflash_independent_rows = false;
 static bool dflash_independent_quotas = false;
 static bool dflash_independent_small_batch = false;
+static bool dflash_mixed_switching = false;
 static bool test_cache_explicit = false;
 static ggml_type test_cache_k = GGML_TYPE_Q8_0, test_cache_v = GGML_TYPE_Q4_0;
 static size_t gemma_test_arena_size = size_t(1024)*1048576;
@@ -2953,6 +2954,65 @@ int main(int argc,char ** argv) {
     if (baseline) return 77;
 #endif
     testing t;
+    t.test("bit_exact_control_framing_preserves_profile_records_and_transaction",[](testing & t) {
+        const std::array<uint64_t,16> profile{1,8192,2047,3,7,2,1,256,8};
+        const std::array<float,4> values{1.0f,-0.0f,0.0f,-2.0f};
+        kv_stream_bit_oracle original;
+        original.bytes("values",values.data(),sizeof(values));
+        original.bytes("empty",nullptr,0);
+        std::unique_ptr<FILE,kv_stream_exact_file_free> file(std::tmpfile());
+        if (!t.assert_true(bool(file))) return;
+        original.save_control(file.get(),profile);
+        if (!t.assert_equal(0,std::fseek(file.get(),0,SEEK_END))) return;
+        const auto size=std::ftell(file.get());
+        if (!t.assert_true(size>0) || !t.assert_equal(0,std::fseek(file.get(),0,SEEK_SET))) return;
+        std::vector<uint8_t> frame(size);
+        if (!t.assert_equal(frame.size(),std::fread(frame.data(),1,frame.size(),file.get()))) return;
+        const auto source=[&](const std::vector<uint8_t> & bytes) {
+            std::unique_ptr<FILE,kv_stream_exact_file_free> result(std::tmpfile());
+            if (!result || (!bytes.empty() && std::fwrite(bytes.data(),1,bytes.size(),result.get())!=bytes.size()) ||
+                    std::fseek(result.get(),0,SEEK_SET)) throw std::runtime_error("cannot make control fixture");
+            return result;
+        };
+        {
+            auto input=source(frame);
+            kv_stream_bit_oracle loaded;
+            loaded.load_control(input.get(),profile);
+            t.assert_equal(original.records(),loaded.records());
+            t.assert_equal(original.byte_count(),loaded.byte_count());
+            loaded.compare();
+            loaded.bytes("values",values.data(),sizeof(values));
+            loaded.bytes("empty",nullptr,0);
+            loaded.finish();
+        }
+        const auto reject=[&](const std::vector<uint8_t> & bytes,const std::array<uint64_t,16> & expected_profile) {
+            auto input=source(bytes);
+            kv_stream_bit_oracle loaded;
+            loaded.bytes("unchanged",values.data(),sizeof(values));
+            bool rejected=false;
+            try { loaded.load_control(input.get(),expected_profile); }
+            catch (const std::runtime_error &) { rejected=true; }
+            t.assert_true("malformed control rejects transactionally",rejected);
+            loaded.compare();loaded.bytes("unchanged",values.data(),sizeof(values));loaded.finish();
+        };
+        auto wrong_profile=profile;wrong_profile[1]++;
+        reject(frame,wrong_profile);
+        for (size_t bytes=0;bytes<frame.size();++bytes)
+            reject(std::vector<uint8_t>(frame.begin(),frame.begin()+bytes),profile);
+        auto bad=frame;bad.push_back(0);reject(bad,profile);
+        for (size_t offset : {size_t(0),size_t(136),size_t(144),size_t(152),size_t(160)}) {
+            bad=frame;bad[offset]=255;reject(bad,profile);
+        }
+        for (bool corrupt_payload : {false,true}) {
+            auto input=source(frame);
+            kv_stream_bit_oracle loaded;loaded.load_control(input.get(),profile);loaded.compare();
+            auto changed=values;changed[1]=0.0f;
+            bool rejected=false;
+            try { loaded.bytes(corrupt_payload ? "values" : "wrong-label",changed.data(),sizeof(changed)); }
+            catch (const std::runtime_error &) { rejected=true; }
+            t.assert_true("label and signed-zero mismatches stay exact",rejected);
+        }
+    });
     t.test("Gemma_assistant_split_oracle_keeps_input_and_all_vectors_exact",[](testing & t) {
         std::array<std::unique_ptr<FILE,kv_stream_exact_file_free>,3> files;
         std::array<FILE *,3> handles{};
@@ -3238,6 +3298,7 @@ int main(int argc,char ** argv) {
             dflash_independent_small_batch = dflash_independent_rows = dflash_short_control = dflash_exact_control = true;
         }
         if (!std::strcmp(argv[i], "--dflash-independent-quotas")) dflash_independent_quotas = true;
+        if (!std::strcmp(argv[i], "--dflash-mixed-switching")) dflash_mixed_switching = true;
         if (!std::strcmp(argv[i], "--dflash-lifecycle")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-context-end")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-rejection-long")) dflash_exact_control = true;
@@ -3269,7 +3330,7 @@ int main(int argc,char ** argv) {
         serial_workspace_growth = serial_workspace_growth || !std::strcmp(argv[i],"--serial-workspace-growth");
     }
     embedded_mtp_control |= vision_mtp_handoff;
-    if (test_cache_explicit && !mtp_bit_exact_control && !dflash_exact_control && !vision_mtp_handoff) {
+    if (test_cache_explicit && !mtp_bit_exact_control && !dflash_exact_control && !dflash_mixed_switching && !vision_mtp_handoff) {
         std::fprintf(stderr, "test cache types require a numerical oracle or vision handoff profile\n");
         return 1;
     }
@@ -3435,6 +3496,22 @@ int main(int argc,char ** argv) {
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-bounded"); })) {
         t.test("Gemma_target_local_cache_reuses_bounded_storage_without_changing_causal_execution",
             [&](testing & t) { test_gemma_bounded_cache(t,model.get()); });
+        return t.summary();
+    }
+    if (dflash_mixed_switching) {
+        if (!t.assert_true(bool(model) && dflash_native_model)) return t.summary();
+        const char * export_native=nullptr,* import_native=nullptr;
+        for (int i=3;i<argc;++i) {
+            auto ** dest=!std::strcmp(argv[i],"--dflash-mixed-export") ? &export_native :
+                !std::strcmp(argv[i],"--dflash-mixed-import") ? &import_native : nullptr;
+            if (dest) {
+                if (!t.assert_true(i+1<argc)) return t.summary();
+                *dest=argv[++i];
+            }
+        }
+        t.test("mixed_K4V_DFlash_switching_matches_native_and_independent_feature_maintenance",[&](testing & t) {
+            test_dflash_mixed_switching(t,model.get(),dflash_native_model,test_cache_k,test_cache_v,export_native,import_native);
+        });
         return t.summary();
     }
     if (dflash_independent_quotas) {
