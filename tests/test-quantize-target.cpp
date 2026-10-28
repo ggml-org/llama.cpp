@@ -20,6 +20,10 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <signal.h>
+#endif
+
 static const uint32_t n_vocab = 256;
 static const uint32_t n_embd  = 256;
 static const uint32_t n_ff    = 512;
@@ -199,6 +203,11 @@ static size_t count_matches(const std::string & log, const std::string & text) {
     for (size_t pos = log.find(text); pos != std::string::npos; pos = log.find(text, pos + text.size())) { n++; }
 
     return n;
+}
+
+static size_t logged_number(const std::string & log, const std::string & text) {
+    const size_t pos = log.find(text);
+    return pos == std::string::npos ? SIZE_MAX : (size_t) std::strtoull(log.c_str() + pos + text.size(), nullptr, 10);
 }
 
 static size_t count_type(const quant_run & run, const ggml_type type) {
@@ -642,6 +651,157 @@ static void test_stats_missing(testing & t, const fixture & f) {
     t.assert_equal("a short stats vector, rows that differ from a left-out one", (size_t) 0, count_row_changes(no_stats, short_stats));
 }
 
+// counts its calls, and asks to stop at call number stop_at only
+struct terminate_probe {
+    size_t n_calls = 0;
+    size_t stop_at = 0;
+};
+
+static bool terminate_at(void * data) {
+    auto * probe = static_cast<terminate_probe *>(data);
+    return ++probe->n_calls == probe->stop_at;
+}
+
+static void test_abort_callback(testing & t, const fixture & f) {
+    // full scoring no interruptions
+    terminate_probe counter;
+    llama_model_quantize_params params = base_params(f);
+    params.state_file          = nullptr;
+    params.abort_callback      = terminate_at;
+    params.abort_callback_data = &counter;
+    const quant_run counted = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    // interrupt at half the calls
+    terminate_probe stopper;
+    stopper.stop_at = counter.n_calls / 2;
+    const std::string fname = sibling_path(f, "interrupted.bpw_state");
+    params.state_file          = fname.c_str();
+    params.abort_callback_data = &stopper;
+    const quant_run stopped = quantize(f.fname_model, f.fname_out, f.im, params);
+    const bool stopped_wrote = std::filesystem::exists(f.fname_out);
+    params.abort_callback = nullptr;
+    const quant_run resumed = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    const size_t n_total = count_matches(f.base.log, "processing tensor");
+    const size_t n_saved = logged_number(stopped.log, "interrupted, saving progress for ");
+    t.log(std::to_string(n_saved) + " of " + std::to_string(n_total) + " tensors scored before the stop at call " + std::to_string(stopper.stop_at) + " of " + std::to_string(counter.n_calls));
+    t.assert_equal("quantize succeeds", 0u, counted.rc);
+    t.assert_equal("a callback that never asks to stop, mix rows that changed", (size_t) 0, count_row_changes(f.base, counted));
+    t.assert_equal("the interrupted call fails", 1u, stopped.rc);
+    t.assert_equal("the stop is reported", (size_t) 1, count_matches(stopped.log, "failed to quantize: interrupted"));
+    t.assert_true("the stop comes part way through the scoring", n_saved > 0 && n_saved < n_total);
+    t.assert_equal("the stopped run saves what it scored", (size_t) 1, count_matches(stopped.log, "saved target progress for " + std::to_string(n_saved) + " tensors to " + fname));
+    t.assert_true("the stopped run writes no output", !stopped_wrote);
+    t.assert_equal("quantize succeeds", 0u, resumed.rc);
+    t.assert_equal("the resumed run loads the saved tensors", (size_t) 1, count_matches(resumed.log, "using " + fname + " (data for " + std::to_string(n_saved) + " tensors loaded)"));
+    t.assert_equal("the resumed run scores the rest", n_total - n_saved, count_matches(resumed.log, "processing tensor"));
+    t.assert_equal("resumed, mix rows that differ from the first run", (size_t) 0, count_row_changes(f.base, resumed));
+
+    // without a target, the main loop calls it once per tensor
+    terminate_probe loop_stopper;
+    loop_stopper.stop_at = 2;
+    llama_model_quantize_params plain = llama_model_quantize_default_params();
+    plain.nthread             = 4;
+    plain.abort_callback      = terminate_at;
+    plain.abort_callback_data = &loop_stopper;
+    const quant_run main_loop = quantize(f.fname_model, f.fname_out, f.im, plain);
+    t.assert_equal("a stop in the main loop fails the call", 1u, main_loop.rc);
+    t.assert_equal("a stop in the main loop is reported", (size_t) 1, count_matches(main_loop.log, "failed to quantize: interrupted"));
+    t.assert_equal("the main loop stops at the call that asks", (size_t) 2, loop_stopper.n_calls);
+}
+
+static void test_interrupt_first_call(testing & t, const fixture & f) {
+    // a copy of the checkpoint, stopped at the first call, before the workers read it back
+    const size_t n_total = count_matches(f.base.log, "processing tensor");
+    const std::string fname = sibling_path(f, "first-call.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+    terminate_probe stopper;
+    stopper.stop_at = 1;
+    llama_model_quantize_params params = base_params(f);
+    params.state_file          = fname.c_str();
+    params.abort_callback      = terminate_at;
+    params.abort_callback_data = &stopper;
+    const quant_run stopped = quantize(f.fname_model, f.fname_out, f.im, params);
+    params.abort_callback = nullptr;
+    const quant_run resumed = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    t.assert_equal("the stopped call fails", 1u, stopped.rc);
+    t.assert_equal("the checkpoint keeps its tensors", (size_t) 1, count_matches(resumed.log, "using " + fname + " (data for " + std::to_string(n_total) + " tensors loaded)"));
+    t.assert_equal("the next run scores nothing", (size_t) 0, count_matches(resumed.log, "processing tensor"));
+}
+
+#ifndef _WIN32
+static void app_signal_handler(int, siginfo_t *, void *) {}
+
+// true when both have the same handler, flags and mask
+static bool same_action(const struct sigaction & a, const struct sigaction & b) {
+    if (a.sa_flags != b.sa_flags) { return false; }
+    if ((a.sa_flags & SA_SIGINFO) ? a.sa_sigaction != b.sa_sigaction : a.sa_handler != b.sa_handler) { return false; }
+    for (int sig = 1; sig < NSIG; sig++) {
+        if (sigismember(&a.sa_mask, sig) != sigismember(&b.sa_mask, sig)) { return false; }
+    }
+
+    return true;
+}
+
+// read SIGINT and SIGTERM disposition
+struct disposition_probe {
+    size_t n_calls = 0;
+    struct sigaction during[2];
+};
+
+static bool probe_dispositions(void * data) {
+    auto * probe = static_cast<disposition_probe *>(data);
+    if (probe->n_calls++ == 0) {
+        sigaction(SIGINT,  nullptr, &probe->during[0]);
+        sigaction(SIGTERM, nullptr, &probe->during[1]);
+    }
+
+    return false;
+}
+#endif
+
+static void test_signal_handlers(testing & t, const fixture & f) {
+#ifdef _WIN32
+    GGML_UNUSED(f);
+    t.skip("POSIX signals only");
+#else
+    struct sigaction app = {};
+    app.sa_sigaction = app_signal_handler;
+    app.sa_flags = SA_SIGINFO;
+    sigemptyset(&app.sa_mask);
+    sigaddset(&app.sa_mask, SIGTERM);
+
+    const int signals[] = { SIGINT, SIGTERM };
+    struct sigaction prev[2], before[2], after[2];
+    for (int i = 0; i < 2; i++) {
+        sigaction(signals[i], &app, &prev[i]);
+        sigaction(signals[i], nullptr, &before[i]);
+    }
+
+    // checkpoint exists, should not score
+    const std::string fname = sibling_path(f, "signals.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+    disposition_probe probe = {};
+    llama_model_quantize_params params = base_params(f);
+    params.state_file          = fname.c_str();
+    params.abort_callback      = probe_dispositions;
+    params.abort_callback_data = &probe;
+    const quant_run run = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    for (int i = 0; i < 2; i++) {
+        sigaction(signals[i], nullptr, &after[i]);
+        sigaction(signals[i], &prev[i], nullptr);
+    }
+    t.assert_equal("quantize succeeds", 0u, run.rc);
+    t.assert_true("the callback is called", probe.n_calls > 0);
+    t.assert_true("SIGINT keeps its handler, flags and mask during a call", same_action(before[0], probe.during[0]));
+    t.assert_true("SIGTERM keeps its handler, flags and mask during a call", same_action(before[1], probe.during[1]));
+    t.assert_true("SIGINT keeps its handler, flags and mask after a call", same_action(before[0], after[0]));
+    t.assert_true("SIGTERM keeps its handler, flags and mask after a call", same_action(before[1], after[1]));
+#endif
+}
+
 static int run_tests(testing & t, const std::filesystem::path & dir) {
     fixture f;
     f.fname_model = (dir / "model-f32.gguf").string();
@@ -664,23 +824,26 @@ static int run_tests(testing & t, const std::filesystem::path & dir) {
         return 1;
     }
 
-    t.test("target_bpw",       [&](testing & t) { test_target_bpw(t, f); });
-    t.test("target_size",      [&](testing & t) { test_target_size(t, f); });
-    t.test("state_checkpoint", [&](testing & t) { test_state_checkpoint(t, f); });
-    t.test("excluded_type",    [&](testing & t) { test_excluded_type(t, f); });
-    t.test("unknown_type",     [&](testing & t) { test_unknown_type(t, f); });
-    t.test("zero_candidates",  [&](testing & t) { test_zero_candidates(t, f); });
-    t.test("truncated",        [&](testing & t) { test_truncated(t, f); });
-    t.test("missing_dir",      [&](testing & t) { test_missing_dir(t, f); });
-    t.test("unreadable_file",  [&](testing & t) { test_unreadable_file(t, f); });
-    t.test("directory_path",   [&](testing & t) { test_directory_path(t, f); });
-    t.test("save_error",       [&](testing & t) { test_save_error(t, f); });
-    t.test("imatrix_swap",     [&](testing & t) { test_imatrix_swap(t, f); });
-    t.test("imatrix_parts",    [&](testing & t) { test_imatrix_parts(t, f); });
-    t.test("imatrix_order",    [&](testing & t) { test_imatrix_order(t, f); });
-    t.test("pruned_layer",     [&](testing & t) { test_pruned_layer(t, f); });
-    t.test("stats_order",      [&](testing & t) { test_stats_order(t, f); });
-    t.test("stats_missing",    [&](testing & t) { test_stats_missing(t, f); });
+    t.test("target_bpw",           [&](testing & t) { test_target_bpw(t, f); });
+    t.test("target_size",          [&](testing & t) { test_target_size(t, f); });
+    t.test("state_checkpoint",     [&](testing & t) { test_state_checkpoint(t, f); });
+    t.test("excluded_type",        [&](testing & t) { test_excluded_type(t, f); });
+    t.test("unknown_type",         [&](testing & t) { test_unknown_type(t, f); });
+    t.test("zero_candidates",      [&](testing & t) { test_zero_candidates(t, f); });
+    t.test("truncated",            [&](testing & t) { test_truncated(t, f); });
+    t.test("missing_dir",          [&](testing & t) { test_missing_dir(t, f); });
+    t.test("unreadable_file",      [&](testing & t) { test_unreadable_file(t, f); });
+    t.test("directory_path",       [&](testing & t) { test_directory_path(t, f); });
+    t.test("save_error",           [&](testing & t) { test_save_error(t, f); });
+    t.test("imatrix_swap",         [&](testing & t) { test_imatrix_swap(t, f); });
+    t.test("imatrix_parts",        [&](testing & t) { test_imatrix_parts(t, f); });
+    t.test("imatrix_order",        [&](testing & t) { test_imatrix_order(t, f); });
+    t.test("pruned_layer",         [&](testing & t) { test_pruned_layer(t, f); });
+    t.test("stats_order",          [&](testing & t) { test_stats_order(t, f); });
+    t.test("stats_missing",        [&](testing & t) { test_stats_missing(t, f); });
+    t.test("abort_callback",       [&](testing & t) { test_abort_callback(t, f); });
+    t.test("interrupt_first_call", [&](testing & t) { test_interrupt_first_call(t, f); });
+    t.test("signal_handlers",      [&](testing & t) { test_signal_handlers(t, f); });
 
     return t.summary();
 }
