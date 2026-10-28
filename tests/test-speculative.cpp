@@ -180,6 +180,57 @@ int main(int argc, char ** argv) {
         t.assert_equal(size_t(3),stats[0].n_acc_tokens);
     });
 
+    t.test("begin_retires_previous_supplier_and_acceptance_for_replaced_history", [&](testing & t) {
+        const llama_tokens initial{99,10,20,30,40,50,98,10};
+        for (const auto & replacement : {initial,llama_tokens{99,10,20,31,41,51,98,10},llama_tokens{10},llama_tokens{}}) {
+            auto params=ngram_params();
+            common_speculative_ptr spec(common_speculative_init(params,1));
+            common_speculative_begin(spec.get(),0,initial);
+            llama_tokens result;
+            draft(spec.get(),initial,result);
+            t.assert_true(result==llama_tokens({30,40,50}));
+            const auto before=common_speculative_get_stats(spec.get());
+            common_speculative_begin(spec.get(),0,replacement);
+            t.assert_equal("new generation has no previous supplier",COMMON_SPECULATIVE_TYPE_NONE,
+                common_speculative_get_last_type(spec.get(),0));
+            common_speculative_accept(spec.get(),0,0);
+            t.assert_equal("reset does not charge an abandoned draft",before[0].n_call_accept,
+                common_speculative_get_stats(spec.get())[0].n_call_accept);
+            result.clear();
+            draft(spec.get(),replacement,result);
+            const llama_tokens expected=replacement.size()==initial.size() ?
+                llama_tokens(replacement.begin()+3,replacement.begin()+6) : llama_tokens{};
+            t.assert_true("map is rebuilt from only the replacement history",result==expected);
+        }
+    });
+
+    t.test("begin_resets_only_its_sequence_and_rebuilds_acceptance_history", [&](testing & t) {
+        auto params=ngram_params();
+        common_speculative_ptr spec(common_speculative_init(params,2));
+        const llama_tokens history[2]={{99,10,20,30,40,50,98,10},{99,10,20,31,41,51,98,10}};
+        llama_tokens result[2];
+        for (llama_seq_id seq=0;seq<2;++seq) {
+            common_speculative_begin(spec.get(),seq,history[seq]);
+            auto & request=common_speculative_get_draft_params(spec.get(),seq);
+            request.drafting=true;request.n_max=-1;request.pos0=llama_pos(history[seq].size());
+            request.id_last=20;request.prompt=&history[seq];request.result=&result[seq];
+        }
+        common_speculative_draft(spec.get());
+        t.assert_true(result[0]==llama_tokens({30,40,50}) && result[1]==llama_tokens({31,41,51}));
+        common_speculative_accept(spec.get(),0,0);
+        common_speculative_begin(spec.get(),0,history[0]);
+        t.assert_equal(COMMON_SPECULATIVE_TYPE_NONE,common_speculative_get_last_type(spec.get(),0));
+        t.assert_equal(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,common_speculative_get_last_type(spec.get(),1));
+        common_speculative_accept(spec.get(),1,2);
+        t.assert_equal(size_t(2),common_speculative_get_stats(spec.get())[0].n_call_accept);
+        t.assert_equal(size_t(2),common_speculative_get_stats(spec.get())[0].n_acc_tokens);
+        result[0].clear();
+        auto & request=common_speculative_get_draft_params(spec.get(),0);
+        request.drafting=true;
+        common_speculative_draft(spec.get());
+        t.assert_true("a new generation does not keep prior zero-accept suppression",result[0]==llama_tokens({30,40,50}));
+    });
+
     t.test("earlier_empty_implementation_allows_ngram", [&](testing & t) {
         auto params = ngram_params();
         params.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);

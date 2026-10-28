@@ -149,6 +149,38 @@ def validate_recovery(result, expected):
         raise ValueError("incomplete lifecycle recovery response")
 
 
+def validate_lifecycle_pair(native, streamed):
+    """Compare the same greedy request/checkpoint protocol, not fresh versus cached runs."""
+    fields=("predicted_n","draft_n","draft_n_accepted","cache_n","prompt_n")
+    timings=[]
+    for result in (native,streamed):
+        tokens=result.get("tokens")
+        timing=result.get("timings",{})
+        if not isinstance(timing,dict) or ("draft_n" in timing)!=("draft_n_accepted" in timing):
+            raise ValueError("incomplete lifecycle draft counters")
+        timing=dict(timing)
+        if "draft_n" not in timing:
+            timing.update(draft_n=0,draft_n_accepted=0)
+        if (not isinstance(tokens,list) or not tokens or any(type(token) is not int or token<0 for token in tokens)
+                or any(type(timing.get(key)) is not int or timing[key]<0 for key in fields)
+                or timing["predicted_n"]!=len(tokens) or timing["draft_n_accepted"]>timing["draft_n"]
+                or result.get("stop_type") not in ("limit","eos","word")):
+            raise ValueError("invalid or incomplete lifecycle comparison record")
+        timings.append(timing)
+    if (native["tokens"]!=streamed["tokens"] or any(timings[0][key]!=timings[1][key] for key in fields)
+            or native["stop_type"]!=streamed["stop_type"] or native.get("stopping_word","")!=streamed.get("stopping_word","")):
+        raise ValueError("paired lifecycle outputs, draft counts, cache use or termination differ")
+
+
+def validate_lifecycle_state(action, result, file_bytes, expected_tokens):
+    if action not in ("save","restore") or type(file_bytes) is not int or file_bytes<=0 or type(expected_tokens) is not int or expected_tokens<0:
+        raise ValueError("invalid lifecycle state expectation")
+    tokens,extent=("n_saved","n_written") if action=="save" else ("n_restored","n_read")
+    if (type(result.get(tokens)) is not int or type(result.get(extent)) is not int or
+            result[tokens]!=expected_tokens or result[extent]!=file_bytes):
+        raise ValueError("lifecycle state token frontier or complete file extent differs")
+
+
 def validate_context_end(result, prompt_tokens, context, requested):
     count = result.get("timings", {}).get("predicted_n")
     if (type(count) is not int or not 1 <= count <= min(requested, context-prompt_tokens)
@@ -168,13 +200,19 @@ def lifecycle_checks(args, url, tokens, evidence):
         memory = [int(line.split(",")[1].strip()) for line in sample.splitlines()
                   if line.split(",")[0].strip() == str(args.lifecycle_pid)]
         evidence.append({"case": label, "result": result, "process_gpu_mib": memory})
+        return result
     recovery("cold", tokens[:512])
-    recovery("cached_append", tokens[:640], True)
+    cached=recovery("cached_append", tokens[:640], True)
     saved = request_json(url+"/slots/0?action=save", {"filename": "lifecycle.bin"}, timeout=args.request_timeout)
+    state_dir=getattr(args,"lifecycle_state_dir",None)
+    if state_dir is not None:
+        validate_lifecycle_state("save",saved,(Path(state_dir)/"lifecycle.bin").stat().st_size,cached["tokens_cached"])
     evidence.append({"case": "slot_save", "result": saved})
     recovery("changed_prompt", tokens[1024:1536])
     recovery("shorter_prompt", tokens[:256])
     restored = request_json(url+"/slots/0?action=restore", {"filename": "lifecycle.bin"}, timeout=args.request_timeout)
+    if state_dir is not None:
+        validate_lifecycle_state("restore",restored,(Path(state_dir)/"lifecycle.bin").stat().st_size,saved["n_saved"])
     evidence.append({"case": "slot_restore", "result": restored})
     recovery("after_slot_restore", tokens[:640], True)
     body = json.dumps({**payload, "prompt": tokens[:args.lifecycle_context+1], "n_predict": 16}).encode()
@@ -495,6 +533,7 @@ def run_point(args, context, depth, token_cache, mode):
                 config = copy.copy(args)
                 config.lifecycle_context = context
                 config.lifecycle_pid = process.pid
+                config.lifecycle_state_dir = directory
                 row["lifecycle"] = []
                 lifecycle_checks(config, url, token_cache["tokens"], row["lifecycle"])
         except Exception as error:

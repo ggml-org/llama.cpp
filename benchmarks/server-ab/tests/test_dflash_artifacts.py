@@ -407,6 +407,51 @@ class OrdinaryControls(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.controls.validate_control_log(line, [])
 
+    def test_lifecycle_pair_requires_exact_case_outputs_and_actual_cache_counts(self):
+        result={"tokens":[1,2],"stop_type":"limit","stopping_word":"",
+            "timings":{"predicted_n":2,"draft_n":3,"draft_n_accepted":1,"cache_n":59,"prompt_n":5}}
+        self.controls.validate_lifecycle_pair(result,copy.deepcopy(result))
+        for key in ("tokens","stop_type","stopping_word"):
+            changed=copy.deepcopy(result);changed[key] = [1,3] if key=="tokens" else "different"
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.controls.validate_lifecycle_pair(result,changed)
+        for key in result["timings"]:
+            changed=copy.deepcopy(result);changed["timings"][key]+=1
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.controls.validate_lifecycle_pair(result,changed)
+
+    def test_lifecycle_pair_rejects_matching_but_invalid_or_incomplete_records(self):
+        valid={"tokens":[1,2],"stop_type":"limit","stopping_word":"",
+            "timings":{"predicted_n":2,"draft_n":3,"draft_n_accepted":1,"cache_n":59,"prompt_n":5}}
+        for field,value in (("predicted_n",1),("draft_n_accepted",4),("cache_n",-1),("prompt_n",True)):
+            bad=copy.deepcopy(valid);bad["timings"][field]=value
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                self.controls.validate_lifecycle_pair(bad,copy.deepcopy(bad))
+        bad=copy.deepcopy(valid);bad["tokens"]=[True,2]
+        with self.assertRaises(ValueError): self.controls.validate_lifecycle_pair(bad,copy.deepcopy(bad))
+        bad=copy.deepcopy(valid);del bad["timings"]["cache_n"]
+        with self.assertRaises(ValueError): self.controls.validate_lifecycle_pair(bad,copy.deepcopy(bad))
+
+    def test_lifecycle_state_actions_require_full_file_bytes_and_exact_frontier(self):
+        for action,tokens,bytes_key in (("save","n_saved","n_written"),("restore","n_restored","n_read")):
+            valid={tokens:77,bytes_key:4097}
+            self.controls.validate_lifecycle_state(action,valid,4097,77)
+            for bad in ({tokens:76,bytes_key:4097},{tokens:77,bytes_key:4096},
+                        {tokens:True,bytes_key:4097},{tokens:77,bytes_key:0}):
+                with self.subTest(action=action,bad=bad),self.assertRaises(ValueError):
+                    self.controls.validate_lifecycle_state(action,bad,4097,77)
+        with self.assertRaises(ValueError): self.controls.validate_lifecycle_state("erase",{},0,0)
+
+    def test_lifecycle_pair_honors_stock_omitted_zero_draft_counters(self):
+        one={"tokens":[1],"stop_type":"limit","timings":{"predicted_n":1,"cache_n":0,"prompt_n":64}}
+        self.controls.validate_lifecycle_pair(one,copy.deepcopy(one))
+        explicit=copy.deepcopy(one);explicit["timings"].update(draft_n=0,draft_n_accepted=0)
+        self.controls.validate_lifecycle_pair(one,explicit)
+        for field in ("draft_n","draft_n_accepted"):
+            partial=copy.deepcopy(one);partial["timings"][field]=0
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                self.controls.validate_lifecycle_pair(partial,copy.deepcopy(partial))
+
     def test_lifecycle_failure_cannot_leave_an_accepted_timing_result(self):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as directory:

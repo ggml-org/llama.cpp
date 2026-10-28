@@ -54,6 +54,7 @@ static bool dflash_independent_rows = false;
 static bool dflash_independent_quotas = false;
 static bool dflash_independent_small_batch = false;
 static bool dflash_mixed_switching = false;
+static bool dflash_mixed_recovery = false;
 static bool test_cache_explicit = false;
 static ggml_type test_cache_k = GGML_TYPE_Q8_0, test_cache_v = GGML_TYPE_Q4_0;
 static size_t gemma_test_arena_size = size_t(1024)*1048576;
@@ -306,6 +307,231 @@ struct serial_parent_view_failure {
     }
     ~serial_parent_view_failure() { parent->view_buffer = original; active = nullptr; }
 };
+
+struct dflash_compute_failure {
+    inline static dflash_compute_failure * active=nullptr;
+    std::map<ggml_backend_t,decltype(ggml_backend_i::graph_compute)> compute;
+    size_t calls=0,queued=0,fail_call;
+    ggml_status status;
+    bool after_queue;
+    dflash_compute_failure(llama_context * context,ggml_status status,size_t fail_call=1,bool after_queue=false) :
+        fail_call(fail_call),status(status),after_queue(after_queue) {
+        GGML_ASSERT(!active);active=this;
+        const auto sched=context->get_sched();
+        for (int i=0;i<ggml_backend_sched_get_n_backends(sched);++i) {
+            auto * backend=ggml_backend_sched_get_backend(sched,i);
+            if (ggml_backend_dev_type(ggml_backend_get_device(backend))!=GGML_BACKEND_DEVICE_TYPE_GPU) continue;
+            compute[backend]=backend->iface.graph_compute;
+            backend->iface.graph_compute=[](ggml_backend_t backend,ggml_cgraph * graph) {
+                auto & fault=*active;
+                const bool fail=++fault.calls==fault.fail_call;
+                if (fail && !fault.after_queue) return fault.status;
+                const auto status=fault.compute.at(backend)(backend,graph);
+                if (status==GGML_STATUS_SUCCESS) ++fault.queued;
+                return fail && status==GGML_STATUS_SUCCESS ? fault.status : status;
+            };
+        }
+        GGML_ASSERT(!compute.empty());
+    }
+    ~dflash_compute_failure() {
+        for (const auto & item:compute) item.first->iface.graph_compute=item.second;
+        active=nullptr;
+    }
+};
+
+static void test_dflash_failure_recovery(testing & t,llama_model * model,const char * sidecar,
+        const char * export_native=nullptr,const char * import_native=nullptr,bool native_import=false) {
+    if (!t.assert_true(!(export_native && import_native) && (!native_import || import_native))) return;
+    auto mp=llama_model_default_params();mp.n_gpu_layers=999;
+    model_ptr draft_model(llama_model_load_from_file(sidecar,mp),llama_model_free);
+    if (!t.assert_true(bool(draft_model))) return;
+    const size_t vocab=llama_vocab_n_tokens(llama_model_get_vocab(model));
+    struct scenario { const char * phase;ggml_status status;size_t call;bool queued; };
+    std::vector<scenario> cases;
+    for (auto status:{GGML_STATUS_ABORTED,GGML_STATUS_ALLOC_FAILED,GGML_STATUS_FAILED}) {
+        cases.push_back({"target",status,1,false});
+        cases.push_back({"inject",status,1,false});
+        cases.push_back({"inject-late",status,2,true});
+        cases.push_back({"predict",status,1,true});
+    }
+    cases.push_back({"features",GGML_STATUS_SUCCESS,0,false});
+    cases.push_back({"handoff",GGML_STATUS_SUCCESS,0,false});
+    cases.push_back({"construct",GGML_STATUS_SUCCESS,0,false});
+    kv_stream_bit_oracle oracle;
+    const std::array<uint64_t,16> profile{1,4096,61,32,8,3,7,2,1,512,vocab,cases.size(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,0,0};
+    if (import_native) {
+        std::unique_ptr<FILE,kv_stream_exact_file_free> input(std::fopen(import_native,"rb"));
+        if (!input) throw std::runtime_error("cannot open recovery native control");
+        oracle.load_control(input.get(),profile);
+    }
+    for (bool streamed:{false,true}) {
+        if (import_native && streamed==native_import) continue;
+        if (streamed || import_native) oracle.compare();
+        for (size_t index=0;index<cases.size();++index) {
+            const auto & test=cases[index];
+            const std::string name=std::to_string(index)+"/"+test.phase;
+            std::fprintf(stderr,"DFlash recovery streamed=%d case=%s status=%d\n",int(streamed),name.c_str(),int(test.status));
+            auto cp=llama_context_default_params();
+            cp.n_ctx=4096;cp.n_batch=32;cp.n_ubatch=8;cp.n_seq_max=1;cp.n_rs_seq=7;
+            cp.n_outputs_max=cp.n_outputs_max_per_seq=8;
+            cp.type_k=GGML_TYPE_Q8_0;cp.type_v=GGML_TYPE_Q4_0;cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            cp.shared_device_memory_bytes=streamed ? size_t(512)*1048576 : 0;
+            context_ptr target(nullptr,llama_free),child(nullptr,llama_free);
+            common_speculative_ptr spec;
+            const auto create=[&] {
+                target.reset(llama_init_from_model(model,cp));
+                if (!t.assert_true(bool(target))) return false;
+                auto dp=dflash_independent_child_params(cp,target.get());dp.n_batch=32;dp.n_ubatch=8;
+                child.reset(streamed ? llama_init_from_model(draft_model.get(),dp,4) : llama_init_from_model(draft_model.get(),dp));
+                if (!t.assert_true(bool(child))) return false;
+                common_params_speculative params;
+                params.types={COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+                params.draft.ctx_tgt=target.get();params.draft.ctx_dft=child.get();
+                params.draft.n_max=3;params.draft.n_min=0;params.draft.p_min=0;
+                params.ngram_map_k4v.size_n=2;params.ngram_map_k4v.size_m=7;params.ngram_map_k4v.min_hits=1;
+                spec.reset(common_speculative_init(params,1));
+                return t.assert_true(bool(spec));
+            };
+            if (!create()) return;
+            llama_tokens history;
+            const auto make_batch=[&](const llama_tokens & tokens,size_t first,bool all) {
+                common_batch batch(target.get());
+                for (size_t i=0;i<tokens.size();++i) batch.add(tokens[i],llama_pos(first+i),0,all || i+1==tokens.size());
+                return batch;
+            };
+            const auto run=[&](const llama_tokens & tokens,size_t first,bool decode) {
+                auto batch=make_batch(tokens,first,decode);
+                llama_set_kv_stream_decode(target.get(),decode);
+                if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get())) ||
+                        !t.assert_true(common_speculative_process(spec.get(),batch))) return false;
+                llama_synchronize(target.get());llama_synchronize(child.get());
+                return true;
+            };
+            const llama_tokens pattern{99,100,101,102,103,104,105,106,107,108};
+            while (history.size()<61) {
+                llama_tokens tokens(std::min(size_t(8),61-history.size()));
+                for (size_t i=0;i<tokens.size();++i) tokens[i]=pattern[(history.size()+i)%pattern.size()];
+                if (!run(tokens,history.size(),false)) return;
+                history.insert(history.end(),tokens.begin(),tokens.end());
+            }
+            const auto save=[&](llama_context * context) {
+                std::vector<uint8_t> state(llama_state_seq_get_size(context,0));
+                if (!t.assert_equal(state.size(),llama_state_seq_get_data(context,state.data(),state.size(),0)))
+                    throw std::runtime_error("incomplete recovery snapshot");
+                return state;
+            };
+            const auto target_state=save(target.get()),draft_state=save(child.get());
+            common_speculative_begin(spec.get(),0,history);
+            const auto predict=[&](llama_token anchor) {
+                llama_tokens result;
+                auto & request=common_speculative_get_draft_params(spec.get(),0);
+                request.drafting=true;request.n_max=7;request.pos0=llama_pos(history.size());request.id_last=anchor;
+                request.prompt=&history;request.result=&result;
+                common_speculative_draft(spec.get());llama_synchronize(child.get());
+                request.prompt=nullptr;request.result=nullptr;
+                return result;
+            };
+            if (!t.assert_true(predict(100)==llama_tokens({101,102,103,104,105,106,107}))) return;
+            llama_tokens extra(16,99);
+            auto pending=make_batch(extra,history.size(),false);
+            if (std::string(test.phase)=="target") {
+                dflash_compute_failure fault(target.get(),test.status,test.call,test.queued);
+                const auto rc=llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,pending.get());
+                llama_synchronize(target.get());
+                if (!t.assert_equal(test.status==GGML_STATUS_ABORTED ? 2 : test.status==GGML_STATUS_ALLOC_FAILED ? -2 : -3,rc) ||
+                        !t.assert_equal(test.call,fault.calls)) return;
+                if (streamed) {
+                    if (!t.assert_true("failed target cannot publish features",!common_speculative_process(spec.get(),pending))) return;
+                    t.assert_true(save(child.get())==draft_state);
+                }
+            } else if (std::string(test.phase).find("inject")==0) {
+                if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,pending.get()))) return;
+                dflash_compute_failure fault(child.get(),test.status,test.call,test.queued);
+                if (!t.assert_true(!common_speculative_process(spec.get(),pending))) return;
+                llama_synchronize(child.get());
+                if (!t.assert_equal(test.call,fault.calls)) return;
+                t.assert_equal(test.queued ? test.call : test.call-1,fault.queued);
+            } else if (std::string(test.phase)=="predict") {
+                dflash_compute_failure fault(child.get(),test.status,test.call,test.queued);
+                if (!t.assert_true("failed prediction supplies no draft",predict(5000).empty()) ||
+                        !t.assert_equal(test.call,fault.calls) || !t.assert_equal(test.call,fault.queued)) return;
+                t.assert_equal(COMMON_SPECULATIVE_TYPE_NONE,common_speculative_get_last_type(spec.get(),0));
+            } else if (streamed && std::string(test.phase)=="features") {
+                if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,pending.get()))) return;
+                const auto layer=llama_model_target_layer_ids(draft_model.get())[0];
+                llama_set_embeddings_layer_inp(target.get(),uint32_t(layer),false);
+                if (!t.assert_true("missing extraction rejects without child writes",!common_speculative_process(spec.get(),pending))) return;
+                t.assert_true(save(child.get())==draft_state);
+            } else if (streamed && std::string(test.phase)=="handoff") {
+                auto * owner=const_cast<llama_context_memory *>(target->get_compute_memory());
+                if (!t.assert_true("target owns the handoff before the injected view failure",owner->prepare_serial_target())) return;
+                if (!t.assert_true(owner->retire_graph())) return;
+                ggml_backend_sched_reset(target->get_sched());
+                const auto before=owner->text_phase();
+                serial_parent_view_failure fault(owner->shared_parent(),1);
+                if (!t.assert_true(owner->signal_text_phase({llama_memory_text_phase::decode,8,true,true,false}).status==
+                        llama_memory_text_phase_status::transition_failed) || !t.assert_true(fault.calls>0)) return;
+                t.assert_true(owner->valid());t.assert_equal(before.revision,owner->text_phase().revision);
+            } else if (streamed && std::string(test.phase)=="construct") {
+                spec.reset();child.reset();
+                auto dp=dflash_independent_child_params(cp,target.get());
+                serial_parent_view_failure fault(target->get_compute_memory()->shared_parent(),1);
+                context_ptr rejected(llama_init_from_model(draft_model.get(),dp,4),llama_free);
+                if (!t.assert_true(!rejected) || !t.assert_true(fault.calls>0)) return;
+                t.assert_true(target->get_compute_memory()->valid());
+            }
+            spec.reset();child.reset();target.reset();
+            if (!create()) return;
+            if (!t.assert_equal(target_state.size(),llama_state_seq_set_data(target.get(),target_state.data(),target_state.size(),0)) ||
+                    !t.assert_equal(draft_state.size(),llama_state_seq_set_data(child.get(),draft_state.data(),draft_state.size(),0))) return;
+            common_speculative_begin(spec.get(),0,history);
+            t.assert_equal(COMMON_SPECULATIVE_TYPE_NONE,common_speculative_get_last_type(spec.get(),0));
+            auto proposed=predict(100);
+            if (!t.assert_true("reconstruction rebuilds discarded ngram state",proposed==llama_tokens({101,102,103,104,105,106,107}))) return;
+            const size_t first=history.size();
+            llama_tokens verified{100};verified.insert(verified.end(),proposed.begin(),proposed.end());
+            if (!run(verified,first,true)) return;
+            for (size_t row=0;row<verified.size();++row) {
+                const auto * logits=llama_get_logits_ith(target.get(),int(row));
+                if (!t.assert_true(logits && std::all_of(logits,logits+vocab,[](float f){return std::isfinite(f);}))) return;
+                oracle.bytes(name+"/logits/"+std::to_string(row),logits,vocab*sizeof(float));
+            }
+            for (uint32_t layer=0;layer<llama_model_target_layer_ids_n(draft_model.get());++layer)
+                oracle.bytes(name+"/features/"+std::to_string(layer),
+                    llama_get_embeddings_layer_inp(target.get(),uint32_t(llama_model_target_layer_ids(draft_model.get())[layer])),
+                    verified.size()*size_t(llama_model_n_embd(model))*sizeof(float));
+            const size_t kept=first+4;
+            if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(target.get()),0,llama_pos(kept),-1) &&
+                    llama_memory_seq_rm(llama_get_memory(child.get()),0,llama_pos(kept),-1))) return;
+            common_speculative_accept(spec.get(),0,3);
+            history.insert(history.end(),verified.begin(),verified.begin()+4);
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
+            auto * local=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(child.get()));
+            if (!t.assert_true(hybrid && local)) return;
+            kv_stream_exact_kv(oracle,name+"/target",hybrid->get_mem_attn(),0,kept);
+            kv_stream_exact_kv(oracle,name+"/draft",local->get_swa(),0,kept);
+            kv_stream_exact_state recurrent;hybrid->get_mem_recr()->state_write(recurrent,0,0);
+            recurrent.compare_with(oracle,name+"/recurrent");
+            proposed=predict(5000);
+            if (!t.assert_equal(size_t(3),proposed.size())) return;
+            oracle.bytes(name+"/neural",proposed.data(),proposed.size()*sizeof(llama_token));
+            const auto lattice=dflash_exact_lattice(llama_get_embeddings_nextn(child.get()),4,
+                size_t(llama_model_n_embd(draft_model.get())),size_t(llama_model_dflash_selector_top_k(draft_model.get())),vocab);
+            oracle.bytes(name+"/selector",lattice.data(),lattice.size()*sizeof(uint32_t));
+            if (streamed) t.assert_true(child->get_compute_memory()->borrows_serial_parent() &&
+                child->get_compute_memory()->shared_parent()==target->get_compute_memory()->shared_parent());
+            t.assert_equal(llama_pos(kept-1),llama_memory_seq_pos_max(llama_get_memory(target.get()),0));
+        }
+        if (streamed || import_native) oracle.finish();
+        if (!streamed && export_native) {
+            std::unique_ptr<FILE,kv_stream_exact_file_free> output(std::fopen(export_native,"wbx"));
+            if (!output) throw std::runtime_error("cannot export recovery native control");
+            oracle.save_control(output.get(),profile);
+        }
+        t.out << "DFlash recovery streamed=" << streamed << " cases=" << cases.size() << " records=" << oracle.records()
+              << " bytes=" << oracle.byte_count() << '\n';
+    }
+}
 
 struct recurrent_snapshot : llama_io_write_i {
     std::vector<uint8_t> metadata;
@@ -3299,6 +3525,7 @@ int main(int argc,char ** argv) {
         }
         if (!std::strcmp(argv[i], "--dflash-independent-quotas")) dflash_independent_quotas = true;
         if (!std::strcmp(argv[i], "--dflash-mixed-switching")) dflash_mixed_switching = true;
+        if (!std::strcmp(argv[i], "--dflash-mixed-recovery")) dflash_mixed_recovery = true;
         if (!std::strcmp(argv[i], "--dflash-lifecycle")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-context-end")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-rejection-long")) dflash_exact_control = true;
@@ -3496,6 +3723,24 @@ int main(int argc,char ** argv) {
     if (std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--gemma-bounded"); })) {
         t.test("Gemma_target_local_cache_reuses_bounded_storage_without_changing_causal_execution",
             [&](testing & t) { test_gemma_bounded_cache(t,model.get()); });
+        return t.summary();
+    }
+    if (dflash_mixed_recovery) {
+        if (!t.assert_true(bool(model) && dflash_native_model)) return t.summary();
+        const char * export_native=nullptr,* import_native=nullptr;
+        bool native_import=false;
+        for (int i=3;i<argc;++i) {
+            auto ** dest=!std::strcmp(argv[i],"--dflash-recovery-export") ? &export_native :
+                (!std::strcmp(argv[i],"--dflash-recovery-import") || !std::strcmp(argv[i],"--dflash-recovery-native-check")) ? &import_native : nullptr;
+            if (dest) {
+                if (!t.assert_true(i+1<argc)) return t.summary();
+                native_import |= !std::strcmp(argv[i],"--dflash-recovery-native-check");
+                *dest=argv[++i];
+            }
+        }
+        t.test("DFlash_mixed_failure_cleanup_and_reconstruction_matches_native",[&](testing & t) {
+            test_dflash_failure_recovery(t,model.get(),dflash_native_model,export_native,import_native,native_import);
+        });
         return t.summary();
     }
     if (dflash_mixed_switching) {

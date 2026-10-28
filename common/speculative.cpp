@@ -2986,6 +2986,9 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
         return;
     }
 
+    GGML_ASSERT(seq_id >= 0 && size_t(seq_id) < spec->impl_last.size());
+    spec->impl_last[seq_id] = nullptr;
+
     for (auto & impl : spec->impls) {
         common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
         impl->begin(seq_id, prompt);
