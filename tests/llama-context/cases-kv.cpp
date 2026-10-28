@@ -762,6 +762,54 @@ struct case_noalloc : ctx_test {
     }
 };
 
+struct case_comp_padding : ctx_test {
+    const char * name() const override { return "comp_padding"; }
+
+    const char * description() const override {
+        return "odd-sized DeepSeek batches reuse the compressed-cache graph";
+    }
+
+    std::string skip_reason(model_run & mr) const override {
+        char arch[64] = {};
+        llama_model_meta_val_str(mr.model, "general.architecture", arch, sizeof(arch));
+        return strcmp(arch, "deepseek4") == 0 || strcmp(arch, "deepseek41") == 0 ? "" : "requires DeepSeek V4 or V4.1";
+    }
+
+    case_result run(model_run & mr) const override {
+        ctx_opts opts;
+        opts.n_ctx      = 256;
+        opts.n_batch    = 64;
+        opts.n_ubatch   = 64;
+        opts.n_seq_max  = 1;
+        opts.kv_unified = 1;
+
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        for (const uint32_t n_tokens : { 3u, 5u, 7u }) {
+            auto ctx = mr.ctx(opts);
+            CTX_REQUIRE(ctx, "failed to create the context");
+            CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, 0, 0, 32), "prefill failed");
+
+            // Stay inside the same attention-cache size while crossing compressor boundaries.
+            llama_pos pos = 32;
+            for (int step = 0; step < 3; ++step) {
+                common_batch batch(ctx.get());
+                for (uint32_t i = 0; i < n_tokens; ++i, ++pos) {
+                    batch.add(gen_token(n_vocab, 0, pos), pos, 0, true);
+                }
+                const int32_t n_reused = llama_perf_context(ctx.get()).n_reused;
+                CTX_REQUIRE(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "decode failed");
+                if (step > 0) {
+                    CTX_REQUIRE(llama_perf_context(ctx.get()).n_reused == n_reused + 1,
+                            "compressed-cache graph was rebuilt for " + std::to_string(n_tokens) + " tokens");
+                }
+            }
+        }
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_kv_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -778,6 +826,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
     cases.push_back(std::make_unique<case_noalloc>());
+    cases.push_back(std::make_unique<case_comp_padding>());
 
     return cases;
 }
