@@ -427,25 +427,6 @@ static void dsv4_state_read_k_cache(
 
         dsv4_state_read_tensor_streams(io, kv->get_k_storage(il), kv_size, n_rows_ref, s0, ns);
     }
-
-    if (n_rows_ref == 0) {
-        return;
-    }
-
-    // refill the mirrors from their sources; a mirror gets the same rows as its source, so a whole copy is exact
-    for (uint32_t il : kv->get_layer_ids()) {
-        const int32_t src = kv_src[il];
-        if (src == (int32_t) il) {
-            continue;
-        }
-        ggml_tensor * t_src = kv->get_k_storage(src);
-        ggml_tensor * t_dst = kv->get_k_storage(il);
-        if (t_src->type != t_dst->type || !ggml_are_same_shape(t_src, t_dst)) {
-            throw std::runtime_error("DSV4 K-cache mirror layout mismatch");
-        }
-
-        ggml_backend_tensor_copy(t_src, t_dst);
-    }
 }
 
 static std::string dsv4_plan_positions(const std::vector<int32_t> & values) {
@@ -1825,6 +1806,9 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
         dsv4_state_read_k_cache(io, kv_csa.get(), seq_id, flags, comp_il_src);
         dsv4_state_read_k_cache(io, kv_hca.get(), seq_id, flags, comp_il_src);
         dsv4_state_read_k_cache(io, kv_lid.get(), seq_id, flags, comp_il_src);
+
+        // the io can defer the tensor reads until it is destroyed, so the mirrors are refilled before the next graph
+        comp_mirrors_stale = true;
     }
 
     csa_state->state_read(io, seq_id, flags);
@@ -1892,6 +1876,30 @@ void llama_kv_cache_dsv4::reset_rs_idx_for_ubatches(const std::vector<llama_ubat
                     rs_idx[seq_id] = 0;
                 }
             }
+        }
+    }
+}
+
+void llama_kv_cache_dsv4::refill_comp_mirrors() {
+    if (!comp_mirrors_stale) {
+        return;
+    }
+
+    comp_mirrors_stale = false;
+
+    // a mirror gets the same rows as its source, so a whole copy is exact
+    for (const llama_kv_cache * kv : { kv_csa.get(), kv_hca.get(), kv_lid.get() }) {
+        for (uint32_t il : kv->get_layer_ids()) {
+            const int32_t src = comp_il_src[il];
+            if (src == (int32_t) il) {
+                continue;
+            }
+
+            ggml_tensor * t_src = kv->get_k_storage(src);
+            ggml_tensor * t_dst = kv->get_k_storage(il);
+            GGML_ASSERT(t_src->type == t_dst->type && ggml_are_same_shape(t_src, t_dst));
+
+            ggml_backend_tensor_copy(t_src, t_dst);
         }
     }
 }
@@ -2300,6 +2308,8 @@ bool llama_kv_cache_dsv4_context::apply() {
         hca_state->apply_copies(sc_info_hca);
         lid_state->apply_copies(sc_info_lid);
     }
+
+    kv->refill_comp_mirrors();
 
     return res;
 }
