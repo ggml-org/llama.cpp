@@ -227,8 +227,8 @@ void ggml_cuda_mul_mat_q(
 
     const bool fallback = ggml_cuda_mmq_needs_fallback(ne01);
 
-    // With fusion dst is the GLU output, not a MUL_MAT; the fused MUL_MATs request no src1 precision (see ggml_cuda_mul_mat_q_fusion_matches).
-    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0->type, gate ? GGML_PREC_UNDEFINED : (ggml_prec) ggml_get_op_params_i32(dst, 3), cc);
+    // With fusion dst is the GLU output, not a MUL_MAT; the src1 precision requested by both fused MUL_MATs is in the fusion args.
+    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0->type, gate ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), cc);
 
     const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
@@ -515,14 +515,15 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
     return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
 }
 
-bool ggml_cuda_mmq_fusion_is_efficient(const ggml_type type, const int64_t nrows_x, const int64_t ncols, const int64_t nchannels, const int device) {
+bool ggml_cuda_mmq_fusion_is_efficient(
+        const ggml_type type, const ggml_prec prec_dst, const int64_t nrows_x, const int64_t ncols, const int64_t nchannels, const int device) {
     const int    cc    = ggml_cuda_info().devices[device].cc;
     const int    nsm   = ggml_cuda_info().devices[device].nsm;
     const size_t smpbo = ggml_cuda_info().devices[device].smpbo;
 
     // Same tile width as ggml_cuda_mul_mat_q; the fused kernel has no fallback and writes I/2 output rows per tile.
     const bool      fallback  = false;
-    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(type, GGML_PREC_UNDEFINED, cc);
+    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(type, prec_dst, cc);
     const int       J_best    = ggml_cuda_mmq_get_J_best(type, ncols, fallback, cc, smpbo, prec_src1);
     if (J_best == 0) {
         return false;

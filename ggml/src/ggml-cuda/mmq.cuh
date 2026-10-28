@@ -1678,4 +1678,5 @@ void ggml_cuda_mul_mat_q(
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);
 
-bool ggml_cuda_mmq_fusion_is_efficient(ggml_type type, int64_t nrows_x, int64_t ncols, int64_t nchannels, int device);
+// prec_dst: the src1 precision requested by the fused MUL_MATs.
+bool ggml_cuda_mmq_fusion_is_efficient(ggml_type type, ggml_prec prec_dst, int64_t nrows_x, int64_t ncols, int64_t nchannels, int device);
