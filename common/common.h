@@ -1014,6 +1014,8 @@ bool common_params_uses_streamed_dflash(const common_params & params);
 const char * common_streamed_kv_config_error(const common_params & params);
 // Configuration checks precede model-specific geometry and compiled-path qualification.
 const char * common_streamed_dflash_config_error(const common_params & params);
+// Resolve target verification even when draft params no longer carry the target arena flags.
+const char * common_streamed_dflash_verification_error(const common_params & params, uint32_t & depth);
 // Resolve the count before context allocation; reject missing metadata and conflicting legacy values.
 uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers,
         bool shares_target_kv = false);

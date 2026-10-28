@@ -1,0 +1,397 @@
+{
+  "stage": "NK3",
+  "status": "qualified",
+  "branch": "feature/adaptive-kv-dflash2-k4v",
+  "compiled_source_commit": "944c4653b3f145e1eefb96d9eb6c0834bb3884aa",
+  "qualified_source_diff_sha256": "f6af143a60161b6ac633269eacfca7a524cca163a4c91d294646a5ef68ee1770",
+  "qualified_runtime_and_test_files": {
+    "common/common.cpp": "34e37096101182808f037a57a13f3b89dac7be411302f37dd080c2987fac2a4f",
+    "common/common.h": "93cf19974b97ed9d3485fe4c8aa233c0cc877e9a0ec6196280fa625170502d4a",
+    "common/speculative.cpp": "8fdaf876aaf8cc7213d48b1ead1c012356d4808e9f71e1feb19ad5a11cc160a6",
+    "src/llama-context.cpp": "7fba17e4bddd526c52eb401fe8f6532f7f70292e98991fe6b6bb75574613e33a",
+    "src/llama-context.h": "13346a00dbbfb3bcc53647cd63d064ad79a08d104cad93fed9b7f55c54493efe",
+    "src/llama-ext.h": "2344df4a19074e9141c95aa7d90634664ad2bd5f6d619a18fb0ef6bd3822c05e",
+    "tests/kv-stream-dflash-test.h": "1e8fb422f137daec61a7f530496b593cbd3d446cb285070e6d7bf838f5cf47e0",
+    "tests/test-kv-stream-context.cpp": "a2afeb5dc57038a185e93dd9af3435327bc54a7a4d71b4ae150283bec755c7f2",
+    "tests/test-speculative.cpp": "7330a667f6e353a5fd0903139f26bafa0d99bfff08356d2de2207866cd966c87"
+  },
+  "native_binaries": {
+    "test-kv-stream-context": "788615f7e4805738397d3beca5604f97d1293a5bbbb173f534f273ae4b6096d5",
+    "libllama-common.so.0": "6aea25527aeb6b07cce45c2bea88ab7d0447ea6c5615f31da8e5ea6834f64b97",
+    "libllama.so.0": "d2c57be849283e7d1a46bc92a2c08801c17171d96f29c77087a1546baacd8a27",
+    "libggml-cuda.so.0": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741"
+  },
+  "unchanged_backend_dependencies": {
+    "libggml.so": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml.so.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libggml-cpu.so": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libggml-base.so": "76ea23b3b8d4e5da7f6238ec555acc74f561dfb81cabbdd4dd4e9505a6f71064",
+    "libmtmd.so.0.6.0": "d6b1f5ed0115cb2fca4aa262ee89e0666211a41d8ee7a5ac63b0b9d679c810af",
+    "libggml-cuda.so.0.26.0": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741",
+    "libmtmd.so": "d6b1f5ed0115cb2fca4aa262ee89e0666211a41d8ee7a5ac63b0b9d679c810af",
+    "libggml-cuda.so.0": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741",
+    "libggml.so.0.26.0": "e99390f1f498fd3b4cf1747ee344569299339d47c6b42c4cebfa9122cc95dc22",
+    "libmtmd.so.0": "d6b1f5ed0115cb2fca4aa262ee89e0666211a41d8ee7a5ac63b0b9d679c810af",
+    "libggml-cpu.so.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libllama-server-impl.so": "d33e9bcab4edf9e52e8077c00335c461962ed6ac5fe15b0404c6c471827a6805",
+    "libggml-cpu.so.0.26.0": "88f2a6df56c483ac34ac16da27eb9f8659ab6da68f517d159083d81e5e2c7173",
+    "libggml-base.so.0": "76ea23b3b8d4e5da7f6238ec555acc74f561dfb81cabbdd4dd4e9505a6f71064",
+    "libggml-base.so.0.26.0": "76ea23b3b8d4e5da7f6238ec555acc74f561dfb81cabbdd4dd4e9505a6f71064",
+    "libggml-cuda.so": "c1c3508eead48911b7e7ae15c411c5e05193b80319540a47ca7098173fbe6741"
+  },
+  "native_build_scope": "Changed host objects with exact CMake commands; unchanged core and all CUDA/backend objects reused by hash. No kernel compilation or timestamp changes.",
+  "evidence_directory": "benchmarks/results/dflash2-k4v-20261027-nk3-work-tGB4jf",
+  "behavioral_reds": [
+    {
+      "directory": "benchmarks/results/dflash2-k4v-20261026-nk3-red-oOPBI2",
+      "finding": "One actual ownership-width assertion: child prediction inherited target width"
+    },
+    {
+      "directory": "benchmarks/results/dflash2-k4v-20261027-nk3-RtuVaJ",
+      "finding": "One exact-quota diagnostic assertion after successful TG8 and child execution; generic error dropped byte requirements"
+    }
+  ],
+  "fixture_failures_preserved": [
+    "Full-SWA default inherited by quota child; CPU one-failure red and bounded-child correction",
+    "Borrowed child has no full-stream diagnostics; corrected the test to query the physical owning target",
+    "Teardown test called the wrong class getter; corrected to the existing compute-owner method"
+  ],
+  "capacity_limit_preserved": {
+    "directory": "benchmarks/results/dflash2-k4v-20261026-nk3-resource-oR5E69",
+    "scope": "Native 8192-context, rollback-seven, draft-ubatch256 MMQ kernel setup OOM before comparison; not a numerical or streaming pass"
+  },
+  "matched_profiles": {
+    "kv_pairs": [
+      [
+        "q8_0",
+        "q4_0"
+      ],
+      [
+        "q8_0",
+        "q8_0"
+      ],
+      [
+        "q5_1",
+        "q5_1"
+      ]
+    ],
+    "context": 8192,
+    "prefill_and_neural_max": [
+      [
+        2047,
+        1
+      ],
+      [
+        2047,
+        3
+      ],
+      [
+        2047,
+        7
+      ],
+      [
+        8000,
+        7
+      ]
+    ],
+    "target_rollback": 7,
+    "actual_verification_widths": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "target_ubatch": 256,
+    "draft_ubatch": 8,
+    "stream_arena_bytes": 239075328,
+    "oracle": "Full native/streamed logits, features, selector scores/candidates, visible KV and recurrent state with identical forced protocol",
+    "limitation": "Explicit small-draft-microbatch fitting test; does not replace ordinary 256-row injection controls or qualify public mixed driver switching"
+  },
+  "joint_quota": {
+    "target_rows": 8,
+    "prediction_rows": 4,
+    "target_and_draft_ubatch": 256,
+    "exact_bytes": 205902080,
+    "one_byte_short": 205902079,
+    "additional_required": 1,
+    "minimum_target_pool_bytes": 7241728,
+    "components": {
+      "compute": 100153600,
+      "writer": 280576,
+      "attention": 33296384,
+      "publication_staging": 45760512,
+      "persistent_draft_kv": 19169280
+    },
+    "coverage": "Invalid bounds before mutation, prefill/injection, actual prediction, TG8/injection, rollback, exact and one-byte-short admission, physical parent, child destruction and target resume"
+  },
+  "strict_memory": {
+    "profile": "Fresh actual joint quota test, same models/types/budgets; eager only for instrumentation",
+    "default_pdl": true,
+    "report_api_errors": "all",
+    "error_exitcode": 99,
+    "summary": "0 errors"
+  },
+  "actual_gates": [
+    {
+      "label": "independent-ubatch8-v2",
+      "assertions": 1724,
+      "log_sha256": "8767f6720c613fc4b29be129c46051fd41441754816ac03e0cb517a8a2ca783f",
+      "provenance_sha256": "e858a451e96b589c55bf7a6dd5e5c8f0f1b571c5c71d8f738160ee6cb9d6f507",
+      "peak_system_accounted_bytes": 16596557824
+    },
+    {
+      "label": "independent-q8q8",
+      "assertions": 1724,
+      "log_sha256": "c0d49eecd5ecf8986fc3b3d883d19ea06c72f9001ae49a2dbc99ca41bce66aea",
+      "provenance_sha256": "e63addbdb52aa4dfd35a8b1acb81d86e7c48d46a475b33caec6338c1702f776f",
+      "peak_system_accounted_bytes": 16548237312
+    },
+    {
+      "label": "independent-q5q5",
+      "assertions": 1724,
+      "log_sha256": "3c00c1324f6905d716414c7529d529cc5e7eb3ad135acc893ebc9065cc02a535",
+      "provenance_sha256": "76152754eb72989f0bdff329e2b92f68b8e30beed0918a9ea1c6cae7986b6fc5",
+      "peak_system_accounted_bytes": 16739483648
+    },
+    {
+      "label": "quota-final",
+      "assertions": 1359,
+      "log_sha256": "f19f275f86b2e10894bc29f71cee8d07ca9f3b215a53317d3ce821aab055631c",
+      "provenance_sha256": "0bdc83b97cf166d97d5237e09d4a16fafaa9d3881e116a6a3c05bfa5188d0744",
+      "peak_system_accounted_bytes": 16385212416
+    },
+    {
+      "label": "native-control-final",
+      "assertions": 1338,
+      "log_sha256": "2ec4e4b6b7defe8fbe298fe149880ec10ea554f10a770c241760653204bbca20",
+      "provenance_sha256": "f90ecc54ade297040a8e2f0984d30f1b2ad5c21915ee278e60af48f766cedeee",
+      "peak_system_accounted_bytes": 14669590528
+    },
+    {
+      "label": "shared-control-final",
+      "assertions": 1359,
+      "log_sha256": "8619cad67f19add27eb870b8abfa589130abc1bdb92017b5ffb7f33646ae69ef",
+      "provenance_sha256": "41c25cc77f3a2df009999e2043ce9dd36462b508cf7c6cb43beb902591070605",
+      "peak_system_accounted_bytes": 15442403328
+    },
+    {
+      "label": "memcheck-quota-final",
+      "assertions": 1359,
+      "log_sha256": "a3981c242969c4b988eb3e79033a06e138740e7d9a71fab820bd088d2043b539",
+      "provenance_sha256": "02194f08fcb92389345d1b523872847a9b3f90e54a3bf2065d1ce141b46b6907",
+      "peak_system_accounted_bytes": 16804814848
+    }
+  ],
+  "final_regression_gates": [
+    {
+      "label": "release-final-build",
+      "command": [
+        "cmake",
+        "--build",
+        "build-upstream-attention-host",
+        "--target",
+        "test-speculative",
+        "test-kv-stream-context",
+        "test-arg-parser",
+        "test-context-memory",
+        "test-kv-stream-mtp-lease",
+        "--parallel",
+        "1"
+      ],
+      "seconds": null,
+      "log_sha256": "14c5cd73a700de8e66634b70620a1132f02715c05ebe0c2959f1629e02b0ff13",
+      "memory_sha256": "51463e9e5735dddb18f3e068028f9f42b27377293188a87f915bcf8aeaf5e6bd"
+    },
+    {
+      "label": "release-final-tests",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "build-upstream-attention-host",
+        "--verbose",
+        "--parallel",
+        "1",
+        "-R",
+        "^(test-speculative|test-kv-stream-context|test-arg-parser|test-context-memory|test-kv-stream-mtp-lease)$"
+      ],
+      "seconds": null,
+      "log_sha256": "1406392f80b03a96e0ec8bb7df9894525138e80bf33ade4a53fb7efdab8ef2c2",
+      "memory_sha256": "3bb658207036e2bce6b4124afdb050857c5bcd5b48e9c5f9e68b4d13fa50fe72"
+    },
+    {
+      "label": "asan-final-build",
+      "command": [
+        "cmake",
+        "--build",
+        "build-pf-host-asan",
+        "--target",
+        "test-speculative",
+        "test-kv-stream-context",
+        "test-arg-parser",
+        "test-context-memory",
+        "test-kv-stream-mtp-lease",
+        "--parallel",
+        "1"
+      ],
+      "seconds": null,
+      "log_sha256": "14c5cd73a700de8e66634b70620a1132f02715c05ebe0c2959f1629e02b0ff13",
+      "memory_sha256": "96ffe5724810c9f1ae3a83133d32c37ddbf578b5e58ab00de66a4545e800500a"
+    },
+    {
+      "label": "asan-final-tests",
+      "command": [
+        "env",
+        "ASAN_OPTIONS=detect_leaks=1",
+        "UBSAN_OPTIONS=halt_on_error=1",
+        "ctest",
+        "--test-dir",
+        "build-pf-host-asan",
+        "--verbose",
+        "--parallel",
+        "1",
+        "-R",
+        "^(test-speculative|test-kv-stream-context|test-arg-parser|test-context-memory|test-kv-stream-mtp-lease)$"
+      ],
+      "seconds": null,
+      "log_sha256": "3b67a109c90f649267fb1bc185d19593b4e79c53c262684c9335edb4471eb7e3",
+      "memory_sha256": "9e5d4d4a954ae2e18a146a43c4e61f694666b168078a9034d167a83721b77f16"
+    },
+    {
+      "label": "context-owner-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-context-memory",
+        "--cuda"
+      ],
+      "seconds": null,
+      "log_sha256": "4f1c50891055678432430f64ae69a498e172e7e3d64cadebe07d1b38a2daadf6",
+      "memory_sha256": "038455f96d3e8305c3691e71bb3713f0cc957f144da4cfe2e3b29d65975411a0"
+    },
+    {
+      "label": "serial-workspace-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-kv-stream-model",
+        "--cuda-serial-scratch"
+      ],
+      "seconds": null,
+      "log_sha256": "eb85afcaf418e949325770bdfcc9f75e35e38b441ea89d204ff7b420fdfa30dc",
+      "memory_sha256": "fbaf1b5571b22c1fce6c69b77322bc0c94e2c2f31b0da5cbcecd58a7db066d62"
+    },
+    {
+      "label": "managed-d512-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-kv-stream-model",
+        "--cuda-gemma-target"
+      ],
+      "seconds": null,
+      "log_sha256": "8e1a5a23335ee6232fbf03e265913f91e963ae1163524ab466e53f7226ab08f2",
+      "memory_sha256": "5b18354867ca6b2a5394528bda728e58c81edd258a879ac94a288f3a754bf8a1"
+    },
+    {
+      "label": "managed-d256-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-kv-stream-model",
+        "--cuda-wide-target"
+      ],
+      "seconds": null,
+      "log_sha256": "a6161f1bd3d81aac2a73f012fe04f58c662b6e18fff6f69c6f6ad7fe102605e7",
+      "memory_sha256": "ee5be655da108872b480a615ad0d42eb0e93a4441ba7279313c8cd24d444ef8f"
+    },
+    {
+      "label": "qwen-64-pairs-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-kv-stream-vector-spans",
+        "--cuda-quant-matrix"
+      ],
+      "seconds": null,
+      "log_sha256": "c7561909c4ad33e19162759e37902771527b5e95289413a9db7570f67955f3f9",
+      "memory_sha256": "5c5dab888e2428cde7a4012561299a7b38d79c8b9502faa04bba346763932767"
+    },
+    {
+      "label": "qwen-mtp-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-kv-stream-context",
+        "--model",
+        "/home/raymond/LLM/llama-cache/models--unsloth--Qwen3.8-27B-GGUF/snapshots/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-IQ4_XS.gguf",
+        "--mtp-bit-exact",
+        "--exact-prefill",
+        "2047",
+        "--exact-rounds",
+        "4",
+        "--exact-pool-mib",
+        "32",
+        "--exact-batch-size",
+        "8",
+        "--exact-length",
+        "3"
+      ],
+      "seconds": null,
+      "log_sha256": "0f0ef9dcc885eee2c7c4c111bd3eb10d65ac62ca3c14dcf208440b96eff5f17f",
+      "memory_sha256": "e18941c458cf4c4ff2bb287b706aefd9f077f79b4ebe79848757d0a23d1540dd"
+    },
+    {
+      "label": "gemma-target-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-kv-stream-context",
+        "--model",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-Q3_K_M.gguf",
+        "--gemma-target"
+      ],
+      "seconds": null,
+      "log_sha256": "436c3205177c59b6e597a4f65024350ebc6f06890cd0a3a440afb03ab2f29930",
+      "memory_sha256": "21235de141849931e7075bdbd2cca4f2a7cae6ca4bf3e29c56a4101766736de9"
+    },
+    {
+      "label": "common-startup-final",
+      "command": [
+        "/home/raymond/LLM/llama.cpp-adaptive-kv-stream/build-upstream-attention-port/bin/test-kv-stream-context",
+        "--model",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-Q3_K_M.gguf",
+        "--gemma-common-startup",
+        "/home/raymond/LLM/llama-cache/gemma-4-31B-it-c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mtp-gemma-4-31B-it-Q8_0.gguf"
+      ],
+      "seconds": null,
+      "log_sha256": "78e504f6d604a79f5cf9d43b64a362524fedae87360506949bddc9fd100553a9",
+      "memory_sha256": "02e4f096c9301018c10f02fabb9dfa571d740d6da51a4b40ceb8d49b90311b44"
+    }
+  ],
+  "scope_limits": [
+    "Public mixed admission remains closed; NK4-NK7 are not complete",
+    "No mixed-mode performance claim",
+    "No new CUDA kernel, arithmetic, allocator or public C parameter layout",
+    "Unchanged component test executables were run freshly against current native libraries, not claimed rebuilt",
+    "Operational service recovery and approved stuck-monitor cleanup are separately audited, not numerical qualification"
+  ],
+  "production_restore": {
+    "health": {
+      "status": "ok"
+    },
+    "persistent_startup_scope": "production-nk3-session-restore-20261027",
+    "containers": {
+      "llm-llmster": {
+        "id_unchanged": true,
+        "running": true,
+        "configuration_unchanged": true
+      },
+      "llm-openwebui": {
+        "id_unchanged": true,
+        "running": true,
+        "configuration_unchanged": true
+      },
+      "llm-hermes": {
+        "id_unchanged": true,
+        "running": true,
+        "configuration_unchanged": true
+      },
+      "llm-hermes-dashboard": {
+        "id_unchanged": true,
+        "running": true,
+        "configuration_unchanged": true
+      }
+    }
+  },
+  "qualification_maximum_system_accounted_bytes": 16804814848
+}

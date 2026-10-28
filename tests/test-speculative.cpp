@@ -428,5 +428,18 @@ int main(int argc, char ** argv) {
         t.assert_true(common_streamed_dflash_config_error(params) == nullptr);
     });
 
+    t.test("shared_draft_verification_validation_survives_removed_target_arena_flags", [&](testing & t) {
+        const auto target = streamed_dflash_params(3, 7);
+        auto params = common_base_params_to_speculative(target);
+        t.assert_equal(size_t(0), params.shared_device_memory_bytes);
+        t.assert_equal(size_t(0), params.kv_stream_pool_bytes);
+        uint32_t depth = 0;
+        t.assert_true(common_streamed_dflash_verification_error(params, depth) == nullptr);
+        t.assert_equal(uint32_t(7), depth);
+        t.assert_equal(3, params.speculative.draft.n_max);
+        params.speculative.ngram_map_k4v.size_m = 48;
+        t.assert_true(common_streamed_dflash_verification_error(params, depth) != nullptr);
+    });
+
     return t.summary();
 }

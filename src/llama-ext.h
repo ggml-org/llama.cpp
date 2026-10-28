@@ -9,6 +9,10 @@
 #include <cstdint>
 #include <map>
 
+// Declare serial prediction rows independently of target verification; zero keeps legacy sizing.
+LLAMA_API llama_context * llama_init_from_model(llama_model * model, llama_context_params params,
+        uint32_t serial_prediction_rows);
+
 // Serial text consumers may read only outputs from the matching successful target invocation.
 LLAMA_API bool llama_serial_features_match(llama_context * ctx,const llama_batch_ext * batch,
         const int32_t * layers = nullptr,uint32_t count = 0);

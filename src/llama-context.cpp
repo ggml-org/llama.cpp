@@ -103,9 +103,13 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+llama_context::llama_context(const llama_model & model, llama_context_params params) :
+    llama_context(model, params, 0) {}
+
 llama_context::llama_context(
         const llama_model & model,
-              llama_context_params params) :
+              llama_context_params params,
+              uint32_t serial_prediction_rows) :
     model(model),
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
@@ -120,6 +124,11 @@ llama_context::llama_context(
     t_load_us  = model.t_load_us;
 
     const auto & hparams = model.hparams;
+
+    if (serial_prediction_rows && (model.arch != LLM_ARCH_DFLASH || !params.ctx_other ||
+            !params.ctx_other->get_cparams().kv_streaming())) {
+        throw std::runtime_error("explicit serial prediction rows require an attached streamed block drafter");
+    }
 
     cparams.n_seq_max = std::max(1u, params.n_seq_max);
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
@@ -375,12 +384,14 @@ llama_context::llama_context(
 
     if (model.arch == LLM_ARCH_DFLASH && params.ctx_other && params.ctx_other->get_cparams().kv_streaming()) {
         auto * target=params.ctx_other;
-        const uint32_t block_rows=target->get_cparams().kv_stream_decode_rows();
+        const uint32_t target_rows=target->get_cparams().kv_stream_decode_rows();
+        const uint32_t block_rows=serial_prediction_rows ? serial_prediction_rows : target_rows;
         if (target->get_model().arch != LLM_ARCH_QWEN35 || target->get_cparams().kv_stream_auxiliary_layers ||
                 !target->get_model().hparams.n_embd ||
                 !target->compute_memory || params.swa_full || !hparams.n_swa || !hparams.dflash_selector_rank ||
                 hparams.dflash_block_size < 2 || hparams.dflash_block_size > 8 ||
-                block_rows < 2 || block_rows > hparams.dflash_block_size || block_rows > cparams.n_ubatch ||
+                target_rows < 2 || target_rows > 8 || block_rows < 2 || block_rows > target_rows ||
+                block_rows > hparams.dflash_block_size || block_rows > cparams.n_ubatch ||
                 cparams.n_seq_max != 1 || cparams.n_rs_seq ||
                 cparams.n_ctx != target->n_ctx() || !cparams.offload_kqv || !cparams.flash_attn ||
                 model.devices.size() != 1 || model.devices.front().dev != target->get_model().devices.front().dev ||
@@ -586,8 +597,12 @@ llama_context::llama_context(
                 serial_target_ctx->sched_reserve_state.invalidate();
                 serial_target_ctx->sched_reserve();
             }
-            if (!(serial_cache=parent->reserve_bounded_cache(layout))) {
-                throw std::runtime_error("bounded draft KV does not fit the declared serial arena");
+            llama_context_memory_create_result cache_admission;
+            if (!(serial_cache=parent->reserve_bounded_cache(layout,&cache_admission))) {
+                throw std::runtime_error(std::string("bounded draft KV does not fit the declared serial arena: ")+
+                    llama_context_memory_create_status_name(cache_admission.status)+"; required="+std::to_string(cache_admission.required_bytes)+
+                    ", available="+std::to_string(cache_admission.available_bytes)+", additional="+std::to_string(cache_admission.additional_bytes)+
+                    " bytes; phase="+std::to_string(cache_admission.stage)+", resource="+std::to_string(cache_admission.resource));
             }
             params_mem.bounded_cache_lease=serial_cache->lease();
         }
@@ -2597,7 +2612,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const auto text_phase = cparams.kv_streaming() ?
         (cparams.kv_stream_decode ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
         (cparams.kv_shared_read ? llama_memory_text_phase::decode : cparams.serial_block_rows ?
-            (n_tokens_all <= cparams.serial_block_rows ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) : cparams.mtp_publish_host ?
+            (balloc->get_batch().token || serial_target_ctx->get_cparams().kv_stream_decode ?
+                llama_memory_text_phase::decode : llama_memory_text_phase::prefill) : cparams.mtp_publish_host ?
             (n_tokens_all <= 4 ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
             llama_memory_text_phase::unspecified);
 
@@ -4863,7 +4879,8 @@ llama_context_params llama_context_default_params() {
 
 llama_context * llama_init_from_model(
                  llama_model * model,
-        llama_context_params   params) {
+        llama_context_params   params,
+                    uint32_t   serial_prediction_rows) {
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
         return nullptr;
@@ -4951,7 +4968,7 @@ llama_context * llama_init_from_model(
     }
 
     try {
-        auto * ctx = new llama_context(*model, params);
+        auto * ctx = new llama_context(*model, params, serial_prediction_rows);
         const auto & cparams = ctx->get_cparams();
 
         if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN && cparams.rope_freq_scale != model->hparams.rope_freq_scale_train) {
@@ -4966,6 +4983,10 @@ llama_context * llama_init_from_model(
     }
 
     return nullptr;
+}
+
+llama_context * llama_init_from_model(llama_model * model, llama_context_params params) {
+    return llama_init_from_model(model, params, 0);
 }
 
 // deprecated

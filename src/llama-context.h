@@ -49,6 +49,10 @@ struct llama_context {
     llama_context(
             const llama_model & model,
                   llama_context_params params);
+    llama_context(
+            const llama_model & model,
+                  llama_context_params params,
+                  uint32_t serial_prediction_rows);
 
     ~llama_context();
 

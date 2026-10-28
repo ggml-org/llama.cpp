@@ -1265,7 +1265,7 @@ const char * common_streamed_kv_config_error(const common_params & params) {
     return nullptr;
 }
 
-static const char * streamed_dflash_verification_error(const common_params & params, uint32_t & depth) {
+const char * common_streamed_dflash_verification_error(const common_params & params, uint32_t & depth) {
     if (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 7) {
         return "adaptive DFlash2 supports 1-7 draft tokens";
     }
@@ -1307,7 +1307,7 @@ const char * common_streamed_dflash_config_error(const common_params & params) {
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
         return "adaptive DFlash2 requires -fa on";
     uint32_t depth = 0;
-    if (const auto * error = streamed_dflash_verification_error(params, depth)) return error;
+    if (const auto * error = common_streamed_dflash_verification_error(params, depth)) return error;
     const auto & draft=params.speculative.draft;
     const auto cache_type=[](ggml_type type) {
         switch (type) {
@@ -1874,7 +1874,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
                                 0 : params.speculative.need_n_rs_seq();
     if (common_params_uses_streamed_dflash(params)) {
         uint32_t depth = 0;
-        if (const auto * error = streamed_dflash_verification_error(params, depth)) {
+        if (const auto * error = common_streamed_dflash_verification_error(params, depth)) {
             throw std::invalid_argument(error);
         }
         cparams.n_rs_seq = depth;

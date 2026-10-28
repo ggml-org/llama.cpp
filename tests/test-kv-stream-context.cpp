@@ -50,6 +50,9 @@ static const char * dflash_native_model = nullptr;
 static bool dflash_shared_workspace_control = false;
 static bool dflash_exact_control = false;
 static bool dflash_short_control = false;
+static bool dflash_independent_rows = false;
+static bool dflash_independent_quotas = false;
+static bool dflash_independent_small_batch = false;
 static bool test_cache_explicit = false;
 static ggml_type test_cache_k = GGML_TYPE_Q8_0, test_cache_v = GGML_TYPE_Q4_0;
 static size_t gemma_test_arena_size = size_t(1024)*1048576;
@@ -107,6 +110,24 @@ static void test_dflash_native(testing & t, llama_model * model) {
     params.speculative.draft.p_min = 0;
     params.speculative.draft.n_gpu_layers = 999;
     params.speculative.draft.mparams.path = dflash_native_model;
+    if (dflash_shared_workspace_control) {
+        const auto revision = target->get_compute_memory()->graph_binding_revision();
+        const auto features = target->get_cparams().embeddings_layer_inp;
+        for (uint16_t length : {7, 48}) {
+            auto invalid = params;
+            invalid.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+            invalid.speculative.ngram_map_k4v.size_m = length;
+            bool rejected = false;
+            try {
+                auto unexpected = common_speculative_init_from_params(invalid, model, target.get());
+            } catch (const std::invalid_argument & error) {
+                rejected = std::string(error.what()).find(length == 7 ? "rollback depth" : "size-m") != std::string::npos;
+            }
+            t.assert_true("invalid shared proposal limits reject before sidecar load and target mutation", rejected);
+            t.assert_equal(revision, target->get_compute_memory()->graph_binding_revision());
+            t.assert_true(features == target->get_cparams().embeddings_layer_inp);
+        }
+    }
     auto draft = common_speculative_init_from_params(params, model, target.get());
     if (!t.assert_true(bool(draft) && draft->context())) return;
     if (dflash_shared_workspace_control) {
@@ -115,6 +136,8 @@ static void test_dflash_native(testing & t, llama_model * model) {
         if (!t.assert_true(target_owner && draft_owner && draft_owner->borrows_serial_parent())) return;
         t.assert_true(!draft->context()->get_cparams().mtp_publish_host);
         t.assert_true(target_owner->shared_parent() == draft_owner->shared_parent());
+        if (!t.assert_equal(uint32_t(params.speculative.draft.n_max + 1),
+                draft->context()->get_cparams().serial_block_rows)) return;
     }
     auto * stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(draft->context()));
     if (!t.assert_true(stock && stock->get_base()->get_layer_ids().empty())) return;
@@ -3028,6 +3051,23 @@ int main(int argc,char ** argv) {
         t.assert_true(!llama_memory_kv_context_get(recurrent_ctx.get()));
     });
     test_kv_stream_bit_exact_comparator(t);
+    t.test("independent_dflash_quota_fixture_declares_a_bounded_child", [&](testing & t) {
+        auto target=llama_context_default_params();
+        target.n_ctx=4096; target.n_rs_seq=7;
+        target.shared_device_memory_bytes=size_t(512)*1024*1024;
+        target.type_k=GGML_TYPE_Q8_0; target.type_v=GGML_TYPE_Q4_0;
+        const auto child=dflash_independent_child_params(target,nullptr);
+        t.assert_true("independent child must not inherit full SWA from native defaults",!child.swa_full);
+        t.assert_equal(uint32_t(4096),child.n_ctx);
+        t.assert_equal(uint32_t(0),child.n_rs_seq);
+        t.assert_equal(size_t(0),child.shared_device_memory_bytes);
+        t.assert_equal(uint32_t(4),child.n_outputs_max);
+        t.assert_equal(uint32_t(4),child.n_outputs_max_per_seq);
+        t.assert_equal(GGML_TYPE_Q8_0,child.type_k);
+        t.assert_equal(GGML_TYPE_Q4_0,child.type_v);
+        t.assert_equal(uint32_t(7),target.n_rs_seq);
+        t.assert_equal(size_t(512)*1024*1024,target.shared_device_memory_bytes);
+    });
     t.test("short_dflash_profiles_keep_native_controls_physically_bounded", [&](testing & t) {
         const auto original = dflash_exact_profiles(false, false, false, false, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0);
         t.assert_equal(size_t(16000), original.back()[1]);
@@ -3145,6 +3185,23 @@ int main(int argc,char ** argv) {
         params.n_rs_seq=0; params.kv_stream_auxiliary_layers=1;
         t.assert_equal(uint32_t(4),params.kv_stream_decode_rows());
     });
+    t.test("serial_prediction_catalog_is_independent_of_target_rollback_catalog", [&](testing & t) {
+        for (uint32_t predictions=1;predictions<=7;++predictions) {
+            for (uint32_t continuation=1;continuation<=7;++continuation) {
+                llama_cparams target{},child{};
+                target.n_ctx=child.n_ctx=4096;
+                target.n_ubatch=child.n_ubatch=256;
+                target.n_seq_max=child.n_seq_max=1;
+                target.n_rs_seq=std::max(predictions,continuation);
+                child.serial_block_rows=predictions+1;
+                t.assert_equal(std::max(predictions,continuation)+1,target.kv_stream_decode_rows());
+                t.assert_equal(uint32_t(0),child.n_rs_seq);
+                t.assert_equal(predictions+1,child.serial_graph_reserve_rows(false));
+                t.assert_equal(predictions+1,child.serial_graph_reserve_rows(true));
+                t.assert_equal(uint32_t(256),target.serial_graph_reserve_rows(false));
+            }
+        }
+    });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
         if (!std::strcmp(argv[i],"--gemma-test-arena-mib")) {
@@ -3174,6 +3231,13 @@ int main(int argc,char ** argv) {
         if (!std::strcmp(argv[i], "--dflash-shared-workspace")) dflash_shared_workspace_control = true;
         if (!std::strcmp(argv[i], "--dflash-bit-exact")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-short")) dflash_short_control = dflash_exact_control = true;
+        if (!std::strcmp(argv[i], "--dflash-independent-rows")) {
+            dflash_independent_rows = dflash_short_control = dflash_exact_control = true;
+        }
+        if (!std::strcmp(argv[i], "--dflash-independent-ubatch8")) {
+            dflash_independent_small_batch = dflash_independent_rows = dflash_short_control = dflash_exact_control = true;
+        }
+        if (!std::strcmp(argv[i], "--dflash-independent-quotas")) dflash_independent_quotas = true;
         if (!std::strcmp(argv[i], "--dflash-lifecycle")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-context-end")) dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-rejection-long")) dflash_exact_control = true;
@@ -3373,6 +3437,12 @@ int main(int argc,char ** argv) {
             [&](testing & t) { test_gemma_bounded_cache(t,model.get()); });
         return t.summary();
     }
+    if (dflash_independent_quotas) {
+        if (!t.assert_true(bool(model) && dflash_native_model)) return t.summary();
+        t.test("independent_DFlash_prediction_and_target_verification_joint_quota",
+                [&](testing & t) { test_dflash_independent_quota(t, model.get(), dflash_native_model); });
+        return t.summary();
+    }
     if (dflash_native_model && !dflash_exact_control) {
         if (!t.assert_true(bool(model))) return t.summary();
         t.test("ordinary_dflash_feature_workspace", [&](testing & t) { test_dflash_native(t, model.get()); });
@@ -3386,7 +3456,8 @@ int main(int argc,char ** argv) {
         const bool sustained=std::any_of(argv+3,argv+argc,[](const char * arg) { return !std::strcmp(arg,"--dflash-rejection-long"); });
         t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) {
             test_kv_stream_dflash_exact(t,model.get(),dflash_native_model,lifecycle,context_end || sustained,sustained,
-                test_cache_k,test_cache_v,test_cache_explicit || dflash_short_control,dflash_short_control);
+                test_cache_k,test_cache_v,test_cache_explicit || dflash_short_control,dflash_short_control,dflash_independent_rows,
+                dflash_independent_small_batch);
         });
         return t.summary();
     }

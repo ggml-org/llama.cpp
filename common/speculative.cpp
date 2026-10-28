@@ -2703,9 +2703,14 @@ common_speculative_init_result::common_speculative_init_result(
     auto * target_memory=llama_context_compute_memory(ctx_tgt);
     const bool streamed_block=target_memory && target_memory->shares_kv_memory() &&
         std::find(params.speculative.types.begin(),params.speculative.types.end(),COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
-    if (streamed_block && (!has_draft ||
-            llama_n_rs_seq(ctx_tgt) < uint32_t(params.speculative.draft.n_max))) {
-        throw std::invalid_argument("adaptive DFlash2 requires a separate drafter and target rollback depth covering all proposals");
+    if (streamed_block) {
+        uint32_t depth = 0;
+        if (const auto * error = common_streamed_dflash_verification_error(params, depth)) {
+            throw std::invalid_argument(error);
+        }
+        if (!has_draft || llama_n_rs_seq(ctx_tgt) < depth) {
+            throw std::invalid_argument("adaptive DFlash2 requires a separate drafter and target rollback depth covering all proposals");
+        }
     }
 
     auto mparams = common_model_params_to_llama(params);
@@ -2763,7 +2768,9 @@ common_speculative_init_result::common_speculative_init_result(
             }
         }
 
-        llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
+        llama_context * ctx_dft = streamed_block ?
+            llama_init_from_model(model_dft, cparams, uint32_t(params.speculative.draft.n_max) + 1) :
+            llama_init_from_model(model_dft, cparams);
         if (ctx_dft == nullptr) {
             LOG_ERR("%s: failed to create MTP context\n", __func__);
             return;

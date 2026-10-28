@@ -1,6 +1,6 @@
 # DFlash2 + K4V adaptive KV streaming roadmap
 
-Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK2 are complete; NK3-NK7 are pending. Mixed streaming admission remains closed, and no mixed-mode performance gain is claimed. Updated: 2026-10-26.
+Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK3 are complete; NK4-NK7 are pending. Mixed streaming admission remains closed, and no mixed-mode performance gain is claimed. Updated: 2026-10-27.
 
 Source baseline: `bcf1a81d641c478db5690d2f2c048c691801fcb2`. The mechanism investigation originally used `1b7c0f46e`; the relevant common, n-gram, context, rollback and server source files were verified unchanged between that revision and this baseline. Recheck those files before implementation if HEAD changes.
 
@@ -232,7 +232,17 @@ Exit: one tested source of verification limits; invalid combinations fail before
 
 ### NK3 - Target and child workspace sizing
 
-Status: pending. Depends on NK2.
+Status: complete for independent resource sizing and its qualified controls. See the [NK3 qualification report](benchmarks/data/dflash2-k4v-nk3.json). Public mixed admission remains closed pending the switching and lifecycle gates.
+
+A private C++ constructor/factory overload now declares the neural prediction rows independently of target verification. The existing C factory, two-argument constructor and public C parameter layout are preserved. Common startup reuses the resolved target-depth validation before loading the child or mutating target features. Token prediction uses the measured neural block, while embedding injection follows the actual target phase rather than inferring it from the prediction row count. The existing serial owner, physical arena and bounded-cache admission are reused; no kernel, arithmetic, allocator or cache format was added. Bounded-draft admission now retains the existing structured required/available/additional-byte result.
+
+The actual ownership-width red failed exactly once before the row separation. A second actual red reproduced the missing exact-quota error details after successful target TG8, child prediction, injection and rollback. The final exact joint minimum is 205902080 bytes: the exact budget runs both contexts and resumes the target after child destruction, while 205902079 rejects with one additional byte required and no separate workspace fallback. This 65-assertion model subtest also passes strict CUDA memcheck with zero errors, default PDL, all API errors reported and exit code 99 on errors; eager execution is restricted to the instrumented run.
+
+Matched actual-model controls pass all target widths TG1-TG8 with neural maxima 1, 3 and 7, including F=3 with target capacity eight. Q8_0/Q4_0, Q8_0/Q8_0 and Q5_1/Q5_1 each pass 1724 total assertions, with exact full logits, features, selector candidates/scores, visible KV and recurrent state under the same forced protocol. The 8192-capacity/8000-prefill case observes actual ring use for every pair. These fitting controls explicitly use target microbatch 256, draft microbatch eight and the unchanged 228 MiB test arena. The earlier native 8192-context/rollback-seven/draft-microbatch-256 MMQ setup OOM is preserved as a capacity limitation, not relabelled a pass. Ordinary 256-row feature injection remains covered by the separate shared-workspace control and the quota test's startup measurements.
+
+Release and ASAN/UBSAN CTest runs pass all five selected suites, including 431 speculative assertions and 1293 portable context assertions. Seven model/resource gates and twelve final build/test/regression gates were audited against the same source and binary cohort. Fresh Qwen MTP, Gemma target/assistant startup, managed D256/D512, serial scratch, context-owner and all-64 reader-format executions pass. Unchanged component executables were run against the current libraries, not claimed rebuilt. Native compilation used exact CMake host commands and hash-pinned unchanged CUDA/backend libraries; no heavy shader rebuild or timing benchmark was performed. Guarded qualification peaked at 16804814848 bytes of conservative system working-memory-plus-swap usage, below the user's 32 GB ceiling; the stopped services were restored with unchanged configuration and healthy host port 1234.
+
+Raw evidence and preserved unexpected fixture/operational failures: `benchmarks/results/dflash2-k4v-20261027-nk3-work-tGB4jf/` and the earlier directories linked in the report. This stage proves resource separation and matched controls, not public K4V/DFlash switching, whole-path lifecycle qualification or a performance gain. Those remain NK4-NK7.
 
 - Audit `serial_block_rows` and all consumers before changing its meaning. Keep target verification capacity, neural prediction limit and embedding-injection extent distinct using the smallest necessary private changes.
 - Reserve all admitted target graph widths and feature/logit rows using the existing scheduler measurement path.
@@ -369,7 +379,7 @@ CLI order must not change the existing K4V-before-DFlash priority. This fragment
 - [x] NK0: pinned controls and proof that both draft sources can be observed independently; actual mixed switching remains NK4.
 - [x] NK1: CPU reds reproduced and demonstrated K4V defects fixed with regression coverage.
 - [x] NK2: one consistent bounded target-workload calculation and validation; public mixed admission stays closed pending NK3/NK4.
-- [ ] NK3: independent verification/prediction/injection measurement and exact quota coverage.
+- [x] NK3: independent verification/prediction/injection measurement, actual TG1-TG8 controls and exact quota coverage; public mixed admission remains closed.
 - [ ] NK4: source switching, feature continuity and every accepted prefix are correct.
 - [ ] NK5: cache reuse, restore/restart, cancellation, sampling and failure recovery pass.
 - [ ] NK6: matched native/streamed exactness, strict safety and supported-mode regressions pass.
