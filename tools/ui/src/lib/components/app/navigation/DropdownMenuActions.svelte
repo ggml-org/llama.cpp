@@ -13,6 +13,8 @@
 		onclick: (event: Event) => void;
 		variant?: 'default' | 'destructive';
 		disabled?: boolean;
+		/** Shown on hover, e.g. why a disabled action is not available. */
+		tooltip?: string;
 		shortcut?: string[];
 		separator?: boolean;
 	}
@@ -88,7 +90,14 @@
 					>
 						{@render iconComponent(action.icon, 'h-4 w-4 shrink-0')}
 
-						<span class="flex-1">{action.label}</span>
+						<span class="flex flex-1 flex-col">
+							{action.label}
+
+							<!-- a phone has no hover, so the hint sits under the label -->
+							{#if action.tooltip}
+								<span class="text-xs text-muted-foreground">{action.tooltip}</span>
+							{/if}
+						</span>
 
 						{#if action.shortcut}
 							<KeyboardShortcutInfo keys={action.shortcut} variant={action.variant} />
@@ -131,28 +140,49 @@
 					<DropdownMenu.Separator />
 				{/if}
 
-				<DropdownMenu.Item
-					class="flex items-center justify-between hover:[&>kbd]:opacity-100"
-					disabled={action.disabled}
-					onclick={action.onclick}
-					variant={action.variant}
-				>
-					<div class="flex items-center gap-2">
-						{@render iconComponent(
-							action.icon,
-							`h-4 w-4 ${action.variant === 'destructive' ? 'text-destructive' : ''}`
-						)}
-						{action.label}
-					</div>
+				{#if action.tooltip}
+					<!-- a disabled item takes no pointer events, so the wrapper holds the hover -->
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<div {...props}>
+									{@render menuItem(action)}
+								</div>
+							{/snippet}
+						</Tooltip.Trigger>
 
-					{#if action.shortcut}
-						<KeyboardShortcutInfo keys={action.shortcut} variant={action.variant} />
-					{/if}
-				</DropdownMenu.Item>
+						<Tooltip.Content class="z-[999999] max-w-64" side="left">
+							<p>{action.tooltip}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{:else}
+					{@render menuItem(action)}
+				{/if}
 			{/each}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 {/if}
+
+{#snippet menuItem(action: ActionItem)}
+	<DropdownMenu.Item
+		class="flex items-center justify-between hover:[&>kbd]:opacity-100"
+		disabled={action.disabled}
+		onclick={action.onclick}
+		variant={action.variant}
+	>
+		<div class="flex items-center gap-2">
+			{@render iconComponent(
+				action.icon,
+				`h-4 w-4 ${action.variant === 'destructive' ? 'text-destructive' : ''}`
+			)}
+			{action.label}
+		</div>
+
+		{#if action.shortcut}
+			<KeyboardShortcutInfo keys={action.shortcut} variant={action.variant} />
+		{/if}
+	</DropdownMenu.Item>
+{/snippet}
 
 {#snippet iconComponent(IconComponent: Component, className: string)}
 	<IconComponent class={className} />
