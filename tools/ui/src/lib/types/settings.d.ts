@@ -89,8 +89,10 @@ export interface SettingsChatServiceOptions {
 	excludeReasoningFromContext?: boolean;
 	// Enable model thinking/reasoning via chat_template_kwargs
 	enableThinking?: boolean;
-	// Reasoning effort level (low/medium/high/max) for thinking models
+	// Reasoning effort level the chat template honors, sent as reasoning_effort
 	reasoningEffort?: ReasoningEffort;
+	// Token budget for thinking, sent as thinking_budget_tokens
+	thinkingBudgetTokens?: number;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;

@@ -12,6 +12,7 @@
 import {
 	COMPACTION,
 	CWD_CLEARED_TEXT,
+	REASONING_EFFORT_TOKENS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
 } from '$lib/constants';
@@ -442,13 +443,23 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
-		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing
-		const effort = conversationsStore.preferences.getReasoningEffort();
+		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing:
+		// a level the chat template honors goes as is, the others as a token budget
+		const modelId = modelsStore.selectedModelName ?? '';
+		const effort = modelsStore.props.resolveReasoningEffort(
+			modelId,
+			conversationsStore.preferences.getReasoningEffort()
+		);
+		const budgetTokens = REASONING_EFFORT_TOKENS[effort];
 
 		if (effort !== ReasoningEffort.DEFAULT) {
 			apiOptions.enableThinking = effort !== ReasoningEffort.OFF;
+		}
 
-			if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
+		if (modelsStore.props.getReasoningEfforts(modelId).includes(effort)) {
+			apiOptions.reasoningEffort = effort;
+		} else if (budgetTokens >= 0) {
+			apiOptions.thinkingBudgetTokens = budgetTokens;
 		}
 
 		if (hasValue(currentConfig.temperature))
@@ -918,7 +929,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
 
+		// a router serves the props the request options read once the model is loaded, so the
+		// request waits for the load, and a stop during the wait aborts it
+		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
+
 		if (serverStore.isRouterMode && effectiveModel) {
+			await modelsStore.status.ensureLoaded(effectiveModel);
+
+			if (abortController.signal.aborted) return;
+
 			if (!modelsStore.props.getModelProps(effectiveModel))
 				await modelsStore.props.fetchModelProps(effectiveModel);
 		}
@@ -994,7 +1013,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		};
 
 		this.processing.setActiveConversation(convId);
-		const abortController = this.getOrCreateAbortController(convId);
 		const streamCallbacks: ChatStreamCallbacks = {
 			createAssistantMessage: async () => {
 				// Reset streaming state for new message

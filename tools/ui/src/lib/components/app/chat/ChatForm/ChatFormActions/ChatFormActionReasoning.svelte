@@ -4,7 +4,7 @@
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, REASONING_EFFORT_LABELS } from '$lib/constants';
 	import { ReasoningEffort } from '$lib/enums';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { deviceStore } from '$lib/stores';
@@ -36,7 +36,7 @@
 		{/if}
 
 		{#if !isDefault}
-			<span class="capitalize">{reasoning.currentEffort}</span>
+			<span>{REASONING_EFFORT_LABELS[reasoning.currentEffort]}</span>
 		{/if}
 	</span>
 {/snippet}
