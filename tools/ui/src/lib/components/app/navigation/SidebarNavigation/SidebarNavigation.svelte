@@ -22,7 +22,8 @@
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		SIDEBAR_OVERSTRETCH_PX,
-		SIDEBAR_SETTLE_MS
+		SIDEBAR_SETTLE_MS,
+		SIDEBAR_TOGGLE_MS
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
@@ -45,11 +46,21 @@
 	let logoHovered = $state(false);
 	/** Set while the collapsed sidebar is revealed by hovering its logo, until the pointer leaves it. */
 	let isPeeking = $state(false);
+	/** Set after the toggle closes the sidebar under the pointer, until the pointer leaves the logo. */
+	let isPeekSuppressed = $state(false);
+	/** Keeps the collapsed sidebar in its strip-width slot while it slides closed or before it slides open. */
+	let isDocked = $state(false);
+	/** Drops the transitions for the frame the sidebar swaps between docked and floating, out of sight. */
+	let isSnapping = $state(false);
+	let dockTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	const isOnMobile = $derived(deviceStore.isMobile);
 	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
-	// the collapsed sidebar shows only its logo until it is peeked at
+	// the collapsed sidebar shows only its logo until it is peeked at, which fades the rest in
 	const isStripHidden = $derived(!uiStore.isSidebarExpanded && !isOnMobile && !isPeeking);
+	// once settled, the collapsed sidebar keeps its full width, floating over the page,
+	// so a peek only fades it in instead of resizing it
+	const isFloating = $derived(!uiStore.isSidebarExpanded && !isOnMobile && !isDocked);
 	// on desktop the logo doubles as the sidebar toggle, unless the sidebar is pinned open
 	const isLogoToggle = $derived(
 		innerWidth > 768 && (!uiStore.isSidebarExpanded || !alwaysShowOnDesktop)
@@ -61,8 +72,58 @@
 		}
 	});
 
+	/** Swaps between docked and floating without a transition, on the next frames. */
+	function snapDocked(docked: boolean, then?: () => void) {
+		isSnapping = true;
+		isDocked = docked;
+
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				isSnapping = false;
+				then?.();
+			})
+		);
+	}
+
 	function toggleExpandedMode() {
-		uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
+		clearTimeout(dockTimeout);
+
+		if (isOnMobile) {
+			uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
+
+			return;
+		}
+
+		if (uiStore.isSidebarExpanded) {
+			// slide closed at strip width, kept hidden under the pointer, then float once out of sight
+			isPeeking = false;
+			isPeekSuppressed = true;
+			isDocked = true;
+			uiStore.isSidebarExpanded = false;
+			dockTimeout = setTimeout(() => snapDocked(false), SIDEBAR_TOGGLE_MS);
+
+			return;
+		}
+
+		if (isPeeking) {
+			// already shown at full width, so only the page slides aside
+			isDocked = false;
+			uiStore.isSidebarExpanded = true;
+
+			return;
+		}
+
+		// dock to strip width out of sight, then slide open from there
+		snapDocked(true, () => {
+			isDocked = false;
+			uiStore.isSidebarExpanded = true;
+		});
+	}
+
+	function peek() {
+		if (!isPeekSuppressed) {
+			isPeeking = true;
+		}
 	}
 
 	function handleAsideFocusOut(event: FocusEvent) {
@@ -501,17 +562,17 @@
 						: 'h-[calc(100dvh-1rem)]'),
 			'rounded-3xl md:rounded-2xl',
 			'flex flex-col justify-between',
-			'md:transition-[width,padding] duration-200 ease-out',
-			uiStore.isSidebarResizing && 'md:duration-0',
+			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] duration-200 ease-out',
+			(uiStore.isSidebarResizing || isSnapping) && 'md:duration-0',
 			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
-			uiStore.isSidebarExpanded &&
-				'md:w-(--sidebar-width) md:bg-muted/60 md:backdrop-blur-xl shadow-md',
-			!uiStore.isSidebarExpanded && 'md:w-12',
-			!uiStore.isSidebarExpanded && isPeeking && 'md:bg-muted/60 md:backdrop-blur-xl md:shadow-md',
+			isDocked && !uiStore.isSidebarExpanded ? 'md:w-12' : 'md:w-(--sidebar-width)',
+			(uiStore.isSidebarExpanded || (isFloating && isPeeking)) &&
+				'md:bg-muted/60 md:backdrop-blur-xl shadow-md',
+			isFloating && 'md:-mr-[calc(var(--sidebar-width)-3rem)]',
 			isStripHidden && 'md:pointer-events-none',
 			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
-		onfocusin={() => (isPeeking = true)}
+		onfocusin={peek}
 		onfocusout={handleAsideFocusOut}
 		onmouseleave={() => (isPeeking = false)}
 	>
@@ -520,9 +581,12 @@
 				class="relative"
 				onmouseenter={() => {
 					logoHovered = true;
-					isPeeking = true;
+					peek();
 				}}
-				onmouseleave={() => (logoHovered = false)}
+				onmouseleave={() => {
+					logoHovered = false;
+					isPeekSuppressed = false;
+				}}
 				role="button"
 				tabindex="0"
 			>
@@ -587,7 +651,6 @@
 		>
 			<SidebarNavigationActions
 				class="px-2"
-				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
 				onAction={handleSidebarAction}
 				onNavigate={() => {
 					if (deviceStore.isMobile) {
@@ -596,37 +659,35 @@
 				}}
 			/>
 
-			{#if uiStore.isSidebarExpanded || isOnMobile}
-				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade)">
-					<SidebarNavigationConversationList
-						{allSelectedArePinned}
-						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
-							visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
-						class="px-2"
-						conversations={conversationsStore.conversations}
-						{currentChatId}
-						{isSelectionMode}
-						onBulkDelete={handleBulkDelete}
-						onBulkExport={handleBulkExport}
-						onBulkPinToggle={handleBulkPinToggle}
-						onCloseSelection={exitSelectionMode}
-						onDelete={handleDeleteConversation}
-						onEdit={handleEditConversation}
-						onEnterSelectionMode={enterSelectionMode}
-						onRowMouseDown={handleRowMouseDown}
-						onSelect={selectConversation}
-						onSelectAllToggle={toggleSelectAllVisible}
-						onSelectionClick={handleSelectionClick}
-						onStop={handleStopGeneration}
-						onToggleSelect={toggleSelected}
-						{pinStateIsMixed}
-						{selectedIds}
-						someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
-							visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
-						visibleCount={visibleSelectionStats.visibleCount}
-					/>
-				</div>
-			{/if}
+			<div class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade)">
+				<SidebarNavigationConversationList
+					{allSelectedArePinned}
+					allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
+						visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
+					class="px-2"
+					conversations={conversationsStore.conversations}
+					{currentChatId}
+					{isSelectionMode}
+					onBulkDelete={handleBulkDelete}
+					onBulkExport={handleBulkExport}
+					onBulkPinToggle={handleBulkPinToggle}
+					onCloseSelection={exitSelectionMode}
+					onDelete={handleDeleteConversation}
+					onEdit={handleEditConversation}
+					onEnterSelectionMode={enterSelectionMode}
+					onRowMouseDown={handleRowMouseDown}
+					onSelect={selectConversation}
+					onSelectAllToggle={toggleSelectAllVisible}
+					onSelectionClick={handleSelectionClick}
+					onStop={handleStopGeneration}
+					onToggleSelect={toggleSelected}
+					{pinStateIsMixed}
+					{selectedIds}
+					someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
+						visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
+					visibleCount={visibleSelectionStats.visibleCount}
+				/>
+			</div>
 		</div>
 
 		{#if uiStore.isSidebarExpanded && !isOnMobile}
