@@ -95,7 +95,7 @@ enum ggml_sycl_xmx_gather_type {
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
-// Which joint_matrix combinations the XMX dequant-GEMM paths may use, one bit each (see fused-gemm.cpp).
+// Which joint_matrix combinations the XMX dequant-GEMM paths may use, one bit each (see xmx.hpp).
 // GGML_SYCL_DYNAMIC_PRECISION picks the operand type, this mask the combinations of that type.
 static constexpr int GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT = 0xff;
 extern int g_ggml_sycl_xmx_gather_shapes;
@@ -135,6 +135,15 @@ extern int g_ggml_sycl_dev2dev_memcpy;
 extern int g_ggml_sycl_fa_onednn;
 extern int g_ggml_sycl_fa_onednn_max_kv;
 extern int g_ggml_sycl_enable_mkl_fa;
+extern int g_ggml_sycl_lightning_indexer;
+enum ggml_sycl_lightning_indexer_xmx_type {
+    GGML_SYCL_LIGHTNING_INDEXER_XMX_F32  = 1 << 0,
+    GGML_SYCL_LIGHTNING_INDEXER_XMX_F16  = 1 << 1,
+    GGML_SYCL_LIGHTNING_INDEXER_XMX_BF16 = 1 << 2,
+};
+static constexpr int GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES_DEFAULT = 7;
+extern int g_ggml_sycl_lightning_indexer_xmx_types;
+extern int g_ggml_sycl_lightning_indexer_xmx_shapes;
 extern int g_ggml_sycl_memtrace;
 extern int g_ggml_sycl_memtrace_step;
 extern int g_ggml_sycl_graph_eviction_timeout;

@@ -105,6 +105,9 @@ int g_ggml_sycl_enable_dnn = 1;
 int g_ggml_sycl_fa_onednn = 1;
 int g_ggml_sycl_fa_onednn_max_kv = 0;
 int g_ggml_sycl_enable_mkl_fa = 1;
+int g_ggml_sycl_lightning_indexer = 0;
+int g_ggml_sycl_lightning_indexer_xmx_types = GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES_DEFAULT;
+int g_ggml_sycl_lightning_indexer_xmx_shapes = GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT;
 int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
@@ -435,6 +438,9 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_fa_onednn = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN", 1);
         g_ggml_sycl_fa_onednn_max_kv = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN_MAX_KV", 0);
         g_ggml_sycl_enable_mkl_fa = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
+        g_ggml_sycl_lightning_indexer = ggml_sycl_get_env("GGML_SYCL_LIGHTNING_INDEXER", 0);
+        g_ggml_sycl_lightning_indexer_xmx_types = ggml_sycl_get_env("GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES", GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES_DEFAULT);
+        g_ggml_sycl_lightning_indexer_xmx_shapes = ggml_sycl_get_env("GGML_SYCL_LIGHTNING_INDEXER_XMX_SHAPES", GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT);
         g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
@@ -546,6 +552,9 @@ static void ggml_check_sycl() try {
 #endif
         GGML_LOG_INFO("  GGML_SYCL_FA_ONEDNN_MAX_KV: %d\n", g_ggml_sycl_fa_onednn_max_kv);
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_MKL_FA: %d\n", g_ggml_sycl_enable_mkl_fa);
+        GGML_LOG_INFO("  GGML_SYCL_LIGHTNING_INDEXER: %d\n", g_ggml_sycl_lightning_indexer);
+        GGML_LOG_INFO("  GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES: %d\n", g_ggml_sycl_lightning_indexer_xmx_types);
+        GGML_LOG_INFO("  GGML_SYCL_LIGHTNING_INDEXER_XMX_SHAPES: %d\n", g_ggml_sycl_lightning_indexer_xmx_shapes);
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE: %d\n", g_ggml_sycl_memtrace);
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE_STEP: %d\n", g_ggml_sycl_memtrace_step);
 #ifdef SYCL_FLASH_ATTN
