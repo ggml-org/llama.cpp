@@ -596,7 +596,7 @@ struct llama_moe_cache::impl {
         ggml_backend_synchronize(backend);
 
         size_t n_hit = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), sel->ne[1], fills, n_hit)) {
+        if (!g.lru.plan(il, ids.data(), ids.size(), ids.size()/n_expert_used, fills, n_hit)) {
             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
         }
 
