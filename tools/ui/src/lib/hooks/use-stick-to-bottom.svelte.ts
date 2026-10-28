@@ -7,6 +7,12 @@
  * exactly where it was. This only adds the one behaviour CSS cannot express -
  * following new content while the reader sits at the bottom - and it stops the
  * moment they scroll away from it.
+ *
+ * Given a `pin` at the end of the content, browsers with scroll anchoring
+ * follow on their own: while sticking, the pin is the only anchor (see
+ * `[data-stick-to-bottom]` in app.css), so every layout keeps it in place.
+ * WebKit has no `overflow-anchor`, so there a resize observer writes the
+ * scroll position instead, before the frame is painted.
  */
 
 /** Distance from the bottom that still counts as being at the bottom. */
@@ -16,6 +22,9 @@ const AT_BOTTOM_PX = 24;
  * opening a preview), so it must not drag the viewport down with it.
  */
 const INTERACTION_GRACE_MS = 400;
+/** Set on the scroller while the pin is its only scroll anchor. */
+const STICK_ATTRIBUTE = 'data-stick-to-bottom';
+const NATIVE_ANCHORING = typeof CSS !== 'undefined' && CSS.supports('overflow-anchor', 'none');
 
 export class StickToBottom {
 	/** Measured position, which drives the "scroll to bottom" affordance. */
@@ -25,21 +34,35 @@ export class StickToBottom {
 
 	private container: HTMLElement | undefined;
 	private enabled = true;
+	private graceTimer: ReturnType<typeof setTimeout> | undefined;
+	private lastScrollTop = 0;
 	private markPressed = (): void => {
 		this.pressedAt = performance.now();
+		this.syncAnchor();
+		clearTimeout(this.graceTimer);
+		this.graceTimer = setTimeout(() => this.syncAnchor(), INTERACTION_GRACE_MS);
 	};
+	private native = false;
 	private observer: ResizeObserver | null = null;
 
-	private pressedAt = 0;
+	// -Infinity, not 0: performance.now() starts at page load, so 0 would read
+	// as a press during the first moments after a refresh, when a chat lands
+	private pressedAt = -Infinity;
 
 	/**
 	 * Binds the scroller and the element whose growth should be followed.
 	 * `content` defaults to the scroller's first child, which is what a panel
-	 * with a single growing body needs.
+	 * with a single growing body needs. `pin` is an empty element at the very
+	 * end of the content that lets the browser do the following.
 	 */
-	attach(container: HTMLElement | undefined, content?: HTMLElement | undefined): void {
+	attach(
+		container: HTMLElement | undefined,
+		content?: HTMLElement | undefined,
+		pin?: HTMLElement | undefined
+	): void {
 		this.detach();
 		this.container = container;
+		this.native = NATIVE_ANCHORING && Boolean(pin);
 
 		const observed = content ?? container?.firstElementChild;
 
@@ -52,13 +75,16 @@ export class StickToBottom {
 			passive: true
 		});
 
+		this.lastScrollTop = container.scrollTop;
 		this.measure();
 	}
 
 	detach(): void {
 		this.observer?.disconnect();
 		this.observer = null;
+		clearTimeout(this.graceTimer);
 		this.container?.removeEventListener('pointerdown', this.markPressed, { capture: true });
+		this.container?.removeAttribute(STICK_ATTRIBUTE);
 		this.container = undefined;
 	}
 
@@ -75,10 +101,15 @@ export class StickToBottom {
 		el.scrollTo({ behavior, top: el.scrollHeight });
 		this.stick = true;
 		this.atBottom = true;
+		// asking for the bottom outranks the press that led here (a sidebar row,
+		// the send button), so the growth that follows is followed
+		this.pressedAt = -Infinity;
+		this.syncAnchor();
 	}
 
 	setEnabled(enabled: boolean): void {
 		this.enabled = enabled;
+		this.syncAnchor();
 	}
 
 	private distanceFromBottom(el: HTMLElement): number {
@@ -91,23 +122,53 @@ export class StickToBottom {
 		if (!el) return;
 
 		const pressedRecently = performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
+		const atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
 
-		if (this.enabled && this.stick && !pressedRecently) {
+		// with native anchoring the pin already held the bottom; write only when
+		// it could not, e.g. once it went offscreen during an interaction grace
+		if (this.enabled && this.stick && !pressedRecently && !(this.native && atBottom)) {
 			el.scrollTop = el.scrollHeight;
 			this.atBottom = true;
 
 			return;
 		}
 
-		this.atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
+		this.atBottom = atBottom;
 	}
 
+	/**
+	 * Only a scroll that moves up while away from the bottom stops following:
+	 * the browser also fires scroll events for the landing jump, for anchoring
+	 * adjustments and for clamping, and those must not unstick a reader who
+	 * never touched the page.
+	 */
 	private measure(): void {
 		const el = this.container;
 
 		if (!el) return;
 
-		this.stick = this.atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
+		const top = el.scrollTop;
+
+		this.atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
+
+		if (this.atBottom) {
+			this.stick = true;
+		} else if (top < this.lastScrollTop) {
+			this.stick = false;
+		}
+
+		this.lastScrollTop = top;
+		this.syncAnchor();
+	}
+
+	/** The pin anchors only while following, so a reader who scrolled up keeps their rows anchored. */
+	private syncAnchor(): void {
+		const pressedRecently = performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
+
+		this.container?.toggleAttribute(
+			STICK_ATTRIBUTE,
+			this.native && this.enabled && this.stick && !pressedRecently
+		);
 	}
 }
 
