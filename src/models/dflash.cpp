@@ -403,6 +403,12 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     const int64_t n_vocab = base->ne[0];
     const int64_t n_tok   = base->ne[1];
 
+    if (g.cparams.dspark_probabilistic) {
+        res->t_logits = base;
+        ggml_build_forward_expand(g.gf, base);
+        return;
+    }
+
     const auto it = model.gguf_kv.find("dflash.block_size");
     GGML_ASSERT(it != model.gguf_kv.end() && "DSpark draft requires 'dflash.block_size' in GGUF metadata");
     const int64_t block_size = std::stoi(it->second);

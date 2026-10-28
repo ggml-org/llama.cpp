@@ -165,6 +165,14 @@ struct common_sampler {
         cur_p = { cur.data(), cur.size(), -1, false };
     }
 
+    void set_logits(const float * logits, int n_vocab) {
+        cur.resize(n_vocab);
+        for (llama_token token_id = 0; token_id < n_vocab; ++token_id) {
+            cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+        }
+        cur_p = { cur.data(), cur.size(), -1, false };
+    }
+
     common_time_meas tm() {
         return common_time_meas(t_total_us, params.no_perf);
     }
@@ -603,8 +611,12 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
     return gsmpl->chain;
 }
 
-llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
-    llama_synchronize(ctx);
+static llama_token common_sampler_sample_impl(
+        common_sampler * gsmpl, llama_context * ctx, int idx,
+        const float * logits, int32_t n_vocab, bool grammar_first) {
+    if (ctx) {
+        llama_synchronize(ctx);
+    }
 
     // start measuring sampling time after the llama_context synchronization in order to not measure any ongoing async operations
     const auto tm = gsmpl->tm();
@@ -616,11 +628,18 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     auto & chain = gsmpl->chain;
     auto & cur_p = gsmpl->cur_p; // initialized by set_logits
 
-    gsmpl->set_logits(ctx, idx);
+    auto set_logits = [&]() {
+        if (ctx) {
+            gsmpl->set_logits(ctx, idx);
+        } else {
+            gsmpl->set_logits(logits, n_vocab);
+        }
+    };
+    set_logits();
 
     // Check if a backend sampler has already sampled a token in which case we
     // return that token id directly.
-    {
+    if (ctx) {
         id = llama_get_sampled_token_ith(ctx, idx);
 
         if (id != LLAMA_TOKEN_NULL) {
@@ -670,7 +689,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     // resampling:
     // if the token is not valid, sample again, but first apply the grammar sampler and then the sampling chain
-    gsmpl->set_logits(ctx, idx);
+    set_logits();
 
     llama_sampler_apply(rbudget,  &cur_p);
 
@@ -685,6 +704,15 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     id = cur_p.data[cur_p.selected].id;
 
     return id;
+}
+
+llama_token common_sampler_sample(common_sampler * gsmpl, llama_context * ctx, int idx, bool grammar_first) {
+    return common_sampler_sample_impl(gsmpl, ctx, idx, nullptr, 0, grammar_first);
+}
+
+llama_token common_sampler_sample_logits(common_sampler * gsmpl, const float * logits, int32_t n_vocab, bool grammar_first) {
+    GGML_ASSERT(gsmpl != nullptr && logits != nullptr && n_vocab > 0);
+    return common_sampler_sample_impl(gsmpl, nullptr, 0, logits, n_vocab, grammar_first);
 }
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
@@ -721,15 +749,6 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     return result;
 }
 
-static float prob_of(const llama_token_data * data, size_t n, llama_token id) {
-    for (size_t k = 0; k < n; ++k) {
-        if (data[k].id == id) {
-            return data[k].p;
-        }
-    }
-    return 0.0f;
-}
-
 // Accept a drafted token with probability min(1, p/q), else draw from norm(max(0, p - q)).
 // Preserves the target distribution exactly, and accepts more often than matching does when the
 // draft samples instead of taking its argmax.
@@ -746,6 +765,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
     std::vector<llama_token_data> residual;
 
     std::vector<llama_token_data> cand; // candidate array masked by the grammar, if there is one
+    std::vector<float> q_by_id(llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx))));
 
     size_t i = 0;
     for (; i < draft.size(); i++) {
@@ -754,6 +774,13 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
 
         const auto * cur_p = common_sampler_get_candidates(gsmpl, true);
         const auto & q     = draft_q[i];
+
+        std::fill(q_by_id.begin(), q_by_id.end(), 0.0f);
+        for (const auto & token : q) {
+            if (token.id >= 0 && (size_t) token.id < q_by_id.size()) {
+                q_by_id[token.id] = token.p;
+            }
+        }
 
         const bool masked = !grammar_first && grammar_should_apply(gsmpl);
         if (masked) {
@@ -782,7 +809,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
         };
 
         // q_x is never 0 for a token the draft produced, but guard the divide
-        const float q_x = prob_of(q.data(), q.size(), draft[i]);
+        const float q_x = draft[i] >= 0 && (size_t) draft[i] < q_by_id.size() ? q_by_id[draft[i]] : 0.0f;
 
         float p_x = 0.0f;
         for (size_t k = 0; k < cur_p->size; ++k) {
@@ -802,7 +829,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
         residual.clear();
         float sum = 0.0f;
         for (size_t k = 0; k < cur_p->size; ++k) {
-            const float r = p_of(k) - prob_of(q.data(), q.size(), cur_p->data[k].id);
+            const float r = p_of(k) - q_by_id[cur_p->data[k].id];
             if (r > 0.0f) {
                 residual.push_back({ cur_p->data[k].id, 0.0f, r });
                 sum += r;

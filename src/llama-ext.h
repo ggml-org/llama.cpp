@@ -177,6 +177,13 @@ LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_mode
 // returns the number of extracted layers from target model
 LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
 
+// Enable CPU-side probabilistic DSpark sampling for this context.
+LLAMA_API void llama_set_dspark_probabilistic(struct llama_context * ctx, bool value);
+
+// Read DSpark Markov weights as F32. Passing nullptr returns the element count.
+LLAMA_API uint32_t llama_model_get_dspark_markov_w1(const struct llama_model * model, float * out);
+LLAMA_API uint32_t llama_model_get_dspark_markov_w2(const struct llama_model * model, float * out);
+
 // retrieves the whole token embedding matrix in F32 format (n_embd * n_vocab)
 // returns total number of elements or 0 on error
 // if out is nullptr, returns the number of tokens without writing to out

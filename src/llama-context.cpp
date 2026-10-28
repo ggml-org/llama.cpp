@@ -1360,6 +1360,13 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
     cparams.embeddings_nextn_masked = masked;
 }
 
+void llama_context::set_dspark_probabilistic(bool value) {
+    if (cparams.dspark_probabilistic != value) {
+        cparams.dspark_probabilistic = value;
+        sched_need_reserve = true;
+    }
+}
+
 void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
 
@@ -4273,6 +4280,10 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
 
 void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
+}
+
+void llama_set_dspark_probabilistic(llama_context * ctx, bool value) {
+    ctx->set_dspark_probabilistic(value);
 }
 
 void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool value) {

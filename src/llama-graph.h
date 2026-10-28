@@ -874,6 +874,10 @@ struct llm_graph_params {
             return false;
         }
 
+        if (cparams.dspark_probabilistic != other.cparams.dspark_probabilistic) {
+            return false;
+        }
+
         if (!samplers_equal(samplers, other.samplers)) {
             return false;
         }
