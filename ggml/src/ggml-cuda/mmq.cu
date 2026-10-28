@@ -161,18 +161,53 @@ static int ggml_cuda_mmq_get_J_best(
     return J_best;
 }
 
+static mmq_epilogue_args ggml_cuda_mmq_get_epilogue_args(
+        const ggml_cuda_mm_fusion_args_host * fusion, const bool mul_mat_id,
+        const int64_t nrows_x, const int64_t nchannels_y) {
+    // The fused gate/up/GLU path has no epilogue.
+    if (!fusion || fusion->gate) {
+        return {};
+    }
+
+    GGML_ASSERT(!fusion->gate_bias);
+    GGML_ASSERT(!fusion->gate_scale);
+
+    mmq_epilogue_args epilogue;
+    if (fusion->x_scale) {
+        GGML_ASSERT(fusion->x_scale->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_is_contiguous(fusion->x_scale));
+        GGML_ASSERT(ggml_nelements(fusion->x_scale) == (mul_mat_id ? nchannels_y : 1));
+        epilogue.scale = (const float *) fusion->x_scale->data;
+    }
+
+    if (fusion->x_bias) {
+        GGML_ASSERT(mul_mat_id);
+        GGML_ASSERT(fusion->x_bias->type == GGML_TYPE_F32);
+        GGML_ASSERT(fusion->x_bias->nb[0] == sizeof(float));
+        GGML_ASSERT(fusion->x_bias->nb[1] % sizeof(float) == 0);
+        GGML_ASSERT(fusion->x_bias->ne[0] == nrows_x);
+        GGML_ASSERT(fusion->x_bias->ne[1] == nchannels_y);
+        GGML_ASSERT(fusion->x_bias->ne[2] == 1);
+        GGML_ASSERT(fusion->x_bias->ne[3] == 1);
+        epilogue.bias = (const float *) fusion->x_bias->data;
+        epilogue.bias_stride = fusion->x_bias->nb[1] / sizeof(float);
+    }
+
+    return epilogue;
+}
+
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
-        const ggml_cuda_mm_fusion_args_host * fusion) {
+        const ggml_cuda_mm_fusion_args_host * fusion, const ggml_tensor * prec_node) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     // Fused gate/up/GLU: src0 is the up weight, dst the GLU output.
     const ggml_tensor * gate = fusion ? fusion->gate : nullptr;
-    if (fusion) {
+    if (gate) {
         // TODO MoE support
-        GGML_ASSERT(gate && !ids && !fusion->x_bias && !fusion->gate_bias && !fusion->x_scale && !fusion->gate_scale);
+        GGML_ASSERT(!ids && !fusion->x_bias && !fusion->gate_bias && !fusion->x_scale && !fusion->gate_scale);
         GGML_ASSERT(gate->type == src0->type && ggml_are_same_shape(gate, src0) && ggml_are_same_stride(gate, src0));
     }
 
@@ -220,10 +255,11 @@ void ggml_cuda_mul_mat_q(
     const int64_t s3  =  dst->nb[3] / ts_dst;
 
     const bool fallback = ggml_cuda_mmq_needs_fallback(ne01);
+    const mmq_epilogue_args epilogue = ggml_cuda_mmq_get_epilogue_args(fusion, ids != nullptr, ne01, ids ? ne02 : ne12);
 
-    // With fusion dst is the GLU output, not a MUL_MAT; the fused types always quantize src1 to Q8_1.
+    // With fusion dst is the GLU output or the last fused node, not a MUL_MAT; the fused gate/up types always quantize src1 to Q8_1.
     // TODO support for Q4 precision if both tensors allow it
-    const ggml_prec prec_src1 = gate ? GGML_PREC_Q8 : ggml_cuda_mmq_get_prec_src1(src0, dst, cc);
+    const ggml_prec prec_src1 = gate ? GGML_PREC_Q8 : ggml_cuda_mmq_get_prec_src1(src0, prec_node ? prec_node : dst, cc);
 
     const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
@@ -299,7 +335,7 @@ void ggml_cuda_mul_mat_q(
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
-            ne1, J_best, fusion_device};
+            ne1, J_best, fusion_device, epilogue};
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, prec_src1);
         return;
     }
@@ -378,7 +414,7 @@ void ggml_cuda_mul_mat_q(
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
-        ne12, J_best};
+        ne12, J_best, {}, epilogue};
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, prec_src1);
 }
