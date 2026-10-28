@@ -1,48 +1,74 @@
 <script lang="ts" module>
+	import StateGallery from '../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import { agenticTimings } from './fixtures';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessageStatistics from '$lib/components/app/chat/ChatMessages/ChatMessageStatistics/ChatMessageStatistics.svelte';
 	import { ChatMessageStatisticsMode, ChatMessageStatsView } from '$lib/enums';
 
 	const { Story } = defineMeta({
-		args: {
-			predictedMs: 3120,
-			predictedTokens: 164,
-			promptMs: 412,
-			promptTokens: 1830
-		},
 		component: ChatMessageStatistics,
 		parameters: {
 			layout: 'centered'
 		},
 		title: 'Components/ChatScreen/ChatMessages/ChatMessageStatistics'
 	});
+
+	const stats = {
+		predictedMs: 3120,
+		predictedTokens: 164,
+		promptMs: 412,
+		promptTokens: 1830
+	};
 </script>
 
-<Story name="Default" />
+<Story asChild name="States">
+	<StateGallery columns={1}>
+		<StateGalleryItem label="Default" note="generation view">
+			<ChatMessageStatistics {...stats} />
+		</StateGalleryItem>
 
-<Story args={{ initialView: ChatMessageStatsView.READING }} name="ReadingView" />
+		<StateGalleryItem label="Reading view">
+			<ChatMessageStatistics {...stats} initialView={ChatMessageStatsView.READING} />
+		</StateGalleryItem>
 
-<Story args={{ agenticTimings, initialView: ChatMessageStatsView.TOOLS }} name="ToolsView" />
+		<StateGalleryItem label="Tools view" note="agentic">
+			<ChatMessageStatistics {...stats} {agenticTimings} initialView={ChatMessageStatsView.TOOLS} />
+		</StateGalleryItem>
 
-<Story args={{ agenticTimings, initialView: ChatMessageStatsView.SUMMARY }} name="SummaryView" />
+		<StateGalleryItem label="Summary view" note="agentic">
+			<ChatMessageStatistics
+				{...stats}
+				{agenticTimings}
+				initialView={ChatMessageStatsView.SUMMARY}
+			/>
+		</StateGalleryItem>
 
-<Story args={{ agenticTimings, hideSummary: true }} name="AgenticWithoutSummary" />
+		<StateGalleryItem label="Agentic without summary">
+			<ChatMessageStatistics {...stats} {agenticTimings} hideSummary />
+		</StateGalleryItem>
 
-<Story args={{ mode: ChatMessageStatisticsMode.GENERATION }} name="GenerationOnly" />
+		<StateGalleryItem label="Generation only">
+			<ChatMessageStatistics {...stats} mode={ChatMessageStatisticsMode.GENERATION} />
+		</StateGalleryItem>
 
-<Story args={{ mode: ChatMessageStatisticsMode.READING }} name="ReadingOnly" />
+		<StateGalleryItem label="Reading only">
+			<ChatMessageStatistics {...stats} mode={ChatMessageStatisticsMode.READING} />
+		</StateGalleryItem>
 
-<Story
-	args={{
-		isLive: true,
-		isProcessingPrompt: true,
-		predictedMs: undefined,
-		predictedTokens: undefined,
-		promptMs: 6000,
-		promptTokens: 4200
-	}}
-	name="LivePromptProcessing"
-/>
+		<StateGalleryItem label="Live, processing prompt">
+			<ChatMessageStatistics
+				isLive
+				isProcessingPrompt
+				predictedMs={undefined}
+				predictedTokens={undefined}
+				promptMs={6000}
+				promptTokens={4200}
+			/>
+		</StateGalleryItem>
 
-<Story args={{ isLive: true, predictedMs: 5120, predictedTokens: 128 }} name="LiveGeneration" />
+		<StateGalleryItem label="Live, generating">
+			<ChatMessageStatistics {...stats} isLive predictedMs={5120} predictedTokens={128} />
+		</StateGalleryItem>
+	</StateGallery>
+</Story>

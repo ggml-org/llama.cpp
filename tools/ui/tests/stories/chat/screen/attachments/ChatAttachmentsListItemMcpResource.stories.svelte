@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import StateGallery from '../../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../../helpers/StateGalleryItem.svelte';
 	import {
 		mcpResourceAttachment,
 		mcpResourceImageAttachment,
@@ -18,35 +20,42 @@
 	const onclick = () => console.log('preview');
 </script>
 
-<Story
-	args={{ attachment: toMcpResourceAttachment(mcpResourceAttachment), onclick }}
-	name="Default"
-/>
+<Story asChild name="States">
+	<StateGallery columns={3}>
+		<StateGalleryItem label="Text resource">
+			<ChatAttachmentsListItemMcpResource
+				attachment={toMcpResourceAttachment(mcpResourceAttachment)}
+				{onclick}
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{ attachment: toMcpResourceAttachment(mcpResourceImageAttachment), onclick }}
-	name="ImageResource"
-/>
+		<StateGalleryItem label="Image resource">
+			<ChatAttachmentsListItemMcpResource
+				attachment={toMcpResourceAttachment(mcpResourceImageAttachment)}
+				{onclick}
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		attachment: toMcpResourceAttachment(mcpResourceAttachment),
-		onclick,
-		onRemove: (id: string) => console.log('remove', id)
-	}}
-	name="Removable"
-/>
+		<StateGalleryItem label="Removable">
+			<ChatAttachmentsListItemMcpResource
+				attachment={toMcpResourceAttachment(mcpResourceAttachment)}
+				onRemove={(id: string) => console.log('remove', id)}
+				{onclick}
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{ attachment: toMcpResourceAttachment(mcpResourceAttachment, { loading: true }) }}
-	name="Loading"
-/>
+		<StateGalleryItem label="Loading">
+			<ChatAttachmentsListItemMcpResource
+				attachment={toMcpResourceAttachment(mcpResourceAttachment, { loading: true })}
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		attachment: toMcpResourceAttachment(mcpResourceAttachment, {
-			error: 'Resource not found'
-		})
-	}}
-	name="Error"
-/>
+		<StateGalleryItem label="Error">
+			<ChatAttachmentsListItemMcpResource
+				attachment={toMcpResourceAttachment(mcpResourceAttachment, {
+					error: 'Resource not found'
+				})}
+			/>
+		</StateGalleryItem>
+	</StateGallery>
+</Story>

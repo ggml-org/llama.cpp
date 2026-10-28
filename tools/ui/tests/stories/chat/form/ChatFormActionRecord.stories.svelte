@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import StateGallery from '../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatFormActionRecord from '$lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
 
@@ -11,17 +13,34 @@
 	});
 </script>
 
-<Story args={{ hasAudioModality: true }} name="Default" />
+<Story asChild name="States">
+	<StateGallery columns={5}>
+		<StateGalleryItem label="Idle">
+			<ChatFormActionRecord hasAudioModality />
+		</StateGalleryItem>
 
-<Story args={{ hasAudioModality: true, isRecording: true }} name="Recording" />
+		<StateGalleryItem label="Recording">
+			<ChatFormActionRecord hasAudioModality isRecording />
+		</StateGalleryItem>
 
-<Story args={{ hasAudioModality: true, isLoading: true }} name="Loading" />
+		<StateGalleryItem label="Loading">
+			<ChatFormActionRecord hasAudioModality isLoading />
+		</StateGalleryItem>
 
-<Story args={{ disabled: true, hasAudioModality: true }} name="Disabled" />
+		<StateGalleryItem label="Disabled">
+			<ChatFormActionRecord disabled hasAudioModality />
+		</StateGalleryItem>
 
+		<StateGalleryItem label="No audio" note="model lacks audio">
+			<ChatFormActionRecord hasAudioModality={false} />
+		</StateGalleryItem>
+	</StateGallery>
+</Story>
+
+<!-- separate: play hovers the button to open its tooltip -->
 <Story
 	args={{ hasAudioModality: false }}
-	name="NoAudioModality"
+	name="NoAudioModalityTooltip"
 	play={async ({ canvas, userEvent }) => {
 		// the tooltip trigger wraps the disabled button, hover the trigger
 		await userEvent.hover(canvas.getAllByRole('button', { name: 'Start recording' })[0]);
