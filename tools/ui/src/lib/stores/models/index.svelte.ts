@@ -205,12 +205,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * Prioritizes:
 	 * 1. Model from active conversation's last assistant response (if loaded)
 	 * 2. Model from active conversation's last assistant response (if not loaded)
-	 * 3. First loaded model (not from active conversation)
-	 * 4. A favorite model
-	 * 5. First available model
+	 * 3. A model that is loading
+	 * 4. First loaded model (not from active conversation)
+	 * 5. A favorite model
+	 * 6. First available model
+	 *
+	 * A chat without a model of its own also trades an idle selection for a
+	 * model that is loading.
 	 */
 	async ensureFirstModelSelected(): Promise<void> {
-		if (this.selectedModelName) return;
+		if (this.selectedModelName) {
+			const loadingModel = this.getLoadingModelToPreselect();
+
+			if (loadingModel) await this.selectModelById(loadingModel.id);
+
+			return;
+		}
 
 		const availableModels = this.getVisibleModels();
 
@@ -231,6 +241,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 				return;
 			}
+		}
+
+		// a model that is loading is the one the user is waiting for
+		const loadingModel = availableModels.find((m) => this.isModelLoading(m.model));
+
+		if (loadingModel) {
+			await this.selectModelById(loadingModel.id);
+
+			return;
 		}
 
 		// Try a loaded model first
@@ -322,6 +341,20 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
+	 * The loading model a chat without a model of its own should switch to: none
+	 * while the current selection is loaded or loading itself.
+	 */
+	getLoadingModelToPreselect(): ModelOption | null {
+		if (this.getModelFromLastAssistantResponse()) return null;
+
+		const selected = this.selectedModelName;
+
+		if (selected && (this.isModelLoaded(selected) || this.isModelLoading(selected))) return null;
+
+		return this.getVisibleModels().find((m) => this.isModelLoading(m.model)) ?? null;
+	}
+
+	/**
 	 * Gets the model name from the last assistant message in the active conversation.
 	 * Used by both the chat page and settings page to maintain model consistency.
 	 */
@@ -365,6 +398,14 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const status = this.getModelStatus(modelId);
 
 		return status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
+	}
+
+	/** Loading on the server, or a load this client started that has not finished yet. */
+	isModelLoading(modelId: string): boolean {
+		return (
+			this.getModelStatus(modelId) === ServerModelStatus.LOADING ||
+			this._status.isOperationInProgress(modelId)
+		);
 	}
 
 	/** Loaded, or sleeping, and not mid-operation: what a row shows as running. */
@@ -415,13 +456,24 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Auto-selects the model from the last assistant response if available and loaded.
+	 * Auto-selects the model from the last assistant response if available and loaded,
+	 * or a loading model when the conversation has no model yet.
 	 * Returns true if a model was selected, false otherwise.
 	 */
 	async selectModelFromLastAssistantResponse(): Promise<boolean> {
 		const lastModel = this.getModelFromLastAssistantResponse();
 
-		if (!lastModel || this.selectedModelName === lastModel) return false;
+		if (!lastModel) {
+			const loadingModel = this.getLoadingModelToPreselect();
+
+			if (!loadingModel) return false;
+
+			await this.selectModelById(loadingModel.id);
+
+			return true;
+		}
+
+		if (this.selectedModelName === lastModel) return false;
 
 		const matchingModel = this.models.find((option) => option.model === lastModel);
 

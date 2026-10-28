@@ -2,10 +2,10 @@
  * Model state for the chat form's action bar.
  *
  * Syncs the conversation's model into the global selection (a conversation
- * opened from history names the model that produced it), falls back to the
- * first loaded model on a router, and reactively tracks which modalities
- * (vision / audio / video) the active model supports - fetching model props
- * from the server on demand if they are not cached yet.
+ * opened from history names the model that produced it), falls back to a
+ * loading, then the first loaded, model on a router, and reactively tracks
+ * which modalities (vision / audio / video) the active model supports -
+ * fetching model props from the server on demand if they are not cached yet.
  */
 
 import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
@@ -36,12 +36,14 @@ export function useChatFormModel() {
 		} else if (
 			isRouter &&
 			!modelsStore.selectedModelId &&
-			modelsStore.loadedModelIds.length > 0 &&
 			conversationsStore.activeMessages.length > 0 &&
 			!conversationModel
 		) {
 			lastSyncedConversationModel = null;
-			const first = modelsStore.models.find((m) => modelsStore.loadedModelIds.includes(m.model));
+			// a model that is loading wins over one that is already up
+			const first =
+				modelsStore.models.find((m) => modelsStore.isModelLoading(m.model)) ??
+				modelsStore.models.find((m) => modelsStore.loadedModelIds.includes(m.model));
 
 			if (first) modelsStore.selectModelById(first.id);
 		}
