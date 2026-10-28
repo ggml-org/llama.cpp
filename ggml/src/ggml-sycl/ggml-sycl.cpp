@@ -3010,6 +3010,35 @@ static void top_k_f32_sycl(
         return;
     }
 
+    // Short rows: one work-item per column and k work-group argmax rounds.
+    // Ties take the lower column.
+    const int wg = std::max(WARP_SIZE, next_power_of_2((int) ncols));
+    if (wg <= ggml_sycl_info().max_work_group_sizes[ctx.device]) {
+        main_stream->parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(nrows * wg), sycl::range<1>(wg)),
+            [=](sycl::nd_item<1> item_ct1) {
+                const int64_t row = item_ct1.get_group(0);
+                const int     tid = item_ct1.get_local_id(0);
+                const auto    grp = item_ct1.get_group();
+
+                // NaN is never preferred, and every round still has a winner since k <= ncols
+                const float x     = tid < ncols ? src[row * ncols + tid] : -INFINITY;
+                const float val   = sycl::isnan(x) ? -INFINITY : x;
+                bool        taken = tid >= ncols;
+                for (int i = 0; i < k; i++) {
+                    const float cand   = taken ? -INFINITY : val;
+                    const float best   = sycl::reduce_over_group(grp, cand, sycl::maximum<float>());
+                    const int   winner = sycl::reduce_over_group(grp, !taken && cand == best ? tid : INT_MAX,
+                                                                 sycl::minimum<int>());
+                    if (tid == winner) {
+                        dst_indices[row * k + i] = tid;
+                        taken = true;
+                    }
+                }
+            });
+        return;
+    }
+
     const int block_size = 128;
 
     const sycl::range<1> block_dims(block_size);
