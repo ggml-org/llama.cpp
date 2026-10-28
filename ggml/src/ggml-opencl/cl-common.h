@@ -2125,6 +2125,9 @@ std::string ggml_opencl_make_compile_opts(const ggml_backend_opencl_context * ba
 void load_cl_kernels(ggml_backend_opencl_context * backend_ctx);
 void sync_with_other_backends(ggml_backend_opencl_context * backend_ctx);
 void sync_with_other_backends(ggml_backend_t backend);
+void transpose_2d(ggml_backend_opencl_context * backend_ctx, cl_kernel kernel,
+                  cl_mem src, cl_mem dst, size_t size, cl_int stride, cl_int rows,
+                  bool blocking = true, bool auto_local = false);
 void transpose_2d_as_8b(ggml_backend_opencl_context * backend_ctx, cl_mem src, cl_mem dst,
                         size_t size, cl_int stride, cl_int rows,
                         bool blocking = true, bool rows_soa = false);
