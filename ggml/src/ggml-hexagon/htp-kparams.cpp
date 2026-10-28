@@ -2672,7 +2672,7 @@ static bool htp_kparams_solve_cpy_transpose(
     if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
         return false;
     }
-    if (!ggml_is_contiguous(dst) || !ggml_are_same_shape(src0, dst) || src0->nb[0] == type_size) {
+    if (!ggml_is_contiguous(dst) || !ggml_are_same_shape(src0, dst)) {
         return false;
     }
 
@@ -2845,13 +2845,13 @@ static bool htp_kparams_solve_cpy(
             }
         }
 
-        if (sameshape) {
-            kparams->kernel_type = HTP_COPY_KERNEL_SAMESHAPE_SAMETYPE;
-            kparams->total_rows  = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
+        if (htp_kparams_solve_cpy_transpose(sess, src0, dst, src_type_size, kparams)) {
             return true;
         }
 
-        if (htp_kparams_solve_cpy_transpose(sess, src0, dst, src_type_size, kparams)) {
+        if (sameshape) {
+            kparams->kernel_type = HTP_COPY_KERNEL_SAMESHAPE_SAMETYPE;
+            kparams->total_rows  = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
             return true;
         }
 
