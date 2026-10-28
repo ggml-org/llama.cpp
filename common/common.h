@@ -311,6 +311,14 @@ struct common_params_model {
     std::string hf_file     = ""; // HF file
     std::string docker_repo = ""; // Docker repo
 
+    std::vector<std::string> shards;
+
+    std::vector<std::string> get_paths() const {
+        std::vector<std::string> paths = { path };
+        paths.insert(paths.end(), shards.begin(), shards.end());
+        return paths;
+    }
+
     std::string get_name() const {
         if (!hf_repo.empty()) {
             return hf_repo;
@@ -493,7 +501,6 @@ struct common_params {
     enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_AUTO; // how to load the model
 
     enum llama_lazy_mode lazy_mode = LLAMA_LAZY_MODE_AUTO; // on-demand reading of tensors marked by the arch
-    std::string ple_path; // separate GGUF with the per-layer embeddings
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
@@ -588,6 +595,7 @@ struct common_params {
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
+    bool ignore_shard_num_mismatch = false; // load only the given files, without split metadata checks
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
@@ -1025,6 +1033,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
 // apply --fit to mparams and cparams, no-op if params.fit_params is false
 void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams);
+
+struct llama_model * common_model_load(const std::vector<std::string> & paths, const struct llama_model_params & mparams);
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);

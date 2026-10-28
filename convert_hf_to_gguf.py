@@ -128,11 +128,11 @@ def parse_args() -> argparse.Namespace:
     ple_group = parser.add_mutually_exclusive_group()
     ple_group.add_argument(
         "--ple-only", action="store_true",
-        help="Export only the per-layer embedding table as a separate GGUF for use with --ple.",
+        help="Export only the per-layer embedding table as a separate GGUF for use with --shard (alias: --ple).",
     )
     ple_group.add_argument(
         "--no-ple", action="store_true",
-        help="Exclude the per-layer embedding table while retaining its metadata. Load the table separately with --ple.",
+        help="Exclude the per-layer embedding table while retaining its metadata. Load the table separately with --shard (alias: --ple).",
     )
     parser.add_argument(
         "--dspark", action="store_true",
