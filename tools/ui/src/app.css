@@ -84,15 +84,21 @@
 	--glass-highlight: oklch(1 0 0 / 0.5);
 	--glass-edge-side: oklch(0.91 0.005 250);
 	--glass-edge-mid: oklch(0.94 0.003 250);
-	--glass-edge-side-focus: oklch(0.76 0.012 250);
-	--glass-edge-mid-focus: oklch(0.82 0.009 250);
+	--glass-edge-side-focus: oklch(0.81 0.01 250);
+	--glass-edge-mid-focus: oklch(0.86 0.007 250);
 	--glass-drop:
 		0 1px 3px oklch(0 0 0 / 0.08), 0 1px 2px -1px oklch(0 0 0 / 0.06),
 		0 6px 16px -10px oklch(0 0 0 / 0.08);
 	--key-drop: 0 1px 3px oklch(0 0 0 / 0.1), 0 1px 2px -1px oklch(0 0 0 / 0.1);
+	--float-edge: oklch(0.9 0.005 250);
+	--float-drop: 0 1px 3px oklch(0 0 0 / 0.06), 0 12px 32px -12px oklch(0 0 0 / 0.18);
+	--well-shade: oklch(0 0 0 / 0.06);
 	--engrave: 0 1px 0 oklch(1 0 0 / 0.85);
-	--sheen-top: oklch(1 0 0 / 0.55);
-	--sheen-bottom: oklch(0 0 0 / 0.015);
+	--bubble-edge: oklch(0.935 0.003 250);
+	--ambient-edge-side: oklch(0.938 0.004 250);
+	--ambient-edge-mid: oklch(0.958 0.002 250);
+	--sheen-top: oklch(1 0 0 / 0.2);
+	--sheen-bottom: oklch(1 0 0 / 0);
 	--font-mono:
 		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
 		'Liberation Mono', Menlo, monospace;
@@ -159,14 +165,20 @@
 	--glass-highlight: oklch(1 0 0 / 0.04);
 	--glass-edge-side: oklch(1 0 0 / 0.06);
 	--glass-edge-mid: oklch(1 0 0 / 0.04);
-	--glass-edge-side-focus: oklch(1 0 0 / 0.24);
-	--glass-edge-mid-focus: oklch(1 0 0 / 0.17);
+	--glass-edge-side-focus: oklch(1 0 0 / 0.18);
+	--glass-edge-mid-focus: oklch(1 0 0 / 0.12);
 	--glass-drop:
 		0 1px 3px oklch(0 0 0 / 0.3), 0 1px 2px -1px oklch(0 0 0 / 0.25),
 		0 6px 16px -10px oklch(0 0 0 / 0.35);
 	--key-drop: 0 1px 2px oklch(0 0 0 / 0.3);
+	--float-edge: oklch(1 0 0 / 0.09);
+	--float-drop: 0 1px 3px oklch(0 0 0 / 0.4), 0 16px 40px -12px oklch(0 0 0 / 0.6);
+	--well-shade: oklch(0 0 0 / 0.3);
 	--engrave: 0 -1px 0 oklch(0 0 0 / 0.55);
-	--sheen-top: oklch(1 0 0 / 0.04);
+	--bubble-edge: oklch(1 0 0 / 0.035);
+	--ambient-edge-side: oklch(1 0 0 / 0.042);
+	--ambient-edge-mid: oklch(1 0 0 / 0.024);
+	--sheen-top: oklch(1 0 0 / 0.015);
 	--sheen-bottom: oklch(1 0 0 / 0);
 }
 
@@ -381,12 +393,16 @@
 @utility matte-glass {
 	--edge-side: var(--glass-edge-side);
 	--edge-mid: var(--glass-edge-mid);
-	position: relative;
 	background-color: var(--glass-fill);
 	backdrop-filter: blur(24px) saturate(1.5);
 	box-shadow:
 		inset 0 0 0 2px var(--glass-highlight),
 		var(--glass-drop);
+
+	/* the ring below needs a positioned box; keep fixed or sticky ones as they are */
+	&:not(.fixed, .absolute, .sticky) {
+		position: relative;
+	}
 
 	/* masked ring, so the edge gradient does not tint the translucent fill */
 	&::before {
@@ -412,6 +428,29 @@
 		--edge-side: var(--glass-edge-side-focus);
 		--edge-mid: var(--glass-edge-mid-focus);
 	}
+}
+
+/* Floating panel (menus, popovers, dialogs): frosted fill over --float-base, faint rim, lifted shadow. */
+@utility matte-float {
+	background-color: color-mix(in oklch, var(--float-base, var(--popover)) 86%, transparent);
+	border-color: var(--float-edge);
+	backdrop-filter: blur(24px) saturate(1.5);
+	box-shadow:
+		inset 0 0 0 1px var(--glass-highlight),
+		var(--float-drop);
+}
+
+/* Recessed field (inputs, switch track, checkbox): soft inner shade, keeps Tailwind focus rings. */
+@utility matte-well {
+	--tw-inset-shadow: inset 0 1px 2px var(--well-shade);
+	box-shadow:
+		var(--tw-inset-shadow), var(--tw-ring-offset-shadow, 0 0 #0000),
+		var(--tw-ring-shadow, 0 0 #0000);
+}
+
+/* Faint even rim for badges and chips. */
+@utility matte-chip {
+	box-shadow: inset 0 0 0 1px var(--glass-highlight);
 }
 
 /* Soft top-down sheen over a surface's own fill, e.g. the user message bubble. */

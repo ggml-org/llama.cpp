@@ -42,7 +42,7 @@
 <svelte:element
 	this={href ? 'a' : 'span'}
 	bind:this={ref}
-	class={cn(badgeVariants({ variant }), className, 'backdrop-blur-sm')}
+	class={cn(badgeVariants({ variant }), className, 'matte-chip backdrop-blur-sm')}
 	data-slot="badge"
 	{href}
 	{...restProps}
