@@ -91,8 +91,6 @@ struct mtmd_cli_context {
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
     std::string video_ffmpeg_bin_dir;
 
-    mtmd::batch_ptr mbatch;
-
     // chat template
     common_chat_templates_ptr tmpls;
     std::vector<common_chat_msg> chat_history;
@@ -122,7 +120,8 @@ struct mtmd_cli_context {
         init_vision_context(params);
 
         mtmd_cap = mtmd_helper_get_capabilities(model, ctx_vision.get());
-        if (!mtmd_cap.chat) {
+        // a realtime transcription model has no chat, it streams the audio below
+        if (!mtmd_cap.chat && !mtmd_cap.audio_stream) {
             LOG_ERR("Model does not support chat mode\n");
             LOG_ERR("Hint: for TTS models, please use llama-tts\n");
             exit(1);
@@ -408,6 +407,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     }
 
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    // mbatch must not outlive the chunks it references
+    mtmd::batch_ptr mbatch;
     int32_t res = mtmd_tokenize_from_parts(ctx.ctx_vision.get(),
                         chunks.ptr.get(), // output
                         parts_ptr.data(),
@@ -446,8 +447,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
         } else {
             // media chunk: try to get embd from existing batch, or create a new batch
             float * embd = nullptr;
-            if (ctx.mbatch) {
-                embd = mtmd_batch_get_output_embd(ctx.mbatch.get(), chunk);
+            if (mbatch) {
+                embd = mtmd_batch_get_output_embd(mbatch.get(), chunk);
 
                 if (embd) {
                     LOG_DBG("found embd for media chunk %zu in existing batch\n", i);
@@ -458,8 +459,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 
             if (!embd) {
                 // create and encode a new batch with as many media chunks as possible
-                ctx.mbatch.reset(mtmd_batch_init(ctx.ctx_vision.get()));
-                res = mtmd_batch_add_chunk(ctx.mbatch.get(), chunk);
+                mbatch.reset(mtmd_batch_init(ctx.ctx_vision.get()));
+                res = mtmd_batch_add_chunk(mbatch.get(), chunk);
                 GGML_ASSERT(res == 0); // first chunk must always succeed
 
                 int n_added = 1;
@@ -470,7 +471,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
                     if (next_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
                         break; // text chunk splits the batch
                     }
-                    res = mtmd_batch_add_chunk(ctx.mbatch.get(), next_chunk);
+                    res = mtmd_batch_add_chunk(mbatch.get(), next_chunk);
                     if (res != 0) {
                         break; // batch full or incompatible
                     }
@@ -479,14 +480,14 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 
                 int64_t time_start = ggml_time_ms();
                 LOG_INF("encoding mtmd batch, n_chunks = %d (done = %zu, total = %zu)\n", n_added, i, n_chunks);
-                res = mtmd_batch_encode(ctx.mbatch.get());
+                res = mtmd_batch_encode(mbatch.get());
                 if (res != 0) {
                     LOG_ERR("Failed to encode mtmd batch, res = %d\n", res);
                     return 1;
                 }
                 LOG_INF("mtmd batch encoding done in %d ms\n", (int)(ggml_time_ms() - time_start));
 
-                embd = mtmd_batch_get_output_embd(ctx.mbatch.get(), chunk);
+                embd = mtmd_batch_get_output_embd(mbatch.get(), chunk);
             }
 
             GGML_ASSERT(embd != nullptr);
@@ -567,7 +568,10 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
-    if (ctx.mtmd_cap.audio_stream) {
+    // realtime transcription models (no chat) transcribe while they listen, the others answer after the audio
+    const bool transcribes = ctx.mtmd_cap.audio_stream && !ctx.mtmd_cap.chat;
+
+    if (transcribes) {
         if (params.image.size() != 1) {
             LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
             return 1;

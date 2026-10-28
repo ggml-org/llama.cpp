@@ -8,6 +8,7 @@
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
@@ -54,12 +55,34 @@ struct tensor_data_params {
 // fills the values of one tensor, the name carries whatever the property needs
 typedef void (*tensor_filler)(std::vector<float> & dst, const char * name, const tensor_data_params & params);
 
+// a pool of normal draws, generated once and reused for every model
+static std::vector<float> g_normal_pool;
+static const size_t NORMAL_POOL_SIZE = 16 * 1024 * 1024;
+
+// fill the pool once; each tensor copies a slice of it
+static void init_normal_pool(const size_t seed, const float stdev) {
+    g_normal_pool.resize(NORMAL_POOL_SIZE);
+    std::mt19937 gen(seed);
+    std::normal_distribution<float> dist(0.0f, stdev);
+    for (float & v : g_normal_pool) {
+        v = dist(gen);
+    }
+}
+
 // a normal draw keyed on a name, so that tensors which share a draw ask for the same key
-static void fill_normal(std::vector<float> & dst, const char * key, const tensor_data_params & params) {
-    std::mt19937 gen(params.seed ^ std::hash<std::string>{}(key));
-    std::normal_distribution<float> dis(0.0f, params.stdev);
-    for (float & v : dst) {
-        v = dis(gen);
+static void fill_normal(std::vector<float> & dst, const char * key, const tensor_data_params &) {
+    const size_t n = dst.size();
+    const size_t pool_size = g_normal_pool.size();
+    const size_t start = std::hash<std::string>{}(key) % pool_size;
+
+    // copy a cyclic slice of the pool, so a tensor larger than the pool still fills
+    size_t i = 0;
+    size_t pos = start;
+    while (i < n) {
+        const size_t chunk = std::min(pool_size - pos, n - i);
+        std::memcpy(dst.data() + i, g_normal_pool.data() + pos, chunk * sizeof(float));
+        i += chunk;
+        pos = 0;
     }
 }
 
@@ -228,6 +251,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head = 1;
         n_ff   = 96;
         n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
+    } else if (arch == LLM_ARCH_LFM3) {
+        n_layer = 3;
     } else if (arch == LLM_ARCH_DEEPSEEK4) {
         // head size 64 so that GPU flash attention kernels support the model
         n_embd  = 512;
@@ -313,8 +338,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
-            arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_KIMI_LINEAR ||
-            arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_GLM5_NEXT) {
+            arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
+            arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_GLM5_NEXT
+            ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
@@ -416,6 +442,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         if (arch == LLM_ARCH_FLINT) {
             ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
         }
+    } else if (arch == LLM_ARCH_LFM3) {
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({0, 0, 1}));
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,               10000.0f);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
     }
@@ -682,11 +711,11 @@ static std::string get_tmp_gguf_path() {
     return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
 }
 
-static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -695,6 +724,23 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+
+    tensor_data_params tensor_params = { seed, stdev };
+    llama_model_ptr model(gguf_ctx != nullptr ?
+        llama_model_init_from_user(gguf_ctx, set_tensor_data, &tensor_params, model_params) :
+        llama_model_load_from_file_ptr(file, model_params));
+    if (!model) {
+        throw std::runtime_error("failed to create llama model");
+    }
+    return model;
+}
+
+static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
+        const std::vector<ggml_backend_dev_t> & devs,
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -709,13 +755,6 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         ctx_params.n_ubatch = 2;
     }
 
-    tensor_data_params tensor_params = { seed, stdev };
-    llama_model_ptr model(gguf_ctx != nullptr ?
-        llama_model_init_from_user(gguf_ctx, set_tensor_data, &tensor_params, model_params) :
-        llama_model_load_from_file_ptr(file, model_params));
-    if (!model) {
-        throw std::runtime_error("failed to create llama model");
-    }
     llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
@@ -1027,10 +1066,12 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                 continue;
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
+            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
             const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
-            LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
-            llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
+            LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
+            llama_model_save_to_file(model.get(), path.c_str());
+            const std::uintmax_t size = std::filesystem::file_size(path);
+            LOG_CNT(" (%.2f MB)\n", (double) size / (1024.0 * 1024.0));
         }
     }
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
@@ -1418,6 +1459,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
+
+    init_normal_pool(seed, stdev);
 
     try {
         if (!out.empty()) {

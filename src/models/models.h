@@ -111,6 +111,11 @@ struct llm_build_lfm_base : public llm_graph_context {
                                       ggml_tensor * cur,
                                       int il);
 
+    // no recurrent state (decision graphs): causal over the ubatch from a zero state
+    ggml_tensor * build_lfm_shortconv(const llama_model & model,
+                                      ggml_tensor * cur,
+                                      int il);
+
     ggml_tensor * build_lfm_dense_ffn(const llama_model & model,
                                       ggml_tensor * cur,
                                       int il);
@@ -2433,6 +2438,21 @@ struct llama_model_lfm2moe : public llama_model_base {
 };
 
 
+struct llama_model_lfm3 : public llama_model_base {
+    llama_model_lfm3(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // decision: d1, the prompt read in one batch, no memory
+    template <bool decision>
+    struct graph : public llm_build_lfm_base {
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_smallthinker : public llama_model_base {
     llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -2792,13 +2812,12 @@ struct llama_model_qwen4exp : public llama_model_base {
         // the QSA layers share one set of k-pool inputs, see llama_memory_hybrid_idx
         llm_graph_input_kpool * build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb);
 
-        // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail, kq_mask included
+        // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail
         ggml_tensor * build_qsa_sel(
   const llama_memory_hybrid_idx_context * mctx_hyb,
           llm_graph_input_kpool * inp_kpool,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
-                    ggml_tensor * kq_mask,
                             int * sections,
                             int   il);
 
@@ -3026,7 +3045,7 @@ struct llama_model_glm5_next : public llama_model_base {
                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
                                       int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
 
-        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, ggml_tensor * kq_mask, const llama_layer & layer,
+        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
                                          const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
 
         // attention output (cur) and the selection to carry to the next shared layer (sel)
