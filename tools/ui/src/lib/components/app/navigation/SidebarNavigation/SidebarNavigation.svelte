@@ -552,7 +552,7 @@
 	<aside
 		bind:this={asideEl}
 		class={[
-			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
+			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 md:z-20 w-[calc(100dvw-1rem)]',
 			'md:h-[calc(100dvh-1.125rem)]',
 			uiStore.isSidebarExpanded &&
 				(deviceStore.isStandalone
