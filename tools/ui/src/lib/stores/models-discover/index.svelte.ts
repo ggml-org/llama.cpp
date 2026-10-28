@@ -14,7 +14,7 @@ import type {
 	HfModelInfo,
 	HfModelSibling
 } from '$lib/types/huggingface';
-import { isAuxSidecar } from '$lib/utils';
+import { isAuxSidecar, orgOf } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 /** Min/max GGUF file size (bytes) across the quants of one repo. */
@@ -141,7 +141,7 @@ class ModelsDiscoverStore {
 
 			if (requestId !== this.searchRequestId) return;
 
-			this.models = results;
+			this.models = this.baseOrgFirst(results);
 			this.error = null;
 		} catch (err) {
 			if (requestId !== this.searchRequestId) return;
@@ -179,6 +179,17 @@ class ModelsDiscoverStore {
 		this.sizeRangePending.set(modelId, request);
 
 		return request;
+	}
+
+	/**
+	 * Repos published by their base model's own org first (e.g. `Qwen/Qwen3-8B-GGUF`
+	 * ahead of third-party quants of `Qwen/Qwen3-8B`); the hub's order holds otherwise.
+	 */
+	private baseOrgFirst(models: HfModelInfo[]): HfModelInfo[] {
+		const isBaseOrg = (model: HfModelInfo) =>
+			HuggingFaceService.getBaseModels(model).some((base) => orgOf(base) === orgOf(model.id));
+
+		return [...models.filter(isBaseOrg), ...models.filter((model) => !isBaseOrg(model))];
 	}
 
 	/**

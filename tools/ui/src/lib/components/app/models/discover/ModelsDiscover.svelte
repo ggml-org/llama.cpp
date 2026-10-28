@@ -18,8 +18,7 @@
 
 	let selectedId = $state<string | null>(null);
 	let searchQuery = $state('');
-	// running and paused downloads both lead the list; a search owns the pane, so the
-	// section steps aside while a query is active
+	// running and paused downloads both lead the list, with or without a search query
 	let downloadEntries = $derived(modelsStore.status.getDownloadEntries());
 
 	let isSearching = $derived(searchQuery.trim().length > 0);
@@ -130,7 +129,7 @@
 >
 	<ModelsDiscoverListSearch bind:value={searchQuery} onSearch={handleSearchInput} />
 
-	{#if downloadEntries.length > 0 && !isSearching}
+	{#if downloadEntries.length > 0}
 		<ModelsSection
 			count={downloadEntries.length}
 			label="Downloading"
