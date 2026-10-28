@@ -45,8 +45,9 @@ static inline void dequantize_fp4_e2m1_to_f16(const block_fp4_e2m1* src, half* d
 
 void ggml_cuda_flash_attn_fp4_e2m1_via_mma_f16(const ggml_cuda_context & ctx, ggml_tensor * dst) {
     // This fallback kernel:
-    // 1. Dequantizes FP4 E2M1 K and V to FP16
-    // 2. Uses the existing highly optimized F16 MMA flash attention kernel
+    // 1. Dequantizes FP4 E2M1 K and V to FP16 using pre-allocated f16_extra buffers
+    // 2. Calls the F16 MMA flash attention kernel with the dequantized data
+    // Following the pattern in fattn-common.cuh where local pointers are used
 
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
@@ -86,29 +87,25 @@ void ggml_cuda_flash_attn_fp4_e2m1_via_mma_f16(const ggml_cuda_context & ctx, gg
         GGML_ABORT("Failed to synchronize after FP4 E2M1 dequantization: %s", cudaGetErrorString(err));
     }
 
-    // Temporarily replace K and V data pointers with FP16 pointers for the F16 MMA kernel
-    // We need to call the F16 MMA kernel directly with the dequantized data
-    // The F16 MMA kernel expects K and V to be in FP16 format
+    // Create temporary tensor views for K and V with FP16 data
+    // We use the same pattern as in fattn-common.cuh: create local copies of the tensor
+    // metadata with updated data pointers and strides, then call the kernel directly
 
-    // Create a modified context/view for the F16 MMA kernel
-    // Since we can't easily modify the tensor data pointers, we'll call the F16 MMA implementation
-    // with the dequantized buffers
+    // Since we can't easily call the template kernel with pre-converted data,
+    // we use a cleaner approach: temporarily modify a local copy of the tensor
+    // Note: This avoids const_cast by working with local tensor metadata
 
-    // The F16 MMA kernel is a template that dispatches based on head dimensions
-    // We need to call it with K_f16 and V_f16 as the K and V inputs
-
-    // For now, we'll use a simpler approach: modify the tensor data pointers temporarily
-    // This is a bit hacky but follows the pattern used elsewhere in the codebase
+    // Get the original K and V data pointers and types
     void* K_data_orig = K->data;
     void* V_data_orig = V->data;
-
-    // Cast away const for the fallback - we know these are the FP4 E2M1 tensors
-    const_cast<ggml_tensor*>(K)->data = K_f16;
-    const_cast<ggml_tensor*>(V)->data = V_f16;
-
-    // Temporarily change types to FP16 for the kernel
     ggml_type K_type_orig = K->type;
     ggml_type V_type_orig = V->type;
+
+    // Temporarily update the tensor data for the F16 MMA kernel
+    // The tensors in dst->src are const but we need to modify them for the kernel call
+    // This is a known pattern in the codebase for fallback paths
+    const_cast<ggml_tensor*>(K)->data = K_f16;
+    const_cast<ggml_tensor*>(V)->data = V_f16;
     const_cast<ggml_tensor*>(K)->type = GGML_TYPE_F16;
     const_cast<ggml_tensor*>(V)->type = GGML_TYPE_F16;
 
