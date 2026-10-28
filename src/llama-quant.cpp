@@ -9,7 +9,6 @@
 #include <atomic>
 #include <cerrno>
 #include <cinttypes>
-#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -782,10 +781,6 @@ static size_t llama_tensor_quantize_impl(ggml_type new_type,
     return new_size;
 }
 
-static std::atomic<bool> bpw_stop{ false };
-
-static void signal_handler(int) { bpw_stop.store(true, std::memory_order_relaxed); }
-
 // Returns tensor type overrides that meet a global file size or bpw target
 static std::unordered_map<std::string, ggml_type> target_bpw_type(
     llama_model_loader & ml,
@@ -799,22 +794,14 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const std::unordered_map<std::string, ggml_type> * locked_tensors,
     int nthread
 ) {
-    bpw_stop.store(false, std::memory_order_relaxed);
-
-    // SIGINT/SIGTERM signal handlers
-    struct signal_scope_guard {
-        using handler_t = void (*)(int);
-        handler_t prev_int = SIG_DFL;
-        handler_t prev_term = SIG_DFL;
-        signal_scope_guard() {
-            prev_int = std::signal(SIGINT, signal_handler);
-            prev_term = std::signal(SIGTERM, signal_handler);
-        }
-        ~signal_scope_guard() {
-            std::signal(SIGINT, prev_int);
-            std::signal(SIGTERM, prev_term);
-        }
-    } signal_guard;
+    bool interrupted = false;
+    std::mutex interrupt_mutex;
+    auto poll_interrupt = [&]() {
+        if (!qs.params->abort_callback) { return false; }
+        std::lock_guard<std::mutex> lock(interrupt_mutex);
+        if (!interrupted) { interrupted = qs.params->abort_callback(qs.params->abort_callback_data); }
+        return interrupted;
+    };
 
     // GGML_TYPE scores
     struct type_scores {
@@ -1148,9 +1135,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return out;
     };
 
-    // Check for user interrupt and save progress
-    auto check_signal_handler = [&](const std::vector<type_choice> & all_tensors) {
-        if (bpw_stop.load(std::memory_order_relaxed)) {
+    // Check for interruptions and try save progress
+    auto throw_if_aborted = [&](const std::vector<type_choice> & all_tensors) {
+        if (interrupted) {
             if (qs.params->state_file) {
                 if (qs.has_ignored_types) {
                     LLAMA_LOG_WARN("\n\t%s: interrupted; state checkpoint is not written while --target-exclude is active\n", func);
@@ -1162,7 +1149,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 LLAMA_LOG_INFO("\n\t%s: interrupted\n", func);
             }
 
-            throw std::runtime_error("user terminated the process");
+            throw std::runtime_error("interrupted");
         }
     };
 
@@ -1968,7 +1955,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         } guard{tensor, tensor->data};
 
         const std::string name = ggml_get_name(tensor);
-        if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
+        if (poll_interrupt()) { return std::nullopt; }
 
         const std::string remapped_name = remap_imatrix(name, mapped);
 
@@ -2271,7 +2258,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         raw_errors.reserve(valid_types.size());
 
         for (ggml_type vt : valid_types) {
-            if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
+            if (poll_interrupt()) { return std::nullopt; }
             const wce_cache * ptr_ref_wce = use_wce && !ref_wce.row_sq_norm.empty() ? & ref_wce : nullptr;
             const mse_cache * ptr_ref_mse = !use_wce && !ref_mse.row_sq_norm.empty() ? & ref_mse : nullptr;
             const float bpw = (float)ggml_type_size(vt) * 8.0f / (float)ggml_blck_size(vt);
@@ -2385,7 +2372,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     std::vector<float> val_cache;
                     std::vector<float> act_cache;
                     while(true) {
-                        if (w_failed.load(std::memory_order_relaxed) || bpw_stop.load(std::memory_order_relaxed)) { break; }
+                        if (w_failed.load(std::memory_order_relaxed) || poll_interrupt()) { break; }
                         const size_t cur = idx.fetch_add(1);
                         if (cur >= tensors.size()) { break; }
                         if (!can_quantize(tensors[cur]->tensor)) { continue; }
@@ -2414,7 +2401,20 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     }
 
-    check_signal_handler(all_tensors);
+    if (interrupted) {
+        std::unordered_set<std::string> reached;
+        for (const auto & tc : all_tensors) { reached.insert(ggml_get_name(tc.w->tensor)); }
+        for (const auto * tw : tensors) {
+            const std::string name = ggml_get_name(tw->tensor);
+            const auto it = bpw_data.find(name);
+            if (it == bpw_data.end() || reached.count(name)) { continue; }
+            type_choice tc = it->second;
+            tc.w = tw;
+            all_tensors.push_back(std::move(tc));
+        }
+    }
+
+    throw_if_aborted(all_tensors);
     if (qs.params->state_file) {
         if (qs.has_ignored_types) { LLAMA_LOG_WARN("\t%s: state checkpoint cannot be saved while --target-exclude is active\n", func); }
         else { save_state(all_tensors); }
@@ -3453,6 +3453,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     // main loop: iterate over all weights
     for (size_t i = 0; i < tensors.size(); ++i) {
+        if (params->abort_callback && params->abort_callback(params->abort_callback_data)) { throw std::runtime_error("interrupted"); }
         const auto & weight = *tensors[i];
         const auto & tm = metadata[i];
         ggml_tensor * tensor = weight.tensor;
@@ -3649,6 +3650,8 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.target_size                 =*/ -1,
         /*.state_file                  =*/ nullptr,
         /*.target_exclude              =*/ nullptr,
+        /*.abort_callback              =*/ nullptr,
+        /*.abort_callback_data         =*/ nullptr
     };
 
     return result;

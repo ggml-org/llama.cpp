@@ -462,6 +462,8 @@ extern "C" {
         int64_t target_size;                                        // target file size in bytes
         const char * state_file;                                    // pointer to bpw state file
         const enum ggml_type * target_exclude;                      // pointer to excluded GGML_TYPEs
+        ggml_abort_callback abort_callback;                         // callback to abort quantization
+        void * abort_callback_data;                                 // pointer to user data for abort_callback
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {

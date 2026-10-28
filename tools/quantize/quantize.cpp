@@ -2,11 +2,22 @@
 #include "common.h"
 #include "imatrix-loader.h"
 
+#include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <signal.h>
 #include <unordered_map>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 // changes to this struct must also be reflected in src/llama-quant.cpp
 struct tensor_type_option {
@@ -577,6 +588,18 @@ static const char * get_ftype(const float bpw) {
     return quant_bpw.lower_bound(bpw)->second;
 }
 
+static std::atomic<int> interrupt_signal{ 0 };
+
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
+// try to save the state checkpoint if interrupted while scoring
+static void signal_handler(int signo) {
+    int expected = 0;
+    interrupt_signal.compare_exchange_strong(expected, signo);
+}
+#endif
+
+static bool is_interrupted(void * /*data*/) { return interrupt_signal.load() != 0; }
+
 // satisfies -Wmissing-declarations
 int llama_quantize(int argc, char ** argv);
 
@@ -896,6 +919,24 @@ int llama_quantize(int argc, char ** argv) {
     }
     fprintf(stderr, "\n");
 
+    // handle SIGINT and SIGTERM
+    {
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
+        struct sigaction sigint_action;
+        sigint_action.sa_handler = signal_handler;
+        sigemptyset(&sigint_action.sa_mask);
+        sigint_action.sa_flags = SA_RESTART;
+        sigaction(SIGINT, &sigint_action, nullptr);
+        sigaction(SIGTERM, &sigint_action, nullptr);
+#elif defined (_WIN32)
+        auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
+            return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
+        };
+        SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
+#endif
+        params.abort_callback = is_interrupted;
+    }
+
     const int64_t t_main_start_us = llama_time_us();
 
     int64_t t_quantize_us = 0;
@@ -906,7 +947,16 @@ int llama_quantize(int argc, char ** argv) {
 
         if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params)) {
             fprintf(stderr, "%s: failed to quantize model from '%s'\n", __func__, fname_inp.c_str());
-            return 1;
+            const int signo = interrupt_signal.load();
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
+            // ensure that a calling shell or script stops too...
+            if (signo) {
+                signal(signo, SIG_DFL);
+                raise(signo);
+            }
+#endif
+            // ...as a shell reports a process that the signal killed
+            return signo ? 128 + signo : 1;
         }
 
         t_quantize_us = llama_time_us() - t_start_us;
