@@ -82,8 +82,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	// message flows: edit, regenerate, continue, delete
 	private flows = new ChatMessageFlows(this);
 	private isEditModeActive = $state(false);
-	private pendingDraftFiles = $state<ChatUploadedFile[]>([]);
-	private pendingDraftMessage = $state<string>('');
 	/** Reactive: queued pending messages for non-agentic streaming */
 	private pendingMessages = new SvelteMap<
 		string,
@@ -171,11 +169,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		return message;
 	}
-	async addSystemPrompt(): Promise<void> {
+	async addSystemPrompt(draft?: { message: string; files: ChatUploadedFile[] }): Promise<void> {
 		let activeConv = conversationsStore.activeConversation;
 
 		if (!activeConv) {
-			await conversationsStore.createConversation();
+			await conversationsStore.createConversation(undefined, draft);
 			activeConv = conversationsStore.activeConversation;
 		}
 
@@ -339,17 +337,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		const pending = this.consumePendingMessage(convId);
 
 		if (pending) await this.sendMessage(pending.content, pending.extras);
-	}
-
-	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
-		if (!this.pendingDraftMessage && this.pendingDraftFiles.length === 0) return null;
-
-		const d = { files: [...this.pendingDraftFiles], message: this.pendingDraftMessage };
-
-		this.pendingDraftMessage = '';
-		this.pendingDraftFiles = [];
-
-		return d;
 	}
 
 	consumePendingMessage(
@@ -564,10 +551,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		return this.streams.getResumeModel(convId);
 	}
 
-	hasPendingDraft(): boolean {
-		return Boolean(this.pendingDraftMessage) || this.pendingDraftFiles.length > 0;
-	}
-
 	hasPendingMessage(convId: string): boolean {
 		return this.pendingMessages.has(convId);
 	}
@@ -724,11 +707,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 			return false;
 		}
-	}
-
-	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
-		this.pendingDraftMessage = message;
-		this.pendingDraftFiles = [...files];
 	}
 
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
