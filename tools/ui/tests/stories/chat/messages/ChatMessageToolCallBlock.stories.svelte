@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import StateGallery from '../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import {
 		defaultToolMarkdownSection,
 		defaultToolPendingSection,
@@ -27,12 +29,6 @@
 	import { AgenticSectionType } from '$lib/enums';
 
 	const { Story } = defineMeta({
-		args: {
-			isStreaming: false,
-			open: true,
-			section: defaultToolSection
-		},
-		beforeEach: () => seedChatStory(),
 		component: ChatMessageToolCallBlock,
 		parameters: {
 			layout: 'padded'
@@ -41,69 +37,120 @@
 	});
 </script>
 
-<Story name="Default" />
+<Story asChild beforeEach={() => seedChatStory()} name="States">
+	<StateGallery columns={1} title="Generic block">
+		<StateGalleryItem label="Default">
+			<ChatMessageToolCallBlock isStreaming={false} open section={defaultToolSection} />
+		</StateGalleryItem>
 
-<Story args={{ open: false }} name="Collapsed" />
+		<StateGalleryItem label="Collapsed">
+			<ChatMessageToolCallBlock isStreaming={false} open={false} section={defaultToolSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: defaultToolMarkdownSection }} name="MarkdownResult" />
+		<StateGalleryItem label="Markdown result">
+			<ChatMessageToolCallBlock isStreaming={false} open section={defaultToolMarkdownSection} />
+		</StateGalleryItem>
 
-<Story args={{ isStreaming: true, section: defaultToolPendingSection }} name="Pending" />
+		<StateGalleryItem label="Pending">
+			<ChatMessageToolCallBlock isStreaming open section={defaultToolPendingSection} />
+		</StateGalleryItem>
 
-<Story args={{ isStreaming: true, section: defaultToolStreamingSection }} name="StreamingArgs" />
+		<StateGalleryItem label="Streaming args">
+			<ChatMessageToolCallBlock isStreaming open section={defaultToolStreamingSection} />
+		</StateGalleryItem>
 
-<Story
-	args={{ section: { ...defaultToolStreamingSection, toolArgs: undefined } }}
-	name="Truncated"
-/>
+		<StateGalleryItem label="Truncated" note="no args received">
+			<ChatMessageToolCallBlock
+				isStreaming={false}
+				open
+				section={{ ...defaultToolStreamingSection, toolArgs: undefined }}
+			/>
+		</StateGalleryItem>
+	</StateGallery>
 
-<Story args={{ section: getDatetimeSection }} name="GetDatetime" />
+	<StateGallery columns={1} title="Per tool">
+		<StateGalleryItem label="Get datetime">
+			<ChatMessageToolCallBlock isStreaming={false} open section={getDatetimeSection} />
+		</StateGalleryItem>
 
-<Story
-	args={{
-		isStreaming: true,
-		section: {
-			...getDatetimeSection,
-			toolResult: undefined,
-			type: AgenticSectionType.TOOL_CALL_PENDING
-		}
-	}}
-	name="GetDatetimePending"
-/>
+		<StateGalleryItem label="Get datetime, pending">
+			<ChatMessageToolCallBlock
+				isStreaming
+				open
+				section={{
+					...getDatetimeSection,
+					toolResult: undefined,
+					type: AgenticSectionType.TOOL_CALL_PENDING
+				}}
+			/>
+		</StateGalleryItem>
 
-<Story args={{ section: getInfoSection }} name="GetInfo" />
+		<StateGalleryItem label="Get info">
+			<ChatMessageToolCallBlock isStreaming={false} open section={getInfoSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: readFileSection }} name="ReadFile" />
+		<StateGalleryItem label="Read file">
+			<ChatMessageToolCallBlock isStreaming={false} open section={readFileSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: editFileSection }} name="EditFile" />
+		<StateGalleryItem label="Edit file">
+			<ChatMessageToolCallBlock isStreaming={false} open section={editFileSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: editFileErrorSection }} name="EditFileError" />
+		<StateGalleryItem label="Edit file, error">
+			<ChatMessageToolCallBlock isStreaming={false} open section={editFileErrorSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: writeFileSection }} name="WriteFile" />
+		<StateGalleryItem label="Write file">
+			<ChatMessageToolCallBlock isStreaming={false} open section={writeFileSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: execShellSection }} name="ExecShellCommand" />
+		<StateGalleryItem label="File glob search">
+			<ChatMessageToolCallBlock isStreaming={false} open section={fileGlobSearchSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: execShellFailedSection }} name="ExecShellCommandFailed" />
+		<StateGalleryItem label="Grep search">
+			<ChatMessageToolCallBlock isStreaming={false} open section={grepSearchSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: execShellTimedOutSection }} name="ExecShellCommandTimedOut" />
+		<StateGalleryItem label="Run JavaScript">
+			<ChatMessageToolCallBlock isStreaming={false} open section={runJavascriptSection} />
+		</StateGalleryItem>
 
-<Story
-	args={{
-		conversationCwd: '/home/user/projects/app',
-		isExecuting: true,
-		isStreaming: true,
-		section: execShellPendingSection
-	}}
-	name="ExecShellCommandRunning"
-/>
+		<StateGalleryItem label="Run JavaScript, error">
+			<ChatMessageToolCallBlock isStreaming={false} open section={runJavascriptErrorSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: fileGlobSearchSection }} name="FileGlobSearch" />
+		<StateGalleryItem label="Read media">
+			<ChatMessageToolCallBlock isStreaming={false} open section={readMediaSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: grepSearchSection }} name="GrepSearch" />
+		<StateGalleryItem label="Search results">
+			<ChatMessageToolCallBlock isStreaming={false} open section={searchResultsSection} />
+		</StateGalleryItem>
+	</StateGallery>
 
-<Story args={{ section: runJavascriptSection }} name="RunJavascript" />
+	<StateGallery columns={1} title="Shell command">
+		<StateGalleryItem label="Completed">
+			<ChatMessageToolCallBlock isStreaming={false} open section={execShellSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: runJavascriptErrorSection }} name="RunJavascriptError" />
+		<StateGalleryItem label="Failed">
+			<ChatMessageToolCallBlock isStreaming={false} open section={execShellFailedSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: readMediaSection }} name="ReadMedia" />
+		<StateGalleryItem label="Timed out">
+			<ChatMessageToolCallBlock isStreaming={false} open section={execShellTimedOutSection} />
+		</StateGalleryItem>
 
-<Story args={{ section: searchResultsSection }} name="SearchResults" />
+		<StateGalleryItem label="Running">
+			<ChatMessageToolCallBlock
+				conversationCwd="/home/user/projects/app"
+				isExecuting
+				isStreaming
+				open
+				section={execShellPendingSection}
+			/>
+		</StateGalleryItem>
+	</StateGallery>
+</Story>

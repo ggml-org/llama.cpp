@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import StateGallery from '../../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../../helpers/StateGalleryItem.svelte';
 	import {
 		audioAttachment,
 		gradientAttachment,
@@ -38,113 +40,102 @@
 	const onFileRemove = (id: string) => console.log('remove', id);
 </script>
 
-<!-- pending uploads in the chat form, removable -->
-<Story
-	args={{
-		class: 'w-[40rem]',
-		onFileRemove,
-		uploadedFiles: [uploadedImage, uploadedText, uploadedPdf]
-	}}
-	name="Default"
-/>
+<Story asChild name="States">
+	<StateGallery columns={1}>
+		<StateGalleryItem label="Pending uploads" note="chat form, removable">
+			<ChatAttachmentsList
+				class="w-[40rem]"
+				{onFileRemove}
+				uploadedFiles={[uploadedImage, uploadedText, uploadedPdf]}
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		attachments: [imageAttachment, logoAttachment, gradientAttachment],
-		class: 'w-[40rem]',
-		imageHeight: 'h-48',
-		imageWidth: 'max-w-72',
-		readonly: true
-	}}
-	name="ImagesOnly"
-/>
+		<StateGalleryItem label="Images only" note="readonly">
+			<ChatAttachmentsList
+				attachments={[imageAttachment, logoAttachment, gradientAttachment]}
+				class="w-[40rem]"
+				imageHeight="h-48"
+				imageWidth="max-w-72"
+				readonly
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		class: 'w-[40rem]',
-		onFileRemove,
-		uploadedFiles: [
-			uploadedText,
-			uploadedNotes,
-			uploadedPdf,
-			uploadedAudio,
-			uploadedVideo,
-			uploadedArchive
-		]
-	}}
-	name="FilesOnly"
-/>
+		<StateGalleryItem label="Files only">
+			<ChatAttachmentsList
+				class="w-[40rem]"
+				{onFileRemove}
+				uploadedFiles={[
+					uploadedText,
+					uploadedNotes,
+					uploadedPdf,
+					uploadedAudio,
+					uploadedVideo,
+					uploadedArchive
+				]}
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		class: 'w-[40rem]',
-		onFileRemove,
-		uploadedFiles: [uploadedImage, uploadedLogo, uploadedText, uploadedPdf, uploadedAudio]
-	}}
-	name="MixedRemovable"
-/>
+		<StateGalleryItem label="Mixed, removable">
+			<ChatAttachmentsList
+				class="w-[40rem]"
+				{onFileRemove}
+				uploadedFiles={[uploadedImage, uploadedLogo, uploadedText, uploadedPdf, uploadedAudio]}
+			/>
+		</StateGalleryItem>
 
-<!-- stored attachments as shown in a sent message -->
-<Story
-	args={{
-		attachments: [
-			imageAttachment,
-			textAttachment,
-			pdfAttachment,
-			pdfAsImagesAttachment,
-			audioAttachment,
-			videoAttachment
-		],
-		class: 'w-[40rem]',
-		imageHeight: 'h-48',
-		imageWidth: 'max-w-72',
-		readonly: true
-	}}
-	name="MixedReadonly"
-/>
+		<StateGalleryItem label="Mixed, readonly" note="as shown in a sent message">
+			<ChatAttachmentsList
+				attachments={[
+					imageAttachment,
+					textAttachment,
+					pdfAttachment,
+					pdfAsImagesAttachment,
+					audioAttachment,
+					videoAttachment
+				]}
+				class="w-[40rem]"
+				imageHeight="h-48"
+				imageWidth="max-w-72"
+				readonly
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		attachments: [notesAttachment],
-		class: 'w-[40rem]',
-		readonly: true
-	}}
-	name="ReadonlyTextFile"
-/>
+		<StateGalleryItem label="Readonly text file">
+			<ChatAttachmentsList attachments={[notesAttachment]} class="w-[40rem]" readonly />
+		</StateGalleryItem>
 
-<Story
-	args={{
-		class: 'w-[40rem]',
-		onFileRemove,
-		uploadedFiles: [uploadedMcpPrompt, uploadedMcpPromptLoading, uploadedMcpPromptError]
-	}}
-	name="McpPrompts"
-/>
+		<StateGalleryItem label="MCP prompts" note="ready, loading, error">
+			<ChatAttachmentsList
+				class="w-[40rem]"
+				{onFileRemove}
+				uploadedFiles={[uploadedMcpPrompt, uploadedMcpPromptLoading, uploadedMcpPromptError]}
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		attachments: [mcpPromptAttachment, mcpResourceAttachment],
-		class: 'w-[40rem]',
-		readonly: true
-	}}
-	name="McpReadonly"
-/>
+		<StateGalleryItem label="MCP, readonly">
+			<ChatAttachmentsList
+				attachments={[mcpPromptAttachment, mcpResourceAttachment]}
+				class="w-[40rem]"
+				readonly
+			/>
+		</StateGalleryItem>
 
-<Story
-	args={{
-		class: 'w-[28rem]',
-		limitToSingleRow: true,
-		onFileRemove,
-		uploadedFiles: [
-			uploadedImage,
-			uploadedLogo,
-			uploadedGradient,
-			uploadedText,
-			uploadedNotes,
-			uploadedPdf,
-			uploadedAudio,
-			uploadedVideo
-		]
-	}}
-	name="SingleRowOverflow"
-/>
+		<StateGalleryItem label="Single row overflow">
+			<ChatAttachmentsList
+				class="w-[28rem]"
+				limitToSingleRow
+				{onFileRemove}
+				uploadedFiles={[
+					uploadedImage,
+					uploadedLogo,
+					uploadedGradient,
+					uploadedText,
+					uploadedNotes,
+					uploadedPdf,
+					uploadedAudio,
+					uploadedVideo
+				]}
+			/>
+		</StateGalleryItem>
+	</StateGallery>
+</Story>

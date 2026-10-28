@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import StateGallery from '../../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../../helpers/StateGalleryItem.svelte';
 	import { SquarePen } from '@lucide/svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatTabsItem from '$lib/components/app/chat/ChatTabs/ChatTabsItem.svelte';
@@ -21,33 +23,41 @@
 	};
 </script>
 
-<!-- idle: content is dimmed until hovered -->
-<Story args={{ ...handlers, tab }} name="Default" />
+<Story asChild name="States">
+	<StateGallery columns={3}>
+		<StateGalleryItem label="Idle" note="dimmed until hovered">
+			<ChatTabsItem {...handlers} {tab} />
+		</StateGalleryItem>
 
-<Story args={{ ...handlers, isActive: true, tab }} name="Active" />
+		<StateGalleryItem label="Active">
+			<ChatTabsItem {...handlers} isActive {tab} />
+		</StateGalleryItem>
 
-<!-- generation running in a background tab; hover the spinner to get the stop button -->
-<Story args={{ ...handlers, isLoading: true, tab }} name="Loading" />
+		<StateGalleryItem label="New chat">
+			<ChatTabsItem
+				{...handlers}
+				isActive
+				tab={{ href: '#/', icon: SquarePen, id: NEW_CHAT_TAB_ID, name: NEW_CHAT_LABEL }}
+			/>
+		</StateGalleryItem>
 
-<Story args={{ ...handlers, isActive: true, isLoading: true, tab }} name="ActiveLoading" />
+		<StateGalleryItem label="Loading" note="hover the spinner to stop">
+			<ChatTabsItem {...handlers} isLoading {tab} />
+		</StateGalleryItem>
 
-<Story
-	args={{
-		...handlers,
-		isActive: true,
-		tab: { href: '#/', icon: SquarePen, id: NEW_CHAT_TAB_ID, name: NEW_CHAT_LABEL }
-	}}
-	name="NewChat"
-/>
+		<StateGalleryItem label="Active, loading">
+			<ChatTabsItem {...handlers} isActive isLoading {tab} />
+		</StateGalleryItem>
 
-<Story
-	args={{
-		...handlers,
-		isActive: true,
-		tab: {
-			...tab,
-			name: 'A very long conversation title that has to be truncated inside the tab'
-		}
-	}}
-	name="LongName"
-/>
+		<StateGalleryItem label="Long name" note="truncated">
+			<ChatTabsItem
+				{...handlers}
+				isActive
+				tab={{
+					...tab,
+					name: 'A very long conversation title that has to be truncated inside the tab'
+				}}
+			/>
+		</StateGalleryItem>
+	</StateGallery>
+</Story>
