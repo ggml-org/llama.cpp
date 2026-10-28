@@ -25,11 +25,13 @@ export class StickToBottom {
 
 	private container: HTMLElement | undefined;
 	private enabled = true;
+	private lastScrollHeight = 0;
+	private lastScrollTop = 0;
+
 	private markPressed = (): void => {
 		this.pressedAt = performance.now();
 	};
 	private observer: ResizeObserver | null = null;
-
 	private pressedAt = 0;
 
 	/**
@@ -64,7 +66,21 @@ export class StickToBottom {
 
 	/** Reader scrolls are the only thing that re-arms or stops following. */
 	handleScroll(): void {
+		const el = this.container;
+
+		if (!el) return;
+
+		// Following only ever moves the viewport down, and content shrinking
+		// lowers scrollHeight, so moving up without shrinkage is the reader.
+		// Release right away: a trackpad or smooth wheel scrolls in steps
+		// smaller than AT_BOTTOM_PX, and staying stuck would snap each of them
+		// back on the next growth while a response streams.
+		const readerScrolledUp =
+			el.scrollTop < this.lastScrollTop && el.scrollHeight >= this.lastScrollHeight;
+
 		this.measure();
+
+		if (readerScrolledUp) this.stick = false;
 	}
 
 	scrollToBottom(behavior: ScrollBehavior = 'auto'): void {
@@ -107,6 +123,8 @@ export class StickToBottom {
 
 		if (!el) return;
 
+		this.lastScrollHeight = el.scrollHeight;
+		this.lastScrollTop = el.scrollTop;
 		this.stick = this.atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
 	}
 }
