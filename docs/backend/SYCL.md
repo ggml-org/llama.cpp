@@ -27,10 +27,8 @@
 
 ### Llama.cpp + SYCL
 
-The llama.cpp SYCL backend is primarily designed for Intel GPUs. It supports **Intel Data Center GPU Max Series (Ponte Vecchio) and Flex Series**, and **discrete Arc GPUs in cluster and server deployments**.
-For Intel integrated and discrete GPUs outside those deployments, it is recommended to use [Vulkan](../build.md#vulkan) or [OpenVINO](OPENVINO.md). Please refer to [Choosing a backend for Intel hardware](../build.md#choosing-a-backend-for-intel-hardware).
-
-Support for Nvidia and AMD GPUs was removed in 2026.02, see [News](#news).
+The llama.cpp SYCL backend is primarily designed for **Intel GPUs**.
+SYCL cross-platform capabilities enable support for other vendor GPUs as well.
 
 ## Recommended Release
 
@@ -123,11 +121,12 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ### Intel GPU
 
-The SYCL backend is supported on:
+SYCL backend supports Intel GPU Family:
 
-- Intel Data Center GPU Max Series (Ponte Vecchio)
-- Intel Data Center GPU Flex Series
-- Intel Arc discrete GPUs in cluster and server deployments
+- Intel Data Center Max Series
+- Intel Flex Series, Arc Series
+- Intel Built-in Arc GPU
+- Intel iGPU in Core CPU (11th Generation Core CPU and newer, refer to [oneAPI supported GPU](https://www.intel.com/content/www/us/en/developer/articles/system-requirements/intel-oneapi-base-toolkit-system-requirements.html#inpage-nav-1-1)).
 
 #### Verified devices
 
@@ -137,6 +136,8 @@ The SYCL backend is supported on:
 | Intel Data Center Flex Series | Support | Flex 170                              |
 | Intel Arc A-Series            | Support | Arc A770, Arc A730M, Arc A750         |
 | Intel Arc B-Series            | Support | Arc B580                              |
+| Intel built-in Arc GPU        | Support | built-in Arc GPU in Meteor Lake, Arrow Lake, Lunar Lake |
+| Intel iGPU                    | Support | iGPU in 13700k, 13400, i5-1250P, i7-1260P, i7-1165G7  |
 
 *Notes:*
 
@@ -487,9 +488,8 @@ SYCL backend depends on:
 
 a. Install the toolkit
 
-As on Linux, **oneDNN is removed from the Intel® Deep Learning Essentials** package since 2026.0, so it's recommended to install the **Intel® oneAPI Toolkit**. The [Linux](#linux) section has the details and the list of verified releases.
-
-The **Intel® oneAPI Toolkit** can be obtained from the official [Intel® oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) page.
+It's recommended to install the **Intel® oneAPI Toolkit**. The [Linux](#linux) section has the details and the list of verified releases.
+Alternatively, users can install **Intel® Deep Learning Essentials** + **oneDNN** to provide the necessary libraries with lesser size.
 
 Please follow the instructions for downloading and installing the Toolkit for Windows, and preferably keep the default installation values unchanged, notably the installation path *(`C:\Program Files (x86)\Intel\oneAPI` by default)*.
 

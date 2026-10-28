@@ -28,7 +28,6 @@ The following sections describe how to build with different backends and options
 * [Android](#android-1)
 * [OpenVINO](#openvino)
 * [Hexagon](#hexagon)
-* [Choosing a backend for Intel hardware](#choosing-a-backend-for-intel-hardware)
 * [Notes about GPU-accelerated backends](#notes-about-gpu-accelerated-backends)
 
 ## CPU Build
@@ -133,7 +132,7 @@ Full steps, threading notes, and a fallback for older CMake: [AOCL.md](./backend
 
 ### Intel oneMKL
 
-Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU and NPU**, refer to [Choosing a backend for Intel hardware](#choosing-a-backend-for-intel-hardware).
+Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU and NPU**, refer to [Supported backend for Intel hardware](../README.md#supported-backends).
 
 - Using manual oneAPI installation:
   By default, `GGML_BLAS_VENDOR` is set to `Generic`, so if you already sourced intel environment script and assign `-DGGML_BLAS=ON` in cmake, the mkl version of Blas will automatically been selected. Otherwise please install oneAPI and follow the below steps:
@@ -163,7 +162,7 @@ When built with Metal support, you can explicitly disable GPU inference with the
 
 SYCL is a higher-level programming model to improve programming productivity on various hardware accelerators.
 
-llama.cpp with SYCL backend **supports Intel Data Center GPUs** (Max Series and Flex Series), and discrete Arc GPUs in cluster and server deployments.
+llama.cpp based on SYCL is used to **support Intel GPU** (Data Center Max series, Flex series, Arc series, Built-in GPU and iGPU).
 
 For detailed info, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
 
@@ -901,20 +900,6 @@ For build instructions and usage examples, refer to [OPENVINO.md](backend/OPENVI
 ## Hexagon
 
 Check [README.md](./backend/snapdragon/README.md) for target specific build and run info.
-
-## Choosing a backend for Intel hardware
-
-Several backends run on Intel hardware. Pick one from the table below, then follow the linked build instructions.
-
-| Intel hardware | Backends |
-|---|---|
-| Data Center GPU Max Series (Ponte Vecchio) and Flex Series | [SYCL](#sycl), [Vulkan](#vulkan) |
-| Discrete Arc GPU | [Vulkan](#vulkan), [OpenVINO](#openvino), and [SYCL](#sycl) (only for GPUs in cluster and server deployments) |
-| Integrated GPU (built-in Arc, iGPU) | [Vulkan](#vulkan), [OpenVINO](#openvino) |
-| NPU | [OpenVINO](#openvino) |
-| CPU (Xeon, Core) | [OpenVINO](#openvino), [CPU](#cpu-build), [oneMKL BLAS](#intel-onemkl) |
-
-Please note that [OpenCL](./backend/OPENCL.md) performance on Intel GPUs is not optimal. Use it only on Intel GPUs that Vulkan and SYCL do not support.
 
 ---
 ## Notes about GPU-accelerated backends

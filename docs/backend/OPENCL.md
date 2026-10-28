@@ -28,7 +28,7 @@ OpenCL (Open Computing Language) is an open, royalty-free standard for cross-pla
 
 ### Llama.cpp + OpenCL
 
-The llama.cpp OpenCL backend is designed to enable llama.cpp on **Qualcomm Adreno GPU** firstly via OpenCL. Thanks to the portabilty of OpenCL, the OpenCL backend can also run on certain Intel GPUs such as those that do not have [Vulkan](/docs/build.md#vulkan) or [SYCL](/docs/backend/SYCL.md) support although the performance is not optimal. Please refer to [Choosing a backend for Intel hardware](/docs/build.md#choosing-a-backend-for-intel-hardware).
+The llama.cpp OpenCL backend is designed to enable llama.cpp on **Qualcomm Adreno GPU** firstly via OpenCL. Thanks to the portabilty of OpenCL, the OpenCL backend can also run on certain Intel GPUs such as those that do not have [SYCL](/docs/backend/SYCL.md) support although the performance is not optimal.
 
 ## OS
 
