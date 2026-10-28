@@ -283,20 +283,13 @@ static void FNAME(                                                              
     const int32_t  iih  = (int32_t) ioh * s1 - p1;                                               \
                                                                                                  \
     /* the DMA stage fills only the columns inside [0, IW): zero the rest of the window */       \
-    int32_t       lo = win0 < 0 ? -win0 : 0;                                                     \
-    int32_t       hi = (int32_t) IW - win0;                                                      \
-    if (hi > (int32_t) Wb) {                                                                     \
-        hi = (int32_t) Wb;                                                                       \
-    }                                                                                            \
-    if (hi < lo) {                                                                               \
-        hi = lo;                                                                                 \
-    }                                                                                            \
-    if (iih < 0 || iih >= (int32_t) IH) {                                                        \
-        /* the input row is in the vertical padding: the stage loaded nothing */                 \
-        lo = 0;                                                                                  \
-        hi = 0;                                                                                  \
-    }                                                                                            \
-    if (lo > 0 || hi < (int32_t) Wb) {                                                           \
+    const int32_t lo = win0 < 0 ? -win0 : 0;                                                     \
+    const int32_t hi = MIN((int32_t) Wb, (int32_t) IW - win0);                                   \
+    if (iih < 0 || iih >= (int32_t) IH || hi <= lo) {                                            \
+        for (uint32_t iic = 0; iic < IC; iic++) {                                                \
+            hvx_splat_f32_u(srcb + (size_t) iic * Wb, 0, Wb);                                    \
+        }                                                                                        \
+    } else if (lo > 0 || hi < (int32_t) Wb) {                                                    \
         for (uint32_t iic = 0; iic < IC; iic++) {                                                \
             float * row = srcb + (size_t) iic * Wb;                                              \
             if (lo > 0) {                                                                        \
