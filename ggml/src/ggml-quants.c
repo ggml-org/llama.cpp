@@ -25,15 +25,12 @@
 
 #define UNUSED GGML_UNUSED
 
-static inline int best_index_int8(int n, const int8_t * val, float x) {
-    if (x <= val[0]) return 0;
-    if (x >= val[n-1]) return n-1;
-    int ml = 0, mu = n-1;
-    while (mu-ml > 1) {
-        int mav = (ml+mu)/2;
-        if (x < val[mav]) mu = mav; else ml = mav;
-    }
-    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
+// index of the nearest kvalues_iq4nl value, with mid[k] = (values[k] + values[k+1])/2
+// for this table it matches a binary search with the tie rule x - values[k] < values[k+1] - x for every float x
+static inline int best_index_iq4nl(const float * GGML_RESTRICT mid, float x) {
+    int l = 15;
+    for (int k = 0; k < 15; ++k) l -= x < mid[k];
+    return l;
 }
 
 // reference implementation for deterministic creation of model files
@@ -4949,6 +4946,11 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
     memset(q4, 0, super_block_size/2);
     dh[0] = GGML_FP32_TO_FP16(0.f);
 
+    float mid[15];
+    float fval[16];
+    for (int k = 0; k < 15; ++k) mid[k] = 0.5f*(values[k] + values[k+1]);
+    for (int k = 0; k < 16; ++k) fval[k] = values[k];
+
     float max_scale = 0, amax_scale = 0;
     for (int ib = 0; ib < super_block_size/block_size; ++ib) {
         const float * xb = x + ib*block_size;
@@ -4971,32 +4973,28 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
             continue;
         }
         float d = ntry > 0 ? -max/values[0] : max/values[0];
-        float id = 1/d;
-        float sumqx = 0, sumq2 = 0;
+        // lane 0 is the initial guess, lanes 1..nt-1 are itry = -ntry..ntry; each lane sums over j in order
+        const int nt = ntry >= 0 ? 2*ntry + 2 : 1;
+        float idt[16], sqx[16], sq2[16];
+        idt[0] = 1/d;
+        for (int t = 1; t < nt; ++t) idt[t] = (t - 1 - ntry + values[0])/max;
+        for (int t = 0; t < nt; ++t) sqx[t] = sq2[t] = 0;
         for (int j = 0; j < block_size; ++j) {
-            float al = id*xb[j];
-            int l = best_index_int8(16, values, al);
-            Lb[j] = l;
-            float q = values[l];
-            float w = weight[j];
-            sumqx += w*q*xb[j];
-            sumq2 += w*q*q;
+            Lb[j] = best_index_iq4nl(mid, idt[0]*xb[j]);
         }
-        d = sumq2 > 0 ? sumqx/sumq2 : 0.f;
-        float best = d*sumqx;
-        for (int itry = -ntry; itry <= ntry; ++itry) {
-            id = (itry + values[0])/max;
-            sumqx = sumq2 = 0;
-            for (int j = 0; j < block_size; ++j) {
-                float al = id*xb[j];
-                int l = best_index_int8(16, values, al);
-                float q = values[l];
-                float w = weight[j];
-                sumqx += w*q*xb[j];
-                sumq2 += w*q*q;
+        for (int j = 0; j < block_size; ++j) {
+            float w = weight[j];
+            for (int t = 0; t < nt; ++t) {
+                float q = fval[best_index_iq4nl(mid, idt[t]*xb[j])];
+                sqx[t] += w*q*xb[j];
+                sq2[t] += w*q*q;
             }
-            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
-                d = sumqx/sumq2; best = d * sumqx;
+        }
+        d = sq2[0] > 0 ? sqx[0]/sq2[0] : 0.f;
+        float best = d*sqx[0];
+        for (int t = 1; t < nt; ++t) {
+            if (sq2[t] > 0 && sqx[t]*sqx[t] > best*sq2[t]) {
+                d = sqx[t]/sq2[t]; best = d * sqx[t];
             }
         }
         scales[ib] = d;
@@ -5020,7 +5018,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
             uint8_t * Lb = L + ib*block_size;
             const float * xb = x + ib*block_size;
             for (int j = 0; j < block_size; ++j) {
-                Lb[j] = best_index_int8(16, values, idl*xb[j]);
+                Lb[j] = best_index_iq4nl(mid, idl*xb[j]);
             }
             l += 32;
             uint8_t l_l = l & 0xf;
@@ -5034,7 +5032,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         if (ntry > 0) {
             float id = scales[0] ? 1/scales[0] : 0;
             for (int j = 0; j < super_block_size; ++j) {
-                L[j] = best_index_int8(16, values, id*x[j]);
+                L[j] = best_index_iq4nl(mid, id*x[j]);
             }
         }
     }
