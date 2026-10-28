@@ -303,7 +303,7 @@ llama_kv_cache::llama_kv_cache(
 
         const bool attn_rot_disable = !model.attn_rot || (env_rot_disable != nullptr && atoi(env_rot_disable) != 0);
         if (attn_rot_disable) {
-            LLAMA_LOG_WARN("%s: attention rotation force disabled (%s)\n", __func__,
+            LLAMA_LOG_INFO("%s: attention rotation force disabled (%s)\n", __func__,
                     model.attn_rot ? "LLAMA_ATTN_ROT_DISABLE" : "llama_model_set_attn_rot");
         }
 
