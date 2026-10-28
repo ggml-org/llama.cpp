@@ -776,32 +776,40 @@ struct case_comp_padding : ctx_test {
     }
 
     case_result run(model_run & mr) const override {
-        ctx_opts opts;
-        opts.n_ctx      = 256;
-        opts.n_batch    = 64;
-        opts.n_ubatch   = 64;
-        opts.n_seq_max  = 1;
-        opts.kv_unified = 1;
-
         const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
 
-        for (const uint32_t n_tokens : { 3u, 5u, 7u }) {
-            auto ctx = mr.ctx(opts);
-            CTX_REQUIRE(ctx, "failed to create the context");
-            CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, 0, 0, 32), "prefill failed");
+        for (const uint32_t n_seq : { 1u, 2u }) {
+            ctx_opts opts;
+            opts.n_ctx      = 256*n_seq;
+            opts.n_batch    = 64;
+            opts.n_ubatch   = 64;
+            opts.n_seq_max  = n_seq;
+            opts.kv_unified = n_seq == 1;
 
-            // Stay inside the same attention-cache size while crossing compressor boundaries.
-            llama_pos pos = 32;
-            for (int step = 0; step < 3; ++step) {
-                common_batch batch(ctx.get());
-                for (uint32_t i = 0; i < n_tokens; ++i, ++pos) {
-                    batch.add(gen_token(n_vocab, 0, pos), pos, 0, true);
+            for (const uint32_t n_tokens : { 3u, 5u, 7u }) {
+                auto ctx = mr.ctx(opts);
+                CTX_REQUIRE(ctx, "failed to create the context");
+                std::vector<llama_pos> pos(n_seq);
+                for (uint32_t s = 0; s < n_seq; ++s) {
+                    pos[s] = 32 + s;
+                    CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, s, 0, pos[s]), "prefill failed");
                 }
-                const int32_t n_reused = llama_perf_context(ctx.get()).n_reused;
-                CTX_REQUIRE(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "decode failed");
-                if (step > 0) {
-                    CTX_REQUIRE(llama_perf_context(ctx.get()).n_reused == n_reused + 1,
-                            "compressed-cache graph was rebuilt for " + std::to_string(n_tokens) + " tokens");
+
+                // Stay inside the same attention-cache size while crossing compressor boundaries.
+                for (int step = 0; step < 3; ++step) {
+                    common_batch batch(ctx.get());
+                    // Equal lengths keep multiple sequences in one ubatch.
+                    for (uint32_t s = 0; s < n_seq; ++s) {
+                        for (uint32_t i = 0; i < n_tokens; ++i, ++pos[s]) {
+                            batch.add(gen_token(n_vocab, s, pos[s]), pos[s], s, true);
+                        }
+                    }
+                    const int32_t n_reused = llama_perf_context(ctx.get()).n_reused;
+                    CTX_REQUIRE(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "decode failed");
+                    if (step > 0) {
+                        CTX_REQUIRE(llama_perf_context(ctx.get()).n_reused == n_reused + 1,
+                                "compressed-cache graph was rebuilt for " + std::to_string(n_tokens) + " tokens and " + std::to_string(n_seq) + " sequences");
+                    }
                 }
             }
         }
