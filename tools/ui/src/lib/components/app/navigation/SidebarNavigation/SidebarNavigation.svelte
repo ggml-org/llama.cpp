@@ -41,12 +41,19 @@
 		toggleSidebar: () => toggleExpandedMode()
 	});
 
-	let hoveredTooltip = $state<string | null>(null);
+	let innerWidth = $state(0);
 	let logoHovered = $state(false);
+	/** Set while the collapsed sidebar is revealed by hovering its logo, until the pointer leaves it. */
+	let isPeeking = $state(false);
 
-	const isStripExpanded = $derived(uiStore.isSidebarExpanded || hoveredTooltip !== null);
 	const isOnMobile = $derived(deviceStore.isMobile);
 	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
+	// the collapsed sidebar shows only its logo until it is peeked at
+	const isStripHidden = $derived(!uiStore.isSidebarExpanded && !isOnMobile && !isPeeking);
+	// on desktop the logo doubles as the sidebar toggle, unless the sidebar is pinned open
+	const isLogoToggle = $derived(
+		innerWidth > 768 && (!uiStore.isSidebarExpanded || !alwaysShowOnDesktop)
+	);
 
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {
@@ -56,9 +63,11 @@
 
 	function toggleExpandedMode() {
 		uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
+	}
 
-		if (!uiStore.isSidebarExpanded) {
-			hoveredTooltip = null;
+	function handleAsideFocusOut(event: FocusEvent) {
+		if (!asideEl?.contains(event.relatedTarget as Node | null)) {
+			isPeeking = false;
 		}
 	}
 
@@ -301,7 +310,6 @@
 		chatStore.stopGenerationForChat(id);
 	}
 
-	let innerWidth = $state(0);
 	let pendingCollapse = $state<ReturnType<typeof setTimeout> | null>(null);
 
 	function scheduleMobileCollapse() {
@@ -479,6 +487,7 @@
 <svelte:window bind:innerWidth onkeydown={handleKeydown} />
 
 {#if innerWidth > 768 || !page.url.hash.includes(ROUTES.SEARCH)}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<aside
 		bind:this={asideEl}
 		class={[
@@ -495,57 +504,73 @@
 			'md:transition-[width,padding] duration-200 ease-out',
 			uiStore.isSidebarResizing && 'md:duration-0',
 			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
-			isStripExpanded && 'md:w-(--sidebar-width) md:bg-muted/60 md:backdrop-blur-xl shadow-md',
-			!isStripExpanded && 'md:w-12',
+			uiStore.isSidebarExpanded &&
+				'md:w-(--sidebar-width) md:bg-muted/60 md:backdrop-blur-xl shadow-md',
+			!uiStore.isSidebarExpanded && 'md:w-12',
+			!uiStore.isSidebarExpanded && isPeeking && 'md:bg-muted/60 md:backdrop-blur-xl md:shadow-md',
+			isStripHidden && 'md:pointer-events-none',
 			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
+		onfocusin={() => (isPeeking = true)}
+		onfocusout={handleAsideFocusOut}
+		onmouseleave={() => (isPeeking = false)}
 	>
 		<div class="px-2 flex items-center justify-between">
 			<div
 				class="relative"
-				onmouseenter={() => (logoHovered = true)}
+				onmouseenter={() => {
+					logoHovered = true;
+					isPeeking = true;
+				}}
 				onmouseleave={() => (logoHovered = false)}
 				role="button"
 				tabindex="0"
 			>
 				<ActionIcon
-					ariaLabel={uiStore.isSidebarExpanded ? 'Go to start' : 'Expand navigation'}
+					ariaLabel={!uiStore.isSidebarExpanded
+						? 'Expand navigation'
+						: isLogoToggle
+							? 'Collapse navigation'
+							: 'Go to start'}
 					class="{uiStore.isSidebarExpanded
 						? 'bg-muted! md:bg-foreground/5!'
 						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
-					href={uiStore.isSidebarExpanded ? ROUTES.START : undefined}
-					icon={!uiStore.isSidebarExpanded && logoHovered && innerWidth > 768
-						? PanelLeftOpen
+					href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
+					icon={isLogoToggle && logoHovered
+						? uiStore.isSidebarExpanded
+							? PanelLeftClose
+							: PanelLeftOpen
 						: Logo}
 					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-					onclick={uiStore.isSidebarExpanded ? undefined : toggleExpandedMode}
+					onclick={!uiStore.isSidebarExpanded || isLogoToggle ? toggleExpandedMode : undefined}
 					size="lg"
-					tooltip={uiStore.isSidebarExpanded ? undefined : 'Open Sidebar'}
+					tooltip={!uiStore.isSidebarExpanded
+						? 'Open Sidebar'
+						: isLogoToggle
+							? 'Close Sidebar'
+							: undefined}
 					tooltipSide={TooltipSide.RIGHT}
 				/>
 			</div>
 
-			{#if isOnMobile || uiStore.isSidebarExpanded}
+			{#if isOnMobile}
 				<div
 					in:fade={{ delay: 50, duration: 150, easing: circIn }}
 					out:fade={{ duration: 100 }}
-					class="flex items-center transition-all duration-150 ease-out {deviceStore.isMobile &&
-					!uiStore.isSidebarExpanded
+					class="flex items-center transition-all duration-150 ease-out {!uiStore.isSidebarExpanded
 						? 'opacity-0 h-0!'
 						: ''}"
 				>
-					{#if isOnMobile || !alwaysShowOnDesktop}
-						<ActionIcon
-							ariaLabel="Collapse navigation"
-							class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 max-md:-mr-1 max-md:-mt-1 hover:bg-accent!"
-							icon={deviceStore.isMobile ? X : PanelLeftClose}
-							iconSize="h-4 w-4"
-							onclick={toggleExpandedMode}
-							size="lg"
-							tooltip="Close Sidebar"
-							tooltipSide={TooltipSide.LEFT}
-						/>
-					{/if}
+					<ActionIcon
+						ariaLabel="Collapse navigation"
+						class="backdrop-blur-none h-10 w-10 rounded-full -mr-1 -mt-1 hover:bg-accent!"
+						icon={X}
+						iconSize="h-4 w-4"
+						onclick={toggleExpandedMode}
+						size="lg"
+						tooltip="Close Sidebar"
+						tooltipSide={TooltipSide.LEFT}
+					/>
 				</div>
 			{/if}
 		</div>
@@ -555,7 +580,10 @@
 			out:fade={{ duration: 200 }}
 			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {deviceStore.isMobile
 				? 'transition-[opacity,height] duration-200 ease-out'
-				: ''} {deviceStore.isMobile && !uiStore.isSidebarExpanded ? 'opacity-0 !h-0' : ''}"
+				: 'md:transition-opacity md:duration-150 md:ease-out'} {deviceStore.isMobile &&
+			!uiStore.isSidebarExpanded
+				? 'opacity-0 !h-0'
+				: ''} {isStripHidden ? 'md:opacity-0' : ''}"
 		>
 			<SidebarNavigationActions
 				class="px-2"
