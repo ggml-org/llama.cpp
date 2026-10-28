@@ -240,6 +240,9 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
         if (GGML_CUDA_CC_IS_RDNA4(cc)) {
             return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
         }
+        if (GGML_CUDA_CC_IS_RDNA4_M(cc)) {
+            return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
+        }
         if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
             return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
         }
@@ -272,6 +275,8 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
     return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
 #elif defined(RDNA4)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
+#elif defined(RDNA4_M)
+    return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
 #elif defined(RDNA3_5)
     return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
 #elif defined(RDNA3)
