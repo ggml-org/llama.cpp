@@ -1430,3 +1430,180 @@ class IQ4_XS(__Quant, qtype=GGMLQuantizationType.IQ4_XS):
         qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1, 32))
 
         return (dl * qs).reshape((n_blocks, -1))
+
+
+class JQ2_K(__Quant, qtype=GGMLQuantizationType.JQ2_K):
+    kvalues = (-19, -4, 8, 26)
+    phase = 5
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, rest = np.hsplit(blocks, [2])
+        extra, rest = np.hsplit(rest, [2])
+        scales, qs = np.hsplit(rest, [QK_K // 32])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        scales = scales.reshape((n_blocks, -1, 1)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 2))
+        scales = (scales.reshape((n_blocks, -1)) & np.uint8(0x0F)).astype(np.int8) - np.int8(8)
+        dl = (d * scales.astype(np.float32)).reshape((n_blocks, -1, 1))
+
+        extra = extra.view(np.uint16) >> np.arange(QK_K // 16, dtype=np.uint16).reshape((1, -1))
+        ph = ((extra & np.uint16(1)) * np.uint16(cls.phase)).astype(np.float32).reshape((n_blocks, -1, 1))
+
+        qs = qs.reshape((n_blocks, 2, 2, 16, 1)) >> np.array([0, 2, 4, 6], dtype=np.uint8).reshape((1, 1, 1, 1, 4))
+        qs = qs.transpose(0, 1, 4, 2, 3).reshape((n_blocks, -1, 1)) & np.uint8(0x03)
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape((1, 1, -1))
+        qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1, 16))
+
+        return (dl * (qs + ph)).reshape((n_blocks, -1))
+
+
+class JQ3_K(__Quant, qtype=GGMLQuantizationType.JQ3_K):
+    kvalues = (-51, -30, -16, -4, 7, 20, 36, 58)
+    phase = 5
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, rest = np.hsplit(blocks, [2])
+        extra, rest = np.hsplit(rest, [2])
+        scales_h, rest = np.hsplit(rest, [2])
+        scales_l, rest = np.hsplit(rest, [QK_K // 32])
+        qs, qh = np.hsplit(rest, [QK_K // 4])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        # the sub-block scale is an odd magnitude with a separate sign bit, so it is never zero
+        scales_l = scales_l.reshape((n_blocks, -1, 1)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 2))
+        scales_l = (scales_l.reshape((n_blocks, -1)) & np.uint8(0x0F)).astype(np.int8)
+        scales_h = scales_h.view(np.uint16) >> np.arange(QK_K // 16, dtype=np.uint16).reshape((1, -1))
+        scales = np.int8(2) * scales_l + np.int8(1)
+        scales = np.where(scales_h & np.uint16(1) == 0, scales, -scales)
+        dl = (d * scales.astype(np.float32)).reshape((n_blocks, -1, 1))
+
+        extra = extra.view(np.uint16) >> np.arange(QK_K // 16, dtype=np.uint16).reshape((1, -1))
+        ph = ((extra & np.uint16(1)) * np.uint16(cls.phase)).astype(np.float32).reshape((n_blocks, -1, 1))
+
+        qs = qs.reshape((n_blocks, 2, 2, 16, 1)) >> np.array([0, 2, 4, 6], dtype=np.uint8).reshape((1, 1, 1, 1, 4))
+        qs = qs.transpose(0, 1, 4, 2, 3).reshape((n_blocks, -1)) & np.uint8(0x03)
+        qh = qh.reshape((n_blocks, 1, 2, 16)) >> np.arange(8, dtype=np.uint8).reshape((1, -1, 1, 1))
+        qh = qh.reshape((n_blocks, -1)) & np.uint8(0x01)
+        qs = (qs | (qh << np.uint8(2))).reshape((n_blocks, -1, 1))
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape((1, 1, -1))
+        qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1, 16))
+
+        return (dl * (qs + ph)).reshape((n_blocks, -1))
+
+
+class JQ4_K(__Quant, qtype=GGMLQuantizationType.JQ4_K):
+    kvalues = (-127, -97, -78, -62, -48, -35, -23, -12, -1, 11, 23, 36, 51, 67, 87, 105)
+    phase = 18
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, rest = np.hsplit(blocks, [2])
+        extra, rest = np.hsplit(rest, [2])
+        scales_h, rest = np.hsplit(rest, [QK_K // 64])
+        scales_l, qs = np.hsplit(rest, [QK_K // 32])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        scales_l = scales_l.reshape((n_blocks, -1, 1)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 2))
+        scales_h = scales_h.reshape((n_blocks, -1, 1)) >> np.array([0, 2, 4, 6], dtype=np.uint8).reshape((1, 1, 4))
+        scales_l = scales_l.reshape((n_blocks, -1)) & np.uint8(0x0F)
+        scales_h = scales_h.reshape((n_blocks, -1)) & np.uint8(0x03)
+        scales = (scales_l | (scales_h << np.uint8(4))).astype(np.int8) - np.int8(32)
+        dl = (d * scales.astype(np.float32)).reshape((n_blocks, -1, 1))
+
+        extra = extra.view(np.uint16) >> np.arange(QK_K // 16, dtype=np.uint16).reshape((1, -1))
+        ph = ((extra & np.uint16(1)) * np.uint16(cls.phase)).astype(np.float32).reshape((n_blocks, -1, 1))
+
+        qs = qs.reshape((n_blocks, -1, 16, 1)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 1, 2))
+        qs = qs.transpose(0, 1, 3, 2).reshape((n_blocks, -1, 1)) & np.uint8(0x0F)
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape((1, 1, -1))
+        qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1, 16))
+
+        return (dl * (qs + ph)).reshape((n_blocks, -1))
+
+
+class JQ5_K(__Quant, qtype=GGMLQuantizationType.JQ5_K):
+    kvalues = (-115, -105, -94, -83, -73, -65, -58, -51, -45, -39, -33, -27, -22, -17, -11, -6,
+               -1, 4, 9, 15, 20, 26, 32, 39, 46, 53, 61, 69, 77, 86, 103, 111)
+    phase = 15
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, rest = np.hsplit(blocks, [2])
+        extra, rest = np.hsplit(rest, [2])
+        scales_h, rest = np.hsplit(rest, [QK_K // 64])
+        scales_l, rest = np.hsplit(rest, [QK_K // 32])
+        qs, qh = np.hsplit(rest, [QK_K // 2])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        scales_l = scales_l.reshape((n_blocks, -1, 1)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 2))
+        scales_h = scales_h.reshape((n_blocks, -1, 1)) >> np.array([0, 2, 4, 6], dtype=np.uint8).reshape((1, 1, 4))
+        scales_l = scales_l.reshape((n_blocks, -1)) & np.uint8(0x0F)
+        scales_h = scales_h.reshape((n_blocks, -1)) & np.uint8(0x03)
+        scales = (scales_l | (scales_h << np.uint8(4))).astype(np.int8) - np.int8(32)
+        dl = (d * scales.astype(np.float32)).reshape((n_blocks, -1, 1))
+
+        extra = extra.view(np.uint16) >> np.arange(QK_K // 16, dtype=np.uint16).reshape((1, -1))
+        ph = ((extra & np.uint16(1)) * np.uint16(cls.phase)).astype(np.float32).reshape((n_blocks, -1, 1))
+
+        qs = qs.reshape((n_blocks, 4, 2, 16, 1)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 1, 1, 2))
+        qs = qs.transpose(0, 1, 4, 2, 3).reshape((n_blocks, -1)) & np.uint8(0x0F)
+        qh = qh.reshape((n_blocks, 1, 2, 16)) >> np.arange(8, dtype=np.uint8).reshape((1, -1, 1, 1))
+        qh = qh.reshape((n_blocks, -1)) & np.uint8(0x01)
+        qs = (qs | (qh << np.uint8(4))).reshape((n_blocks, -1, 1))
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape((1, 1, -1))
+        qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1, 16))
+
+        return (dl * (qs + ph)).reshape((n_blocks, -1))
+
+
+class JQ6_K(__Quant, qtype=GGMLQuantizationType.JQ6_K):
+    kvalues = (-120, -115, -108, -103, -99, -93, -88, -83, -79, -75, -70, -66, -62, -59, -55, -51,
+               -48, -45, -41, -38, -35, -32, -29, -26, -24, -21, -18, -15, -13, -10, -7, -5,
+               -2, 0, 3, 6, 8, 11, 14, 16, 19, 22, 25, 28, 31, 34, 38, 41,
+               44, 48, 52, 56, 60, 64, 68, 73, 77, 82, 86, 93, 97, 104, 109, 114)
+    phase = 13
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, rest = np.hsplit(blocks, [2])
+        extra, rest = np.hsplit(rest, [2])
+        scales, rest = np.hsplit(rest, [QK_K // 16])
+        qs, qh = np.hsplit(rest, [QK_K // 2])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        dl = (d * scales.view(np.int8).astype(np.float32)).reshape((n_blocks, -1, 1))
+
+        extra = extra.view(np.uint16) >> np.arange(QK_K // 16, dtype=np.uint16).reshape((1, -1))
+        ph = ((extra & np.uint16(1)) * np.uint16(cls.phase)).astype(np.float32).reshape((n_blocks, -1, 1))
+
+        qs = qs.reshape((n_blocks, 4, 2, 16, 1)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 1, 1, 2))
+        qs = qs.transpose(0, 1, 4, 2, 3).reshape((n_blocks, -1)) & np.uint8(0x0F)
+        qh = qh.reshape((n_blocks, 2, 2, 16, 1)) >> np.array([0, 2, 4, 6], dtype=np.uint8).reshape((1, 1, 1, 1, 4))
+        qh = qh.transpose(0, 1, 4, 2, 3).reshape((n_blocks, -1)) & np.uint8(0x03)
+        qs = (qs | (qh << np.uint8(4))).reshape((n_blocks, -1, 1))
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape((1, 1, -1))
+        qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1, 16))
+
+        return (dl * (qs + ph)).reshape((n_blocks, -1))

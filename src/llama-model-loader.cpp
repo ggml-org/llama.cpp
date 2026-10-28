@@ -71,6 +71,11 @@ const char * llama_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:    name = LLAMA_FTYPE_PREFIX "IQ4_XS - 4.25 bpw"; break;
         case LLAMA_FTYPE_MOSTLY_IQ3_S:     name = LLAMA_FTYPE_PREFIX "IQ3_S - 3.4375 bpw"; break;
         case LLAMA_FTYPE_MOSTLY_IQ3_M:     name = LLAMA_FTYPE_PREFIX "IQ3_S mix - 3.66 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_JQ2_K:     name = LLAMA_FTYPE_PREFIX "JQ2_K - 2.375 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_JQ3_K:     name = LLAMA_FTYPE_PREFIX "JQ3_K - 3.4375 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_JQ4_K:     name = LLAMA_FTYPE_PREFIX "JQ4_K - 4.5 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_JQ5_K:     name = LLAMA_FTYPE_PREFIX "JQ5_K - 5.5 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_JQ6_K:     name = LLAMA_FTYPE_PREFIX "JQ6_K - 6.625 bpw"; break;
         default:                           name = LLAMA_FTYPE_PREFIX "unknown, may not work"; break;
     }
     return (ftype & LLAMA_FTYPE_GUESSED) ? name : name + guessed_prefix_len;
@@ -782,6 +787,11 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
             case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
             case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
+            case GGML_TYPE_JQ2_K:   ftype = LLAMA_FTYPE_MOSTLY_JQ2_K;   break;
+            case GGML_TYPE_JQ3_K:   ftype = LLAMA_FTYPE_MOSTLY_JQ3_K;   break;
+            case GGML_TYPE_JQ4_K:   ftype = LLAMA_FTYPE_MOSTLY_JQ4_K;   break;
+            case GGML_TYPE_JQ5_K:   ftype = LLAMA_FTYPE_MOSTLY_JQ5_K;   break;
+            case GGML_TYPE_JQ6_K:   ftype = LLAMA_FTYPE_MOSTLY_JQ6_K;   break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -1076,12 +1086,20 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
 // find the first buffer type in the list that can use the tensor
 static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list) {
     GGML_ASSERT(!buft_list->empty());
+    bool skipped_gpu = false;
     for (const auto & cur : *buft_list) {
         ggml_backend_dev_t cur_dev = cur.first;
         ggml_backend_buffer_type_t cur_buft = cur.second;
         if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
+            if (skipped_gpu) {
+                LLAMA_LOG_WARN("%s: no GPU backend supports operation %s for type %s in tensor %s; offloading to CPU (reduced performance)\n",
+                    __func__, ggml_op_name(op), ggml_type_name(tensor->type), tensor->name);
+            }
+
             return cur_buft;
         }
+
+        if (ggml_backend_dev_type(cur_dev) == GGML_BACKEND_DEVICE_TYPE_GPU) { skipped_gpu = true; }
     }
 
     return nullptr;
