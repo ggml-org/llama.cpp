@@ -18,6 +18,7 @@
 # ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
 # ggml-org/ggml-webgpu      : reeselevine, yomaytk
 # ggml-org/ggml-zdnn        : AlekseiNikiforovIBM, Andreas-Krebbel, taronaeo
+# ggml-org/llama-base       : am17an, CISC, ggerganov, ngxson, sanmai, ServeurpersoCom
 # ggml-org/llama-common     : aldehir, angt, bartowski1182, danbev, ggerganov, ngxson, nikwen, pwilkin, ruixiang63, sanmai
 # ggml-org/llama-examples   : ggerganov
 # ggml-org/llama-models     : CISC, danbev, ggerganov, ngxson
@@ -79,14 +80,14 @@
 /scripts/get*                           @ggerganov
 /scripts/sync*                          @ggerganov
 /scripts/snapdragon/                    @ggml-org/ggml-hexagon
-/src/                                   @ggerganov
+/src/                                   @ggml-org/llama-base
 /src/llama-adapter.*                    @CISC
 /src/llama-arch.*                       @CISC
 /src/llama-chat.*                       @ngxson
 /src/llama-graph.*                      @CISC
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
-/src/models/                            @CISC @ggml-org/llama-models
+/src/models/                            @ggml-org/llama-models
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
 /tests/test-server-component.cpp        @ggml-org/llama-server
