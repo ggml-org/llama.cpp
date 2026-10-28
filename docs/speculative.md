@@ -254,7 +254,7 @@ Use exactly one of these options:
                                         speculative decoding split probability (default: 0.10)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)
 --spec-draft-p-min, --draft-p-min       P
-                                        minimum speculative decoding probability (greedy) (default: 0.00)
+                                        minimum speculative decoding probability, not applied to sampled draft-mtp and draft-dflash drafts (default: 0.00)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_MIN)
 --spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft  N
                                         max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)

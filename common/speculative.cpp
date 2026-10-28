@@ -1379,7 +1379,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                             probs[k] = std::exp((scores[k] - scores[predecessor]) / temp);
                             sum += probs[k];
                         }
-                        if (1.0f / sum < params.p_min) {
+                        // p_min stops greedy drafts only: a sampled token is accepted with probability min(1, p/q)
+                        if (!sample && 1.0f / sum < params.p_min) {
                             break;
                         }
                         for (int32_t k = 0; k < top_k; ++k) {
@@ -1842,8 +1843,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 // add drafted token for each sequence
                 const llama_token id = dparams.at(seq_id).result_q ? id_sampled : cur_p->data[0].id;
 
-                // only collect very high-confidence draft tokens
-                if (cur_p->data[0].p < params.p_min) {
+                // p_min stops greedy drafts only: a sampled token is accepted with probability min(1, p/q)
+                if (!dparams.at(seq_id).result_q && cur_p->data[0].p < params.p_min) {
                     drafting[seq_id] = false;
                     n_drafting--;
 
