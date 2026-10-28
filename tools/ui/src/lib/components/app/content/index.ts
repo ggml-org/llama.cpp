@@ -32,6 +32,21 @@
 export { default as MarkdownContent } from './MarkdownContent/MarkdownContent.svelte';
 
 /**
+ * **MarkdownEditor** - Live-preview markdown editor (CodeMirror)
+ *
+ * Edits markdown source in place: every block the cursor is not in renders
+ * exactly like MarkdownContent, and the block being edited shows its raw text
+ * in the same typography. The document is never rewritten, so the value stays
+ * byte-exact. Used by the chat form input and the notebook.
+ *
+ * @example
+ * ```svelte
+ * <MarkdownEditor value={text} onChange={(v) => (text = v)} placeholder="Write..." />
+ * ```
+ */
+export { default as MarkdownEditor } from './MarkdownEditor/MarkdownEditor.svelte';
+
+/**
  * **MentionText** - Plain text with file mention badges
  *
  * Renders a message verbatim, turning only `[name](file://path)` links
