@@ -1318,10 +1318,18 @@ static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, int rank,
     ret->comms.resize(1);
     ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_nccl;
 
+    // On DGX Spark, NCCL picks 64 channels by default, which is slower and uses more memory than 8.
+    // NCCL_MAX_CTAS still overrides this.
+    ncclConfig_t config = NCCL_CONFIG_INITIALIZER;
+    const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK) {
+        config.maxCTAs = 8;
+    }
+
     ggml_cuda_set_device(cuda_ctx->device);
-    const ncclResult_t rc = ncclCommInitRank(&ret->comms[0], world_size, all[0].id, rank);
+    const ncclResult_t rc = ncclCommInitRankConfig(&ret->comms[0], world_size, all[0].id, rank, &config);
     if (rc != ncclSuccess) {
-        GGML_LOG_ERROR("%s: ncclCommInitRank failed for rank %d/%d (%s)\n",
+        GGML_LOG_ERROR("%s: ncclCommInitRankConfig failed for rank %d/%d (%s)\n",
                        __func__, rank, world_size, ncclGetErrorString(rc));
         ret->comms.clear();
         delete ret;
