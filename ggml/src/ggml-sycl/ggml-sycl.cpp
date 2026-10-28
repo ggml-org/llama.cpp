@@ -6998,20 +6998,22 @@ static bool mul_mat_uses_onednn(int device, ggml_tensor * dst) {
 #endif
 }
 
-static bool mul_mat_id_runs_on_device(ggml_backend_sycl_context * ctx, const ggml_tensor * dst) {
+// returns true when ggml_sycl_mul_mat_id takes the fallback path that requires stream synchronization:
+// neither the fused MMVQ path nor the device-scheduled grouped GEMM (GGML_SYCL_MMID_SCHED) handles dst
+static bool ggml_sycl_mul_mat_id_needs_sync(ggml_backend_sycl_context * ctx, const ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids = dst->src[2];
     if (!src0 || !src1 || !ids || ggml_backend_buffer_is_sycl_split(src0->buffer)) {
-        return false;
+        return true;
     }
     const bool reordered = src0->extra && ((const ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder;
     if (ggml_sycl_mul_mat_id_mmvq_shape_ok(src0, src1, ids, dst)) {
-        return reordered ? ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(src0->type) :
-                           ggml_sycl_mul_mat_vec_q_id_supports_type(src0->type);
+        return reordered ? !ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(src0->type) :
+                           !ggml_sycl_mul_mat_vec_q_id_supports_type(src0->type);
     }
-    return ggml_sycl_mul_mat_id_grouped_shape_ok(dst) &&
-           ggml_sycl_grouped_dequant_gemm_device_supported(src0->type, reordered, ggml_sycl_src1_prec(dst),
+    return !ggml_sycl_mul_mat_id_grouped_shape_ok(dst) ||
+           !ggml_sycl_grouped_dequant_gemm_device_supported(src0->type, reordered, ggml_sycl_src1_prec(dst),
                src0->ne[2], ids->ne[0], ids->ne[1], src0->ne[1], src0->ne[0], ctx->stream());
 }
 
@@ -7069,7 +7071,7 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
         }
 
         // Reorder expert weights before recording, so the reorder state that
-        // mul_mat_id_runs_on_device() sees is the one the recorded graph runs with.
+        // ggml_sycl_mul_mat_id_needs_sync() sees is the one the recorded graph runs with.
         if (node_op == GGML_OP_MUL_MAT_ID && mul_mat_id_reorders_src0(node)) {
             opt_for_reorder_id(ctx, node->src[0]);
         }
@@ -7081,7 +7083,7 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 // The ggml_sycl_mul_mat_id() fallback path does a blocking host wait on the sycl
                 // queue after submitting a memcpy operation, but wait() can't be called on a queue
                 // that is recording to a graph.
-                if (!mul_mat_id_runs_on_device(ctx, node)) {
+                if (ggml_sycl_mul_mat_id_needs_sync(ctx, node)) {
                     GGML_LOG_DEBUG("%s: disabling SYCL graphs due to host wait in %s\n", __func__,
                                    ggml_op_name(node_op));
                     return false;
