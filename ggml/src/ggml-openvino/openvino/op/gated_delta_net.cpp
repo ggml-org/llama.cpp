@@ -209,8 +209,11 @@ static OutputVector translate_gdn(const NodeContext & context, const OutputVecto
 
     // ggml state layout (OV notation): [B, H_v, value_dim, key_dim]
     // GatedDeltaNet op expects: [B, H_v, key_dim, value_dim]
+    // With native state the buffer already holds the op layout, so skip both transposes. This is safe because
+    // resets and slot copies move whole states, and supports_op aborts instead of falling back to CPU.
+    const bool native_state = ggml_openvino_gdn_native_state_enabled();
     auto state_perm = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, 1, 3, 2});
-    if (!cache_inputs && snapshot_count == 1) {
+    if (!native_state && !cache_inputs && snapshot_count == 1) {
         state = std::make_shared<ov::op::v1::Transpose>(state, state_perm);
     }
 
@@ -269,9 +272,12 @@ static OutputVector translate_gdn(const NodeContext & context, const OutputVecto
         auto gdn = std::make_shared<ov::op::internal::GatedDeltaNet>(
             q, k, v, state, g, beta, fuse_qk_l2norm, q_eps, k_eps);
         attn_4d = gdn->output(0);
-        states = std::make_shared<ov::op::v1::Transpose>(gdn->output(1), state_perm);
+        if (native_state) {
+            states = gdn->output(1);
+        } else {
+            states = std::make_shared<ov::op::v1::Transpose>(gdn->output(1), state_perm);
+        }
     }
-
     if (snapshot_count == 1 && context.get_output_names().size() == 2) {
         // The canonical graph consumes the packed GGML result only through separate attention
         // and state VIEWs. Publish the native outputs under those VIEW names to avoid

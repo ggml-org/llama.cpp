@@ -190,6 +190,10 @@ bool ggml_openvino_gdn_prescale_enabled();
 // 64.0f. Only consulted when ggml_openvino_gdn_prescale_enabled() is true.
 float ggml_openvino_gdn_q_scale();
 
+// Keep the GDN state in the OV op layout [B, H_v, key_dim, value_dim], skipping two transposes per layer.
+// Only the OpenVINO backend may then read the state. NPU only, enabled when GGML_OPENVINO_GDN_NATIVE_STATE is a positive integer.
+bool ggml_openvino_gdn_native_state_enabled();
+
 // Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
 size_t ggml_openvino_max_alloc_size();
 

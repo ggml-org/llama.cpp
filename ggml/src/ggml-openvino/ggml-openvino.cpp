@@ -1873,17 +1873,25 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         //     // CVS-186471
         //     return true;
         // }
+        const char * reason = nullptr;
         if (op->src[2]->op == GGML_OP_PERMUTE) {
-            return {false, "GATED_DELTA_NET with PERMUTE src2 is not supported"};
+            reason = "GATED_DELTA_NET with PERMUTE src2 is not supported";
         }
-        // kda (per-key-dimension gating) not supported by fused GatedDeltaNet op
-        if (op->src[3]->ne[0] != 1) {
-            return {false, "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported"};
+        else if (op->src[3]->ne[0] != 1) {
+            // kda (per-key-dimension gating) not supported by fused GatedDeltaNet op
+            reason = "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported";
         }
-        if (op->op_params[0] > 1) {
+        else if (op->op_params[0] > 1) {
             if (!ggml_openvino_is_gpu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
-                return {false, "GATED_DELTA_NET snapshots require dynamic GPU execution"};
+                reason = "GATED_DELTA_NET snapshots require dynamic GPU execution";
             }
+        }
+        if (reason != nullptr) {
+            if (ggml_openvino_gdn_native_state_enabled()) {
+                // the CPU fallback reads the state in the ggml layout and would silently corrupt it
+                GGML_ABORT("ggml-openvino: GGML_OPENVINO_GDN_NATIVE_STATE is set, but %s", reason);
+            }
+            return {false, reason};
         }
         break;
     }
