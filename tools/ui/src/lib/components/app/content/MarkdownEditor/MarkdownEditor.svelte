@@ -243,6 +243,11 @@
 		loadHighlightTheme(mode.current === ColorMode.DARK);
 	});
 
+	/** The editor's content element, once mounted (e.g. to follow its height). */
+	export function getContentDOM(): HTMLElement | undefined {
+		return view?.contentDOM;
+	}
+
 	/** Cursor offset in the markdown source. */
 	export function getCaretOffset(): number {
 		return view?.state.selection.main.head ?? 0;
