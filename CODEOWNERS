@@ -19,6 +19,7 @@
 # ggml-org/ggml-webgpu      : reeselevine, yomaytk
 # ggml-org/ggml-zdnn        : AlekseiNikiforovIBM, Andreas-Krebbel, taronaeo
 # ggml-org/llama-common     : aldehir, angt, bartowski1182, danbev, ggerganov, ngxson, nikwen, pwilkin, ruixiang63, sanmai
+# ggml-org/llama-examples   : ggerganov
 # ggml-org/llama-models     : CISC, danbev, ggerganov, ngxson
 # ggml-org/llama-mtmd       : ngxson
 # ggml-org/llama-server     : allozaur, angt, ggerganov, ngxson, ServeurpersoCom
