@@ -1532,115 +1532,18 @@ static void launch_dequantize_mul_mat_vec_reorder(const void *vx, const dfloat *
     }
 }
 
-static void dequantize_mul_mat_vec_q2_K_sycl(const void *vx, const float *y,
-                                             float *dst, const int ncols,
-                                             const int nrows,
-                                             dpct::queue_ptr stream) {
+template <int ny, auto kernel>
+static void launch_dequantize_mul_mat_vec_k(const void *vx, const float *y, float *dst,
+                                            const int ncols, const int nrows,
+                                            dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2; // very slightly faster than 1 even when K_QUANTS_PER_ITERATION = 2
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q2_k(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q2_K_sycl_reorder(const void *vx, const float *y,
-                                                     float *dst, const int ncols,
-                                                     const int nrows,
-                                                     dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q2_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q3_K_sycl(const void *vx, const float *y,
-                                             float *dst, const int ncols,
-                                             const int nrows,
-                                             dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q3_k(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q3_K_sycl_reorder(const void *vx, const float *y,
-                                                     float *dst, const int ncols,
-                                                     const int nrows,
-                                                     dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q3_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q4_K_sycl(const void *vx, const float *y,
-                                             float *dst, const int ncols,
-                                             const int nrows,
-                                             dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q4_k(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q5_K_sycl(const void *vx, const float *y,
-                                             float *dst, const int ncols,
-                                             const int nrows,
-                                             dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q5_k(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
-                                             float *dst, const int ncols,
-                                             const int nrows,
-                                             dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q6_k(vx, y, dst, ncols, nrows, item_ct1);
+            kernel(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
 
@@ -2023,54 +1926,6 @@ bool ggml_sycl_dequantize_mul_mat_vec_glu_reorder_esimd(enum ggml_type src0_type
 
 #endif // GGML_SYCL_DMMV_HAS_ESIMD
 
-static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float *y,
-                                                     float *dst, const int ncols,
-                                                     const int nrows,
-                                                     dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q4_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q5_K_sycl_reorder(const void *vx, const float *y,
-                                                     float *dst, const int ncols,
-                                                     const int nrows,
-                                                     dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q5_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
-static void dequantize_mul_mat_vec_q6_K_sycl_reorder(const void *vx, const float *y,
-                                                     float *dst, const int ncols,
-                                                     const int nrows,
-                                                     dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 2 / K_QUANTS_PER_ITERATION;
-    const int block_num_y = (nrows + ny - 1) / ny;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q6_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
-        });
-}
-
 void ggml_sycl_op_dequantize_mul_mat_vec(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
@@ -2166,10 +2021,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 else
 #endif
                 {
-                    dequantize_mul_mat_vec_q2_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                    launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q2_k_reorder>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
                 }
             } else {
-                dequantize_mul_mat_vec_q2_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                launch_dequantize_mul_mat_vec_k<2, dequantize_mul_mat_vec_q2_k>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
             break;
         case GGML_TYPE_Q3_K:
@@ -2182,10 +2037,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 else
 #endif
                 {
-                    dequantize_mul_mat_vec_q3_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                    launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q3_k_reorder>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
                 }
             } else {
-                dequantize_mul_mat_vec_q3_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q3_k>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
             break;
         case GGML_TYPE_Q4_K:
@@ -2198,10 +2053,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 else
 #endif
                 {
-                    dequantize_mul_mat_vec_q4_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                    launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q4_k_reorder>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
                 }
             } else {
-                dequantize_mul_mat_vec_q4_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q4_k>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
             break;
         case GGML_TYPE_Q5_K:
@@ -2214,10 +2069,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 else
 #endif
                 {
-                    dequantize_mul_mat_vec_q5_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                    launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q5_k_reorder>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
                 }
             } else {
-                dequantize_mul_mat_vec_q5_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q5_k>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
             break;
         case GGML_TYPE_Q6_K:
@@ -2230,10 +2085,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 else
 #endif
                 {
-                    dequantize_mul_mat_vec_q6_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                    launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q6_k_reorder>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
                 }
             } else {
-                dequantize_mul_mat_vec_q6_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                launch_dequantize_mul_mat_vec_k<2/K_QUANTS_PER_ITERATION, dequantize_mul_mat_vec_q6_k>(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
             break;
         case GGML_TYPE_F16:
