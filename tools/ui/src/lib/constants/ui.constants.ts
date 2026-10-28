@@ -1,4 +1,10 @@
 import { MODEL_ICON } from './icons.constants';
+import {
+	SHORTCUT_MODELS,
+	SHORTCUT_NEW_CHAT,
+	SHORTCUT_SEARCH,
+	SHORTCUT_SETTINGS
+} from './keyboard-shortcuts.constants';
 import { MODELS_ROUTE_ID } from './routes.constants';
 import { Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
@@ -90,14 +96,15 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{
 		action: SidebarAction.NEW_CHAT,
 		icon: SquarePen,
-		keys: ['shift', 'cmd', 'o'],
+		keys: SHORTCUT_NEW_CHAT,
 		tooltip: 'New chat'
 	},
-	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
+	{ action: SidebarAction.SEARCH, icon: Search, keys: SHORTCUT_SEARCH, tooltip: 'Search' },
 	{
 		action: SidebarAction.MANAGE_MODELS,
 		activeRouteId: MODELS_ROUTE_ID,
 		icon: MODEL_ICON,
+		keys: SHORTCUT_MODELS,
 		tooltip: 'Models'
 	},
 	{
@@ -108,6 +115,7 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{
 		action: SidebarAction.SETTINGS,
 		icon: Settings,
+		keys: SHORTCUT_SETTINGS,
 		tooltip: 'Settings'
 	}
 ];

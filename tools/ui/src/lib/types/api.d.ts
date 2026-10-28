@@ -289,6 +289,10 @@ export interface ApiLlamaCppServerProps {
 		video: boolean;
 	};
 	chat_template: string;
+	chat_template_caps?: {
+		/** reasoning_effort values the chat template renders distinctly, from lowest to highest */
+		reasoning_effort_levels?: string[];
+	};
 	bos_token: string;
 	eos_token: string;
 	build_info: string;
@@ -313,6 +317,7 @@ export interface ApiChatCompletionRequest {
 	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
+	reasoning_effort?: string;
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;

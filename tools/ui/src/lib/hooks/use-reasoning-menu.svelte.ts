@@ -1,4 +1,4 @@
-import { REASONING_EFFORT_LEVELS, REASONING_EFFORT_TOKENS } from '$lib/constants';
+import { REASONING_EFFORT_TOKENS } from '$lib/constants';
 import { ReasoningEffort } from '$lib/enums';
 import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
 import type { ReasoningEffortLevel } from '$lib/types';
@@ -54,7 +54,27 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 
 		return modelsStore.props.supportsThinking || modelSupportsThinkingFromMessages;
 	});
-	const currentEffort = $derived(conversationsStore.preferences.getReasoningEffort());
+	// the model the next request goes to, as getApiOptions() resolves it
+	const modelId = $derived(modelsStore.selectedModelName ?? '');
+	// levels the chat template honors are sent as reasoning_effort and carry no token budget
+	const hasTemplateLevels = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
+
+		return modelsStore.props.getReasoningEfforts(modelId).length > 0;
+	});
+	const levels = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
+
+		return modelsStore.props.getReasoningLevels(modelId);
+	});
+	const currentEffort = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
+
+		return modelsStore.props.resolveReasoningEffort(
+			modelId,
+			conversationsStore.preferences.getReasoningEffort()
+		);
+	});
 	const thinkingEnabled = $derived(
 		currentEffort !== ReasoningEffort.OFF && currentEffort !== ReasoningEffort.DEFAULT
 	);
@@ -79,7 +99,7 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 			return currentEffort === level.value;
 		},
 		get levels() {
-			return REASONING_EFFORT_LEVELS;
+			return levels;
 		},
 		get modelSupportsThinking() {
 			return modelSupportsThinking;
@@ -92,6 +112,8 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		},
 		tokenLabel(level: ReasoningEffortLevel): string | null {
 			if (level.value === ReasoningEffort.DEFAULT) return 'Model default';
+
+			if (hasTemplateLevels) return null;
 
 			const tokens = REASONING_EFFORT_TOKENS[level.value];
 
