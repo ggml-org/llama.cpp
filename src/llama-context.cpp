@@ -30,6 +30,8 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <cuda_runtime.h>
 #include <liburing.h>
 
@@ -45,6 +47,7 @@ static thread_local double moe_diag_publish_ms = 0.0;
 
 static inline int moe_get_layer_slots(int il, int n_layer);
 static inline int moe_get_layer_base_slot(int il, int n_layer);
+static void moe_cache_scan(llama_context * ctx, const char * tag, bool drop_dup);
 
 static bool moe_doorbell_on(const llama_context * ctx) {
     static int on = -1;
@@ -98,6 +101,25 @@ int moe_doorbell_stage_cap();
 
 static std::atomic<bool> g_doorbell_running{false};
 static std::thread g_doorbell_thread;
+static std::atomic<bool> g_hot_rank_valid{false};
+
+// Refresh the per-layer frequency rank from the decode counters. The doorbell
+// worker is the only place that counts decodes in that mode, so it owns this.
+static void moe_rank_refresh(llama_context * ctx) {
+    const int n_layer = ctx->moe.n_layer;
+    const int n_exp   = ctx->moe.n_expert;
+    if (ctx->moe.exp_rank.size() != (size_t) n_layer * n_exp) return;
+    if (ctx->moe.dec_freq.size() != (size_t) n_layer * n_exp) return;
+    std::vector<int> order((size_t) n_exp);
+    for (int il = 0; il < n_layer; il++) {
+        for (int e = 0; e < n_exp; e++) order[(size_t) e] = e;
+        const uint32_t * d = ctx->moe.dec_freq.data() + (size_t) il * n_exp;
+        std::sort(order.begin(), order.end(), [&](int a, int b) { return d[a] > d[b]; });
+        uint16_t * rk = ctx->moe.exp_rank.data() + (size_t) il * n_exp;
+        for (int k = 0; k < n_exp; k++) rk[order[(size_t) k]] = (uint16_t) k;
+    }
+    g_hot_rank_valid.store(true, std::memory_order_relaxed);
+}
 
 static void start_doorbell_worker(llama_context * ctx) {
     if (g_doorbell_running.load()) return;
@@ -268,6 +290,15 @@ static void start_doorbell_worker(llama_context * ctx) {
                     _mm_sfence();
 #endif
                     done[(size_t) ci] = 1;
+                    // The expert now lives in the VRAM pool, so its page-cache
+                    // copy is a duplicate. Drop it to keep the two tiers
+                    // exclusive and leave the RAM for the warm tail.
+                    if (ctx->pager.pack_mode() && ctx->hot_k > 0) {
+                        const moe_pager::moe_pack_loc & l = locs[(size_t) ci];
+                        if (l.fd >= 0) {
+                            posix_fadvise(l.fd, (off_t) l.off, (off_t) l.len, POSIX_FADV_DONTNEED);
+                        }
+                    }
                 };
                 auto fail_ci = [&](int ci) {
                     if (done[(size_t) ci]) return;
@@ -462,6 +493,15 @@ static void start_doorbell_worker(llama_context * ctx) {
 
                 handled = true;
                 served++;
+
+                // refresh the page-cache ranking from the live decode counters;
+                // overlaps with the kernel copy below
+                if ((served % 6144) == 0) {
+                    moe_rank_refresh(ctx);
+                    if ((served % 24576) == 0) {
+                        moe_cache_scan(ctx, "run", true);
+                    }
+                }
 
                 // The kernel copies from the stage buffer. Wait until it is done
                 // before the next layer reuses those slots.
@@ -881,13 +921,16 @@ static void moe_oracle_start(llama_context * ctx) {
     static int nth = [] {
         const char * e = getenv("MOE_RA_THREADS");
         if (e && atoi(e) == 0) return 0;
-        int v = e && atoi(e) > 0 ? atoi(e) : 4;
+        int v = e && atoi(e) > 0 ? atoi(e) : 1;
         return std::min(v, 32);
     }();
     if (ctx->or_run.load() || nth <= 0) {
         LLAMA_LOG_WARN("%s: page-cache read-ahead DISABLED\n", __func__);
         return;
     }
+    // The page-cache warmer is opt-in (MOE_HOT_K = warm experts per layer).
+    // Measured net loss on this box: the demand stream already keeps the device
+    // busy, so a warmer can only steal bandwidth from it.
     const char * hk = getenv("MOE_HOT_K");
     ctx->hot_k = hk ? atoi(hk) : 0;
     ctx->hot_cycles = ctx->hot_k > 0;
@@ -953,27 +996,125 @@ static void moe_io_worker(llama_context * ctx) {
     }
 }
 
+// Page-cache warmer budget per thread. The demand stream already keeps the
+// device busy, so the warmer must stay well under the device rate.
+static constexpr double MOE_WARM_RATE_MB = 200.0;
+
+// 1 when the whole expert range is already in the page cache. Used to keep the
+// background warmer from re-issuing reads for data that is already there.
+static bool moe_ra_resident(int fd, off_t off, size_t len) {
+    static std::mutex mtx;
+    static int     cfd = -1;
+    static char *  map = nullptr;
+    static size_t  map_len = 0;
+    std::lock_guard<std::mutex> lock(mtx);
+    if (fd != cfd) {
+        if (map) { munmap(map, map_len); map = nullptr; map_len = 0; }
+        struct stat st;
+        if (fstat(fd, &st) != 0 || st.st_size <= 0) return false;
+        map = (char *) mmap(nullptr, (size_t) st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+        if (map == MAP_FAILED) { map = nullptr; return false; }
+        map_len = (size_t) st.st_size;
+        cfd = fd;
+    }
+    if (!map || (size_t) off + len > map_len) return false;
+    const size_t page = 4096;
+    const off_t  a = off & ~(off_t) (page - 1);
+    const size_t n = (size_t) ((off + (off_t) len - a + (off_t) page - 1) / (off_t) page);
+    unsigned char vec[512];
+    if (n > sizeof(vec)) return false;
+    if (mincore(map + a, n * page, vec) != 0) return false;
+    for (size_t i = 0; i < n; i++) {
+        if (!(vec[i] & 1)) return false;
+    }
+    return true;
+}
+
+// Residency census over the pack file: how much of the VRAM pool is duplicated
+// in the page cache, and how much of the warm tail the page cache actually
+// holds. `drop_dup` frees the duplicates so the RAM tier can use that space.
+static void moe_cache_scan(llama_context * ctx, const char * tag, bool drop_dup) {
+    const int n_layer = ctx->moe.n_layer;
+    const int n_exp   = ctx->moe.n_expert;
+    if (!ctx->pager.pack_mode()) return;
+    long n_vram = 0, n_ram = 0, n_both = 0, n_warm = 0, n_warm_ram = 0;
+    double dropped = 0.0;
+    const int pad = ctx->hot_k;
+    for (int il = 0; il < n_layer; il++) {
+        const int s_l = moe_get_layer_slots(il, n_layer);
+        for (int e = 0; e < n_exp; e++) {
+            const moe_pager::moe_pack_loc loc = ctx->pager.pack_loc(il, e);
+            if (loc.fd < 0) continue;
+            const bool vram = ctx->moe.slot_of[(size_t) il * n_exp + e] >= 0;
+            const bool ram  = moe_ra_resident(loc.fd, (off_t) loc.off, (size_t) loc.len);
+            const bool warm = !vram && pad > 0 && g_hot_rank_valid.load(std::memory_order_relaxed) &&
+                ctx->moe.exp_rank.size() == (size_t) n_layer * n_exp &&
+                ctx->moe.exp_rank[(size_t) il * n_exp + e] < (uint16_t) (s_l + pad);
+            if (vram) n_vram++;
+            if (ram)  n_ram++;
+            if (vram && ram) n_both++;
+            if (warm) { n_warm++; if (ram) n_warm_ram++; }
+            if (drop_dup && vram && ram) {
+                if (posix_fadvise(loc.fd, (off_t) loc.off, (off_t) loc.len, POSIX_FADV_DONTNEED) == 0) {
+                    dropped += (double) loc.len;
+                }
+            }
+        }
+    }
+    fprintf(stderr, "[moe_cache] %s vram=%ld ram=%ld dup=%ld warm=%ld warm_ram=%ld (%.1f%%) dropped=%.2f GiB\n",
+            tag, n_vram, n_ram, n_both, n_warm, n_warm_ram,
+            n_warm ? 100.0 * (double) n_warm_ram / (double) n_warm : 0.0,
+            dropped / 1073741824.0);
+}
+
 // Walk the frequency-ranked experts that overflow the VRAM slots so the page
 // cache keeps them resident. Ranking (exp_rank) is refreshed by moe_hot_save()
 // every 128 decode tokens; resident experts are skipped.
 void llama_context::moe_hot_cycle(int fd) {
     const int k_hot = hot_k;
-    if (k_hot <= 0 || moe.exp_rank.empty()) {
+    if (k_hot <= 0 || moe.exp_rank.empty() || !g_hot_rank_valid.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         return;
     }
     const int n_layer = moe.n_layer;
     const int n_exp = moe.n_expert;
+    size_t issued = 0;
     for (int t = 0; t < k_hot; t++) {
         const int e = hot_pos % n_exp;
         const int il = (hot_pos / n_exp) % n_layer;
         hot_pos++;
         if (moe.slot_of[(size_t) il * n_exp + e] >= 0) continue;
+        // k_hot is a per-layer pad on top of the VRAM slots, so layers with a
+        // larger pool warm a proportionally smaller tail
+        const int s_l = moe_get_layer_slots(il, n_layer);
         const uint16_t * rk = moe.exp_rank.data() + (size_t) il * n_exp;
-        if (rk[e] >= k_hot) continue;
-        const moe_expert_slice * s = pager.slices(il, e);
-        readahead(fd, (off_t) s->off, (size_t) s->len);
+        if (rk[e] >= (uint16_t) (s_l + k_hot)) continue;
+        int rfd = fd;
+        off_t roff = 0;
+        size_t rlen = 0;
+        if (pager.pack_mode()) {
+            // the doorbell reads the pack blob, not the GGUF
+            const moe_pager::moe_pack_loc loc = pager.pack_loc(il, e);
+            if (loc.fd < 0) continue;
+            rfd = loc.fd; roff = (off_t) loc.off; rlen = (size_t) loc.len;
+        } else {
+            const moe_expert_slice * s = pager.slices(il, e);
+            roff = (off_t) s->off; rlen = (size_t) s->len;
+        }
+        // skip experts that are already in the page cache: re-issuing
+        // readahead for resident data only churns the cache
+        if (moe_ra_resident(rfd, roff, rlen)) continue;
+        readahead(rfd, roff, rlen);
         moe.ra_done++;
+        issued += rlen;
+    }
+    // The warmer is a background filler, not a second demand stream. Pace it
+    // well below the device rate so it never starves the doorbell reads.
+    if (issued == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    } else {
+        const double us = (double) issued / (MOE_WARM_RATE_MB * 1048576.0) * 1e6;
+        std::this_thread::sleep_for(std::chrono::microseconds((long long) us));
     }
 }
 
@@ -1604,6 +1745,11 @@ llama_context::llama_context(
                                 }
                             }
                             moe_seed_hot();
+                            if (moe_doorbell_on(this) && pager.pack_mode()) {
+                                // tiers are exclusive: free the page-cache copies
+                                // of the VRAM set before the warmer runs
+                                moe_cache_scan(this, "init", true);
+                            }
                             // RouterPredictorV2 measured 1.2% top-16 hit rate on this
                             // model, so it is off by default: it costs 120 MiB of VRAM
                             // that the slot pool can use instead. MOE_PRED=1 re-arms it.
