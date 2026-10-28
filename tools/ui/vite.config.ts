@@ -60,10 +60,12 @@ export default defineConfig(({ mode }) => {
 				'Cross-Origin-Opener-Policy': 'same-origin'
 			},
 			proxy: {
+				'/completion': SERVER_ORIGIN,
 				'/cors-proxy': SERVER_ORIGIN,
 				'/models': SERVER_ORIGIN,
 				'/props': SERVER_ORIGIN,
 				'/slots': SERVER_ORIGIN,
+				'/tokenize': SERVER_ORIGIN,
 				'/tools': SERVER_ORIGIN,
 				'/v1': SERVER_ORIGIN
 			}

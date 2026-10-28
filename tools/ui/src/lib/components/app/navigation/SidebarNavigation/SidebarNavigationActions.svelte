@@ -7,10 +7,11 @@
 		ICON_CLASS_DEFAULT,
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
 		ICON_STRIP_TRANSITION_DURATION,
+		ROUTES,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
+	import { deviceStore, uiStore } from '$lib/stores';
 	import type { DesktopIconStripItem } from '$lib/types';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
@@ -27,10 +28,13 @@
 
 	let { class: className, isExpandedMode = false, onAction, onNavigate }: Props = $props();
 
-	// the models manager stays desktop-only: a phone picks its models in the selector
+	// the models manager stays desktop-only: a phone picks its models in the selector;
+	// the notebook is opt-in from the General settings
 	const actions = $derived(
 		SIDEBAR_ACTIONS_ITEMS.filter(
-			(item) => item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile
+			(item) =>
+				(item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile) &&
+				(item.route !== ROUTES.NOTEBOOK || uiStore.isNotebookEnabled)
 		)
 	);
 	let initialized = $state(false);

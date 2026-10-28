@@ -136,6 +136,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
+				help: 'Show the Notebook sidebar action: a free-form markdown editor where the model continues your text with raw completions.',
+				isExperimental: true,
+				key: SETTINGS_KEYS.ENABLE_NOTEBOOK,
+				label: 'Enable Notebook',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
 				help: 'Fetch model display data (avatars, context length, chat template) and everything in the Discover Models view from the Hugging Face Hub API. Locked on while Discover Models is enabled; can be turned on alone for just the display data.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use the Hugging Face Hub API',

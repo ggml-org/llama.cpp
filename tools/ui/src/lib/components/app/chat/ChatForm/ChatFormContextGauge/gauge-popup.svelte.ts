@@ -1,6 +1,7 @@
 // Shared state for the context gauge popup. The dial and the card live in
 // different DOM subtrees, so open state and placement are coordinated here.
-// centerX and bottom place the card just above the dial: both are measured
+// centerX and bottom place the card just above the dial (or top just below it,
+// for a frame marked data-gauge-placement="below"): all are measured
 // once at open time, relative to the closest form ancestor; the dial and
 // the card share that positioning frame, so the values stay exact for the
 // whole time the card is open.
@@ -16,7 +17,12 @@ import {
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let lastPointerType = '';
 
-export const gaugePopup = $state({ bottom: 0, centerX: 0, open: false });
+export const gaugePopup = $state<{
+	bottom: number;
+	centerX: number;
+	open: boolean;
+	top: null | number;
+}>({ bottom: 0, centerX: 0, open: false, top: null });
 
 function openFrom(trigger: HTMLElement): void {
 	clearTimeout(closeTimer);
@@ -34,6 +40,10 @@ function openFrom(trigger: HTMLElement): void {
 
 		gaugePopup.centerX = Math.min(Math.max(centerX, min), Math.max(min, max));
 		gaugePopup.bottom = frameRect.bottom - triggerRect.top + CONTEXT_GAUGE_DIAL_GAP_PX;
+		gaugePopup.top =
+			frame instanceof HTMLElement && frame.dataset.gaugePlacement === 'below'
+				? triggerRect.bottom - frameRect.top + CONTEXT_GAUGE_DIAL_GAP_PX
+				: null;
 	}
 
 	gaugePopup.open = true;

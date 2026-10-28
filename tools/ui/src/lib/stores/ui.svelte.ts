@@ -60,6 +60,11 @@ class UiStore {
 		return page.route.id === MODELS_ROUTE_ID;
 	}
 
+	/** Whether the Notebook is turned on; its sidebar action and route hide without it. */
+	get isNotebookEnabled(): boolean {
+		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_NOTEBOOK));
+	}
+
 	/** Whether the desktop sidebar is expanded (open); remembered across reloads on desktop. */
 	get isSidebarExpanded(): boolean {
 		return this.#isSidebarExpanded;

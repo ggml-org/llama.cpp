@@ -176,7 +176,9 @@
 		onpointerenter={gaugeCardEnter}
 		onpointerleave={gaugeCardLeave}
 		role="status"
-		style="left: {gaugePopup.centerX}px; bottom: {gaugePopup.bottom}px"
+		style="left: {gaugePopup.centerX}px; {gaugePopup.top !== null
+			? `top: ${gaugePopup.top}px`
+			: `bottom: ${gaugePopup.bottom}px`}"
 	>
 		<div class="flex flex-col gap-2 px-2 py-1.5">
 			<div class="flex items-center gap-2">
