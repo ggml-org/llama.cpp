@@ -1333,6 +1333,11 @@ class MODEL_TENSOR(IntEnum):
     DSPARK_MARKOV_W1       = auto()  # markov head: prev-token embed
     DSPARK_MARKOV_W2       = auto()  # markov head: bias projection
     DSPARK_CONF_PROJ       = auto()  # confidence head
+    DSPARK_FC_NORM_0       = auto()
+    DSPARK_FC_NORM_1       = auto()
+    DSPARK_FC_NORM_2       = auto()
+    DSPARK_FC_NORM_3       = auto()
+    DSPARK_FC_NORM_4       = auto()
     ENGRAM_KV              = auto()
     ENGRAM_GATE            = auto()
     DFLASH_ATTN_CONV_BASE  = auto()
@@ -2187,6 +2192,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
     MODEL_TENSOR.DSPARK_CONF_PROJ:          "conf_proj",
+    MODEL_TENSOR.DSPARK_FC_NORM_0:          "fc_norm.0",
+    MODEL_TENSOR.DSPARK_FC_NORM_1:          "fc_norm.1",
+    MODEL_TENSOR.DSPARK_FC_NORM_2:          "fc_norm.2",
+    MODEL_TENSOR.DSPARK_FC_NORM_3:          "fc_norm.3",
+    MODEL_TENSOR.DSPARK_FC_NORM_4:          "fc_norm.4",
     MODEL_TENSOR.ENGRAM_KV:                 "blk.{bid}.engram_kv",
     MODEL_TENSOR.ENGRAM_GATE:               "blk.{bid}.engram_gate",
     MODEL_TENSOR.DFLASH_ATTN_CONV_BASE:     "blk.{bid}.attn_conv_base",
@@ -5807,6 +5817,11 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DSPARK_MARKOV_W1,
         MODEL_TENSOR.DSPARK_MARKOV_W2,
         MODEL_TENSOR.DSPARK_CONF_PROJ,
+        MODEL_TENSOR.DSPARK_FC_NORM_0,
+        MODEL_TENSOR.DSPARK_FC_NORM_1,
+        MODEL_TENSOR.DSPARK_FC_NORM_2,
+        MODEL_TENSOR.DSPARK_FC_NORM_3,
+        MODEL_TENSOR.DSPARK_FC_NORM_4,
         MODEL_TENSOR.DFLASH_ATTN_CONV_BASE,
         MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ,
         MODEL_TENSOR.DFLASH_FFN_CONV_BASE,

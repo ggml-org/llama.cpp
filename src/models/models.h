@@ -1612,6 +1612,10 @@ struct llama_model_dflash : public llama_model_base {
         graph_dsv41(const llama_model & model, const llm_graph_params & params);
     };
 
+    struct graph_spark : public llm_graph_context {
+        graph_spark(const llama_model & model, const llm_graph_params & params);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 

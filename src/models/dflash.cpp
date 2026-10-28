@@ -5,6 +5,7 @@
 #include "llama-kv-cache-iswa.h"
 
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
+    const bool spark_draft = ml.get_tensor_meta("fc_norm.0.weight") != nullptr;
 
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false);
@@ -119,6 +120,14 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+        if (spark_draft) {
+            ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
+            for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+                if (!hparams.is_swa(il)) {
+                    throw std::runtime_error("Spark-X2.5 DSpark currently assumes all draft layers use sliding attention");
+                }
+            }
+        }
     }
 
     type = LLM_TYPE_UNKNOWN;
@@ -128,6 +137,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
+    const bool spark_draft = ml->get_tensor_meta("fc_norm.0.weight") != nullptr;
 
     tok_embd        = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,       "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
 
@@ -242,6 +252,24 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         lilicorr_anchor_out_head_b      = create_tensor(tn(LLM_TENSOR_LILICORR_ANCHOR_OUT_HEAD, "bias"), { factor },           0);
     }
 
+    if (spark_draft) {
+        const int64_t n_features = target_layer_ids.size();
+        if (n_features != 5) {
+            throw std::runtime_error("Spark-X2.5 DSpark requires five target feature layers");
+        }
+        const llm_tensor norm_types[] = {
+            LLM_TENSOR_DSPARK_FC_NORM_0, LLM_TENSOR_DSPARK_FC_NORM_1, LLM_TENSOR_DSPARK_FC_NORM_2,
+            LLM_TENSOR_DSPARK_FC_NORM_3, LLM_TENSOR_DSPARK_FC_NORM_4,
+        };
+        if (!markov_meta) {
+            throw std::runtime_error("Spark-X2.5 DSpark requires a vanilla Markov head");
+        }
+        dspark_fc_norms.reserve(n_features);
+        for (int64_t i = 0; i < n_features; ++i) {
+            dspark_fc_norms.push_back(create_tensor(tn(norm_types[i], "weight"), { n_embd }, 0));
+        }
+    }
+
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     fc_s            = create_tensor(tn(LLM_TENSOR_FC,              "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
     fc_in_s         = create_tensor(tn(LLM_TENSOR_FC,              "input_scale"), { 1 }, TENSOR_NOT_REQUIRED);
@@ -305,6 +333,23 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         return;
     }
 
+    if (spark_draft) {
+        for (int i = 0; i < n_layer; ++i) {
+            auto & layer = layers[i];
+            const int64_t n_embd_q = n_embd_head_k * n_head;
+            const int64_t n_embd_kv = n_embd_head_k * n_head_kv;
+            layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+            create_tensor_qkv(layer, i, n_embd, n_embd_q, n_embd_kv, n_embd_kv, 0);
+            layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_head }, 0);
+            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_q, n_embd }, 0);
+            layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
+            layer.ffn_up = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", i), { n_embd, n_ff }, 0);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
+        }
+        return;
+    }
+
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
@@ -363,6 +408,16 @@ ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
 template <>
 llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = build_inp_embd_enc();
+
+    if (!model.dspark_fc_norms.empty()) {
+        ggml_tensor * normed = nullptr;
+        for (size_t i = 0; i < model.dspark_fc_norms.size(); ++i) {
+            ggml_tensor * part = ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], i * n_embd * cur->nb[0]);
+            part = build_norm(ggml_cont(ctx0, part), model.dspark_fc_norms[i], nullptr, LLM_NORM_RMS, -1);
+            normed = normed ? ggml_concat(ctx0, normed, part, 0) : part;
+        }
+        cur = normed;
+    }
 
     cur = build_lora_mm(model.fc, cur, model.fc_s);
     cb(cur, "fc_out", -1);
@@ -1115,6 +1170,120 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
 }
 
+llama_model_dflash::graph_spark::graph_spark(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+    const int64_t n_embd_head = hparams.n_embd_head_k();
+    const int64_t n_head = hparams.n_head();
+    const int64_t n_head_kv = hparams.n_head_kv();
+    const float kq_scale = 1.0f / sqrtf((float) n_embd_head);
+    const bool use_iswa = hparams.swa_type != LLAMA_SWA_TYPE_NONE;
+
+    ggml_tensor * inp_pos = build_inp_pos();
+    llm_graph_input_attn_kv      * inp_attn      = nullptr;
+    llm_graph_input_attn_kv_iswa * inp_attn_iswa = nullptr;
+    if (use_iswa) {
+        GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_STANDARD);
+        inp_attn_iswa = build_attn_inp_kv_iswa();
+    } else {
+        inp_attn = build_attn_inp_kv();
+    }
+
+    if (ubatch.embd) {
+        auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+        ggml_set_input(inp->embd);
+        ggml_tensor * fused = inp->embd;
+        res->add_input(std::move(inp));
+
+        for (int il = 0; il < n_layer; ++il) {
+            const auto & layer = model.layers[il];
+            auto [q, k, v] = build_qkv(layer, fused, n_embd_head, n_head, n_head_kv, il);
+            (void) q;
+            k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, hparams.n_rot(il), rope_type, n_ctx_orig,
+                    model.get_rope_freq_base(cparams, il), model.get_rope_freq_scale(cparams, il),
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+            if (use_iswa) {
+                if (inp_attn_iswa->self_k_rot_swa) {
+                    k = llama_mul_mat_hadamard(ctx0, k, inp_attn_iswa->self_k_rot_swa);
+                }
+                if (inp_attn_iswa->self_v_rot_swa) {
+                    v = llama_mul_mat_hadamard(ctx0, v, inp_attn_iswa->self_v_rot_swa);
+                }
+                const auto * kv = inp_attn_iswa->mctx->get_swa();
+                ggml_build_forward_expand(gf, kv->cpy_k(ctx0, k, inp_attn_iswa->get_k_idxs_swa(), il));
+                ggml_build_forward_expand(gf, kv->cpy_v(ctx0, v, inp_attn_iswa->get_v_idxs_swa(), il));
+            } else {
+                if (inp_attn->self_k_rot) {
+                    k = llama_mul_mat_hadamard(ctx0, k, inp_attn->self_k_rot);
+                }
+                if (inp_attn->self_v_rot) {
+                    v = llama_mul_mat_hadamard(ctx0, v, inp_attn->self_v_rot);
+                }
+                ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, k, inp_attn->get_k_idxs(), il));
+                ggml_build_forward_expand(gf, inp_attn->mctx->cpy_v(ctx0, v, inp_attn->get_v_idxs(), il));
+            }
+        }
+        res->t_embd = fused;
+        ggml_build_forward_expand(gf, fused);
+        return;
+    }
+
+    auto * tok_embd = model.tok_embd;
+    auto * output = model.output;
+    if (!tok_embd || !output) {
+        GGML_ASSERT(cparams.ctx_other != nullptr);
+        const auto * target = llama_get_model(cparams.ctx_other);
+        if (!tok_embd) {
+            tok_embd = target->tok_embd;
+        }
+        if (!output) {
+            output = target->output;
+        }
+    }
+    GGML_ASSERT(tok_embd && output);
+
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp->tokens);
+    ggml_tensor * tokens = inp->tokens;
+    ggml_tensor * cur = ggml_get_rows(ctx0, tok_embd, tokens);
+    res->add_input(std::move(inp));
+
+    for (int il = 0; il < n_layer; ++il) {
+        const auto & layer = model.layers[il];
+        ggml_tensor * attn_inp = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+        auto [q, k, v] = build_qkv(layer, attn_inp, n_embd_head, n_head, n_head_kv, il);
+        const int64_t n_rot = hparams.n_rot(il);
+        const float freq_base = model.get_rope_freq_base(cparams, il);
+        const float freq_scale = model.get_rope_freq_scale(cparams, il);
+        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
+                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+        k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
+                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+        ggml_tensor * attn = use_iswa
+                ? build_attn(inp_attn_iswa, nullptr, nullptr, nullptr, q, k, v, nullptr, nullptr, nullptr, kq_scale, il)
+                : build_attn(inp_attn, nullptr, nullptr, nullptr, q, k, v, nullptr, nullptr, nullptr, kq_scale, il);
+        ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, attn_inp));
+        attn = ggml_reshape_3d(ctx0, attn, n_embd_head, n_head, n_tokens);
+        gate = ggml_reshape_3d(ctx0, gate, 1, n_head, n_tokens);
+        attn = ggml_reshape_2d(ctx0, ggml_mul(ctx0, attn, gate), n_embd_head * n_head, n_tokens);
+        cur = ggml_add(ctx0, cur, build_lora_mm(layer.wo, attn));
+        ggml_tensor * ffn = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
+        ffn = build_ffn(ffn,
+                layer.ffn_up, nullptr, nullptr,
+                layer.ffn_gate, nullptr, nullptr,
+                layer.ffn_down, nullptr, nullptr,
+                nullptr, LLM_FFN_GELU, LLM_FFN_PAR, il);
+        cur = ggml_add(ctx0, cur, ffn);
+        cb(cur, "draft_hidden", il);
+    }
+
+    ggml_tensor * normed = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+    res->t_embd = normed;
+    res->t_logits = build_lora_mm(output, normed, model.output_s);
+    ggml_build_forward_expand(gf, res->t_logits);
+    build_dspark_markov_head(*this, model, tokens);
+}
+
 // DSV4 DSpark decoder, dual-mode by batch type (see the DFlash decoder above):
 //   * embd batch  -> project main_x through each stage's wkv and inject K into the ring cache
 //   * token batch -> noise block through 3 full DSV4 stages (hc + MLA + MoE), markov + confidence heads
@@ -1535,6 +1704,9 @@ std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const ll
             return std::make_unique<graph<true>>(*this, params);
         case LLM_GRAPH_TYPE_DEFAULT:
         case LLM_GRAPH_TYPE_DECODER:
+            if (!dspark_fc_norms.empty()) {
+                return std::make_unique<graph_spark>(*this, params);
+            }
             if (hparams.dsv4_hc_mult > 0 && hparams.dsv4_hc_single_pass) {
                 return std::make_unique<graph_dsv41>(*this, params);
             }
