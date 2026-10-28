@@ -3,10 +3,12 @@
  *
  *   node demo/cli.ts pr <number>   record the ```ts demo block from a PR description
  *   node demo/cli.ts docs          record every docs/*.demo.ts script in DEMO_STORAGE
+ *   node demo/cli.ts traces        write the built-in traces, and push them to DEMO_TRACES_DATASET
  *
  * Settings come from tools/ui/.env (see .env.example).
  */
 
+import { DEMO_TRACES, generateTrace } from './fixtures/traces.ts';
 import { type DemoStorage, getDemoStorage, getPublicUrl } from './storage.ts';
 import { execFileSync } from 'node:child_process';
 import {
@@ -26,6 +28,7 @@ const DEMO_DIR = import.meta.dirname;
 const UI_DIR = resolve(DEMO_DIR, '..');
 const RUNS_DIR = join(DEMO_DIR, '.runs');
 const VIDEOS_DIR = join(DEMO_DIR, 'videos');
+const TRACES_DIR = join(DEMO_DIR, 'traces');
 const DEMO_BLOCK = /```(?:ts|typescript)[ \t]+demo[ \t]*\r?\n([\s\S]*?)```/;
 const HELPERS_IMPORT = /^import\s[^;]*from\s+['"][^'"]*helpers(?:\.ts)?['"];?\s*$/gm;
 const SECTION_START = '<!-- demo:start -->';
@@ -252,13 +255,49 @@ async function recordDocs(): Promise<void> {
 	}
 }
 
+/** Writes the built-in traces to demo/traces/ and uploads them to the traces dataset. */
+function writeTraces(): void {
+	rmSync(TRACES_DIR, { force: true, recursive: true });
+	mkdirSync(TRACES_DIR, { recursive: true });
+
+	for (const name of Object.keys(DEMO_TRACES)) {
+		writeFileSync(join(TRACES_DIR, `${name}.jsonl`), `${generateTrace(name)}\n`);
+		console.log(`wrote demo/traces/${name}.jsonl`);
+	}
+
+	const dataset = process.env.DEMO_TRACES_DATASET;
+
+	if (!dataset) {
+		console.log('DEMO_TRACES_DATASET is not set: not uploading.');
+
+		return;
+	}
+
+	execFileSync(
+		'hf',
+		[
+			'upload',
+			dataset,
+			TRACES_DIR,
+			'.',
+			'--repo-type',
+			'dataset',
+			'--commit-message',
+			'Update demo traces'
+		],
+		{ stdio: 'inherit' }
+	);
+}
+
 const [command, arg] = process.argv.slice(2);
 
 if (command === 'pr' && arg) {
 	await recordPr(arg);
 } else if (command === 'docs') {
 	await recordDocs();
+} else if (command === 'traces') {
+	writeTraces();
 } else {
-	console.error('usage: node demo/cli.ts pr <number> | docs');
+	console.error('usage: node demo/cli.ts pr <number> | docs | traces');
 	process.exit(1);
 }

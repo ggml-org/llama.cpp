@@ -22,6 +22,7 @@
 		"demo:docs": "node demo/cli.ts docs",
 		"demo:pr": "node demo/cli.ts pr",
 		"demo:record": "playwright test --config=demo/playwright.config.ts",
+		"demo:traces": "node demo/cli.ts traces",
 		"test:client": "vitest --project=client",
 		"test:unit": "vitest --project=unit",
 		"test:unit:pwa": "vitest --project=unit --run tests/unit/pwa.spec.ts",

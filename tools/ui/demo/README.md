@@ -7,10 +7,10 @@ Scripted Playwright walkthroughs of the UI, exported as mp4 with an animated GIF
 
 ```
 demo/
-├── cli.ts      demo:pr and demo:docs
+├── cli.ts      demo:pr, demo:docs and demo:traces
 ├── storage.ts  storage targets (hf://, file://)
 ├── helpers.ts  `test` with a `demo` fixture: cursor, captions, mp4 export
-├── fixtures/   fixture MCP servers and seeded settings
+├── fixtures/   fixture MCP servers, seeded settings and demo conversations
 └── videos/     output (git-ignored)
 ```
 
@@ -63,7 +63,18 @@ Records every `scripts/docs/*.demo.ts` from the storage target and uploads `vide
 
 ## Writing a demo
 
-Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting; `demo.caption` shows a caption at the bottom of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting; `demo.scroll` turns the mouse wheel over a target; `demo.caption` shows a caption at the bottom of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+
+## Conversations
+
+Demos that need existing chats import them with `test.use({ traces: ['long-chat'] })`, through Settings > Import/Export before the video starts. Traces use the export format (llama.app JSONL), so the Hub shows them as Llama traces:
+
+- `fixtures/traces.ts` generates the built-in ones: `long-chat` (36 tall exchanges) and `agentic-debugging` (long reasoning, shell output and code blocks).
+- Any other name is downloaded as `<name>.jsonl` from `DEMO_TRACES_DATASET`, e.g. an exported conversation uploaded there.
+
+`npm run demo:traces` writes the built-in traces to `demo/traces/` and pushes them to `DEMO_TRACES_DATASET`.
+
+## Trying a script locally
 
 To try a script locally, put it in `demo/` as `<name>.demo.ts`, importing from `./helpers.ts`, and run `npm run demo:record -- demo/<name>`. `npm run demo:codegen` opens Playwright codegen against `:5180` for a first draft.
 

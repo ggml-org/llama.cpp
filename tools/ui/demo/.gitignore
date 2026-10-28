@@ -2,3 +2,4 @@
 test-results/
 videos/
 *.demo.ts
+/traces/

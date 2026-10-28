@@ -1,8 +1,9 @@
 import { demoMcpServerSettings } from './fixtures/demo-config.ts';
+import { generateTrace } from './fixtures/traces.ts';
 import { type Locator, type Page, test as base } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 
 const VIDEOS_DIR = resolve(import.meta.dirname, 'videos');
 
@@ -135,6 +136,20 @@ export class Demo {
 		await this.pause(ms);
 	}
 
+	/** Scrolls the wheel over `target` by `dy` pixels (negative scrolls up), in small steps like a trackpad. */
+	async scroll(target: Locator, dy: number, ms = 500): Promise<void> {
+		await this.moveTo(target);
+
+		const step = Math.sign(dy) * 40;
+
+		for (let done = 0; Math.abs(done) < Math.abs(dy); done += step) {
+			await this.page.mouse.wheel(0, step);
+			await this.page.waitForTimeout(16);
+		}
+
+		await this.pause(ms);
+	}
+
 	async type(target: Locator, text: string, ms = 500): Promise<void> {
 		await this.click(target, 200);
 		await target.pressSequentially(text, { delay: 40 });
@@ -147,13 +162,58 @@ interface DemoOptions {
 	startPath: string;
 	/** Extra UI settings merged into the seeded config. */
 	settings: Record<string, unknown>;
+	/**
+	 * Conversations imported before the demo starts: built-in traces from
+	 * fixtures/traces.ts, or `<name>.jsonl` files from DEMO_TRACES_DATASET.
+	 */
+	traces: string[];
+}
+
+/** Reads a trace by name, generating built-in ones and downloading the rest. */
+function loadTrace(name: string, dir: string): string {
+	const generated = generateTrace(name);
+
+	if (generated) return generated;
+
+	const dataset = process.env.DEMO_TRACES_DATASET;
+
+	if (!dataset)
+		throw new Error(`demo: no built-in trace "${name}" and DEMO_TRACES_DATASET is not set`);
+
+	execFileSync(
+		'hf',
+		['download', dataset, `${name}.jsonl`, '--repo-type', 'dataset', '--local-dir', dir],
+		{ stdio: 'inherit' }
+	);
+
+	return readFileSync(join(dir, `${name}.jsonl`), 'utf8');
+}
+
+/** Imports conversations through Settings > Import/Export, like a user would. */
+async function importTraces(page: Page, file: string): Promise<void> {
+	// the expanded sidebar adds the shortcut to the name
+	await page
+		.getByRole('button', { name: /^Settings(\s|$)/ })
+		.first()
+		.click();
+
+	const dialog = page.getByRole('dialog');
+
+	await dialog.getByText('Import/Export', { exact: true }).filter({ visible: true }).click();
+
+	const chooser = page.waitForEvent('filechooser');
+
+	await dialog.getByRole('button', { name: 'Import conversations' }).click();
+	await (await chooser).setFiles(file);
+	await page.getByRole('button', { name: /^Import \(\d+\)$/ }).click();
+	await page.getByRole('heading', { name: /^Imported \d+ conversation/ }).waitFor();
 }
 
 export const test = base.extend<DemoOptions & { demo: Demo }>({
 	demo: async ({ page }, use) => {
 		await use(new Demo(page));
 	},
-	page: async ({ page, settings, startPath }, use, testInfo) => {
+	page: async ({ page, settings, startPath, traces }, use, testInfo) => {
 		const createdAt = Date.now();
 
 		await page.addInitScript(installCursorOverlay);
@@ -162,7 +222,21 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 			...settings
 		});
 
+		if (traces.length > 0) {
+			const dir = testInfo.outputPath('traces');
+			const file = join(dir, 'import.jsonl');
+
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(file, traces.map((name) => loadTrace(name, dir)).join('\n'));
+			await page.goto('/');
+			await importTraces(page, file);
+		}
+
 		await page.goto(startPath);
+
+		// a hash route after the import doesn't reload, which the conversations list needs
+		if (traces.length > 0) await page.reload();
+
 		await page.getByRole('textbox', { name: 'Type a message...' }).waitFor();
 
 		const viewport = page.viewportSize();
@@ -193,7 +267,9 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 
 	settings: [{}, { option: true }],
 
-	startPath: ['/', { option: true }]
+	startPath: ['/', { option: true }],
+
+	traces: [[], { option: true }]
 });
 
 export { expect } from '@playwright/test';
