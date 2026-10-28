@@ -6,6 +6,8 @@
 
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
+    const bool is_dspark = ml.get_tensor_meta("markov_w1.weight") != nullptr;
+
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false);
     ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, hparams.f_attn_value_scale, false);
@@ -114,6 +116,10 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     // optional interleaved sliding-window attention with per-layer pattern array.
     if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
+        if (is_dspark) {
+            // include the configured history window before the anchor
+            hparams.n_swa += 1;
+        }
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
@@ -505,6 +511,25 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
 
     res->t_logits = out;
     ggml_build_forward_expand(g.gf, out);
+}
+
+static void build_dspark_block_mask(llm_graph_context & g, ggml_tensor *& mask) {
+    const int64_t n_blocks = g.ubatch.n_seqs_unq;
+    if (!mask || n_blocks <= 0) {
+        return;
+    }
+
+    const int64_t block_size = g.n_tokens / n_blocks;
+    if (block_size <= 1 || g.n_tokens % n_blocks != 0 || mask->ne[2] != 1 || mask->ne[1] % block_size != 0 || !ggml_is_contiguous(mask)) {
+        return;
+    }
+
+    // all queries use the anchor row to keep history fixed across the block
+    ggml_tensor * mask_4d = ggml_reshape_4d(g.ctx0, mask, mask->ne[0], block_size, mask->ne[1]/block_size, mask->ne[3]);
+    ggml_tensor * row_0 = ggml_view_4d(g.ctx0, mask_4d, mask_4d->ne[0], 1, mask_4d->ne[2], mask_4d->ne[3], mask_4d->nb[1], mask_4d->nb[2], mask_4d->nb[3], 0);
+    mask_4d = ggml_repeat(g.ctx0, row_0, mask_4d);
+    mask = ggml_reshape_4d(g.ctx0, mask_4d, mask->ne[0], mask->ne[1], 1, mask->ne[3]);
+    g.cb(mask, "dspark_block_mask", -1);
 }
 
 static ggml_tensor * build_dflash2_conv(
@@ -987,6 +1012,10 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
     cb(inpL, "inp_noise_embd", -1);
 
+    if (model.dspark_markov_w1 && use_iswa) {
+        build_dspark_block_mask(*this, inp_attn_iswa->self_kq_mask_swa_cnv);
+    }
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
 
@@ -1422,19 +1451,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
     inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
     cb(inpL, "hc_init", -1);
 
-    // window of a block = window of its first query, see n_swa
-    {
-        ggml_tensor * m = inp_attn->self_kq_mask_swa_cnv;
-        const int64_t n_blocks = ubatch.n_seqs_unq;
-        const int64_t bd       = n_blocks > 0 ? n_tokens / n_blocks : 0;
-        if (m && bd > 1 && n_tokens % n_blocks == 0 && m->ne[2] == 1 && m->ne[1] % bd == 0 && ggml_is_contiguous(m)) {
-            ggml_tensor * m4 = ggml_reshape_4d(ctx0, m, m->ne[0], bd, m->ne[1]/bd, m->ne[3]);
-            ggml_tensor * r0 = ggml_view_4d(ctx0, m4, m4->ne[0], 1, m4->ne[2], m4->ne[3], m4->nb[1], m4->nb[2], m4->nb[3], 0);
-            m4 = ggml_repeat(ctx0, r0, m4);
-            inp_attn->self_kq_mask_swa_cnv = ggml_reshape_4d(ctx0, m4, m->ne[0], m->ne[1], 1, m->ne[3]);
-            cb(inp_attn->self_kq_mask_swa_cnv, "dspark_block_mask", -1);
-        }
-    }
+    build_dspark_block_mask(*this, inp_attn->self_kq_mask_swa_cnv);
 
     ggml_tensor * pre_prev = nullptr;
 
