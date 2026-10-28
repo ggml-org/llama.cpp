@@ -19,7 +19,7 @@
 	<AlertDialogPrimitive.Content
 		bind:ref
 		class={cn(
-			'fixed z-[999999] grid w-full gap-4 border bg-background p-6 shadow-lg duration-200',
+			'fixed z-[999999] grid w-full gap-4 border matte-float [--float-base:var(--background)] p-6 duration-200',
 			// Mobile: Bottom sheet behavior
 			'right-0 bottom-0 left-0 max-h-[100dvh] translate-x-0 translate-y-0 overflow-y-auto rounded-t-lg',
 			'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:fill-mode-forwards data-[state=closed]:slide-out-to-bottom-full',

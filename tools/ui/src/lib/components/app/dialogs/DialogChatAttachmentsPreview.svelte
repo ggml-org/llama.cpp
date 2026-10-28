@@ -68,7 +68,9 @@
 	<Dialog.Portal>
 		<DialogUI.Overlay class="bg-black/85" style="z-index: 1000" />
 
-		<Dialog.Content class="fixed inset-0 z-[1000] flex flex-col bg-transparent outline-none">
+		<Dialog.Content
+			class="fixed inset-0 z-[1000] flex flex-col bg-transparent! shadow-none! backdrop-filter-none! outline-none"
+		>
 			<Dialog.Close
 				aria-label="Close"
 				class="absolute top-4 right-4 z-10 cursor-pointer text-white hover:text-gray-400"

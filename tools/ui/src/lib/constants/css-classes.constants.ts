@@ -4,7 +4,7 @@ export const BOX_BORDER =
 export const INPUT_CLASSES = `
     bg-muted/60 dark:bg-muted/75
     ${BOX_BORDER}
-    shadow-sm
+    matte-key
     outline-none
     text-foreground
 `;
@@ -35,7 +35,7 @@ export const TAB_SURFACE_IDLE_CLASS =
 
 /** Tab surface of the open tab. */
 export const TAB_SURFACE_ACTIVE_CLASS =
-	'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15';
+	'matte-key bg-muted/60 border-border/10 text-accent-foreground hover:bg-primary/15';
 
 /** Selects the focused chat-form input (either renderer) to restore focus after model actions. */
 export const CHAT_INPUT_FOCUS_SELECTOR =
@@ -91,11 +91,11 @@ export const MODEL_ROW_TRAILING_CELL_CLASS =
 
 /** Neutral model badge: params, quantization, tags. */
 export const MODEL_BADGE_CLASS =
-	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
+	'matte-chip inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
 
 /** Emphasis model badge: draft sidecars and other markers that must stand out. */
 export const MODEL_VARIANT_BADGE_CLASS =
-	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
+	'matte-chip inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
 
 /** Default Tailwind size class for inline icon components (lucide, etc.). */
 export const ICON_CLASS_DEFAULT = 'h-4 w-4';
