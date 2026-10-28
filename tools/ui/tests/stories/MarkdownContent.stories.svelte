@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/MarkdownContent'
+		title: 'Chat/MarkdownContent'
 	});
 </script>
 

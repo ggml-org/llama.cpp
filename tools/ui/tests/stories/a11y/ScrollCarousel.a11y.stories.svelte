@@ -10,7 +10,7 @@
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Components/ScrollCarousel/Accessibility'
+		title: 'Chat/ScrollCarousel/Accessibility'
 	});
 </script>
 

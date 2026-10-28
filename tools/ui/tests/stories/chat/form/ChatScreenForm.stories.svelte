@@ -30,7 +30,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatForm/ChatScreenForm'
+		title: 'Chat/ChatScreen/ChatForm/ChatScreenForm'
 	});
 
 	const modelServer = {

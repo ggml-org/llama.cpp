@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatMessages/ChatMessageActionCard'
+		title: 'Chat/ChatScreen/ChatMessages/ChatMessageActionCard'
 	});
 
 	const onDecision = () => {};

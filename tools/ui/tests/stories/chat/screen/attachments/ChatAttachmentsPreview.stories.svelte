@@ -17,7 +17,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Components/ChatScreen/ChatAttachments/ChatAttachmentsPreview'
+		title: 'Chat/ChatScreen/ChatAttachments/ChatAttachmentsPreview'
 	});
 
 	// same backdrop as DialogChatAttachmentsPreview

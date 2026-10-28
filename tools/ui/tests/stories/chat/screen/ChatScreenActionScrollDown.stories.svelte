@@ -7,7 +7,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatScreenActionScrollDown'
+		title: 'Chat/ChatScreen/ChatScreenActionScrollDown'
 	});
 </script>
 
