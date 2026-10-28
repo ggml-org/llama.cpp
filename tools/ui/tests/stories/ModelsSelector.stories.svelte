@@ -1,8 +1,6 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ModelsSelectorList from '$lib/components/app/models/ModelsSelector/ModelsSelectorList.svelte';
-	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelector/ModelsSelectorOption.svelte';
-	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores/models/index.svelte';
 	import type { GroupedModelOptions, ModelItem } from '$lib/utils';
 
@@ -29,40 +27,13 @@
 		},
 		tags
 	});
-
-	const mockRouterEntry = (modelName: string, status: ServerModelStatus): ApiModelDataEntry => ({
-		created: Date.now(),
-		id: modelName,
-		in_cache: true,
-		object: 'model',
-		owned_by: 'llamacpp',
-		path: `/models/${modelName}`,
-		status: { value: status }
-	});
 </script>
 
 <script lang="ts">
 	let selectedModel = $state<string | null>(null);
 	let activeId = $state<string | null>(null);
 
-	function mockModelsStore() {
-		modelsStore.favoriteModelIds = new Set(['qwen2.5-7b', 'llama3.2-3b']);
-
-		// Mock router models with various statuses for ModelLoadedStates story
-		modelsStore.routerModels = [
-			mockRouterEntry('meta/Model (loading)', ServerModelStatus.LOADING),
-			mockRouterEntry('meta/Model (loaded)', ServerModelStatus.LOADED),
-			mockRouterEntry('meta/Model (sleeping)', ServerModelStatus.SLEEPING),
-			mockRouterEntry('meta/Model (failed)', ServerModelStatus.FAILED)
-		];
-	}
-
-	mockModelsStore();
-
-	const loadedModels: ModelItem[] = [
-		{ option: mockModel('llama3.1-8b', 'Llama-3.1-8B-Instruct', 'meta') },
-		{ option: mockModel('mistral-7b', 'Mistral-7B-v0.3', 'mistralai') }
-	];
+	modelsStore.favoriteModelIds = new Set(['qwen2.5-7b', 'llama3.2-3b']);
 
 	const favoriteModels: ModelItem[] = [
 		{ option: mockModel('qwen2.5-7b', 'Qwen2.5-7B-Instruct', 'Qwen') },
@@ -105,9 +76,7 @@
 	};
 
 	function handleSelect(modelId: string) {
-		const opt = [...loadedModels, ...favoriteModels, ...availableModels].find(
-			(m) => m.option.id === modelId
-		);
+		const opt = [...favoriteModels, ...availableModels].find((m) => m.option.id === modelId);
 
 		if (opt) {
 			selectedModel = opt.option.model;
@@ -116,153 +85,14 @@
 	}
 </script>
 
-<Story name="List">
-	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
+<Story name="Default">
+	<div class="w-80 rounded-xl border matte-float p-1.5">
 		<ModelsSelectorList
 			{activeId}
 			currentModel={selectedModel}
 			favorites={favoriteModels}
 			groups={groupedOptions}
 			onSelect={handleSelect}
-		/>
-	</div>
-</Story>
-
-<Story name="SingleLoaded">
-	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
-		<ModelsSelectorList
-			activeId={null}
-			currentModel={null}
-			groups={{ available: [] }}
-			loaded={[loadedModels[0]]}
-			onSelect={handleSelect}
-		/>
-	</div>
-</Story>
-
-<Story name="WithFavoritesOnly">
-	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
-		<ModelsSelectorList
-			activeId={null}
-			currentModel={null}
-			favorites={favoriteModels}
-			groups={{ available: [] }}
-			onSelect={handleSelect}
-		/>
-	</div>
-</Story>
-
-<Story name="ModelLoadedStates">
-	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
-		<div class="px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none">
-			Server model states
-		</div>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={false}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('model-idle', 'Model (idle)', 'meta')}
-		/>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={false}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('model-loading', 'Model (loading)', 'meta')}
-		/>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={false}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('model-loaded', 'Model (loaded)', 'meta')}
-		/>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={false}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('model-sleeping', 'Model (sleeping)', 'meta')}
-		/>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={false}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('model-failed', 'Model (failed)', 'meta')}
-		/>
-	</div>
-</Story>
-
-<Story name="ModelSelectedStates">
-	<div class="w-80 rounded-lg border border-border bg-popover p-2 shadow-md">
-		<div class="px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none">
-			Selection states
-		</div>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={false}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('normal-model', 'Normal Model', 'meta')}
-		/>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={false}
-			isSelected={true}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('selected-model', 'Selected Model', 'meta')}
-		/>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={false}
-			isHighlighted={true}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('highlighted-model', 'Highlighted Model', 'meta')}
-		/>
-
-		<ModelsSelectorOption
-			hideOrgName={true}
-			isFav={true}
-			isHighlighted={false}
-			isSelected={false}
-			onKeyDown={() => {}}
-			onMouseEnter={() => {}}
-			onSelect={() => {}}
-			option={mockModel('fav-model', 'Favorite Model', 'Qwen')}
 		/>
 	</div>
 </Story>
