@@ -1,6 +1,11 @@
 import { PreferencesService } from './preferences.service';
 import { browser } from '$app/environment';
-import { CONFIG_LOCALSTORAGE_KEY, USER_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
+import {
+	API_KEY_LOCALSTORAGE_KEY,
+	CONFIG_LOCALSTORAGE_KEY,
+	SETTINGS_KEYS,
+	USER_OVERRIDES_LOCALSTORAGE_KEY
+} from '$lib/constants';
 
 /**
  * SettingsService - localStorage persistence layer for settings
@@ -31,6 +36,14 @@ export class SettingsService {
 			const storedConfigRaw = PreferencesService.getItem(CONFIG_LOCALSTORAGE_KEY);
 			const isFirstVisit = storedConfigRaw === null;
 			const config = JSON.parse(storedConfigRaw || '{}') as Record<string, unknown>;
+
+			// with the config on the server, the API key stays in this browser
+			if (PreferencesService.isRemote) {
+				const apiKey = PreferencesService.getItem(API_KEY_LOCALSTORAGE_KEY);
+
+				if (apiKey) config[SETTINGS_KEYS.API_KEY] = apiKey;
+			}
+
 			const userOverrides = JSON.parse(
 				PreferencesService.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
 			) as string[];
@@ -68,6 +81,18 @@ export class SettingsService {
 		if (!browser) return;
 
 		try {
+			if (PreferencesService.isRemote) {
+				const { [SETTINGS_KEYS.API_KEY]: apiKey, ...shared } = config;
+
+				if (typeof apiKey === 'string' && apiKey) {
+					PreferencesService.setItem(API_KEY_LOCALSTORAGE_KEY, apiKey);
+				} else {
+					PreferencesService.removeItem(API_KEY_LOCALSTORAGE_KEY);
+				}
+
+				config = shared;
+			}
+
 			PreferencesService.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
 			PreferencesService.setItem(USER_OVERRIDES_LOCALSTORAGE_KEY, JSON.stringify(userOverrides));
 		} catch (error) {

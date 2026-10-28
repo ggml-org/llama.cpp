@@ -370,3 +370,17 @@ export { SettingsService } from './settings.service';
  * @see USER_PREFERENCE_KEYS in constants/storage.constants.ts - the user data keys
  */
 export { PreferencesService } from './preferences.service';
+
+/**
+ * **StorageModeService** - chooses where conversations and user settings live
+ *
+ * This browser (IndexedDB + localStorage) by default, or a storage adapter the
+ * user switched to: llama-server with --ui-storage, or one added in
+ * $lib/storage-adapters. Activated once at startup, switching copies this
+ * browser's data and reloads the app.
+ *
+ * - **StorageAdapter**: a remote document store, one document per conversation
+ * - **DocumentStoreBackend**: StorageBackend over an adapter, see document-store-backend.ts
+ */
+export { DocumentStoreBackend } from './document-store-backend';
+export { StorageModeService } from './storage-mode.service';

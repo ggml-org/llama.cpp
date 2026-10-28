@@ -373,6 +373,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.isModelLoaded(modelId) && !this._status.isOperationInProgress(modelId);
 	}
 
+	/** Re-read the persisted user lists, once startup has chosen where they are stored. */
+	reloadPersisted(): void {
+		this.favoriteModelIds = this.loadFavoritesFromStorage();
+		this.hiddenModelIds = loadHiddenModels();
+		this.recentModelIds = loadRecentModels();
+	}
+
 	/**
 	 * Select a model. `recordRecent` keeps automatic picks out of the recency list.
 	 */

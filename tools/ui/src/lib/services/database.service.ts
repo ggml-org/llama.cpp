@@ -18,7 +18,7 @@ import {
 	uuid
 } from '$lib/utils';
 
-const backend: StorageBackend = new IdbBackend();
+let backend: StorageBackend = new IdbBackend();
 
 export class DatabaseService {
 	/**
@@ -483,6 +483,14 @@ export class DatabaseService {
 		updates: Partial<Omit<DatabaseMessage, 'id'>>
 	): Promise<void> {
 		await backend.updateMessage(id, updates);
+	}
+
+	/**
+	 * Switch where conversations are stored. Called once at startup, before any
+	 * conversation is read.
+	 */
+	static useBackend(next: StorageBackend): void {
+		backend = next;
 	}
 
 	/**

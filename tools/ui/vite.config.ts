@@ -64,6 +64,7 @@ export default defineConfig(({ mode }) => {
 				'/models': SERVER_ORIGIN,
 				'/props': SERVER_ORIGIN,
 				'/slots': SERVER_ORIGIN,
+				'/storage': SERVER_ORIGIN,
 				'/tools': SERVER_ORIGIN,
 				'/v1': SERVER_ORIGIN
 			}

@@ -683,6 +683,8 @@ struct common_params {
     bool ui = true;
     bool ui_mcp_proxy = false;
     std::string ui_config_json;
+    bool ui_storage = false;        // keep UI conversations and settings on disk
+    std::string ui_storage_dir;     // empty: fs_get_data_directory() / "ui"
 
     // "advanced" endpoints are disabled by default for better security
     bool endpoint_slots   = true;
@@ -944,6 +946,7 @@ inline bool common_create_directories(const std::filesystem::path & path, std::e
 std::filesystem::path fs_get_cache_directory();
 std::filesystem::path fs_get_cache_file(const std::string & filename);
 std::filesystem::path fs_get_config_directory();
+std::filesystem::path fs_get_data_directory();
 
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data);
 

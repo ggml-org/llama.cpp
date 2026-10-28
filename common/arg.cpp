@@ -3442,6 +3442,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
     add_opt(common_arg(
+        {"--ui-storage"},
+        {"--no-ui-storage"},
+        "experimental: keep UI conversations and settings on disk instead of only in the browser - anyone who can reach the server can read them (default: disabled)",
+        [](common_params & params, bool value) {
+            params.ui_storage = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_STORAGE"));
+    add_opt(common_arg(
+        {"--ui-storage-dir"}, "PATH",
+        "directory for UI storage, implies --ui-storage (default: llama.cpp/ui in the user data directory)",
+        [](common_params & params, const std::string & value) {
+            params.ui_storage     = true;
+            params.ui_storage_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_STORAGE_DIR"));
+    add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"

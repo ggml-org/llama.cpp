@@ -1051,6 +1051,24 @@ std::filesystem::path fs_get_config_directory() {
     return config_directory / "llama.cpp";
 }
 
+std::filesystem::path fs_get_data_directory() {
+    std::filesystem::path data_directory;
+#if defined(_WIN32)
+    data_directory = common_get_path_from_env("APPDATA");
+    if (data_directory.empty()) {
+        throw std::runtime_error("Failed to find %APPDATA% directory");
+    }
+#elif defined(__APPLE__)
+    data_directory = get_home_directory() / "Library/Application Support";
+#else
+    data_directory = common_get_path_from_env("XDG_DATA_HOME");
+    if (data_directory.empty()) {
+        data_directory = get_home_directory() / ".local/share";
+    }
+#endif
+    return data_directory / "llama.cpp";
+}
+
 std::filesystem::path fs_get_cache_file(const std::string & filename) {
     GGML_ASSERT(filename.find(DIRECTORY_SEPARATOR) == std::string::npos);
     const std::filesystem::path cache_directory = fs_get_cache_directory();

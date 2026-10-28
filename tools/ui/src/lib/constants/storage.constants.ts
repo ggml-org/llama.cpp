@@ -70,6 +70,12 @@ export const DEPRECATED_FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME_D
 /** @deprecated Use {@link USER_OVERRIDES_LOCALSTORAGE_KEY} instead */
 export const DEPRECATED_USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME_DEPRECATED}.userOverrides`;
 
+/** Storage adapter id this browser keeps conversations and user settings in, unset: this browser */
+export const STORAGE_ADAPTER_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.storageAdapter`;
+
+/** API key kept in this browser while the rest of the config lives on the server */
+export const API_KEY_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.apiKey`;
+
 /** Build version stored in localStorage for non-PWA update detection */
 export const BUILD_VERSION_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.buildVersion`;
 
