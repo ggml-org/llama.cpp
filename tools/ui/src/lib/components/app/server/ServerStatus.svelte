@@ -18,11 +18,11 @@
 	let serverData = $derived(serverStore.props);
 
 	function getStatusColor() {
-		if (loading) return 'bg-yellow-500';
+		if (loading) return 'status-lamp orb-yellow';
 
-		if (error) return 'bg-red-500';
+		if (error) return 'status-lamp orb-red';
 
-		if (serverData) return 'bg-green-500';
+		if (serverData) return 'status-lamp orb-green';
 
 		return 'bg-gray-500';
 	}
