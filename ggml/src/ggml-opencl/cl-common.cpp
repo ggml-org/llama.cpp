@@ -127,13 +127,13 @@ bool use_adreno_bin_kernels(ggml_backend_opencl_context * backend_ctx) {
 }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-static void transpose_2d(
+void transpose_2d(
     ggml_backend_opencl_context * backend_ctx,
     cl_kernel kernel,
     cl_mem src, cl_mem dst, size_t size,
     cl_int stride, cl_int rows,
-    bool blocking = true,
-    bool auto_local = false // let driver pick local size for non-uniform workgroups
+    bool blocking,
+    bool auto_local // let driver pick local size for non-uniform workgroups
 ) {
     static ggml_cl_buffer buf;
 
