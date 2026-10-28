@@ -69,7 +69,7 @@
 /ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
 /ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
-/ggml/src/ggml-hip/                     @IMbackK
+/ggml/src/ggml-hip/                     @ggml-org/ggml-hip
 /ggml/src/ggml-et/                      @marty1885
 /ggml/src/ggml-impl.h                   @ggerganov
 /ggml/src/ggml-metal/                   @ggml-org/ggml-metal
