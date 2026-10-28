@@ -68,7 +68,7 @@
 /ggml/src/ggml-virtgpu/                 @kpouget
 /ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
-/ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
+/ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn
 /ggml/src/ggml-zendnn/                  @avinashcpandey @Jiten1parmar
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
