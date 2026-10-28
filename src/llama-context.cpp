@@ -228,6 +228,12 @@ static void start_doorbell_worker(llama_context * ctx) {
                 // so the kernel can copy each expert as soon as its read lands
                 locs.clear();
                 int ncopy = 0;
+                const int warm_pad = ctx->hot_k;
+                const bool rank_ok = warm_pad > 0 &&
+                    ctx->moe.exp_rank.size() == (size_t) n_layer * n_exp &&
+                    g_hot_rank_valid.load(std::memory_order_relaxed);
+                std::vector<char> is_cold;
+                std::vector<int>  rfd;
                 for (size_t mi = 0; mi < misses.size() && ncopy < stage_cap; ++mi) {
                     const int e = misses[mi];
                     const size_t v = ctx->moe.lru.victim(pinned.data(), (size_t) base, (size_t) s_pl);
@@ -240,13 +246,24 @@ static void start_doorbell_worker(llama_context * ctx) {
                     ctx->moe.lru.miss(v);
                     pl->copy_slot[ncopy] = (int32_t) (v - (size_t) base);
                     pl->copy_ready[ncopy] = 0;
+                    // twin-FD split: warm misses (rank in [S_L, S_L+W)) go through
+                    // the buffered fd so they ride in the page cache; cold-tail
+                    // misses go O_DIRECT so they never evict the warm tier.
+                    bool cold = false;
+                    if (rank_ok) {
+                        const uint16_t rk = ctx->moe.exp_rank[(size_t) il * n_exp + e];
+                        cold = rk >= (uint16_t)(s_pl + warm_pad);
+                    }
+                    is_cold.push_back((char) cold);
                     if (ctx->pager.pack_mode()) {
                         const moe_pager::moe_pack_loc loc = ctx->pager.pack_loc(il, e);
                         locs.push_back(loc);
                         pl->copy_pre[ncopy] = loc.pre;
+                        rfd.push_back(cold && ctx->pager.pack_fd() >= 0 ? ctx->pager.pack_fd() : loc.fd);
                     } else {
                         locs.push_back(moe_pager::moe_pack_loc{-1, 0, 0, 0});
                         pl->copy_pre[ncopy] = 0;
+                        rfd.push_back(fd_gguf);
                     }
                     ncopy++;
                 }
@@ -330,7 +347,8 @@ static void start_doorbell_worker(llama_context * ctx) {
                 for (int ci = 0; ci < ncopy; ++ci) {
                     if (ctx->pager.pack_mode()) {
                         const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
-                        if (loc.fd < 0 || loc.len > stride) { read_fail[(size_t) ci] = 1; continue; }
+                        const int rfd_ci = rfd[(size_t) ci];
+                        if (rfd_ci < 0 || loc.len > stride) { read_fail[(size_t) ci] = 1; continue; }
                         exp_len[(size_t) ci * 3] = loc.len;
                         left[(size_t) ci] = 1;
                     } else if (fd_gguf >= 0) {
@@ -354,7 +372,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                             const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
                             size_t got = 0;
                             while (got < loc.len) {
-                                const ssize_t r = pread(loc.fd, dst + got, loc.len - got,
+                                const ssize_t r = pread(rfd[(size_t) ci], dst + got, loc.len - got,
                                         (off_t) (loc.off + got));
                                 if (r <= 0) break;
                                 got += (size_t) r;
@@ -388,7 +406,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                             const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
                             struct io_uring_sqe * sqe = io_uring_get_sqe(&ring);
                             if (!sqe) { submit_ok = false; break; }
-                            io_uring_prep_read(sqe, loc.fd, dst, loc.len, (off_t) loc.off);
+                            io_uring_prep_read(sqe, rfd[(size_t) ci], dst, loc.len, (off_t) loc.off);
                             io_uring_sqe_set_data(sqe, (void *) (uintptr_t) ((size_t) ci * 3));
                             n_sqe++;
                         } else {
@@ -453,7 +471,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                                 const moe_pager::moe_pack_loc & loc = locs[(size_t) ci];
                                 size_t got = 0;
                                 while (got < want) {
-                                    const ssize_t rr = pread(loc.fd, dst + got, want - got,
+                                    const ssize_t rr = pread(rfd[(size_t) ci], dst + got, want - got,
                                             (off_t) (loc.off + got));
                                     if (rr <= 0) break;
                                     got += (size_t) rr;
