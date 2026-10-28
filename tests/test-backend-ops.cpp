@@ -1313,6 +1313,7 @@ struct test_case {
     }
 
     virtual bool run_whole_graph() { return false; }
+    virtual bool perf_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
     virtual bool use_weight_context() { return false; }
 
@@ -1616,6 +1617,8 @@ struct test_case {
         ggml_context_ptr ctx_weights(use_weights ? ggml_init(params) : nullptr);
         GGML_ASSERT(!use_weights || ctx_weights);
 
+        gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
+
         ggml_tensor * out             = build_graph(ctx.get(), ctx_weights.get());
         current_op_name               = op_desc(out);
         if (!matches_filter(out, op_names_filter)) {
@@ -1658,7 +1661,6 @@ struct test_case {
         }
 
         // build graph
-        ggml_cgraph * gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
         ggml_build_forward_expand(gf, out);
 
         // warmup run
@@ -1688,8 +1690,18 @@ struct test_case {
         }
 
         // duplicate the op
-        for (int i = 1; i < n_runs; i++) {
-            ggml_graph_add_node(gf, out);
+        if (perf_whole_graph()) {
+            const int n_nodes = ggml_graph_n_nodes(gf);
+            n_runs = std::min(n_runs, ggml_graph_size(gf) / n_nodes);
+            for (int i = 1; i < n_runs; i++) {
+                for (int j = 0; j < n_nodes; j++) {
+                    ggml_graph_add_node(gf, ggml_graph_node(gf, j));
+                }
+            }
+        } else {
+            for (int i = 1; i < n_runs; i++) {
+                ggml_graph_add_node(gf, out);
+            }
         }
 
         // calculate memory
@@ -4782,6 +4794,114 @@ struct test_ssm_conv_bias_silu : public test_case {
 
         ggml_set_name(out, "out");
         return out;
+    }
+};
+
+struct test_ssm_conv_window : public test_case {
+    const int64_t channels;
+    const int64_t n_t;
+    const int64_t n_seqs;
+    const int64_t n_slots;
+    const bool    gather;  // state read from the cache by get_rows, as build_rs does
+    const bool    bias;
+    const int     consumer;
+    const bool    contiguous;
+    std::vector<ggml_tensor *> outputs;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SSM_CONV_WINDOW";
+    }
+
+    bool run_whole_graph() override { return true; }
+    bool perf_whole_graph() override { return true; }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return outputs; }
+
+    std::string vars() override {
+        return VARS_TO_STR8(channels, n_t, n_seqs, n_slots, gather, bias, consumer, contiguous);
+    }
+
+    test_ssm_conv_window(int64_t channels, int64_t n_t, int64_t n_seqs = 1, int64_t n_slots = 1, bool gather = true,
+            bool bias = false, int consumer = 0, bool contiguous = false)
+        : channels(channels), n_t(n_t), n_seqs(n_seqs), n_slots(n_slots), gather(gather), bias(bias), consumer(consumer), contiguous(contiguous) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t state_cols = 3;
+        const int64_t mem_size   = n_seqs + 2;
+        const int64_t kv_head    = 1;
+
+        outputs.clear();
+
+        ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_cols * channels, mem_size * n_slots);
+        ggml_set_name(cache, "cache");
+
+        ggml_tensor * state;
+        if (gather) {
+            ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_seqs);
+            ggml_set_name(ids, "ids");
+            state = ggml_reshape_3d(ctx, ggml_get_rows(ctx, cache, ids), state_cols, channels, n_seqs);
+        } else {
+            state = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, state_cols, channels, n_seqs);
+        }
+
+        ggml_tensor * x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, channels, n_t, n_seqs);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * conv_input = ggml_concat(ctx, state, ggml_transpose(ctx, x), 0);
+
+        for (int64_t slot = 0; slot < n_slots; ++slot) {
+            const int64_t s_idx = std::max<int64_t>(0, conv_input->ne[0] - state_cols - slot);
+            ggml_tensor * tail = ggml_view_3d(ctx, conv_input, state_cols, channels, n_seqs,
+                    conv_input->nb[1], conv_input->nb[2], ggml_row_size(conv_input->type, s_idx));
+            if (consumer == 3) {
+                ggml_set_output(tail);
+                outputs.push_back(tail);
+            }
+            ggml_tensor * dst = ggml_view_2d(ctx, cache, state_cols * channels, n_seqs, cache->nb[1],
+                    ((consumer == 4 ? 0 : slot) * mem_size + kv_head) * cache->nb[1]);
+            ggml_tensor * cpy = ggml_cpy(ctx, contiguous ? ggml_cont(ctx, tail) : tail, dst);
+            ggml_build_forward_expand(gf, cpy);
+            outputs.push_back(cpy);
+        }
+
+        if (consumer == 1 || consumer == 2) {
+            ggml_tensor * side = ggml_scale(ctx, consumer == 1 ? conv_input : cache, 0.5f);
+            ggml_build_forward_expand(gf, side);
+            outputs.push_back(side);
+        }
+
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_cols + 1, channels);
+        if (consumer == 5) {
+            w = ggml_view_2d(ctx, cache, state_cols + 1, channels, (state_cols + 1) * sizeof(float), kv_head * cache->nb[1]);
+        }
+        ggml_tensor * out = ggml_ssm_conv(ctx, conv_input, w);
+        if (bias) {
+            ggml_tensor * b = consumer == 6 ? ggml_view_1d(ctx, cache, channels, kv_head * cache->nb[1]) :
+                                             ggml_new_tensor_1d(ctx, GGML_TYPE_F32, channels);
+            out = ggml_add(ctx, out, b);
+        }
+        out = ggml_silu(ctx, out);
+        ggml_set_name(out, "out");
+        outputs.push_back(out);
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
+            if (t->type == GGML_TYPE_I32) {
+                // read rows outside the ones the cpys write
+                std::vector<int32_t> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); i++) {
+                    data[i] = (int32_t) (n_seqs + 1 + i) % (int32_t) (n_seqs + 2);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int32_t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
     }
 };
 
@@ -11021,6 +11141,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    for (int64_t channels : {256, 10240}) {
+        for (int64_t n_t : {1, 4}) {
+            test_cases.emplace_back(new test_ssm_conv_window(channels, n_t));
+            test_cases.emplace_back(new test_ssm_conv_window(channels, n_t, 1, 1, false));
+            test_cases.emplace_back(new test_ssm_conv_window(channels, n_t, 2, 3));
+            test_cases.emplace_back(new test_ssm_conv_window(channels, n_t, 1, 1, true, true));
+        }
+    }
+    test_cases.emplace_back(new test_ssm_conv_window(256, 13, 2, 3));
+    test_cases.emplace_back(new test_ssm_conv_window(10240, 512));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 1, 1, 1, true, false, 1));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 4, 2, 3, true, false, 2));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 4, 1, 8));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 4, 1, 9));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 1, 1, 1, true, false, 3));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 4, 1, 3, true, false, 4));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 4, 1, 1, true, false, 5));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 4, 1, 1, true, true, 6));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 4, 2, 3, true, false, 0, true));
+    test_cases.emplace_back(new test_ssm_conv_window(10240, 1, 1, 1, true, true, 0, true));
+    test_cases.emplace_back(new test_ssm_conv_window(256, 13, 2, 3, false, false, 0, true));
+
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 16, 1, 1024, 1, 32, 4)); // Mamba-1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 128, 8, 1, 1)); // Nemotron-3-Puzzle decode (scan path, unused warp in last block)
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 16, 8, 300, 2, false, /*K=*/1, /*weak_decay=*/true)); // d_state=96 SSD multi-chunk (partial 2nd chunk, 2 seqs)
@@ -13038,6 +13180,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, {cols, nrows, 1, 1}));
         }
     }
+
+    test_cases.emplace_back(new test_ssm_conv_window(10240, 1));
+    test_cases.emplace_back(new test_ssm_conv_window(10240, 512));
 
     // Examples from granite-4.0-h-1b/ggml-model-Q8_0.gguf
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1})); // prefill

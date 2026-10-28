@@ -109,6 +109,7 @@ int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_enable_fusion = 1;
+int g_ggml_sycl_fuse_conv_window = 1;
 int g_ggml_sycl_enable_esimd = 1;
 int g_ggml_sycl_mmvq_wide = 1;
 int g_ggml_sycl_enable_xmx_esimd = 1;
@@ -439,6 +440,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
+        g_ggml_sycl_fuse_conv_window = ggml_sycl_get_env("GGML_SYCL_FUSE_CONV_WINDOW", 1);
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
         g_ggml_sycl_enable_xmx_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_XMX_ESIMD", 1);
@@ -577,6 +579,7 @@ static void ggml_check_sycl() try {
 #endif
 
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
+        GGML_LOG_INFO("  GGML_SYCL_FUSE_CONV_WINDOW: %d\n", g_ggml_sycl_fuse_conv_window);
         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
 
 #if defined(__INTEL_LLVM_COMPILER)
@@ -6675,6 +6678,7 @@ static int ggml_sycl_try_gdn_cache_fusion(const ggml_cgraph * cgraph, int node_i
 }
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+    ggml_sycl_conv_window_match conv_window;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
         if (ggml_sycl_is_view_or_noop(node)) {
@@ -6682,6 +6686,24 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
+        }
+
+        // Run the window and cache updates at the convolution.
+        if (conv_window.concat == nullptr && node->op == GGML_OP_CONCAT &&
+            ggml_sycl_match_conv_window(cgraph, i, conv_window)) {
+            continue;
+        }
+        if (conv_window.concat != nullptr) {
+            if (std::find(conv_window.cont, conv_window.cont + conv_window.n_slots, node) != conv_window.cont + conv_window.n_slots ||
+                std::find(conv_window.cpy, conv_window.cpy + conv_window.n_slots, node) != conv_window.cpy + conv_window.n_slots) {
+                continue;
+            }
+            if (node == conv_window.conv) {
+                ggml_sycl_ssm_conv_window(*sycl_ctx, conv_window);
+                i           = conv_window.last_idx;
+                conv_window = {};
+                continue;
+            }
         }
 
         const int nodes_to_skip = ggml_sycl_fuse(*sycl_ctx, cgraph, i);
@@ -7096,6 +7118,22 @@ static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_ev
     std::exit(1);
 }
 
+static void ggml_backend_sycl_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph,
+                                              ggml_backend_graph_optimize_params * params) {
+    GGML_UNUSED(backend);
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        ggml_sycl_conv_window_match match;
+        if (cgraph->nodes[i]->op != GGML_OP_CONCAT || !ggml_sycl_match_conv_window(cgraph, i, match)) {
+            continue;
+        }
+        // Inputs and delayed cache writes must stay allocated until the fused kernel.
+        for (ggml_tensor * t : { match.concat->src[0], match.concat->src[1], match.cpy[0]->src[1] }) {
+            params->add_alloc_dep(params->user_data, t->view_src ? t->view_src : t, match.silu);
+        }
+        i = match.last_idx;
+    }
+}
+
 static ggml_backend_i ggml_backend_sycl_interface = {
     /* .get_name                = */ ggml_backend_sycl_get_name,
     /* .free                    = */ ggml_backend_sycl_free,
@@ -7114,7 +7152,7 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .graph_compute           = */ ggml_backend_sycl_graph_compute,
     /* .event_record            = */ ggml_backend_sycl_event_record,
     /* .event_wait              = */ ggml_backend_sycl_event_wait,
-    /* .graph_optimize          = */ NULL,
+    /* .graph_optimize          = */ ggml_backend_sycl_graph_optimize,
 };
 
 static ggml_guid_t ggml_backend_sycl_guid() {

@@ -69,6 +69,7 @@ void ggml_sycl_host_free(void* ptr);
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
+extern int g_ggml_sycl_fuse_conv_window;
 extern int g_ggml_sycl_enable_esimd;
 extern int g_ggml_sycl_mmvq_wide;
 extern int g_ggml_sycl_enable_xmx_esimd;
