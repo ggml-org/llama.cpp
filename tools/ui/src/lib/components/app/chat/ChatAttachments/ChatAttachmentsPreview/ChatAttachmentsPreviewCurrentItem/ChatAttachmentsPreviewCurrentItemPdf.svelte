@@ -24,9 +24,13 @@
 	let pdfImages = $state<string[]>([]);
 	let pdfImagesLoading = $state(false);
 	let pdfImagesError = $state<string | null>(null);
+	// id of the item whose conversion failed, so the effect does not retry it forever
+	let pdfImagesFailedId = $state<string | null>(null);
 	let pdfText = $state<string | null>(null);
 	let pdfTextLoading = $state(false);
 	let pdfTextError = $state<string | null>(null);
+	// id of the item whose text extraction failed, so the effect does not retry it forever
+	let pdfTextFailedId = $state<string | null>(null);
 
 	let language = $derived(getLanguageFromFilename(displayName));
 
@@ -67,6 +71,10 @@
 			return;
 		}
 
+		if (pdfImagesFailedId === currentItem.id) return;
+
+		const itemId = currentItem.id;
+
 		pdfImagesLoading = true;
 		pdfImagesError = null;
 
@@ -80,6 +88,7 @@
 			pdfImages = await convertPDFToImage(file);
 		} catch (error) {
 			pdfImagesError = error instanceof Error ? error.message : 'Failed to load PDF images';
+			pdfImagesFailedId = itemId;
 		} finally {
 			pdfImagesLoading = false;
 		}
@@ -94,6 +103,10 @@
 			return;
 		}
 
+		if (pdfTextFailedId === currentItem.id) return;
+
+		const itemId = currentItem.id;
+
 		pdfTextLoading = true;
 		pdfTextError = null;
 
@@ -107,6 +120,7 @@
 			pdfText = await convertPDFToText(file);
 		} catch (error) {
 			pdfTextError = error instanceof Error ? error.message : 'Failed to extract PDF text';
+			pdfTextFailedId = itemId;
 		} finally {
 			pdfTextLoading = false;
 		}
