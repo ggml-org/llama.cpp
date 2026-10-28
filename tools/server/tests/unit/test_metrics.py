@@ -333,3 +333,49 @@ def test_memory_reports_mmproj():
     assert res.status_code == 200
     rows = res.body["data"]
     assert any(isinstance(row.get("mmproj"), int) and row["mmproj"] > 0 for row in rows), rows
+
+
+def test_memory_device_rows_report_sane_device_memory():
+    global server
+    server.start()
+    res = server.make_request("GET", "/memory")
+    assert res.status_code == 200
+    rows = [row for row in res.body["data"] if "total" in row]
+    if not rows:
+        pytest.skip("this build has no GPU device")
+    for row in rows:
+        assert 0 < row["free"] <= row["total"], row
+
+
+def test_memory_device_buffers_are_not_folded_into_host():
+    global server
+    server.n_gpu_layer = 99
+    server.start()
+    res = server.make_request("GET", "/memory")
+    assert res.status_code == 200
+    devices = [row for row in res.body["data"] if "total" in row]
+    if not devices:
+        pytest.skip("this build has no GPU device")
+    assert any(row["model"] > 0 for row in devices), devices
+
+
+def test_memory_output_buffer_is_counted_in_context():
+    global server
+    server.n_slots = 1
+
+    def start_and_measure(n_ctx: int) -> tuple[int, int]:
+        server.n_ctx = n_ctx
+        server.start()
+        res = server.make_request("GET", "/memory")
+        assert res.status_code == 200
+        n_vocab = server.make_request("GET", "/v1/models").body["data"][0]["meta"]["n_vocab"]
+        server.stop()
+        return sum(row["context"] for row in res.body["data"]), n_vocab
+
+    # the context size is padded up to a multiple of 256, so 512 and 1024 stay as they are and the KV cache doubles exactly
+    smaller, n_vocab = start_and_measure(512)
+    larger, _ = start_and_measure(1024)
+
+    # the output buffer does not grow with the context size, so it is what the doubling leaves over
+    output_buffer = 2 * smaller - larger
+    assert output_buffer >= n_vocab * 4, f"output buffer {output_buffer} bytes, vocabulary {n_vocab}"
