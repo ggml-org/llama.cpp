@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import StateGallery from '../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatFormActionSubmit from '$lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 
@@ -11,22 +13,30 @@
 	});
 </script>
 
-<Story args={{ canSend: false }} name="Default" />
+<Story asChild name="States">
+	<StateGallery columns={5}>
+		<StateGalleryItem label="Empty" note="nothing to send">
+			<ChatFormActionSubmit canSend={false} />
+		</StateGalleryItem>
 
-<Story args={{ canSend: true }} name="Enabled" />
+		<StateGalleryItem label="Enabled">
+			<ChatFormActionSubmit canSend />
+		</StateGalleryItem>
 
-<Story args={{ canSend: true, disabled: true }} name="Disabled" />
+		<StateGalleryItem label="Disabled">
+			<ChatFormActionSubmit canSend disabled />
+		</StateGalleryItem>
 
-<Story
-	args={{ canSend: false, tooltipLabel: 'Please select a model first' }}
-	name="NoModelSelected"
-/>
+		<StateGalleryItem label="No model" note="tooltip on hover">
+			<ChatFormActionSubmit canSend={false} tooltipLabel="Please select a model first" />
+		</StateGalleryItem>
 
-<Story
-	args={{
-		canSend: false,
-		showErrorState: true,
-		tooltipLabel: 'Selected model is not available, please select another'
-	}}
-	name="ModelNotAvailable"
-/>
+		<StateGalleryItem label="Unavailable" note="error, tooltip on hover">
+			<ChatFormActionSubmit
+				canSend={false}
+				showErrorState
+				tooltipLabel="Selected model is not available, please select another"
+			/>
+		</StateGalleryItem>
+	</StateGallery>
+</Story>

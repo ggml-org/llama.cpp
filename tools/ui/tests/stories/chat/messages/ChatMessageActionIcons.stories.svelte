@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import StateGallery from '../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import ActionIconsStoryHost from './ActionIconsStoryHost.svelte';
 	import { siblingInfo } from './fixtures';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
@@ -14,23 +16,54 @@
 		},
 		title: 'Components/ChatScreen/ChatMessages/ChatMessageActionIcons'
 	});
+
+	const onRegenerate = () => {};
 </script>
 
-<Story args={{ onContinue: () => {}, onRegenerate: () => {} }} name="Default" />
+<Story asChild name="States">
+	<StateGallery columns={3}>
+		<StateGalleryItem label="Assistant" note="regenerate + continue">
+			<ActionIconsStoryHost
+				actionsPosition="left"
+				justify="start"
+				onContinue={() => {}}
+				{onRegenerate}
+			/>
+		</StateGalleryItem>
 
-<Story args={{ actionsPosition: 'right', justify: 'end' }} name="User" />
+		<StateGalleryItem label="User" note="right aligned">
+			<ActionIconsStoryHost actionsPosition="right" justify="end" />
+		</StateGalleryItem>
 
-<Story args={{ forkable: false }} name="NoFork" />
+		<StateGalleryItem label="No fork">
+			<ActionIconsStoryHost actionsPosition="left" forkable={false} justify="start" />
+		</StateGalleryItem>
 
-<Story args={{ onRegenerate: () => {}, showRawOutputSwitch: true }} name="WithRawOutputSwitch" />
+		<StateGalleryItem label="Raw output switch">
+			<ActionIconsStoryHost
+				actionsPosition="left"
+				justify="start"
+				{onRegenerate}
+				showRawOutputSwitch
+			/>
+		</StateGalleryItem>
 
-<Story args={{ onRegenerate: () => {}, siblingInfo }} name="WithBranching" />
+		<StateGalleryItem label="Branching">
+			<ActionIconsStoryHost actionsPosition="left" justify="start" {onRegenerate} {siblingInfo} />
+		</StateGalleryItem>
 
-<Story
-	args={{ onRegenerate: () => {}, siblingInfo: { ...siblingInfo, currentIndex: 0 } }}
-	name="BranchingFirstVersion"
-/>
+		<StateGalleryItem label="Branching, first version">
+			<ActionIconsStoryHost
+				actionsPosition="left"
+				justify="start"
+				{onRegenerate}
+				siblingInfo={{ ...siblingInfo, currentIndex: 0 }}
+			/>
+		</StateGalleryItem>
+	</StateGallery>
+</Story>
 
+<!-- Separate: the delete dialog opens in a portal over the whole page. -->
 <Story
 	args={{
 		deletionInfo: {
