@@ -35,7 +35,7 @@ permissions:
 env:
   GH_TOKEN: ${{ github.token }}
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DLLAMA_CONNECT=ON"
 
 # note: run this workflow one at a time for better cache reuse
 concurrency:
@@ -547,7 +547,7 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
-    container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
+    container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.8'
 
     defaults:
       run:
@@ -600,7 +600,7 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
-    container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
+    container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.8'
 
     defaults:
       run:
@@ -967,6 +967,11 @@ jobs:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
           max-size: "1G"
+
+      - name: Tune ccache for ROCm
+        run: |
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
 
       # - name: Cache ROCm Installation
       #   id: cache-rocm
@@ -1478,6 +1483,7 @@ jobs:
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_NATIVE=OFF \
+            -DLLAMA_CONNECT=ON \
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
 
@@ -1544,6 +1550,8 @@ jobs:
           # builds hit.
           ccache --set-config=compiler_check=content
           ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
 
       - name: Dependencies
         id: depends

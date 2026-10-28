@@ -97,18 +97,17 @@ export class ModelStatusManager {
 	/** Sidecar kinds each in-flight or paused download pulls with its model. */
 	private downloadSidecars = new SvelteMap<string, ModelSidecar[]>();
 	/**
-	 * Draft sidecars the registered models pull with them, keyed by the repo of the model
-	 * that pulls them: the router records them in the model's `--model-draft` args.
+	 * Draft sidecars the registered models pull with them, keyed by the model that pulls
+	 * them: the router records them in the model's `--model-draft` args, and each quant
+	 * of a repo can pull a different draft.
 	 */
-	private draftSidecarsByRepo = $derived.by(() => {
+	private draftSidecarsByModel = $derived.by(() => {
 		const result = new SvelteMap<string, ModelSidecarBadge[]>();
 
 		for (const m of this.host.routerModels) {
 			const args = m.status?.args;
 
 			if (!args) continue;
-
-			const baseRepo = repoOf(m.id);
 
 			for (let i = 0; i < args.length - 1; i++) {
 				if (args[i] !== CLI_FLAGS.MODEL_DRAFT && args[i] !== CLI_FLAGS.MODEL_DRAFT_SHORT) {
@@ -128,7 +127,7 @@ export class ModelStatusManager {
 					quant: meta.quant,
 					repo: parsed.repo
 				};
-				const kinds = result.get(baseRepo);
+				const kinds = result.get(m.id);
 
 				if (kinds) {
 					if (
@@ -139,7 +138,7 @@ export class ModelStatusManager {
 						kinds.push(badge);
 					}
 				} else {
-					result.set(baseRepo, [badge]);
+					result.set(m.id, [badge]);
 				}
 			}
 		}
@@ -404,17 +403,19 @@ export class ModelStatusManager {
 	}
 
 	/**
-	 * Draft sidecars a repo pulls with its model, e.g. `mtp` at `Q8_0`: the
-	 * router records loaded models' sidecars in their `--model-draft` args, and
-	 * lists the sidecars each cached model has on disk.
+	 * Draft sidecars a model pulls with it, e.g. `mtp` at `Q8_0`: the router
+	 * records each model's sidecars in its `--model-draft` args, and lists the
+	 * sidecars each cached repo has on disk.
 	 */
-	getDraftSidecars(repoId: string): ModelSidecarBadge[] {
-		// one badge per kind: the args know the quant, the listing carries kinds only,
-		// and a draft still coming down is pending rather than on disk
-		const merged = [...(this.draftSidecarsByRepo.get(repoId) ?? [])];
+	getDraftSidecars(modelId: string): ModelSidecarBadge[] {
+		const repo = repoOf(modelId);
+		// one badge per kind: the args know the quant of this model's draft, the
+		// listing carries repo-wide kinds only, and a draft still coming down is
+		// pending rather than on disk
+		const merged = [...(this.draftSidecarsByModel.get(modelId) ?? [])];
 
 		for (const source of [this.listedSidecarsByRepo, this.pendingSidecarsByRepo]) {
-			for (const badge of source.get(repoId) ?? []) {
+			for (const badge of source.get(repo) ?? []) {
 				if (!merged.some((b) => b.kind === badge.kind && b.repo === badge.repo)) {
 					merged.push(badge);
 				}

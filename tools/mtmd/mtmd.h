@@ -65,6 +65,7 @@ struct mtmd_image_tokens;
 struct mtmd_input_chunk;
 struct mtmd_input_chunks;
 struct mtmd_batch;
+struct mtmd_gen_state;
 
 struct mtmd_input_text {
     const char * text;
@@ -79,6 +80,7 @@ struct mtmd_input_part {
     const struct mtmd_bitmap * bitmap;
 };
 
+
 //
 // C API
 //
@@ -91,6 +93,7 @@ typedef struct mtmd_input_chunks mtmd_input_chunks;
 typedef struct mtmd_input_text   mtmd_input_text;
 typedef struct mtmd_input_part   mtmd_input_part;
 typedef struct mtmd_batch        mtmd_batch;
+typedef struct mtmd_gen_state    mtmd_gen_state;
 
 typedef bool (*mtmd_progress_callback)(float progress, void * user_data);
 
@@ -360,6 +363,7 @@ MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 struct mtmd_caps {
     bool inp_vision;
     bool inp_audio;
+    bool gen_audio;
 };
 MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
 
@@ -379,6 +383,11 @@ typedef struct mtmd_audio_stream mtmd_audio_stream;
 
 struct mtmd_audio_stream_params {
     int32_t step_ms; // audio encoded per encoder call, rounded up to the model step (default: 320)
+
+    // tokens that open the stream, they go out with the first rows (default: none)
+    // with the prompt of its "asr" chat template, LFM3-Audio transcribes live
+    const llama_token * prompt;
+    size_t              n_prompt;
 };
 MTMD_API struct mtmd_audio_stream_params mtmd_audio_stream_params_default(void);
 
@@ -408,6 +417,16 @@ MTMD_API int32_t mtmd_audio_stream_step(mtmd_audio_stream * stream, llama_token 
 // rows of the last step, the reading size (in bytes) is n_rows * llama_model_n_embd_inp(model) * sizeof(float)
 MTMD_API const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream * stream);
 
+// true if the rows of the last step start a new sequence: the caller drops its sequence before decoding them
+MTMD_API bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * stream);
+
+// audio rows whose text has been sampled (prefix rows included), step() updates it from last_token
+MTMD_API int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * stream);
+
+// audio rows up to the end of the last flush
+// once get_n_rows() reaches it, the text of the flushed audio has been sampled
+MTMD_API int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * stream);
+
 /////////////////////////////////////////
 // EXPERIMENTAL API for audio generation, subjected to breaking changes
 
@@ -416,6 +435,8 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_NONE, // not supported
     MTMD_GEN_AUDIO_TYPE_QWEN3TTS,
     MTMD_GEN_AUDIO_TYPE_POCKETTTS,
+    MTMD_GEN_AUDIO_TYPE_SOPRANO,
+    MTMD_GEN_AUDIO_TYPE_LFM3A,
 };
 
 struct mtmd_gen_audio_info {
@@ -432,6 +453,7 @@ enum mtmd_gen_process_type {
     MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert semantic to PCM audio
                                     // for qwen3tts, this is code2wav
                                     // for pocket-tts, this is mimi decoder
+                                    // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
 };
 
 struct mtmd_gen_inp {
@@ -442,21 +464,21 @@ struct mtmd_gen_inp {
     float * embd;   // the hidden state from backbone, must have n_text_embd elements
     int32_t top_k;
     float   top_p;
-    uint32_t seed; // UINT32_MAX for random
-    float    temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
+    int32_t penalty_last_n; // frames the repetition penalty looks back on
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
+    // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
     int32_t * codes;
     size_t    n_codes;
     const float * feats;
     size_t        n_feats;
-    const char * state_data;
-    size_t       state_size;
 };
 
 struct mtmd_gen_out {
-    // note: output memory is allocated by the context, valid until next process() call
+    // note: output memory is owned by the state, valid until the next process() call with this state
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_CODE
     const int32_t * codes;
@@ -470,15 +492,28 @@ struct mtmd_gen_out {
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     const float * audio;
     size_t        n_samples;
-    const char * state_data;
-    size_t       state_size;
 };
+
+struct mtmd_gen_state_params {
+    uint32_t seed; // UINT32_MAX for random
+};
+
+MTMD_API struct mtmd_gen_state_params mtmd_gen_state_params_default(void);
+
+// returns nullptr if the model does not support audio generation
+MTMD_API mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, struct mtmd_gen_state_params params);
+MTMD_API void             mtmd_gen_state_free(mtmd_gen_state * state);
+
+// clear the decoder state (cold start), keep the RNG stream
+MTMD_API void             mtmd_gen_state_reset(mtmd_gen_state * state);
 
 // defaults tuned for the loaded pipeline, callers override only what they care about
 MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);
 
-// note: this API is stateless, caller must handle state management and audio frame accumulation
+// run one step and update the state in place
+// the caller drives the backbone and collects the audio frames
 MTMD_API int32_t mtmd_gen_audio_process(mtmd_context * ctx,
+                                mtmd_gen_state * state,
                                 const struct mtmd_gen_inp * inp,
                                 struct mtmd_gen_out * out);
 
@@ -542,6 +577,11 @@ struct mtmd_audio_stream_deleter {
     void operator()(mtmd_audio_stream * val) { mtmd_audio_stream_free(val); }
 };
 using audio_stream_ptr = std::unique_ptr<mtmd_audio_stream, mtmd_audio_stream_deleter>;
+
+struct mtmd_gen_state_deleter {
+    void operator()(mtmd_gen_state * val) { mtmd_gen_state_free(val); }
+};
+using gen_state_ptr = std::unique_ptr<mtmd_gen_state, mtmd_gen_state_deleter>;
 
 struct bitmap {
     bitmap_ptr ptr;

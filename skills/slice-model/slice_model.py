@@ -223,6 +223,7 @@ def patch_config(cfg: dict, families: dict[str, Family], new_vocab: int | None, 
                 lfam = next((f for f in families.values() if f.kind == "layer"), None)
                 if lfam is None:
                     continue
+                assert lfam.kept is not None
                 d[key] = sum(1 for i in lfam.kept if i < val)
             elif "expert" in key and fam is not None and fam.kind == "expert" and not any(x in key for x in EXPERT_KEY_EXCLUDE):
                 d[key] = fam.new_count
@@ -236,6 +237,7 @@ def patch_config(cfg: dict, families: dict[str, Family], new_vocab: int | None, 
             # per-layer lists, e.g. layer_types
             fam = by_card.get(len(val))
             if fam is not None and fam.kind == "layer" and len(val) in (fam.card, fam.regular_total):
+                assert fam.kept is not None
                 d[key] = [val[i] for i in fam.kept if i < len(val)]
                 log.append(f"{key}: list[{len(val)}] -> list[{len(d[key])}]")
     return log

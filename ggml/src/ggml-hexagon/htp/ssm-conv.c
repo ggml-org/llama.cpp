@@ -135,6 +135,13 @@ static inline void hvx_ssm_conv_unpack_to_T(const float * raw, float * T, uint32
     }
 }
 
+static __attribute__((noinline)) void hvx_ssm_conv_silu_vtcm(float * restrict buf, uint32_t n_vecs) {
+    HVX_Vector * restrict vbuf = (HVX_Vector *) buf;
+    for (uint32_t i = 0; i < n_vecs; ++i) {
+        vbuf[i] = hvx_vec_silu_f32(vbuf[i]);
+    }
+}
+
 // Decode dot product specialization for d_conv == 4: multiply in the raw channel-major layout,
 // then deinterleave the products so each vector holds one tap of 32 channels, and sum.
 // Keeps both operands in DMA layout - no transpose, no scratch.
@@ -189,9 +196,10 @@ static void ssm_conv_thread_f32_decode(unsigned int nth, unsigned int ith, void 
 
     dma_queue * dma_q = octx->ctx->dma[ith];
 
-    const uint32_t d_conv  = kparams->d_conv;
-    const uint32_t d_inner = kparams->d_inner;
-    const uint32_t n_s     = kparams->n_s;
+    const uint32_t d_conv     = kparams->d_conv;
+    const uint32_t d_inner    = kparams->d_inner;
+    const uint32_t n_s        = kparams->n_s;
+    const bool     apply_silu = kparams->silu != 0;
 
     const uint32_t dr  = scctx->nrows_per_thread;
     const uint32_t ir0 = scctx->row_start + dr * ith;
@@ -232,7 +240,7 @@ static void ssm_conv_thread_f32_decode(unsigned int nth, unsigned int ith, void 
     // raw_dot keeps both operands in the DMA layout, so src1 needs no prep pass
     const bool raw_dot = (d_conv == 4) && (d_inner_per_thread % VLEN_FP32 == 0);
 
-    const uint32_t n_tiles   = (d_inner_per_thread + d_inner_tile - 1) / d_inner_tile;
+    const uint32_t n_tiles   = fastdiv(d_inner_per_thread + d_inner_tile - 1, &kparams->div_d_inner_tile);
     const uint32_t n_chunks  = n_s * n_tiles;
     const size_t   row_bytes = d_conv * sizeof(float);
 
@@ -295,20 +303,17 @@ static void ssm_conv_thread_f32_decode(unsigned int nth, unsigned int ith, void 
             hvx_ssm_conv_unpack_to_T(src0_tile_raw[c & 1], src0_T, tile_n, tile_stride, d_conv);
 
             for (uint32_t cb = 0; cb < tile_n; cb += VLEN_FP32) {
-                const uint32_t cb_n = MIN(VLEN_FP32, tile_n - cb);
                 HVX_Vector acc = hvx_vec_splat_f32(0.0f);
                 for (uint32_t j = 0; j < d_conv; ++j) {
                     HVX_Vector x = *(const HVX_Vector *)(src0_T + j * tile_stride + cb);
                     HVX_Vector w = *(const HVX_Vector *)(src1_T + j * d_inner_stride + tile_off + cb);
                     acc          = Q6_Vqf32_vadd_Vqf32Vqf32(acc, Q6_Vqf32_vmpy_VsfVsf(x, w));
                 }
-                HVX_Vector y = Q6_Vsf_equals_Vqf32(acc);
-                if (cb_n == VLEN_FP32) {
-                    *(HVX_Vector *)(out + cb) = y;
-                } else {
-                    hvx_vec_store_u(out + cb, cb_n * sizeof(float), y);
-                }
+                *(HVX_Vector *)(out + cb) = Q6_Vsf_equals_Vqf32(acc);
             }
+        }
+        if (apply_silu) {
+            hvx_ssm_conv_silu_vtcm(out, hex_round_up(tile_n, VLEN_FP32) / VLEN_FP32);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i3);
 
@@ -352,11 +357,12 @@ static void ssm_conv_thread_f32_prefill(unsigned int nth, unsigned int ith, void
 
     dma_queue * dma_q = octx->ctx->dma[ith];
 
-    const uint32_t d_conv  = kparams->d_conv;
-    const uint32_t d_inner = kparams->d_inner;
-    const uint32_t n_t     = kparams->n_t;
-    const uint32_t n_s     = kparams->n_s;
-    const uint32_t ncs     = src0->ne[0];
+    const uint32_t d_conv     = kparams->d_conv;
+    const uint32_t d_inner    = kparams->d_inner;
+    const uint32_t n_t        = kparams->n_t;
+    const uint32_t n_s        = kparams->n_s;
+    const uint32_t ncs        = src0->ne[0];
+    const bool     apply_silu = kparams->silu != 0;
 
     const uint32_t dr  = scctx->nrows_per_thread;
     const uint32_t ir0 = scctx->row_start + dr * ith;
@@ -397,7 +403,7 @@ static void ssm_conv_thread_f32_prefill(unsigned int nth, unsigned int ith, void
 
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];
 
-    const uint32_t n_tiles   = (d_inner_per_thread + d_inner_tile - 1) / d_inner_tile;
+    const uint32_t n_tiles   = fastdiv(d_inner_per_thread + d_inner_tile - 1, &kparams->div_d_inner_tile);
     const uint32_t n_chunks  = n_s * n_tiles;
     const size_t   row_bytes = ncs * sizeof(float);
 
@@ -513,10 +519,14 @@ static void ssm_conv_thread_f32_prefill(unsigned int nth, unsigned int ith, void
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
         }
 
+        if (apply_silu) {
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
+            hvx_ssm_conv_silu_vtcm(out, n_t * (dst_tile_stride / C_TILE));
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
+        }
+
         // Writeback dst_tile VTCM -> DDR via 2D DMA
-        dma_queue_push(dma_q,
-                       dma_make_data(dst->data + i3 * dst_stride_seq_bytes + (ir0 + tile_off) * sizeof(float),
-                                     (uint8_t *) out),
+        dma_queue_push(dma_q, dma_make_data(dst->data + i3 * dst_stride_seq_bytes + (ir0 + tile_off) * sizeof(float), (uint8_t *) out),
                        dst_stride_token_bytes, dst_tile_stride * sizeof(float), tile_n * sizeof(float), n_t);
 
         if (c + 2 < n_chunks) {
@@ -547,12 +557,7 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src1 = octx->src[1];
     const struct htp_tensor * dst  = octx->dst;
 
-    if (src0->type != HTP_TYPE_F32 || src1->type != HTP_TYPE_F32 || dst->type != HTP_TYPE_F32) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
     const struct htp_ssm_conv_kernel_params * kparams = (const struct htp_ssm_conv_kernel_params *) octx->kernel_params;
-
 
     if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
         return HTP_STATUS_INVAL_PARAMS;
@@ -582,25 +587,29 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_threads          = octx->n_threads;
+    const uint32_t raw_rpt            = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+    const uint32_t d_inner_per_thread = hex_round_up(raw_rpt, VLEN_FP32);
 
-    octx->src0_spad.size_per_thread = kparams->vtcm_src0_size_per_thread;
-    octx->src1_spad.size_per_thread = kparams->vtcm_src1_size_per_thread;
-    octx->dst_spad.size_per_thread  = kparams->vtcm_dst_size_per_thread;
+    struct htp_ssm_conv_vtcm_layout L;
+    htp_ssm_conv_vtcm_layout_build(&L, d_inner_per_thread, kparams->d_conv, kparams->n_t, kparams->d_inner_tile, n_threads);
 
-    octx->src0_spad.size = kparams->vtcm_src0_size;
-    octx->src1_spad.size = kparams->vtcm_src1_size;
-    octx->dst_spad.size  = kparams->vtcm_dst_size;
+    uint8_t * const base = (uint8_t *) octx->ctx->vtcm_base;
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+    octx->src0_spad.size_per_thread = L.src0_bytes_per_thread;
+    octx->src1_spad.size_per_thread = L.src1_bytes_per_thread;
+    octx->dst_spad.size_per_thread  = L.dst_bytes_per_thread;
+
+    octx->src0_spad.size = L.src0_bytes;
+    octx->src1_spad.size = L.src1_bytes;
+    octx->dst_spad.size  = L.dst_bytes;
+
+    octx->src0_spad.data = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0);
+    octx->src1_spad.data = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
+    octx->dst_spad.data  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
     octx->src0_spad.src  = NULL;
     octx->src1_spad.src  = NULL;
     octx->dst_spad.src   = NULL;
-
-    const uint32_t raw_rpt            = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
-    const uint32_t d_inner_per_thread = hex_round_up(raw_rpt, VLEN_FP32);
 
     struct htp_ssm_conv_context scctx = {
         .octx             = octx,

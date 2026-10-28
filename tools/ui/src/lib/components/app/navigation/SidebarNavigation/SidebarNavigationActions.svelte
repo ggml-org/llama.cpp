@@ -1,18 +1,16 @@
 <script lang="ts">
-	import { Search } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ActionIcon, KeyboardShortcutInfo, SearchInput } from '$lib/components/app';
+	import { ActionIcon, KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		ICON_CLASS_DEFAULT,
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
 		ICON_STRIP_TRANSITION_DURATION,
-		ROUTES,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
-	import { conversationsStore, deviceStore } from '$lib/stores';
+	import { deviceStore } from '$lib/stores';
 	import type { DesktopIconStripItem } from '$lib/types';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
@@ -22,28 +20,12 @@
 	interface Props {
 		class: string;
 		isExpandedMode: boolean;
-		isSearchModeActive: boolean;
-		searchQuery: string;
-		onSearchDeactivated?: () => void;
-		onSearchClick?: () => void;
-		onManageModelsClick?: () => void;
-		onMcpClick?: () => void;
-		onNewChat?: () => void;
-		onSettingsClick?: () => void;
+		onAction?: (action: SidebarAction) => void;
+		/** Called before following a route item, so a phone can collapse the sidebar. */
+		onNavigate?: () => void;
 	}
 
-	let {
-		class: className,
-		isExpandedMode = false,
-		isSearchModeActive = $bindable(false),
-		onManageModelsClick,
-		onMcpClick,
-		onNewChat,
-		onSearchClick,
-		onSearchDeactivated,
-		onSettingsClick,
-		searchQuery = $bindable('')
-	}: Props = $props();
+	let { class: className, isExpandedMode = false, onAction, onNavigate }: Props = $props();
 
 	// the models manager stays desktop-only: a phone picks its models in the selector
 	const actions = $derived(
@@ -53,15 +35,8 @@
 	);
 	let initialized = $state(false);
 	let showIcons = $state(false);
-	let searchInputRef = $state<HTMLInputElement | null>(null);
 
 	const isOnMobile = $derived(deviceStore.isMobile);
-
-	$effect(() => {
-		if (isSearchModeActive && searchInputRef) {
-			searchInputRef.focus();
-		}
-	});
 
 	onMount(() => {
 		showIcons = true;
@@ -71,41 +46,22 @@
 		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * actions.length);
 	});
 
-	/** Click handler of one icon strip item: a sidebar action, a route, or the search. */
-	function itemClickHandler(
-		item: DesktopIconStripItem,
-		isSearchOnMobile: boolean
-	): (() => void) | undefined {
-		switch (item.action) {
-			case SidebarAction.NEW_CHAT:
-				return () => {
-					onNewChat?.();
-					void conversationsStore.openNewChat();
-				};
-			case SidebarAction.MANAGE_MODELS:
-				return () => onManageModelsClick?.();
-			case SidebarAction.MCP:
-				return () => onMcpClick?.();
-			case SidebarAction.SETTINGS:
-				return () => onSettingsClick?.();
-			default:
-				break;
+	/** Click handler of one icon strip item: a sidebar action or a route. */
+	function itemClickHandler(item: DesktopIconStripItem): (() => void) | undefined {
+		const { action, route } = item;
+
+		if (action) {
+			return () => onAction?.(action);
 		}
 
-		if (item.route) {
+		if (route) {
 			return () => {
-				onNewChat?.();
-				goto(item.route!);
+				onNavigate?.();
+				goto(route);
 			};
 		}
 
-		return isSearchOnMobile ? undefined : onSearchClick;
-	}
-
-	function handleSearchModeDeactivate() {
-		isSearchModeActive = false;
-		searchQuery = '';
-		onSearchDeactivated?.();
+		return undefined;
 	}
 
 	function isItemActive(item: {
@@ -133,17 +89,7 @@
 	<IconComponent class={ICON_CLASS_DEFAULT} />
 {/snippet}
 
-{#if isSearchModeActive}
-	<div class="px-4 my-2">
-		<SearchInput
-			bind:ref={searchInputRef}
-			bind:value={searchQuery}
-			onClose={handleSearchModeDeactivate}
-			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
-			placeholder="Search conversations..."
-		/>
-	</div>
-{:else if isExpandedMode || isOnMobile}
+{#if isExpandedMode || isOnMobile}
 	<div
 		class="{className} flex flex-col gap-5 md:gap-1 mt-2 md:mt-0 {!isExpandedMode && isOnMobile
 			? 'hidden pointer-events-none'
@@ -151,9 +97,7 @@
 	>
 		{#each actions as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
-			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
-			{@const itemOnClick = itemClickHandler(item, isSearchOnMobile)}
+			{@const itemOnClick = itemClickHandler(item)}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -166,7 +110,7 @@
 						class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"
-						href={itemHref}
+						href={item.route}
 						onclick={itemOnClick}
 						size="default"
 						variant="ghost"
@@ -175,8 +119,10 @@
 							{@render itemIcon(item.icon)}
 
 							{#if showIcons}
-								<span in:fade={itemTransition} out:fade={itemTransition} class="min-w-0 truncate"
-									>{item.tooltip}</span
+								<span
+									in:fade={itemTransition}
+									out:fade={itemTransition}
+									class="min-w-0 truncate opacity-(--sidebar-fade)">{item.tooltip}</span
 								>
 							{/if}
 						</span>
@@ -193,8 +139,7 @@
 	<div class="{className} flex-col gap-1 hidden md:flex">
 		{#each actions as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
-			{@const itemOnClick = itemClickHandler(item, isSearchOnMobile)}
+			{@const itemOnClick = itemClickHandler(item)}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,

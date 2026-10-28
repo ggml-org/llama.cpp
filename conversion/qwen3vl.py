@@ -144,6 +144,16 @@ class Qwen3VLVisionModel(MmprojModel):
         yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
 
 
+@ModelBase.register("MiniCPMOCRForSequenceClassification")
+class MiniCPMOCRSeqClsVisionModel(Qwen3VLVisionModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # trained with the image budget of its processor, wider than the mtmd default of Qwen-VL
+        size = self.preprocessor_config["size"]
+        self.gguf_writer.add_vision_min_pixels(int(size["shortest_edge"]))
+        self.gguf_writer.add_vision_max_pixels(int(size["longest_edge"]))
+
+
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
 @ModelBase.example("Qwen/Qwen3-Omni-30B-A3B-Instruct")
 class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
