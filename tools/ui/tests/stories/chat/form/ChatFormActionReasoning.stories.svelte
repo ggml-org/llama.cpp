@@ -16,7 +16,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatForm/ChatFormActionReasoning'
+		title: 'Chat/ChatScreen/ChatForm/ChatFormActionReasoning'
 	});
 
 	function seedEffort(

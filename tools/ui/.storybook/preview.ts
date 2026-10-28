@@ -17,9 +17,16 @@ const preview: Preview = {
 		},
 
 		options: {
-			// the full screen leads its folder; everything else keeps its natural order
+			// sidebar sections; the full chat screen leads its folder
 			storySort: {
-				order: ['Introduction', 'Components', ['ChatScreen', ['ChatScreen', '*']]]
+				order: [
+					'Introduction',
+					'Chat',
+					['ChatScreen', ['ChatScreen', '*']],
+					'Models',
+					'Navigation',
+					'Settings'
+				]
 			}
 		},
 

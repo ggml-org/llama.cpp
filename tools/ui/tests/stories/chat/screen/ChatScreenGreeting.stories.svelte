@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatScreenGreeting'
+		title: 'Chat/ChatScreen/ChatScreenGreeting'
 	});
 
 	function seedAudio(audio: boolean) {

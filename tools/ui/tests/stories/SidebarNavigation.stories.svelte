@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/SidebarNavigation'
+		title: 'Navigation/SidebarNavigation'
 	});
 </script>
 

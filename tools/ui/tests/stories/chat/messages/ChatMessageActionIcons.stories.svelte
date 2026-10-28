@@ -14,7 +14,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Components/ChatScreen/ChatMessages/ChatMessageActionIcons'
+		title: 'Chat/ChatScreen/ChatMessages/ChatMessageActionIcons'
 	});
 
 	const onRegenerate = () => {};
