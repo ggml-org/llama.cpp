@@ -499,7 +499,7 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
 }
 
 // has_fusion: accumulators l and l + ne/2 hold the up and gate values of one output element, the GLU of the two is written.
-// x_scale/gate_scale: optional NVFP4 per-tensor scales of the up and gate weights.
+// x_scale/gate_scale: optional NVFP4 scales of the up and gate weights (per tensor, or of the expert of this tile).
 template<ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion>
 static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
             const float * __restrict__ sum, const int * __restrict__ ids_dst, float * __restrict__ dst,
@@ -519,6 +519,11 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
 
     const bool y_scale_used = y_scale != nullptr;
+
+    // Fused NVFP4: load the weight scales once, 1 without scales.
+    constexpr bool fused_nvfp4 = has_fusion && type == GGML_TYPE_NVFP4;
+    const float scale_up   = fused_nvfp4 && x_scale ? *x_scale    : 1.0f;
+    const float scale_gate = fused_nvfp4 && x_scale ? *gate_scale : 1.0f;
 
 #pragma unroll
     for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
@@ -547,10 +552,8 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
                             up   *= y_scale[j];
                             gate *= y_scale[j];
                         }
-                        if (x_scale) {
-                            up   *= *x_scale;
-                            gate *= *gate_scale;
-                        }
+                        up   *= scale_up;
+                        gate *= scale_gate;
                     }
                     dst[ids_dst[j]*stride + i] = ggml_cuda_op_glu_single(glu_op, gate, up, glu_limit);
                 } else if constexpr (type == GGML_TYPE_NVFP4) {
@@ -567,7 +570,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
         }
     }
 
-    GGML_UNUSED_VARS(y_scale_used, glu_op, glu_limit, x_scale, gate_scale);
+    GGML_UNUSED_VARS(y_scale_used, glu_op, glu_limit, x_scale, gate_scale, scale_up, scale_gate);
 }
 
 // -------------------------------------------------------------------------------------------------------------------------------------
@@ -1023,9 +1026,15 @@ static __global__ void mul_mat_q(
 #else
     constexpr bool fusion_available = false;
 #endif // TURING_MMA_AVAILABLE
+#ifdef BLACKWELL_MMA_AVAILABLE
+    constexpr bool native_fp4_available = true;
+#else
+    constexpr bool native_fp4_available = false;
+#endif // BLACKWELL_MMA_AVAILABLE
 
-    // Skip unused template specializations for faster compilation:
-    if (ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).type == GGML_TYPE_COUNT || (has_fusion && !fusion_available)) {
+    // Skip unused template specializations for faster compilation (the host only uses 4-bit src1 with native FP4):
+    if (ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).type == GGML_TYPE_COUNT ||
+            (has_fusion && (!fusion_available || (prec_src1 == GGML_PREC_Q4 && !native_fp4_available)))) {
         NO_DEVICE_CODE;
         return;
     }

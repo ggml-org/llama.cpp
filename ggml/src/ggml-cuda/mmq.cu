@@ -174,7 +174,11 @@ void ggml_cuda_mul_mat_q(
     if (fusion) {
         GGML_ASSERT(gate && !fusion->x_bias && !fusion->gate_bias && !fusion->x_scale == !fusion->gate_scale);
         GGML_ASSERT(gate->type == src0->type && ggml_are_same_shape(gate, src0) && ggml_are_same_stride(gate, src0));
-        // NVFP4 weight scales: one value per tensor, or one per expert with ids.
+        // NVFP4 weight scales (only applied for NVFP4): one value per tensor, or one per expert with ids.
+        for (const ggml_tensor * scale : { fusion->x_scale, fusion->gate_scale }) {
+            GGML_ASSERT(!scale || (src0->type == GGML_TYPE_NVFP4 && scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale) &&
+                ggml_nelements(scale) == (ids ? src0->ne[2] : 1)));
+        }
         fusion_device.gate       = gate->data;
         fusion_device.x_scale    = fusion->x_scale    ? fusion->x_scale->data    : nullptr;
         fusion_device.gate_scale = fusion->gate_scale ? fusion->gate_scale->data : nullptr;
