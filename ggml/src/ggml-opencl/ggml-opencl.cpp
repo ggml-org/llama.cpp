@@ -1286,6 +1286,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_noshuffle_q4_k_f32;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_o4;  // 4-output-per-WI, long-vocab lm_head
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_tiled;  // tiled-wide layout (opt-in)
+    cl_kernel kernel_gemm_noshuffle_q4_K_f32_tiled_dp4a = nullptr;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_splitk; // split-K across WGs (small-M decode)
     cl_kernel kernel_gemv_splitk_reduce_f32;         // sums split-K per-slice partials
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_glu;    // fused gate+up GEMV + GLU (FFN)
@@ -5088,6 +5089,23 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q4_k_f32_tiled =
             clCreateKernel(prog, "kernel_gemv_noshuffle_q4_k_f32_tiled", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
+    // gemm_noshuffle_q4_K_f32_tiled_dp4a
+    if (backend_ctx->has_integer_dot) {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q4_K_f32_tiled_dp4a.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q4_K_f32_tiled_dp4a.cl");
+#endif
+        std::string compile_opts = std::string("-cl-std=") + opencl_c_std + " -cl-mad-enable ";
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q4_K_f32_tiled_dp4a =
+            clCreateKernel(prog, "kernel_gemm_noshuffle_q4_K_f32_tiled_dp4a", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -9622,9 +9640,11 @@ inline bool use_q6k_tiled(const ggml_backend_opencl_context *backend_ctx, const 
            use_adreno_kernels(backend_ctx, tensor);
 }
 
-// q4_K analog of the tiled-wide lm_head/embed GEMV (default OFF;
-// GGML_OPENCL_Q4K_GEMV_TILED forces either way: =0 off, else on). Same gate.
+// Select untiled Q4_K before upload if the batched DP4A reader is unavailable.
 inline bool q4k_gemv_tiled_enabled(const ggml_backend_opencl_context *backend_ctx) {
+    if (!backend_ctx->has_integer_dot) {
+        return false;
+    }
     static const char * e = std::getenv("GGML_OPENCL_Q4K_GEMV_TILED");
     if (e && e[0] != '\0') {
         return e[0] != '0';
@@ -23505,6 +23525,48 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
         region.origin = offset1;
         region.size = K * N * sizeof(float);
         CL_CHECK((b_sub_buf = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        // Only the tiled kernels can read the tiled layout (use_q4k_tiled).
+        if (use_q4k_tiled(backend_ctx, src0)) {
+            const size_t n_blocks = (size_t)N * (K / 32);
+            backend_ctx->prealloc_moe_qa.allocate(context, (size_t)N * K * sizeof(cl_char));
+            backend_ctx->prealloc_moe_da.allocate(context, n_blocks * sizeof(cl_half));
+            backend_ctx->prealloc_moe_sa.allocate(context, n_blocks * sizeof(cl_half));
+
+            cl_int tbq = (cl_int)n_blocks;
+            cl_kernel qk = backend_ctx->kernel_quant_a_q8_1;
+            CL_CHECK(clSetKernelArg(qk, 0, sizeof(cl_mem), &b_sub_buf));
+            CL_CHECK(clSetKernelArg(qk, 1, sizeof(cl_mem), &backend_ctx->prealloc_moe_qa.buffer));
+            CL_CHECK(clSetKernelArg(qk, 2, sizeof(cl_mem), &backend_ctx->prealloc_moe_da.buffer));
+            CL_CHECK(clSetKernelArg(qk, 3, sizeof(cl_mem), &backend_ctx->prealloc_moe_sa.buffer));
+            CL_CHECK(clSetKernelArg(qk, 4, sizeof(cl_int), &tbq));
+            size_t q_local[1]  = { 64 };
+            size_t q_global[1] = { (size_t)(((n_blocks + 63) / 64) * 64) };
+            backend_ctx->enqueue_ndrange_kernel(qk, 1, q_global, q_local, dst);
+
+            cl_kernel dk = backend_ctx->kernel_gemm_noshuffle_q4_K_f32_tiled_dp4a;
+            CL_CHECK(clSetKernelArg(dk, 0, sizeof(cl_mem),   &extra0_q4_k->q));
+            CL_CHECK(clSetKernelArg(dk, 1, sizeof(cl_mem),   &extra0_q4_k->d));
+            CL_CHECK(clSetKernelArg(dk, 2, sizeof(cl_mem),   &extra0_q4_k->dm));
+            CL_CHECK(clSetKernelArg(dk, 3, sizeof(cl_mem),   &extra0_q4_k->s));
+            CL_CHECK(clSetKernelArg(dk, 4, sizeof(cl_mem),   &backend_ctx->prealloc_moe_qa.buffer));
+            CL_CHECK(clSetKernelArg(dk, 5, sizeof(cl_mem),   &backend_ctx->prealloc_moe_da.buffer));
+            CL_CHECK(clSetKernelArg(dk, 6, sizeof(cl_mem),   &backend_ctx->prealloc_moe_sa.buffer));
+            CL_CHECK(clSetKernelArg(dk, 7, sizeof(cl_mem),   &extrad->data_device));
+            CL_CHECK(clSetKernelArg(dk, 8, sizeof(cl_ulong), &offsetd));
+            CL_CHECK(clSetKernelArg(dk, 9, sizeof(cl_int),   &ne00));
+            CL_CHECK(clSetKernelArg(dk, 10, sizeof(cl_int),  &ne01));
+            CL_CHECK(clSetKernelArg(dk, 11, sizeof(cl_int),  &ne1));
+
+            const int WROWS_D = 4 * 64;
+            const int BN_DP   = 8;
+            size_t dlocal[3]  = {64, 4, 1};
+            size_t dglobal[3] = {(size_t)CEIL_DIV(ne01, WROWS_D) * 64, 4, (size_t)CEIL_DIV(ne1, BN_DP)};
+            backend_ctx->enqueue_ndrange_kernel(dk, 3, dglobal, dlocal, dst);
+
+            CL_CHECK(clReleaseMemObject(b_sub_buf));
+            return;
+        }
 
         // CoopK handles without _bin use the same untiled weight layout as gemm_noshuffle_q4_k_f32.
         // Activations use K-major Q8_1 SoA (K contiguous).
