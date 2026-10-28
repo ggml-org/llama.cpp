@@ -185,6 +185,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_DRAFT_SELF,    // self-speculative decoding with masked-block drafts
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
@@ -299,6 +300,9 @@ struct common_params_sampling {
     bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
     bool backend_sampling = false;
+
+    float spec_accept_ratio = -1.0f; // < 0 uses ordinary speculative acceptance
+    float spec_accept_delta =  0.6f; // entropy threshold multiplier
 
     // print the parameters into a string
     std::string print() const;

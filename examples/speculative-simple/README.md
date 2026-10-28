@@ -46,4 +46,12 @@ Demonstration of basic greedy speculative decoding
         -p "Here is a quick sort implementation in C++. Just code, no comments:\n\n#include" \
         --spec-type draft-dspark --spec-draft-n-max 7 -ngld 99 --color on \
         -n 256 --temp 0 --top-k 1 --seed 42 -ngl 99 -lv 4
+
+# spec-type draft-self
+./bin/llama-speculative-simple \
+        -m models/clover-bf16.gguf \
+        -p "Here is a quick sort implementation in C++. Just code, no comments:\n\n#include" \
+        --spec-type draft-self --spec-draft-n-max 15 --color on \
+        --spec-accept-ratio 0.9 --spec-accept-delta 0.6 -ctk bf16 -ctv bf16 \
+        -n 256 --temp 0 --top-k 1 --seed 42 -ngl 99 -lv 4
 ```
