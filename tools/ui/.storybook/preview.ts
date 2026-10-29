@@ -17,11 +17,13 @@ const preview: Preview = {
 		},
 
 		options: {
-			// sidebar sections; the full chat screen leads its folder
+			// sidebar sections; foundations lead the design system, the full chat screen leads its folder
 			storySort: {
 				order: [
 					'Introduction',
+					['Overview', 'Design guidelines'],
 					'Design system',
+					['Foundations', 'Actions', 'Forms', 'Display', 'Overlays'],
 					'Chat',
 					['ChatScreen', ['ChatScreen', '*']],
 					'Content',
