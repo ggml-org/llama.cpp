@@ -430,6 +430,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3:
+                // same as tekken, but numbers are split into right-aligned groups of 3 digits
+                // "...|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))|\\p{N}{1,2}|..."
+                regex_exprs = {
+                    "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))|\\p{N}{1,2}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_CHAMELEON:
                 // Note: in theory, the special token (sentinel and image token) regex_exprs below
                 // are unnecessary, as they are split in `tokenizer_st_partition` anyway.
@@ -2616,6 +2623,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "tekken" ||
                 tokenizer_pre == "pixtral") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_TEKKEN;
+                clean_spaces = false;
+                ignore_merges = true;
+                add_bos = true;
+            } else if (
+                tokenizer_pre == "tekken-num3") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3;
                 clean_spaces = false;
                 ignore_merges = true;
                 add_bos = true;

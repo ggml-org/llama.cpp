@@ -194,6 +194,10 @@ minimax-m2          ,0   ,any     ,RMS_NORM+MUL                ,      9
 minimax-m3          ,0   ,any     ,ADD+ADD                     ,      1
 minimax-m3          ,0   ,any     ,MUL+ADD                     ,      2
 minimax-m3          ,0   ,any     ,RMS_NORM+MUL                ,     11
+mistral-large4      ,0   ,any     ,ADD+ADD                     ,      3
+mistral-large4      ,0   ,any     ,MUL+ADD                     ,      6
+mistral-large4      ,0   ,any     ,NORM+MUL+ADD                ,      6
+mistral-large4      ,0   ,any     ,RMS_NORM+MUL                ,     12
 mistral3            ,0   ,any     ,RMS_NORM+MUL                ,      5
 mistral3            ,0   ,any     ,MUL+ADD                     ,      4
 mistral3            ,0   ,any     ,RMS_NORM+MUL                ,      5
