@@ -358,7 +358,7 @@ bool ggml_openvino_npu_fast_mask_enabled() {
 }
 
 bool ggml_openvino_npu_l0_host_tensors_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_L0_HOST_TENSORS") != 0;
+    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_L0_HOST_TENSORS", 1) != 0;
 }
 
 bool ggml_openvino_npu_hfa_prefill_enabled() {
