@@ -23,7 +23,15 @@ const preview: Preview = {
 					'Introduction',
 					['Overview', 'Design guidelines'],
 					'Design system',
-					['Foundations', 'Actions', 'Forms', 'Display', 'Overlays'],
+					[
+						'Foundations',
+						['Colors', 'Typography', 'Sizing', 'Shapes', 'Elevation', 'Surfaces'],
+						'Actions',
+						'Forms',
+						'Display',
+						'Overlays',
+						'Patterns'
+					],
 					'Chat',
 					['ChatScreen', ['ChatScreen', '*']],
 					'Content',
