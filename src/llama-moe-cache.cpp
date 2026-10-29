@@ -14,9 +14,11 @@
 
 namespace {
 
-// ClassLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
-// CRF = uses of an expert, decayed with a half-life of crf_half tokens; class = floor(log2(CRF)), at most n_class - 1
-// each slot is in the LRU list of the class of its last use; the victim is the list head with the max age/2^class
+// ClassLRU: one LRU list per frequency class, over the experts of a group of layers
+// slot_map[il][e] is the slot of expert e of layer il, -1 if not cached, the host copy of the slot map tensor
+// CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of crf_half tokens, retained across evictions
+// class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
+// victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
 struct moe_cache_lru {
     static constexpr int   n_class  = 4;
     static constexpr float crf_half = 128.0f; // tokens
@@ -36,7 +38,7 @@ struct moe_cache_lru {
 
     std::vector<float>   crf;      // [n_layer*n_expert]
     std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
-    std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer
+    std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer (as added by plan() for each ubatch)
 
     std::vector<uint32_t> seen; // [n_expert] seen[e] == seen_gen if expert e is selected by the current plan()
     uint32_t seen_gen = 0;
@@ -109,9 +111,9 @@ struct moe_cache_lru {
             for (int32_t s = head[c]; s >= 0; s = next[s]) {
                 const int32_t key = key_of[s];
                 if (key < 0) {
-                    return s;
+                    return s; // unused slot
                 }
-                // keep every expert selected by this request, including earlier fills
+                // skip the experts selected by this plan(), including the misses it filled already
                 if (key / n_expert == il && seen[key % n_expert] == seen_gen) {
                     continue;
                 }
@@ -168,7 +170,8 @@ struct moe_cache_lru {
                 n_hit++;
             }
         }
-        // sorted misses usually get consecutive slots, so the uploads can be merged
+        // fill the misses in expert order: victim() takes unused slots, and slots filled by one plan(), in list order,
+        // so consecutive experts often get consecutive slots and one upload
         std::sort(uniq.begin(), uniq.end());
         for (int32_t e : uniq) {
             if (slots[e] >= 0) {
