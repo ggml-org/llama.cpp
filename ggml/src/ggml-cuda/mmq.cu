@@ -113,13 +113,13 @@ static ggml_prec ggml_cuda_mmq_get_prec_env() {
 }
 
 // src1 is quantized to Q8_1 unless the FP4 types can use 4-bit activations, in which case they
-// default to the native W4A4 instructions on Blackwell. prec_dst is the src1 precision requested by the MUL_MAT.
-static ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_type type, const ggml_prec prec_dst, const int cc) {
+// default to the native W4A4 instructions on Blackwell.
+static ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_type type, const ggml_prec prec_requested, const int cc) {
     static const ggml_prec prec_env = ggml_cuda_mmq_get_prec_env();
 
     ggml_prec prec = prec_env;
     if (prec == GGML_PREC_UNDEFINED) {
-        prec = prec_dst;
+        prec = prec_requested;
     }
 
     // Q4 only for the FP4 types on Blackwell
@@ -520,14 +520,14 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
 }
 
 bool ggml_cuda_mmq_fusion_is_efficient(
-        const ggml_type type, const ggml_prec prec_dst, const int64_t nrows_x, const int64_t ncols, const int64_t nchannels, const int device) {
+        const ggml_type type, const ggml_prec prec_requested, const int64_t nrows_x, const int64_t ncols, const int64_t nchannels, const int device) {
     const int    cc    = ggml_cuda_info().devices[device].cc;
     const int    nsm   = ggml_cuda_info().devices[device].nsm;
     const size_t smpbo = ggml_cuda_info().devices[device].smpbo;
 
     // Same tile width as ggml_cuda_mul_mat_q; the fused kernel has no fallback and writes I/2 output rows per tile.
     const bool      fallback  = false;
-    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(type, prec_dst, cc);
+    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(type, prec_requested, cc);
     const int       J_best    = ggml_cuda_mmq_get_J_best(type, ncols, fallback, cc, smpbo, prec_src1);
     if (J_best == 0) {
         return false;
