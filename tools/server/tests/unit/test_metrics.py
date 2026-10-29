@@ -379,3 +379,36 @@ def test_memory_output_buffer_is_counted_in_context():
     # the output buffer does not grow with the context size, so it is what the doubling leaves over
     output_buffer = 2 * smaller - larger
     assert output_buffer >= n_vocab * 4, f"output buffer {output_buffer} bytes, vocabulary {n_vocab}"
+
+
+def test_memory_counts_the_draft_model():
+    draft_file = download_file("https://huggingface.co/ggml-org/tiny-llamas/resolve/main/stories15M-q4_0.gguf")
+
+    def measure(model_draft: str | None, model_file: str | None = None) -> dict[str, int]:
+        global server
+        server = ServerPreset.stories15m_moe()
+        server.server_memory = True
+        server.fa = "off"
+        if model_file:
+            server.model_hf_repo = None
+            server.model_hf_file = None
+            server.model_file = model_file
+        if model_draft:
+            server.model_draft = model_draft
+            server.spec_type = "draft-simple"
+        server.start()
+        res = server.make_request("GET", "/memory")
+        assert res.status_code == 200
+        server.stop()
+        rows = res.body["data"]
+        return {field: sum(row[field] for row in rows) for field in ["model", "context", "compute"]}
+
+    target = measure(None)
+    draft  = measure(None, model_file=draft_file)
+    both   = measure(draft_file)
+
+    # the weights do not depend on the context, so the draft adds exactly the bytes it holds when loaded alone
+    assert both["model"] - target["model"] == draft["model"], (target, draft, both)
+    # the draft context allocates its own KV cache and compute buffers
+    assert both["context"] > target["context"], (target, both)
+    assert both["compute"] > target["compute"], (target, both)

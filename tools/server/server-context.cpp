@@ -1066,7 +1066,7 @@ public:
         return metrics;
     }
 
-    // one entry per device the model or the projector allocates on
+    // one entry per device the model, the draft model or the projector allocates on
     json get_memory_data() const {
         json memory_data = json::array();
 
@@ -1078,7 +1078,33 @@ public:
                 mmproj_mem[is_host ? "Host" : ggml_backend_dev_name(dev)] += size;
             }
         }
-        const std::vector<common_memory_breakdown_row> mb = common_memory_breakdown_rows(ctx_tgt);
+        std::vector<common_memory_breakdown_row> mb = common_memory_breakdown_rows(ctx_tgt);
+        if (ctx_dft) {
+            // an MTP draft context runs on the target model, so its weights are already counted
+            const bool shares_model = llama_get_model(ctx_dft) == llama_get_model(ctx_tgt);
+            for (const common_memory_breakdown_row & row_dft : common_memory_breakdown_rows(ctx_dft)) {
+                const size_t model_dft = shares_model ? 0 : row_dft.model;
+                auto it = std::find_if(mb.begin(), mb.end(), [&](const common_memory_breakdown_row & row) {
+                    return row.kind == row_dft.kind && row.name == row_dft.name;
+                });
+                if (it == mb.end()) {
+                    // a device or buffer type only the draft uses, devices stay ahead of the host
+                    common_memory_breakdown_row row = row_dft;
+                    row.model = model_dft;
+                    const auto pos = row.kind == common_memory_breakdown_row::DEVICE
+                        ? std::find_if(mb.begin(), mb.end(), [](const common_memory_breakdown_row & r) {
+                              return r.kind != common_memory_breakdown_row::DEVICE;
+                          })
+                        : mb.end();
+                    mb.insert(pos, std::move(row));
+                    continue;
+                }
+                // total and free describe the whole device, so they are taken once from the target
+                it->model   += model_dft;
+                it->context += row_dft.context;
+                it->compute += row_dft.compute;
+            }
+        }
         for (const common_memory_breakdown_row & row : mb) {
             json entry = {
                 { "name",    row.name        },

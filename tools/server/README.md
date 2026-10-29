@@ -1260,7 +1260,7 @@ llamacpp:memory_model_bytes{device="CUDA0"} 17825792000
 llamacpp:memory_model_bytes{device="Host"} 13191648
 ```
 
-They report the same figures as the memory breakdown printed on exit at trace verbosity (`-lv 4`). `Host` covers the host buffer types, and buffer types belonging to none of the model's devices (such as `CPU_REPACK`) are reported under their own name. `memory_total_bytes` and `memory_free_bytes` come from the backend and describe the whole device, not this process, so they are only present on real devices.
+They report the same figures as the memory breakdown printed on exit at trace verbosity (`-lv 4`), plus the memory of the speculative decoding draft context when there is one. The draft's weights, KV cache and compute buffers count under `model`, `context` and `compute` on the devices it uses. An MTP draft runs on the target model, so its weights are not counted twice. `Host` covers the host buffer types, and buffer types belonging to none of the model's devices (such as `CPU_REPACK`) are reported under their own name. `memory_total_bytes` and `memory_free_bytes` come from the backend and describe the whole device, not this process, so they are only present on real devices.
 
 While the server sleeps, `/metrics` is served from the snapshot taken before sleeping. The `memory_*` values then describe the model that was loaded, not memory in use. See [Sleeping on idle](#sleeping-on-idle).
 
