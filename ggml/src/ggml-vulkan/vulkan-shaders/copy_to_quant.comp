@@ -28,6 +28,34 @@ layout (binding = 2) writeonly buffer Q {A_TYPE data_q[];};
 layout (binding = 1) writeonly buffer Q {A_TYPE data_q[];};
 #endif
 
+#if defined(DATA_A_Q2_0) || defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0)
+// round like the CPU reference: a correctly rounded 1/d (Vulkan only guarantees ~2.5 ulp for a divide, so pick the
+// quotient or a neighbour by the smallest exact residual 1 - d*y, from an fma-free Dekker product), and precise to
+// keep x*id + c from fusing
+float recip_residual(float d, float y) {
+    precise const float p  = d * y;
+    precise const float cd = 4097.0 * d;
+    precise const float dh = cd - (cd - d);
+    precise const float dl = d - dh;
+    precise const float cy = 4097.0 * y;
+    precise const float yh = cy - (cy - y);
+    precise const float yl = y - yh;
+    precise const float e  = ((dh * yh - p) + dh * yl + dl * yh) + dl * yl; // d*y = p + e exactly
+    precise const float r  = (1.0 - p) - e;
+    return abs(r);
+}
+
+float recip_rn(float d) {
+    precise const float y  = 1.0 / d;
+    precise const float lo = uintBitsToFloat(floatBitsToUint(y) - 1u);
+    precise const float hi = uintBitsToFloat(floatBitsToUint(y) + 1u);
+    const float e  = recip_residual(d, y);
+    const float el = recip_residual(d, lo);
+    const float eh = recip_residual(d, hi);
+    return el < e && el <= eh ? lo : (eh < e ? hi : y);
+}
+#endif
+
 #if defined(DATA_A_Q4_0)
 void quantize(uint dst_idx, uint src_idx)
 {
@@ -42,17 +70,20 @@ void quantize(uint dst_idx, uint src_idx)
         }
     }
 
-    const float d  = vmax / -8;
-    const float id = (d != 0.0) ? 1.0/d : 0.0;
+    const float d  = vmax * -0.125; // exact, same as the CPU's vmax / -8 (a GPU divide may not be)
+    const float id = (d != 0.0) ? recip_rn(d) : 0.0;
 
     data_q[dst_idx].d = float16_t(d);
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q4_0/2; ++j) {
-        const float x0 = float(data_s[src_idx + 0              + j])*id;
-        const float x1 = float(data_s[src_idx + QUANT_K_Q4_0/2 + j])*id;
+        // the min() is a no-op that keeps drivers from fusing x*id + c into an fma (Mesa ANV and llvmpipe fuse despite precise)
+        precise const float x0 = min(float(data_s[src_idx + 0              + j])*id, 3.0e38);
+        precise const float x1 = min(float(data_s[src_idx + QUANT_K_Q4_0/2 + j])*id, 3.0e38);
+        precise const float y0 = x0 + 8.5;
+        precise const float y1 = x1 + 8.5;
 
-        const uint xi0 = min(15, int(x0 + 8.5));
-        const uint xi1 = min(15, int(x1 + 8.5));
+        const uint xi0 = min(15, int(y0));
+        const uint xi1 = min(15, int(y1));
 
         data_q[dst_idx].qs[j]  = uint8_t(xi0 | (xi1 << 4));
     }
@@ -104,18 +135,21 @@ void quantize(uint dst_idx, uint src_idx)
         }
     }
 
-    const float d  = vmax / -16;
-    const float id = (d != 0.0) ? 1.0/d : 0.0;
+    const float d  = vmax * -0.0625; // exact, same as the CPU's vmax / -16
+    const float id = (d != 0.0) ? recip_rn(d) : 0.0;
 
     data_q[dst_idx].d = float16_t(d);
 
     uint32_t qh = 0;
     [[unroll]] for (int j = 0; j < QUANT_K_Q5_0/2; ++j) {
-        const float x0 = float(data_s[src_idx + 0              + j])*id;
-        const float x1 = float(data_s[src_idx + QUANT_K_Q5_0/2 + j])*id;
+        // the min() is a no-op that keeps drivers from fusing x*id + c into an fma (Mesa ANV and llvmpipe fuse despite precise)
+        precise const float x0 = min(float(data_s[src_idx + 0              + j])*id, 3.0e38);
+        precise const float x1 = min(float(data_s[src_idx + QUANT_K_Q5_0/2 + j])*id, 3.0e38);
+        precise const float y0 = x0 + 16.5;
+        precise const float y1 = x1 + 16.5;
 
-        const uint xi0 = min(31, int(x0 + 16.5));
-        const uint xi1 = min(31, int(x1 + 16.5));
+        const uint xi0 = min(31, int(y0));
+        const uint xi1 = min(31, int(y1));
 
         data_q[dst_idx].qs[j]  = uint8_t((xi0 & 0xf) | ((xi1 & 0xf) << 4));
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
@@ -211,7 +245,9 @@ void quantize(uint dst_idx, uint src_idx)
 #if defined(DATA_A_Q2_0)
 uint quantize_q2_0(float x)
 {
-    const int q = int(x >= 0.0f ? floor(x + 0.5f) : ceil(x - 0.5f)) + 1;
+    // exact roundf (half away from zero): floor(x + 0.5f) carries for x = 0.5 - 2^-25
+    precise const float t = trunc(x);
+    const int q = int(abs(x - t) >= 0.5f ? t + sign(x) : t) + 1;
     return uint(clamp(q, 0, 3));
 }
 
@@ -224,15 +260,19 @@ void quantize(uint dst_idx, uint src_idx)
     }
 
     const float d = amax;
-    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+    const float id = d != 0.0f ? recip_rn(d) : 0.0f;
 
     data_q[dst_idx].d = float16_t(d);
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q2_0 / 4; ++j) {
-        const uint q0 = quantize_q2_0(float(data_s[src_idx + 4*j    ]) * id);
-        const uint q1 = quantize_q2_0(float(data_s[src_idx + 4*j + 1]) * id);
-        const uint q2 = quantize_q2_0(float(data_s[src_idx + 4*j + 2]) * id);
-        const uint q3 = quantize_q2_0(float(data_s[src_idx + 4*j + 3]) * id);
+        precise const float v0 = float(data_s[src_idx + 4*j    ]) * id;
+        precise const float v1 = float(data_s[src_idx + 4*j + 1]) * id;
+        precise const float v2 = float(data_s[src_idx + 4*j + 2]) * id;
+        precise const float v3 = float(data_s[src_idx + 4*j + 3]) * id;
+        const uint q0 = quantize_q2_0(v0);
+        const uint q1 = quantize_q2_0(v1);
+        const uint q2 = quantize_q2_0(v2);
+        const uint q3 = quantize_q2_0(v3);
         data_q[dst_idx].qs[j] = uint8_t(q0 | (q1 << 2u) | (q2 << 4u) | (q3 << 6u));
     }
 }
