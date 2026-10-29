@@ -33,9 +33,9 @@ struct moe_cache_lru {
     int32_t tail[n_class] = { -1, -1, -1, -1 };
     std::vector<int8_t> list_of; // [n_slots]
 
-    std::vector<float>   crf;   // [n_layer*n_expert]
-    std::vector<int64_t> last;  // [n_layer*n_expert] layer clock at the last use, -1 if not used
-    std::vector<int64_t> clock; // [n_layer] tokens seen by the layer
+    std::vector<float>   crf;      // [n_layer*n_expert]
+    std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
+    std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer
 
     std::vector<uint32_t> seen; // [n_expert]
     uint32_t seen_gen = 0;
@@ -56,15 +56,15 @@ struct moe_cache_lru {
         tail[0] = n_slots - 1;
         list_of.assign(n_slots, 0);
         crf.assign((size_t) n_layer*n_expert, 0.0f);
-        last.assign((size_t) n_layer*n_expert, -1);
+        last_use.assign((size_t) n_layer*n_expert, -1);
         clock.assign(n_layer, 0);
         seen.assign(n_expert, 0);
     }
 
-    // move slot s to the most recently used end of list l
-    void move(int32_t s, int l) {
+    // move slot s to the most recently used end of list c
+    void move(int32_t s, int c) {
         const int from = list_of[s];
-        if (from == l && s == tail[from]) {
+        if (from == c && s == tail[from]) {
             return;
         }
         if (prev[s] >= 0) {
@@ -78,15 +78,15 @@ struct moe_cache_lru {
             tail[from] = prev[s];
         }
 
-        prev[s] = tail[l];
+        prev[s] = tail[c];
         next[s] = -1;
-        if (tail[l] >= 0) {
-            next[tail[l]] = s;
+        if (tail[c] >= 0) {
+            next[tail[c]] = s;
         } else {
-            head[l] = s;
+            head[c] = s;
         }
-        tail[l] = s;
-        list_of[s] = l;
+        tail[c] = s;
+        list_of[s] = c;
     }
 
     int class_of(int32_t key) const {
@@ -95,15 +95,15 @@ struct moe_cache_lru {
 
     void use(int32_t il, int32_t key) {
         const int64_t t = clock[il];
-        crf[key]  = last[key] >= 0 ? crf[key]*std::exp2(-(t - last[key])/crf_half) + 1.0f : 1.0f;
-        last[key] = t;
+        crf[key]      = last_use[key] >= 0 ? crf[key]*std::exp2(-(t - last_use[key])/crf_half) + 1.0f : 1.0f;
+        last_use[key] = t;
     }
 
     int32_t victim(int32_t il) const {
         int32_t res = -1;
         double res_score = -1.0;
-        for (int l = 0; l < n_class; ++l) {
-            for (int32_t s = head[l]; s >= 0; s = next[s]) {
+        for (int c = 0; c < n_class; ++c) {
+            for (int32_t s = head[c]; s >= 0; s = next[s]) {
                 const int32_t key = key_of[s];
                 if (key < 0) {
                     return s;
@@ -112,7 +112,7 @@ struct moe_cache_lru {
                 if (key / n_expert == il && seen[key % n_expert] == seen_gen) {
                     continue;
                 }
-                const double score = std::ldexp((double) (clock[key / n_expert] - last[key]), -l);
+                const double score = std::ldexp((double) (clock[key / n_expert] - last_use[key]), -c);
                 if (score > res_score) {
                     res       = s;
                     res_score = score;
