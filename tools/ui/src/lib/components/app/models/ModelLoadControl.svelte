@@ -37,26 +37,26 @@
 		{#if showAction && revealOnHover}
 			{#if isFailed}
 				<MODEL_LOAD_ICONS.failed
-					class="h-3.5 w-3.5 text-status-red group-hover:hidden [@media(pointer:coarse)]:hidden"
+					class="h-3.5 w-3.5 text-status-danger group-hover:hidden [@media(pointer:coarse)]:hidden"
 				/>
 			{:else}
 				<span
 					class="h-2 w-2 rounded-full group-hover:hidden [@media(pointer:coarse)]:hidden {isSleeping
-						? 'status-lamp orb-yellow'
+						? 'status-lamp orb-warning'
 						: isLoaded
-							? 'status-lamp orb-green'
+							? 'status-lamp orb-success'
 							: 'bg-muted-foreground/50'}"
 				></span>
 			{/if}
 		{:else}
 			{#if isFailed}
-				<MODEL_LOAD_ICONS.failed class="h-3.5 w-3.5 text-status-red" />
+				<MODEL_LOAD_ICONS.failed class="h-3.5 w-3.5 text-status-danger" />
 			{:else}
 				<span
 					class="h-2 w-2 rounded-full {isSleeping
-						? 'status-lamp orb-yellow'
+						? 'status-lamp orb-warning'
 						: isLoaded
-							? 'status-lamp orb-green'
+							? 'status-lamp orb-success'
 							: 'bg-muted-foreground/50'}"
 				></span>
 			{/if}

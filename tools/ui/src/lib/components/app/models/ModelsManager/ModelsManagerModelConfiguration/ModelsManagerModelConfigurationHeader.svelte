@@ -58,15 +58,15 @@
 
 	let statusDot = $derived.by(() => {
 		if (isDownload)
-			return isDownloadPaused ? 'status-lamp orb-yellow' : 'status-lamp orb-blue animate-pulse';
+			return isDownloadPaused ? 'status-lamp orb-warning' : 'status-lamp orb-blue animate-pulse';
 
-		if (status === ServerModelStatus.FAILED) return 'status-lamp orb-red';
+		if (status === ServerModelStatus.FAILED) return 'status-lamp orb-danger';
 
 		if (status === ServerModelStatus.LOADING) return 'bg-muted-foreground/50 animate-pulse';
 
-		if (status === ServerModelStatus.SLEEPING) return 'status-lamp orb-yellow';
+		if (status === ServerModelStatus.SLEEPING) return 'status-lamp orb-warning';
 
-		if (isLoaded) return 'status-lamp orb-green';
+		if (isLoaded) return 'status-lamp orb-success';
 
 		return 'bg-muted-foreground/50';
 	});

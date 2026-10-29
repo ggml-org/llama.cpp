@@ -586,7 +586,7 @@
 	></div>
 
 	<div
-		class="matte-glass overflow-hidden rounded-4xl text-foreground outline-none md:rounded-3xl {disabled
+		class="chat-form-surface overflow-hidden rounded-(--chat-form-radius-compact) outline-none md:rounded-(--chat-form-radius) {disabled
 			? 'cursor-not-allowed opacity-60'
 			: ''}"
 		data-slot="input-area"

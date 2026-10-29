@@ -85,7 +85,7 @@
 		/>
 
 		<div class="flex items-center justify-end gap-2">
-			<Button onclick={onCancel} size="sm" variant="secondary">Cancel</Button>
+			<Button onclick={onCancel} size="sm" variant="outline">Cancel</Button>
 
 			<Button disabled={!canSave} size="sm" type="submit">
 				{serverUrl.trim() ? 'Update' : 'Add'}

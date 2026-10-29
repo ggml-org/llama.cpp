@@ -3,6 +3,10 @@
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
+@import './lib/styles/tokens/primitives.css';
+@import './lib/styles/tokens/semantic.css';
+@import './lib/styles/tokens/components.css';
+@import './lib/styles/surfaces.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -37,68 +41,6 @@
 	--radius: 0.625rem;
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.95 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.95 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.875 0 0);
-	--input: oklch(0.92 0 0);
-	--ring: oklch(0.708 0 0);
-	--chart-1: oklch(0.646 0.222 41.116);
-	--chart-2: oklch(0.6 0.118 184.704);
-	--chart-3: oklch(0.398 0.07 227.392);
-	--chart-4: oklch(0.828 0.189 84.429);
-	--chart-5: oklch(0.769 0.188 70.08);
-	--sidebar: oklch(0.985 0 0);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.205 0 0);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.97 0 0);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.708 0 0);
-	--code-background: oklch(0.985 0 0);
-	--code-foreground: oklch(0.145 0 0);
-	/* status lamps: fill, lighter rim, darker ink for glyphs */
-	--status-red: oklch(0.6 0.235 27);
-	--status-red-rim: oklch(0.69 0.2 22);
-	--status-red-ink: oklch(0.43 0.17 27);
-	--status-yellow: oklch(0.85 0.17 84);
-	--status-yellow-rim: oklch(0.9 0.14 92);
-	--status-yellow-ink: oklch(0.5 0.1 70);
-	--status-green: oklch(0.73 0.2 148);
-	--status-green-rim: oklch(0.81 0.16 150);
-	--status-green-ink: oklch(0.45 0.14 145);
-	--glass-fill: oklch(0.97 0 0 / 0.6);
-	--glass-highlight: oklch(1 0 0 / 0.5);
-	--glass-edge-side: oklch(0.91 0.005 250);
-	--glass-edge-mid: oklch(0.94 0.003 250);
-	--glass-edge-side-focus: oklch(0.81 0.01 250);
-	--glass-edge-mid-focus: oklch(0.86 0.007 250);
-	--glass-drop:
-		0 1px 3px oklch(0 0 0 / 0.08), 0 1px 2px -1px oklch(0 0 0 / 0.06),
-		0 6px 16px -10px oklch(0 0 0 / 0.08);
-	--key-drop: 0 1px 3px oklch(0 0 0 / 0.1), 0 1px 2px -1px oklch(0 0 0 / 0.1);
-	--float-edge: oklch(0.9 0.005 250);
-	--float-drop: 0 1px 3px oklch(0 0 0 / 0.06), 0 12px 32px -12px oklch(0 0 0 / 0.18);
-	--well-shade: oklch(0 0 0 / 0.06);
-	--engrave: 0 1px 0 oklch(1 0 0 / 0.85);
-	--bubble-edge: oklch(0.935 0.003 250);
-	--ambient-edge-side: oklch(0.938 0.004 250);
-	--ambient-edge-mid: oklch(0.958 0.002 250);
-	--sheen-top: oklch(1 0 0 / 0.2);
-	--sheen-bottom: oklch(1 0 0 / 0);
 	--font-mono:
 		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
 		'Liberation Mono', Menlo, monospace;
@@ -108,6 +50,31 @@
 	--chat-form-area-offset: 2rem;
 	--chat-form-padding-top: 6rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
+
+	/*
+	 * shadcn names, kept so the vendored components and their classes keep working.
+	 * They alias semantic tokens; new code uses the semantic names directly.
+	 */
+	--background: var(--surface-page);
+	--foreground: var(--fg-default);
+	--card: var(--surface-raised);
+	--card-foreground: var(--fg-default);
+	--popover: var(--surface-raised);
+	--popover-foreground: var(--fg-default);
+	--primary: var(--action-primary);
+	--primary-foreground: var(--fg-on-action);
+	--secondary: var(--surface-emphasis);
+	--secondary-foreground: var(--fg-default);
+	--muted: var(--surface-muted);
+	--muted-foreground: var(--fg-muted);
+	--accent: var(--surface-selected);
+	--accent-foreground: var(--fg-default);
+	--destructive: var(--fg-danger);
+	--border: var(--line-default);
+	--input: var(--line-field);
+	--ring: var(--line-focus);
+	--code-background: var(--surface-code);
+	--code-foreground: var(--fg-code);
 }
 
 @media (min-width: 640px) {
@@ -116,70 +83,6 @@
 		--chat-form-area-offset: 12rem;
 		--chat-form-padding-top: 6rem;
 	}
-}
-
-.dark {
-	--background: oklch(0.16 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.29 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 30%);
-	--input: oklch(1 0 0 / 30%);
-	--ring: oklch(0.556 0 0);
-	--chart-1: oklch(0.488 0.243 264.376);
-	--chart-2: oklch(0.696 0.17 162.48);
-	--chart-3: oklch(0.769 0.188 70.08);
-	--chart-4: oklch(0.627 0.265 303.9);
-	--chart-5: oklch(0.645 0.246 16.439);
-	--sidebar: oklch(0.2 0 0);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.269 0 0);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.556 0 0);
-	--code-background: oklch(0.225 0 0);
-	--code-foreground: oklch(0.875 0 0);
-	--status-red: oklch(0.63 0.22 25);
-	--status-red-rim: oklch(0.7 0.18 22);
-	--status-red-ink: oklch(0.4 0.15 27);
-	--status-yellow: oklch(0.83 0.16 84);
-	--status-yellow-rim: oklch(0.88 0.13 92);
-	--status-yellow-ink: oklch(0.45 0.09 70);
-	--status-green: oklch(0.72 0.19 148);
-	--status-green-rim: oklch(0.8 0.15 150);
-	--status-green-ink: oklch(0.4 0.12 145);
-	--glass-fill: oklch(0.269 0 0 / 0.75);
-	--glass-highlight: oklch(1 0 0 / 0.04);
-	--glass-edge-side: oklch(1 0 0 / 0.06);
-	--glass-edge-mid: oklch(1 0 0 / 0.04);
-	--glass-edge-side-focus: oklch(1 0 0 / 0.18);
-	--glass-edge-mid-focus: oklch(1 0 0 / 0.12);
-	--glass-drop:
-		0 1px 3px oklch(0 0 0 / 0.3), 0 1px 2px -1px oklch(0 0 0 / 0.25),
-		0 6px 16px -10px oklch(0 0 0 / 0.35);
-	--key-drop: 0 1px 2px oklch(0 0 0 / 0.3);
-	--float-edge: oklch(1 0 0 / 0.09);
-	--float-drop: 0 1px 3px oklch(0 0 0 / 0.4), 0 16px 40px -12px oklch(0 0 0 / 0.6);
-	--well-shade: oklch(0 0 0 / 0.3);
-	--engrave: 0 -1px 0 oklch(0 0 0 / 0.55);
-	--bubble-edge: oklch(1 0 0 / 0.035);
-	--ambient-edge-side: oklch(1 0 0 / 0.042);
-	--ambient-edge-mid: oklch(1 0 0 / 0.024);
-	--sheen-top: oklch(1 0 0 / 0.015);
-	--sheen-bottom: oklch(1 0 0 / 0);
 }
 
 @theme inline {
@@ -205,22 +108,6 @@
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);
-	--color-chart-1: var(--chart-1);
-	--color-chart-2: var(--chart-2);
-	--color-chart-3: var(--chart-3);
-	--color-chart-4: var(--chart-4);
-	--color-chart-5: var(--chart-5);
-	--color-sidebar: var(--sidebar);
-	--color-sidebar-foreground: var(--sidebar-foreground);
-	--color-sidebar-primary: var(--sidebar-primary);
-	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-	--color-sidebar-accent: var(--sidebar-accent);
-	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-	--color-sidebar-border: var(--sidebar-border);
-	--color-sidebar-ring: var(--sidebar-ring);
-	--color-status-red: var(--status-red);
-	--color-status-yellow: var(--status-yellow);
-	--color-status-green: var(--status-green);
 }
 
 @layer base {
@@ -258,7 +145,7 @@
 	}
 
 	*:hover {
-		scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+		scrollbar-color: color-mix(in oklch, var(--fg-muted) 30%, transparent) transparent;
 	}
 
 	*::-webkit-scrollbar {
@@ -277,11 +164,11 @@
 	}
 
 	*:hover::-webkit-scrollbar-thumb {
-		background: hsl(var(--muted-foreground) / 0.3);
+		background: color-mix(in oklch, var(--fg-muted) 30%, transparent);
 	}
 
 	*::-webkit-scrollbar-thumb:hover {
-		background: hsl(var(--muted-foreground) / 0.5);
+		background: color-mix(in oklch, var(--fg-muted) 50%, transparent);
 	}
 
 	:where(code, pre, kbd, samp) {
@@ -337,158 +224,6 @@
 			animation: none;
 		}
 	}
-}
-
-/* Frosted panel: flat fill, faint inner rim, hairline border shaded darker at the sides. */
-@utility matte-glass {
-	--edge-side: var(--glass-edge-side);
-	--edge-mid: var(--glass-edge-mid);
-	background-color: var(--glass-fill);
-	backdrop-filter: blur(24px) saturate(1.5);
-	box-shadow:
-		inset 0 0 0 2px var(--glass-highlight),
-		var(--glass-drop);
-
-	/* the ring below needs a positioned box; keep fixed or sticky ones as they are */
-	&:not(.fixed, .absolute, .sticky) {
-		position: relative;
-	}
-
-	/* masked ring, so the edge gradient does not tint the translucent fill */
-	&::before {
-		content: '';
-		position: absolute;
-		inset: 0;
-		padding: 1px;
-		border-radius: inherit;
-		pointer-events: none;
-		background: linear-gradient(
-			to right,
-			var(--edge-side),
-			var(--edge-mid) 12%,
-			var(--edge-mid) 88%,
-			var(--edge-side)
-		);
-		mask:
-			linear-gradient(#000 0 0) content-box exclude,
-			linear-gradient(#000 0 0);
-	}
-
-	&:focus-within {
-		--edge-side: var(--glass-edge-side-focus);
-		--edge-mid: var(--glass-edge-mid-focus);
-	}
-}
-
-/* Floating panel (menus, popovers, dialogs): frosted fill over --float-base, faint rim, lifted shadow. */
-@utility matte-float {
-	background-color: color-mix(in oklch, var(--float-base, var(--popover)) 86%, transparent);
-	border-color: var(--float-edge);
-	backdrop-filter: blur(24px) saturate(1.5);
-	box-shadow:
-		inset 0 0 0 1px var(--glass-highlight),
-		var(--float-drop);
-}
-
-/* Recessed field (inputs, switch track, checkbox): soft inner shade, keeps Tailwind focus rings. */
-@utility matte-well {
-	--tw-inset-shadow: inset 0 1px 2px var(--well-shade);
-	box-shadow:
-		var(--tw-inset-shadow), var(--tw-ring-offset-shadow, 0 0 #0000),
-		var(--tw-ring-shadow, 0 0 #0000);
-}
-
-/* Faint even rim for badges and chips. */
-@utility matte-chip {
-	box-shadow: inset 0 0 0 1px var(--glass-highlight);
-}
-
-/* Soft top-down sheen over a surface's own fill, e.g. the user message bubble. */
-@utility matte-sheen {
-	background-image: linear-gradient(to bottom, var(--sheen-top), var(--sheen-bottom));
-}
-
-/* Frosted button finish: keeps the button's own fill, adds blur and a faint even rim. */
-@utility matte-key {
-	backdrop-filter: blur(12px) saturate(1.4);
-	box-shadow:
-		inset 0 0 0 1px var(--glass-highlight),
-		var(--key-drop);
-}
-
-/* Lit colored control (record, error send). Set the color with an orb-* utility. */
-@utility matte-orb {
-	background-image: radial-gradient(
-		circle at 50% 35%,
-		color-mix(in oklch, var(--orb), white 18%),
-		var(--orb) 70%
-	);
-	color: var(--orb-ink);
-	box-shadow:
-		inset 0 0 0 1.5px var(--orb-rim),
-		inset 0 1px 1px oklch(1 0 0 / 0.4),
-		inset 0 -2px 3px oklch(0 0 0 / 0.08),
-		0 1px 2px oklch(0 0 0 / 0.18),
-		0 6px 16px -4px color-mix(in oklch, var(--orb) 60%, transparent);
-	transition:
-		box-shadow 150ms ease,
-		filter 150ms ease,
-		translate 150ms ease;
-
-	& svg {
-		filter: drop-shadow(0 1px 0 oklch(1 0 0 / 0.3));
-	}
-
-	&:hover:not(:disabled) {
-		filter: brightness(1.05) saturate(1.05);
-	}
-
-	&:active:not(:disabled) {
-		translate: 0 0.5px;
-	}
-
-	&:disabled {
-		filter: saturate(0.25);
-		box-shadow:
-			inset 0 0 0 1.5px var(--orb-rim),
-			inset 0 1px 1px oklch(1 0 0 / 0.4),
-			0 1px 2px oklch(0 0 0 / 0.12);
-	}
-}
-
-/* Small glowing lamp for status dots. */
-@utility status-lamp {
-	background-image: radial-gradient(
-		circle at 50% 30%,
-		color-mix(in oklch, var(--orb), white 35%),
-		var(--orb) 65%
-	);
-	box-shadow:
-		inset 0 0 0 0.5px var(--orb-ink),
-		0 0 6px color-mix(in oklch, var(--orb) 70%, transparent);
-}
-
-@utility orb-red {
-	--orb: var(--status-red);
-	--orb-rim: var(--status-red-rim);
-	--orb-ink: var(--status-red-ink);
-}
-
-@utility orb-yellow {
-	--orb: var(--status-yellow);
-	--orb-rim: var(--status-yellow-rim);
-	--orb-ink: var(--status-yellow-ink);
-}
-
-@utility orb-green {
-	--orb: var(--status-green);
-	--orb-rim: var(--status-green-rim);
-	--orb-ink: var(--status-green-ink);
-}
-
-/* Letters pressed into a matte surface. */
-@utility engraved {
-	text-shadow: var(--engrave);
 }
 
 .mermaidTooltip {

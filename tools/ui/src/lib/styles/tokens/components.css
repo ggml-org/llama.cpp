@@ -1,0 +1,113 @@
+/*
+ * Tier 3: component tokens. One group per component, pattern
+ * [component]-[variant]-[property]-[state]. They point at semantic tokens only, so
+ * light and dark come for free. Components read them as bg-(--token) and friends.
+ */
+:root {
+	/* chat form: the main glass surface */
+	--chat-form-background: var(--surface-glass);
+	--chat-form-text: var(--fg-default);
+	--chat-form-placeholder: var(--fg-muted);
+	--chat-form-edge-side: var(--edge-rest-side);
+	--chat-form-edge-mid: var(--edge-rest-mid);
+	--chat-form-edge-side-focus: var(--edge-focus-side);
+	--chat-form-edge-mid-focus: var(--edge-focus-mid);
+	--chat-form-highlight: var(--highlight-inner);
+	--chat-form-shadow: var(--elevation-surface);
+	--chat-form-radius: var(--radius-surface);
+	--chat-form-radius-compact: var(--radius-surface-lg);
+
+	/* card: a resting glass panel */
+	--card-background: var(--surface-glass);
+	--card-text: var(--fg-default);
+	--card-edge-side: var(--edge-rest-side);
+	--card-edge-mid: var(--edge-rest-mid);
+	--card-highlight: var(--highlight-inner);
+	--card-shadow: var(--elevation-surface);
+	--card-radius: var(--radius-card);
+
+	/* sidebar: a large ambient glass panel whose edge stays put on focus */
+	--sidebar-background: color-mix(in oklch, var(--surface-muted) 60%, transparent);
+	--sidebar-edge-side: var(--edge-ambient-side);
+	--sidebar-edge-mid: var(--edge-ambient-mid);
+	--sidebar-highlight: transparent;
+	--sidebar-shadow: var(--elevation-surface);
+	--sidebar-radius: var(--radius-container);
+
+	/* user message bubble */
+	--user-bubble-background: color-mix(in oklch, var(--action-primary) 5%, transparent);
+	--user-bubble-edge: var(--edge-faint);
+	--user-bubble-sheen-start: var(--sheen-start);
+	--user-bubble-sheen-end: var(--sheen-end);
+
+	/* floating panels: menus, popovers, select lists, hover cards, drawers, dialogs */
+	--float-panel-background: color-mix(in oklch, var(--surface-raised) 86%, transparent);
+	--float-panel-background-modal: color-mix(in oklch, var(--surface-page) 86%, transparent);
+	--float-panel-text: var(--fg-default);
+	--float-panel-edge: var(--edge-raised);
+	--float-panel-highlight: var(--highlight-inner);
+	--float-panel-shadow: var(--elevation-raised);
+	--float-panel-overlay: var(--surface-overlay);
+
+	/* buttons */
+	--button-primary-background: var(--action-primary);
+	--button-primary-background-hover: var(--action-primary-hover);
+	--button-primary-text: var(--fg-on-action);
+	--button-danger-background: var(--action-danger);
+	--button-danger-background-hover: var(--action-danger-hover);
+	--button-danger-text: var(--fg-on-danger);
+	--button-secondary-background: var(--surface-glass);
+	--button-secondary-background-hover: color-mix(in oklch, var(--surface-muted) 80%, transparent);
+	--button-secondary-border: color-mix(in oklch, var(--line-default) 30%, transparent);
+	--button-ghost-background-hover: var(--action-ghost-hover);
+	--button-outline-border: var(--line-default);
+	--button-text: var(--fg-default);
+	--button-highlight: var(--highlight-inner);
+	--button-shadow: var(--elevation-control);
+
+	/* fields: input, textarea, checkbox, switch track */
+	--input-background: var(--field-background);
+	--input-text: var(--fg-default);
+	--input-placeholder: var(--fg-muted);
+	--input-border: var(--line-field);
+	--input-border-focus: var(--line-focus);
+	--input-border-invalid: var(--line-danger);
+	--input-shadow: var(--elevation-inset);
+
+	/* tooltips: the inverse of the page */
+	--tooltip-background: var(--action-primary);
+	--tooltip-text: var(--fg-on-action);
+	--tooltip-highlight: var(--highlight-inverse);
+	--tooltip-shadow: var(--elevation-tooltip);
+
+	/* badges */
+	--badge-primary-background: var(--action-primary);
+	--badge-primary-background-hover: var(--action-primary-hover);
+	--badge-primary-text: var(--fg-on-action);
+	--badge-secondary-background: color-mix(in oklch, var(--fg-default) 15%, transparent);
+	--badge-secondary-background-hover: color-mix(in oklch, var(--fg-default) 25%, transparent);
+	--badge-danger-background: var(--fg-danger);
+	--badge-danger-background-hover: color-mix(in oklch, var(--fg-danger) 90%, transparent);
+	--badge-danger-text: var(--fg-on-danger);
+	--badge-outline-border: var(--line-default);
+	--badge-outline-background-hover: var(--surface-selected);
+	--badge-text: var(--fg-default);
+	--badge-highlight: var(--highlight-inner);
+
+	/* status lamps and orbs read the status tokens through orb-danger and friends */
+}
+
+.dark {
+	--button-secondary-background-hover: var(--surface-muted);
+	--button-secondary-border: color-mix(in oklch, var(--line-default) 20%, transparent);
+	--button-outline-border: var(--line-field);
+	--badge-secondary-background: color-mix(in oklch, var(--fg-default) 10%, transparent);
+	--badge-danger-background: color-mix(in oklch, var(--fg-danger) 70%, transparent);
+	--badge-danger-background-hover: var(--badge-danger-background);
+}
+
+/* the user bubble is a card with an even, fainter edge */
+.chat-message-user-bubble {
+	--card-edge-side: var(--user-bubble-edge);
+	--card-edge-mid: var(--user-bubble-edge);
+}

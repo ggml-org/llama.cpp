@@ -90,7 +90,7 @@
 			disabled={isCompactDisabled}
 			onclick={handleCompact}
 			size="sm"
-			variant="tertiary"
+			variant="secondary"
 		>
 			{#if isCompacting}
 				<Loader2 class="h-3.5 w-3.5 animate-spin" />

@@ -61,7 +61,7 @@
 	{#if isDownload}
 		<!-- an in-flight download cannot load or chat: it pauses, resumes, cancels -->
 		<div class="flex gap-3">
-			<Button class="flex-1 gap-1.5" onclick={onToggleDownload} {size} variant="secondary">
+			<Button class="flex-1 gap-1.5" onclick={onToggleDownload} {size} variant="outline">
 				{#if isDownloadPaused}
 					<Play class="h-3.5 w-3.5" />
 
@@ -73,7 +73,7 @@
 				{/if}
 			</Button>
 
-			<Button class="flex-1 gap-1.5" onclick={onRequestCancelDownload} {size} variant="secondary">
+			<Button class="flex-1 gap-1.5" onclick={onRequestCancelDownload} {size} variant="outline">
 				<Trash2 class="h-3.5 w-3.5" />
 
 				Cancel download
@@ -81,7 +81,7 @@
 		</div>
 
 		{#if onSeeInDiscover && discoverEnabled}
-			<Button class="gap-1.5" onclick={onSeeInDiscover} {size} variant="tertiary">
+			<Button class="gap-1.5" onclick={onSeeInDiscover} {size} variant="secondary">
 				<Compass class="h-3.5 w-3.5" />
 
 				See in Discover
@@ -118,7 +118,7 @@
 					disabled={isLoading}
 					onclick={onToggleLoad}
 					{size}
-					variant="secondary"
+					variant="outline"
 				>
 					{#if isLoading}
 						<Loader2 class="h-3.5 w-3.5 animate-spin" />
@@ -137,7 +137,7 @@
 			{/if}
 
 			{#if onSeeInDiscover && discoverEnabled}
-				<Button class="flex-1 gap-1.5" onclick={onSeeInDiscover} {size} variant="tertiary">
+				<Button class="flex-1 gap-1.5" onclick={onSeeInDiscover} {size} variant="secondary">
 					<Compass class="h-3.5 w-3.5" />
 
 					See in Discover

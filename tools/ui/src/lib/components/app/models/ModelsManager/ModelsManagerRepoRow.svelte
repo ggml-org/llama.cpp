@@ -80,7 +80,7 @@
 	<span class="justify-self-center max-md:hidden">
 		<span
 			class="block h-2.5 w-2.5 rounded-full {anyLoaded
-				? 'status-lamp orb-green'
+				? 'status-lamp orb-success'
 				: 'border border-muted-foreground/50'}"
 		></span>
 	</span>

@@ -560,15 +560,14 @@
 					: deviceStore.isIOSDevice
 						? 'h-[calc(100dvh-0.5rem)]'
 						: 'h-[calc(100dvh-1rem)]'),
-			'rounded-3xl md:rounded-2xl',
+			'rounded-3xl md:rounded-(--sidebar-radius)',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] duration-200 ease-out',
 			(uiStore.isSidebarResizing || isSnapping) && 'md:duration-0',
 			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
 			isDocked && !uiStore.isSidebarExpanded ? 'md:w-12' : 'md:w-(--sidebar-width)',
-			// ambient edge that stays the same while focus is inside, unlike the chat form
 			(uiStore.isSidebarExpanded || (isFloating && isPeeking)) &&
-				'md:matte-glass max-md:shadow-md [--glass-fill:color-mix(in_oklch,var(--muted)_60%,transparent)] [--glass-highlight:transparent] [--glass-edge-side:var(--ambient-edge-side)] [--glass-edge-mid:var(--ambient-edge-mid)] [--glass-edge-side-focus:var(--ambient-edge-side)] [--glass-edge-mid-focus:var(--ambient-edge-mid)]',
+				'md:sidebar-surface max-md:shadow-md',
 			isFloating && 'md:-mr-[calc(var(--sidebar-width)-3rem)]',
 			isStripHidden && 'md:pointer-events-none',
 			uiStore.isSidebarExpanded && 'is-expanded'

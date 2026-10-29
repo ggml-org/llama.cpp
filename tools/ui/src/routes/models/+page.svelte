@@ -38,7 +38,7 @@
 				class="ml-auto shrink-0 gap-1.5"
 				onclick={() => uiStore.openModelsDiscover()}
 				size="sm"
-				variant="tertiary"
+				variant="secondary"
 			>
 				<DISCOVER_ICON class="h-3.5 w-3.5" />
 

@@ -1,0 +1,95 @@
+/*
+ * Tier 1: primitives. Raw values named by what they are, never by where they are used.
+ * Only semantic tokens (semantic.css) reference these; components never do.
+ */
+:root {
+	/* neutral greys: Tailwind's neutral scale plus three in-between steps */
+	--neutral-0: oklch(1 0 0);
+	--neutral-50: oklch(0.985 0 0);
+	--neutral-100: oklch(0.97 0 0);
+	--neutral-150: oklch(0.95 0 0);
+	--neutral-200: oklch(0.922 0 0);
+	--neutral-300: oklch(0.87 0 0);
+	--neutral-400: oklch(0.708 0 0);
+	--neutral-500: oklch(0.556 0 0);
+	--neutral-600: oklch(0.439 0 0);
+	--neutral-700: oklch(0.371 0 0);
+	--neutral-750: oklch(0.29 0 0);
+	--neutral-800: oklch(0.269 0 0);
+	--neutral-900: oklch(0.205 0 0);
+	--neutral-925: oklch(0.16 0 0);
+	--neutral-950: oklch(0.145 0 0);
+
+	/* cool greys (hue 250) for hairline edges */
+	--cool-gray-50: oklch(0.958 0.002 250);
+	--cool-gray-100: oklch(0.938 0.004 250);
+	--cool-gray-200: oklch(0.91 0.005 250);
+	--cool-gray-300: oklch(0.86 0.007 250);
+	--cool-gray-400: oklch(0.81 0.01 250);
+
+	/* red, yellow and green: each scale keeps the hue of its root (red-500, yellow-400, green-500) */
+	--red-400: oklch(0.69 0.2 27);
+	--red-500: oklch(0.6 0.235 27);
+	--red-600: oklch(0.55 0.22 27);
+	--red-800: oklch(0.43 0.17 27);
+
+	--yellow-300: oklch(0.9 0.14 84);
+	--yellow-400: oklch(0.85 0.17 84);
+	--yellow-800: oklch(0.5 0.1 84);
+
+	--green-400: oklch(0.81 0.16 148);
+	--green-500: oklch(0.73 0.2 148);
+	--green-800: oklch(0.45 0.14 148);
+
+	/* translucent white and black, named by opacity in percent */
+	--white-a2: oklch(1 0 0 / 0.02);
+	--white-a4: oklch(1 0 0 / 0.04);
+	--white-a6: oklch(1 0 0 / 0.06);
+	--white-a9: oklch(1 0 0 / 0.09);
+	--white-a12: oklch(1 0 0 / 0.12);
+	--white-a18: oklch(1 0 0 / 0.18);
+	--white-a20: oklch(1 0 0 / 0.2);
+	--white-a30: oklch(1 0 0 / 0.3);
+	--white-a40: oklch(1 0 0 / 0.4);
+	--white-a50: oklch(1 0 0 / 0.5);
+	--white-a85: oklch(1 0 0 / 0.85);
+	--black-a6: oklch(0 0 0 / 0.06);
+	--black-a8: oklch(0 0 0 / 0.08);
+	--black-a10: oklch(0 0 0 / 0.1);
+	--black-a12: oklch(0 0 0 / 0.12);
+	--black-a18: oklch(0 0 0 / 0.18);
+	--black-a25: oklch(0 0 0 / 0.25);
+	--black-a30: oklch(0 0 0 / 0.3);
+	--black-a35: oklch(0 0 0 / 0.35);
+	--black-a40: oklch(0 0 0 / 0.4);
+	--black-a55: oklch(0 0 0 / 0.55);
+	--black-a60: oklch(0 0 0 / 0.6);
+
+	/* type: sizes and line heights in px, weights by number */
+	--font-size-12: 0.75rem;
+	--font-size-14: 0.875rem;
+	--font-size-16: 1rem;
+	--font-size-18: 1.125rem;
+	--font-size-24: 1.5rem;
+	--line-height-16: 1rem;
+	--line-height-20: 1.25rem;
+	--line-height-24: 1.5rem;
+	--line-height-28: 1.75rem;
+	--line-height-32: 2rem;
+	--font-weight-400: 400;
+	--font-weight-500: 500;
+	--font-weight-600: 600;
+
+	/* lengths in px, for sizes, radii and blur */
+	--length-6: 0.375rem;
+	--length-8: 0.5rem;
+	--length-10: 0.625rem;
+	--length-12: 0.75rem;
+	--length-14: 0.875rem;
+	--length-16: 1rem;
+	--length-20: 1.25rem;
+	--length-24: 1.5rem;
+	--length-32: 2rem;
+	--length-36: 2.25rem;
+	--length-40: 2.5rem;
+}

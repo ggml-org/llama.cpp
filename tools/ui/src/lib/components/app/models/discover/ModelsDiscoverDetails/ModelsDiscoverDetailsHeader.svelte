@@ -80,7 +80,7 @@
 			rel="noopener noreferrer"
 			size="sm"
 			target="_blank"
-			variant="tertiary"
+			variant="secondary"
 		>
 			<img alt="" class="h-3.5 w-3.5" src="{base}/recommended-mcp/huggingface.ico" />
 

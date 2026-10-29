@@ -27,7 +27,7 @@
 	<DialogPrimitive.Content
 		bind:ref
 		class={cn(
-			`fixed top-[50%] left-[50%] z-50 grid translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border matte-float [--float-base:var(--background)] p-6 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:fill-mode-forwards data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`,
+			`fixed top-[50%] left-[50%] z-50 grid translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border matte-float-modal p-6 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:fill-mode-forwards data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`,
 			'max-h-[100dvh] max-w-full size-auto sm:max-w-lg md:w-auto md:size-auto md:max-w-[calc(100%-2rem)]',
 			className
 		)}
