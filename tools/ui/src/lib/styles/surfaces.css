@@ -1,0 +1,198 @@
+/*
+ * Matte finishes. Each reads its colours from slot variables (--glass-*, --float-*)
+ * that default to semantic tokens; the *-surface utilities below point the slots at
+ * one component's tokens, so markup needs a single class per component.
+ */
+
+/* Frosted panel: flat fill, faint inner rim, hairline border shaded darker at the sides. */
+@utility matte-glass {
+	--edge-side: var(--glass-edge-side, var(--edge-rest-side));
+	--edge-mid: var(--glass-edge-mid, var(--edge-rest-mid));
+	background-color: var(--glass-background, var(--surface-glass));
+	backdrop-filter: blur(var(--blur-surface)) saturate(1.5);
+	box-shadow:
+		inset 0 0 0 2px var(--glass-highlight, var(--highlight-inner)),
+		var(--glass-shadow, var(--elevation-surface));
+
+	/* the ring below needs a positioned box; keep fixed or sticky ones as they are */
+	&:not(.fixed, .absolute, .sticky) {
+		position: relative;
+	}
+
+	/* masked ring, so the edge gradient does not tint the translucent fill */
+	&::before {
+		content: '';
+		position: absolute;
+		inset: 0;
+		padding: 1px;
+		border-radius: inherit;
+		pointer-events: none;
+		background: linear-gradient(
+			to right,
+			var(--edge-side),
+			var(--edge-mid) 12%,
+			var(--edge-mid) 88%,
+			var(--edge-side)
+		);
+		mask:
+			linear-gradient(#000 0 0) content-box exclude,
+			linear-gradient(#000 0 0);
+	}
+
+	&:focus-within {
+		--edge-side: var(--glass-edge-side-focus, var(--edge-focus-side));
+		--edge-mid: var(--glass-edge-mid-focus, var(--edge-focus-mid));
+	}
+}
+
+@utility chat-form-surface {
+	@apply matte-glass;
+	--glass-background: var(--chat-form-background);
+	--glass-edge-side: var(--chat-form-edge-side);
+	--glass-edge-mid: var(--chat-form-edge-mid);
+	--glass-edge-side-focus: var(--chat-form-edge-side-focus);
+	--glass-edge-mid-focus: var(--chat-form-edge-mid-focus);
+	--glass-highlight: var(--chat-form-highlight);
+	--glass-shadow: var(--chat-form-shadow);
+	color: var(--chat-form-text);
+}
+
+@utility card-surface {
+	@apply matte-glass;
+	--glass-background: var(--card-background);
+	--glass-edge-side: var(--card-edge-side);
+	--glass-edge-mid: var(--card-edge-mid);
+	--glass-highlight: var(--card-highlight);
+	--glass-shadow: var(--card-shadow);
+	color: var(--card-text);
+}
+
+/* the sidebar edge stays the same while focus is inside, unlike the chat form */
+@utility sidebar-surface {
+	@apply matte-glass;
+	--glass-background: var(--sidebar-background);
+	--glass-edge-side: var(--sidebar-edge-side);
+	--glass-edge-mid: var(--sidebar-edge-mid);
+	--glass-edge-side-focus: var(--sidebar-edge-side);
+	--glass-edge-mid-focus: var(--sidebar-edge-mid);
+	--glass-highlight: var(--sidebar-highlight);
+	--glass-shadow: var(--sidebar-shadow);
+}
+
+/* Floating panel (menus, popovers, drawers): frosted fill, faint rim, lifted shadow. */
+@utility matte-float {
+	background-color: var(--float-background, var(--float-panel-background));
+	border-color: var(--float-panel-edge);
+	color: var(--float-panel-text);
+	backdrop-filter: blur(var(--blur-surface)) saturate(1.5);
+	box-shadow:
+		inset 0 0 0 1px var(--float-panel-highlight),
+		var(--float-panel-shadow);
+}
+
+/* Dialogs float over the page colour rather than the raised one. */
+@utility matte-float-modal {
+	@apply matte-float;
+	--float-background: var(--float-panel-background-modal);
+}
+
+/* Recessed field (inputs, switch track, checkbox): soft inner shade, keeps Tailwind focus rings. */
+@utility matte-well {
+	--tw-inset-shadow: var(--input-shadow);
+	box-shadow:
+		var(--tw-inset-shadow), var(--tw-ring-offset-shadow, 0 0 #0000),
+		var(--tw-ring-shadow, 0 0 #0000);
+}
+
+/* Faint even rim for badges and chips. */
+@utility matte-chip {
+	box-shadow: inset 0 0 0 1px var(--badge-highlight);
+}
+
+/* Soft top-down sheen over a surface's own fill, e.g. the user message bubble. */
+@utility matte-sheen {
+	background-image: linear-gradient(to bottom, var(--sheen-start), var(--sheen-end));
+}
+
+/* Frosted button finish: keeps the button's own fill, adds blur and a faint even rim. */
+@utility matte-key {
+	backdrop-filter: blur(var(--blur-control)) saturate(1.4);
+	box-shadow:
+		inset 0 0 0 1px var(--button-highlight),
+		var(--button-shadow);
+}
+
+/* Lit colored control (record, error send). Set the color with orb-danger, orb-warning or orb-success. */
+@utility matte-orb {
+	background-image: radial-gradient(
+		circle at 50% 35%,
+		color-mix(in oklch, var(--orb), white 18%),
+		var(--orb) 70%
+	);
+	color: var(--orb-glyph);
+	box-shadow:
+		inset 0 0 0 1.5px var(--orb-rim),
+		inset 0 1px 1px var(--white-a40),
+		inset 0 -2px 3px var(--black-a8),
+		0 1px 2px var(--black-a18),
+		0 6px 16px -4px color-mix(in oklch, var(--orb) 60%, transparent);
+	transition:
+		box-shadow 150ms ease,
+		filter 150ms ease,
+		translate 150ms ease;
+
+	& svg {
+		filter: drop-shadow(0 1px 0 var(--white-a30));
+	}
+
+	&:hover:not(:disabled) {
+		filter: brightness(1.05) saturate(1.05);
+	}
+
+	&:active:not(:disabled) {
+		translate: 0 0.5px;
+	}
+
+	&:disabled {
+		filter: saturate(0.25);
+		box-shadow:
+			inset 0 0 0 1.5px var(--orb-rim),
+			inset 0 1px 1px var(--white-a40),
+			0 1px 2px var(--black-a12);
+	}
+}
+
+/* Small glowing lamp for status dots. */
+@utility status-lamp {
+	background-image: radial-gradient(
+		circle at 50% 30%,
+		color-mix(in oklch, var(--orb), white 35%),
+		var(--orb) 65%
+	);
+	box-shadow:
+		inset 0 0 0 0.5px var(--orb-glyph),
+		0 0 6px color-mix(in oklch, var(--orb) 70%, transparent);
+}
+
+@utility orb-danger {
+	--orb: var(--status-danger);
+	--orb-rim: var(--status-danger-rim);
+	--orb-glyph: var(--status-danger-glyph);
+}
+
+@utility orb-warning {
+	--orb: var(--status-warning);
+	--orb-rim: var(--status-warning-rim);
+	--orb-glyph: var(--status-warning-glyph);
+}
+
+@utility orb-success {
+	--orb: var(--status-success);
+	--orb-rim: var(--status-success-rim);
+	--orb-glyph: var(--status-success-glyph);
+}
+
+/* Letters pressed into a matte surface. */
+@utility engraved {
+	text-shadow: var(--text-shadow-engraved);
+}

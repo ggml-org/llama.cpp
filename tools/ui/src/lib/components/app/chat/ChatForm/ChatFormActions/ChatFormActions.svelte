@@ -181,7 +181,7 @@
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
 			title="Skip reasoning"
 			type="button"
-			variant="secondary"
+			variant="ghost"
 		>
 			<span class="sr-only">Skip reasoning</span>
 
@@ -196,7 +196,7 @@
 			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9 hover:bg-destructive/10!"
 			onclick={onStop}
 			type="button"
-			variant="secondary"
+			variant="ghost"
 		>
 			<span class="sr-only">Stop</span>
 

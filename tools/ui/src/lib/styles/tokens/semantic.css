@@ -1,0 +1,191 @@
+/*
+ * Tier 2: semantic tokens. Named by purpose, they point at primitives and are the
+ * only tier that changes between light and dark. Pattern: [category]-[role]-[state].
+ */
+:root {
+	/* surfaces: what a region of the page sits on */
+	--surface-page: var(--neutral-0);
+	--surface-muted: var(--neutral-100);
+	--surface-emphasis: var(--neutral-150);
+	--surface-selected: var(--neutral-150);
+	--surface-raised: var(--neutral-0);
+	--surface-glass: color-mix(in oklch, var(--neutral-100) 60%, transparent);
+	--surface-code: var(--neutral-50);
+	--surface-overlay: var(--black-a40);
+
+	/* foreground: text and icons */
+	--fg-default: var(--neutral-950);
+	--fg-muted: var(--neutral-500);
+	--fg-on-action: var(--neutral-50);
+	--fg-on-danger: var(--neutral-0);
+	--fg-code: var(--neutral-950);
+	--fg-danger: var(--red-600);
+
+	/* lines: borders, dividers and focus */
+	--line-default: var(--neutral-300);
+	--line-field: var(--neutral-200);
+	--line-focus: var(--neutral-400);
+	--line-danger: var(--red-600);
+
+	/* edges: hairlines of matte surfaces, darker at the sides than in the middle */
+	--edge-rest-side: var(--cool-gray-200);
+	--edge-rest-mid: var(--cool-gray-100);
+	--edge-focus-side: var(--cool-gray-400);
+	--edge-focus-mid: var(--cool-gray-300);
+	--edge-ambient-side: var(--cool-gray-100);
+	--edge-ambient-mid: var(--cool-gray-50);
+	--edge-faint: var(--cool-gray-100);
+	--edge-raised: var(--cool-gray-200);
+
+	/* actions: fills of interactive controls */
+	--action-primary: var(--neutral-900);
+	--action-primary-hover: color-mix(in oklch, var(--neutral-900) 90%, transparent);
+	--action-danger: var(--red-600);
+	--action-danger-hover: color-mix(in oklch, var(--red-600) 90%, transparent);
+	--action-ghost-hover: color-mix(in oklch, var(--neutral-500) 10%, transparent);
+
+	/* fields: editable controls */
+	--field-background: var(--surface-page);
+	--field-shade: var(--black-a6);
+
+	/* status lamps: fill, lighter rim, darker glyph; the same in both modes */
+	--status-danger: var(--red-500);
+	--status-danger-rim: var(--red-400);
+	--status-danger-glyph: var(--red-800);
+	--status-warning: var(--yellow-400);
+	--status-warning-rim: var(--yellow-300);
+	--status-warning-glyph: var(--yellow-800);
+	--status-success: var(--green-500);
+	--status-success-rim: var(--green-400);
+	--status-success-glyph: var(--green-800);
+
+	/* light effects */
+	--highlight-inner: var(--white-a50);
+	--highlight-inverse: var(--white-a12);
+	--sheen-start: var(--white-a20);
+	--sheen-end: transparent;
+	--text-shadow-engraved: 0 1px 0 var(--white-a85);
+
+	/* elevation */
+	--elevation-surface:
+		0 1px 3px var(--black-a8), 0 1px 2px -1px var(--black-a6), 0 6px 16px -10px var(--black-a8);
+	--elevation-control: 0 1px 3px var(--black-a10), 0 1px 2px -1px var(--black-a10);
+	--elevation-raised: 0 1px 3px var(--black-a6), 0 12px 32px -12px var(--black-a18);
+	--elevation-inset: inset 0 1px 2px var(--field-shade);
+	--elevation-tooltip: 0 4px 12px -4px var(--black-a30);
+	--blur-surface: var(--length-24);
+	--blur-control: var(--length-12);
+}
+
+.dark {
+	--surface-page: var(--neutral-925);
+	--surface-muted: var(--neutral-800);
+	--surface-emphasis: var(--neutral-750);
+	--surface-selected: var(--neutral-800);
+	--surface-raised: var(--neutral-900);
+	--surface-glass: color-mix(in oklch, var(--neutral-800) 75%, transparent);
+	--surface-code: var(--neutral-900);
+
+	--fg-default: var(--neutral-50);
+	--fg-muted: var(--neutral-400);
+	--fg-on-action: var(--neutral-900);
+	--fg-code: var(--neutral-300);
+	--fg-danger: var(--red-400);
+
+	--line-default: var(--white-a30);
+	--line-field: var(--white-a30);
+	--line-focus: var(--neutral-500);
+	--line-danger: var(--red-400);
+
+	--edge-rest-side: var(--white-a6);
+	--edge-rest-mid: var(--white-a4);
+	--edge-focus-side: var(--white-a18);
+	--edge-focus-mid: var(--white-a12);
+	--edge-ambient-side: var(--white-a4);
+	--edge-ambient-mid: var(--white-a2);
+	--edge-faint: var(--white-a4);
+	--edge-raised: var(--white-a9);
+
+	--action-primary: var(--neutral-200);
+	--action-primary-hover: color-mix(in oklch, var(--neutral-200) 90%, transparent);
+	--action-danger: color-mix(in oklch, var(--red-400) 60%, transparent);
+	/* the dark fill already wins over hover, so hover keeps it */
+	--action-danger-hover: var(--action-danger);
+	--action-ghost-hover: color-mix(in oklch, var(--neutral-400) 10%, transparent);
+
+	--field-background: var(--white-a9);
+	--field-shade: var(--black-a30);
+
+	--highlight-inner: var(--white-a4);
+	--sheen-start: var(--white-a2);
+	--text-shadow-engraved: 0 -1px 0 var(--black-a55);
+
+	--elevation-surface:
+		0 1px 3px var(--black-a30), 0 1px 2px -1px var(--black-a25), 0 6px 16px -10px var(--black-a35);
+	--elevation-control: 0 1px 2px var(--black-a30);
+	--elevation-raised: 0 1px 3px var(--black-a40), 0 16px 40px -12px var(--black-a60);
+}
+
+/* roles that do not change with the theme, exposed as Tailwind utilities */
+@theme inline {
+	/* type roles: text-body, text-label-sm, ... set size, line height and weight */
+	--text-body: var(--font-size-16);
+	--text-body--line-height: var(--line-height-24);
+	--text-body--font-weight: var(--font-weight-400);
+	--text-body-sm: var(--font-size-14);
+	--text-body-sm--line-height: var(--line-height-20);
+	--text-body-sm--font-weight: var(--font-weight-400);
+	--text-label: var(--font-size-14);
+	--text-label--line-height: var(--line-height-20);
+	--text-label--font-weight: var(--font-weight-500);
+	--text-label-sm: var(--font-size-12);
+	--text-label-sm--line-height: var(--line-height-16);
+	--text-label-sm--font-weight: var(--font-weight-500);
+	--text-caption: var(--font-size-12);
+	--text-caption--line-height: var(--line-height-16);
+	--text-caption--font-weight: var(--font-weight-400);
+	--text-title: var(--font-size-18);
+	--text-title--line-height: var(--line-height-28);
+	--text-title--font-weight: var(--font-weight-600);
+	--text-heading: var(--font-size-24);
+	--text-heading--line-height: var(--line-height-32);
+	--text-heading--font-weight: var(--font-weight-600);
+
+	/* icon sizes: size-icon-xs ... size-icon-lg */
+	--size-icon-xs: var(--length-12);
+	--size-icon-sm: var(--length-14);
+	--size-icon-md: var(--length-16);
+	--size-icon-lg: var(--length-20);
+
+	/* control heights and corner roles */
+	--height-control-sm: var(--length-32);
+	--height-control-md: var(--length-36);
+	--height-control-lg: var(--length-40);
+	--radius-control: var(--length-8);
+	--radius-panel: var(--length-10);
+	--radius-card: var(--length-14);
+	--radius-container: var(--length-16);
+	--radius-surface: var(--length-24);
+	--radius-surface-lg: var(--length-32);
+
+	/* colours: bg-surface-*, text-fg-*, border-line-* and border-edge-* */
+	--background-color-surface-page: var(--surface-page);
+	--background-color-surface-muted: var(--surface-muted);
+	--background-color-surface-emphasis: var(--surface-emphasis);
+	--background-color-surface-selected: var(--surface-selected);
+	--background-color-surface-raised: var(--surface-raised);
+	--background-color-surface-glass: var(--surface-glass);
+	--background-color-surface-code: var(--surface-code);
+	--background-color-surface-overlay: var(--surface-overlay);
+	--text-color-fg-default: var(--fg-default);
+	--text-color-fg-muted: var(--fg-muted);
+	--text-color-fg-on-action: var(--fg-on-action);
+	--text-color-fg-danger: var(--fg-danger);
+	--border-color-line-default: var(--line-default);
+	--border-color-line-field: var(--line-field);
+	--border-color-line-focus: var(--line-focus);
+	--border-color-line-danger: var(--line-danger);
+	--color-status-danger: var(--status-danger);
+	--color-status-warning: var(--status-warning);
+	--color-status-success: var(--status-success);
+}

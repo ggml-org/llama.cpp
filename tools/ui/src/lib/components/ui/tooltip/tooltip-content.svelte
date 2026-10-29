@@ -18,7 +18,7 @@
 
 	const contentClass = $derived(
 		cn(
-			'z-50 w-fit origin-(--bits-tooltip-content-transform-origin) animate-in rounded-md bg-primary px-3 py-1.5 shadow-[inset_0_0_0_1px_oklch(1_0_0/0.12),0_4px_12px_-4px_oklch(0_0_0/0.3)] text-xs text-balance text-primary-foreground fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:fill-mode-forwards',
+			'z-50 w-fit origin-(--bits-tooltip-content-transform-origin) animate-in rounded-md bg-(--tooltip-background) px-3 py-1.5 shadow-[inset_0_0_0_1px_var(--tooltip-highlight),var(--tooltip-shadow)] text-caption text-balance text-(--tooltip-text) fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:fill-mode-forwards',
 			className
 		)
 	);

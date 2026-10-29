@@ -12,7 +12,7 @@
 
 <div
 	bind:this={ref}
-	class={cn('matte-glass flex flex-col gap-6 rounded-xl py-6 text-card-foreground', className)}
+	class={cn('card-surface flex flex-col gap-6 rounded-(--card-radius) py-6', className)}
 	data-slot="card"
 	{...restProps}
 >
