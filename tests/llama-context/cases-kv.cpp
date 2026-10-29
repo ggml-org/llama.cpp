@@ -782,7 +782,8 @@ struct case_comp_padding : ctx_test {
             ctx_opts opts;
             opts.n_ctx      = 256*n_seq;
             opts.n_batch    = 64;
-            opts.n_ubatch   = 64;
+            // Reserve the DSV4.1 small-batch attention graph when n_seq == 1.
+            opts.n_ubatch   = 32;
             opts.n_seq_max  = n_seq;
             opts.kv_unified = n_seq == 1;
 
