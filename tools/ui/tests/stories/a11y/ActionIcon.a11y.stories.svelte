@@ -10,7 +10,7 @@
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Chat/ActionIcon/Accessibility'
+		title: 'Design system/ActionIcon/Accessibility'
 	});
 </script>
 

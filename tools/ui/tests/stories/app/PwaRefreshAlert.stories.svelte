@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Chat/PwaRefreshAlert'
+		title: 'App/PwaRefreshAlert'
 	});
 </script>
 
