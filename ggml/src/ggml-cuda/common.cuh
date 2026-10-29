@@ -1442,6 +1442,8 @@ struct ggml_cuda_stream_context {
     }
 };
 
+struct ggml_cuda_sampling_context;
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1547,6 +1549,7 @@ struct ggml_backend_cuda_context {
 
     // pool
     std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
+    std::shared_ptr<ggml_cuda_sampling_context> sampling;
 
     static std::unique_ptr<ggml_cuda_pool> new_pool_for_device(ggml_backend_cuda_context & ctx, int device, int stream_no);
 

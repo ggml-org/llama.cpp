@@ -9,6 +9,7 @@
 #include "ggml-cuda/arange.cuh"
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/argsort.cuh"
+#include "ggml-cuda/sampling.cuh"
 #include "ggml-cuda/binbcast.cuh"
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/col2im-1d.cuh"
@@ -6282,8 +6283,25 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+static bool ggml_backend_cuda_sample(ggml_backend_t backend, const ggml_tensor * logits,
+        const ggml_tensor * draft_probs, const ggml_sample_params * params, ggml_sample_result * result) {
+    if (!ggml_backend_is_cuda(backend) || !logits || !logits->buffer) {
+        return false;
+    }
+    const auto device = ggml_backend_get_device(backend);
+    for (const auto * tensor : {logits, draft_probs}) {
+        if (tensor && (!tensor->buffer || ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer)) != device)) {
+            return false;
+        }
+    }
+    return ggml_cuda_sample(*(ggml_backend_cuda_context *) backend->context, logits, draft_probs, params, result);
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
+    if (strcmp(name, "ggml_backend_sample") == 0) {
+        return (void *) ggml_backend_cuda_sample;
+    }
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
     }
