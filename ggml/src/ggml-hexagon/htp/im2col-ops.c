@@ -413,6 +413,37 @@ static void im2col_patchembed_compute_f16(
     const uint32_t KH = ictx->KH, KW = ictx->KW;
     const uint32_t OW = ictx->OW, patch_stride = ictx->patch_stride;
 
+    if (KW == 16 && (KH % 4 == 0)) {
+        const HVX_VectorPred q_lo = Q6_Q_vsetq_R(64);
+        for (uint32_t iow = 0; iow < OW; iow++) {
+            uint16_t * dst_patch = dstb + (size_t) iow * patch_stride;
+            for (uint32_t iic = 0; iic < IC; iic++) {
+                for (uint32_t ikh = 0; ikh < KH; ikh += 4) {
+                    const int32_t iih0 = (int32_t) ioh * (int32_t) KH + (int32_t) (ikh + 0);
+                    const int32_t iih1 = (int32_t) ioh * (int32_t) KH + (int32_t) (ikh + 1);
+                    const int32_t iih2 = (int32_t) ioh * (int32_t) KH + (int32_t) (ikh + 2);
+                    const int32_t iih3 = (int32_t) ioh * (int32_t) KH + (int32_t) (ikh + 3);
+
+                    const float * s0 = srcb + (size_t) (iic * KH + ikh + 0) * IW + (size_t) iow * 16;
+                    const float * s1 = srcb + (size_t) (iic * KH + ikh + 1) * IW + (size_t) iow * 16;
+                    const float * s2 = srcb + (size_t) (iic * KH + ikh + 2) * IW + (size_t) iow * 16;
+                    const float * s3 = srcb + (size_t) (iic * KH + ikh + 3) * IW + (size_t) iow * 16;
+
+                    const HVX_Vector v0 = (iih0 >= 0 && iih0 < (int32_t) IH) ? *((const HVX_UVector *) s0) : Q6_V_vzero();
+                    const HVX_Vector v1 = (iih1 >= 0 && iih1 < (int32_t) IH) ? *((const HVX_UVector *) s1) : Q6_V_vzero();
+                    const HVX_Vector v2 = (iih2 >= 0 && iih2 < (int32_t) IH) ? *((const HVX_UVector *) s2) : Q6_V_vzero();
+                    const HVX_Vector v3 = (iih3 >= 0 && iih3 < (int32_t) IH) ? *((const HVX_UVector *) s3) : Q6_V_vzero();
+
+                    const HVX_Vector w01 = Q6_V_vmux_QVV(q_lo, v0, Q6_V_vror_VR(v1, 64));
+                    const HVX_Vector w23 = Q6_V_vmux_QVV(q_lo, v2, Q6_V_vror_VR(v3, 64));
+
+                    *((HVX_Vector *) (dst_patch + (size_t) (iic * KH + ikh) * 16)) = hvx_vec_f32_to_f16(w01, w23);
+                }
+            }
+        }
+        return;
+    }
+
     for (uint32_t iow = 0; iow < OW; iow++) {
         uint16_t * dst_patch = dstb + (size_t) iow * patch_stride;
         for (uint32_t ikh = 0; ikh < KH; ikh++) {
@@ -437,6 +468,30 @@ static void im2col_patchembed_compute_f32(
     const uint32_t IC = ictx->IC, IH = ictx->IH, IW = ictx->IW;
     const uint32_t KH = ictx->KH, KW = ictx->KW;
     const uint32_t OW = ictx->OW, patch_stride = ictx->patch_stride;
+
+    if (KW == 16 && (KH % 2 == 0)) {
+        const HVX_VectorPred q_lo = Q6_Q_vsetq_R(64);
+        for (uint32_t iow = 0; iow < OW; iow++) {
+            float * dst_patch = dstb + (size_t) iow * patch_stride;
+            for (uint32_t iic = 0; iic < IC; iic++) {
+                for (uint32_t ikh = 0; ikh < KH; ikh += 2) {
+                    const int32_t iih0 = (int32_t) ioh * (int32_t) KH + (int32_t) (ikh + 0);
+                    const int32_t iih1 = (int32_t) ioh * (int32_t) KH + (int32_t) (ikh + 1);
+
+                    const float * s0 = srcb + (size_t) (iic * KH + ikh + 0) * IW + (size_t) iow * 16;
+                    const float * s1 = srcb + (size_t) (iic * KH + ikh + 1) * IW + (size_t) iow * 16;
+
+                    const HVX_Vector v0 = (iih0 >= 0 && iih0 < (int32_t) IH) ? *((const HVX_UVector *) s0) : Q6_V_vzero();
+                    const HVX_Vector v1 = (iih1 >= 0 && iih1 < (int32_t) IH) ? *((const HVX_UVector *) s1) : Q6_V_vzero();
+
+                    const HVX_Vector w01 = Q6_V_vmux_QVV(q_lo, v0, Q6_V_vror_VR(v1, 64));
+
+                    *((HVX_Vector *) (dst_patch + (size_t) (iic * KH + ikh) * 16)) = w01;
+                }
+            }
+        }
+        return;
+    }
 
     for (uint32_t iow = 0; iow < OW; iow++) {
         float * dst_patch = dstb + (size_t) iow * patch_stride;
