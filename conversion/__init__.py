@@ -176,6 +176,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Lfm3ForCausalLM": "lfm3",
     "Lfm3OmniForConditionalGeneration": "lfm3",
     "Lfm3VlForConditionalGeneration": "lfm3",
+    "LimiteForCausalLM": "limite",
     "Llama4ForCausalLM": "llama",
     "Llama4ForConditionalGeneration": "llama",
     "LlamaBidirectionalModel": "llama",
