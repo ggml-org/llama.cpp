@@ -1663,7 +1663,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
 
         res->add_input(std::move(inp));
 
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target);
         inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
         cb(inp_g, "main_x", -1);
 
@@ -1760,7 +1760,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
 
             // apply wv_b after attn, so the K rotation is already undone
             ggml_tensor * out = build_attn(inp_attn,
-                    nullptr, nullptr, nullptr,
+                    nullptr, nullptr,
                     Qcur, Kcur, Vcur,
                     nullptr, nullptr, nullptr,
                     kq_scale, il);
@@ -1771,7 +1771,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
             out = ggml_mul_mat(ctx0, layer.wv_b, ggml_permute(ctx0, out, 0, 2, 1, 3));
             out = ggml_cont_2d(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3), n_embd_head_v_mla*n_head, n_tokens);
 
-            cur = build_lora_mm(layer.wo, out, layer.wo_s);
+            cur = build_lora_mm(layer.wo, out);
             cb(cur, "attn_out", il);
         }
 
@@ -1782,9 +1782,9 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                layer.ffn_up,   nullptr, nullptr,
-                layer.ffn_gate, nullptr, nullptr,
-                layer.ffn_down, nullptr, nullptr,
+                layer.ffn_up,   nullptr,
+                layer.ffn_gate, nullptr,
+                layer.ffn_down, nullptr,
                 nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
@@ -1796,17 +1796,15 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    auto * output   = model.output;
-    auto * output_s = model.output_s;
+    auto * output = model.output;
     if (output == nullptr) {
         GGML_ASSERT(cparams.ctx_other != nullptr);
         const auto * model_other = llama_get_model(cparams.ctx_other);
         GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
-        output   = model_other->output;
-        output_s = model_other->output_s;
+        output = model_other->output;
     }
 
-    ggml_tensor * logits = build_lora_mm(output, cur, output_s);
+    ggml_tensor * logits = build_lora_mm(output, cur);
 
     // softcap does not apply to the markov bias
     if (hparams.f_final_logit_softcapping) {
