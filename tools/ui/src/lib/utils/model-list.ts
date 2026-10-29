@@ -100,7 +100,9 @@ export function groupModelOptions(filteredOptions: ModelOption[]): GroupedModelO
 	}
 
 	for (const [orgName, items] of orgGroups) {
-		available.push({ items, orgName: orgName || null });
+		// The org-less group has no header, so it goes first to not read as part of the org above it
+		if (orgName) available.push({ items, orgName });
+		else available.unshift({ items, orgName: null });
 	}
 
 	return { available };

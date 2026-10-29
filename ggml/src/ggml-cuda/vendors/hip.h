@@ -254,6 +254,10 @@ typedef __hip_fp8_e4m3 __nv_fp8_e4m3;
 #define FP8_AVAILABLE
 #endif // HIP_VERSION >= 60300000
 
+#if HIP_VERSION < 70000000
+#define __ballot_sync(mask, var) __ballot(var)
+#endif //HIP_VERSION < 70000000
+
 typedef int8_t int8x4_t __attribute__((ext_vector_type(4)));
 typedef uint8_t uint8x4_t __attribute__((ext_vector_type(4)));
 static __device__ __forceinline__ int __vsubss4(const int a, const int b) {
@@ -310,4 +314,23 @@ static __device__ __forceinline__ unsigned int __vcmpne4(unsigned int a, unsigne
     const unsigned int ne_any_bit = ne_low_7bits | ne_high_1bit;
 
     return (ne_any_bit >> 7) * 0xff;
+}
+
+// v_perm_b32 with selector bytes in [0, 7]: 0-3 pick bytes of lo, 4-7 pick bytes of hi.
+static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, const uint32_t lo, const uint32_t sel) {
+#if __has_builtin(__builtin_amdgcn_is_invocable)
+    if (__builtin_amdgcn_is_invocable(__builtin_amdgcn_perm)) {
+        return __builtin_amdgcn_perm(hi, lo, sel);
+    }
+    const uint64_t src = ((uint64_t) hi << 32) | lo;
+    uint32_t res = 0;
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t byte_sel = (sel >> (8 * i)) & 0x07;
+        res |= (uint32_t) ((src >> (8 * byte_sel)) & 0xFF) << (8 * i);
+    }
+    return res;
+#else
+    return __builtin_amdgcn_perm(hi, lo, sel);
+#endif // __has_builtin(__builtin_amdgcn_is_invocable)
 }

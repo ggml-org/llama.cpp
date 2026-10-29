@@ -98,7 +98,7 @@
 		{status}
 	/>
 
-	<div class="min-h-0 flex-1 overflow-y-auto py-4 pl-4 max-md:pr-4">
+	<div class="min-h-0 flex-1 overflow-y-auto p-4">
 		{#if isDownload}
 			<!-- nothing is on disk yet, so the pane keeps to the download itself -->
 			<div class="space-y-2 py-1">

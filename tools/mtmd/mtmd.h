@@ -58,6 +58,13 @@ enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_COUNT, // for validation
 };
 
+// how the frames and timestamps of a video are laid out in the prompt
+enum mtmd_video_template {
+    MTMD_VIDEO_TEMPLATE_DEFAULT,   // "Video:" prefix, then a "[XmY.YYs]" timestamp every N ms
+    MTMD_VIDEO_TEMPLATE_LFM3,      // "<X.X seconds>" before every group of 2 frames
+    MTMD_VIDEO_TEMPLATE_LFM3_OMNI, // same as LFM3, then the soundtrack of each group, as an audio bitmap after its frames
+};
+
 // opaque types
 struct mtmd_context;
 struct mtmd_bitmap;
@@ -156,6 +163,20 @@ MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
 
+// recommended video input for the current model, given the source video
+// fields set to 0 mean "no preference, use the caller's default"
+struct mtmd_video_config {
+    enum mtmd_video_template tmpl;
+    float   fps;          // frame sampling rate
+    int32_t n_frames;     // number of frames to sample
+    int32_t frame_width;  // size to resize the frames to
+    int32_t frame_height;
+};
+// src_n_frames and src_fps can be <= 0 if unknown
+MTMD_API struct mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
+                                                        int32_t src_width, int32_t src_height,
+                                                        int32_t src_n_frames, float src_fps);
+
 // get the current marker string
 MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 
@@ -166,7 +187,7 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 //     the data is in RGBRGBRGB... format
 //     note: some video-capable models (i.e. qwen-vl) can merge consecutive bitmaps
 //           into one chunk; mtmd_tokenize() handles this, but remember to set
-//           mtmd_bitmap_set_mergeable(true) for every frame
+//           mtmd_bitmap_set_mergeable(true) and mtmd_bitmap_set_is_video(true) for every frame
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
@@ -189,6 +210,10 @@ MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
 MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 // if true, this bitmap can be merged (temporal merge) with an adjacent mergeable bitmap by certain video input models
 MTMD_API void         mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable);
+// on a frame: video frames must be both mergeable and is_video
+// on a lazy bitmap: the expanded chunks are one video, wrapped by the model's video begin/end tokens
+//                   with MTMD_VIDEO_TEMPLATE_LFM3_OMNI, its audio bitmaps are the pieces of one soundtrack, in order
+MTMD_API void         mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video);
 
 // mtmd_bitmap lazy
 //
@@ -383,6 +408,11 @@ typedef struct mtmd_audio_stream mtmd_audio_stream;
 
 struct mtmd_audio_stream_params {
     int32_t step_ms; // audio encoded per encoder call, rounded up to the model step (default: 320)
+
+    // tokens that open the stream, they go out with the first rows (default: none)
+    // with the prompt of its "asr" chat template, LFM3-Audio transcribes live
+    const llama_token * prompt;
+    size_t              n_prompt;
 };
 MTMD_API struct mtmd_audio_stream_params mtmd_audio_stream_params_default(void);
 
@@ -412,6 +442,16 @@ MTMD_API int32_t mtmd_audio_stream_step(mtmd_audio_stream * stream, llama_token 
 // rows of the last step, the reading size (in bytes) is n_rows * llama_model_n_embd_inp(model) * sizeof(float)
 MTMD_API const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream * stream);
 
+// true if the rows of the last step start a new sequence: the caller drops its sequence before decoding them
+MTMD_API bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * stream);
+
+// audio rows whose text has been sampled (prefix rows included), step() updates it from last_token
+MTMD_API int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * stream);
+
+// audio rows up to the end of the last flush
+// once get_n_rows() reaches it, the text of the flushed audio has been sampled
+MTMD_API int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * stream);
+
 /////////////////////////////////////////
 // EXPERIMENTAL API for audio generation, subjected to breaking changes
 
@@ -420,6 +460,8 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_NONE, // not supported
     MTMD_GEN_AUDIO_TYPE_QWEN3TTS,
     MTMD_GEN_AUDIO_TYPE_POCKETTTS,
+    MTMD_GEN_AUDIO_TYPE_SOPRANO,
+    MTMD_GEN_AUDIO_TYPE_LFM3A,
 };
 
 struct mtmd_gen_audio_info {
@@ -436,6 +478,7 @@ enum mtmd_gen_process_type {
     MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert semantic to PCM audio
                                     // for qwen3tts, this is code2wav
                                     // for pocket-tts, this is mimi decoder
+                                    // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
 };
 
 struct mtmd_gen_inp {
@@ -447,9 +490,12 @@ struct mtmd_gen_inp {
     int32_t top_k;
     float   top_p;
     float   temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
+    int32_t penalty_last_n; // frames the repetition penalty looks back on
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
+    // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
     int32_t * codes;
     size_t    n_codes;
     const float * feats;

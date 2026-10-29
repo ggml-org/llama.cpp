@@ -49,6 +49,8 @@ deepseek32          ,0   ,any     ,NORM+MUL+ADD                ,      2
 deepseek32          ,0   ,any     ,RMS_NORM+MUL                ,      9
 deepseek4           ,0   ,any     ,MUL+ADD                     ,      8
 deepseek4           ,0   ,any     ,RMS_NORM+MUL                ,     20
+deepseek41          ,0   ,any     ,MUL+ADD                     ,     12
+deepseek41          ,0   ,any     ,RMS_NORM+MUL                ,     29
 dots1               ,0   ,any     ,ADD+ADD                     ,      1
 dots1               ,0   ,any     ,MUL+ADD                     ,      2
 dots1               ,0   ,any     ,RMS_NORM+MUL                ,      9
@@ -153,6 +155,7 @@ laguna              ,0   ,any     ,RMS_NORM+MUL                ,      9
 lfm2                ,0   ,any     ,RMS_NORM+MUL                ,      7
 lfm2moe             ,1   ,any     ,MUL+ADD                     ,      2
 lfm2moe             ,1   ,any     ,RMS_NORM+MUL                ,      7
+lfm3                ,0   ,any     ,RMS_NORM+MUL                ,     17
 llada               ,0   ,any     ,RMS_NORM+MUL                ,      5
 llada-moe           ,1   ,any     ,MUL+ADD                     ,      4
 llada-moe           ,1   ,any     ,RMS_NORM+MUL                ,      9

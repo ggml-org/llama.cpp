@@ -406,8 +406,7 @@ Hooks are the thin view-layer between components and stores: they own UI concern
 | `use-chat-message-edit-context` | Message edit context (content + extras)                                                         |
 | `use-chat-screen-drag-and-drop` | Drag-and-drop state machine                                                                     |
 | `use-chat-screen-file-upload`   | File upload queue + capability validation                                                       |
-| `use-chat-screen-scroll`        | Scroll container binding + navigation guard                                                     |
-| `use-auto-scroll`               | Auto-scroll controller for streaming                                                            |
+| `use-stick-to-bottom`           | Follows new content while the reader sits at the bottom of a scroller                           |
 | `use-marquee-selection`         | Shift+click / marquee range selection                                                           |
 | `use-keyboard-shortcuts`        | Global keyboard shortcuts                                                                       |
 | `use-settings-navigation`       | Settings section navigation                                                                     |

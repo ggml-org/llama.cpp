@@ -230,6 +230,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
+| `--models-memory-margin N` | for router server, MiB of device memory to keep free per device, unload LRU models until a new one fits (default: 0, 0 = disabled)<br/>(env: LLAMA_ARG_MODELS_MEMORY_MARGIN) |
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
@@ -563,7 +564,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `64`, where `0` is disabled.
 
-`dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. Default: `['\n', ':', '"', '*']`
+`dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. At most 64 distinct breakers, duplicates are ignored. Default: `['\n', ':', '"', '*']`
 
 `xtc_probability`: Set the chance for token removal via XTC sampler. Default: `0.0`, which is disabled.
 
@@ -771,36 +772,80 @@ This endpoint also supports multimodal embeddings. See the documentation for the
 
 ### POST `/reranking`: Rerank documents according to a given query
 
+> [!IMPORTANT]
+>
+> This endpoint is **not** OAI-compatible.
 Similar to https://jina.ai/reranker/ but might change in the future.
-Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` options.
+Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` or `--reranking` options.
 
-*Options:*
+`query` and each `documents`/`texts` element accept a plain string, or
+(for multimodal rerankers such as Qwen3-VL-Reranker) an object of the form
+`{"text": string | [strings], "image": url | data-uri | raw-base64 | [urls]}`.
+All keys are optional; a plain string is treated as `{"text": "..."}`.
 
-`query`: The query against which the documents will be ranked.
-
-`documents`: An array strings representing the documents to be ranked.
+Options: `top_n` (default: all), `model` (echoed in the Jina response), `return_text` (TEI only).
 
 *Aliases:*
   - `/rerank`
   - `/v1/rerank`
   - `/v1/reranking`
 
-*Examples:*
+The format is selected by which key carries the documents: `texts` (TEI, same input shape as Jina,
+set `return_text: true` to echo document text) or `documents` (Jina, multimodal supported).
+
+**Text only (TEI format)** - `query` + `texts`; set `return_text: true` to echo document text:
 
 ```shell
 curl http://127.0.0.1:8012/v1/rerank \
     -H "Content-Type: application/json" \
     -d '{
-        "model": "some-model",
-            "query": "What is panda?",
-            "top_n": 3,
-            "documents": [
-                "hi",
-            "it is a bear",
-            "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
-            ]
+        "query": "What is machine learning?",
+        "texts": [
+            "Machine learning is a subset of artificial intelligence.",
+            "A python is a large snake."
+        ],
+        "return_text": true
     }' | jq
 ```
+
+**Multimodal (Jina Format)** - mix text and images in `query` and/or `documents`:
+
+```shell
+curl http://127.0.0.1:8012/v1/rerank \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen3-VL-Reranker-2B",
+        "query": {
+            "text": "A city skyline with tall buildings and a river",
+            "image": "data:image/jpeg;base64,<base64>"
+        },
+        "documents": [
+            "a plain string document is also valid",
+            {
+                "text": "A photograph of the Boston skyline at dusk",
+                "image": "https://example.com/skyline.jpg"
+            },
+            {
+                "text": "caption for the two-figure spread",
+                "image": ["https://example.com/fig1.png", "data:image/jpeg;base64,<base64>"]
+            }
+        ],
+        "top_n": 2
+    }' | jq
+```
+
+Jina format returns a wrapped object with `model`, `object`, `usage` (`prompt_tokens` is the sum
+of `tokens_evaluated` across all scored pairs), and a `results` array of `{index, relevance_score}`.
+TEI format returns a bare array of `{index, score}` (+ `text` when `return_text: true`).
+Both are sorted descending by score and truncated to `top_n`; the score is the match probability in `[0, 1]`.
+
+Images never appear in any response shape.
+
+> **NOTE:** **Input size limit:** A bidirectional-encoder reranker (e.g. `bge-reranker-v2-m3`) must fit the whole prompt within
+`--ubatch-size`; if the input is too large to process, increase `--ubatch-size`.
+Causal decoder rerankers (e.g. `Qwen3-VL-Reranker`) have no such limitation.
+
+
 
 ### POST `/tts`: Generate speech audio from text
 
@@ -811,6 +856,8 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 `input`: The text to speak (alias: `prompt`).
 
 `lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
+
+`voice`: Voice for the utterance (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional.
 
 `speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence.
 
@@ -972,7 +1019,7 @@ By default, it is read-only. To make POST request to change global properties, y
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
 - `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
-- `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info)
+- `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info), `reasoning_effort_levels` lists the `reasoning_effort` values the template renders distinctly, from lowest to highest
 - `modalities` - the list of supported modalities
 - `is_sleeping` - sleeping status, see [Sleeping on idle](#sleeping-on-idle)
 
@@ -1418,6 +1465,7 @@ For multimodal input (typed content, `messages[i].content[j]`):
 - If `type == "input_video"`:
     - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, raw base64 or path to local file
     - Accepts formats supported by `ffmpeg`
+    - Models that hear their video (LFM3-Omni) also get its soundtrack, the audio of each group of frames follows them
 - Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
 
 *Examples:*
@@ -1540,6 +1588,10 @@ Returns a JSON object with a boolean `success` field, and an optional `message` 
 
 Transcribes streamed audio, for models with a streaming audio encoder. Compatible with OAI `/v1/realtime` schema.
 
+Models that write the text while they listen use this endpoint: Voxtral Realtime, and live ASR models, which carry the prompt of their transcription in a chat template named `asr` (e.g. the LFM3-Audio live ASR checkpoints, the text of every 0.96 s of audio follows it). A live ASR model restarts its context at a pause after 15 s and always after 30 s, the transcript then goes on in a new line. A commit completes the audio with silence, so that its text comes out.
+
+Live ASR models can also hold a conversation, so they transcribe live only in sessions opened with `/v1/realtime?intent=transcription`, as OpenAI transcription sessions are; other sessions are a [realtime conversation](#realtime-conversation).
+
 Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `audio.input.format.rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
 
 *Client events:*
@@ -1560,6 +1612,41 @@ Closing the websocket also ends the input.
 - `error`: `error.message` describes the problem
 
 Note that words held back by the model's delay at the time of a commit are attributed to the next item.
+
+#### Realtime conversation
+
+Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono at the model sample rate (`audio.input.format.rate` of `session.created`), audio output is PCM16 mono at `audio.output.format.rate`.
+
+`session.type` selects the session, it can be changed with `session.update` before the first audio or message:
+
+- `realtime` (default): a conversation, every response stays in context for the next turns
+- `transcription`: each committed audio buffer is transcribed on its own, `audio.input.transcription.language` picks the language
+
+*Client events:*
+
+- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
+- `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
+- `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
+- `conversation.item.create`: a user message with `input_text` content, or a `function_call_output` with the `call_id` and `output` of a tool call of the last response
+- `response.create`: ends the user turn and generates the response, `response.output_modalities`, `response.max_output_tokens` and `response.tool_choice` override the session
+- `response.cancel`: stops the response being generated
+
+LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its turns open with an empty think block.
+
+`output_modalities` picks the mode of the responses: left out, the model switches between text and audio on its own; `["text"]` keeps the response in text, `["audio"]` makes it speech and `["text", "audio"]` interleaves text with the speech.
+
+*Server events:*
+
+- `session.created` and `session.updated`: carry the `session` object
+- `input_audio_buffer.committed`, `conversation.item.added`, `conversation.item.done`: the user item
+- `response.created`, `response.output_item.added`, `response.content_part.added`, then `response.output_text.delta` and `response.output_audio.delta` (base64 PCM16) as they are generated, then the `.done` events and `response.done`
+- `response.output_item.added` with a `function_call` item, `response.function_call_arguments.delta` and `.done`: a tool call of the response, its arguments are a JSON string
+- `conversation.item.input_audio_transcription.delta` and `.completed`: in a transcription session
+- `error`: `error.message` describes the problem
+
+Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
+
+See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
 
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
@@ -1798,13 +1885,17 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
 
 The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly.
 
-The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for granite-switch, laya, clef, pplx-decider, vllm-decision2, vllm-d3, lfm2-d1, lfm2-d1-omni and h2o-lightning. For laya, long questions and options are truncated to the token budget the model was trained with.
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for granite-switch, laya, clef, pplx-decider, vllm-decision2, vllm-d3, lfm2-d1, lfm2-d1-omni and h2o-lightning, 2 for openbmb-minicpm-ocr-jev. For laya, long questions and options are truncated to the token budget the model was trained with.
 
 For laya, clef, vllm-d3 and lfm2-d1-omni, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. An lfm2-d1-omni prompt is cut to 16384 tokens. For vllm-decision2, the options of a question and the end of the prompt must fit in one batch. An h2o-lightning state longer than 32000 tokens keeps its first and last 16000 tokens. A server that runs clef only serves this endpoint, text generation is not available. A decision model that is also a text model, such as granite-switch, serves both and reports `["text", "decisions"]`.
 
+openbmb-minicpm-ocr-jev answers one fixed question: is an OCR text, rendered as an image, consistent with the original image? `state` is the OCR text, as a string, special tokens written in it are escaped. `files` (or `images`) has exactly 2 images: the original, then the rendered one, both are required. The request has one question and no `instructions`: the task is part of the prompt of the model, so a request that sends one is rejected. It is either a `choice` with the `criteria` `{"0": null, "1": null}`, where `1` means consistent, or a `noul` without `criteria`, which returns the probability of `1`. The model has no LM head, so text generation is not available.
+
+Its prompt carries two images, so it is much longer than a text-only one: size the context with `-c` and the batch with `--batch-size`/`--ubatch-size` accordingly. The prompt of a request is evaluated in batches like a normal causal model, the class scores are read from the pooled output of its last token.
+
 *Image input:*
 
-Image input needs a model that supports it (for example: openjev, clef, pplx-decider, vllm-d3, lfm2-d1, lfm2-d1-omni, h2o-lightning) and its multimodal projector, see `--mmproj`.
+Image input needs a model that supports it (for example: openjev, clef, pplx-decider, vllm-d3, lfm2-d1, lfm2-d1-omni, h2o-lightning, openbmb-minicpm-ocr-jev) and its multimodal projector, see `--mmproj`.
 
 Images can be given in two ways, and both can be used in the same request:
 
@@ -2069,6 +2160,40 @@ For the **WebSocket** endpoint (`/v1/realtime`) The router also uses the `model`
 
 By default, the model will be loaded automatically if it's not loaded. To disable this, add `--no-models-autoload` when starting the server. Additionally, you can include `?autoload=true|false` in the query param to control this behavior per-request.
 
+### Memory-based unloading
+
+By default, the router only limits the *number* of loaded models (`--models-max`, least recently used first). With `--models-memory-margin N`, it also keeps track of device memory and unloads models (LRU) until the model being loaded fits, while leaving `N` MiB free on each device.
+
+How it works:
+- On startup, and whenever a model is added or its preset changes, the router spawns one short-lived `llama-server` child per model (one at a time, in the background) that reads the model metadata without allocating memory and reports two measurements:
+  - `min`: the memory the model needs at the smallest context that `--fit` may pick, i.e. `--fit-ctx` (default 4096) times the number of sequences, with the device placement from its preset. If the preset pins the context with `-c`, or sets `--fit off`, this is the memory at that context.
+  - `max`: the memory it needs at the largest context that `--fit` picks given the device memory free at that moment. This is a snapshot: it changes as other models load and unload.
+- When an instance is loaded, it reports the memory it actually allocated (`effective`). With `--fit` on (the default) an instance takes the largest context that fits at load time, so it typically ends up close to `max`. Pin the context with `-c` in the preset of a model if you want it to leave room for other models.
+- Before spawning an instance, the router unloads idle models (LRU) until the `min` of the new model fits in the free memory of every device minus the margin. A model that is serving requests is never unloaded. If nothing is left to unload and the model still does not fit, it is loaded anyway and `--fit` in the instance decides.
+- A load request for a model whose measurement has not finished yet waits for it (the model is moved to the front of the measurement queue).
+
+Notes:
+- The router itself never touches a GPU, all device memory figures come from the child processes.
+- Host (CPU) memory is assumed to be unlimited, as with `--fit`. On a build without GPU devices the memory limit has no effect.
+- A model whose measurement fails (for example a broken GGUF, or an `-hf` model that is not downloaded yet) is loaded without memory checks; the measurement is retried once the model has been loaded successfully.
+- Multimodal projectors (`mmproj`) are not included in the measurements yet, such a model needs more than its `min` reports.
+- The measurements are exposed in the `memory` field of each model in `GET /models` (sizes in bytes), and a `model_memory` event is sent on `/models/sse` when a measurement completes:
+
+```js
+"memory": {
+  "status": "measured", // unmeasured | measuring | measured | failed
+  "min": {
+    "n_ctx": 4096,
+    "devices": [
+      { "kind": "device", "name": "CUDA0", "total": 25757220864, "free": 24387584000, "model": 4986635264, "context": 536870912, "compute": 301989888 },
+      { "kind": "host",   "name": "Host", "model": 263454720, "context": 0, "compute": 16793600 }
+    ]
+  },
+  "max":       { "n_ctx": 131072, "devices": [ /* ... */ ] },
+  "effective": { "n_ctx": 131072, "devices": [ /* ... */ ] } // null unless the model is loaded
+}
+```
+
 ### GET `/models`: List available models
 
 Listing all models in cache. The model metadata will also include a field to indicate the status of the model:
@@ -2317,6 +2442,18 @@ Example events:
 {
   "model": "...",
   "event": "model_remove"
+}
+
+// only with --models-memory-margin, when the measurement of a model completes (see "Memory-based unloading")
+{
+  "model": "...",
+  "event": "model_memory",
+  "data": {
+    "status": "measured",
+    "min": { /* ... */ },
+    "max": { /* ... */ },
+    "effective": null
+  }
 }
 
 // special event: reload of the list of all models
