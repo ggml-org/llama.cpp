@@ -331,6 +331,88 @@ template [[host_name("kernel_get_rows_i32")]]  kernel get_rows_f_t kernel_get_ro
 template [[host_name("kernel_get_rows_bf16")]] kernel get_rows_f_t kernel_get_rows_f<bfloat, float>;
 #endif
 
+template<typename T>
+static inline void get_rows_back_add(device float * pdst, device const char * src, int32_t c0, int32_t c1, ushort tiisg) {
+    const device T * psrc = (const device T *) src;
+    for (int32_t i0 = c0 + tiisg; i0 < c1; i0 += N_SIMDWIDTH) {
+        pdst[i0] += (float) psrc[i0];
+    }
+}
+
+kernel void kernel_get_rows_back(
+        constant ggml_metal_kargs_get_rows_back & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3 ntg  [[threads_per_threadgroup]]) {
+    if (args.zero) {
+        const int32_t i0 = tgpig.x*ntg.x + tpitg.x;
+        if (i0 < args.ne00) {
+            ((device float *) (dst + tgpig.y*args.nb1))[i0] = 0.0f;
+        }
+        return;
+    }
+
+    // one simdgroup per grad row and block of nc columns
+    const ushort  tiisg = tpitg.x;
+    const int32_t i10   = tgpig.x*ntg.y + tpitg.y;
+
+    if (i10 >= args.ne10) {
+        return;
+    }
+
+    const int32_t r = *((device const int32_t *) (src1 + i10*args.nb10));
+
+    if (r < 0 || r >= args.ne1) {
+        return;
+    }
+
+    // only the first grad row with index r writes dst row r, so no atomics are needed
+    for (int32_t j0 = 0; j0 < i10; j0 += 4*N_SIMDWIDTH) {
+        bool found = false;
+        for (short k = 0; k < 4; ++k) {
+            const int32_t j = j0 + k*N_SIMDWIDTH + tiisg;
+            found = found || (j < i10 && *((device const int32_t *) (src1 + j*args.nb10)) == r);
+        }
+        if (simd_any(found)) {
+            return;
+        }
+    }
+
+    const int32_t c0 = tgpig.y*args.nc;
+    const int32_t c1 = min(c0 + args.nc, args.ne00);
+
+    device float * pdst = (device float *) (dst + r*args.nb1);
+
+    // add in the same order as the CPU backend
+    for (int32_t j0 = i10; j0 < args.ne10; j0 += 4*N_SIMDWIDTH) {
+        bool m[4];
+        bool found = false;
+        for (short k = 0; k < 4; ++k) {
+            const int32_t j = j0 + k*N_SIMDWIDTH + tiisg;
+            m[k] = j < args.ne10 && *((device const int32_t *) (src1 + j*args.nb10)) == r;
+            found = found || m[k];
+        }
+        if (!simd_any(found)) {
+            continue;
+        }
+        for (short k = 0; k < 4; ++k) {
+            ulong bits = (ulong) simd_ballot(m[k]);
+            while (bits) {
+                device const char * psrc = src0 + (j0 + k*N_SIMDWIDTH + ctz(bits))*args.nb01;
+                if (args.f16) {
+                    get_rows_back_add<half>(pdst, psrc, c0, c1, tiisg);
+                } else {
+                    get_rows_back_add<float>(pdst, psrc, c0, c1, tiisg);
+                }
+                bits &= bits - 1;
+            }
+        }
+    }
+}
+
 typedef decltype(kernel_get_rows_q<block_q4_0, 2, dequantize_q4_0>) get_rows_q_t;
 
 template [[host_name("kernel_get_rows_q1_0")]]    kernel get_rows_q_t kernel_get_rows_q<block_q1_0,    8, dequantize_q1_0>;
