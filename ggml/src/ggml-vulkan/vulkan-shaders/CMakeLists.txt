@@ -41,8 +41,3 @@ add_executable(${TARGET} vulkan-shaders-gen.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 target_link_libraries(vulkan-shaders-gen PUBLIC Threads::Threads)
-
-if (WIN32 AND DEFINED LLAMA_WIN_APP_CMAKE AND EXISTS "${LLAMA_WIN_APP_CMAKE}")
-    include("${LLAMA_WIN_APP_CMAKE}")
-    llama_add_app_manifest(${TARGET})
-endif()
