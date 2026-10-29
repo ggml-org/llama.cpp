@@ -198,6 +198,9 @@ export type {
 	MCPServerResources
 } from './mcp';
 
+// Group types
+export type { Group } from './groups';
+
 // Search result types
 export type { SearchResult } from './search';
 

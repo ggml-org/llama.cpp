@@ -119,6 +119,23 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
+	 * Puts the active conversation into a group, or out of one with null.
+	 * With no active conversation the pick is buffered and the next created
+	 * chat joins that group.
+	 *
+	 * @param groupId - Target group, null to leave the current one
+	 */
+	async assignActiveConversationGroup(groupId: string | null): Promise<void> {
+		const active = this.activeConversation;
+
+		if (active) {
+			await this.setConversationGroup(active.id, groupId);
+		} else {
+			this.preferences.pendingGroupId = groupId;
+		}
+	}
+
+	/**
 	 * Deletes multiple conversations in sequence.
 	 * Mirrors deleteConversation() per-id; navigates to the new-chat screen only
 	 * if the currently-open chat was among the deleted ones.
@@ -276,11 +293,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		// new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
 			cwd: this.preferences.pendingCwd ?? undefined,
+			groupId: this.preferences.pendingGroupId ?? undefined,
 			reasoningEffort: this.preferences.pendingReasoningEffort,
 			...this.preferences.getToolPolicySnapshot()
 		});
 
 		this.preferences.pendingCwd = null;
+		this.preferences.pendingGroupId = null;
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -656,6 +675,22 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		}
 
 		return undefined;
+	}
+
+	/**
+	 * Moves a conversation into a group, or out of one when `groupId` is null.
+	 *
+	 * @param convId - Conversation to move
+	 * @param groupId - Target group, null to take the conversation out of its group
+	 */
+	async setConversationGroup(convId: string, groupId: string | null): Promise<void> {
+		try {
+			await DatabaseService.updateConversation(convId, { groupId: groupId ?? undefined });
+
+			this.applyConversationUpdate(convId, { groupId: groupId ?? undefined });
+		} catch (error) {
+			console.error('Failed to move conversation to group:', error);
+		}
 	}
 
 	/**

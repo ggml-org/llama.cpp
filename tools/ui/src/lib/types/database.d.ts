@@ -26,6 +26,8 @@ export interface DatabaseConversation {
 	/** Tool categories disabled for this conversation */
 	disabledToolCategories?: ToolSource[];
 	forkedFromConversationId?: string;
+	/** Sidebar group the conversation is sorted into. */
+	groupId?: string;
 	pinned?: boolean;
 }
 

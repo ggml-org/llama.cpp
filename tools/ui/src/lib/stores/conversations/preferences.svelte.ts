@@ -80,6 +80,13 @@ export class ConversationPreferences {
 	 */
 	pendingCwd = $state<string | null>(null);
 
+	/**
+	 * Group the chat about to start goes into, picked before any conversation
+	 * exists. Consumed by `createConversation()` so the first send lands in
+	 * that group. Cleared alongside `pendingCwd`.
+	 */
+	pendingGroupId = $state<string | null>(null);
+
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(loadReasoningEffortDefault());
 
@@ -200,6 +207,7 @@ export class ConversationPreferences {
 	resetPending(): void {
 		this.pendingReasoningEffort = loadReasoningEffortDefault();
 		this.pendingCwd = null;
+		this.pendingGroupId = null;
 	}
 
 	// Working Directory

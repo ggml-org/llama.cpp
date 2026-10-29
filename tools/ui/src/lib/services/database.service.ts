@@ -1,26 +1,37 @@
 /**
- * DatabaseService - IndexedDB persistence for conversations and messages
+ * DatabaseService - IndexedDB persistence for conversations, messages and groups
  *
- * Thin Dexie layer over the conversations/messages tables: CRUD, tree
+ * Thin Dexie layer over the conversations/messages/groups tables: CRUD, tree
  * navigation (descendants, reparenting) and cascading deletes. No reactive
- * state; consumed by conversationsStore and the chat flows.
+ * state; consumed by conversationsStore, groupsStore and the chat flows.
  */
 
-import { IDXDB_STORES, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
+import {
+	IDXDB_STORE_SCHEMAS,
+	IDXDB_STORES_V1,
+	IDXDB_TABLES,
+	IDXDB_VERSION,
+	STORAGE_APP_NAME
+} from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
+import type { Group } from '$lib/types/groups';
 import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
 import Dexie, { type EntityTable } from 'dexie';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
+	[IDXDB_TABLES.groups]!: EntityTable<Group, 'id'>;
 	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
 
 	constructor() {
 		super(STORAGE_APP_NAME);
 
-		this.version(1).stores(IDXDB_STORES);
+		this.version(1).stores(IDXDB_STORES_V1);
+		this.version(IDXDB_VERSION).stores({
+			[IDXDB_TABLES.groups]: IDXDB_STORE_SCHEMAS.groups
+		});
 	}
 }
 
@@ -144,6 +155,17 @@ export class DatabaseService {
 		await db[IDXDB_TABLES.conversations].add(conversation);
 
 		return conversation;
+	}
+
+	/**
+	 * Creates a new group.
+	 *
+	 * @returns The created group
+	 */
+	static async createGroup(group: Group): Promise<Group> {
+		await db[IDXDB_TABLES.groups].add(group);
+
+		return group;
 	}
 
 	/**
@@ -310,6 +332,26 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Deletes a group. Its conversations stay, out of any group.
+	 *
+	 * @param id - Group ID
+	 */
+	static async deleteGroup(id: string): Promise<void> {
+		await db.transaction(
+			'rw',
+			[db[IDXDB_TABLES.groups], db[IDXDB_TABLES.conversations]],
+			async () => {
+				await db[IDXDB_TABLES.groups].delete(id);
+				await db[IDXDB_TABLES.conversations]
+					.filter((conversation) => conversation.groupId === id)
+					.modify((conversation) => {
+						delete conversation.groupId;
+					});
+			}
+		);
+	}
+
+	/**
 	 * Deletes a message and removes it from its parent's children array.
 	 *
 	 * @param messageId - ID of the message to delete
@@ -448,6 +490,15 @@ export class DatabaseService {
 	 */
 	static async getAllConversations(): Promise<DatabaseConversation[]> {
 		return await db[IDXDB_TABLES.conversations].orderBy('lastModified').reverse().toArray();
+	}
+
+	/**
+	 * Gets all groups, sorted by last update time (newest first).
+	 *
+	 * @returns Array of groups
+	 */
+	static async getAllGroups(): Promise<Group[]> {
+		return await db[IDXDB_TABLES.groups].orderBy('updatedAt').reverse().toArray();
 	}
 
 	/**
@@ -599,6 +650,17 @@ export class DatabaseService {
 		await this.updateConversation(convId, {
 			currNode: nodeId
 		});
+	}
+
+	/**
+	 * Updates a group. `updatedAt` is never stamped implicitly; pass it in
+	 * `updates` to bump the group in recency ordering.
+	 *
+	 * @param id - Group ID
+	 * @param updates - Partial group data to update
+	 */
+	static async updateGroup(id: string, updates: Partial<Omit<Group, 'id'>>): Promise<void> {
+		await db[IDXDB_TABLES.groups].update(id, updates);
 	}
 
 	/**
