@@ -114,12 +114,10 @@
 	background-image: linear-gradient(to bottom, var(--sheen-start), var(--sheen-end));
 }
 
-/* Frosted button finish: keeps the button's own fill, adds blur and a faint even rim. */
+/* Frosted button finish: keeps the button's own fill and border, adds blur and a small drop shadow. */
 @utility matte-key {
 	backdrop-filter: blur(var(--blur-control)) saturate(1.4);
-	box-shadow:
-		inset 0 0 0 1px var(--button-highlight),
-		var(--button-shadow);
+	box-shadow: var(--button-shadow);
 }
 
 /* Lit colored control (record, error send). Set the color with orb-danger, orb-warning or orb-success. */

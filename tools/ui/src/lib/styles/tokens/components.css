@@ -65,7 +65,6 @@
 	--button-ghost-background-hover: var(--action-ghost-hover);
 	--button-outline-border: var(--line-default);
 	--button-text: var(--fg-default);
-	--button-highlight: var(--highlight-inner);
 	--button-shadow: var(--elevation-control);
 
 	/* fields: input, textarea, checkbox, switch track */
