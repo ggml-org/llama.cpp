@@ -69,21 +69,21 @@
 
 		<StateGalleryItem label="status-lamp" note="red, yellow, green">
 			<div class="flex h-28 items-center gap-4">
-				<span class="status-lamp orb-red"></span>
+				<span class="status-lamp orb-danger"></span>
 
-				<span class="status-lamp orb-yellow"></span>
+				<span class="status-lamp orb-warning"></span>
 
-				<span class="status-lamp orb-green"></span>
+				<span class="status-lamp orb-success"></span>
 			</div>
 		</StateGalleryItem>
 
 		<StateGalleryItem label="matte-orb" note="recording button">
 			<div class="flex h-28 items-center gap-4">
-				<span class="matte-orb orb-red size-8 rounded-full"></span>
+				<span class="matte-orb orb-danger size-8 rounded-full"></span>
 
-				<span class="matte-orb orb-yellow size-8 rounded-full"></span>
+				<span class="matte-orb orb-warning size-8 rounded-full"></span>
 
-				<span class="matte-orb orb-green size-8 rounded-full"></span>
+				<span class="matte-orb orb-success size-8 rounded-full"></span>
 			</div>
 		</StateGalleryItem>
 	</StateGallery>

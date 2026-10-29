@@ -1,6 +1,5 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { Button } from '$lib/components/ui/button';
 	import * as HoverCard from '$lib/components/ui/hover-card';
 
 	const { Story } = defineMeta({
@@ -17,7 +16,9 @@
 		<HoverCard.Root open>
 			<HoverCard.Trigger>
 				{#snippet child({ props })}
-					<Button {...props} variant="link">ggml-org/Qwen3.8-27B-GGUF</Button>
+					<a {...props} class="text-sm underline-offset-4 hover:underline" href="#hover-card"
+						>ggml-org/Qwen3.8-27B-GGUF</a
+					>
 				{/snippet}
 			</HoverCard.Trigger>
 

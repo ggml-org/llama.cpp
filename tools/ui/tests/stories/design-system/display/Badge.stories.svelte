@@ -12,17 +12,11 @@
 		title: 'Design system/Display/Badge'
 	});
 
-	const variants: NonNullable<BadgeVariant>[] = [
-		'default',
-		'secondary',
-		'tertiary',
-		'outline',
-		'destructive'
-	];
+	const variants: NonNullable<BadgeVariant>[] = ['default', 'secondary', 'outline', 'destructive'];
 </script>
 
 <Story asChild name="Default">
-	<StateGallery columns={5} minItemWidth="8rem">
+	<StateGallery columns={4} minItemWidth="8rem">
 		{#each variants as variant (variant)}
 			<StateGalleryItem label={variant}>
 				<Badge {variant}>Q4_K_M</Badge>
