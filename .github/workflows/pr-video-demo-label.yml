@@ -1,0 +1,40 @@
+name: "PR video demo label"
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+cache-mode: none
+permissions:
+  pull-requests: write
+
+jobs:
+  video-demo-label:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Add or remove the video demo label
+        uses: actions/github-script@v8
+        with:
+          script: |
+            // The body is only matched, never run or interpolated, so it is safe to read from a fork.
+            const body = context.payload.pull_request.body ?? '';
+            const label = 'video demo';
+
+            // Sections written by demo:pr (see tools/ui/demo/cli.ts): the managed
+            // comment markers, or a preview linking to a demo video uploaded for this PR.
+            const hasMarkers = /<!-- demo:start -->[\s\S]*<!-- demo:end -->/.test(body);
+            const hasVideo = /\/resolve\/videos\/pr\/\d+\/[0-9a-f]{10}\.mp4/.test(body);
+            const hasDemo = hasMarkers || hasVideo;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const labels = (
+              await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number })
+            ).data.map((l) => l.name);
+            const has = labels.includes(label);
+
+            if (hasDemo && !has) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [label] });
+            } else if (!hasDemo && has) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+            }
