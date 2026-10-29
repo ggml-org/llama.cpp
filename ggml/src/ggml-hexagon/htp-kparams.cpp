@@ -62,6 +62,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_IM2COL_3D:       return HTP_OP_IM2COL_3D;
         case GGML_OP_CONV_2D:         return HTP_OP_CONV_2D;
         case GGML_OP_CONV_2D_DW:      return HTP_OP_CONV_2D_DW;
+        case GGML_OP_CONV_3D:         return HTP_OP_CONV_3D;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
         case GGML_OP_UPSCALE:         return HTP_OP_UPSCALE;
         case GGML_OP_LIGHTNING_INDEXER: return HTP_OP_LIGHTNING_INDEXER;
@@ -3994,16 +3995,17 @@ static bool htp_kparams_conv2d_tiled(
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
+    const bool is3d = dst->op == GGML_OP_CONV_3D;
     const int32_t s0 = ggml_get_op_params_i32(dst, 0);
-    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
+    const int32_t d0 = ggml_get_op_params_i32(dst, is3d ? 6 : 4);
 
     const uint32_t KW   = src0->ne[0];
-    const uint32_t KH   = src0->ne[1];
-    const uint32_t Cin  = src0->ne[2];
-    const uint32_t Cout = src0->ne[3];
+    const uint32_t KH   = is3d ? src0->ne[2] * src0->ne[1] : src0->ne[1];
+    const uint32_t Cin  = is3d ? ggml_get_op_params_i32(dst, 9) : src0->ne[2];
+    const uint32_t Cout = is3d ? ggml_get_op_params_i32(dst, 11) : src0->ne[3];
     const uint32_t OW   = dst->ne[0];
-    const uint32_t OH   = dst->ne[1];
-    const uint32_t N    = dst->ne[3];
+    const uint32_t OH   = is3d ? dst->ne[2] * dst->ne[1] : dst->ne[1];
+    const uint32_t N    = is3d ? ggml_get_op_params_i32(dst, 10) : dst->ne[3];
     const size_t   es   = ggml_type_size(src0->type);
 
     if (s0 != 1 || dst->nb[0] != sizeof(float)) {
@@ -4012,10 +4014,10 @@ static bool htp_kparams_conv2d_tiled(
 
     // kernel k order must match the staged input: (cin, kh, kw) for WHCN input, (kh, kw, cin) for CWHN input.
     // Kernel is either k-contiguous rows per cout (WHCN only) or cout-contiguous with a uniform k stride.
-    const bool   whcn   = src1->nb[0] == sizeof(float);
+    const bool   whcn   = is3d || src1->nb[0] == sizeof(float);
     const bool   cwhn   = !whcn && src1->nb[2] == sizeof(float) && src1->nb[0] == Cin * sizeof(float);
     const bool   co_c   = Cout == 1 || src0->nb[3] == es;
-    const bool   w_rows = whcn && src0->nb[0] == es && (KH == 1 || src0->nb[1] == KW * es) && (Cin == 1 || src0->nb[2] == KW * KH * es);
+    const bool   w_rows = is3d || (whcn && src0->nb[0] == es && (KH == 1 || src0->nb[1] == KW * es) && (Cin == 1 || src0->nb[2] == KW * KH * es));
     const size_t ks     = whcn ? src0->nb[0] : src0->nb[2];
     bool         kmajor = false;
     if (whcn) {
@@ -4040,6 +4042,10 @@ static bool htp_kparams_conv2d_tiled(
     const uint32_t wk    = (std::min)(k_pad, 512u);
     const uint32_t nth   = htp_session_n_threads(sess);
     const size_t   tile  = 2048;
+
+    if (KH > 255) {
+        return false;
+    }
 
     uint32_t rt_block = n_rt;
     uint32_t ct       = (std::min)(n_ct, 64u);
@@ -4085,7 +4091,7 @@ static bool htp_kparams_conv2d_tiled(
         const size_t thr2 = hex_round_up((std::max)(2 * stage + ostage + prow, wpack), tile);
         struct htp_conv2d_vtcm_layout L2;
         htp_conv2d_vtcm_layout_build(&L2, rt_block, w_size, act_size, out_size, thr2, nth);
-        if (stage <= 128 * 1024 && L2.total_bytes <= htp_session_vtcm_size(sess)) {
+        if (stage <= 128 * 1024 && 2 * KH <= 255 && L2.total_bytes <= htp_session_vtcm_size(sess)) {
             n_stage  = 2;
             thr_size = thr2;
             total    = L2.total_bytes;
@@ -4335,6 +4341,57 @@ static bool htp_kparams_solve_conv2d_dw(
     kparams->div_n_chunks   = init_fastdiv_values(n_chunks > 0 ? n_chunks : 1);
 
     return true;
+}
+
+static bool htp_kparams_solve_conv3d(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_conv2d_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) ||
+        src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int32_t IC = ggml_get_op_params_i32(op, 9);
+    const int32_t N  = ggml_get_op_params_i32(op, 10);
+    const int32_t OC = ggml_get_op_params_i32(op, 11);
+    if (IC <= 0 || N <= 0 || OC <= 0 || src0->ne[3] != (int64_t) IC * OC || src1->ne[3] != (int64_t) IC * N ||
+        dst->ne[3] != (int64_t) OC * N) {
+        return false;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        const int32_t s = ggml_get_op_params_i32(op, i);
+        const int32_t p = ggml_get_op_params_i32(op, 3 + i);
+        const int32_t d = ggml_get_op_params_i32(op, 6 + i);
+        if (s <= 0 || d <= 0 || p < 0 || src0->ne[i] <= 0) {
+            return false;
+        }
+        const int64_t o = (src1->ne[i] + 2 * p - d * (src0->ne[i] - 1) - 1) / s + 1;
+        if (o != dst->ne[i]) {
+            return false;
+        }
+    }
+
+    const size_t es     = ggml_type_size(src0->type);
+    const bool   w_rows = src0->nb[0] == es && src0->nb[1] == src0->ne[0] * es && src0->nb[2] == src0->ne[1] * src0->nb[1] &&
+                          ((int64_t) IC * OC == 1 || src0->nb[3] == src0->ne[2] * src0->nb[2]);
+    if (!w_rows || src1->nb[0] != sizeof(float) || dst->nb[2] != dst->ne[1] * dst->nb[1]) {
+        return false;
+    }
+
+    const uint32_t total_rows = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
+    kparams->total_rows = total_rows;
+    kparams->n_threads  = total_rows == 0 ? 1 : (std::min)((uint32_t) htp_session_n_threads(sess), total_rows);
+
+    return htp_kparams_conv2d_tiled(sess, op, kparams);
 }
 
 static bool htp_dsv4_hc_pre_can_collapse(
@@ -5240,6 +5297,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_CONV_2D_DW:
             return htp_kparams_invoke<htp_kparams_solve_conv2d_dw>(sess, op, kparams);
+
+        case HTP_OP_CONV_3D:
+            return htp_kparams_invoke<htp_kparams_solve_conv3d>(sess, op, kparams);
 
         case HTP_OP_SUM_ROWS:
         case HTP_OP_SUM:
