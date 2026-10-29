@@ -2185,7 +2185,8 @@ static bool htp_kparams_solve_ssm_conv(
         target_max_tile          = (std::max)(target_max_tile, 32u);
         target_max_tile          = (std::min)(target_max_tile, 128u);
 
-        uint32_t d_inner_tile = (uint32_t) (avail_for_tiles / (2 * (ncs + n_t) * sizeof(float)));
+        const size_t raw_stride_bytes = ncs * sizeof(float) + sizeof(float);
+        uint32_t d_inner_tile = (uint32_t) (avail_for_tiles / (2 * (raw_stride_bytes + n_t * sizeof(float))));
         d_inner_tile          = (d_inner_tile / 32) * 32;
         if (d_inner_tile == 0) {
             d_inner_tile = 32;

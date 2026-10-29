@@ -173,11 +173,12 @@ static inline void hvx_ssm_conv_decode_4(const float * x, const float * w, float
 // the lanes past the channel tail.
 static inline void hvx_ssm_conv_transpose_block(const float * raw_block,
                                                 float *       T,
+                                                uint32_t      raw_stride_bytes,
                                                 uint32_t      ncs,
                                                 uint32_t      cb_n,
                                                 HVX_Vector    vv) {
     const size_t   base = (size_t) raw_block;
-    const uint32_t mu   = cb_n * ncs * sizeof(float) - 1;
+    const uint32_t mu   = cb_n * raw_stride_bytes - 1;
 
     for (uint32_t t = 0; t < ncs; ++t) {
         Q6_vgather_ARMVw((HVX_Vector *) (T + (size_t) t * VLEN_FP32), base + t * sizeof(float), mu, vv);
@@ -393,7 +394,8 @@ static void ssm_conv_thread_f32_prefill(unsigned int nth, unsigned int ith, void
 
     // src0 spad holds two raw tiles (fetch of tile n+1 overlaps compute of tile n) plus
     // the transposed block. dst spad holds two tiles so a writeback can stay in flight.
-    const size_t src0_tile_raw_bytes = hex_round_up(d_inner_tile * ncs * sizeof(float), 128);
+    const size_t raw_stride_bytes    = ncs * sizeof(float) + sizeof(float);
+    const size_t src0_tile_raw_bytes = hex_round_up(d_inner_tile * raw_stride_bytes, 128);
     const size_t dst_tile_bytes      = hex_round_up(d_inner_tile * n_t * sizeof(float), 128);
 
     float * src0_tile_raw[2] = { (float *) src0_spad_base, (float *) (src0_spad_base + src0_tile_raw_bytes) };
@@ -419,7 +421,7 @@ static void ssm_conv_thread_f32_prefill(unsigned int nth, unsigned int ith, void
                                           (ir0 + tile_off_fetch) * src0_stride_inner_bytes;       \
             dma_queue_push(dma_q,                                                                 \
                            dma_make_data((uint8_t *) src0_tile_raw[(c) & 1], fetch_ddr),          \
-                           row_bytes, src0_stride_inner_bytes, row_bytes, cur_tile_n);            \
+                           raw_stride_bytes, src0_stride_inner_bytes, row_bytes, cur_tile_n);     \
             tile_off_fetch += d_inner_tile;                                                       \
             if (tile_off_fetch >= d_inner_per_thread) {                                           \
                 tile_off_fetch = 0;                                                               \
@@ -446,11 +448,7 @@ static void ssm_conv_thread_f32_prefill(unsigned int nth, unsigned int ith, void
     const uint32_t C_TILE = VLEN_FP32;
 
     // gather offsets: lane r reads channel r of the raw tile block
-    uint32_t __attribute__((aligned(VLEN))) gather_off[VLEN_FP32];
-    for (uint32_t r = 0; r < VLEN_FP32; ++r) {
-        gather_off[r] = r * ncs * sizeof(float);
-    }
-    const HVX_Vector vv = *(const HVX_Vector *) gather_off;
+    const HVX_Vector vv = hvx_vec_gather_offsets_w(raw_stride_bytes);
 
     uint32_t i3       = 0;
     uint32_t tile_off = 0;
@@ -474,7 +472,8 @@ static void ssm_conv_thread_f32_prefill(unsigned int nth, unsigned int ith, void
             const uint32_t cb_n = MIN(C_TILE, tile_n - cb);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) tile_off);
-            hvx_ssm_conv_transpose_block(raw + (size_t) cb * ncs, src0_T, ncs, cb_n, vv);
+            const float * raw_ch = (const float *) ((const uint8_t *) raw + (size_t) cb * raw_stride_bytes);
+            hvx_ssm_conv_transpose_block(raw_ch, src0_T, raw_stride_bytes, ncs, cb_n, vv);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) tile_off);
 
             const float * restrict wp = src1_T + tile_off + cb;

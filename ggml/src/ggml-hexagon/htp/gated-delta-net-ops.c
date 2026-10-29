@@ -1456,9 +1456,10 @@ static inline void gdn_dma_push_chunk_gb(
     const dma_addr_t g_dma    = g->data + (uint64_t) iv3 * g->nb[3] + (uint64_t) t_chunk * g->nb[2] + (uint64_t) iv1 * g->nb[1];
     const dma_addr_t beta_dma = beta->data + (uint64_t) iv3 * beta->nb[3] + (uint64_t) t_chunk * beta->nb[2] + (uint64_t) iv1 * beta->nb[1];
     const uint32_t row_bytes  = n_batch * sizeof(float);
+    const uint32_t dst_stride = (n_batch > 1) ? row_bytes + sizeof(float) : row_bytes;
 
-    dma_queue_push(dma_q, dma_make_data(vtcm_g_raw, g_dma), row_bytes, g->nb[2], row_bytes, chunk_size);
-    dma_queue_push(dma_q, dma_make_data(vtcm_b_raw, beta_dma), row_bytes, beta->nb[2], row_bytes, chunk_size);
+    dma_queue_push(dma_q, dma_make_data(vtcm_g_raw, g_dma), dst_stride, g->nb[2], row_bytes, chunk_size);
+    dma_queue_push(dma_q, dma_make_data(vtcm_b_raw, beta_dma), dst_stride, beta->nb[2], row_bytes, chunk_size);
 }
 
 static inline void gdn_pack_s_col_tiles(
@@ -1707,19 +1708,16 @@ static void gdn_hvx_phase1a_worker(unsigned int n, unsigned int i, void * data) 
         hvx_vmem(head->b_f32[curr_buf] + 0)  = hvx_vmem(bctx->vtcm_b_raw + 0);
         hvx_vmem(head->b_f32[curr_buf] + 32) = hvx_vmem(bctx->vtcm_b_raw + 32);
     } else {
-        int32_t offsets[32] __attribute__((aligned(128)));
-        for (int k = 0; k < 32; ++k) {
-            offsets[k] = k * n_batch * sizeof(float);
-        }
-        HVX_Vector vv = *(const HVX_Vector *) offsets;
+        const uint32_t vtcm_stride = (n_batch + 1) * sizeof(float);
+        const HVX_Vector vv = hvx_vec_gather_offsets_w(vtcm_stride);
         const size_t rt_g = (size_t) ((const uint8_t *) bctx->vtcm_g_raw + i * sizeof(float));
         const size_t rt_b = (size_t) ((const uint8_t *) bctx->vtcm_b_raw + i * sizeof(float));
-        const size_t mu   = 64 * n_batch * sizeof(float);
+        const size_t mu   = 64 * vtcm_stride;
 
         Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 0),  rt_g, mu, vv);
-        Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 32), rt_g + 32 * n_batch * sizeof(float), mu, vv);
+        Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 32), rt_g + 32 * vtcm_stride, mu, vv);
         Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 0),  rt_b, mu, vv);
-        Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 32), rt_b + 32 * n_batch * sizeof(float), mu, vv);
+        Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 32), rt_b + 32 * vtcm_stride, mu, vv);
     }
 
     const uint32_t t_chunk = bctx->c * 64;
