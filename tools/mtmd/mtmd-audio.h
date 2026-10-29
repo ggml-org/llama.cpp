@@ -134,6 +134,12 @@ struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+// youtu-omni: whisper mel without the last frame, split into 2-30 s chunks
+struct mtmd_audio_preprocessor_youtu_omni : mtmd_audio_preprocessor_qwen3a {
+    using mtmd_audio_preprocessor_qwen3a::mtmd_audio_preprocessor_qwen3a;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+};
+
 struct mtmd_audio_preprocessor_dots3note : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_dots3note(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;

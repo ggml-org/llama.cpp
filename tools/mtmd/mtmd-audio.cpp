@@ -763,6 +763,44 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
 }
 
 //
+// mtmd_audio_preprocessor_youtu_omni
+//
+// Matches WhisperFeatureExtractor(padding="do_not_pad"): n_samples/hop frames, the last STFT frame is dropped
+// before the max-8 clamp. The chunking loop is ported as-is from the reference, float rounding included
+// (a "30 s" chunk ends up 2999 frames long).
+//
+
+bool mtmd_audio_preprocessor_youtu_omni::preprocess(const float *                 samples,
+                                                     size_t                        n_samples,
+                                                     std::vector<mtmd_audio_mel> & output) const {
+    const int64_t n_frames = (int64_t)(n_samples / hparams.audio_hop_len);
+    if (n_frames == 0) {
+        return false;
+    }
+    mtmd_audio_mel mel_full;
+    if (!compute_mel(samples, n_samples, n_frames, mel_full)) {
+        return false;
+    }
+
+    const double min_sec = 2.0;
+    const double max_sec = 30.0;
+    const double sec_per_frame = (n_frames / 100.0) / n_frames;
+    int64_t off = 0;
+    int64_t len = 0;
+    for (int64_t i = 0; i < n_frames; i++) {
+        const double sec = sec_per_frame + 1.0 * len * sec_per_frame;
+        if (sec >= min_sec && sec > max_sec) {
+            output.push_back(slice_mel(mel_full, off, len));
+            off += len;
+            len = 0;
+        }
+        len++;
+    }
+    output.push_back(slice_mel(mel_full, off, len));
+    return true;
+}
+
+//
 // mtmd_audio_preprocessor_dots3note
 //
 // Matches Dots3NoteFeatureExtractor: the waveform is split into 60s chunks and each chunk gets

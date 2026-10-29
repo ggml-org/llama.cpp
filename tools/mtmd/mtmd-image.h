@@ -290,6 +290,12 @@ struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
 };
 
+// youtu-omni: fit the pixel budget, then pad right and bottom up to a multiple of patch_size*n_merge
+struct mtmd_image_preprocessor_youtu_omni : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_youtu_omni(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+};
+
 // llava-next "anyres": stacks the overview and all tiles into one image, assembled by clip in a single graph
 struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}

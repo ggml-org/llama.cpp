@@ -225,6 +225,7 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
     MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
     MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_YOUTU_OMNI, // sequential positions, the "\n" token embedding follows every row
     MTMD_POS_TYPE_CANVAS,    // MiniCPM-V 4.7: overview + slices in one chunk, sharing one 2D canvas (see mtmd_image_tokens::canvas_tile_grid)
     MTMD_POS_TYPE_COUNT,     // for validation
 };
@@ -240,6 +241,10 @@ struct mtmd_image_tokens {
         if (pos == MTMD_POS_TYPE_HUNYUANVL) {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
+        }
+        if (pos == MTMD_POS_TYPE_YOUTU_OMNI) {
+            // merged image tokens, plus one newline after every row
+            return nx * ny + ny;
         }
         if (pos == MTMD_POS_TYPE_CANVAS) {
             uint32_t n = 0;
@@ -284,7 +289,9 @@ struct mtmd_image_tokens {
 
     bool can_batch_with(const mtmd_image_tokens & other) {
         // a canvas chunk holds a whole image group, its layout is not given by nx/ny alone
-        return nx == other.nx && ny == other.ny && pos == other.pos && pos != MTMD_POS_TYPE_CANVAS;
+        // youtu-omni rows are interleaved with newlines per image
+        return nx == other.nx && ny == other.ny && pos == other.pos
+            && pos != MTMD_POS_TYPE_CANVAS && pos != MTMD_POS_TYPE_YOUTU_OMNI;
     }
 
     mtmd_image_tokens clone() {
@@ -769,6 +776,17 @@ struct mtmd_context {
                     img_end = "<|vision_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_youtuvl>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_YOUTU_OMNI:
+                {
+                    // <|vision_start|>{height}*{width}\n
+                    //   (row of embeddings)\n
+                    //   ...
+                    // <|vision_end|>
+                    img_beg = "<|vision_start|>";
+                    img_end = "<|vision_end|>";
+                    tok_row_end = {lookup_token("\n")};
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_youtu_omni>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_YASA2:
                 {
                     img_beg = "<image>";
@@ -1023,6 +1041,13 @@ struct mtmd_context {
                     aud_beg = "<|audio_start|>";
                     aud_end = "<|audio_end|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_qwen3a>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_YOUTU_OMNI:
+                {
+                    // [HH:MM:SS]<|audio_start|> ... <|audio_end|> per chunk, see mtmd_tokenizer::add_media
+                    aud_beg = "<|audio_start|>";
+                    aud_end = "<|audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_youtu_omni>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_VOXTRAL:
                 {
@@ -1624,6 +1649,15 @@ struct mtmd_tokenizer {
                     image_tokens->image_idx = n_images_added;
                     GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
                 }
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_YOUTU_OMNI) {
+                    const auto & e0 = preproc_out.entries[0];
+                    image_tokens->nx  = clip_n_output_tokens_x(ctx->ctx_v, &e0);
+                    image_tokens->ny  = clip_n_output_tokens_y(ctx->ctx_v, &e0);
+                    image_tokens->pos = MTMD_POS_TYPE_YOUTU_OMNI;
+                    // resolution is height*width in resized pixels, followed by a newline
+                    add_text(std::to_string(e0.ny()) + "*" + std::to_string(e0.nx()), true);
+                    add_text("\n", true);
+                }
 
                 clip_image_f32_batch batch_f32;
                 batch_f32.is_audio = false;
@@ -1670,7 +1704,10 @@ struct mtmd_tokenizer {
                 return 2;
             }
 
-            if (!ctx->aud_beg.empty()) {
+            // youtu-omni wraps every chunk on its own
+            const bool wrap_chunks = ctx->proj_type_a() == PROJECTOR_TYPE_YOUTU_OMNI;
+
+            if (!wrap_chunks && !ctx->aud_beg.empty()) {
                 add_text(ctx->aud_beg, true); // add audio begin token
             }
 
@@ -1709,9 +1746,28 @@ struct mtmd_tokenizer {
                 }
             }
 
+            // start second of each chunk, computed like the reference so that round() gives the same result
+            int64_t n_frames_total = 0;
+            for (const auto & mel_spec : mel_spec_chunks) {
+                n_frames_total += mel_spec.n_len_org;
+            }
+            const double sec_per_frame = n_frames_total > 0 ? (n_frames_total / 100.0) / n_frames_total : 0.0;
+            double chunk_sec = 0.0;
+
             // consider each mel_spec as a separate audio chunk
             // TODO: maybe support batching, but this may come with memory cost
             for (auto & mel_spec : mel_spec_chunks) {
+                if (wrap_chunks) {
+                    if (mel_spec_chunks.size() > 1) {
+                        const int sec = (int) std::nearbyint(chunk_sec);
+                        char ts[32];
+                        snprintf(ts, sizeof(ts), "%02d:%02d:%02d", sec / 3600, (sec / 60) % 60, sec % 60);
+                        add_text(ts, true);
+                    }
+                    chunk_sec += mel_spec.n_len_org * sec_per_frame;
+                    add_text(ctx->aud_beg, true);
+                }
+
                 const bool is_placeholder = mel_spec.data.empty();
 
                 // Validate dimensions fit in clip_image_size (int)
@@ -1721,6 +1777,7 @@ struct mtmd_tokenizer {
                 mel_f32.set_size(
                     {(int)mel_spec.n_len, (int)mel_spec.n_mel},
                     is_placeholder, /* is_audio */ true);
+                mel_f32.audio_n_frames = (int) mel_spec.n_len_org;
                 mel_f32.cpy_buf(mel_spec.data);
 
                 size_t n_tokens = clip_n_output_tokens(ctx->ctx_a, &mel_f32);
@@ -1743,9 +1800,13 @@ struct mtmd_tokenizer {
                     std::move(audio_tokens),
                 };
                 cur.entries.emplace_back(std::move(chunk));
+
+                if (wrap_chunks) {
+                    add_text(ctx->aud_end, true);
+                }
             }
 
-            if (!ctx->aud_end.empty()) {
+            if (!wrap_chunks && !ctx->aud_end.empty()) {
                 add_text(ctx->aud_end, true); // add audio end token
             }
         }
@@ -1934,6 +1995,33 @@ int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
     }
 }
 
+// youtu-omni: the text token "\n" follows every row of image embeddings
+static int32_t mtmd_youtu_add_row_newlines(const mtmd_context * ctx, const mtmd_image_tokens * image_tokens,
+                                           const std::vector<float> & rows, std::vector<float> & out_embd) {
+    const size_t n_embd = ctx->n_embd_out();
+    const size_t nx     = image_tokens->nx;
+    const size_t ny     = image_tokens->ny;
+    GGML_ASSERT(rows.size() == nx * ny * n_embd);
+
+    if (!ctx->text_model || ctx->tok_row_end.size() != 1 || ctx->tok_row_end[0] == LLAMA_TOKEN_NULL) {
+        LOG_ERR("%s: the row newline embedding needs the text model\n", __func__);
+        return 1;
+    }
+    std::vector<float> nl(llama_model_n_embd(ctx->text_model));
+    if (llama_model_get_tok_embd_rows(ctx->text_model, ctx->tok_row_end.data(), 1, nl.data()) != n_embd) {
+        LOG_ERR("%s: failed to get the newline token embedding\n", __func__);
+        return 1;
+    }
+
+    out_embd.resize(image_tokens->n_tokens() * n_embd);
+    float * dst = out_embd.data();
+    for (size_t y = 0; y < ny; y++) {
+        dst = std::copy_n(rows.data() + y * nx * n_embd, nx * n_embd, dst);
+        dst = std::copy(nl.begin(), nl.end(), dst);
+    }
+    return 0;
+}
+
 static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd) {
     clip_ctx * ctx_clip = ctx->ctx_v;
     if (!ctx_clip) {
@@ -1948,6 +2036,14 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
     if (image_tokens->is_placeholder()) {
         LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
         return 1;
+    }
+
+    if (image_tokens->pos == MTMD_POS_TYPE_YOUTU_OMNI) {
+        std::vector<float> rows((size_t) n_embd_out * image_tokens->nx * image_tokens->ny);
+        if (!clip_image_batch_encode(ctx_clip, ctx->n_threads, &image_tokens->batch_f32, rows)) {
+            return 1;
+        }
+        return mtmd_youtu_add_row_newlines(ctx, image_tokens, rows, out_embd);
     }
 
     if (image_tokens->pos == MTMD_POS_TYPE_CANVAS) {
@@ -2720,6 +2816,7 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                 pos.z = 0; // unused for now
             } break;
         case MTMD_POS_TYPE_NORMAL:
+        case MTMD_POS_TYPE_YOUTU_OMNI:
             {
                 pos.t = pos_0 + i;
                 pos.x = pos_0 + i;
@@ -2777,6 +2874,7 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
         case MTMD_POS_TYPE_MROPE:
             return std::max(image_tokens->nx, image_tokens->ny);
         case MTMD_POS_TYPE_NORMAL:
+        case MTMD_POS_TYPE_YOUTU_OMNI:
             return image_tokens->n_tokens();
         case MTMD_POS_TYPE_HUNYUANVL:
             // HunyuanVL: the sequential (dim-0) position advances by the full token count

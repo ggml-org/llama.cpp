@@ -516,6 +516,7 @@ enum projector_type {
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_GLM5V,
     PROJECTOR_TYPE_YOUTUVL,
+    PROJECTOR_TYPE_YOUTU_OMNI,
     PROJECTOR_TYPE_YASA2,
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
@@ -590,6 +591,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GLM4V,             "glm4v"},
     { PROJECTOR_TYPE_GLM5V,             "glm5v"},
     { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
+    { PROJECTOR_TYPE_YOUTU_OMNI,        "youtu_omni"},
     { PROJECTOR_TYPE_YASA2,             "yasa2"},
     { PROJECTOR_TYPE_KIMIK25,           "kimik25"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL,    "nemotron_v2_vl"},
@@ -722,6 +724,23 @@ static inline const std::vector<int> & clip_suffix_rows(clip_suffix_type type) {
     }
 }
 
+// Youtu omni audio: chunks of 100 mel frames, three stride-2 convs, 13 tokens per full chunk.
+// Matches _get_feat_extract_output_lengths. A partial tail uses floor division that stays
+// non-negative, so the leave==0 case is the only one that would need Python's floor div.
+static inline int clip_youtu_omni_audio_tokens(int n_frames) {
+    if (n_frames <= 0) {
+        return 0;
+    }
+    const int n_full = n_frames / 100;
+    const int leave  = n_frames % 100;
+    if (leave == 0) {
+        return n_full * 13;
+    }
+    const int feat  = (leave - 1) / 2 + 1;
+    const int inner = (feat - 1) / 2;
+    return inner / 2 + 1 + n_full * 13;
+}
+
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
 // For seq, buf.size() == nx*ny*3*nt
@@ -737,6 +756,8 @@ struct clip_image_f32 {
     // deepseek4v: number of leading IMAGE_PAD embeddings, aligns IMAGE_START to the LLM compressor ratio
     // depends on the chunk position, set at tokenize time (see mtmd_tokenizer::add_media)
     int32_t lead_pad = 0;
+    // valid mel frames before the conv chunk padding. 0 means "use nx" (already a multiple of 100)
+    int32_t audio_n_frames = 0;
     // separators appended after the image tokens
     clip_suffix_type suffix_type = CLIP_SUFFIX_NONE;
 

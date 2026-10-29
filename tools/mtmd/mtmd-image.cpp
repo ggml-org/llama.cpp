@@ -1763,6 +1763,55 @@ mtmd_image_preproc_out mtmd_image_preprocessor_youtuvl::preprocess(const clip_im
     return output;
 }
 
+//
+// mtmd_image_preprocessor_youtu_omni
+//
+
+mtmd_image_preproc_out mtmd_image_preprocessor_youtu_omni::preprocess(const clip_image_u8 & img) const {
+    const int64_t max_px = hparams.image_max_pixels;
+    GGML_ASSERT(hparams.image_min_pixels > 0 && max_px > 0);
+    const int64_t factor = hparams.patch_size * hparams.n_merge;
+    const int64_t min_px = hparams.image_min_pixels;
+    const int64_t height = img.get_size().height;
+    const int64_t width  = img.get_size().width;
+
+    int64_t h = height;
+    int64_t w = width;
+    if (height * width > max_px) {
+        const double beta = std::sqrt((double) (height * width) / max_px);
+        h = std::max<int64_t>(1, (int64_t) std::floor(height / beta));
+        w = std::max<int64_t>(1, (int64_t) std::floor(width  / beta));
+    } else if (height * width < min_px) {
+        const double beta = std::sqrt((double) min_px / (height * width));
+        h = std::max<int64_t>(1, (int64_t) std::ceil(height * beta));
+        w = std::max<int64_t>(1, (int64_t) std::ceil(width  * beta));
+    }
+
+    int64_t canvas_h = (h + factor - 1) / factor * factor;
+    int64_t canvas_w = (w + factor - 1) / factor * factor;
+    if (canvas_h * canvas_w > max_px) {
+        // align down instead, and shrink the content to fit
+        canvas_h = std::max(factor, h / factor * factor);
+        canvas_w = std::max(factor, w / factor * factor);
+        const double scale = std::min((double) canvas_h / h, (double) canvas_w / w);
+        // nearbyint rounds half to even, same as python round()
+        h = std::max<int64_t>(1, std::min<int64_t>(canvas_h, (int64_t) std::nearbyint(h * scale)));
+        w = std::max<int64_t>(1, std::min<int64_t>(canvas_w, (int64_t) std::nearbyint(w * scale)));
+    }
+
+    clip_image_u8 content;
+    img_tool::resize(img, content, clip_image_size{(int) w, (int) h}, hparams.image_resize_algo, PAD_NONE);
+
+    clip_image_u8 canvas;
+    canvas.set_size(clip_image_size{(int) canvas_w, (int) canvas_h}, img.is_placeholder());
+    img_tool::fill(canvas, hparams.image_pad_color);
+    img_tool::composite(canvas, content, 0, 0);
+
+    mtmd_image_preproc_out output;
+    output.append(hparams, canvas, true);
+    return output;
+}
+
 mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_image_u8 & img) const {
     GGML_ASSERT(!hparams.image_res_candidates.empty());
 

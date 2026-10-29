@@ -74,6 +74,7 @@ add_library(mtmd
             models/deepseekocr2.cpp
             models/mobilenetv5.cpp
             models/youtuvl.cpp
+            models/youtu-omni.cpp
             models/yasa2.cpp
             models/parakeet.cpp
             )
