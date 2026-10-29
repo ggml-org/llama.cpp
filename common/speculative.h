@@ -34,6 +34,7 @@ std::vector<double> common_speculative_synth_rates_resolve(const common_params_s
 
 // return the conditional synthetic acceptance probabilities
 const std::vector<double> & common_speculative_get_synth_probs(const common_speculative * spec);
+bool common_speculative_has_device_probs(const common_speculative * spec);
 
 common_params common_base_params_to_speculative(const common_params & params);
 
@@ -73,12 +74,14 @@ struct common_speculative_draft_params {
     // the generated draft from the last _draft() call
     llama_tokens * result;
 
-    // candidate distribution per drafted token; set it to make draft-simple, draft-mtp and draft-dflash (DFlash2 only) sample
+    // candidate distribution per drafted token; used by probabilistic draft-simple, draft-mtp, DFlash2 and DSpark
     std::vector<std::vector<llama_token_data>> * result_q = nullptr;
 
     // the target's temp and seed, read only when the drafter samples probabilistically
     float    temp = 1.0f;
     uint32_t seed = LLAMA_DEFAULT_SEED;
+
+    bool probs_device = false;
 };
 
 common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);

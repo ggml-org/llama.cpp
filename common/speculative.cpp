@@ -32,15 +32,15 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
-// Rebuild seq_id's draft sampler at the target's temperature: rejection weighs q against p, so
-// both have to sample alike. Only temp and seed carry over; the draft keeps its own top_k.
+// Rebuild the draft sampler when the request's temperature or seed changes.
 static void spec_retune(
         std::vector<common_sampler_ptr> & smpls,
         std::vector<common_params_sampling> & cfg,
         const llama_model * model,
         llama_seq_id seq_id,
         float temp,
-        uint32_t seed) {
+        uint32_t seed,
+        bool full_vocab = false) {
     if (cfg.size() != smpls.size()) {
         const size_t n_old = cfg.size();
         cfg.resize(smpls.size());
@@ -62,11 +62,15 @@ static void spec_retune(
 
     common_params_sampling sparams;
     sparams.no_perf  = false;
-    sparams.top_k    = 10;
+    sparams.top_k    = full_vocab ? 0 : 10;
+    sparams.top_p    = 1.0f;
+    sparams.min_p    = 0.0f;
     sparams.temp     = cur.temp;
     // must be explicit, the default reseeds at random; mixed so it differs from the target's
     sparams.seed     = cur.seed == LLAMA_DEFAULT_SEED ? cur.seed : cur.seed ^ 0x85ebca6bu;
-    sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE };
+    sparams.samplers = full_vocab
+        ? std::vector<common_sampler_type>{ COMMON_SAMPLER_TYPE_TEMPERATURE }
+        : std::vector<common_sampler_type>{ COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE };
 
     smpls[seq_id].reset(common_sampler_init(model, sparams));
 }
@@ -990,9 +994,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<float> features_buf; // [n_chunk, n_embd_enc] gathered target features
 
     std::vector<common_sampler_ptr> smpls;
+    std::vector<common_params_sampling> smpls_cfg;
 
     // backend sampler chain per seq, attached to ctx_dft
     std::vector<llama_sampler *> backend_chains;
+    std::vector<uint32_t> backend_seeds;
+    std::vector<float> backend_temps;
 
     int32_t n_embd_dec = 0;  // draft hidden size
     int32_t n_embd_enc = 0;  // target_layer_ids_n * target_hidden_size
@@ -1020,7 +1027,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     // dspark speculators
     bool sample_from_anchor = true;
-
+    bool dspark_probabilistic = false;
     // block-internal attention
     bool causal_attn = false;
 
@@ -1039,6 +1046,15 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         const llama_model * model_dft = llama_get_model(ctx_dft);
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
+
+        dspark_probabilistic = is_dspark && this->params.probabilistic;
+        if (dspark_probabilistic) {
+            if (this->params.p_min > 0.0f) {
+                throw std::runtime_error("probabilistic DSpark requires --spec-draft-p-min 0");
+            }
+            llama_set_dspark_probabilistic(ctx_dft, true);
+            LOG_INF("%s: probabilistic DSpark uses the GPU Markov head and backend sampling\n", __func__);
+        }
 
         target_layer_ids   = llama_model_target_layer_ids  (model_dft);
         target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
@@ -1122,7 +1138,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
-        if (this->params.backend_sampling && !is_dflash2 && !is_lilicorr) {
+        backend_seeds.assign(n_seq, LLAMA_DEFAULT_SEED);
+        backend_temps.assign(n_seq, NAN);
+        if (this->params.backend_sampling && !is_dflash2 && !is_lilicorr && !dspark_probabilistic) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
                 llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
@@ -1142,12 +1160,15 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
 
         // DFlash2 reads its selector lattice from h_nextn and never consumes raw logits.
-        llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ !is_dflash2 && !is_lilicorr);
+        llama_set_embeddings_nextn(ctx_dft, !dspark_probabilistic, /*masked*/ !is_dflash2 && !is_lilicorr);
         llama_set_causal_attn(ctx_dft, causal_attn); // DFlash needs non-causal attention unless the model says otherwise
     }
 
     ~common_speculative_impl_draft_dflash() override {
         auto * ctx_dft = this->params.ctx_dft;
+        if (ctx_dft && dspark_probabilistic) {
+            llama_set_dspark_probabilistic(ctx_dft, false);
+        }
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) backend_chains.size(); ++seq_id) {
             if (backend_chains[seq_id] == nullptr) {
                 continue;
@@ -1164,6 +1185,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
+        if (dspark_probabilistic) {
+            smpls_cfg.resize(n_seq);
+            smpls_cfg[seq_id].temp = NAN;
+            if (backend_chains[seq_id] != nullptr) {
+                llama_sampler_reset(backend_chains[seq_id]);
+            }
+        }
 
         // reseed per request rather than per round, or two identical requests differ
         dflash2_seed[seq_id] = -1;
@@ -1179,6 +1207,38 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     "Drafts may degrade.\n",
                     __func__, (int) pos_max, N - 1);
         }
+    }
+
+    void setup_dspark_backend_sampler(llama_seq_id seq_id, float temp, uint32_t seed) {
+        if (!dspark_probabilistic || !params.backend_sampling) {
+            return;
+        }
+
+        auto * ctx_dft = params.ctx_dft;
+        if (backend_chains[seq_id] != nullptr &&
+                backend_seeds[seq_id] == seed && backend_temps[seq_id] == temp) {
+            return;
+        }
+        if (backend_chains[seq_id] != nullptr) {
+            llama_set_sampler(ctx_dft, seq_id, nullptr);
+            llama_sampler_free(backend_chains[seq_id]);
+            backend_chains[seq_id] = nullptr;
+        }
+
+        llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        if (temp > 0.0f && temp != 1.0f) {
+            llama_sampler_chain_add(chain, llama_sampler_init_temp(temp));
+        }
+        llama_sampler_chain_add(chain, llama_sampler_init_dist(seed == LLAMA_DEFAULT_SEED ? seed : seed ^ 0x85ebca6bu));
+
+        if (!llama_set_sampler(ctx_dft, seq_id, chain)) {
+            LOG_WRN("%s: backend sampling unavailable for seq_id=%d; using CPU sampling\n", __func__, (int) seq_id);
+            llama_sampler_free(chain);
+            return;
+        }
+        backend_chains[seq_id] = chain;
+        backend_seeds[seq_id] = seed;
+        backend_temps[seq_id] = temp;
     }
 
     bool process(const common_batch & batch_in) override {
@@ -1300,7 +1360,19 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 continue;
             }
 
-            common_sampler_reset(smpls[seq_id].get());
+            if (dspark_probabilistic) {
+                // Keep one random stream per request, including across verification rounds.
+                setup_dspark_backend_sampler(seq_id, dp.temp, dp.seed);
+                if (backend_chains[seq_id] == nullptr) {
+                    spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id,
+                            dp.result_q ? dp.temp : 0.0f, dp.seed, true);
+                }
+            } else {
+                common_sampler_reset(smpls[seq_id].get());
+                if (is_dspark) {
+                    dp.result_q = nullptr;
+                }
+            }
 
             const int32_t n = (int32_t) dp.pos0;
 
@@ -1323,12 +1395,20 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             return;
         }
 
+        bool probs_device = dspark_probabilistic && sample_from_anchor && n_seq == 1 &&
+            backend_chains[0] && dparams[0].probs_device && dparams[0].result_q;
+        dparams[0].probs_device = probs_device;
+        llama_set_probs_device(ctx_dft, probs_device);
+
         // decode all sequence's noise block in a single batch
         int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (ret != 0) {
             LOG_WRN("%s: llama_process returned %d\n", __func__, ret);
             return;
         }
+
+        probs_device = probs_device && llama_get_probs_device(ctx_dft) != nullptr;
+        dparams[0].probs_device = probs_device;
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
@@ -1423,9 +1503,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
 
             if (is_dspark) {
-                // DSpark: read from the first draft slot, truncate below the confidence threshold
                 const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
-                // bonus-anchor drafts read the mask positions only, like DFlash
                 const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
                 for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {
                     const int32_t idx = beg + i;
@@ -1434,21 +1512,25 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         break;
                     }
 
-                    common_sampler_sample(smpl, ctx_dft, idx, true);
-
-                    const auto * cur_p = common_sampler_get_candidates(smpl, true);
-
-                    for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-                        LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                                seq_id, k, i, cur_p->data[k].id, cur_p->data[k].p,
-                                common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    llama_token id;
+                    if (probs_device) {
+                        id = llama_get_sampled_token_ith(ctx_dft, idx);
+                    } else if (dspark_probabilistic) {
+                        id = common_sampler_sample(smpl, ctx_dft, idx, true);
+                    } else {
+                        common_sampler_sample(smpl, ctx_dft, idx, true);
+                        id = common_sampler_get_candidates(smpl, true)->data[0].id;
                     }
 
-                    const llama_token id = cur_p->data[0].id;
-
+                    const auto * cur_p = probs_device ? nullptr : common_sampler_get_candidates(smpl, false);
                     common_sampler_accept(smpl, id, true);
-
+                    if (dspark_probabilistic && backend_chains[seq_id]) {
+                        llama_sampler_accept(backend_chains[seq_id], id);
+                    }
                     result.push_back(id);
+                    if (dspark_probabilistic && dp.result_q && !probs_device) {
+                        dp.result_q->emplace_back(cur_p->data, cur_p->data + cur_p->size);
+                    }
                 }
             } else {
                 // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
@@ -1477,6 +1559,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             if (result.size() < (size_t) params.n_min) {
                 result.clear();
+                if (dspark_probabilistic && dp.result_q) {
+                    dp.result_q->clear();
+                }
             }
         }
     }
@@ -2935,6 +3020,10 @@ void common_speculative_free(common_speculative * spec) {
     }
 
     delete spec;
+}
+
+bool common_speculative_has_device_probs(const common_speculative * spec) {
+    return spec && spec->impls.size() == 1 && spec->impls[0]->type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
 }
 
 common_speculative_draft_params & common_speculative_get_draft_params(

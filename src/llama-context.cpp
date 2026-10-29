@@ -1028,6 +1028,7 @@ enum llama_pooling_type llama_context::pooling_type() const {
 }
 
 float * llama_context::get_logits() {
+    read_logits();
     output_reorder();
 
     return logits.data;
@@ -1063,6 +1064,7 @@ int64_t llama_context::output_resolve_row(int32_t i) const {
 }
 
 float * llama_context::get_logits_ith(int32_t i) {
+    read_logits();
     output_reorder();
 
     try {
@@ -1184,6 +1186,13 @@ llama_token llama_context::get_sampled_token_ith(int32_t idx) {
 }
 
 float * llama_context::get_sampled_probs_ith(int32_t idx) {
+    if (sampling.probs_pending) {
+        synchronize();
+        auto * probs = gf_res_prev_active ? gf_res_prev_active->t_sampled_probs_packed : nullptr;
+        GGML_ASSERT(probs && ggml_nelements(probs) <= (int64_t) sampling.probs.size);
+        ggml_backend_tensor_get(probs, sampling.probs.data, 0, ggml_nbytes(probs));
+        sampling.probs_pending = false;
+    }
     output_reorder();
 
     if (!sampling.probs.has_data()) {
@@ -1359,6 +1368,71 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
 
     cparams.embeddings_nextn        = value;
     cparams.embeddings_nextn_masked = masked;
+}
+
+void llama_context::set_dspark_probabilistic(bool value) {
+    if (cparams.dspark_probabilistic != value) {
+        cparams.dspark_probabilistic = value;
+        sched_need_reserve = true;
+    }
+}
+
+bool llama_context::supports_gpu_sampling() const {
+    for (auto * backend : backend_ptrs) {
+        auto * device = ggml_backend_get_device(backend);
+        auto * reg = ggml_backend_dev_backend_reg(device);
+        if (ggml_backend_reg_get_proc_address(reg, "ggml_backend_sample")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void llama_context::read_logits() {
+    if (!sampling.logits_pending) {
+        return;
+    }
+    synchronize();
+    auto * tensor = gf_res_prev_active ? gf_res_prev_active->t_logits : nullptr;
+    GGML_ASSERT(tensor && ggml_nelements(tensor) <= (int64_t) logits.size);
+    ggml_backend_tensor_get(tensor, logits.data, 0, ggml_nbytes(tensor));
+    sampling.logits_pending = false;
+}
+
+bool llama_context::sample_gpu(llama_context * draft, const std::vector<int> & idxs,
+        ggml_sample_params params, ggml_sample_result & result) {
+    auto * res = gf_res_prev_active;
+    auto * logits_tensor = res ? res->t_logits : nullptr;
+    if (!logits_tensor || idxs.size() != (size_t) params.n_draft + 1 ||
+            params.n_draft < 0 || params.n_draft > GGML_SAMPLE_MAX_DRAFT ||
+            logits_tensor->ne[1] != n_outputs || !output_swaps.empty()) {
+        return false;
+    }
+    auto * backend = ggml_backend_sched_get_tensor_backend(sched.get(), logits_tensor);
+    if (!backend) {
+        return false;
+    }
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+    auto sample = (ggml_backend_sample_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_sample");
+    if (!sample) {
+        return false;
+    }
+    ggml_tensor * q = nullptr;
+    if (params.n_draft > 0) {
+        if (!draft || !draft->gf_res_prev_active || !draft->output_swaps.empty()) {
+            return false;
+        }
+        q = draft->get_probs_device();
+        if (!q) {
+            return false;
+        }
+        draft->synchronize();
+    }
+    for (size_t i = 0; i < idxs.size(); ++i) {
+        params.rows[i] = output_resolve_row(idxs[i]);
+    }
+    synchronize();
+    return sample(backend, logits_tensor, q, &params, &result);
 }
 
 void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
@@ -1999,6 +2073,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
+    sampling.probs_pending = false;
+    sampling.logits_pending = false;
+    if (n_outputs_all > 0) {
+        sampling.probs_valid = false;
+    }
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -2075,7 +2154,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
             float * logits_out = logits.data + n_outputs_prev*n_vocab;
 
-            if (n_outputs) {
+            if (sampling.logits_device && n_outputs_prev == 0 && n_outputs == n_outputs_all) {
+                sampling.logits_pending = true;
+            } else if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
                 ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
@@ -2176,10 +2257,48 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             const auto stride = n_vocab;
 
             // async copy the sampling data from the backend to the host
-            copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    1,      n_outputs_prev, sched.get());
-            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
-            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
-            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            if (res->t_sampled_packed) {
+                GGML_ASSERT(res->t_sampled_probs_packed && n_outputs > 0);
+                GGML_ASSERT(ggml_nelements(res->t_sampled_packed) == n_outputs);
+                GGML_ASSERT(ggml_nelements(res->t_sampled_probs_packed) == n_outputs * n_vocab);
+                GGML_ASSERT((size_t) (n_outputs_prev + n_outputs) <= sampling.sampled.size);
+                GGML_ASSERT((size_t) (n_outputs_prev + n_outputs) * stride <= sampling.probs.size);
+                GGML_ASSERT((size_t) (n_outputs_prev + n_outputs) <= sampling.probs_count.size());
+                for (auto * tensor : { res->t_sampled_packed, res->t_sampled_probs_packed }) {
+                    if (tensor == res->t_sampled_probs_packed && sampling.probs_device &&
+                            n_outputs_prev == 0 && n_outputs == n_outputs_all) {
+                        if (!sampling.probs_tensor || sampling.probs_tensor->ne[0] != tensor->ne[0] ||
+                                sampling.probs_tensor->ne[1] != tensor->ne[1]) {
+                            synchronize();
+                            sampling.probs_buffer.reset();
+                            sampling.probs_ctx.reset(ggml_init({ggml_tensor_overhead(), nullptr, true}));
+                            sampling.probs_tensor = ggml_new_tensor_2d(sampling.probs_ctx.get(), GGML_TYPE_F32,
+                                    tensor->ne[0], tensor->ne[1]);
+                            sampling.probs_buffer.reset(ggml_backend_alloc_ctx_tensors_from_buft(sampling.probs_ctx.get(),
+                                    ggml_backend_buffer_get_type(tensor->buffer)));
+                            GGML_ASSERT(sampling.probs_buffer);
+                        }
+                        auto * backend = ggml_backend_sched_get_tensor_backend(sched.get(), tensor);
+                        ggml_backend_tensor_copy_async(backend, backend, tensor, sampling.probs_tensor);
+                        sampling.probs_pending = true;
+                        sampling.probs_valid = true;
+                        continue;
+                    }
+                    auto * backend = ggml_backend_sched_get_tensor_backend(sched.get(), tensor);
+                    void * dst = tensor == res->t_sampled_packed
+                        ? (void *) (sampling.sampled.data + n_outputs_prev)
+                        : (void *) (sampling.probs.data + n_outputs_prev * stride);
+                    ggml_backend_tensor_get_async(backend, tensor, dst, 0, ggml_nbytes(tensor));
+                }
+                for (uint32_t row = n_outputs_prev; row < n_outputs_prev + n_outputs; ++row) {
+                    sampling.probs_count[row] = n_vocab;
+                }
+            } else {
+                copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    1,      n_outputs_prev, sched.get());
+                copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
+                copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
+                copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            }
         }
 
         n_outputs_prev += n_outputs;
@@ -2442,6 +2561,9 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
 }
 
 void llama_context::output_reorder() {
+    if (!output_swaps.empty()) {
+        read_logits();
+    }
     const uint64_t n_vocab     = model.vocab.n_tokens();
     const uint64_t n_embd      = model.hparams.n_embd;
     const uint64_t n_embd_out  = model.hparams.n_embd_out();
@@ -2563,6 +2685,9 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
     for (const auto & [seq_id, sampler] : sampling.samplers) {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
+    }
+    if (cparams.dspark_probabilistic && !sampling.samplers.empty()) {
+        res += 4 * n_tokens;
     }
 
     if (cparams.training) {
@@ -4278,6 +4403,31 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
 
 void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
+}
+
+void llama_set_dspark_probabilistic(llama_context * ctx, bool value) {
+    ctx->set_dspark_probabilistic(value);
+}
+
+bool llama_supports_gpu_sampling(llama_context * ctx) {
+    return ctx && ctx->supports_gpu_sampling();
+}
+
+bool llama_sample_gpu(llama_context * ctx, llama_context * draft, const std::vector<int> & idxs,
+        ggml_sample_params params, ggml_sample_result & result) {
+    return ctx && ctx->sample_gpu(draft, idxs, params, result);
+}
+
+void llama_set_probs_device(llama_context * ctx, bool value) {
+    ctx->set_probs_device(value);
+}
+
+void llama_set_logits_device(llama_context * ctx, bool value) {
+    ctx->set_logits_device(value);
+}
+
+ggml_tensor * llama_get_probs_device(llama_context * ctx) {
+    return ctx->get_probs_device();
 }
 
 void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool value) {

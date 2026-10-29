@@ -4,6 +4,7 @@
 #include "arg.h"
 #include "log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +14,78 @@
 
 // Tests that common_sampler_sample_and_accept_n_rejection preserves the target
 // distribution regardless of what the draft distribution Q looks like.
+
+static void test_probabilistic_sampling(llama_model * model, llama_context * ctx) {
+    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    GGML_ASSERT(n_vocab >= 3);
+    std::vector<float> logits(n_vocab, -INFINITY);
+    logits[0] = std::log(0.1f);
+    logits[1] = std::log(0.3f);
+    logits[2] = std::log(0.6f);
+
+    common_params_sampling params;
+    params.seed = 42;
+    params.samplers = { COMMON_SAMPLER_TYPE_TEMPERATURE };
+    for (float temp : {0.5f, 1.0f, 2.0f}) {
+        params.temp = temp;
+        common_sampler_ptr sampler(common_sampler_init(model, params));
+        common_sampler_sample_logits(sampler.get(), logits.data(), n_vocab);
+        const auto * candidates = common_sampler_get_candidates(sampler.get(), false);
+        double sum = 0.0;
+        double norm = 0.0;
+        for (int32_t i = 0; i < 3; ++i) {
+            norm += std::exp((double) logits[i] / temp);
+        }
+        for (size_t i = 0; i < candidates->size; ++i) {
+            const auto & token = candidates->data[i];
+            const double expected = std::exp((double) logits[token.id] / temp) / norm;
+            GGML_ASSERT(std::abs(token.p - expected) < 1e-6);
+            sum += token.p;
+        }
+        GGML_ASSERT(std::abs(sum - 1.0) < 1e-6);
+    }
+
+    llama_memory_clear(llama_get_memory(ctx), true);
+    common_batch batch(ctx);
+    batch.add(0, 0, 0, true);
+    batch.add(1, 1, 0, true);
+    GGML_ASSERT(llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+
+    const float target_probs[] = {0.75f, 0.2f, 0.05f};
+    for (int32_t row = 0; row < 2; ++row) {
+        float * target_logits = llama_get_logits_ith(ctx, row);
+        std::fill(target_logits, target_logits + n_vocab, -INFINITY);
+        for (int32_t i = 0; i < 3; ++i) {
+            target_logits[i] = std::log(target_probs[i]);
+        }
+    }
+
+    params.temp = 1.0f;
+    common_sampler_ptr draft(common_sampler_init(model, params));
+    params.seed = 123;
+    common_sampler_ptr target(common_sampler_init(model, params));
+    int counts[3] = {};
+    const int n_samples = 12000;
+    for (int i = 0; i < n_samples; ++i) {
+        const llama_token token = common_sampler_sample_logits(draft.get(), logits.data(), n_vocab);
+        const auto * candidates = common_sampler_get_candidates(draft.get(), true);
+        const std::vector<std::vector<llama_token_data>> q = {
+            {candidates->data, candidates->data + candidates->size}
+        };
+        const auto accepted = common_sampler_sample_and_accept_n_rejection(target.get(), ctx, {0, 1}, {token}, q);
+        GGML_ASSERT(accepted[0] >= 0 && accepted[0] < 3);
+        ++counts[accepted[0]];
+    }
+    for (int i = 0; i < 3; ++i) {
+        GGML_ASSERT(std::abs((double) counts[i] / n_samples - target_probs[i]) < 0.025);
+    }
+    const std::vector<std::vector<llama_token_data>> outside_vocab = {{{n_vocab, 0.0f, 1.0f}}};
+    for (int i = 0; i < 100; ++i) {
+        const auto accepted = common_sampler_sample_and_accept_n_rejection(target.get(), ctx, {0, 1}, {n_vocab}, outside_vocab);
+        GGML_ASSERT(accepted.size() == 1 && accepted[0] >= 0 && accepted[0] < 3);
+    }
+    llama_memory_clear(llama_get_memory(ctx), true);
+}
 
 static int test_speculative_rejection_sampling(common_params & params, int n_trials) {
     params.sampling.backend_sampling = false;
@@ -24,6 +97,8 @@ static int test_speculative_rejection_sampling(common_params & params, int n_tri
         LOG_ERR("failed to initialize target model and context\n");
         return 1;
     }
+
+    test_probabilistic_sampling(model_tgt, ctx_tgt);
 
     const llama_tokens prompt = { 1, 2, 3, 1, 2 };
 
@@ -117,6 +192,7 @@ static int test_speculative_rejection_sampling(common_params & params, int n_tri
 
     bool   ok      = true;
     size_t covered = 0;
+    const double log_confidence = std::log(2.0 * n_vocab / 1e-6);
 
     auto get_count_for = [&](llama_token id) -> int {
         const auto it = token_counts.find(id);
@@ -138,8 +214,9 @@ static int test_speculative_rejection_sampling(common_params & params, int n_tri
         // a token outside of the target's distribution.
         covered += count;
 
-        const float standard_error = std::sqrt(p_t * (1.0f - p_t) / n_trials);
-        const float tolerance      = 6.0f * standard_error;
+        // Bernstein's bound also covers rare buckets; account for all vocabulary comparisons.
+        const float tolerance = std::sqrt(2.0 * p_t * (1.0f - p_t) * log_confidence / n_trials) +
+            2.0 * log_confidence / (3.0 * n_trials);
 
         LOG("token %3d : target = %f, empirical = %f, diff = %f, tol = %f\n", id, p_t, p_e, diff, tolerance);
 

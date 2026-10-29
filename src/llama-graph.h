@@ -874,6 +874,10 @@ struct llm_graph_params {
             return false;
         }
 
+        if (cparams.dspark_probabilistic != other.cparams.dspark_probabilistic) {
+            return false;
+        }
+
         if (!samplers_equal(samplers, other.samplers)) {
             return false;
         }
@@ -973,6 +977,9 @@ public:
     std::vector<ggml_tensor *> t_sampled_probs;
     std::vector<ggml_tensor *> t_sampled_logits;
     std::vector<ggml_tensor *> t_candidates;
+
+    ggml_tensor * t_sampled_packed = nullptr;
+    ggml_tensor * t_sampled_probs_packed = nullptr;
 
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
