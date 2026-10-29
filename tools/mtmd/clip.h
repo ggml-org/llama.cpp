@@ -14,6 +14,7 @@
 
 struct clip_ctx;
 struct clip_enc_state;
+struct clip_gen_state;
 
 struct clip_image_size {
     int width;
@@ -110,7 +111,6 @@ struct clip_encode_params {
     float   top_p = 1.0f;
     std::vector<int32_t> * out_codes = nullptr; // this frame's 16 sampled codes
     std::vector<float> * out_feats = nullptr; // continuous counterpart of out_codes
-    uint32_t seed = UINT32_MAX;               // UINT32_MAX for random
     float   temp = 0.0f;                      // sampling temperature, noise scale for flow-matching decoders
     bool * out_is_eos = nullptr;
 
@@ -118,8 +118,9 @@ struct clip_encode_params {
     const std::vector<int32_t> * codes = nullptr;     // this frame's 16 RVQ codes
     const std::vector<float> *   feats = nullptr;     // continuous counterpart of codes
     std::vector<float> * out_audio = nullptr;         // decoded PCM samples, F32
-    const std::vector<uint8_t> * state_in  = nullptr; // state from previous call, null or wrong size means cold start
-    std::vector<uint8_t> *       state_out = nullptr; // state for the next call
+
+    // audio gen: state of one sequence, clip_encode() updates it in place
+    struct clip_gen_state * gen_state = nullptr;
 
     // streaming audio input, updated in place by clip_encode()
     struct clip_enc_state * enc_state = nullptr;
@@ -131,6 +132,12 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params);
 // n_frames_max is the maximum number of encoder frames per call
 struct clip_enc_state * clip_enc_state_init(struct clip_ctx * ctx, int32_t n_frames_max);
 void                    clip_enc_state_free(struct clip_enc_state * state);
+
+// per-sequence state of audio generation: RNG and the slots kept between GEN_WAV calls
+// seed UINT32_MAX means random; reset() clears the slots and keeps the RNG stream
+struct clip_gen_state * clip_gen_state_init(struct clip_ctx * ctx, uint32_t seed);
+void                    clip_gen_state_free(struct clip_gen_state * state);
+void                    clip_gen_state_reset(struct clip_gen_state * state);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated

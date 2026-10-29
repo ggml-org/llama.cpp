@@ -32,10 +32,20 @@ enum htp_fa_kernel_type {
     HTP_FA_KERNEL_HMX
 };
 
+// Multicore: gcd(n_kv_heads, N) teams own the KV heads, team members share the Q-blocks
+#define HTP_FA_FLAG_TEAM_SPLIT 0x01
+
+static inline void htp_fa_mdev_teams(uint32_t n_kv_heads, uint32_t mdev_count, bool head_split,
+                                     uint32_t * n_teams, uint32_t * team_size) {
+    const uint32_t t = (head_split && n_kv_heads > 0 && mdev_count > 1) ? hex_gcd_u32(n_kv_heads, mdev_count) : 1;
+    *n_teams   = t;
+    *team_size = mdev_count > 1 ? mdev_count / t : 1;
+}
+
 struct htp_fa_kernel_params {
     uint8_t  kernel_type;        // enum htp_fa_kernel_type
     uint8_t  head_split;         // 1 = partition by KV heads in multicore, 0 = token partition
-    uint8_t  flags;              // reserved
+    uint8_t  flags;              // HTP_FA_FLAG_*
     uint8_t  n_threads;          // Number of threads to run
 
     // Common parameters
@@ -49,9 +59,6 @@ struct htp_fa_kernel_params {
     float    logit_softcap;
     uint32_t vtcm_size;
 
-    uint32_t qrows;
-    uint32_t qrows_per_thread;
-    uint32_t qrow_start;
     float    m0;
     float    m1;
     uint32_t n_head_log2;
@@ -67,8 +74,6 @@ struct htp_fa_kernel_params {
     union {
         struct {
             uint32_t g_br;
-            uint32_t row_buf_stride;
-            uint32_t mask_buf_row_stride;
             int32_t  mask_broadcast;
             int32_t  pipeline;
             struct fastdiv_values div_G;
@@ -85,6 +90,8 @@ struct htp_fa_kernel_params {
 
 #if defined(__cplusplus)
 static_assert(sizeof(struct htp_fa_kernel_params) <= 128, "htp_fa_kernel_params is too large for kernel_params blob");
+#else
+_Static_assert(sizeof(struct htp_fa_kernel_params) <= 128, "htp_fa_kernel_params is too large for kernel_params blob");
 #endif
 
 // VTCM region layout for the HMX flash-attention kernel.
@@ -325,7 +332,8 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                                          size_t   n_threads,
                                          bool     is_q_fp32,
                                          bool     has_sinks,
-                                         size_t   n_heads) {
+                                         size_t   n_heads,
+                                         size_t   q_split) {
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
@@ -365,7 +373,8 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                 const size_t vecs_per_t     = n_use > 0 ? (n_row_vec_cnt + n_use - 1) / n_use : 1;
 
                 const size_t c_iter_actual  = c_iter_base + c_softmax * vecs_per_t;
-                const size_t cost           = q_blocks * (c_q_fixed + kv_blocks * c_iter_actual);
+                const size_t q_blocks_nsp   = (q_blocks + q_split - 1) / (q_split ? q_split : 1);
+                const size_t cost           = q_blocks_nsp * (c_q_fixed + kv_blocks * c_iter_actual);
                 const size_t mn             = Br * Bc;
 
                 if (cost < best_cost || (cost == best_cost && mn > best_mn)) {

@@ -172,12 +172,12 @@ static ggml_tensor * hy_v4_hc_reduce(ggml_context * ctx0, ggml_tensor * x, ggml_
     return ggml_cast(ctx0, result, out_type);
 }
 
-ggml_tensor * llama_model_hy_v4::graph::build_hc_pre(
+llama_model_hy_v4::graph::hc_pre
+llama_model_hy_v4::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * hc_fn,
         ggml_tensor * hc_scale,
         ggml_tensor * hc_base,
-        ggml_tensor ** post,
         int il) const {
     const int64_t hc  = hparams.dsv4_hc_mult;
     const int64_t nt  = x->ne[2];
@@ -202,16 +202,15 @@ ggml_tensor * llama_model_hy_v4::graph::build_hc_pre(
     cb(pre, "hc_pre", il);
 
     // post = magnitude*sigmoid(mixes[hc:2hc]*scale_post + base_post) + eps
-    ggml_tensor * po = hy_v4_view_2d(ctx0, mixes, hc, nt, hc);
-    po = ggml_mul(ctx0, po, scale_post);
-    po = ggml_add(ctx0, po, base_post);
-    po = ggml_sigmoid(ctx0, po);
-    po = ggml_scale(ctx0, po, hparams.hc_magnitude);
-    po = ggml_scale_bias(ctx0, po, 1.0f, hparams.dsv4_hc_eps);
-    *post = po;
-    cb(po, "hc_post_gate", il);
+    ggml_tensor * post = hy_v4_view_2d(ctx0, mixes, hc, nt, hc);
+    post = ggml_mul(ctx0, post, scale_post);
+    post = ggml_add(ctx0, post, base_post);
+    post = ggml_sigmoid(ctx0, post);
+    post = ggml_scale(ctx0, post, hparams.hc_magnitude);
+    post = ggml_scale_bias(ctx0, post, 1.0f, hparams.dsv4_hc_eps);
+    cb(post, "hc_post_gate", il);
 
-    return hy_v4_hc_reduce(ctx0, x, pre, hc, n_embd, nt, x->type);
+    return { hy_v4_hc_reduce(ctx0, x, pre, hc, n_embd, nt, x->type), post };
 }
 
 ggml_tensor * llama_model_hy_v4::graph::build_hc_post(
@@ -418,12 +417,13 @@ ggml_tensor * llama_model_hy_v4::graph::build_indexer_top_k(
     return ggml_cont(ctx0, ggml_top_k(ctx0, score, n_top_k));
 }
 
-ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
+llama_model_hy_v4::graph::attn_dsa
+llama_model_hy_v4::graph::build_attention_dsa(
         const llama_model & model,
         llm_graph_input_attn_k_dsa * inp_attn_dsa,
         ggml_tensor * cur,
         ggml_tensor * inp_pos,
-        ggml_tensor ** last_top_k,
+        ggml_tensor * last_top_k,
         float kq_scale,
         int il) const {
     const auto & layer = model.layers[il];
@@ -436,11 +436,12 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
     ggml_tensor * qr = ggml_mul_mat(ctx0, layer.wq_a, cur);
     qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
 
+    ggml_tensor * top_k = last_top_k;
     if (hparams.is_indexer_full(il)) {
-        *last_top_k = build_indexer_top_k(model, inp_attn_dsa, cur, qr, inp_pos, il);
-        cb(*last_top_k, "top_k", il);
+        top_k = build_indexer_top_k(model, inp_attn_dsa, cur, qr, inp_pos, il);
+        cb(top_k, "top_k", il);
     }
-    GGML_ASSERT(*last_top_k != nullptr);
+    GGML_ASSERT(top_k != nullptr);
 
     ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, qr);
 
@@ -480,7 +481,7 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
 
     ggml_tensor * attn = build_attn(inp_attn_dsa,
             nullptr, nullptr, nullptr,
-            Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, layer.wv_b, *last_top_k, kq_scale, il);
+            Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, layer.wv_b, top_k, kq_scale, il);
     cb(attn, "attn_kqv", il);
 
     ggml_tensor * gate = ggml_mul_mat(ctx0, layer.wqkv_gate, cur);
@@ -491,7 +492,7 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention_dsa(
     ggml_tensor * out = build_lora_mm(layer.wo, attn);
     cb(out, "attn_out", il);
 
-    return out;
+    return { out, top_k };
 }
 
 llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_params & params) :
@@ -520,23 +521,27 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * residual = inpL;
-        ggml_tensor * post = nullptr;
-
-        cur = build_hc_pre(inpL, model.layers[il].hc_attn_fn, model.layers[il].hc_attn_scale,
-                model.layers[il].hc_attn_base, &post, il);
+        hc_pre attn_hc = build_hc_pre(inpL, model.layers[il].hc_attn_fn, model.layers[il].hc_attn_scale,
+                model.layers[il].hc_attn_base, il);
+        cur = attn_hc.cur;
         cur = build_norm(cur, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        cur = is_dsa
-            ? build_attention_dsa(model, inp_attn_dsa, cur, inp_pos, &last_top_k, kq_scale, il)
-            : build_attention(model, inp_attn, cur, inp_pos, kq_scale, il);
+        if (is_dsa) {
+            attn_dsa attn = build_attention_dsa(model, inp_attn_dsa, cur, inp_pos, last_top_k, kq_scale, il);
+            cur = attn.cur;
+            last_top_k = attn.top_k;
+        } else {
+            cur = build_attention(model, inp_attn, cur, inp_pos, kq_scale, il);
+        }
 
-        inpL = build_hc_post(cur, residual, post, il);
+        inpL = build_hc_post(cur, residual, attn_hc.post, il);
         cb(inpL, "hc_attn_out", il);
 
         residual = inpL;
-        cur = build_hc_pre(inpL, model.layers[il].hc_ffn_fn, model.layers[il].hc_ffn_scale,
-                model.layers[il].hc_ffn_base, &post, il);
+        hc_pre ffn_hc = build_hc_pre(inpL, model.layers[il].hc_ffn_fn, model.layers[il].hc_ffn_scale,
+                model.layers[il].hc_ffn_base, il);
+        cur = ffn_hc.cur;
         cur = build_norm(cur, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
@@ -575,7 +580,7 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
             cb(cur, "ffn_out", il);
         }
 
-        inpL = build_hc_post(cur, residual, post, il);
+        inpL = build_hc_post(cur, residual, ffn_hc.post, il);
         cb(inpL, "l_out", il);
     }
 

@@ -21,6 +21,7 @@
 		editWithReplacement: () => {},
 		forkConversation: () => {},
 		navigateToSibling: () => {},
+		regenerateCompaction: () => {},
 		regenerateWithBranching: () => {}
 	};
 
@@ -99,6 +100,77 @@
 		type: 'message'
 	});
 
+	const compactionMessage: DatabaseMessage = {
+		children: [],
+		content:
+			'The user asked about the ultimate answer and its origin. Key facts: the answer is **42**, from Douglas Adams\' "The Hitchhiker\'s Guide to the Galaxy", computed by Deep Thought over 7.5 million years.\n\nNothing is left to do unless the user wants the question itself discussed.',
+		convId: 'conv-1',
+		id: '8',
+		// The model the server reports for the summary request.
+		model: 'ggml-org/Qwen3.8-Flash-Next',
+		parent: '1',
+		role: 'user',
+		thinking: '',
+		timestamp: Date.now() - 1000 * 60 * 30,
+		// The pre-encode stamps the reduced prompt on the node; `compaction`
+		// keeps the summary request's own timings for the stats row.
+		timings: {
+			cache_n: 0,
+			compaction: {
+				cache_n: 0,
+				predicted_ms: 12000,
+				predicted_n: 300,
+				prompt_ms: 18200,
+				prompt_n: 42200
+			},
+			predicted_n: 0,
+			prompt_n: 3204
+		},
+		type: 'compaction'
+	};
+
+	// The turn the compaction summarized: its timings are the context size
+	// the node's toggle reports as the "before" number.
+	const preCompactionAssistant: DatabaseMessage = {
+		children: [],
+		content: 'Deep Thought took 7.5 million years to answer.',
+		convId: 'conv-1',
+		id: '7',
+		parent: '1',
+		role: 'assistant',
+		thinking: '',
+		timestamp: Date.now() - 1000 * 60 * 31,
+		timings: { cache_n: 0, predicted_n: 118, prompt_n: 42200 },
+		type: 'message'
+	};
+
+	const compactionPendingMessage: DatabaseMessage = {
+		children: [],
+		content: '',
+		convId: 'conv-1',
+		id: '9',
+		parent: '1',
+		role: 'user',
+		thinking: '',
+		timestamp: Date.now() - 1000 * 60 * 29,
+		type: 'compaction'
+	};
+
+	// The same node once the prompt is through and the summary is streaming.
+	const compactionGeneratingMessage: DatabaseMessage = {
+		children: [],
+		content:
+			'The user asked about the ultimate answer and its origin. Key facts: the answer is **42**',
+		convId: 'conv-1',
+		id: '10',
+		model: 'ggml-org/Qwen3.8-Flash-Next',
+		parent: '1',
+		role: 'user',
+		thinking: '',
+		timestamp: Date.now() - 1000 * 60 * 29,
+		type: 'compaction'
+	};
+
 	let streamingMessage = $state({
 		children: [],
 		content: '',
@@ -173,6 +245,95 @@
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 
 		settingsStore.updateConfig('showRawOutputSwitch', true);
+	}}
+/>
+
+<Story
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		message: compactionMessage
+	}}
+	name="Compaction"
+	play={async () => {
+		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
+
+		settingsStore.updateConfig('showMessageStats', true);
+		settingsStore.updateConfig('showRawOutputSwitch', false);
+		// The toggle reads the before size from the branch, so the story needs
+		// the summarized turn in the active message list.
+		conversationsStore.activeMessages = [preCompactionAssistant, compactionMessage];
+	}}
+/>
+
+<Story
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		message: compactionPendingMessage
+	}}
+	name="CompactionPrefill"
+	play={async () => {
+		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { chatActivityStore } = await import('$lib/stores/chat/activity.svelte');
+		const { chatStore } = await import('$lib/stores/chat/index.svelte');
+
+		settingsStore.updateConfig('showRawOutputSwitch', false);
+
+		// The summary request reports its prompt progress through the shared
+		// processing state; seed one so the story shows the prefill detail.
+		chatActivityStore.markCompacting('conv-1', compactionPendingMessage.id);
+		chatStore.processing.setActiveConversation('conv-1');
+		chatStore.processing.setState('conv-1', {
+			contextTotal: 32768,
+			contextUsed: 10000,
+			hasNextToken: false,
+			outputTokensMax: -1,
+			outputTokensUsed: 0,
+			progressPercent: 42,
+			promptProgress: { cache: 0, processed: 4200, time_ms: 6000, total: 10000 },
+			promptTokens: 0,
+			speculative: false,
+			status: 'preparing',
+			temperature: 0.8,
+			tokensDecoded: 0,
+			tokensPerSecond: 0,
+			tokensRemaining: -1,
+			topP: 0.95
+		});
+	}}
+/>
+
+<Story
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		message: compactionGeneratingMessage
+	}}
+	name="CompactionGenerating"
+	play={async () => {
+		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { chatActivityStore } = await import('$lib/stores/chat/activity.svelte');
+		const { chatStore } = await import('$lib/stores/chat/index.svelte');
+
+		settingsStore.updateConfig('showRawOutputSwitch', false);
+
+		// Prompt processing is over, so only the generated tokens are reported.
+		chatActivityStore.markCompacting('conv-1', compactionGeneratingMessage.id);
+		chatStore.processing.setActiveConversation('conv-1');
+		chatStore.processing.setState('conv-1', {
+			contextTotal: 32768,
+			contextUsed: 45200,
+			hasNextToken: true,
+			outputTokensMax: -1,
+			outputTokensUsed: 128,
+			promptTokens: 42200,
+			speculative: false,
+			status: 'generating',
+			temperature: 0.8,
+			tokensDecoded: 128,
+			tokensPerSecond: 25,
+			tokensRemaining: -1,
+			topP: 0.95
+		});
 	}}
 />
 
