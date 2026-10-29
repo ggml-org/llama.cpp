@@ -17,12 +17,14 @@
 
 namespace {
 
-// ClassLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
-// CRF = uses of an expert, decayed with a half-life of crf_half tokens; class = floor(log2(CRF)), at most n_class - 1
-// each slot is in the LRU list of the class of its last use; the victim is the list head with the max age/2^class
+// ClassLRU: one LRU list per frequency class, over the experts of a group of layers
+// slot_map[il][e] is the slot of expert e of layer il, n_slots or later if not cached, the host slot map tensor
+// CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of crf_half_life tokens, retained across evictions
+// class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
+// victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
 struct moe_cache_lru {
     static constexpr int   n_class  = 4;
-    static constexpr float crf_half = 128.0f; // tokens
+    static constexpr float crf_half_life = 128.0f; // tokens
 
     int32_t n_expert = 0;
     int32_t n_slots  = 0;
@@ -31,22 +33,23 @@ struct moe_cache_lru {
     // [n_layer] data of the slot maps, the experts at slot n_slots or later are not cached
     // the experts computed on the CPU read zero slots after the cached ones on the device
     std::vector<int32_t *> slot_map;
-    std::vector<int32_t>   key_of;   // [n_slots] il*n_expert + expert, -1 if empty
+    std::vector<int32_t>   key_of;   // [n_slots] key of the expert in the slot, -1 if empty
 
-    std::vector<int32_t> prev;
-    std::vector<int32_t> next;
+    // one LRU list per class, the head is the least recently used end
+    std::vector<int32_t> prev;    // [n_slots] -1 at the ends
+    std::vector<int32_t> next;    // [n_slots]
     int32_t head[n_class] = { -1, -1, -1, -1 };
     int32_t tail[n_class] = { -1, -1, -1, -1 };
-    std::vector<int8_t> list_of; // [n_slots]
+    std::vector<int8_t>  list_of; // [n_slots] class list of the slot
     int32_t n_filled = 0; // slots that hold an expert
 
-    std::vector<float>   crf;   // [n_layer*n_expert]
-    std::vector<int64_t> last;  // [n_layer*n_expert] layer clock at the last use, -1 if not used
-    std::vector<int64_t> clock; // [n_layer] tokens seen by the layer
+    std::vector<float>   crf;      // [n_layer*n_expert]
+    std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
+    std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer (as added by plan() for each ubatch)
 
-    std::vector<uint32_t> seen; // [n_expert]
+    std::vector<uint32_t> seen; // [n_expert] seen[e] == seen_gen if expert e is selected by the current plan()
     uint32_t seen_gen = 0;
-    std::vector<int32_t> uniq;
+    std::vector<int32_t> uniq;  // the distinct selected experts
     std::vector<int32_t> misses;
     std::vector<uint64_t> token_zero; // [n_tokens] zero slots used by each token
 
@@ -66,15 +69,15 @@ struct moe_cache_lru {
         tail[0] = n_slots - 1;
         list_of.assign(n_slots, 0);
         crf.assign((size_t) n_layer*n_expert, 0.0f);
-        last.assign((size_t) n_layer*n_expert, -1);
+        last_use.assign((size_t) n_layer*n_expert, -1);
         clock.assign(n_layer, 0);
         seen.assign(n_expert, 0);
     }
 
-    // move slot s to the most recently used end of list l
-    void move(int32_t s, int l) {
+    // move slot s to the most recently used end of list c
+    void move(int32_t s, int c) {
         const int from = list_of[s];
-        if (from == l && s == tail[from]) {
+        if (from == c && s == tail[from]) {
             return;
         }
         if (prev[s] >= 0) {
@@ -88,46 +91,72 @@ struct moe_cache_lru {
             tail[from] = prev[s];
         }
 
-        prev[s] = tail[l];
+        prev[s] = tail[c];
         next[s] = -1;
-        if (tail[l] >= 0) {
-            next[tail[l]] = s;
+        if (tail[c] >= 0) {
+            next[tail[c]] = s;
         } else {
-            head[l] = s;
+            head[c] = s;
         }
-        tail[l] = s;
-        list_of[s] = l;
+        tail[c] = s;
+        list_of[s] = c;
     }
 
+    // key = index of an expert of a layer in crf and last_use
+    int32_t make_key(int32_t il, int32_t e) const { return il*n_expert + e; }
+    int32_t key_layer (int32_t key) const { return key / n_expert; }
+    int32_t key_expert(int32_t key) const { return key % n_expert; }
+
+    // for a key after use(): its CRF is >= 1, so log2 is >= 0 and the cast is the floor
     int class_of(int32_t key) const {
         return std::min(n_class - 1, (int) std::log2(crf[key]));
     }
 
+    // decay the CRF by the time since the last use; an unused key gets 1 because crf[key] is 0 prior to first use
     void use(int32_t il, int32_t key) {
         const int64_t t = clock[il];
-        crf[key]  = last[key] >= 0 ? crf[key]*std::exp2(-(t - last[key])/crf_half) + 1.0f : 1.0f;
-        last[key] = t;
+        crf[key]      = crf[key]*std::exp2(-(t - last_use[key])/crf_half_life) + 1.0f;
+        last_use[key] = t;
+    }
+
+    // the experts selected by this plan() must not be evicted, nor the slots this plan() filled already
+    bool is_selected(int32_t il, int32_t key) const {
+        if (key < 0) {
+            return false; // unused slot
+        }
+        if (key_layer(key) != il) {
+            return false; // seen is per expert index, an expert of another layer can have the same index
+        }
+        return seen[key_expert(key)] == seen_gen;
+    }
+
+    // the least recently used slot of list c that this plan() does not select, -1 if none
+    int32_t candidate(int c, int32_t il) const {
+        for (int32_t s = head[c]; s >= 0; s = next[s]) {
+            if (!is_selected(il, key_of[s])) {
+                return s;
+            }
+        }
+        return -1;
     }
 
     int32_t victim(int32_t il) const {
         int32_t res = -1;
         double res_score = -1.0;
-        for (int l = 0; l < n_class; ++l) {
-            for (int32_t s = head[l]; s >= 0; s = next[s]) {
-                const int32_t key = key_of[s];
-                if (key < 0) {
-                    return s;
-                }
-                // keep every expert selected by this request, including earlier fills
-                if (key / n_expert == il && seen[key % n_expert] == seen_gen) {
-                    continue;
-                }
-                const double score = std::ldexp((double) (clock[key / n_expert] - last[key]), -l);
-                if (score > res_score) {
-                    res       = s;
-                    res_score = score;
-                }
-                break;
+        for (int c = 0; c < n_class; ++c) {
+            const int32_t s = candidate(c, il);
+            if (s < 0) {
+                continue;
+            }
+            const int32_t key = key_of[s];
+            if (key < 0) {
+                return s; // unused slot
+            }
+            const int64_t age   = clock[key_layer(key)] - last_use[key];
+            const double  score = std::ldexp((double) age, -c); // age/2^class
+            if (score > res_score) {
+                res       = s;
+                res_score = score;
             }
         }
         if (res < 0) {
@@ -202,9 +231,10 @@ struct moe_cache_lru {
         // update the CRF of all selected experts and promote hits before choosing victims for misses
         misses.clear();
         for (int32_t e : uniq) {
-            use(il, il*n_expert + e);
+            const int32_t key = make_key(il, e);
+            use(il, key);
             if (slots[e] < n_slots) {
-                move(slots[e], class_of(il*n_expert + e));
+                move(slots[e], class_of(key));
                 n_hit++;
             } else {
                 misses.push_back(e);
@@ -232,14 +262,15 @@ struct moe_cache_lru {
         }
         misses.erase(misses.begin(), misses.begin() + n_keep);
 
-        // sorted misses usually get consecutive slots, so the uploads can be merged
+        // fill the misses in expert order: victim() takes unused slots, and slots filled by one plan(), in list order,
+        // so consecutive experts often get consecutive slots and one upload
         std::sort(misses.begin(), misses.end());
         for (int32_t e : misses) {
-            const int32_t key = il*n_expert + e;
+            const int32_t key = make_key(il, e);
             const int32_t s = victim(il);
             if (admit && key_of[s] >= 0) {
                 const int32_t v = key_of[s];
-                if (crf[key] <= crf[v]*std::exp2(-(clock[v / n_expert] - last[v])/crf_half)) {
+                if (crf[key] <= crf[v]*std::exp2(-(clock[key_layer(v)] - last_use[v])/crf_half_life)) {
                     const int32_t z = take_zero(e, ids, n_tokens, n_used, n_zero);
                     if (z >= 0) {
                         slots[e] = z;
@@ -249,12 +280,12 @@ struct moe_cache_lru {
                 }
             }
             if (key_of[s] >= 0) {
-                slot_map[key_of[s] / n_expert][key_of[s] % n_expert] = empty;
+                slot_map[key_layer(key_of[s])][key_expert(key_of[s])] = empty;
             } else {
                 n_filled++;
             }
             key_of[s] = key;
-            slots[e] = s;
+            slots[e]  = s;
             move(s, class_of(key));
             fills.push_back({ e, s });
         }
