@@ -182,9 +182,12 @@ int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
 int op_im2col_3d(struct htp_ops_context * octx);
+int op_conv_2d(struct htp_ops_context * octx);
+int op_conv_2d_dw(struct htp_ops_context * octx);
 int op_pool_2d(struct htp_ops_context * octx);
 int op_pool_1d(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
+int op_upscale(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

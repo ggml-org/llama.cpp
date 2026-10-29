@@ -2473,7 +2473,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({
                 run_in_terminal_tool
         })
-            .expect_content("Let me inspect the current directory.\n")
+            .expect_content("Let me inspect the current directory.")
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
@@ -2495,7 +2495,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 run_in_terminal_tool
         })
             .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
-            .expect_content("Let me inspect the current directory.\n")
+            .expect_content("Let me inspect the current directory.")
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
@@ -2604,7 +2604,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
                 .messages({ user_start, assistant_todos, tool_result, user_continue })
                 .expect_reasoning("I need to run a terminal command.")
-                .expect_content("Let me inspect the current directory.\n")
+                .expect_content("Let me inspect the current directory.")
                 .expect_tool_calls({
                     { "run_in_terminal", R"({"command": "pwd"})", {} },
                 })
@@ -8146,12 +8146,12 @@ static void test_chat_session() {
         for (size_t i = 0; i < thinking.size(); i += 3) {
             session.feed(common_chat_input(thinking.substr(i, 3)));
         }
-        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n"), session.msg());
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking"), session.msg());
 
         for (size_t i = thinking.size(); i < output.size(); i += 3) {
             session.feed(common_chat_input(output.substr(i, 3)));
         }
-        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n", "special_function", "{\"arg1\":1}"), session.finish());
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}"), session.finish());
     }
 
     // a copy does not see what is fed to the original
@@ -8176,7 +8176,7 @@ static void test_chat_session() {
         common_chat_session session(tmpls.get(), nullptr, cont);
         assert_equals(std::string("<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, "),
                       session.generation_prompt());
-        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking\n"), session.msg());
+        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking"), session.msg());
         session.feed(common_chat_input("world!"));
         assert_equals(std::string("Hello, world!"), session.msg().content);
 

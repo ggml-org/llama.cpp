@@ -762,6 +762,63 @@ struct case_noalloc : ctx_test {
     }
 };
 
+struct case_comp_padding : ctx_test {
+    const char * name() const override { return "comp_padding"; }
+
+    const char * description() const override {
+        return "fixed-sized DeepSeek batches reuse the compressed-cache graph";
+    }
+
+    std::string skip_reason(model_run & mr) const override {
+        char arch[64] = {};
+        llama_model_meta_val_str(mr.model, "general.architecture", arch, sizeof(arch));
+        return strcmp(arch, "deepseek4") == 0 || strcmp(arch, "deepseek41") == 0 ? "" : "requires DeepSeek V4 or V4.1";
+    }
+
+    case_result run(model_run & mr) const override {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        for (const uint32_t n_seq : { 1u, 2u }) {
+            ctx_opts opts;
+            opts.n_ctx      = 256*n_seq;
+            opts.n_batch    = 64;
+            // Reserve the DSV4.1 small-batch attention graph when n_seq == 1.
+            opts.n_ubatch   = 32;
+            opts.n_seq_max  = n_seq;
+            opts.kv_unified = n_seq == 1;
+
+            for (const uint32_t n_tokens : { 3u, 5u, 6u, 7u }) {
+                auto ctx = mr.ctx(opts);
+                CTX_REQUIRE(ctx, "failed to create the context");
+                std::vector<llama_pos> pos(n_seq);
+                for (uint32_t s = 0; s < n_seq; ++s) {
+                    pos[s] = 32 + s;
+                    CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, s, 0, pos[s]), "prefill failed");
+                }
+
+                // Stay inside the same attention-cache size while crossing compressor boundaries.
+                for (int step = 0; step < 3; ++step) {
+                    common_batch batch(ctx.get());
+                    // Equal lengths keep multiple sequences in one ubatch.
+                    for (uint32_t s = 0; s < n_seq; ++s) {
+                        for (uint32_t i = 0; i < n_tokens; ++i, ++pos[s]) {
+                            batch.add(gen_token(n_vocab, s, pos[s]), pos[s], s, true);
+                        }
+                    }
+                    const int32_t n_reused = llama_perf_context(ctx.get()).n_reused;
+                    CTX_REQUIRE(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "decode failed");
+                    if (step > 0) {
+                        CTX_REQUIRE(llama_perf_context(ctx.get()).n_reused == n_reused + 1,
+                                "compressed-cache graph was rebuilt for " + std::to_string(n_tokens) + " tokens and " + std::to_string(n_seq) + " sequences");
+                    }
+                }
+            }
+        }
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_kv_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -778,6 +835,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
     cases.push_back(std::make_unique<case_noalloc>());
+    cases.push_back(std::make_unique<case_comp_padding>());
 
     return cases;
 }

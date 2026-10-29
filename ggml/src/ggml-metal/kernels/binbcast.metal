@@ -22,8 +22,13 @@ kernel void kernel_bin_fuse_impl(
 
     if (FC_RB) {
         // row broadcast
-        const uint i0 = tgpig.y*args.ne00 + tgpig.x;
-        const uint i1 = FC_CB ? tgpig.x%args.ne10 : tgpig.x;
+        const uint i = tgpig.x*ntg.x + tpitg.x;
+        if (i >= (uint) args.ne0) {
+            return;
+        }
+
+        const uint i0 = tgpig.y*args.ne00 + i;
+        const uint i1 = FC_CB ? i%args.ne10 : i;
 
         device const T0 * src0_row = (device const T0 *) (src0);
         device       T  * dst_row  = (device       T  *) (dst);

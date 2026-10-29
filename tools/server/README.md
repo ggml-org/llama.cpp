@@ -1465,6 +1465,7 @@ For multimodal input (typed content, `messages[i].content[j]`):
 - If `type == "input_video"`:
     - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, raw base64 or path to local file
     - Accepts formats supported by `ffmpeg`
+    - Models that hear their video (LFM3-Omni) also get its soundtrack, the audio of each group of frames follows them
 - Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
 
 *Examples:*
@@ -1623,11 +1624,11 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 
 *Client events:*
 
-- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default)
+- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
-- `conversation.item.create`: a user message with `input_text` content
-- `response.create`: ends the user turn and generates the response, `response.output_modalities` and `response.max_output_tokens` override the session
+- `conversation.item.create`: a user message with `input_text` content, or a `function_call_output` with the `call_id` and `output` of a tool call of the last response
+- `response.create`: ends the user turn and generates the response, `response.output_modalities`, `response.max_output_tokens` and `response.tool_choice` override the session
 - `response.cancel`: stops the response being generated
 
 LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its turns open with an empty think block.
@@ -1639,8 +1640,11 @@ LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its tu
 - `session.created` and `session.updated`: carry the `session` object
 - `input_audio_buffer.committed`, `conversation.item.added`, `conversation.item.done`: the user item
 - `response.created`, `response.output_item.added`, `response.content_part.added`, then `response.output_text.delta` and `response.output_audio.delta` (base64 PCM16) as they are generated, then the `.done` events and `response.done`
+- `response.output_item.added` with a `function_call` item, `response.function_call_arguments.delta` and `.done`: a tool call of the response, its arguments are a JSON string
 - `conversation.item.input_audio_transcription.delta` and `.completed`: in a transcription session
 - `error`: `error.message` describes the problem
+
+Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
 
 See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
 

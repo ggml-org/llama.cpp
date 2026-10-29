@@ -105,10 +105,31 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_q2_k_f32
     gemm_noshuffle_q2_k_f32
     gemm_noshuffle_q3_k_f32
+    gemm_noshuffle_iq2_s_f32
+    gemm_noshuffle_iq2_xs_f32
+    gemm_noshuffle_iq2_xxs_f32
+    gemm_noshuffle_iq2_xxs_q8_1_dp4a
+    gemv_noshuffle_iq2_xxs_f32
+    gemm_noshuffle_iq2_xs_q8_1_dp4a
+    gemv_noshuffle_iq2_xs_f32
+    gemm_noshuffle_iq2_s_q8_1_dp4a
+    gemv_noshuffle_iq2_s_f32
     gemm_noshuffle_q3_k_q8_1_dp4a
     gemv_noshuffle_q3_k_f32
     mul_mv_q2_k_f32
     mul_mv_q3_k_f32
+    iq2_s_grid
+    mul_mv_iq2_s_f32
+    iq2_xs_grid
+    mul_mv_iq2_xs_f32
+    iq2_xxs_grid
+    mul_mv_iq2_xxs_f32
+    mul_mv_iq2_xxs_f32_flat
+    mul_mm_iq2_xxs_f32_l4_lm
+    mul_mv_iq2_xs_f32_flat
+    mul_mm_iq2_xs_f32_l4_lm
+    mul_mv_iq2_s_f32_flat
+    mul_mm_iq2_s_f32_l4_lm
     mul_mv_q3_k_f32_flat
     mul_mm_q3_k_f32_l4_lm
     mul_mv_q2_k_f32_flat
@@ -206,6 +227,7 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_q4_k_f32
     gemv_noshuffle_q4_k_f32_o4
     gemv_noshuffle_q4_k_f32_tiled
+    gemm_noshuffle_q4_K_f32_tiled_dp4a
     gemm_noshuffle_q4_k_f32
     gemv_noshuffle_q4_k_f32_32b_trans
     gemv_noshuffle_q6_k_f32

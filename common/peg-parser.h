@@ -162,9 +162,10 @@ struct common_peg_parse_result {
 };
 
 enum common_peg_parse_flags {
-    COMMON_PEG_PARSE_FLAG_NONE    = 0,
-    COMMON_PEG_PARSE_FLAG_LENIENT = 1 << 0,
-    COMMON_PEG_PARSE_FLAG_DEBUG   = 1 << 1,
+    COMMON_PEG_PARSE_FLAG_NONE     = 0,
+    COMMON_PEG_PARSE_FLAG_LENIENT  = 1 << 0,
+    COMMON_PEG_PARSE_FLAG_DEBUG    = 1 << 1,
+    COMMON_PEG_PARSE_FLAG_COMPLETE = 1 << 2,
 };
 
 inline common_peg_parse_flags operator|(common_peg_parse_flags a, common_peg_parse_flags b) {
@@ -209,6 +210,7 @@ struct common_peg_parse_context {
 
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
     bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
+    bool is_complete() const { return flags & COMMON_PEG_PARSE_FLAG_COMPLETE; }
 };
 
 class common_peg_arena;

@@ -388,10 +388,10 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
 
 static const size_t DECISION_MAX_IMAGES = 8;
 
-// any media, mtmd tells an audio clip from an image by its content
+// any media, mtmd tells an audio clip or a video from an image by its content
 static void decision_load_image(const json & url, std::vector<raw_buffer> & files) {
     if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:")) {
-        throw std::invalid_argument("images must be data URLs (data:image/...;base64,... or data:audio/...;base64,...)");
+        throw std::invalid_argument("media must be data URLs (data:image/..., data:audio/... or data:video/...;base64,...)");
     }
     if (files.size() >= DECISION_MAX_IMAGES) {
         throw std::invalid_argument(string_format("too many images, the maximum is %zu", DECISION_MAX_IMAGES));
@@ -457,6 +457,9 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
             } else if (part.is_object() && json_value(part, "type", std::string()) == "input_audio" && part.contains("input_audio")) {
                 const json input_audio = json_value(part, "input_audio", json::object());
                 decision_load_audio(input_audio.contains("data") ? input_audio.at("data") : json_value(input_audio, "url", json()), files);
+            } else if (is_lfm3_d1() && part.is_object() && json_value(part, "type", std::string()) == "video_url" && part.contains("video_url")) {
+                const json & video_url = part.at("video_url");
+                decision_load_image(video_url.is_object() && video_url.contains("url") ? video_url.at("url") : video_url, files);
             } else {
                 content.push_back(part);
             }
@@ -1236,7 +1239,10 @@ void server_decision_context::fill_task(
     if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_VLLM_D3 || type == COMMON_DECISION_TYPE_LFM2_D1 ||
         type == COMMON_DECISION_TYPE_H2O_LIGHTNING || type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) {
         if (!media.empty()) {
-            task.tokens = process_mtmd_prompt(mctx, prompt, media, init_opt);
+            // the d1 reference sees the frames of a video, not its soundtrack
+            mtmd_helper_init_opt opt = init_opt;
+            opt.video_params.no_soundtrack = is_lfm3_d1();
+            task.tokens = process_mtmd_prompt(mctx, prompt, media, opt);
             return;
         }
     }

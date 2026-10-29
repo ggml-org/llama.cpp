@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ArrowBigUp } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		keys: string[];
@@ -19,7 +20,9 @@
 <kbd class="{baseClasses} {variantClasses} {className}">
 	{#each keys as key, index (index)}
 		{#if key === 'shift'}
-			<ArrowBigUp class="h-1 w-1 {variant === 'destructive' ? 'text-destructive' : ''} -mr-1" />
+			<ArrowBigUp
+				class="{ICON_CLASS_DEFAULT} {variant === 'destructive' ? 'text-destructive' : ''} -mr-1"
+			/>
 		{:else if key === 'cmd'}
 			<span class={variant === 'destructive' ? 'text-destructive' : ''}>⌘</span>
 		{:else}
