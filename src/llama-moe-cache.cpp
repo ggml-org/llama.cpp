@@ -175,9 +175,10 @@ struct moe_cache_lru {
             if (key_of[s] >= 0) {
                 slot_map[key_of[s] / n_expert][key_of[s] % n_expert] = -1;
             }
-            key_of[s] = il*n_expert + e;
-            slots[e] = s;
-            move(s, class_of(key_of[s]));
+            const int32_t key = il*n_expert + e;
+            key_of[s] = key;
+            slots[e]  = s;
+            move(s, class_of(key));
             fills.push_back({ e, s });
         }
         clock[il] += n_tokens;
