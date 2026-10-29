@@ -7598,10 +7598,14 @@ void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends)
     ctx->buf0 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx0->pool());
     ctx->buf1 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx1->pool());
 
+#if defined(_WIN32) || defined(_WIN64) // Not supported on Windows
+    ctx->comm_exchange = ggml_sycl_comm_exchange;
+#else
     // SYCL_ENABLE_DEFAULT_CONTEXTS=1 sets comm_exchange_fast on Linux - PR #30956
     ctx->comm_exchange = (sctx0->stream()->get_context() == sctx1->stream()->get_context())
                        ? ggml_sycl_comm_exchange_fast
                        : ggml_sycl_comm_exchange;
+#endif
     return ctx;
 }
 catch (const sycl::exception &) { return nullptr; }
