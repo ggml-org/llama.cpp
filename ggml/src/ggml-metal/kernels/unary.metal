@@ -11,12 +11,12 @@ inline constexpr T ggml_metal_unary_cast(U x) {
 #if defined(GGML_METAL_HAS_BF16)
 // MSL has no C-style cast from float vectors to bfloat vectors
 template <>
-inline constexpr bfloat4 ggml_metal_unary_cast<bfloat4, float4>(float4 x) {
+inline bfloat4 ggml_metal_unary_cast<bfloat4, float4>(float4 x) {
     return bfloat4(bfloat(x[0]), bfloat(x[1]), bfloat(x[2]), bfloat(x[3]));
 }
 
 template <>
-inline constexpr bfloat4 ggml_metal_unary_cast<bfloat4, float>(float x) {
+inline bfloat4 ggml_metal_unary_cast<bfloat4, float>(float x) {
     return bfloat4(bfloat(x), bfloat(x), bfloat(x), bfloat(x));
 }
 #endif
