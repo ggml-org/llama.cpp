@@ -1,6 +1,6 @@
 <script lang="ts" module>
-	import StateGallery from '../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
+	import StateGallery from '../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 
@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Badge'
+		title: 'Design system/Display/Badge'
 	});
 
 	const variants: NonNullable<BadgeVariant>[] = [
