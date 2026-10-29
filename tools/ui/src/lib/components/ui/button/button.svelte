@@ -1,35 +1,35 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from '$lib/components/ui/utils';
+	import { tv } from '$lib/components/ui/utils';
 	import type { HTMLAnchorAttributes, HTMLButtonAttributes } from 'svelte/elements';
-	import { tv, type VariantProps } from 'tailwind-variants';
+	import type { VariantProps } from 'tailwind-variants';
 
 	export const buttonVariants = tv({
-		base: "focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium outline-none transition-all focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+		base: "focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-control text-label font-medium outline-none transition-all focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*='size-'])]:size-icon-md [&_svg]:pointer-events-none [&_svg]:shrink-0",
 		defaultVariants: {
 			size: 'default',
 			variant: 'default'
 		},
 		variants: {
 			size: {
-				default: 'h-9 px-4 py-2 has-[>svg]:px-3',
-				icon: 'size-9',
-				'icon-lg': 'size-10',
+				default: 'h-control-md px-4 py-2 has-[>svg]:px-3',
+				icon: 'size-(--height-control-md)',
+				'icon-lg': 'size-(--height-control-lg)',
 				'icon-sm': 'size-5 rounded-sm',
-				lg: 'h-10 rounded-lg px-6 has-[>svg]:px-4',
-				sm: 'h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5'
+				lg: 'h-control-lg rounded-panel px-6 has-[>svg]:px-4',
+				sm: 'h-control-sm gap-1.5 rounded-control px-3 has-[>svg]:px-2.5'
 			},
 			variant: {
-				default: 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90',
+				default:
+					'bg-(--button-primary-background) text-(--button-primary-text) shadow-sm hover:bg-(--button-primary-background-hover)',
 				destructive:
-					'bg-destructive shadow-sm hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60 text-white!',
-				ghost: 'hover:text-accent-foreground hover:bg-muted-foreground/10 backdrop-blur-sm',
-				link: 'text-primary underline-offset-4 hover:underline',
+					'bg-(--button-danger-background) shadow-sm hover:bg-(--button-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--button-danger-text)!',
+				ghost:
+					'hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) backdrop-blur-sm',
 				outline:
-					'matte-key hover:text-accent-foreground hover:bg-muted-foreground/10 dark:border-input border',
+					'matte-key hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) border border-(--button-outline-border)',
 				secondary:
-					'matte-key bg-muted/30 dark:bg-muted-foreground/15 dark:text-secondary-foreground border-muted border text-foreground hover:bg-muted dark:hover:bg-muted-foreground/25',
-				tertiary:
-					'matte-key bg-muted/60 dark:bg-muted/75 border border-border/30 text-foreground hover:bg-muted/80 dark:border-border/20 dark:hover:bg-muted'
+					'matte-key bg-(--button-secondary-background) border border-(--button-secondary-border) text-(--button-text) hover:bg-(--button-secondary-background-hover)'
 			}
 		}
 	});

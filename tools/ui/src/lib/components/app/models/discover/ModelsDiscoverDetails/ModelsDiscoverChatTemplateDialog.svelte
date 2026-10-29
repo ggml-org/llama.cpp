@@ -45,7 +45,7 @@
 				class="h-auto gap-1.5 px-2 py-1 text-xs"
 				onclick={() => void copy()}
 				size="sm"
-				variant="tertiary"
+				variant="secondary"
 			>
 				{#if copied}
 					<Check class="size-3.5 text-green-500" />

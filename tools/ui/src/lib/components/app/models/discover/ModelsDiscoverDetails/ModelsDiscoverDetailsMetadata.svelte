@@ -54,7 +54,7 @@
 			class="h-auto gap-1.5 px-2.5 py-1 text-xs"
 			onclick={() => (chatTemplateOpen = true)}
 			size="sm"
-			variant="tertiary"
+			variant="secondary"
 		>
 			<MessageSquareCode class="size-3" />
 			Chat template

@@ -31,7 +31,7 @@
 					class="!rounded-r-none !shadow-none"
 					onclick={() => onDecision(ToolPermissionDecision.ONCE)}
 					size="sm"
-					variant="secondary"
+					variant="outline"
 				>
 					Allow once
 				</Button>
@@ -41,7 +41,7 @@
 				<DropdownMenu.Trigger
 					aria-label="More allow options"
 					class={cn(
-						buttonVariants({ size: 'sm', variant: 'secondary' }),
+						buttonVariants({ size: 'sm', variant: 'outline' }),
 						'inline-flex cursor-pointer items-center !rounded-l-none !shadow-none !px-2'
 					)}
 				>
