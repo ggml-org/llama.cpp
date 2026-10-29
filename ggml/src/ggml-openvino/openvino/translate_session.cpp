@@ -5,9 +5,9 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
-#include "pipelines/pipeline.h"
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/mark_dequantization_subgraph.h"
+#include "pass_registry/pipeline.h"
 #include "rt_info/weightless_caching_attributes.hpp"
 
 #include <algorithm>

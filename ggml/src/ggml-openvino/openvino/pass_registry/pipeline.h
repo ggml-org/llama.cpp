@@ -7,7 +7,7 @@
 // plugin lacks -- is registered here, in that device's pipeline:
 //
 //   register_common_passes()     every device, before the device passes (dequantization marking, fusions)
-//   register_device_passes()     pipelines/{cpu,gpu,npu}.cpp
+//   register_device_passes()     pass_registry/{cpu,gpu,npu}.cpp
 //   register_execution_passes()  every device, after the device passes (stateful KV, static shapes)
 //
 // Every device workaround names the plugin defect it covers and keeps its env opt-out next to the

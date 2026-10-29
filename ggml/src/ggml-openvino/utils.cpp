@@ -1,13 +1,13 @@
 #include "utils.h"
 
+#include "device/npu_config.h"
+#include "device/npu_quant_policy.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
 #include "ggml-openvino.h"
 #include "ggml-openvino/ggml-decoder.h"
 #include "ggml.h"
 #include "model-cache.h"
-#include "npu/npu_config.h"
-#include "npu/npu_quant_policy.h"
 #include "openvino/frontend.h"
 #include "openvino/input_model.h"
 
