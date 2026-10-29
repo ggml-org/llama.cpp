@@ -662,13 +662,10 @@ void mtmd_audio_preprocessor_qwen3a::initialize() {
     cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
 }
 
-bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 samples,
-                                                 size_t                        n_samples,
-                                                 std::vector<mtmd_audio_mel> & output) const {
-    if (n_samples == 0) {
-        return false;
-    }
-
+bool mtmd_audio_preprocessor_qwen3a::compute_mel(const float *    samples,
+                                                  size_t           n_samples,
+                                                  int64_t          n_frames,
+                                                  mtmd_audio_mel & mel_full) const {
     GGML_ASSERT(!cache.sin_vals.empty());
     GGML_ASSERT(!cache.cos_vals.empty());
     GGML_ASSERT(!cache.filters.data.empty());
@@ -698,54 +695,69 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
     params.no_padding       = true; // reflection padding already applied above
     params.use_natural_log  = false; // log10
 
-    mtmd_audio_mel mel_full;
     bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), 4, params, cache, mel_full);
     if (!ok) {
         return false;
     }
+    n_frames = std::min(n_frames, mel_full.n_len);
 
     // Whisper-style normalization: clamp to (max - 8), scale to [-1, 1]
     {
         double mmax = -1e20;
-        for (float v : mel_full.data) {
-            if (v > mmax) mmax = v;
+        for (int64_t m = 0; m < mel_full.n_mel; m++) {
+            for (int64_t i = 0; i < n_frames; i++) {
+                mmax = std::max(mmax, (double) mel_full.data[(size_t)m * mel_full.n_len + i]);
+            }
         }
         mmax -= 8.0;
         for (float & v : mel_full.data) {
             v = (std::max((double)v, mmax) + 4.0) / 4.0;
         }
     }
+    return true;
+}
+
+mtmd_audio_mel mtmd_audio_preprocessor_qwen3a::slice_mel(const mtmd_audio_mel & mel_full, int64_t off, int64_t n) {
+    const int chunk_size = 100; // conv sub-chunk size (n_window * 2, n_window=50)
+
+    mtmd_audio_mel out;
+    out.n_mel     = mel_full.n_mel;
+    out.n_len     = (n + chunk_size - 1) / chunk_size * chunk_size;
+    out.n_len_org = n;
+    out.data.assign((size_t)out.n_mel * (size_t)out.n_len, 0.0f);
+    for (int64_t m = 0; m < out.n_mel; m++) {
+        const int64_t copy_len = std::min(n, mel_full.n_len - off);
+        if (copy_len > 0) {
+            std::copy(mel_full.data.begin() + (size_t)m * mel_full.n_len + off,
+                      mel_full.data.begin() + (size_t)m * mel_full.n_len + off + copy_len,
+                      out.data.begin()      + (size_t)m * out.n_len);
+        }
+    }
+    return out;
+}
+
+bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 samples,
+                                                 size_t                        n_samples,
+                                                 std::vector<mtmd_audio_mel> & output) const {
+    if (n_samples == 0) {
+        return false;
+    }
 
     // The effective frame count: center-padded STFT gives ~n_samples/hop_length frames.
     // We take min(mel_full.n_len, n_samples/hop + 1) to avoid including excess frames.
-    const int64_t n_eff = std::min(mel_full.n_len,
-                               (int64_t)(n_samples / hparams.audio_hop_len) + 1);
+    const int64_t n_eff_max = (int64_t)(n_samples / hparams.audio_hop_len) + 1;
+    mtmd_audio_mel mel_full;
+    if (!compute_mel(samples, n_samples, n_eff_max, mel_full)) {
+        return false;
+    }
+    const int64_t n_eff = std::min(mel_full.n_len, n_eff_max);
 
     // Split into inference windows matching n_window_infer=800 from model config.
-    // Each window is padded to the next multiple of chunk_size for the cgraph.
     // The mtmd caller loops over output entries, so long audio is handled automatically.
-    const int chunk_size  = 100; // conv sub-chunk size (n_window * 2, n_window=50)
     const int window_size = 800; // mel frames per forward pass (n_window_infer=800)
 
     for (int64_t off = 0; off < n_eff; off += window_size) {
-        const int64_t win_eff  = std::min((int64_t)window_size, n_eff - off);
-        const int64_t n_chunks  = (win_eff + chunk_size - 1) / chunk_size;
-        const int64_t n_padded  = n_chunks * chunk_size;
-
-        mtmd_audio_mel out;
-        out.n_mel     = mel_full.n_mel;
-        out.n_len     = n_padded;
-        out.n_len_org = win_eff;
-        out.data.assign((size_t)out.n_mel * (size_t)out.n_len, 0.0f);
-        for (int64_t m = 0; m < out.n_mel; m++) {
-            const int64_t copy_len = std::min((int64_t)win_eff, mel_full.n_len - off);
-            if (copy_len > 0) {
-                std::copy(mel_full.data.begin() + (size_t)m * mel_full.n_len + off,
-                          mel_full.data.begin() + (size_t)m * mel_full.n_len + off + copy_len,
-                          out.data.begin()      + (size_t)m * out.n_len);
-            }
-        }
-        output.push_back(std::move(out));
+        output.push_back(slice_mel(mel_full, off, std::min((int64_t)window_size, n_eff - off)));
     }
     return true;
 }

@@ -167,6 +167,11 @@ struct clip_graph {
     // Abstracts out the StackAudioFrames logic used by ultravox
     ggml_tensor * build_stack(ggml_tensor * cur, int32_t stack_factor, int32_t n_embed);
 
+    // Qwen3-ASR style audio stem: 100-frame mel chunks, 3x stride-2 conv2d + gelu, then conv_out
+    // mel: [n_frames, n_mel], n_frames must be a multiple of 100
+    // returns [n_embd, 13 * n_chunks]
+    ggml_tensor * build_audio_conv2d_stem(ggml_tensor * mel);
+
     // append the separators of img.suffix_type after the image tokens
     ggml_tensor * build_suffix(ggml_tensor * cur);
 };
