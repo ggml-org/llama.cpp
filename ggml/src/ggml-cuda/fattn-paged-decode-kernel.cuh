@@ -17,8 +17,7 @@
 // Rows are (query token, GQA head) pairs, packed into one or two 16-row WMMA tiles (nb * 6 <= 32).
 //
 // Per chunk:
-//   1. raw Q8_0 K rows go to LDS (coalesced 16 B loads); V rows use a padded format-neutral LDS layout,
-//      the V scales also to a token-contiguous array;
+//   1. raw Q8_0 K rows go to LDS (coalesced 16 B loads); V rows use a padded, format-neutral LDS layout;
 //   2. S = Q K^T with WMMA, K dequantized to f16 while building the B fragments; wave w owns 16 tokens of one m-tile;
 //   3. online softmax by row through LDS (P stored as f16, per-row rescale factor);
 //   4. O += P V with WMMA, V dequantized while gathering B fragments; wave w owns 32 output dims.
