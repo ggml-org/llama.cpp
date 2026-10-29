@@ -2726,7 +2726,8 @@ static bool htp_kparams_solve_im2col(
             const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
 
             struct htp_im2col_vtcm_layout layout;
-            htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+            htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads,
+                                         htp_im2col_scratch_bytes(HTP_IM2COL_KERNEL_PATCHEMBED_DMA, KH, patch_stride));
 
             if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
                 kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
@@ -2775,18 +2776,24 @@ static bool htp_kparams_solve_im2col(
         const uint32_t src_row_bytes = hex_round_up((uint32_t) src_row_bytes_raw, 256);
         const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
 
+        // threads work on output-col blocks, so a single output row (1D) can use them all
+        const uint32_t nbpr        = (OW + owb - 1) / owb;
+        const uint64_t nblocks     = (uint64_t) total_rows * nbpr;
+        const uint32_t blk_threads = (uint32_t) (nblocks < max_threads ? nblocks : max_threads);
+
         struct htp_im2col_vtcm_layout layout;
-        htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+        htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, blk_threads,
+                                     htp_im2col_scratch_bytes(HTP_IM2COL_KERNEL_BLOCKED_DMA, KH, patch_stride));
 
         if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
             kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
-            kparams->n_threads            = (uint8_t) n_threads;
+            kparams->n_threads            = (uint8_t) blk_threads;
             kparams->vtcm_size            = (uint32_t) layout.total_bytes;
             kparams->src_row_bytes        = src_row_bytes;
             kparams->dst_row_bytes        = dst_row_bytes;
             kparams->owb                  = owb;
             kparams->wb                   = (uint32_t) Wb;
-            kparams->nbpr                 = (OW + owb - 1) / owb;
+            kparams->nbpr                 = nbpr;
             kparams->N                    = N;
             kparams->IC                   = IC;
             kparams->ID                   = 1;
@@ -2803,6 +2810,7 @@ static bool htp_kparams_solve_im2col(
             kparams->rows_per_chunk       = rows_per_chunk;
             kparams->div_OH               = init_fastdiv_values(OH);
             kparams->div_OD               = init_fastdiv_values(1);
+            kparams->div_nbpr             = init_fastdiv_values(nbpr);
             return true;
         }
         if (owb == 1) break;
@@ -2904,7 +2912,7 @@ static bool htp_kparams_solve_im2col_3d(
             const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
 
             struct htp_im2col_vtcm_layout layout;
-            htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+            htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads, 256);
 
             if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
                 kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
@@ -2954,7 +2962,7 @@ static bool htp_kparams_solve_im2col_3d(
         const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
 
         struct htp_im2col_vtcm_layout layout;
-        htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+        htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads, 256);
 
         if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
             kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
