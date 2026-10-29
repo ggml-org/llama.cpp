@@ -5,9 +5,11 @@ When the experts of MoE layers stay in host memory (`-cmoe`, `-ncmoe`, `-ot`), t
 | Argument | |
 |---|---|
 | `--moe-cache-mib N` | cache size in MiB, split among the GPUs like the layers (default: 0, disabled) |
-| `--moe-cache-cpu-share F` | share of the cache misses computed on the CPU from the host experts instead of uploaded, once the cache is full (default: 0) |
+| `--moe-cache-cpu-share F\|auto` | share of the cache misses computed on the CPU from the host experts instead of uploaded, once the cache is full, or `auto` (default: 0) |
 
 The cache hits run on the device. With `--moe-cache-cpu-share F` the CPU computes a share `F` of the misses while the device computes the hits and uploads the other misses into the cache. This is faster when the CPU reads the host experts faster than the device can upload them, for example with fast RAM, a PCIe 4 link or experts that are not in pinned memory (`-lm dio` can pin them). Until the cache is full every miss is uploaded, so the cache fills as fast as without the CPU share. The best share depends on the machine, the model and the cache size.
+
+With `--moe-cache-cpu-share auto` there is no share to tune. For each miss, the cache compares how often the expert was used recently with the expert that it would evict. A miss that is used less often is computed on the CPU, the other misses are uploaded. With a large cache few misses go to the CPU, with a small cache most of them do.
 
 ## Picking the arguments
 
