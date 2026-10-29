@@ -36,7 +36,9 @@ static bool pd_shapes_ok(int device, const ggml_tensor * dst, int64_t max_nb) {
     float params[3];
     memcpy(params, dst->op_params, sizeof(params)); // scale, max_bias, logit_softcap
     if (!GGML_CUDA_CC_IS_RDNA4(ggml_cuda_info().devices[device].cc)) return false;
-    if (Q->type != GGML_TYPE_F32 || K->type != GGML_TYPE_Q8_0 || V->type != GGML_TYPE_Q4_0) return false;
+    if (Q->type != GGML_TYPE_F32 || K->type != GGML_TYPE_Q8_0) return false;
+    if (V->type != GGML_TYPE_Q4_0 && V->type != GGML_TYPE_Q5_0 &&
+        V->type != GGML_TYPE_Q5_1 && V->type != GGML_TYPE_Q8_0) return false;
     if (Q->ne[0] != PD_D || K->ne[0] != PD_D || V->ne[0] != PD_D) return false;
     if (Q->ne[1] < 1 || Q->ne[1] > max_nb || Q->ne[3] != 1 || K->ne[3] != 1 || V->ne[3] != 1) return false;
     if (K->ne[2] < 1 || Q->ne[2] != PD_GQA * K->ne[2] || V->ne[2] != K->ne[2] || V->ne[1] != K->ne[1]) return false;
@@ -138,6 +140,7 @@ struct pd_full_mask {
 bool ggml_cuda_fattn_paged_prefill_enabled(int device, const ggml_tensor * dst) {
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];
+    const ggml_tensor * V     = dst->src[2];
     const bool          paged = dst->src[GGML_FA_SRC_PAGES] != nullptr;
     const int64_t       chunk = (int64_t) pd_prefill_chunk_pages()*PD_PAGE;
     if (Q->ne[1] <= PD_DECODE_MAX_NB) {
@@ -146,6 +149,11 @@ bool ggml_cuda_fattn_paged_prefill_enabled(int device, const ggml_tensor * dst) 
     // paged K/V needs the runs; contiguous K/V is one run, worth splitting when longer than a chunk (bounds the stock
     // kernels' f16 copies of K/V, and their f16 accumulation)
     if (paged ? !ggml_flash_attn_ext_get_page_runs(dst) : (pd_disabled() || K->ne[1] <= chunk)) {
+        return false;
+    }
+    // The custom chunked prefill kernel currently only decodes Q4_0 V rows.
+    // Other supported V formats use the format-aware paged-decode kernel.
+    if (V->type != GGML_TYPE_Q4_0) {
         return false;
     }
     if (!pd_shapes_ok(device, dst, INT32_MAX) || dst->src[4]) {
@@ -266,20 +274,27 @@ void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml
     // the kernel indexes mask rows by K/V column
     const char * mask_data = mask ? (const char *) mask->data - (ptrdiff_t) mask_col0*sizeof(half) : nullptr;
     const int64_t mask_nb1 = mask ? mask->nb[1] : 0;
-#define PD_LAUNCH(M, P, MT) \
-    pd_partial<M, P, MT><<<grid, PD_NWARPS * 32, 0, stream>>>((const char *) Q->data, Q->nb[1], Q->nb[2], kv_k, kv_v, sync, \
+#define PD_LAUNCH(M, P, MT, VT) \
+    pd_partial<M, P, VT, MT><<<grid, PD_NWARPS * 32, 0, stream>>>((const char *) Q->data, Q->nb[1], Q->nb[2], kv_k, kv_v, sync, \
         mask_data, mask_nb1, mask_col0, scale, n_kv, nb, n_chunks, chunks_per_split, O_part, ML_part)
+#define PD_LAUNCH_FMT(M, P, MT) do { \
+    if (V->type == GGML_TYPE_Q4_0) { PD_LAUNCH(M, P, MT, 0); } \
+    else if (V->type == GGML_TYPE_Q5_0) { PD_LAUNCH(M, P, MT, 1); } \
+    else if (V->type == GGML_TYPE_Q5_1) { PD_LAUNCH(M, P, MT, 2); } \
+    else { PD_LAUNCH(M, P, MT, 3); } \
+} while (0)
     if (n_tiles > 1) {
         // a 32-row tile spans at most 7 query tokens
-        if (pages) { PD_LAUNCH(2, true, 8); } else { PD_LAUNCH(2, false, 8); }
+        if (pages) { PD_LAUNCH_FMT(2, true, 8); } else { PD_LAUNCH_FMT(2, false, 8); }
     } else if (M_TILES == 1) {
-        if (pages) { PD_LAUNCH(1, true, 4); } else { PD_LAUNCH(1, false, 4); }
+        if (pages) { PD_LAUNCH_FMT(1, true, 4); } else { PD_LAUNCH_FMT(1, false, 4); }
     } else if (nb <= 4) {
-        if (pages) { PD_LAUNCH(2, true, 4); } else { PD_LAUNCH(2, false, 4); }
+        if (pages) { PD_LAUNCH_FMT(2, true, 4); } else { PD_LAUNCH_FMT(2, false, 4); }
     } else {
         // 5 query tokens (30 rows) in one 32-row tile
-        if (pages) { PD_LAUNCH(2, true, 8); } else { PD_LAUNCH(2, false, 8); }
+        if (pages) { PD_LAUNCH_FMT(2, true, 8); } else { PD_LAUNCH_FMT(2, false, 8); }
     }
+#undef PD_LAUNCH_FMT
 #undef PD_LAUNCH
     CUDA_CHECK(cudaGetLastError());
     pd_combine<<<dim3(nb * PD_GQA, n_heads), PD_D, 0, stream>>>(O_part, ML_part, n_splits, n_tiles * R,
