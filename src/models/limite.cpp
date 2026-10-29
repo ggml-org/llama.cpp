@@ -170,7 +170,7 @@ llama_model_limite::graph::graph(const llama_model & model, const llm_graph_para
             }
 
             cur = build_attn(inp_attn,
-                    nullptr, nullptr, nullptr,
+                    nullptr, nullptr,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
             cb(cur, "attn_raw", il);
 
@@ -199,7 +199,7 @@ llama_model_limite::graph::graph(const llama_model & model, const llm_graph_para
             }
 
             cur = ggml_reshape_2d(ctx0, cur, n_embd_head*n_head, n_tokens);
-            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+            cur = build_lora_mm(layer.wo, cur);
             cb(cur, "attn_out", il);
         }
 
@@ -217,9 +217,9 @@ llama_model_limite::graph::graph(const llama_model & model, const llm_graph_para
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                layer.ffn_up,   nullptr, nullptr,
-                layer.ffn_gate, nullptr, nullptr,
-                layer.ffn_down, nullptr, nullptr,
+                layer.ffn_up,   nullptr,
+                layer.ffn_gate, nullptr,
+                layer.ffn_down, nullptr,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -237,7 +237,7 @@ llama_model_limite::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     // scale * sigmoid((x + shift) / temperature)
     const auto & cap = hparams.final_logit_sigmoid_capping;
