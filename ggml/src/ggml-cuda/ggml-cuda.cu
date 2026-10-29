@@ -2842,36 +2842,18 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     return res;
 }
 
-static void ggml_cuda_graph_update_executable(cudaGraphExec_t & instance, cudaGraph_t cuda_graph) {
-#if CUDART_VERSION >= 12000
-    cudaGraphExecUpdateResultInfo result_info;
-    cudaError_t stat = cudaGraphExecUpdate(instance, cuda_graph, &result_info);
-#else
-    cudaGraphNode_t errorNode;
-    cudaGraphExecUpdateResult result_info;
-    cudaError_t stat = cudaGraphExecUpdate(instance, cuda_graph, &errorNode, &result_info);
-#endif // CUDART_VERSION >= 12000
-
-    if (stat == cudaErrorGraphExecUpdateFailure) {
-        if (ggml_cuda_graph_debug_enabled()) {
-            GGML_LOG_DEBUG("%s: CUDA graph update failed\n", __func__);
-        }
-
-        // The pre-existing graph exec cannot be updated due to violated constraints
-        // so instead clear error and re-instantiate
-        (void)cudaGetLastError();
-        CUDA_CHECK(cudaGraphExecDestroy(instance));
-        instance = nullptr;
-        CUDA_CHECK(cudaGraphInstantiate(&instance, cuda_graph, nullptr, nullptr, 0));
-    } else {
-        GGML_ASSERT(stat == cudaSuccess);
-    }
-}
-
-// thread block cluster dims of the kernel nodes in a captured graph as (node, x, y, z), e.g. cuBLAS sm90 GEMMs
-static std::vector<uint32_t> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph) {
+#ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
+static std::vector<uint32_t> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph, int device) {
     std::vector<uint32_t> clusters;
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+    static const bool runtime_affected = [] {
+        int version = 0;
+        CUDA_CHECK(cudaRuntimeGetVersion(&version));
+        // TODO: upper bound once fixed in the CUDA runtime
+        return version >= 11080;
+    }();
+    if (!runtime_affected || ggml_cuda_info().devices[device].cc < GGML_CUDA_CC_HOPPER) {
+        return clusters;
+    }
     size_t n_nodes = 0;
     CUDA_CHECK(cudaGraphGetNodes(cuda_graph, nullptr, &n_nodes));
     std::vector<cudaGraphNode_t> nodes(n_nodes);
@@ -2891,10 +2873,49 @@ static std::vector<uint32_t> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph
             clusters.insert(clusters.end(), { (uint32_t) i, val.clusterDim.x, val.clusterDim.y, val.clusterDim.z });
         }
     }
-#else
-    GGML_UNUSED(cuda_graph);
-#endif
     return clusters;
+}
+#endif // USE_CUDA_GRAPH_CLUSTER_CHECK
+
+static void ggml_cuda_graph_update_executable(ggml_cuda_graph_instance & instance, cudaGraph_t cuda_graph, int device) {
+#ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
+    std::vector<uint32_t> clusters = ggml_cuda_graph_get_clusters(cuda_graph, device);
+    if (instance.clusters != clusters) {
+        if (ggml_cuda_graph_debug_enabled()) {
+            GGML_LOG_DEBUG("%s: cluster dims changed, re-instantiating CUDA graph\n", __func__);
+        }
+        CUDA_CHECK(cudaGraphExecDestroy(instance));
+        CUDA_CHECK(cudaGraphInstantiate(&instance.handle, cuda_graph, nullptr, nullptr, 0));
+        instance.clusters = std::move(clusters);
+        return;
+    }
+#else
+    GGML_UNUSED(device);
+#endif // USE_CUDA_GRAPH_CLUSTER_CHECK
+
+#if CUDART_VERSION >= 12000
+    cudaGraphExecUpdateResultInfo result_info;
+    cudaError_t stat = cudaGraphExecUpdate(instance, cuda_graph, &result_info);
+#else
+    cudaGraphNode_t errorNode;
+    cudaGraphExecUpdateResult result_info;
+    cudaError_t stat = cudaGraphExecUpdate(instance, cuda_graph, &errorNode, &result_info);
+#endif // CUDART_VERSION >= 12000
+
+    if (stat == cudaErrorGraphExecUpdateFailure) {
+        if (ggml_cuda_graph_debug_enabled()) {
+            GGML_LOG_DEBUG("%s: CUDA graph update failed\n", __func__);
+        }
+
+        // The pre-existing graph exec cannot be updated due to violated constraints
+        // so instead clear error and re-instantiate
+        (void)cudaGetLastError();
+        CUDA_CHECK(cudaGraphExecDestroy(instance));
+        instance.handle = nullptr;
+        CUDA_CHECK(cudaGraphInstantiate(&instance.handle, cuda_graph, nullptr, nullptr, 0));
+    } else {
+        GGML_ASSERT(stat == cudaSuccess);
+    }
 }
 
 // number of ggml nodes per CUDA graph chunk, 0 captures the whole ggml graph as one CUDA graph
@@ -2911,23 +2932,15 @@ static void ggml_cuda_graph_launch_chunk(ggml_backend_cuda_context * cuda_ctx, g
     cudaGraph_t cuda_graph = nullptr;
     CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_graph));
 
-    std::vector<uint32_t> clusters = ggml_cuda_graph_get_clusters(cuda_graph);
-    if (idx < graph->instances.size() && graph->clusters[idx] == clusters) {
-        ggml_cuda_graph_update_executable(graph->instances[idx], cuda_graph);
-    } else if (idx < graph->instances.size()) {
-        // cudaGraphExecUpdate keeps the old cluster dims -> illegal instruction or wrong results, so re-instantiate
-        if (ggml_cuda_graph_debug_enabled()) {
-            GGML_LOG_DEBUG("%s: cluster dims changed, re-instantiating chunk %zu\n", __func__, idx);
-        }
-        CUDA_CHECK(cudaGraphExecDestroy(graph->instances[idx]));
-        graph->instances[idx] = nullptr;
-        CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx], cuda_graph, nullptr, nullptr, 0));
-        graph->clusters[idx] = std::move(clusters);
+    if (idx < graph->instances.size()) {
+        ggml_cuda_graph_update_executable(graph->instances[idx], cuda_graph, cuda_ctx->device);
     } else {
         GGML_ASSERT(idx == graph->instances.size());
-        graph->instances.emplace_back(nullptr);
-        graph->clusters.push_back(std::move(clusters));
-        CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx], cuda_graph, nullptr, nullptr, 0));
+        graph->instances.emplace_back();
+        CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx].handle, cuda_graph, nullptr, nullptr, 0));
+#ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
+        graph->instances[idx].clusters = ggml_cuda_graph_get_clusters(cuda_graph, cuda_ctx->device);
+#endif // USE_CUDA_GRAPH_CLUSTER_CHECK
     }
     CUDA_CHECK(cudaGraphDestroy(cuda_graph));
 
@@ -4899,7 +4912,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 CUDA_CHECK(cudaGraphExecDestroy(graph->instances[i]));
             }
             graph->instances.resize(n_chunks);
-            graph->clusters.resize(n_chunks);
             graph_evaluated_or_captured = true; // CUDA graph has been captured
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
