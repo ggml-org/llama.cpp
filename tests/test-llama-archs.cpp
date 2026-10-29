@@ -50,6 +50,7 @@ static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
 struct tensor_data_params {
     size_t seed;
     float  stdev;
+    std::vector<ggml_tensor *> * tensors = nullptr;
 };
 
 // fills the values of one tensor, the name carries whatever the property needs
@@ -122,6 +123,9 @@ static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[]
 
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     const tensor_data_params & params = *(const tensor_data_params *) userdata;
+    if (params.tensors) {
+        params.tensors->push_back(tensor);
+    }
 
     tensor_filler fill = fill_normal;
     for (const auto & filler : TENSOR_FILLERS) {
@@ -142,6 +146,12 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
             tmp16[i] = ggml_fp32_to_fp16(tmp[i]);
         }
         ggml_backend_tensor_set(tensor, tmp16.data(), 0, ggml_nbytes(tensor));
+    } else if (tensor->type == GGML_TYPE_BF16) {
+        std::vector<ggml_bf16_t> tmpbf16(tmp.size());
+        for (size_t i = 0; i < tmp.size(); i++) {
+            tmpbf16[i] = ggml_fp32_to_bf16(tmp[i]);
+        }
+        ggml_backend_tensor_set(tensor, tmpbf16.data(), 0, ggml_nbytes(tensor));
     } else {
         GGML_ABORT("fatal error");
     }
@@ -226,7 +236,7 @@ struct kv_writer {
     }
 };
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const float stdev, const bool bf16_scales = false) {
     gguf_context_ptr ret(gguf_init_empty());
     kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -236,7 +246,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
-    if (arch == LLM_ARCH_LLAMA4) {
+    if (arch == LLM_ARCH_DORY) {
+        n_layer = 6;
+        n_head = 4;
+    } else if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
     } else if (arch == LLM_ARCH_MAION_CODER) {
         n_head = 4;
@@ -698,6 +711,36 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
+    if (arch == LLM_ARCH_DORY) {
+        ms.add_kv(LLM_KV_INPUT_LAYER_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_RECURRENT_LAYER_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_OUTPUT_LAYER_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_NUM_LOOPS, uint32_t(4));
+        ms.add_kv(LLM_KV_LAYER_PATTERN, "*-S-*-");
+        ms.add_kv(LLM_KV_RECURRENT_KV_CACHE_MODE, "per_loop");
+        ms.add_kv(LLM_KV_ROPE_PROFILE, std::vector<uint32_t>({1, 1, 2, 1, 1, 1}));
+        ms.add_kv(LLM_KV_INIT_STD, stdev);
+        ms.add_kv(LLM_KV_ALPHA_INIT, 0.05f);
+        ms.add_kv(LLM_KV_GATE_INIT, sqrtf(n_embd));
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE, 10000000.0f);
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_2, 10000.0f);
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH, n_embd_head);
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT, n_embd_head);
+        if (bf16_scales) {
+            ggml_tensor t = {};
+            t.type = GGML_TYPE_BF16;
+            ggml_set_name(&t, "output_scale.weight");
+            gguf_add_tensor(ms.gguf_ctx, &t);
+            for (uint32_t il = 0; il < n_layer; il++) {
+                for (const char * scale : { "residual_alpha", "attn_qk_scale", "attn_gate_scale", "ffn_gate_scale", "ffn_up_scale" }) {
+                    ggml_format_name(&t, "blk.%u.%s.weight", il, scale);
+                    gguf_add_tensor(ms.gguf_ctx, &t);
+                }
+            }
+        }
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
         memset(&t, 0, sizeof(ggml_tensor));
@@ -718,6 +761,64 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
     return true;
 }
 
+static bool check_dory_placement(llama_context * lctx, const std::vector<ggml_tensor *> & tensors,
+        ggml_backend_dev_t dev, int n_gpu_layers, bool bf16_scales, bool shared_kv) {
+    ggml_init_params params = { ggml_tensor_overhead()*3, nullptr, true };
+    ggml_context_ptr ctx(ggml_init(params));
+    GGML_ASSERT(ctx);
+    const auto cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    const auto expected_device = [&](int p) {
+        return p >= std::max(7 - n_gpu_layers, 0) ? dev : cpu;
+    };
+    size_t n_scales = 0;
+    bool ok = true;
+    for (ggml_tensor * tensor : tensors) {
+        int p = -1;
+        if (sscanf(tensor->name, "blk.%d.", &p) != 1) {
+            p = strncmp(tensor->name, "output", 6) == 0 ? 6 : -1;
+        }
+        const auto expected = expected_device(p);
+        if (tensor->type == GGML_TYPE_BF16) {
+            n_scales++;
+            ggml_tensor * cast = ggml_cast(ctx.get(), tensor, GGML_TYPE_F32);
+            const bool supported = ggml_backend_dev_supports_op(expected, cast);
+            ggml_reset(ctx.get());
+            if (!supported) {
+                continue;
+            }
+        }
+        const auto buft = ggml_backend_buffer_get_type(tensor->buffer);
+        const bool on_device = buft == ggml_backend_dev_buffer_type(expected) ||
+            (ggml_backend_dev_type(expected) == GGML_BACKEND_DEVICE_TYPE_CPU && ggml_backend_buft_is_host(buft));
+        if (!on_device) {
+            LOG_ERR("%s: %s uses %s instead of %s\n", __func__, tensor->name,
+                ggml_backend_buft_name(buft), ggml_backend_dev_name(expected));
+            ok = false;
+        }
+    }
+    // Inspect the allocated caches through the exported graph interface.
+    ggml_cgraph * graph = llama_graph_reserve(lctx, 8, 1, 8);
+    if (!graph) {
+        return false;
+    }
+    const int n_layer = llama_model_n_layer(llama_get_model(lctx));
+    for (int il = 0; il < n_layer; il += 2) {
+        if (shared_kv && il >= 4 && il < n_layer - 2) {
+            continue;
+        }
+        const int p = il < 2 ? il : il < n_layer - 2 ? 2 + (il - 2) % 2 : 4 + il - (n_layer - 2);
+        for (const char * kv : { "k", "v" }) {
+            const std::string name = "cache_" + std::string(kv) + "_l" + std::to_string(il);
+            const ggml_tensor * tensor = ggml_graph_get_tensor(graph, name.c_str());
+            if (!tensor || !tensor->buffer || ggml_backend_buffer_get_type(tensor->buffer) != ggml_backend_dev_buffer_type(expected_device(p))) {
+                LOG_ERR("%s: %s is missing or on the wrong device\n", __func__, name.c_str());
+                ok = false;
+            }
+        }
+    }
+    return ok && n_scales == (bf16_scales ? 19 : 0);
+}
+
 static std::string get_tmp_gguf_path() {
     static size_t id = 0;
     return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
@@ -727,7 +828,8 @@ static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr,
+        const int n_gpu_layers = -1, std::vector<ggml_tensor *> * tensors = nullptr) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -736,8 +838,9 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.n_gpu_layers = n_gpu_layers;
 
-    tensor_data_params tensor_params = { seed, stdev };
+    tensor_data_params tensor_params = { seed, stdev, tensors };
     llama_model_ptr model(gguf_ctx != nullptr ?
         llama_model_init_from_user(gguf_ctx, set_tensor_data, &tensor_params, model_params) :
         llama_model_load_from_file_ptr(file, model_params));
@@ -751,8 +854,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
-    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0,
+        const int n_gpu_layers = -1, std::vector<ggml_tensor *> * tensors = nullptr) {
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides, n_gpu_layers, tensors);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -1077,7 +1181,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, stdev);
             llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
             const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
@@ -1228,21 +1332,33 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         }
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
-        for (bool moe : {false, true}) {
+        for (int config = 0; config < (arch == LLM_ARCH_DORY ? 32 : 2); ++config) {
+            const bool bf16_scales = arch == LLM_ARCH_DORY && config % 16 >= 8;
+            const bool partial_offload = arch == LLM_ARCH_DORY && config >= 16;
+            const bool shared_kv = arch == LLM_ARCH_DORY && config % 8 >= 4;
+            const bool moe = arch != LLM_ARCH_DORY && config != 0;
             if (moe && !moe_implemented(arch)) {
                 continue;
             }
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            const std::string config_name = moe ? "MoE" : "Dense";
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            const std::string config_name = arch == LLM_ARCH_DORY ? "K" + std::to_string(config % 4 + 1) + (shared_kv ? "/L" : "/P") + (bf16_scales ? "/BF16" : "") + (partial_offload ? "/ngl5" : "") : moe ? "MoE" : "Dense";
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, stdev, bf16_scales);
+            if (arch == LLM_ARCH_DORY) {
+                kv_writer ms(arch, gguf_ctx.get());
+                ms.add_kv(LLM_KV_NUM_LOOPS, uint32_t(config % 4 + 1));
+                ms.add_kv(LLM_KV_RECURRENT_KV_CACHE_MODE, shared_kv ? "last_loop" : "per_loop");
+            }
             if (arch == LLM_ARCH_BAILINGMOE3) {
                 GGML_ASSERT(gguf_remove_key(gguf_ctx.get(), "bailingmoe3.kda.safe_gate") >= 0);
             }
             std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_cpu;
             std::vector<float> logits_cpu;
             for (device_config & dc : dev_configs) {
+                if ((bf16_scales || partial_offload) && dc.split_mode != LLAMA_SPLIT_MODE_LAYER) {
+                    continue;
+                }
                 if (dc.host_experts && (!moe || !host_experts_test(arch))) {
                     continue;
                 }
@@ -1253,6 +1369,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 fflush(stdout);
 
                 std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_dev;
+                std::vector<ggml_tensor *> tensors_dev;
                 std::vector<float> logits_dev;
                 std::string status_nmse      = "\033[1;33mSKIP\033[0m";
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
@@ -1270,7 +1387,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size, partial_offload ? 5 : -1, arch == LLM_ARCH_DORY ? &tensors_dev : nullptr);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
@@ -1278,6 +1395,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         if (nmse_val > 1e-4) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
+                        }
+
+                        if (arch == LLM_ARCH_DORY && dc.split_mode == LLAMA_SPLIT_MODE_LAYER && dc.devs.size() == 1 &&
+                            !check_dory_placement(model_and_ctx_dev.second.get(), tensors_dev, dc.devs.front(), partial_offload ? 5 : 7, bf16_scales, shared_kv)) {
+                            test_ok = false;
+                            status_nmse = "\033[1;31mFAIL\033[0m (placement)";
                         }
 
                         // chunked decode matches a single batch only with causal attention over a memory
@@ -1292,7 +1415,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                             std::vector<float> logits_mixed;
                             std::vector<float> logits_chunks;
                             if (llama_arch_supports_mixed_batch(arch)) {
-                                if (get_logits_mixed(model_and_ctx_dev.first.get(), lctx_dev, tokens, embd_mixed, false, logits_chunks) != 0 ||
+                                // Shared final-loop KV depends on chunk boundaries; compare the same mixed batch across backends.
+                                llama_model * reference_model = shared_kv ? model_and_ctx_cpu.first.get() : model_and_ctx_dev.first.get();
+                                llama_context * reference_ctx = shared_kv ? model_and_ctx_cpu.second.get() : lctx_dev;
+                                if (get_logits_mixed(reference_model, reference_ctx, tokens, embd_mixed, shared_kv, logits_chunks) != 0 ||
                                     get_logits_mixed(model_and_ctx_dev.first.get(), lctx_dev, tokens, embd_mixed, true,  logits_mixed)  != 0) {
                                     throw std::runtime_error("failed to decode mixed batch");
                                 }

@@ -12,6 +12,9 @@
 #include <string>
 #include <vector>
 
+// Physical weight blocks, excluding MTP, for offload fitting. Repeated executions do not add weights.
+LLAMA_API int32_t llama_model_n_layer_physical(const struct llama_model * model);
+
 //
 // llama architecture queries
 //

@@ -44,6 +44,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
     switch (arch) {
         case LLM_ARCH_CLIP:
             return new llama_model_clip(params);
+        case LLM_ARCH_DORY:
+            return new llama_model_dory(params);
         case LLM_ARCH_LLAMA:
             return new llama_model_llama(params);
         case LLM_ARCH_LLAMA4:
@@ -1601,6 +1603,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     const auto & tensor_split = params.tensor_split;
 
     const int n_layer_all = hparams.n_layer_all;
+    const int n_layer_physical = this->n_layer_physical();
     const int n_gpu_layers = this->n_gpu_layers();
 
     const bool use_mmap_buffer = true;
@@ -1684,8 +1687,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         splits[i] = split_sum != 0.0f ? splits[i] / split_sum : float(i + 1) / n_devices();
     }
 
-    const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
-    const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_all + 1);
+    const int i_gpu_start = std::max(n_layer_physical + 1 - n_gpu_layers, 0);
+    const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_physical + 1);
     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
         const bool is_swa = il < n_layer_all && hparams.is_swa(il);
         if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
@@ -1703,13 +1706,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
 
     // assign the repeating layers to the devices according to the splits
-    pimpl->dev_layer.resize(n_layer_all);
-    for (int il = 0; il < n_layer_all; ++il) {
+    pimpl->dev_layer.resize(n_layer_physical);
+    for (int il = 0; il < n_layer_physical; ++il) {
         pimpl->dev_layer[il] = get_layer_buft_list(il);
     }
 
     // assign the output layer
-    pimpl->dev_output = get_layer_buft_list(n_layer_all);
+    pimpl->dev_output = get_layer_buft_list(n_layer_physical);
 
     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
 
@@ -2016,7 +2019,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     if (llama_supports_gpu_offload()) {
-        const int n_gpu = std::min(n_gpu_layers, n_layer_all);
+        const int n_gpu = std::min(n_gpu_layers, n_layer_physical + 1);
 
         int n_repeating = n_gpu;
         if (n_repeating > 0) {
@@ -2025,8 +2028,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
         LLAMA_LOG_INFO("%s: offloading %d repeating layers to GPU\n", __func__, n_repeating);
 
-        const int max_backend_supported_layers = n_layer_all + 1;
-        const int max_offloadable_layers       = n_layer_all + 1;
+        const int max_backend_supported_layers = n_layer_physical + 1;
+        const int max_offloadable_layers       = n_layer_physical + 1;
 
         LLAMA_LOG_INFO("%s: offloaded %d/%d layers to GPU\n", __func__, std::min(n_gpu_layers, max_offloadable_layers), max_backend_supported_layers);
     }
@@ -2445,7 +2448,7 @@ const float * llama_model::tensor_split() const {
 
 uint32_t llama_model::n_gpu_layers() const {
     // note: plus 1 for the "output" layer
-    return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer_all + 1;
+    return params.n_gpu_layers >= 0 ? params.n_gpu_layers : n_layer_physical() + 1;
 }
 
 llama_split_mode llama_model::split_mode() const {
@@ -2704,7 +2707,7 @@ void llama_model::print_info() const {
 }
 
 ggml_backend_dev_t llama_model::dev_layer(int il) const {
-    return pimpl->dev_layer.at(il).dev;
+    return pimpl->dev_layer.at(layer_physical(il)).dev;
 }
 
 ggml_backend_dev_t llama_model::dev_output() const {
@@ -2753,7 +2756,7 @@ static ggml_backend_buffer_type_t select_buft(const buft_list_t & buft_list, con
 
 ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
     return ::select_buft(
-            *pimpl->dev_layer.at(il).buft_list,
+            *pimpl->dev_layer.at(layer_physical(il)).buft_list,
             [&](ggml_context * ctx) {
                 ggml_tensor * cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd);
                 ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd);
@@ -3249,6 +3252,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     llama_memory_i::layer_reuse_cb reuse = nullptr;
                     llama_kv_cache::layer_share_cb share = nullptr;
 
+                    if (arch == LLM_ARCH_DORY) {
+                        filter = [&](uint32_t il) {
+                            const auto & dory = static_cast<const llama_model_dory &>(*this);
+                            return hparams.n_head_kv(il) > 0 && dory.cache_layer[il] == (int) il;
+                        };
+                    }
+
                     if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4) {
                         reuse = [&](uint32_t il) {
                             GGML_ASSERT(hparams.n_layer_kv_from_start >= 2);
@@ -3437,6 +3447,10 @@ int32_t llama_model_n_layer(const llama_model * model) {
     return model->hparams.n_layer();
 }
 
+int32_t llama_model_n_layer_physical(const llama_model * model) {
+    return model->n_layer_physical() - model->hparams.n_layer_nextn;
+}
+
 int32_t llama_model_n_layer_nextn(const llama_model * model) {
     return model->hparams.n_layer_nextn;
 }
@@ -3587,6 +3601,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
+        case LLM_ARCH_DORY:
         case LLM_ARCH_FALCON:
         case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_GROK:

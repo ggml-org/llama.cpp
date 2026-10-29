@@ -226,6 +226,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build(test-llama-archs.cpp)
+llama_test(test-llama-archs NAME test-llama-archs-dory LABEL "main behavior backend" ARGS -a dory -b CPU -s 1)
 
 set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
 file(MAKE_DIRECTORY "${MODEL_DIR}")

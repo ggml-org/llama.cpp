@@ -900,6 +900,10 @@ struct llama_model {
     llama_split_mode split_mode() const;
     bool no_alloc() const;
 
+    // Weight placement uses physical blocks; graph and KV indices use execution layers.
+    virtual uint32_t n_layer_physical() const { return hparams.n_layer_all; }
+    virtual int layer_physical(int il) const { return il; }
+
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
     // total number of parameters in the model
