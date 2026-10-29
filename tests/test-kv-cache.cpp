@@ -32,11 +32,11 @@ int main() {
         ggml_set_f32(assistant->layers[0].k_cache_scale, 2.0f);
         ggml_set_f32(assistant->layers[0].v_cache_scale, 4.0f);
 
-        llama_kv_cache source(*target, target->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
-                false, false, true, 32, 1, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr,
+        llama_kv_cache source(*target, false, target->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
+                false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr,
                 [](uint32_t il) { return il == 0 ? 2 : -1; }, nullptr);
-        llama_kv_cache shared(*assistant, assistant->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
-                false, false, true, 32, 1, 1, 0, LLAMA_SWA_TYPE_NONE, &source, nullptr, nullptr,
+        llama_kv_cache shared(*assistant, false, assistant->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
+                false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, &source, nullptr, nullptr,
                 [](int32_t il) { return il == 0 ? 2 : 1; });
 
         GGML_ASSERT(source.get_k_scale(2) == target->layers[2].k_cache_scale);
