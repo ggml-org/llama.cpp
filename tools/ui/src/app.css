@@ -274,6 +274,33 @@
 		}
 	}
 
+	/* An opaque copy of the sidebar panel's translucent tint, under what moves
+	   over the other sections while dragged */
+	.sidebar-drag-surface,
+	.sidebar-drag-overlay {
+		background: color-mix(in oklab, var(--muted) 60%, var(--background));
+	}
+
+	/* the copy of a chat row that follows the pointer, raised above the page */
+	.sidebar-drag-overlay {
+		box-shadow:
+			0 10px 30px -10px rgb(0 0 0 / 0.35),
+			0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+	}
+
+	/* While something is dragged, what it passes over takes no hover: only the
+	   sections themselves stay targets, for the drop */
+	body[data-sidebar-dragging] [data-sidebar-section] * {
+		pointer-events: none;
+	}
+
+	.sidebar-drag-overlay {
+		position: fixed;
+		z-index: 1000;
+		border-radius: 0.5rem;
+		pointer-events: none;
+	}
+
 	.shimmer-text {
 		background: linear-gradient(
 			90deg,

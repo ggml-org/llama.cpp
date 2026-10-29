@@ -24,6 +24,15 @@ export const COLLAPSIBLE_TRANSITION_MS = 200;
 export const NATIVE_CONTEXT_MENU_SELECTOR =
 	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
 
+/**
+ * A sidebar section under a dragged chat, or one being moved: the faint tint
+ * of the sidebar's resize handle, edged like the handle while it is dragged.
+ */
+export const SIDEBAR_DRAG_HIGHLIGHT_CLASS = 'bg-foreground/6 ring-1 ring-foreground/15 ring-inset';
+
+/** How long a sidebar chat row takes to slide out of a section, or into one. */
+export const SIDEBAR_ROW_SLIDE_MS = 200;
+
 /** Chats a sidebar section shows before its "Show more" row. */
 export const SIDEBAR_SECTION_PREVIEW_COUNT = 6;
 

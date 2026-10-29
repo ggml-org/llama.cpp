@@ -36,6 +36,8 @@ export const RECENT_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModels`
 export const HIDDEN_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.hiddenModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 /** Sidebar conversation sections the user folded. */
+/** Order the user gave the sidebar's sections by dragging their headings. */
+export const SIDEBAR_SECTION_ORDER_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.sidebarSectionOrder`;
 export const SIDEBAR_COLLAPSED_SECTIONS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.sidebarCollapsedSections`;
 export const CONVERSATION_TABS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.conversationTabs`;
 export const SIDEBAR_EXPANDED_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.sidebarExpanded`;
