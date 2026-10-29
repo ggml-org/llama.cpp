@@ -5583,6 +5583,15 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
+enum mul_hadamard_consumer {
+    MUL_HADAMARD_MAT,    // n_mm mat-vecs
+    MUL_HADAMARD_MAT_ID, // MUL_MAT_ID with a broadcast input
+    MUL_HADAMARD_GLU,    // gate and up mat-vecs with SWIGLU
+    MUL_HADAMARD_ROT2,   // a second MUL and rotation of the result, then a mat-vec of each rotation
+    MUL_HADAMARD_SCALE,  // a mat-vec of an in-place SCALE of the rotation
+    MUL_HADAMARD_NARROW, // a mat-vec of the rotation in rows of n
+};
+
 enum mul_hadamard_input {
     MUL_HADAMARD_INPUT_VEC,  // x times a vector that is broadcast over the rows of x
     MUL_HADAMARD_INPUT_FULL, // x times a tensor with the shape of x, so the ops must not be fused
@@ -5594,6 +5603,18 @@ enum mul_hadamard_prod_use {
     MUL_HADAMARD_PROD_READ,   // another op also reads the product, so the ops must not be fused
     MUL_HADAMARD_PROD_OUTPUT, // the product is a graph output, so the ops must not be fused
 };
+
+static std::string var_to_str(mul_hadamard_consumer consumer) {
+    switch (consumer) {
+        case MUL_HADAMARD_MAT:    return "mat";
+        case MUL_HADAMARD_MAT_ID: return "mat_id";
+        case MUL_HADAMARD_GLU:    return "glu";
+        case MUL_HADAMARD_ROT2:   return "rot2";
+        case MUL_HADAMARD_SCALE:  return "scale";
+        case MUL_HADAMARD_NARROW: return "narrow";
+    }
+    return "unknown";
+}
 
 static std::string var_to_str(mul_hadamard_input input) {
     switch (input) {
@@ -5613,12 +5634,18 @@ static std::string var_to_str(mul_hadamard_prod_use prod_use) {
     return "unknown";
 }
 
-// MUL by a vector that is broadcast over the rows, then GGML_HINT_SRC0_IS_HADAMARD on the product reshaped to rows of n
+// MUL by a vector that is broadcast over the rows, then GGML_HINT_SRC0_IS_HADAMARD on the product reshaped to rows of n, then optional consumers of type_w
 struct test_mul_hadamard : public test_case {
     const int64_t n;
     const std::array<int64_t, 4> ne;
+    const ggml_type type_w;
+    const int n_mm;
+    const mul_hadamard_consumer consumer;
     const mul_hadamard_input input;
     const mul_hadamard_prod_use prod_use;
+
+    static constexpr int n_mats = 4; // MUL_MAT_ID experts
+    static constexpr int n_used = 2;
 
     ggml_tensor * prod = nullptr;
     ggml_tensor * out  = nullptr;
@@ -5638,7 +5665,7 @@ struct test_mul_hadamard : public test_case {
     }
 
     std::string vars() override {
-        return VARS_TO_STR4(n, ne, input, prod_use);
+        return VARS_TO_STR7(n, ne, type_w, n_mm, consumer, input, prod_use);
     }
 
     double max_nmse_err() override {
@@ -5646,8 +5673,9 @@ struct test_mul_hadamard : public test_case {
     }
 
     test_mul_hadamard(int64_t n = 512, std::array<int64_t, 4> ne = {1024, 1, 1, 1},
+            ggml_type type_w = GGML_TYPE_F32, int n_mm = 0, mul_hadamard_consumer consumer = MUL_HADAMARD_MAT,
             mul_hadamard_input input = MUL_HADAMARD_INPUT_VEC, mul_hadamard_prod_use prod_use = MUL_HADAMARD_PROD_FUSE)
-        : n(n), ne(ne), input(input), prod_use(prod_use) {}
+        : n(n), ne(ne), type_w(type_w), n_mm(n_mm), consumer(consumer), input(input), prod_use(prod_use) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * x;
@@ -5675,6 +5703,47 @@ struct test_mul_hadamard : public test_case {
         out = ggml_mul_mat(ctx, h, out);
         ggml_mul_mat_set_hint(out, GGML_HINT_SRC0_IS_HADAMARD);
 
+        const int64_t n_tokens = ne[1]*ne[2]*ne[3];
+
+        if (consumer == MUL_HADAMARD_MAT && n_mm > 0) {
+            ggml_tensor * rot = ggml_reshape_4d(ctx, out, ne[0], ne[1], ne[2], ne[3]);
+            for (int i = 0; i < n_mm; ++i) {
+                ggml_tensor * w  = ggml_new_tensor_2d(ctx, type_w, ne[0], 64);
+                ggml_tensor * mm = ggml_mul_mat(ctx, w, rot);
+                out = i == 0 ? mm : ggml_add(ctx, out, mm);
+            }
+        } else if (consumer == MUL_HADAMARD_MAT_ID) {
+            ggml_tensor * rot = ggml_reshape_3d(ctx, out, ne[0], 1, n_tokens);
+            ggml_tensor * w   = ggml_new_tensor_3d(ctx, type_w, ne[0], 64, n_mats);
+            ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_used, n_tokens);
+            ggml_set_name(ids, "ids");
+            out = ggml_mul_mat_id(ctx, w, rot, ids);
+        } else if (consumer == MUL_HADAMARD_GLU) {
+            ggml_tensor * rot  = ggml_reshape_2d(ctx, out, ne[0], n_tokens);
+            ggml_tensor * gate = ggml_new_tensor_2d(ctx, type_w, ne[0], 64);
+            ggml_tensor * up   = ggml_new_tensor_2d(ctx, type_w, ne[0], 64);
+            out = ggml_swiglu_split(ctx, ggml_mul_mat(ctx, gate, rot), ggml_mul_mat(ctx, up, rot));
+        } else if (consumer == MUL_HADAMARD_ROT2) {
+            ggml_tensor * rot1 = ggml_reshape_2d(ctx, out, ne[0], n_tokens);
+            ggml_tensor * v2   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+            ggml_tensor * rot2 = ggml_mul(ctx, rot1, v2);
+            rot2 = ggml_reshape_2d(ctx, rot2, n, ggml_nelements(rot2)/n);
+            rot2 = ggml_mul_mat(ctx, h, rot2);
+            ggml_mul_mat_set_hint(rot2, GGML_HINT_SRC0_IS_HADAMARD);
+            rot2 = ggml_reshape_2d(ctx, rot2, ne[0], n_tokens);
+            ggml_tensor * w1 = ggml_new_tensor_2d(ctx, type_w, ne[0], 64);
+            ggml_tensor * w2 = ggml_new_tensor_2d(ctx, type_w, ne[0], 64);
+            // graph order: both rotations, the mat-vec of rot2, then the mat-vec of rot1
+            out = ggml_add(ctx, ggml_mul_mat(ctx, w2, rot2), ggml_mul_mat(ctx, w1, rot1));
+        } else if (consumer == MUL_HADAMARD_SCALE) {
+            ggml_tensor * rot = ggml_scale_inplace(ctx, ggml_reshape_2d(ctx, out, ne[0], n_tokens), 2.0f);
+            ggml_tensor * w   = ggml_new_tensor_2d(ctx, type_w, ne[0], 64);
+            out = ggml_mul_mat(ctx, w, rot);
+        } else if (consumer == MUL_HADAMARD_NARROW) {
+            ggml_tensor * w = ggml_new_tensor_2d(ctx, type_w, n, 64);
+            out = ggml_mul_mat(ctx, w, out);
+        }
+
         if (prod_use == MUL_HADAMARD_PROD_READ) {
             out = ggml_add(ctx, out, ggml_scale(ctx, ggml_sum(ctx, prod), 1.0f/ggml_nelements(prod)));
         }
@@ -5687,6 +5756,13 @@ struct test_mul_hadamard : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "h") == 0) {
                 init_tensor_hadamard(t);
+            } else if (t->type == GGML_TYPE_I32) {
+                // n_used different experts per token
+                std::vector<int32_t> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); i++) {
+                    data[i] = (int32_t) ((i / n_used + i % n_used) % n_mats);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int32_t));
             } else {
                 init_tensor_uniform(t);
             }
@@ -11276,13 +11352,34 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_hadamard(8192, {8192, 1, 1, 1}));
     test_cases.emplace_back(new test_mul_hadamard(512, {3584, 1, 1, 1}));
     test_cases.emplace_back(new test_mul_hadamard(1024, {1024, 4, 2, 1}));
+    for (ggml_type type_w : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K}) {
+        for (int64_t ntok : {1, 3, 8, 9}) {
+            test_cases.emplace_back(new test_mul_hadamard(512, {3584, ntok, 1, 1}, type_w, 1));
+            test_cases.emplace_back(new test_mul_hadamard(1024, {1024, ntok, 1, 1}, type_w, 2));
+        }
+        test_cases.emplace_back(new test_mul_hadamard(1024, {2048, 2, 2, 1}, type_w, 2));
+        for (int64_t ntok : {1, 4}) {
+            test_cases.emplace_back(new test_mul_hadamard(512, {1024, ntok, 1, 1}, type_w, 0, MUL_HADAMARD_MAT_ID));
+            test_cases.emplace_back(new test_mul_hadamard(512, {3584, ntok, 1, 1}, type_w, 0, MUL_HADAMARD_GLU));
+            test_cases.emplace_back(new test_mul_hadamard(1024, {1024, ntok, 1, 1}, type_w, 0, MUL_HADAMARD_ROT2));
+        }
+    }
+    test_cases.emplace_back(new test_mul_hadamard(64, {256, 1, 1, 1}, GGML_TYPE_Q4_0, 2));
+    test_cases.emplace_back(new test_mul_hadamard(128, {1024, 2, 1, 1}, GGML_TYPE_Q4_0, 2));
+    test_cases.emplace_back(new test_mul_hadamard(256, {512, 1, 1, 1}, GGML_TYPE_Q4_K, 2));
+    test_cases.emplace_back(new test_mul_hadamard(4096, {4096, 1, 1, 1}, GGML_TYPE_Q4_0, 1));
+    test_cases.emplace_back(new test_mul_hadamard(8192, {8192, 1, 1, 1}, GGML_TYPE_Q4_0, 1));
+    // fused, but the mat-vec must not use the q8_1 data of the rotation
+    test_cases.emplace_back(new test_mul_hadamard(1024, {1024, 1, 1, 1}, GGML_TYPE_Q4_0, 0, MUL_HADAMARD_SCALE));
+    test_cases.emplace_back(new test_mul_hadamard(256, {512, 2, 1, 1}, GGML_TYPE_Q4_0, 0, MUL_HADAMARD_NARROW));
     // must not be fused
     test_cases.emplace_back(new test_mul_hadamard(2048, {1024, 2, 1, 1})); // n is wider than the rows of x
     for (mul_hadamard_input input : {MUL_HADAMARD_INPUT_FULL, MUL_HADAMARD_INPUT_VIEW}) {
-        test_cases.emplace_back(new test_mul_hadamard(1024, {1024, 4, 1, 1}, input));
+        test_cases.emplace_back(new test_mul_hadamard(1024, {1024, 4, 1, 1}, GGML_TYPE_F32, 0, MUL_HADAMARD_MAT, input));
     }
     for (mul_hadamard_prod_use prod_use : {MUL_HADAMARD_PROD_READ, MUL_HADAMARD_PROD_OUTPUT}) {
-        test_cases.emplace_back(new test_mul_hadamard(1024, {1024, 1, 1, 1}, MUL_HADAMARD_INPUT_VEC, prod_use));
+        test_cases.emplace_back(new test_mul_hadamard(1024, {1024, 1, 1, 1}, GGML_TYPE_F32, 0, MUL_HADAMARD_MAT, MUL_HADAMARD_INPUT_VEC, prod_use));
+        test_cases.emplace_back(new test_mul_hadamard(1024, {1024, 1, 1, 1}, GGML_TYPE_Q4_0, 2, MUL_HADAMARD_MAT, MUL_HADAMARD_INPUT_VEC, prod_use));
     }
 
     // FP4 activation precision (default = native W4A4, src1 GGML_PREC_Q8 = W4A8)

@@ -4116,9 +4116,20 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL, GGML_OP_RESHAPE, GGML_OP_MUL_MAT }, {})) {
         ggml_tensor * mm = cgraph->nodes[i + 2];
 
-        if (ggml_cuda_op_mul_fwht(*cuda_ctx, node, mm)) {
+        // the result is the input of mat-vecs, so the kernel also writes the q8_1 data that MMVQ reads
+        cuda_ctx->q8_1_cache_reset();
+        block_q8_1 * q8_1 = nullptr;
+        if (ggml_nrows(node) <= MMVQ_MAX_BATCH_SIZE && node->ne[0] % MATRIX_ROW_PADDING == 0 &&
+            cuda_ctx->stream_context().concurrent_events.empty()) {
+            cuda_ctx->q8_1_cache = std::make_unique<ggml_cuda_pool_alloc<char>>(cuda_ctx->pool(), ggml_nelements(mm)/QK8_1*sizeof(block_q8_1));
+            q8_1 = (block_q8_1 *) cuda_ctx->q8_1_cache->get();
+        }
+
+        if (ggml_cuda_op_mul_fwht(*cuda_ctx, node, mm, q8_1)) {
+            cuda_ctx->q8_1_cache_src = q8_1 ? mm : nullptr;
             return 2;
         }
+        cuda_ctx->q8_1_cache_reset();
     }
 
     // Snake activation: y = x + sin(a*x)^2 * inv_b
@@ -4881,6 +4892,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
+            cuda_ctx->q8_1_cache_reset();
+
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
 #ifdef USE_CUDA_GRAPH
@@ -4971,6 +4984,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     try_launch_concurrent_event(node);
                }
             }
+
+            cuda_ctx->q8_1_cache_reset();
         }
 
 #ifdef USE_CUDA_GRAPH
