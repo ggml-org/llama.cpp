@@ -5070,7 +5070,15 @@ private:
             res = std::min(res, params_base.kv_unified_per_slot);
         }
 
-        return std::min(res, llama_model_n_ctx_train(model_tgt));
+        // Only cap to the training context when no RoPE scaling is configured.
+        // With YaRN/linear scaling the user explicitly extends the usable context
+        // beyond n_ctx_train, so capping here would silently defeat --ctx-size.
+        if (params_base.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_NONE ||
+            params_base.rope_freq_scale == 1.0f) {
+            res = std::min(res, llama_model_n_ctx_train(model_tgt));
+        }
+
+        return res;
     }
 
     server_response_reader get_response_reader() {
