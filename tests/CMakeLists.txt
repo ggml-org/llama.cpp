@@ -254,6 +254,24 @@ set_tests_properties(
     PROPERTIES FIXTURES_SETUP speculative-model
 )
 
+# #31158: concurrent first read of llama_get_logits_ith() must not replay
+# the lazy output_reorder() twice. Relies on the in-memory synthetic model.
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-logits-ith-race
+    LABEL "main behavior"
+    ARGS --race -s 1234
+)
+
+# #31158: layer-input embedding rows must follow batch order even when
+# output_swaps is empty and only embd_batch_idxs needs permuting.
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-embedding-reorder
+    LABEL "main behavior"
+    ARGS --embed -s 1234
+)
+
 # To avoid recreating the model use the fixture exclude any option:
 # -FA "^speculative-model$"
 llama_build_and_test(test-speculative-rejection-sampling.cpp ARGS
