@@ -90,13 +90,15 @@ struct moe_cache_lru {
         list_of[s] = c;
     }
 
+    // for a key after use(): its CRF is >= 1, so log2 is >= 0 and the cast is the floor
     int class_of(int32_t key) const {
         return std::min(n_class - 1, (int) std::log2(crf[key]));
     }
 
+    // decay the CRF by the time since the last use; an unused key gets 1 because crf[key] is 0 prior to first use
     void use(int32_t il, int32_t key) {
         const int64_t t = clock[il];
-        crf[key]      = last_use[key] >= 0 ? crf[key]*std::exp2(-(t - last_use[key])/crf_half) + 1.0f : 1.0f;
+        crf[key]      = crf[key]*std::exp2(-(t - last_use[key])/crf_half) + 1.0f;
         last_use[key] = t;
     }
 
