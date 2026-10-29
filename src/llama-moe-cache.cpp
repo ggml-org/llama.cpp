@@ -15,7 +15,7 @@
 namespace {
 
 // ClassLRU: one LRU list per frequency class, over the experts of a group of layers
-// slot_map[il][e] is the slot of expert e of layer il, -1 if not cached, the host copy of the slot map tensor
+// slot_map[il][e] is the slot of expert e of layer il, -1 if not cached, the host slot map tensor
 // CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of crf_half tokens, retained across evictions
 // class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
 // victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
@@ -113,7 +113,7 @@ struct moe_cache_lru {
                 if (key < 0) {
                     return s; // unused slot
                 }
-                // skip the experts selected by this plan(), including the misses it filled already
+                // do not evict the experts selected by this plan(), including the misses it filled already
                 if (key / n_expert == il && seen[key % n_expert] == seen_gen) {
                     continue;
                 }
