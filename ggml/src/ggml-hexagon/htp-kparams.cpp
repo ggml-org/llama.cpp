@@ -60,6 +60,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_CONV_2D:         return HTP_OP_CONV_2D;
         case GGML_OP_CONV_2D_DW:      return HTP_OP_CONV_2D_DW;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
+        case GGML_OP_UPSCALE:         return HTP_OP_UPSCALE;
 
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
@@ -2185,7 +2186,8 @@ static bool htp_kparams_solve_ssm_conv(
         target_max_tile          = (std::max)(target_max_tile, 32u);
         target_max_tile          = (std::min)(target_max_tile, 128u);
 
-        uint32_t d_inner_tile = (uint32_t) (avail_for_tiles / (2 * (ncs + n_t) * sizeof(float)));
+        const size_t raw_stride_bytes = ncs * sizeof(float) + sizeof(float);
+        uint32_t d_inner_tile = (uint32_t) (avail_for_tiles / (2 * (raw_stride_bytes + n_t * sizeof(float))));
         d_inner_tile          = (d_inner_tile / 32) * 32;
         if (d_inner_tile == 0) {
             d_inner_tile = 32;
@@ -2368,6 +2370,183 @@ static bool htp_kparams_solve_pool_2d(
                             kparams->stride_x, kparams->pad_x,
                             &kparams->ox_lo, &kparams->ox_hi);
     kparams->inv_kernel_area = 1.0f / (float) (kparams->kernel_x * kparams->kernel_y);
+
+    return true;
+}
+
+bool htp_kparams_solve_upscale(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    struct htp_upscale_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const uint32_t src_x = (uint32_t) src0->ne[0];
+    const uint32_t src_y = (uint32_t) src0->ne[1];
+    const uint32_t src_z = (uint32_t) src0->ne[2];
+    const uint32_t src_w = (uint32_t) src0->ne[3];
+
+    const uint32_t dst_x = (uint32_t) dst->ne[0];
+    const uint32_t dst_y = (uint32_t) dst->ne[1];
+    const uint32_t dst_z = (uint32_t) dst->ne[2];
+    const uint32_t dst_w = (uint32_t) dst->ne[3];
+
+    if (src_x == 0 || src_y == 0 || src_z == 0 || src_w == 0 ||
+        dst_x == 0 || dst_y == 0 || dst_z == 0 || dst_w == 0) {
+        return false;
+    }
+
+    const bool is_src_contig_row = (src0->nb[0] == sizeof(float));
+    const bool is_src_strided_2d = (src0->nb[0] > sizeof(float)) &&
+                                   (src0->nb[0] % sizeof(float) == 0) &&
+                                   (src0->nb[1] == (size_t) src_x * src0->nb[0]) &&
+                                   ((size_t) src_x * src_y <= 0xFFFFu);
+
+    if ((!is_src_contig_row && !is_src_strided_2d) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+
+    const int32_t mode_flags = dst->op_params[0];
+    const uint32_t mode_raw  = (uint32_t) (mode_flags & 0xFF);
+    if (mode_raw >= GGML_SCALE_MODE_COUNT) {
+        return false;
+    }
+
+    const bool align_corners = (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) != 0;
+    const bool antialias     = (mode_flags & GGML_SCALE_FLAG_ANTIALIAS) != 0;
+
+    float sf0 = (float) dst_x / (float) src_x;
+    float sf1 = (float) dst_y / (float) src_y;
+    float sf2 = (float) dst_z / (float) src_z;
+    float sf3 = (float) dst_w / (float) src_w;
+    float pixel_offset = 0.5f;
+
+    if (align_corners) {
+        pixel_offset = 0.0f;
+        sf0 = (dst_x > 1 && src_x > 1) ? (float) (dst_x - 1) / (float) (src_x - 1) : sf0;
+        sf1 = (dst_y > 1 && src_y > 1) ? (float) (dst_y - 1) / (float) (src_y - 1) : sf1;
+    }
+
+    const float inv_sf0 = 1.0f / sf0;
+    const float inv_sf1 = 1.0f / sf1;
+    const float inv_sf2 = 1.0f / sf2;
+    const float inv_sf3 = 1.0f / sf3;
+
+    const float filter_radius0 = antialias ? (std::max)(1.0f, inv_sf0) : 0.0f;
+    const float filter_radius1 = antialias ? (std::max)(1.0f, inv_sf1) : 0.0f;
+    const float invscale0      = antialias ? (1.0f / filter_radius0) : 0.0f;
+    const float invscale1      = antialias ? (1.0f / filter_radius1) : 0.0f;
+
+    const uint32_t total_slices = dst_z * dst_w;
+    uint32_t       n_threads    = htp_session_n_threads(sess);
+
+    struct htp_upscale_vtcm_layout layout;
+    uint32_t dst_nrows_per_chunk = 0;
+    while (n_threads > 0) {
+        if (htp_upscale_solve_layout(&layout, src_x, src_y, dst_x, dst_y, inv_sf1, filter_radius1, n_threads,
+                                     htp_session_vtcm_size(sess), &dst_nrows_per_chunk)) {
+            break;
+        }
+        n_threads--;
+    }
+    if (n_threads == 0) {
+        return false;
+    }
+
+    size_t lut_x_size = 0;
+    size_t elem_y_sz  = sizeof(uint32_t);
+    if (mode_raw == HTP_UPSCALE_MODE_BICUBIC) {
+        lut_x_size = hex_round_up(dst_x * sizeof(struct upscale_bicubic_x), 128);
+        elem_y_sz  = sizeof(struct upscale_bicubic_y);
+    } else if (antialias) {
+        lut_x_size = hex_round_up(dst_x * sizeof(struct upscale_antialias_x), 128);
+        elem_y_sz  = sizeof(struct upscale_antialias_y);
+    } else if (mode_raw == HTP_UPSCALE_MODE_BILINEAR) {
+        const uint32_t n_chunks = (dst_x + 31) / 32;
+        lut_x_size = hex_round_up(n_chunks * sizeof(struct upscale_bilinear_x_chunk), 128);
+        elem_y_sz  = sizeof(struct upscale_bilinear_y);
+    } else {
+        lut_x_size = hex_round_up(dst_x * sizeof(uint32_t), 128);
+    }
+    const size_t total_lut_size = lut_x_size + hex_round_up(dst_y * elem_y_sz, 128);
+    if (total_lut_size > HTP_DDR_SPAD_SIZE) {
+        return false;
+    }
+
+    const uint32_t chunks_per_slice = (dst_y + dst_nrows_per_chunk - 1) / dst_nrows_per_chunk;
+    const uint32_t total_chunks     = total_slices * chunks_per_slice;
+
+    n_threads = (std::min)(n_threads, total_chunks > 0 ? total_chunks : 1);
+    htp_upscale_vtcm_layout_build(&layout, src_x, src_y, dst_x, dst_y, dst_nrows_per_chunk, inv_sf1, filter_radius1, n_threads);
+
+    const uint32_t slice_dst_bytes = dst_x * dst_y * sizeof(float);
+    const uint32_t chunk_dst_bytes = dst_x * dst_nrows_per_chunk * sizeof(float);
+    const bool     dst_contig      = (dst->nb[1] == (size_t) dst_x * sizeof(float)) &&
+                                     (dst_z <= 1 || dst->nb[2] == (size_t) dst_y * dst->nb[1]) &&
+                                     (dst_w <= 1 || dst->nb[3] == (size_t) dst_z * dst->nb[2]);
+
+    uint32_t chunks_per_group = 0;
+    if (dst_contig) {
+        const uint32_t slices_per_group = (slice_dst_bytes > 0)
+            ? (HEX_L2_LINE_SIZE / hex_gcd_u32(slice_dst_bytes, HEX_L2_LINE_SIZE))
+            : 1;
+        if (slices_per_group == 1 && (chunk_dst_bytes % HEX_L2_LINE_SIZE == 0)) {
+            chunks_per_group = 1;
+        } else {
+            chunks_per_group = slices_per_group * chunks_per_slice;
+        }
+    }
+
+    uint8_t kernel_type = HTP_UPSCALE_KERNEL_BILINEAR;
+    if (mode_raw == HTP_UPSCALE_MODE_NEAREST) {
+        if (dst_x == 2 * src_x && dst_y == 2 * src_y && !align_corners) {
+            kernel_type = HTP_UPSCALE_KERNEL_NEAREST_2X;
+        } else if (dst_x == 4 * src_x && dst_y == 4 * src_y && !align_corners) {
+            kernel_type = HTP_UPSCALE_KERNEL_NEAREST_4X;
+        } else {
+            kernel_type = HTP_UPSCALE_KERNEL_NEAREST;
+        }
+    } else if (mode_raw == HTP_UPSCALE_MODE_BICUBIC) {
+        kernel_type = HTP_UPSCALE_KERNEL_BICUBIC;
+    } else if (antialias) {
+        kernel_type = HTP_UPSCALE_KERNEL_BILINEAR_AA;
+    } else if (dst_x == 2 * src_x && dst_y == 2 * src_y && !align_corners && (src_x % 32 == 0)) {
+        kernel_type = HTP_UPSCALE_KERNEL_BILINEAR_2X;
+    } else {
+        kernel_type = HTP_UPSCALE_KERNEL_BILINEAR;
+    }
+
+    kparams->kernel_type          = kernel_type;
+    kparams->mode                 = (uint8_t) mode_raw;
+    kparams->align_corners        = align_corners ? 1 : 0;
+    kparams->antialias            = antialias ? 1 : 0;
+
+    kparams->inv_sf0              = inv_sf0;
+    kparams->inv_sf1              = inv_sf1;
+    kparams->inv_sf2              = inv_sf2;
+    kparams->inv_sf3              = inv_sf3;
+    kparams->pixel_offset         = pixel_offset;
+
+    kparams->filter_radius0       = filter_radius0;
+    kparams->filter_radius1       = filter_radius1;
+    kparams->invscale0            = invscale0;
+    kparams->invscale1            = invscale1;
+
+    kparams->n_threads            = n_threads;
+    kparams->chunks_per_group     = chunks_per_group;
+
+    kparams->dst_nrows_per_chunk  = dst_nrows_per_chunk;
+    kparams->chunks_per_slice     = chunks_per_slice;
+    kparams->total_chunks         = total_chunks;
+    kparams->vtcm_size            = (uint32_t) layout.total_bytes;
+
+    kparams->div_chunks_per_slice = init_fastdiv_values(chunks_per_slice > 0 ? chunks_per_slice : 1);
+    kparams->div_dst_z            = init_fastdiv_values(dst_z > 0 ? dst_z : 1);
 
     return true;
 }
@@ -3916,6 +4095,31 @@ void htp_opnode_collapse(const struct ggml_hexagon_session * sess, htp_opnode & 
         }
         return;
     }
+
+    if (node.opcode == HTP_OP_UPSCALE) {
+        if (node.inputs.empty() || !node.inputs[0] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * src0 = node.inputs[0];
+        const struct ggml_tensor * dst  = node.outputs[0];
+
+        if ((src0->ne[3] > 1 || dst->ne[3] > 1) &&
+            src0->ne[2] == dst->ne[2] && src0->ne[3] == dst->ne[3] &&
+            src0->nb[3] == (size_t) src0->ne[2] * src0->nb[2] &&
+            dst->nb[3]  == (size_t) dst->ne[2]  * dst->nb[2]) {
+            struct ggml_tensor src0_c = *src0;
+            struct ggml_tensor dst_c  = *dst;
+            src0_c.ne[2] *= src0_c.ne[3];
+            src0_c.ne[3] = 1;
+            src0_c.nb[3] = (size_t) src0_c.ne[2] * src0_c.nb[2];
+            dst_c.ne[2]  *= dst_c.ne[3];
+            dst_c.ne[3]  = 1;
+            dst_c.nb[3]  = (size_t) dst_c.ne[2] * dst_c.nb[2];
+            node.inputs[0]  = node.add_dummy(src0_c);
+            node.outputs[0] = node.add_dummy(dst_c);
+        }
+        return;
+    }
 }
 
 bool htp_kparams_solve(
@@ -3945,6 +4149,9 @@ bool htp_kparams_solve(
         const size_t src2_size = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
         return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2 ? src2->nb[1] : 0, src2_size, node.kparams<htp_mm_kernel_params>());
     }
+    if (node.opcode == HTP_OP_UPSCALE) {
+        return htp_kparams_solve_upscale(sess, src0, dst, node.kparams<htp_upscale_kernel_params>());
+    }
 
     return htp_kparams_solve(sess, node.node, node.kernel_params);
 }
@@ -3955,7 +4162,7 @@ bool htp_kparams_solve(
     void * kparams
 ) {
     const htp_op_code opcode = htp_op_remap(op);
-    if (htp_op_is_unary(opcode) || htp_op_is_glu(opcode)) {
+    if (htp_op_is_unary(opcode) || htp_op_is_glu(opcode) || opcode == HTP_OP_UPSCALE) {
         htp_opnode tmp(opcode, op);
         if (!htp_kparams_solve(sess, tmp)) {
             return false;
