@@ -57,7 +57,7 @@ void llama_model_saver::add_kv(const enum llm_kv key, const char value) {
 template <typename Container>
 void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, const bool per_layer) {
     GGML_ASSERT(model != nullptr || !per_layer);
-    const size_t n_values = per_layer ? size_t(model->hparams.n_layer()) : value.size();
+    const size_t n_values = per_layer ? size_t(model->arch == LLM_ARCH_GIGACHAT35 ? model->hparams.n_layer_all : model->hparams.n_layer()) : value.size();
     GGML_ASSERT(n_values <= value.size());
 
     if (n_values == 0) {
@@ -257,6 +257,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     add_kv(LLM_KV_POST_NORM_EPS,                     hparams.f_post_norm_eps);
+    if (hparams.n_norm_gate_rank > 0) {
+        add_kv(LLM_KV_NORM_GATE_RANK,               hparams.n_norm_gate_rank);
+    }
     add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
     add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert);
@@ -483,6 +486,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->tok_norm_b);
     add_tensor(model->output_norm);
     add_tensor(model->output_norm_b);
+    add_tensor(model->output_norm_gate_up);
+    add_tensor(model->output_norm_gate_down);
     add_tensor(model->output);
     add_tensor(model->output_b);
     add_tensor(model->output_norm_enc);

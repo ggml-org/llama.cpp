@@ -238,6 +238,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_layer = 2;
     if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
+    } else if (arch == LLM_ARCH_GIGACHAT35) {
+        n_head = 8;
+        n_layer = 4; // dense recurrent, MoE MLA, MoE recurrent, MoE MLA
     } else if (arch == LLM_ARCH_MAION_CODER) {
         n_head = 4;
         n_layer = 4; // dense and MoE layers, each with local and full attention
@@ -294,7 +297,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     }
 
     uint32_t n_head_kv = n_head;
-    if (arch == LLM_ARCH_QWEN3) {
+    if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_GIGACHAT35) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
             arch == LLM_ARCH_KOLIBRI1) {
@@ -305,14 +308,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head_kv = 2;
         n_layer   = 4;
     }
-    const uint32_t n_embd_head = n_embd / n_head;
+    const uint32_t n_embd_head   = n_embd / n_head;
+    const uint32_t n_layer_nextn = arch == LLM_ARCH_GIGACHAT35 ? 2 : 0;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
     ms.add_kv(LLM_KV_VOCAB_SIZE,                n_vocab);
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,            n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
-    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
+    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer + n_layer_nextn);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
 
     if (arch == LLM_ARCH_K2_HORIZON) {
@@ -373,6 +377,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_GIGACHAT35
             || arch == LLM_ARCH_MISTRAL4) {
         // GLM5 next MLA is nope only, the cache row is the compressed latent alone.
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       arch == LLM_ARCH_GLM5_NEXT ? uint32_t(512) : uint32_t(576));
@@ -686,6 +691,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
+    if (arch == LLM_ARCH_GIGACHAT35) {
+        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, n_layer_nextn);
+        ms.add_kv(LLM_KV_NORM_GATE_RANK, uint32_t(16));
+        ms.add_kv(LLM_KV_SSM_INNER_SIZE, uint32_t(128) * n_head);
+        ms.add_kv(LLM_KV_SSM_GROUP_COUNT, uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, std::vector<uint32_t>{1, 0, 1, 0, 0, 0});
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 10.0f);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, 10.0f);
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
         memset(&t, 0, sizeof(ggml_tensor));
@@ -712,7 +727,7 @@ static std::string get_tmp_gguf_path() {
 }
 
 static llama_model_ptr get_model(
-        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev, bool load_mtp,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
         const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
@@ -724,6 +739,7 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.load_mtp = load_mtp;
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -736,11 +752,11 @@ static llama_model_ptr get_model(
 }
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev, bool load_mtp,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
         const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
-    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, load_mtp, devs, split_mode, tensor_buft_overrides);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -932,6 +948,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_GLM5_NEXT:
+        case LLM_ARCH_GIGACHAT35:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_MELLUM:
@@ -1066,7 +1083,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                 continue;
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
+            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, arch == LLM_ARCH_GIGACHAT35, {});
             const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model.get(), path.c_str());
@@ -1253,12 +1270,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 bool test_ok = true;
                 if (!skip) {
                     if (logits_cpu.empty()) {
-                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
+                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, arch == LLM_ARCH_GIGACHAT35, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, arch == LLM_ARCH_GIGACHAT35, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
@@ -1323,7 +1340,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         GGML_ASSERT(file != nullptr);
 
                         {
-                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, false, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                             const std::vector<float> logits_roundtrip = get_logits(
                                 model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
                             status_roundtrip = "\033[1;32mOK\033[0m";

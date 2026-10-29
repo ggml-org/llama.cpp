@@ -728,6 +728,9 @@ class GGUFWriter:
     def add_leading_dense_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.LEADING_DENSE_BLOCK_COUNT.format(arch=self.arch), length)
 
+    def add_norm_gate_rank(self, rank: int) -> None:
+        self.add_uint32(Keys.LLM.NORM_GATE_RANK.format(arch=self.arch), rank)
+
     def add_full_attention_interval(self, interval: int) -> None:
         self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), interval)
 
