@@ -77,11 +77,11 @@ struct htp_lid_vtcm_layout {
     size_t total_bytes;
 };
 
-static inline void htp_lid_vtcm_layout_build(struct htp_lid_vtcm_layout * L, size_t D, size_t n_head, size_t n_tok, size_t n_threads, bool k_f32) {
+static inline void htp_lid_vtcm_layout_build(struct htp_lid_vtcm_layout * L, size_t D, size_t n_head, size_t n_tok, size_t n_threads, size_t k_row_size) {
     L->size_q_row  = hex_round_up(D * sizeof(uint16_t), 128);
     L->size_qs_row = hex_round_up(D * sizeof(float), 128);
     L->size_k_row  = hex_round_up(D * sizeof(uint16_t), 128);
-    L->size_k_raw_row = k_f32 ? hex_round_up(D * sizeof(float), 128) : L->size_k_row;
+    L->size_k_raw_row = L->size_k_row > hex_round_up(k_row_size, 128) ? L->size_k_row : hex_round_up(k_row_size, 128);
     L->size_m_row  = hex_round_up(HTP_LID_KV_BLOCK * sizeof(uint16_t), 128);
     L->size_o_row  = hex_round_up(HTP_LID_KV_BLOCK * sizeof(float), 128);
 
@@ -103,9 +103,9 @@ static inline void htp_lid_vtcm_layout_build(struct htp_lid_vtcm_layout * L, siz
     L->total_bytes = off;
 }
 
-static inline size_t htp_lid_compute_vtcm_usage(size_t D, size_t n_head, size_t n_tok, size_t n_threads, bool k_f32) {
+static inline size_t htp_lid_compute_vtcm_usage(size_t D, size_t n_head, size_t n_tok, size_t n_threads, size_t k_row_size) {
     struct htp_lid_vtcm_layout L;
-    htp_lid_vtcm_layout_build(&L, D, n_head, n_tok, n_threads, k_f32);
+    htp_lid_vtcm_layout_build(&L, D, n_head, n_tok, n_threads, k_row_size);
     return L.total_bytes;
 }
 
@@ -146,7 +146,7 @@ struct htp_lid_hmx_vtcm_layout {
 };
 
 static inline void htp_lid_hmx_vtcm_layout_build(struct htp_lid_hmx_vtcm_layout * L,
-                                                  size_t D, size_t n_head, size_t n_tok, size_t Bc, size_t n_qsets, size_t n_threads, bool k_f32) {
+                                                  size_t D, size_t n_head, size_t n_tok, size_t Bc, size_t n_qsets, size_t n_threads, size_t k_row_size) {
     L->n_ch  = (uint32_t) ((n_tok * n_head + 31) / 32);
     L->n_u   = (uint32_t) ((n_tok + 31) / 32);
     L->n_dot = (uint32_t) (D / 32);
@@ -156,7 +156,7 @@ static inline void htp_lid_hmx_vtcm_layout_build(struct htp_lid_hmx_vtcm_layout 
     L->size_qs_row = hex_round_up(D * sizeof(float), 128);
     L->size_qh_row = hex_round_up(D * sizeof(uint16_t), 128);
     L->size_k_row  = hex_round_up(D * sizeof(uint16_t), 128);
-    L->size_k_raw_row = k_f32 ? hex_round_up(D * sizeof(float), 128) : L->size_k_row;
+    L->size_k_raw_row = L->size_k_row > hex_round_up(k_row_size, 128) ? L->size_k_row : hex_round_up(k_row_size, 128);
     L->size_m_row  = hex_round_up(Bc * sizeof(uint16_t), 128);
     L->size_o_row  = hex_round_up(Bc * sizeof(float), 128);
     L->size_qs     = 32 * (L->size_qs_row + L->size_qh_row) + hex_round_up(Bc / 64 * 128, 128);
@@ -190,9 +190,9 @@ static inline void htp_lid_hmx_vtcm_layout_build(struct htp_lid_hmx_vtcm_layout 
     L->total_bytes = off;
 }
 
-static inline size_t htp_lid_hmx_compute_vtcm_usage(size_t D, size_t n_head, size_t n_tok, size_t Bc, size_t n_qsets, size_t n_threads, bool k_f32) {
+static inline size_t htp_lid_hmx_compute_vtcm_usage(size_t D, size_t n_head, size_t n_tok, size_t Bc, size_t n_qsets, size_t n_threads, size_t k_row_size) {
     struct htp_lid_hmx_vtcm_layout L;
-    htp_lid_hmx_vtcm_layout_build(&L, D, n_head, n_tok, Bc, n_qsets, n_threads, k_f32);
+    htp_lid_hmx_vtcm_layout_build(&L, D, n_head, n_tok, Bc, n_qsets, n_threads, k_row_size);
     return L.total_bytes;
 }
 

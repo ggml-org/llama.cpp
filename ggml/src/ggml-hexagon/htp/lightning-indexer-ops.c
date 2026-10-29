@@ -152,6 +152,39 @@ static inline void lid_dequant_row_q8_0(uint8_t * restrict row, uint32_t D) {
     }
 }
 
+static inline void lid_dequant_row_q4_0(uint8_t * restrict row, uint32_t D) {
+    const int32_t nb = D / QK4_0;
+
+    const HVX_VectorPred q16     = Q6_Q_vsetq_R(16);
+    const HVX_VectorPred q32     = Q6_Q_vsetq_R(32);
+    const HVX_VectorPred q64     = Q6_Q_vsetq_R(64);
+    const HVX_Vector     v_eight = Q6_Vb_vsplat_R(8);
+    const HVX_Vector     zero    = Q6_V_vzero();
+
+    for (int32_t p = (nb - 1) / 2; p >= 0; --p) {
+        const int32_t      i    = 2 * p;
+        const block_q4_0 * src0 = (const block_q4_0 *) row + i;
+        const block_q4_0 * src1 = src0 + 1;
+        const HVX_Vector   vq0  = *(const HVX_UVector *) src0->qs;
+        const HVX_Vector   vq1  = i + 1 < nb ? *(const HVX_UVector *) src1->qs : zero;
+        const HVX_Vector   lo0  = Q6_Vb_vsub_VbVb(Q6_V_vand_VV(vq0, Q6_Vb_vsplat_R(0x0F)), v_eight);
+        const HVX_Vector   hi0  = Q6_Vb_vsub_VbVb(Q6_Vub_vlsr_VubR(vq0, 4), v_eight);
+        const HVX_Vector   lo1  = Q6_Vb_vsub_VbVb(Q6_V_vand_VV(vq1, Q6_Vb_vsplat_R(0x0F)), v_eight);
+        const HVX_Vector   hi1  = Q6_Vb_vsub_VbVb(Q6_Vub_vlsr_VubR(vq1, 4), v_eight);
+        const HVX_Vector   q0   = Q6_V_vmux_QVV(q16, lo0, Q6_V_vlalign_VVR(hi0, zero, 16));
+        const HVX_Vector   q1   = Q6_V_vmux_QVV(q16, lo1, Q6_V_vlalign_VVR(hi1, zero, 16));
+        const HVX_Vector   q    = Q6_V_vmux_QVV(q32, q0, Q6_V_vlalign_VVR(q1, zero, 32));
+        const HVX_Vector   d    = Q6_V_vmux_QVV(q64, Q6_Vh_vsplat_R(*(const uint16_t *) &src0->d),
+                                               i + 1 < nb ? Q6_Vh_vsplat_R(*(const uint16_t *) &src1->d) : zero);
+
+#if __HVX_ARCH__ < 79
+        ((HVX_Vector *) row)[p] = Q6_Vhf_equals_Wqf32(Q6_Wqf32_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(Q6_Wh_vunpack_Vb(q))), d));
+#else
+        ((HVX_Vector *) row)[p] = Q6_Vhf_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(Q6_Wh_vunpack_Vb(q))), d);
+#endif
+    }
+}
+
 static inline void lid_convert_row_f32_to_f16(uint8_t * row, uint32_t D) {
     const HVX_Vector zero = Q6_V_vzero();
     const HVX_Vector * src = (const HVX_Vector *) row;
@@ -440,6 +473,7 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
 
     const bool     is_f32     = (k->type == HTP_TYPE_F32);
     const bool     is_q8_0    = (k->type == HTP_TYPE_Q8_0);
+    const bool     is_q4_0    = (k->type == HTP_TYPE_Q4_0);
     const uint32_t k_row_size = htp_tensor_get_row_size(k->type, D);
 
     const uint32_t nbk2 = k->nb[2];
@@ -495,18 +529,16 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
             k_buf[j] = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;
             m_buf[j] = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;
 
-            if (is_q8_0 && !q8_g) {
+            if ((is_q8_0 && !q8_g) || is_q4_0) {
                 htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) (b + j));
                 for (uint32_t r = 0; r < nkv; ++r) {
-                    lid_dequant_row_q8_0(k_buf[j] + r * L->size_k_row, D);
+                    if (is_q4_0) {
+                        lid_dequant_row_q4_0(k_buf[j] + r * L->size_k_raw_row, D);
+                    } else {
+                        lid_dequant_row_q8_0(k_buf[j] + r * L->size_k_raw_row, D);
+                    }
                 }
                 htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) (b + j));
-            }
-
-            if (is_f32) {
-                for (uint32_t r = 0; r < nkv; ++r) {
-                    lid_convert_row_f32_to_f16(k_buf[j] + r * L->size_k_raw_row, D);
-                }
             }
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (b + j));
@@ -888,6 +920,50 @@ static inline void lid_hmx_prep_k_q8_0(__fp16 * restrict k_t, const uint8_t * re
     }
 }
 
+// Raw Q4_0 rows [r0, r1) to activation tiles. Rows >= nv are zero.
+static inline void lid_hmx_prep_k_q4_0(__fp16 * restrict k_t, const uint8_t * restrict k_raw, size_t row_stride,
+                                       uint32_t r0, uint32_t r1, uint32_t nv, uint32_t n_dot) {
+    const HVX_VectorPred q16    = Q6_Q_vsetq_R(16);
+    const HVX_Vector     v_eight = Q6_Vb_vsplat_R(8);
+    const HVX_Vector     zero    = Q6_V_vzero();
+
+    for (uint32_t r = r0; r < r1; r += 2) {
+        const uint8_t * p0 = k_raw + r * row_stride;
+        const uint8_t * p1 = p0 + row_stride;
+        const bool      v0 = r < nv;
+        const bool      v1 = r + 1 < nv;
+
+        HVX_Vector * dst = (HVX_Vector *) (k_t + (r / 32) * n_dot * HMX_FP16_TILE_N_ELMS) + (r % 32) / 2;
+
+        for (uint32_t i = 0; i < n_dot; ++i) {
+            const uint8_t * a = p0 + i * sizeof(block_q4_0);
+            const uint8_t * b = p1 + i * sizeof(block_q4_0);
+            uint8_t a_qs[VLEN] __attribute__((aligned(VLEN))) = { 0 };
+            uint8_t b_qs[VLEN] __attribute__((aligned(VLEN))) = { 0 };
+            if (v0) {
+                memcpy(a_qs, a + sizeof(ggml_fp16_t), QK4_0 / 2);
+            }
+            if (v1) {
+                memcpy(b_qs, b + sizeof(ggml_fp16_t), QK4_0 / 2);
+            }
+            const HVX_Vector qa = *(const HVX_UVector *) a_qs;
+            const HVX_Vector qb = *(const HVX_UVector *) b_qs;
+
+            const HVX_Vector a_lo = Q6_Vb_vsub_VbVb(Q6_V_vand_VV(qa, Q6_Vb_vsplat_R(0x0F)), v_eight);
+            const HVX_Vector a_hi = Q6_Vb_vsub_VbVb(Q6_Vub_vlsr_VubR(qa, 4), v_eight);
+            const HVX_Vector b_lo = Q6_Vb_vsub_VbVb(Q6_V_vand_VV(qb, Q6_Vb_vsplat_R(0x0F)), v_eight);
+            const HVX_Vector b_hi = Q6_Vb_vsub_VbVb(Q6_Vub_vlsr_VubR(qb, 4), v_eight);
+            const HVX_Vector a_q  = Q6_V_vmux_QVV(q16, a_lo, Q6_V_vlalign_VVR(a_hi, zero, 16));
+            const HVX_Vector b_q  = Q6_V_vmux_QVV(q16, b_lo, Q6_V_vlalign_VVR(b_hi, zero, 16));
+            const HVX_Vector da   = v0 ? Q6_Vh_vsplat_R(*(const uint16_t *) a) : zero;
+            const HVX_Vector db   = v1 ? Q6_Vh_vsplat_R(*(const uint16_t *) b) : zero;
+            const HVX_Vector ds   = Q6_V_lo_W(Q6_W_vshuff_VVR(db, da, -SIZEOF_FP16));
+
+            lid_q8_0_pair_store(dst + i * 16, a_q, b_q, hvx_vec_repl4(ds), zero, false);
+        }
+    }
+}
+
 // F16 rows [r0, r1) to activation tiles: row pairs interleaved. Rows >= nv are zero.
 static inline void lid_hmx_prep_k_f16(__fp16 * restrict k_t, const uint8_t * restrict k_raw, size_t row_stride,
                                       uint32_t r0, uint32_t r1, uint32_t nv, uint32_t n_dot) {
@@ -928,6 +1004,7 @@ static void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith
     __fp16 *        k_t   = hctx->k_t[g % 2];
     const bool      f32   = k->type == HTP_TYPE_F32;
     const bool      q8    = k->type == HTP_TYPE_Q8_0;
+    const bool      q4    = k->type == HTP_TYPE_Q4_0;
 
     for (uint32_t r = r0; r < r1;) {
         const uint32_t x   = xa + r;
@@ -938,6 +1015,8 @@ static void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith
 
         if (q8) {
             lid_hmx_prep_k_q8_0(k_t, k_raw, L->size_k_row, r, end, nv, L->n_dot);
+        } else if (q4) {
+            lid_hmx_prep_k_q4_0(k_t, k_raw, L->size_k_raw_row, r, end, nv, L->n_dot);
         } else {
             if (f32) {
                 for (uint32_t i = r; i < end; ++i) {
@@ -1384,7 +1463,8 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
     hctx.n_tile   = kparams->n_tokens_tile;
     hctx.n_tt     = (n_tokens + hctx.n_tile - 1) / hctx.n_tile;
     hctx.n_qsets  = n_qsets;
-    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_threads, octx->src[1]->type == HTP_TYPE_F32);
+    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_threads,
+                                  htp_tensor_get_row_size(octx->src[1]->type, D));
 
     uint8_t * const base = octx->ctx->vtcm_base;
     const struct htp_lid_hmx_vtcm_layout * L = &hctx.L;
@@ -1505,7 +1585,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     const struct htp_tensor * k = octx->src[1];
     const struct htp_tensor * m = octx->src[3];
 
-    if (k->type != HTP_TYPE_F32 && k->type != HTP_TYPE_F16 && k->type != HTP_TYPE_Q8_0) {
+    if (k->type != HTP_TYPE_F32 && k->type != HTP_TYPE_F16 && k->type != HTP_TYPE_Q8_0 && k->type != HTP_TYPE_Q4_0) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -1533,7 +1613,8 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     lctx.n_blocks          = kparams->n_kv_blocks;
     lctx.blocks_per_thread = kparams->blocks_per_thread;
 
-    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_threads, k->type == HTP_TYPE_F32);
+    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_threads,
+                              htp_tensor_get_row_size(k->type, q->ne[0]));
 
     uint8_t * const base = octx->ctx->vtcm_base;
 

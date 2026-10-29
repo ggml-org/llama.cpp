@@ -4717,7 +4717,7 @@ static bool htp_kparams_solve_lightning_indexer(
     const struct ggml_tensor * q = op->src[0];
     const struct ggml_tensor * k = op->src[1];
 
-    if (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0) {
+    if (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) {
         return false;
     }
 
@@ -4733,16 +4733,17 @@ static bool htp_kparams_solve_lightning_indexer(
         return false;
     }
 
-    const uint32_t D        = q->ne[0];
-    const uint32_t n_head   = q->ne[1];
-    const uint32_t n_tokens = q->ne[2];
+    const uint32_t D          = q->ne[0];
+    const uint32_t n_head     = q->ne[1];
+    const uint32_t n_tokens   = q->ne[2];
+    const size_t   k_row_size = ggml_row_size(k->type, D);
     if (htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
         const uint32_t n_threads = htp_session_n_threads(sess);
         const uint32_t n_stream  = q->ne[3];
         const uint32_t n_dot     = D / HMX_FP16_TILE_N_COLS;
 
         auto vtcm_usage = [&](uint32_t n_tok, uint32_t kv_block, uint32_t n_qsets) {
-            return htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, kv_block, n_qsets, n_threads, k->type == GGML_TYPE_F32);
+            return htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, kv_block, n_qsets, n_threads, k_row_size);
         };
 
         uint32_t n_tok = (std::min)(n_tokens, (uint32_t) HTP_LID_HMX_TOKENS_MAX);
@@ -4795,11 +4796,11 @@ static bool htp_kparams_solve_lightning_indexer(
 
     const uint32_t n_threads = (std::min)(htp_session_n_threads(sess), n_kv_blocks);
     uint32_t n_tok = (std::min)((uint32_t) q->ne[2], (uint32_t) HTP_LID_TOKENS_MAX);
-    while (n_tok > 1 && htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k->type == GGML_TYPE_F32) > htp_session_vtcm_size(sess)) {
+    while (n_tok > 1 && htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k_row_size) > htp_session_vtcm_size(sess)) {
         n_tok /= 2;
     }
 
-    const size_t vtcm_size = htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k->type == GGML_TYPE_F32);
+    const size_t vtcm_size = htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k_row_size);
     if (vtcm_size > htp_session_vtcm_size(sess)) {
         return false;
     }
