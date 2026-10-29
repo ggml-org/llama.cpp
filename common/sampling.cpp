@@ -1,5 +1,5 @@
 #include "sampling.h"
-#include "../src/llama-ext.h"
+#include "../src/llama-sampler.h"
 
 #include "common.h"
 #include "fit.h"
@@ -689,11 +689,9 @@ llama_token common_sampler_sample_from_outputs(common_sampler * gsmpl, const lla
 }
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
-    return common_sampler_sample_and_accept_n(gsmpl, llama_get_outputs(ctx), idxs, draft, grammar_first);
-}
-
-std::vector<llama_token> common_sampler_sample_and_accept_n(common_sampler * gsmpl, const llama_outputs * outputs, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
     GGML_ASSERT(idxs.size() == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
+
+    const auto * outputs = llama_get_outputs(ctx);
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());
@@ -739,12 +737,10 @@ static float prob_of(const llama_token_data * data, size_t n, llama_token id) {
 // Preserves the target distribution exactly, and accepts more often than matching does when the
 // draft samples instead of taking its argmax.
 std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first) {
-    return common_sampler_sample_and_accept_n_rejection(gsmpl, llama_get_outputs(ctx), idxs, draft, draft_q, grammar_first);
-}
-
-std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(common_sampler * gsmpl, const llama_outputs * outputs, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first) {
     GGML_ASSERT(idxs.size()    == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
     GGML_ASSERT(draft_q.size() == draft.size() && "draft_q must have one entry per draft token");
+
+    const auto * outputs = llama_get_outputs(ctx);
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());

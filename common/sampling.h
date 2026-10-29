@@ -88,11 +88,9 @@ llama_token common_sampler_sample_from_outputs(common_sampler * gsmpl, const lla
 // returns at least 1 token, up to idxs.size()
 //
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first = false);
-std::vector<llama_token> common_sampler_sample_and_accept_n(common_sampler * gsmpl, const llama_outputs * outputs, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first = false);
 
 // as above, but verifies by rejection sampling; draft_q holds the draft's candidates per token
 std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first = false);
-std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(common_sampler * gsmpl, const llama_outputs * outputs, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first = false);
 
 // assume idxs == [ 0, 1, 2, ..., draft.size() ]
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first = false);

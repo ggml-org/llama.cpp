@@ -1035,6 +1035,9 @@ const llama_outputs * llama_context::get_outputs() {
     outputs.embeddings = embd.data;
     outputs.embeddings_nextn = embd_nextn.data;
     outputs.output_ids = &output_ids;
+    outputs.n_embd = model.hparams.n_embd_out();
+    outputs.n_embeddings_nextn = embd_nextn.size / outputs.n_embd;
+    outputs.embeddings_nextn_masked = cparams.embeddings_nextn_masked;
 
     outputs.sampling.resize(n_outputs);
     for (uint32_t row = 0; row < n_outputs; ++row) {

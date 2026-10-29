@@ -11,6 +11,7 @@
 #include "sampling.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
+#include "../src/llama-sampler.h"
 
 #include <algorithm>
 #include <cassert>
@@ -393,6 +394,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         int i = 0;
 
         while (n_drafting > 0) {
+            const auto * outputs = llama_get_outputs(ctx_dft);
             int i_batch = 0;
 
             batch.clear();
@@ -404,7 +406,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                const llama_token id_sampled = common_sampler_sample(smpl, ctx_dft, i_batch, true);
+                const llama_token id_sampled = common_sampler_sample_from_outputs(smpl, outputs, i_batch, true);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -685,10 +687,11 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         // to get one g_embd row per token.
         features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
+        const auto * outputs = llama_get_outputs(ctx_tgt);
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
             const float * layer = target_layer_ids[k] < n_layer_tgt
-                ? llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k])
-                : llama_get_embeddings_nextn(ctx_tgt);
+                ? outputs->get_embeddings_layer_inp((uint32_t) target_layer_ids[k])
+                : outputs->embeddings_nextn;
             if (!layer) {
                 GGML_ABORT("EAGLE3: target layer %d input not extracted.", target_layer_ids[k]);
             }
@@ -841,6 +844,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         int i = 0;
 
         while (n_drafting > 0) {
+            const auto * outputs = llama_get_outputs(ctx_dft);
             int i_batch = 0;
 
             batch.clear();
@@ -852,9 +856,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                common_sampler_sample(smpl, ctx_dft, i_batch, true);
+                common_sampler_sample_from_outputs(smpl, outputs, i_batch, true);
                 // pre-norm hidden state of this position becomes g_embd for the next step
-                const float * prenorm = llama_get_embeddings_nextn_ith(ctx_dft, i_batch);
+                const float * prenorm = outputs->get_embeddings_nextn_ith(i_batch);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -1612,6 +1616,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
+        const auto * outputs = llama_get_outputs(ctx_tgt);
 
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
         if (!is_mem_shared) {
@@ -1623,7 +1628,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             // i.e. we cannot have seq_id like this: [0, 0, 0, 1, 1, 0, 1, 1]
             //                                                       ^--- this is a problem
             // TODO:this is generally true, but would be nice to assert it
-            const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
+            const float * h_tgt = outputs->embeddings_nextn;
 
             for (int k = 0; k < n_tokens; ++k) {
                 const auto & t = batch_in.tokens[k];
@@ -1684,7 +1689,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
 
             for (int32_t i = 0; i < n_rows; ++i) {
-                const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                const float * h = outputs->get_embeddings_nextn_ith(i_batch_beg[seq_id] + i);
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
             }
 
@@ -1763,6 +1768,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 break;
             }
 
+            const auto * outputs = llama_get_outputs(ctx_dft);
+
             // rebuild the batch for the next step: the growing-KV paths re-add only the
             // new token (the KV already holds the prefix), while chained heads re-add the
             // whole prefix at the next head. dropped sequences are simply not re-added.
@@ -1775,8 +1782,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                const llama_token id_sampled = common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
-                const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
+                const llama_token id_sampled = common_sampler_sample_from_outputs(smpl, outputs, i_last[seq_id], true);
+                const float * h_row = outputs->get_embeddings_nextn_ith(i_last[seq_id]);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
