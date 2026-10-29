@@ -6,7 +6,6 @@
 
 #include "llama.h"
 #include "llama-arch.h"
-#include "ggml-sampling.h"
 
 #include <cstdint>
 #include <map>
@@ -177,21 +176,6 @@ LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * m
 LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
 // returns the number of extracted layers from target model
 LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
-
-// Enable probabilistic DSpark Markov logits for this context.
-LLAMA_API void llama_set_dspark_probabilistic(struct llama_context * ctx, bool value);
-
-LLAMA_API bool llama_supports_gpu_sampling(struct llama_context * ctx);
-LLAMA_API bool llama_sample_gpu(struct llama_context * ctx, struct llama_context * draft,
-        const std::vector<int> & idxs, struct ggml_sample_params params, struct ggml_sample_result & result);
-LLAMA_API void llama_set_probs_device(struct llama_context * ctx, bool value);
-LLAMA_API void llama_set_logits_device(struct llama_context * ctx, bool value);
-// Retained until the next device-probability draft batch or context destruction.
-LLAMA_API struct ggml_tensor * llama_get_probs_device(struct llama_context * ctx);
-
-// Read DSpark Markov weights as F32. Passing nullptr returns the element count.
-LLAMA_API uint32_t llama_model_get_dspark_markov_w1(const struct llama_model * model, float * out);
-LLAMA_API uint32_t llama_model_get_dspark_markov_w2(const struct llama_model * model, float * out);
 
 // retrieves the whole token embedding matrix in F32 format (n_embd * n_vocab)
 // returns total number of elements or 0 on error

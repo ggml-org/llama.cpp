@@ -3996,37 +3996,6 @@ static void llama_tensor_rows_to_f32(const ggml_tensor * tensor, int64_t row0, i
     }
 }
 
-uint32_t llama_model_get_dspark_markov_w1(const struct llama_model * model, float * out) {
-    const ggml_tensor * tensor = model->dspark_markov_w1;
-    if (tensor == nullptr || model->d2t != nullptr || ggml_nelements(tensor) > UINT32_MAX) {
-        return 0;
-    }
-    const uint32_t count = (uint32_t) ggml_nelements(tensor);
-    if (out != nullptr) {
-        llama_tensor_rows_to_f32(tensor, 0, tensor->ne[1], out);
-    }
-    return count;
-}
-
-uint32_t llama_model_get_dspark_markov_w2(const struct llama_model * model, float * out) {
-    const ggml_tensor * tensor = model->dspark_markov_w2;
-    if (tensor == nullptr || model->d2t != nullptr || ggml_nelements(tensor) > UINT32_MAX) {
-        return 0;
-    }
-    const uint32_t count = (uint32_t) ggml_nelements(tensor);
-    if (out != nullptr) {
-        llama_tensor_rows_to_f32(tensor, 0, tensor->ne[1], out);
-        if (model->dspark_markov_w2_s != nullptr) {
-            float scale;
-            llama_tensor_rows_to_f32(model->dspark_markov_w2_s, 0, 1, &scale);
-            for (uint32_t i = 0; i < count; ++i) {
-                out[i] *= scale;
-            }
-        }
-    }
-    return count;
-}
-
 uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out) {
     if (model->vocab.n_tokens() == 0 || model->tok_embd == nullptr) {
         return 0;

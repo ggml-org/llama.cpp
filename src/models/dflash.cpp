@@ -3,11 +3,8 @@
 #include "llama-impl.h"
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
-#include "llama-sampler.h"
 
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
-
-    const bool is_dspark = ml.get_tensor_meta("markov_w1.weight") != nullptr;
 
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false);
@@ -117,10 +114,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     // optional interleaved sliding-window attention with per-layer pattern array.
     if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
-        if (is_dspark) {
-            // include the configured history window before the anchor
-            hparams.n_swa += 1;
-        }
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
@@ -313,7 +306,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         return;
     }
 
-    const bool has_attn_gate = ml->get_tensor_meta("blk.0.attn_gate.weight") != nullptr;
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
@@ -324,12 +316,10 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, TENSOR_NOT_REQUIRED);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
-        if (has_attn_gate) {
-            layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_head }, 0);
-        } else {
-            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
-            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
-        }
+        layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_head }, TENSOR_NOT_REQUIRED);
+        const int norm_flags = layer.wqkv_gate ? TENSOR_NOT_REQUIRED : 0;
+        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, norm_flags);
+        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, norm_flags);
 
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
         layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
@@ -404,7 +394,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     GGML_ASSERT(w1 && w2 && "DSpark markov weights not loaded");
 
     // confidence head is optional
-    const bool has_conf = model.dspark_conf_proj != nullptr && !g.cparams.dspark_probabilistic;
+    const bool has_conf = model.dspark_conf_proj != nullptr;
 
     ggml_tensor * base = res->t_logits; // [n_vocab, n_tokens]
     const int64_t n_vocab = base->ne[0];
@@ -438,23 +428,6 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * cat      = nullptr;
     ggml_tensor * cat_conf = nullptr;
 
-    bool sample_chain = g.cparams.dspark_probabilistic && !g.samplers.empty();
-    for (int64_t b = 0; b < n_blocks && sample_chain; ++b) {
-        sample_chain = g.samplers.count(g.ubatch.seq_id[b * block_drafts][0]) != 0;
-    }
-    if (sample_chain) {
-        res->add_input(std::make_unique<llm_graph_input_sampling>(g.samplers));
-        res->t_sampled.resize(n_tok, nullptr);
-        res->t_sampled_probs.resize(n_tok, nullptr);
-        res->t_sampled_logits.resize(n_tok, nullptr);
-        res->t_candidates.resize(n_tok, nullptr);
-        for (const auto & entry : g.samplers) {
-            if (entry.second->iface->backend_reset) {
-                entry.second->iface->backend_reset(entry.second);
-            }
-        }
-    }
-
     if (!sample_from_anchor) {
         // bonus anchor slot: pass the logits through unbiased, pad the (unread) confidence column
         cat = ggml_cont(ctx0, ggml_view_2d(ctx0, base, n_vocab, n_blocks, base_stride, 0));
@@ -463,6 +436,8 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
         }
     }
 
+    // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
+    //       token pick, not the Markov conditioning path
     for (int64_t i = i_draft_beg; i < block_drafts; ++i) {
         ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);                          // [R, n_blocks]
         ggml_tensor * bias    = g.build_lora_mm(w2, w1_prev, model.dspark_markov_w2_s); // [n_vocab_draft, n_blocks]
@@ -498,25 +473,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
             cat_conf = cat_conf ? ggml_concat(ctx0, cat_conf, conf, 1) : conf;
         }
 
-        if (sample_chain) {
-            ggml_tensor * sampled_prev = nullptr;
-            for (int64_t b = 0; b < n_blocks; ++b) {
-                const int64_t row = b * block_drafts + i;
-                auto * sampler = g.samplers.at(g.ubatch.seq_id[b * block_drafts][0]);
-                llama_sampler_data data = {
-                    ggml_view_1d(ctx0, col, n_vocab, b * col->nb[1]), nullptr, nullptr, nullptr,
-                };
-                sampler->iface->backend_apply(sampler, ctx0, g.gf, &data);
-                GGML_ASSERT(data.sampled && data.probs && !data.candidates);
-                res->t_sampled[row] = data.sampled;
-                res->t_sampled_probs[row] = data.probs;
-                ggml_build_forward_expand(g.gf, data.sampled);
-                ggml_build_forward_expand(g.gf, data.probs);
-                auto * token = ggml_reshape_1d(ctx0, data.sampled, 1);
-                sampled_prev = sampled_prev ? ggml_concat(ctx0, sampled_prev, token, 0) : token;
-            }
-            prev = sampled_prev;
-        } else if (i + 1 < block_drafts) {
+        if (i + 1 < block_drafts) {
             prev = ggml_argmax(ctx0, col);
         }
     }
@@ -1068,6 +1025,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
         if (layer.attn_q_norm) {
             Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
+        }
+        if (layer.attn_k_norm) {
             Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
         }
         if (shared_kv) {
@@ -1128,7 +1087,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
                 layer.ffn_gate, NULL, layer.ffn_gate_s,
                 layer.ffn_down, NULL, layer.ffn_down_s,
                 NULL,
-                layer.wqkv_gate ? LLM_FFN_GELU : hparams.llm_ffn_op, LLM_FFN_PAR, il);
+                hparams.llm_ffn_op, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
         if (ffn_dynamic) {

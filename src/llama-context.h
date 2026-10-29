@@ -119,13 +119,6 @@ struct llama_context {
 
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
-    void set_dspark_probabilistic(bool value);
-    bool supports_gpu_sampling() const;
-    bool sample_gpu(llama_context * draft, const std::vector<int> & idxs,
-            ggml_sample_params params, ggml_sample_result & result);
-    void set_probs_device(bool value) { sampling.probs_device = value; }
-    void set_logits_device(bool value) { sampling.logits_device = value; }
-    ggml_tensor * get_probs_device() const { return sampling.probs_valid ? sampling.probs_tensor : nullptr; }
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
@@ -242,7 +235,6 @@ private:
     uint32_t output_reserve(int32_t n_outputs);
 
     void output_reorder();
-    void read_logits();
 
     // map the output row index `i` to batch index
     int64_t output_resolve_row(int32_t i) const;
@@ -335,14 +327,6 @@ private:
     std::vector<int32_t> embd_batch_idxs; // extracted index -> original batch index
 
     struct sampling_info {
-        bool probs_device = false;
-        bool probs_pending = false;
-        bool probs_valid = false;
-        bool logits_device = false;
-        bool logits_pending = false;
-        ggml_context_ptr probs_ctx;
-        ggml_backend_buffer_ptr probs_buffer;
-        ggml_tensor * probs_tensor = nullptr;
         // !samplers.empty() to check if any samplers are active
         std::map<llama_seq_id, llama_sampler *> samplers;
 

@@ -16,7 +16,6 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
-#include "../../src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -2065,8 +2064,6 @@ private:
 
             const bool need_pre_sample_logits = task.params.sampling.n_probs > 0 && !task.params.post_sampling_probs;
 
-            llama_set_logits_device(ctx_tgt, common_sampler_can_gpu(slot.smpl.get(), ctx_tgt) && llama_n_seq_max(ctx_tgt) == 1);
-
             bool use_backend_sampling = task.params.sampling.backend_sampling;
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
@@ -3903,11 +3900,6 @@ private:
                             /* .result_q = */ spec_reject ? &slot.spec_draft_q : nullptr,
                             /* .temp     = */ slot.task->params.sampling.temp,
                             /* .seed     = */ slot.task->params.sampling.seed,
-                            /* .probs_device = */ common_speculative_has_device_probs(spec.get()) &&
-                                ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_FULL &&
-                                (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_RS || (uint32_t) common_speculative_n_max(spec.get()) <= llama_n_rs_seq(ctx_tgt)) &&
-                                common_sampler_can_gpu(slot.smpl.get(), slot.ctx_tgt) &&
-                                llama_n_seq_max(slot.ctx_tgt) == 1 && ctx_dft && llama_supports_gpu_sampling(ctx_dft),
                         };
 
                         drafting.push_back(&slot);
@@ -4881,7 +4873,7 @@ private:
             llama_token id;
             {
                 scoped_timer timer(t_sampl, n_sampl);
-                id = common_sampler_sample_gpu(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
             }
 
             slot.i_batch = -1;
@@ -4946,8 +4938,7 @@ private:
                 const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
 
                 // drafters that fill no distribution fall back here
-                const bool probs_device = common_speculative_get_draft_params(spec.get(), slot.id).probs_device;
-                const bool use_rejection = slot.use_spec_rejection() && (!slot.spec_draft_q.empty() || probs_device);
+                const bool use_rejection = slot.use_spec_rejection() && !slot.spec_draft_q.empty();
 
                 std::vector<llama_token> accepted;
                 if (!synth_probs.empty()) {
@@ -4958,7 +4949,7 @@ private:
                 } else if (slot.spec_is_replay && slot.use_spec_rejection()) {
                     accepted = server_accept_replay(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
                 } else if (use_rejection) {
-                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft, slot.spec_draft_q, false, probs_device ? ctx_dft : nullptr);
+                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft, slot.spec_draft_q);
                 } else {
                     accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
                 }

@@ -3,8 +3,6 @@
 #include "llama-cpp.h"
 #include "common.h"
 #include "sampling.h"
-#include "ggml-cpp.h"
-#include "../src/llama-ext.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -1693,7 +1691,7 @@ static void test_multi_output_limit(const test_params & params) {
     printf("backend multi-output limit test PASSED\n");
 }
 
-static void test_multi_output_multi_sequence_dist_impl(const test_params & params, bool packed) {
+static void test_multi_output_multi_sequence_dist(const test_params & params) {
     const llama_vocab * vocab = llama_model_get_vocab(params.model.get());
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
     const uint32_t seeds[] = { 88, 1337 };
@@ -1711,9 +1709,6 @@ static void test_multi_output_multi_sequence_dist_impl(const test_params & param
         { 1, chain_1.get() },
     };
     test_context test_ctx(params, configs, 2, 4, 0, 2);
-    if (packed) {
-        llama_set_dspark_probabilistic(test_ctx.ctx.get(), true);
-    }
 
     std::vector<llama_sampler_seq_config> reference_configs;
     test_context reference_ctx(params, reference_configs, 2, 4);
@@ -1746,9 +1741,6 @@ static void test_multi_output_multi_sequence_dist_impl(const test_params & param
     };
     std::uniform_real_distribution<double> reference_dist(0.0, 1.0);
 
-    common_params_sampling reader_params;
-    common_sampler_ptr reader(common_sampler_init(params.model.get(), reader_params));
-
     for (int i = 0; i < batch.size(); ++i) {
         const llama_seq_id seq_id = batch.tokens[i].seq_id;
         GGML_ASSERT(seq_id == 0 || seq_id == 1);
@@ -1762,40 +1754,18 @@ static void test_multi_output_multi_sequence_dist_impl(const test_params & param
         const float * reference_logits = llama_get_logits_ith(reference_ctx.ctx.get(), i);
 
         GGML_ASSERT(backend_token >= 0 && backend_token < n_vocab);
-        GGML_ASSERT((sampled_logits == nullptr) == packed);
+        GGML_ASSERT(sampled_logits != nullptr);
         GGML_ASSERT(sampled_probs != nullptr);
         GGML_ASSERT(reference_logits != nullptr);
-        GGML_ASSERT(n_logits == (packed ? 0 : (uint32_t) n_vocab));
+        GGML_ASSERT(n_logits == (uint32_t) n_vocab);
         GGML_ASSERT(n_probs == (uint32_t) n_vocab);
-
-        if (packed) {
-            GGML_ASSERT(common_sampler_sample(reader.get(), test_ctx.ctx.get(), i, true) == backend_token);
-            const auto * candidates = common_sampler_get_candidates(reader.get(), false);
-            GGML_ASSERT(candidates->size == (size_t) n_vocab);
-            for (llama_token token = 0; token < n_vocab; ++token) {
-                GGML_ASSERT(candidates->data[token].id == token);
-                GGML_ASSERT(candidates->data[token].p == sampled_probs[token]);
-            }
-        }
 
         float prob_sum = 0.0f;
         float cumsum_before = 0.0f;
-        float max_logit = -INFINITY;
-        for (llama_token token = 0; token < n_vocab; ++token) {
-            max_logit = std::max(max_logit, reference_logits[token] / temp);
-        }
-        double reference_sum = 0.0;
-        for (llama_token token = 0; token < n_vocab; ++token) {
-            reference_sum += std::exp(reference_logits[token] / temp - max_logit);
-        }
         for (llama_token token = 0; token < n_vocab; ++token) {
             const float expected_logit = reference_logits[token] / temp;
             const float tolerance = 1e-4f * std::max(1.0f, std::fabs(expected_logit));
-            if (sampled_logits) {
-                GGML_ASSERT(std::fabs(sampled_logits[token] - expected_logit) <= tolerance);
-            }
-            const double expected_prob = std::exp(expected_logit - max_logit) / reference_sum;
-            GGML_ASSERT(std::fabs(sampled_probs[token] - expected_prob) <= 1e-5f);
+            GGML_ASSERT(std::fabs(sampled_logits[token] - expected_logit) <= tolerance);
             GGML_ASSERT(std::isfinite(sampled_probs[token]));
             GGML_ASSERT(sampled_probs[token] >= 0.0f);
 
@@ -1814,296 +1784,6 @@ static void test_multi_output_multi_sequence_dist_impl(const test_params & param
     }
 
     printf("backend multi-sequence multi-output dist test PASSED\n");
-}
-
-static void test_dspark_markov_sampling(const test_params & params) {
-    auto * model = params.model.get();
-    const uint32_t count_w1 = llama_model_get_dspark_markov_w1(model, nullptr);
-    const uint32_t count_w2 = llama_model_get_dspark_markov_w2(model, nullptr);
-    if (count_w1 == 0 || count_w2 != count_w1) {
-        printf("DSpark full-vocabulary Markov weights unavailable, skipping\n");
-        return;
-    }
-    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    const int rank = count_w1 / n_vocab;
-    const int n_rows = 5;
-    const float temperature = 1.3f;
-    const char * target_path = std::getenv("DSPARK_TEST_TARGET");
-    if (!target_path) {
-        printf("Set DSPARK_TEST_TARGET to test shared DSpark embeddings, skipping\n");
-        return;
-    }
-    auto mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 999;
-    llama_model_ptr target_model(llama_model_load_from_file(target_path, mparams));
-    GGML_ASSERT(target_model);
-    auto target_params = llama_context_default_params();
-    target_params.n_ctx = 128;
-    target_params.n_batch = target_params.n_ubatch = 16;
-    llama_context_ptr target_ctx(llama_init_from_model(target_model.get(), target_params));
-    GGML_ASSERT(target_ctx);
-    std::vector<float> base;
-    llama_sampler_ptr sampler(llama_sampler_chain_init(llama_sampler_chain_default_params()));
-    llama_sampler_chain_add(sampler.get(), llama_sampler_init_temp(temperature));
-    llama_sampler_chain_add(sampler.get(), llama_sampler_init_dist(88));
-    llama_sampler_seq_config config = {0, sampler.get()};
-    auto cparams = llama_context_default_params();
-    cparams.ctx_other = target_ctx.get();
-    cparams.n_ctx = 128;
-    cparams.n_batch = cparams.n_ubatch = 16;
-    cparams.n_seq_max = 1;
-    cparams.n_outputs_max = cparams.n_outputs_max_per_seq = 7;
-    cparams.samplers = &config;
-    cparams.n_samplers = 1;
-    cparams.cb_eval_user_data = &base;
-    cparams.cb_eval = [](ggml_tensor * tensor, bool ask, void * user_data) {
-        if (std::strcmp(ggml_get_name(tensor), "result_output") != 0 || tensor->ne[1] != n_rows) {
-            return false;
-        }
-        if (!ask) {
-            auto & values = *(std::vector<float> *) user_data;
-            values.resize(ggml_nelements(tensor));
-            ggml_backend_tensor_get(tensor, values.data(), 0, ggml_nbytes(tensor));
-        }
-        return true;
-    };
-    llama_context_ptr ctx(llama_init_from_model(model, cparams));
-    GGML_ASSERT(ctx);
-    llama_set_dspark_probabilistic(ctx.get(), true);
-    llama_set_probs_device(ctx.get(), true);
-    common_batch batch(ctx.get());
-    for (int i = 0; i < n_rows; ++i) {
-        batch.add(i == 0 ? 1 : llama_vocab_mask(llama_model_get_vocab(model)), i, 0, true);
-    }
-    GGML_ASSERT(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
-    llama_synchronize(ctx.get());
-    GGML_ASSERT(base.size() == (size_t) n_vocab * n_rows);
-    std::vector<float> w1(count_w1), w2(count_w2);
-    llama_model_get_dspark_markov_w1(model, w1.data());
-    llama_model_get_dspark_markov_w2(model, w2.data());
-    int previous = 1;
-    int non_argmax = 0;
-    std::mt19937 reference_rng(88);
-    std::uniform_real_distribution<double> reference_uniform(0.0, 1.0);
-    std::vector<float> retained(n_vocab * n_rows);
-    for (int row = 0; row < n_rows; ++row) {
-        const auto * actual = llama_get_sampled_probs_ith(ctx.get(), row);
-        GGML_ASSERT(actual);
-        std::vector<double> expected(n_vocab);
-        double maximum = -INFINITY;
-        for (int id = 0; id < n_vocab; ++id) {
-            double bias = 0.0;
-            for (int r = 0; r < rank; ++r) {
-                bias += w1[previous * rank + r] * w2[id * rank + r];
-            }
-            expected[id] = (base[row * n_vocab + id] + bias) / temperature;
-            maximum = std::max(maximum, expected[id]);
-        }
-        double sum = 0.0;
-        for (auto & value : expected) { value = std::exp(value - maximum); sum += value; }
-        double error_l1 = 0.0;
-        for (int id = 0; id < n_vocab; ++id) { error_l1 += std::abs(expected[id] / sum - actual[id]); }
-        printf("DSpark sampled predecessor row=%d, L1 error=%.8g\n", row, error_l1);
-        GGML_ASSERT(error_l1 < 0.002);
-        previous = llama_get_sampled_token_ith(ctx.get(), row);
-        GGML_ASSERT(previous >= 0 && previous < n_vocab);
-        non_argmax += previous != std::max_element(actual, actual + n_vocab) - actual;
-        double cdf_before = 0.0;
-        for (int id = 0; id < previous; ++id) { cdf_before += actual[id]; }
-        const float uniform = reference_uniform(reference_rng);
-        GGML_ASSERT(uniform >= cdf_before - 1e-4 && uniform <= cdf_before + actual[previous] + 1e-4);
-        std::copy(actual, actual + n_vocab, retained.data() + row * n_vocab);
-        llama_sampler_accept(sampler.get(), previous);
-    }
-    GGML_ASSERT(non_argmax > 0);
-    const int n_features = llama_model_target_layer_ids_n(model) * llama_model_n_embd(target_model.get());
-    std::vector<float> features(n_features, 0.0f);
-    common_batch inject(ctx.get());
-    const llama_pos position[4] = {5, 5, 5, 0};
-    inject.add_embd({features.data(), 1, (size_t) n_features}, position, 0, false);
-    GGML_ASSERT(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, inject.get()) == 0);
-    llama_synchronize(ctx.get());
-    std::vector<float> after_injection(retained.size());
-    ggml_backend_tensor_get(llama_get_probs_device(ctx.get()), after_injection.data(), 0, after_injection.size() * sizeof(float));
-    GGML_ASSERT(retained == after_injection);
-    batch.clear();
-    for (int i = 0; i < n_rows; ++i) {
-        batch.add(i == 0 ? 1 : llama_vocab_mask(llama_model_get_vocab(model)), 6 + i, 0, true);
-    }
-    GGML_ASSERT(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
-    for (int row = 0; row < n_rows; ++row) {
-        const auto token = llama_get_sampled_token_ith(ctx.get(), row);
-        const auto * probs = llama_get_sampled_probs_ith(ctx.get(), row);
-        double cdf_before = 0.0;
-        for (int id = 0; id < token; ++id) { cdf_before += probs[id]; }
-        const float uniform = reference_uniform(reference_rng);
-        GGML_ASSERT(uniform >= cdf_before - 1e-4 && uniform <= cdf_before + probs[token] + 1e-4);
-        llama_sampler_accept(sampler.get(), token);
-    }
-    printf("DSpark Markov sampling CPU reference PASSED\n");
-}
-
-static void test_gpu_rejection(const test_params &) {
-    auto * device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-    auto sample = device ? (ggml_backend_sample_t) ggml_backend_reg_get_proc_address(
-            ggml_backend_dev_backend_reg(device), "ggml_backend_sample") : nullptr;
-    if (!sample) {
-        printf("GPU rejection sampling extension unavailable, skipping\n");
-        return;
-    }
-    ggml_backend_ptr backend(ggml_backend_dev_init(device, nullptr));
-    ggml_context_ptr ctx(ggml_init({4 * ggml_tensor_overhead(), nullptr, true}));
-    const int n_vocab = 1025;
-    const int n_rows = 4;
-    auto * logits = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_vocab, n_rows);
-    auto * q = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_vocab, n_rows - 1);
-    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
-    std::vector<float> values(n_vocab * n_rows, -INFINITY);
-    std::vector<float> draft_q(n_vocab * (n_rows - 1), 0.0f);
-    for (int row = 0; row < n_rows; ++row) {
-        for (int id = 0; id < 5; ++id) {
-            values[row * n_vocab + id] = -0.4f * ((id + row) % 5) - 0.03f * id;
-            if (row < n_rows - 1) {
-                draft_q[row * n_vocab + id] = (id + 1) / 15.0f;
-            }
-        }
-    }
-    ggml_backend_tensor_set(logits, values.data(), 0, ggml_nbytes(logits));
-    ggml_backend_tensor_set(q, draft_q.data(), 0, ggml_nbytes(q));
-    std::mt19937 rng(716);
-    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
-    int accepted_lengths[4] = {};
-    for (bool dense : {false, true}) {
-        if (dense) {
-            for (int row = 0; row < n_rows; ++row) {
-                for (int id = 0; id < n_vocab; ++id) {
-                    values[row * n_vocab + id] = -0.02f * id - 0.013f * row * (id % 17);
-                }
-            }
-            ggml_backend_tensor_set(logits, values.data(), 0, ggml_nbytes(logits));
-        }
-        for (bool temperature_first : {false, true}) {
-            for (float top_p : {0.55f, 0.95f, 1.0f}) {
-                for (float temperature : {0.7f, 1.4f}) {
-                    for (int min_keep : {1, 3}) {
-                        ggml_sample_params params = {};
-                        params.n_draft = n_rows - 1;
-                        params.top_p = top_p;
-                        params.temperature = temperature;
-                        params.temperature_first = temperature_first;
-                        params.min_keep = min_keep;
-                        params.n_bias = 1;
-                        params.bias_ids[0] = 4;
-                        params.bias_values[0] = -INFINITY;
-                        std::vector<std::vector<int>> ids(n_rows);
-                        std::vector<std::vector<double>> probabilities(n_rows);
-                        for (int row = 0; row < n_rows; ++row) {
-                            params.rows[row] = (row + 1) % n_rows;
-                            if (row < params.n_draft) {
-                                params.draft[row] = row;
-                            }
-                            auto & order = ids[row];
-                            const float * raw = values.data() + params.rows[row] * n_vocab;
-                            for (int id = 0; id < n_vocab; ++id) {
-                                if (id != 4 && std::isfinite(raw[id])) { order.push_back(id); }
-                            }
-                            std::sort(order.begin(), order.end(), [&](int a, int b) { return raw[a] != raw[b] ? raw[a] > raw[b] : a < b; });
-                            std::vector<double> mass(order.size());
-                            double total = 0.0;
-                            for (size_t i = 0; i < order.size(); ++i) {
-                                mass[i] = std::exp((raw[order[i]] - raw[order[0]]) / (temperature_first ? temperature : 1.0));
-                                total += mass[i];
-                            }
-                            double cumulative = 0.0;
-                            auto & probs = probabilities[row];
-                            probs.resize(order.size());
-                            double norm = 0.0;
-                            for (size_t i = 0; i < order.size(); ++i) {
-                                probs[i] = top_p >= 1.0f || (int) i < min_keep || cumulative < top_p * total
-                                    ? std::exp((raw[order[i]] - raw[order[0]]) / temperature) : 0.0;
-                                cumulative += mass[i];
-                                norm += probs[i];
-                            }
-                            for (auto & value : probs) {
-                                value /= norm;
-                            }
-                        }
-                        for (int trial = 0; trial < 24; ++trial) {
-                            for (int row = 0; row < params.n_draft; ++row) {
-                                params.draft[row] = (row + trial) % 5;
-                            }
-                            for (int i = 0; i < 2 * params.n_draft + 1; ++i) {
-                                params.uniforms[i] = uni(rng);
-                            }
-                            std::vector<int> expected;
-                            for (int row = 0; row < n_rows; ++row) {
-                                const auto & order = ids[row];
-                                const auto & probs = probabilities[row];
-                                double p_x = 0.0;
-                                if (row < params.n_draft) {
-                                    for (size_t i = 0; i < order.size(); ++i) {
-                                        if (order[i] == params.draft[row]) { p_x = probs[i]; }
-                                    }
-                                    const float q_x = draft_q[row * n_vocab + params.draft[row]];
-                                    if (params.uniforms[row] < std::min(1.0, p_x / q_x)) {
-                                        expected.push_back(params.draft[row]);
-                                        continue;
-                                    }
-                                }
-                                auto residual = probs;
-                                if (row < params.n_draft) {
-                                    for (size_t i = 0; i < order.size(); ++i) {
-                                        residual[i] = std::max(0.0, probs[i] - draft_q[row * n_vocab + order[i]]);
-                                    }
-                                }
-                                double total = 0.0;
-                                for (auto value : residual) { total += value; }
-                                double threshold = params.uniforms[params.n_draft + row] * total;
-                                for (size_t i = 0; i < order.size(); ++i) {
-                                    threshold -= residual[i];
-                                    if (threshold < 0.0) {
-                                        expected.push_back(order[i]);
-                                        break;
-                                    }
-                                }
-                                break;
-                            }
-                            ggml_sample_result result = {};
-                            GGML_ASSERT(sample(backend.get(), logits, q, &params, &result));
-                            GGML_ASSERT(result.n_tokens == (int) expected.size());
-                            GGML_ASSERT(std::equal(expected.begin(), expected.end(), result.tokens));
-                            ++accepted_lengths[result.n_tokens - 1];
-                            params.n_draft = 0;
-                            GGML_ASSERT(sample(backend.get(), logits, nullptr, &params, &result));
-                            GGML_ASSERT(result.n_tokens == 1);
-                            double threshold = params.uniforms[0];
-                            for (size_t i = 0; i < ids[0].size(); ++i) {
-                                threshold -= probabilities[0][i];
-                                if (threshold < 0.0) {
-                                    GGML_ASSERT(result.tokens[0] == ids[0][i]);
-                                    break;
-                                }
-                            }
-                            params.n_draft = n_rows - 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for (int count : accepted_lengths) { GGML_ASSERT(count > 0); }
-    ggml_sample_params invalid = {};
-    ggml_sample_result result = {};
-    GGML_ASSERT(!sample(backend.get(), logits, nullptr, &invalid, &result));
-    printf("GPU top-p, temperature and rejection sampling CPU reference PASSED\n");
-}
-
-static void test_multi_output_multi_sequence_dist(const test_params & params) {
-    test_multi_output_multi_sequence_dist_impl(params, false);
-}
-
-static void test_multi_output_multi_sequence_dist_packed(const test_params & params) {
-    test_multi_output_multi_sequence_dist_impl(params, true);
 }
 
 static void test_multi_output_dist_transaction(const test_params & params) {
@@ -2171,7 +1851,7 @@ static void test_multi_output_dist_transaction(const test_params & params) {
     printf("backend multi-output dist transaction test PASSED\n");
 }
 
-static void test_multi_output_sampling_chain_impl(const test_params & params, bool packed) {
+static void test_multi_output_sampling_chain(const test_params & params) {
     const llama_seq_id seq_id = 0;
     const uint32_t seed = 88;
     const float p = 0.9f;
@@ -2196,9 +1876,6 @@ static void test_multi_output_sampling_chain_impl(const test_params & params, bo
     llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
     test_context test_ctx(params, configs, 1, 2, 2, 2);
-    if (packed) {
-        llama_set_dspark_probabilistic(test_ctx.ctx.get(), true);
-    }
 
     std::vector<llama_sampler_seq_config> reference_configs;
     test_context reference_ctx(params, reference_configs, 1, 2, 2);
@@ -2325,14 +2002,6 @@ static void test_multi_output_sampling_chain_impl(const test_params & params, bo
     printf("backend multi-output sampling chain test PASSED\n");
 }
 
-static void test_multi_output_sampling_chain(const test_params & params) {
-    test_multi_output_sampling_chain_impl(params, false);
-}
-
-static void test_multi_output_sampling_chain_packed_fallback(const test_params & params) {
-    test_multi_output_sampling_chain_impl(params, true);
-}
-
 static void test_multi_output_cpu_suffix(const test_params & params) {
     const llama_seq_id seq_id = 0;
     const int32_t k = 8;
@@ -2420,12 +2089,8 @@ static const backend_test_case BACKEND_TESTS[] = {
     // multiple outputs per sequence
     { "test_multi_output_limit",                  test_multi_output_limit,               true },
     { "test_multi_output_multi_sequence_dist",    test_multi_output_multi_sequence_dist, true },
-    { "test_multi_output_multi_sequence_dist_packed", test_multi_output_multi_sequence_dist_packed, true },
     { "test_multi_output_dist_transaction",       test_multi_output_dist_transaction,    true },
-    { "test_gpu_rejection",                       test_gpu_rejection,                    true },
-    { "test_dspark_markov_sampling",              test_dspark_markov_sampling,           true },
     { "test_multi_output_sampling_chain",         test_multi_output_sampling_chain,      true },
-    { "test_multi_output_sampling_chain_packed_fallback", test_multi_output_sampling_chain_packed_fallback, true },
     { "test_multi_output_cpu_suffix",             test_multi_output_cpu_suffix,          true },
 };
 

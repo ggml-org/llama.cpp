@@ -55,9 +55,6 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 // get the underlying llama_sampler_chain
 struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
 
-bool common_sampler_can_gpu(const struct common_sampler * gsmpl, struct llama_context * ctx);
-llama_token common_sampler_sample_gpu(struct common_sampler * gsmpl, struct llama_context * ctx, int idx);
-
 // extended sampling implementation:
 //
 // - set logits
@@ -69,10 +66,6 @@ llama_token common_sampler_sample_gpu(struct common_sampler * gsmpl, struct llam
 // useful in cases where all the resulting candidates (not just the sampled one) must fit the grammar
 //
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
-
-// Sample from caller-provided logits. Candidates remain available through
-// common_sampler_get_candidates() after this call.
-llama_token common_sampler_sample_logits(struct common_sampler * gsmpl, const float * logits, int32_t n_vocab, bool grammar_first = false);
 
 // generalized version of common_sampler_sample
 //
@@ -93,7 +86,7 @@ llama_token common_sampler_sample_logits(struct common_sampler * gsmpl, const fl
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first = false);
 
 // as above, but verifies by rejection sampling; draft_q holds the draft's candidates per token
-std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first = false, struct llama_context * draft_ctx = nullptr);
+std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first = false);
 
 // assume idxs == [ 0, 1, 2, ..., draft.size() ]
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first = false);

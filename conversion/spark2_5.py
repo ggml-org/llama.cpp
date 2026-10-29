@@ -107,6 +107,9 @@ class Spark2_5DSparkModel(Spark2_5Model):
         self.gguf_writer.add_target_layers([i + 1 for i in self.hparams["target_layer_ids"]])
         self.gguf_writer.add_sample_from_anchor(self.hparams.get("sample_from_anchor", True))
         self.gguf_writer.add_causal_attention(False)
+        self.gguf_writer.add_hidden_act(self.hparams["hidden_act"])
+        # GGUF counts the anchor in the sliding window.
+        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"] + 1)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("model.fc_norm."):
