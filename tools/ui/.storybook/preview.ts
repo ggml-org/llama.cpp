@@ -21,11 +21,15 @@ const preview: Preview = {
 			storySort: {
 				order: [
 					'Introduction',
+					'Design system',
 					'Chat',
 					['ChatScreen', ['ChatScreen', '*']],
+					'Content',
 					'Models',
+					'MCP',
 					'Navigation',
-					'Settings'
+					'Settings',
+					'App'
 				]
 			}
 		},
