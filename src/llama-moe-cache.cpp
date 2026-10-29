@@ -27,7 +27,7 @@ struct moe_cache_lru {
     int32_t n_slots  = 0;
 
     std::vector<int32_t *> slot_map; // [n_layer] data of the slot maps, -1 if the expert is not cached
-    std::vector<int32_t>   key_of;   // [n_slots] il*n_expert + expert, -1 if empty
+    std::vector<int32_t>   key_of;   // [n_slots] key of the expert in the slot, -1 if empty
 
     // one LRU list per class, the head is the least recently used end
     std::vector<int32_t> prev;    // [n_slots] -1 at the ends
@@ -92,6 +92,11 @@ struct moe_cache_lru {
         list_of[s] = c;
     }
 
+    // key = index of an expert of a layer in crf and last_use
+    int32_t make_key(int32_t il, int32_t e) const { return il*n_expert + e; }
+    int32_t key_layer (int32_t key) const { return key / n_expert; }
+    int32_t key_expert(int32_t key) const { return key % n_expert; }
+
     // for a key after use(): its CRF is >= 1, so log2 is >= 0 and the cast is the floor
     int class_of(int32_t key) const {
         return std::min(n_class - 1, (int) std::log2(crf[key]));
@@ -104,26 +109,44 @@ struct moe_cache_lru {
         last_use[key] = t;
     }
 
+    // the experts selected by this plan() must not be evicted, nor the slots this plan() filled already
+    bool is_selected(int32_t il, int32_t key) const {
+        if (key < 0) {
+            return false; // unused slot
+        }
+        if (key_layer(key) != il) {
+            return false; // seen is per expert index, an expert of another layer can have the same index
+        }
+        return seen[key_expert(key)] == seen_gen;
+    }
+
+    // the least recently used slot of list c that this plan() does not select, -1 if none
+    int32_t candidate(int c, int32_t il) const {
+        for (int32_t s = head[c]; s >= 0; s = next[s]) {
+            if (!is_selected(il, key_of[s])) {
+                return s;
+            }
+        }
+        return -1;
+    }
+
     int32_t victim(int32_t il) const {
         int32_t res = -1;
         double res_score = -1.0;
         for (int c = 0; c < n_class; ++c) {
-            for (int32_t s = head[c]; s >= 0; s = next[s]) {
-                const int32_t key = key_of[s];
-                if (key < 0) {
-                    return s; // unused slot
-                }
-                // do not evict the experts selected by this plan(), including the misses it filled already
-                if (key / n_expert == il && seen[key % n_expert] == seen_gen) {
-                    continue;
-                }
-                const int64_t age   = clock[key / n_expert] - last_use[key];
-                const double  score = std::ldexp((double) age, -c); // age/2^class
-                if (score > res_score) {
-                    res       = s;
-                    res_score = score;
-                }
-                break;
+            const int32_t s = candidate(c, il);
+            if (s < 0) {
+                continue;
+            }
+            const int32_t key = key_of[s];
+            if (key < 0) {
+                return s; // unused slot
+            }
+            const int64_t age   = clock[key_layer(key)] - last_use[key];
+            const double  score = std::ldexp((double) age, -c); // age/2^class
+            if (score > res_score) {
+                res       = s;
+                res_score = score;
             }
         }
         if (res < 0) {
@@ -163,7 +186,7 @@ struct moe_cache_lru {
 
         // update the CRF of all selected experts and promote hits before choosing victims for misses
         for (int32_t e : uniq) {
-            const int32_t key = il*n_expert + e;
+            const int32_t key = make_key(il, e);
             use(il, key);
             if (slots[e] >= 0) {
                 move(slots[e], class_of(key));
@@ -179,9 +202,9 @@ struct moe_cache_lru {
             }
             const int32_t s = victim(il);
             if (key_of[s] >= 0) {
-                slot_map[key_of[s] / n_expert][key_of[s] % n_expert] = -1;
+                slot_map[key_layer(key_of[s])][key_expert(key_of[s])] = -1;
             }
-            const int32_t key = il*n_expert + e;
+            const int32_t key = make_key(il, e);
             key_of[s] = key;
             slots[e]  = s;
             move(s, class_of(key));
