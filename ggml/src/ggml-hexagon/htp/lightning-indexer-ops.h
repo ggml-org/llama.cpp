@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include "hex-common.h"
+#include "hex-fastdiv.h"
 #include "htp-vtcm.h"
 
 #ifdef __cplusplus
@@ -34,13 +35,22 @@ enum htp_lid_kernel_type {
 struct htp_lid_kernel_params {
     uint32_t n_threads;
     uint32_t n_tokens_tile;     // tokens per Q tile
-    uint32_t n_kv_blocks;       // per stream
+    uint32_t n_kv_blocks;       // HVX: per stream, HMX: per run of n_qsets sets
     uint32_t blocks_per_thread;
     uint32_t vtcm_size;
     uint32_t kernel_type;       // htp_lid_kernel_type
+    uint32_t k_row_size;        // K row bytes
     uint32_t kv_block;          // HMX: kv rows per block (multiple of 64)
     uint32_t n_qsets;           // HMX: Q sets kept in VTCM (streams run in one pipeline)
     uint32_t n_qbuf;            // HMX: Q buffers, 2: the next run's Q is prepped during the current run
+    uint32_t kv_seg;            // HMX: rows per set, n_kv padded to 64
+    uint32_t n_tt;              // HMX: token tiles per stream
+
+    struct fastdiv_values div_n_head;
+    struct fastdiv_values div_m_ne3;  // mask streams (broadcast)
+    struct fastdiv_values div_kv_seg; // HMX
+    struct fastdiv_values div_n_tt;   // HMX
+    struct fastdiv_values div_n_ch;   // HMX: channel tiles per Q set
 };
 
 #if defined(__cplusplus)

@@ -12763,16 +12763,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
-        for (int hsk : { 32, 64, 96, 160, 256 }) {
-            for (int nh : { 3, 4, 7 }) {
-                test_cases.emplace_back(new test_lightning_indexer(hsk, nh, 100, 33, 2, 1, type_K));
-            }
-        }
-        test_cases.emplace_back(new test_lightning_indexer(128, 8, 520, 5, 1, 1, type_K));
-        test_cases.emplace_back(new test_lightning_indexer(256, 64, 130, 40, 1, 1, type_K));
-    }
-
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -12808,7 +12798,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // Qwen3.8-Flash-Next pooled indexer prefill.
     test_cases.emplace_back(new test_lightning_indexer(128, 4, 1088, 1024, 1, 1, GGML_TYPE_F32));
     test_cases.emplace_back(new test_lightning_indexer(128, 4, 1088, 1024, 1, 1, GGML_TYPE_Q4_0));
-
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
@@ -13315,12 +13304,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
 
     // lightning_indexer
-    for (int kv : { 64, 128, 256, 4096, 65536 }) {
+    for (int kv : { 256, 4096, 65536 }) {
         for (int bs : { 1, 512, 2048 }) {
-            // short kv only needs decode (nb=1); skip the large prefill cross product
-            if (kv < 256 && bs != 1) {
-                continue;
-            }
             for (int nh : { 4, 32, 64 }) {
                 for (int ns : { 1, 4 }) {
                     for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {

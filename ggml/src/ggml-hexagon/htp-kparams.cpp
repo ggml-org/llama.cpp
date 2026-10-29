@@ -4737,6 +4737,11 @@ static bool htp_kparams_solve_lightning_indexer(
     const uint32_t n_head     = q->ne[1];
     const uint32_t n_tokens   = q->ne[2];
     const size_t   k_row_size = ggml_row_size(k->type, D);
+
+    kparams->k_row_size = (uint32_t) k_row_size;
+    kparams->div_n_head = init_fastdiv_values(n_head);
+    kparams->div_m_ne3  = init_fastdiv_values((uint32_t) op->src[3]->ne[3]);
+
     if (htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
         const uint32_t n_threads = htp_session_n_threads(sess);
         const uint32_t n_stream  = q->ne[3];
@@ -4771,7 +4776,8 @@ static bool htp_kparams_solve_lightning_indexer(
         }
 
         const uint32_t n_ch   = (n_tok * n_head + 31) / 32;
-        const uint32_t n_rows = n_qsets * hex_round_up(k->ne[2], 64);
+        const uint32_t kv_seg = hex_round_up(k->ne[2], 64);
+        const uint32_t n_rows = n_qsets * kv_seg;
         const uint32_t bc_max = n_rows <= 512 ? n_rows : (std::max)(256u, n_rows / 4);
         uint32_t kv_block = 64;
         while (kv_block < HTP_LID_HMX_KV_BLOCK_MAX && kv_block < bc_max && (kv_block / 32) * n_ch * (n_dot + 1) < 256 &&
@@ -4781,15 +4787,21 @@ static bool htp_kparams_solve_lightning_indexer(
 
         const size_t vtcm_size = vtcm_usage(n_tok, kv_block, n_qsets * n_qbuf);
         if (vtcm_size <= htp_session_vtcm_size(sess)) {
-            const uint32_t n_blk = (k->ne[2] + kv_block - 1) / kv_block;
+            const uint32_t n_tt = (n_tokens + n_tok - 1) / n_tok;
             kparams->kernel_type       = HTP_LID_KERNEL_HMX;
             kparams->n_threads         = n_threads;
             kparams->n_tokens_tile     = n_tok;
-            kparams->n_kv_blocks       = n_blk;
+            kparams->n_kv_blocks       = (n_rows + kv_block - 1) / kv_block;
+            kparams->blocks_per_thread = 0;
             kparams->kv_block          = kv_block;
             kparams->n_qsets           = n_qsets;
             kparams->n_qbuf            = n_qbuf;
+            kparams->kv_seg            = kv_seg;
+            kparams->n_tt              = n_tt;
             kparams->vtcm_size         = (uint32_t) vtcm_size;
+            kparams->div_kv_seg        = init_fastdiv_values(kv_seg);
+            kparams->div_n_tt          = init_fastdiv_values(n_tt);
+            kparams->div_n_ch          = init_fastdiv_values(n_ch);
             return true;
         }
     }
@@ -4810,6 +4822,11 @@ static bool htp_kparams_solve_lightning_indexer(
     kparams->n_tokens_tile     = n_tok;
     kparams->n_kv_blocks       = n_kv_blocks;
     kparams->blocks_per_thread = (n_kv_blocks + n_threads - 1) / n_threads;
+    kparams->kv_block          = HTP_LID_KV_BLOCK;
+    kparams->n_qsets           = 1;
+    kparams->n_qbuf            = 1;
+    kparams->kv_seg            = 0;
+    kparams->n_tt              = 0;
     kparams->vtcm_size         = (uint32_t) vtcm_size;
 
     return true;

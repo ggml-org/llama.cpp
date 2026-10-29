@@ -26,7 +26,8 @@
 #include "lightning-indexer-ops.h"
 
 struct htp_lid_context {
-    const struct htp_ops_context * octx;
+    const struct htp_ops_context *       octx;
+    const struct htp_lid_kernel_params * kp;
 
     uint32_t n_blocks;
     uint32_t blocks_per_thread;
@@ -61,8 +62,9 @@ static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t D      = q->ne[0];
     const uint32_t n_head = q->ne[1];
 
+    // nth is min(n_threads, n_items): the same chunk as a split over n_threads
     const uint32_t n_items = lctx->nt * n_head;
-    const uint32_t chunk   = (n_items + nth - 1) / nth;
+    const uint32_t chunk   = fastdiv(n_items + octx->n_threads - 1, &octx->n_threads_div);
     const uint32_t i0      = ith * chunk;
     const uint32_t i1      = MIN(i0 + chunk, n_items);
 
@@ -79,7 +81,7 @@ static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
     uint8_t * ws = qs + n_head * L->size_qs_row;
     uint8_t * qh = ws + hex_round_up(w_row_size, 128);
 
-    uint32_t t  = i0 / n_head;
+    uint32_t t  = fastdiv(i0, &lctx->kp->div_n_head);
     uint32_t ha = i0 - t * n_head;
 
     for (uint32_t i = i0; i < i1; ++t, ha = 0) {
@@ -488,7 +490,7 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
     const bool     is_f32     = (k->type == HTP_TYPE_F32);
     const bool     is_q8_0    = (k->type == HTP_TYPE_Q8_0);
     const bool     is_q4_0    = (k->type == HTP_TYPE_Q4_0);
-    const uint32_t k_row_size = htp_tensor_get_row_size(k->type, D);
+    const uint32_t k_row_size = lctx->kp->k_row_size;
 
     const uint32_t nbk2 = k->nb[2];
     const uint32_t nbm1 = m->nb[1];
@@ -628,12 +630,12 @@ struct lid_hmx_set {
 };
 
 struct htp_lid_hmx_context {
-    const struct htp_ops_context * octx;
-    struct htp_lid_hmx_vtcm_layout L;
+    const struct htp_ops_context *       octx;
+    const struct htp_lid_kernel_params * kp;
+    struct htp_lid_hmx_vtcm_layout       L;
 
     uint32_t Bc;
     uint32_t kv_seg;    // rows per set: n_kv padded to 64
-    struct fastdiv_values kv_seg_div;
     uint32_t n_blocks;  // per run
     uint32_t n_tile;    // tokens per token tile
     uint32_t n_tt;      // token tiles per stream
@@ -651,9 +653,10 @@ struct htp_lid_hmx_context {
     struct lid_hmx_set sets[HTP_LID_HMX_MAX_QSETS];
 
     // next run, Q prepped in the stages of this one
-    bool               nx_on;
-    uint32_t           nx_n_run;
-    struct lid_hmx_set nx_sets[HTP_LID_HMX_MAX_QSETS];
+    bool                  nx_on;
+    uint32_t              nx_n_run;
+    struct fastdiv_values nx_stg_div; // stages of this run: n_blocks + 1
+    struct lid_hmx_set    nx_sets[HTP_LID_HMX_MAX_QSETS];
 
     __fp16 *  qw;
     __fp16 *  gw;
@@ -684,9 +687,9 @@ static inline struct lid_hmx_set lid_hmx_set_init(const struct htp_lid_hmx_conte
     const uint32_t ti = hctx->tile0 + set;
 
     struct lid_hmx_set S;
-    S.is   = ti / hctx->n_tt;
-    S.im3  = S.is % octx->src[3]->ne[3];
-    S.t0   = (ti % hctx->n_tt) * hctx->n_tile;
+    S.is   = fastdiv(ti, &hctx->kp->div_n_tt);
+    S.im3  = fastmodulo(S.is, octx->src[3]->ne[3], &hctx->kp->div_m_ne3);
+    S.t0   = (ti - S.is * hctx->n_tt) * hctx->n_tile;
     S.nt   = MIN(hctx->n_tile, octx->src[0]->ne[2] - S.t0);
     S.n_ch = (S.nt * octx->src[0]->ne[1] + 31) / 32;
     S.n_u  = (S.nt + 31) / 32;
@@ -702,7 +705,7 @@ static inline uint32_t lid_hmx_segs(const struct htp_lid_hmx_context * hctx, uin
 
     uint32_t n = 0;
     for (uint32_t x = xa; x < xb;) {
-        const uint32_t set = fastdiv(x, &hctx->kv_seg_div);
+        const uint32_t set = fastdiv(x, &hctx->kp->div_kv_seg);
         const uint32_t kv  = x - set * ks;
         const uint32_t end = MIN(xb, (set + 1) * ks);
         if (kv < n_kv) {
@@ -793,23 +796,28 @@ static void lid_hmx_worker(void * data) {
 
 // Thread slices: K rows by row pairs of the padded block, mask / output rows by token.
 // Block 0 is prepped together with Q: its K rows go to the threads without Q work.
+// K rows are split only in stages on all n_threads threads.
 static inline void lid_hmx_rows(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g, uint32_t n_rows,
                                 uint32_t * r0, uint32_t * r1) {
+    uint32_t per;
     if (g == 0 && hctx->n_qthr < nth) {
         if (ith < hctx->n_qthr) {
             *r0 = *r1 = 0;
             return;
         }
         ith -= hctx->n_qthr;
-        nth -= hctx->n_qthr;
+        per = (n_rows + nth - hctx->n_qthr - 1) / (nth - hctx->n_qthr);
+    } else {
+        per = fastdiv(n_rows + hctx->octx->n_threads - 1, &hctx->octx->n_threads_div);
     }
-    const uint32_t per = hex_round_up((n_rows + nth - 1) / nth, 2);
+    per = hex_round_up(per, 2);
     *r0 = MIN(ith * per, n_rows);
     *r1 = MIN(*r0 + per, n_rows);
 }
 
-static inline void lid_hmx_toks(uint32_t ith, uint32_t nth, uint32_t nt, uint32_t * t0, uint32_t * t1) {
-    const uint32_t per = (nt + nth - 1) / nth;
+// Split over n_threads; a stage on one thread has one token, which this split also gives to thread 0
+static inline void lid_hmx_toks(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nt, uint32_t * t0, uint32_t * t1) {
+    const uint32_t per = fastdiv(nt + hctx->octx->n_threads - 1, &hctx->octx->n_threads_div);
     *t0 = MIN(ith * per, nt);
     *t1 = MIN((ith + 1) * per, nt);
 }
@@ -827,10 +835,10 @@ static uint32_t lid_hmx_in(const struct htp_lid_hmx_context * hctx, uint32_t ith
 
     uint32_t r0, r1, ta, tb;
     lid_hmx_rows(hctx, ith, nth, g, n_rows, &r0, &r1);
-    lid_hmx_toks(ith, nth, hctx->nt_run, &ta, &tb);
+    lid_hmx_toks(hctx, ith, hctx->nt_run, &ta, &tb);
 
     dma_queue *    dma_q      = octx->ctx->dma[ith];
-    const uint32_t k_row_size = htp_tensor_get_row_size(k->type, k->ne[0]);
+    const uint32_t k_row_size = hctx->kp->k_row_size;
 
     uint32_t n = 0;
     for (uint32_t i = 0; i < n_seg; ++i) {
@@ -973,8 +981,9 @@ static inline void lid_hmx_prep_k_f16(__fp16 * restrict k_t, const uint8_t * res
     }
 }
 
-// K rows of block g (this thread's rows) to activation tiles, one piece per set; set padding rows are zero
-static void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
+// K rows of block g (this thread's rows) to activation tiles, one piece per set; set padding rows are zero.
+// Not inlined: keeps the stage's registers out of the prep loops.
+static __attribute__((noinline)) void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
     const struct htp_tensor * k = hctx->octx->src[1];
 
@@ -994,7 +1003,7 @@ static void lid_hmx_prep_k(const struct htp_lid_hmx_context * hctx, uint32_t ith
 
     for (uint32_t r = r0; r < r1;) {
         const uint32_t x   = xa + r;
-        const uint32_t set = fastdiv(x, &hctx->kv_seg_div);
+        const uint32_t set = fastdiv(x, &hctx->kp->div_kv_seg);
         const uint32_t kv  = x - set * ks;
         const uint32_t end = MIN(r1, (set + 1) * ks - xa);
         const uint32_t nv  = r + (kv < n_kv ? n_kv - kv : 0);
@@ -1022,7 +1031,7 @@ static void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, uint32_t it
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
 
     uint32_t ta, tb;
-    lid_hmx_toks(ith, nth, hctx->nt_run, &ta, &tb);
+    lid_hmx_toks(hctx, ith, hctx->nt_run, &ta, &tb);
     if (ta >= tb) {
         return;
     }
@@ -1100,7 +1109,7 @@ static void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, uint32_t it
 // Number of output DMAs of block g for this thread
 static inline uint32_t lid_hmx_n_out(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
     uint32_t ta, tb;
-    lid_hmx_toks(ith, nth, hctx->nt_run, &ta, &tb);
+    lid_hmx_toks(hctx, ith, hctx->nt_run, &ta, &tb);
     if (ta >= tb) {
         return 0;
     }
@@ -1176,10 +1185,11 @@ static uint32_t lid_hmx_push_q(const struct htp_lid_hmx_context * hctx, dma_queu
     const uint32_t            ch = c * 32;
     const uint32_t            nr = MIN(32, S->nt * nh - ch);
 
+    // channel ch + r is (token t, head h); a DMA ends at the token end, so the next one starts at h 0
+    uint32_t t = fastdiv(ch, &hctx->kp->div_n_head);
+    uint32_t h = ch - t * nh;
     uint32_t n = 0;
-    for (uint32_t r = 0; r < nr;) {
-        const uint32_t t   = (ch + r) / nh;
-        const uint32_t h   = (ch + r) - t * nh;
+    for (uint32_t r = 0; r < nr; ++t, h = 0) {
         const uint32_t cnt = MIN(nh - h, nr - r);
         dma_queue_push(dma_q, dma_make_data(qs + r * hctx->L.size_qs_row,
                                             q->data + S->is * q->nb[3] + (S->t0 + t) * q->nb[2] + h * q->nb[1]),
@@ -1191,9 +1201,9 @@ static uint32_t lid_hmx_push_q(const struct htp_lid_hmx_context * hctx, dma_queu
 }
 
 // Scales (|w| per channel, f16 in the low half of each word) and G tile (sign(w) at row c, column token(c) % 32)
-// of one channel tile. w points at the tile's 32 channels.
+// of one channel tile. w points at the tile's 32 channels, the first one is (token t, head h).
 static inline void lid_hmx_build_sc_g(uint8_t * restrict sc, __fp16 * restrict gt, const float * restrict w,
-                                      uint32_t ch, uint32_t nr, uint32_t nh) {
+                                      uint32_t t, uint32_t h, uint32_t nr, uint32_t nh) {
     const HVX_Vector zero = Q6_V_vzero();
     const HVX_Vector wv   = Q6_V_vmux_QVV(Q6_Q_vsetq2_R(nr * sizeof(float)), *(const HVX_Vector *) w, zero);
 
@@ -1208,8 +1218,6 @@ static inline void lid_hmx_build_sc_g(uint8_t * restrict sc, __fp16 * restrict g
 
     // token column of each row; -1 for missing rows (only rows 0..31 are used)
     int16_t tcol[64] __attribute__((aligned(128))) = { 0 };
-    uint32_t t = ch / nh;
-    uint32_t h = ch - t * nh;
     for (uint32_t r = 0; r < 32; ++r) {
         tcol[r] = r < nr ? (int16_t) (t % 32) : -1;
         if (++h == nh) {
@@ -1246,9 +1254,10 @@ static inline void lid_hmx_q_scg(const struct htp_lid_hmx_context * hctx, uint32
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
     const uint32_t nh = hctx->octx->src[0]->ne[1];
     const uint32_t ch = c * 32;
+    const uint32_t t  = fastdiv(ch, &hctx->kp->div_n_head);
 
     lid_hmx_build_sc_g(hctx->sc + (slot * L->n_ch + c) * 256, hctx->gw + (slot * L->n_ch + c) * HMX_FP16_TILE_N_ELMS,
-                       hctx->w + slot * (L->size_w / sizeof(float)) + ch, ch, MIN(32, S->nt * nh - ch), nh);
+                       hctx->w + slot * (L->size_w / sizeof(float)) + ch, t, ch - t * nh, MIN(32, S->nt * nh - ch), nh);
 }
 
 // Staged f32 Q rows of channel tile c to f16, then to the weight tiles of a Q slot
@@ -1281,11 +1290,10 @@ static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t it
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
 
     const uint32_t nh     = octx->src[0]->ne[1];
-    const uint32_t n_stg  = hctx->n_blocks + 1;
     const uint32_t n_tot  = hctx->nx_n_run * L->n_ch;
-    const uint32_t a      = hctx->g * n_tot / n_stg;
-    const uint32_t b      = (hctx->g + 1) * n_tot / n_stg;
-    const uint32_t per    = (b - a + nth - 1) / nth;
+    const uint32_t a      = fastdiv(hctx->g * n_tot, &hctx->nx_stg_div);
+    const uint32_t b      = fastdiv((hctx->g + 1) * n_tot, &hctx->nx_stg_div);
+    const uint32_t per    = fastdiv(b - a + octx->n_threads - 1, &octx->n_threads_div);
     const uint32_t gc0    = MIN(a + ith * per, b);
     const uint32_t gc1    = MIN(gc0 + per, b);
     const uint32_t qb     = hctx->qbuf ^ 1;
@@ -1295,8 +1303,8 @@ static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t it
     uint8_t *   qh    = qs + 32 * L->size_qs_row;
 
     for (uint32_t gc = gc0; gc < gc1; ++gc) {
-        const uint32_t             set = gc / L->n_ch;
-        const uint32_t             c   = gc % L->n_ch;
+        const uint32_t             set = fastdiv(gc, &hctx->kp->div_n_ch);
+        const uint32_t             c   = gc - set * L->n_ch;
         const struct lid_hmx_set * S   = &hctx->nx_sets[set];
         if (c >= S->n_ch) {
             continue;
@@ -1304,8 +1312,8 @@ static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t it
 
         const uint32_t slot = lid_hmx_slot(hctx, qb, set);
         const uint32_t ch   = c * 32;
-        const uint32_t ta   = ch / nh;
-        const uint32_t tb   = (MIN(ch + 32, S->nt * nh) - 1) / nh + 1;
+        const uint32_t ta   = fastdiv(ch, &hctx->kp->div_n_head);
+        const uint32_t tb   = fastdiv(MIN(ch + 32, S->nt * nh) - 1, &hctx->kp->div_n_head) + 1;
 
         float * wd = hctx->w + slot * (L->size_w / sizeof(float));
         dma_queue_push(dma_q, dma_make_data(wd + ta * nh, w->data + S->is * w->nb[3] + (S->t0 + ta) * w->nb[1]),
@@ -1335,7 +1343,7 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
     dma_queue *               dma_q = octx->ctx->dma[ith];
 
     const uint32_t n_tot = hctx->n_run * L->n_ch;
-    const uint32_t per   = (n_tot + nth - 1) / nth;
+    const uint32_t per   = fastdiv(n_tot + octx->n_threads - 1, &octx->n_threads_div);
     const uint32_t gc0   = MIN(ith * per, n_tot);
     const uint32_t gc1   = MIN(gc0 + per, n_tot);
 
@@ -1345,7 +1353,8 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
     // all input DMAs in flight at once: w of the sets, Q of the first channel tile, then K and mask of block 0
     uint32_t n_dma = 0;
     uint32_t first = gc1;
-    for (uint32_t set = gc0 / L->n_ch; gc0 < gc1 && set <= (gc1 - 1) / L->n_ch; ++set) {
+    const struct fastdiv_values * div_n_ch = &hctx->kp->div_n_ch;
+    for (uint32_t set = fastdiv(gc0, div_n_ch); gc0 < gc1 && set <= fastdiv(gc1 - 1, div_n_ch); ++set) {
         const struct lid_hmx_set S = hctx->sets[set];
 
         const uint32_t c0 = MAX(gc0, set * L->n_ch) - set * L->n_ch;
@@ -1355,8 +1364,8 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
         }
         first = MIN(first, set * L->n_ch + c0);
 
-        const uint32_t ta = c0 * 32 / nh;
-        const uint32_t tb = (MIN(c1 * 32, S.nt * nh) - 1) / nh + 1;
+        const uint32_t ta = fastdiv(c0 * 32, &hctx->kp->div_n_head);
+        const uint32_t tb = fastdiv(MIN(c1 * 32, S.nt * nh) - 1, &hctx->kp->div_n_head) + 1;
         float * wd = hctx->w + lid_hmx_slot(hctx, hctx->qbuf, set) * (L->size_w / sizeof(float));
         dma_queue_push(dma_q, dma_make_data(wd + ta * nh, w->data + S.is * w->nb[3] + (S.t0 + ta) * w->nb[1]),
                        nh * sizeof(float), w->nb[1], nh * sizeof(float), tb - ta);
@@ -1364,8 +1373,9 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
     }
 
     if (first < gc1) {
-        const struct lid_hmx_set S = hctx->sets[first / L->n_ch];
-        n_dma += lid_hmx_push_q(hctx, dma_q, qs, &S, first % L->n_ch);
+        const uint32_t           set = fastdiv(first, div_n_ch);
+        const struct lid_hmx_set S   = hctx->sets[set];
+        n_dma += lid_hmx_push_q(hctx, dma_q, qs, &S, first - set * L->n_ch);
     }
 
     uint32_t n_in = lid_hmx_push_in(hctx, ith, nth, 0);
@@ -1377,8 +1387,8 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) gc0);
 
     for (uint32_t gc = first; gc < gc1; ++gc) {
-        const uint32_t           set = gc / L->n_ch;
-        const uint32_t           c   = gc % L->n_ch;
+        const uint32_t           set = fastdiv(gc, div_n_ch);
+        const uint32_t           c   = gc - set * L->n_ch;
         const struct lid_hmx_set S   = hctx->sets[set];
         if (c >= S.n_ch) {
             continue;
@@ -1424,33 +1434,23 @@ static void lid_hmx_first_thread(unsigned int nth, unsigned int ith, void * data
 static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kernel_params * kparams) {
     const struct htp_tensor * q = octx->src[0];
 
-    if (!octx->ctx->hmx_enabled) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    const uint32_t D      = q->ne[0];
-    const uint32_t n_head = q->ne[1];
-
-    if (D % HMX_FP16_TILE_N_COLS != 0) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    const uint32_t n_tokens  = q->ne[2];
+    const uint32_t D         = q->ne[0];
+    const uint32_t n_head    = q->ne[1];
     const uint32_t n_stream  = q->ne[3];
     const uint32_t n_threads = kparams->n_threads;
     const uint32_t n_qsets   = kparams->n_qsets;
 
     struct htp_lid_hmx_context hctx;
     memset(&hctx, 0, sizeof(hctx));
-    hctx.octx     = octx;
-    hctx.Bc       = kparams->kv_block;
-    hctx.kv_seg   = hex_round_up(octx->src[1]->ne[2], 64);
-    hctx.kv_seg_div = init_fastdiv_values(hctx.kv_seg);
-    hctx.n_tile   = kparams->n_tokens_tile;
-    hctx.n_tt     = (n_tokens + hctx.n_tile - 1) / hctx.n_tile;
-    hctx.n_qsets  = n_qsets;
+    hctx.octx    = octx;
+    hctx.kp      = kparams;
+    hctx.Bc      = kparams->kv_block;
+    hctx.kv_seg  = kparams->kv_seg;
+    hctx.n_tile  = kparams->n_tokens_tile;
+    hctx.n_tt    = kparams->n_tt;
+    hctx.n_qsets = n_qsets;
     htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_threads,
-                                  htp_tensor_get_row_size(octx->src[1]->type, D));
+                                  kparams->k_row_size);
 
     uint8_t * const base = octx->ctx->vtcm_base;
     const struct htp_lid_hmx_vtcm_layout * L = &hctx.L;
@@ -1482,7 +1482,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
     for (uint32_t tile0 = 0, r = 0; tile0 < n_tiles; tile0 += n_qsets, ++r) {
         hctx.tile0 = tile0;
         hctx.n_run = MIN(n_qsets, n_tiles - tile0);
-        hctx.qbuf  = r % kparams->n_qbuf;
+        hctx.qbuf  = r & (kparams->n_qbuf - 1); // n_qbuf is 1 or 2
 
         for (uint32_t i = 0; i < hctx.n_run; ++i) {
             hctx.sets[i] = lid_hmx_set_init(&hctx, i);
@@ -1492,11 +1492,11 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
         const struct lid_hmx_set S0 = hctx.sets[0];
         hctx.nt_run   = S0.nt;
         hctx.n_u_run  = S0.n_u;
-        hctx.n_blocks = (hctx.n_run * hctx.kv_seg + hctx.Bc - 1) / hctx.Bc;
+        hctx.n_blocks = hctx.n_run == n_qsets ? kparams->n_kv_blocks : (hctx.n_run * hctx.kv_seg + hctx.Bc - 1) / hctx.Bc;
 
         const int32_t  n     = (int32_t) hctx.n_blocks;
         const uint32_t n_tot = hctx.n_run * L->n_ch;
-        const uint32_t per   = (n_tot + n_threads - 1) / n_threads;
+        const uint32_t per   = fastdiv(n_tot + n_threads - 1, &octx->n_threads_div);
 
         hctx.n_qthr = (n_tot + per - 1) / per;
         hctx.g      = -1;
@@ -1518,7 +1518,8 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
             for (uint32_t i = 0; i < hctx.nx_n_run; ++i) {
                 hctx.nx_sets[i] = lid_hmx_set_init(&nx, i);
             }
-            hctx.nx_on = true;
+            hctx.nx_stg_div = init_fastdiv_values(hctx.n_blocks + 1);
+            hctx.nx_on      = true;
         }
 
         for (int32_t g = 0; g < n; ++g) {
@@ -1568,12 +1569,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
 
 int op_lightning_indexer(struct htp_ops_context * octx) {
     const struct htp_tensor * q = octx->src[0];
-    const struct htp_tensor * k = octx->src[1];
     const struct htp_tensor * m = octx->src[3];
-
-    if (k->type != HTP_TYPE_F32 && k->type != HTP_TYPE_F16 && k->type != HTP_TYPE_Q8_0 && k->type != HTP_TYPE_Q4_0) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
 
     // no multi-device split yet, device 0 does all the work
     if (octx->ctx->mdev.count > 1 && octx->ctx->mdev.idx != 0) {
@@ -1596,11 +1592,11 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
 
     struct htp_lid_context lctx;
     lctx.octx              = octx;
+    lctx.kp                = kparams;
     lctx.n_blocks          = kparams->n_kv_blocks;
     lctx.blocks_per_thread = kparams->blocks_per_thread;
 
-    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_threads,
-                              htp_tensor_get_row_size(k->type, q->ne[0]));
+    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_threads, kparams->k_row_size);
 
     uint8_t * const base = octx->ctx->vtcm_base;
 
@@ -1619,7 +1615,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
 
     for (uint32_t is = 0; is < n_stream; ++is) {
         lctx.is  = is;
-        lctx.im3 = is % m->ne[3];
+        lctx.im3 = fastmodulo(is, m->ne[3], &kparams->div_m_ne3);
 
         for (uint32_t t0 = 0; t0 < n_tokens; t0 += n_tile) {
             lctx.t0 = t0;
