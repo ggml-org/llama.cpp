@@ -392,6 +392,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_get_rows(ctx, idx);
             } break;
+        case GGML_OP_GET_ROWS_BACK:
+            {
+                n_fuse = ggml_metal_op_get_rows_back(ctx, idx);
+            } break;
         case GGML_OP_SET_ROWS:
             {
                 n_fuse = ggml_metal_op_set_rows(ctx, idx);
@@ -1259,6 +1263,60 @@ int ggml_metal_op_get_rows(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, nw0*ne10, ne11, ne12, nth, 1, 1);
+
+    return 1;
+}
+
+int ggml_metal_op_get_rows_back(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
+
+    auto pipeline = ggml_metal_library_get_pipeline_base(lib, GGML_OP_GET_ROWS_BACK);
+
+    // number of 32-bit mask words per chunk of indices
+    const int32_t nw = std::min((ne10 + 31)/32, 1024);
+
+    ggml_metal_kargs_get_rows_back args = {
+        /*.ne00 =*/ ne00,
+        /*.nb01 =*/ nb01,
+        /*.ne10 =*/ ne10,
+        /*.nb10 =*/ nb10,
+        /*.ne1  =*/ ne1,
+        /*.nb1  =*/ nb1,
+        /*.nw   =*/ nw,
+        /*.zero =*/ 1,
+    };
+
+    const int nth = std::min(ne00, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+
+    const int nw0 = (ne00 + nth - 1)/nth;
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+    ggml_metal_encoder_set_threadgroup_memory_size(enc, GGML_PAD((1 + nw)*sizeof(uint32_t), 16), 0);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, nw0, ne1, 1, nth, 1, 1);
+
+    ggml_metal_op_concurrency_reset(ctx);
+
+    args.zero = 0;
+
+    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, 1, ne10, 1, nth, 1, 1);
 
     return 1;
 }
