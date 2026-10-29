@@ -9,7 +9,8 @@ Scripted Playwright walkthroughs of the UI, exported as mp4 with an animated GIF
 demo/
 ├── cli.ts      demo:pr, demo:docs and demo:traces
 ├── storage.ts  storage targets (hf://, file://)
-├── helpers.ts  `test` with a `demo` fixture: cursor, captions, mp4 export
+├── helpers.ts  `test` with a `demo` fixture: cursor, captions, human-like timing
+├── recorder.ts screencast recording and mp4 export
 ├── fixtures/   fixture MCP servers, seeded settings and demo conversations
 └── videos/     output (git-ignored)
 ```
@@ -25,7 +26,7 @@ DEMO_STORAGE_PUBLIC_URL='https://...'          # public base URL of the same loc
 
 `hf://` uses the `hf` CLI login. Without `DEMO_STORAGE`, videos stay in `demo/videos/`; without `DEMO_STORAGE_PUBLIC_URL`, they are uploaded but not linked in the PR.
 
-`ffmpeg` is required for the mp4 and GIF exports.
+`ffmpeg` is required for the mp4 and GIF exports. Videos are recorded through Chromium's screencast at `DEMO_SCALE` (2x by default, so 2880x1800) and 60 fps, starting once the page has settled.
 
 ## Recording a pull request
 
@@ -63,7 +64,7 @@ Records every `scripts/docs/*.demo.ts` from the storage target and uploads `vide
 
 ## Writing a demo
 
-Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting; `demo.scroll` turns the mouse wheel over a target; `demo.caption` shows a caption at the top of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); `demo.scroll` turns the mouse wheel over a target; `demo.caption` shows a caption at the top of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
 
 ## Conversations
 

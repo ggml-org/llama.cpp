@@ -1,8 +1,9 @@
 import { demoMcpServerSettings } from './fixtures/demo-config.ts';
 import { generateTrace } from './fixtures/traces.ts';
+import { ScreencastRecorder } from './recorder.ts';
 import { type Locator, type Page, test as base } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 const VIDEOS_DIR = resolve(import.meta.dirname, 'videos');
@@ -81,7 +82,34 @@ function seedSettings(config: Record<string, unknown>): void {
 	}
 }
 
+/** Seeded randomness, so a demo moves the same way on every recording. */
+function createRandom(seed: string): () => number {
+	let state = [...seed].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 2654435761), 1);
+
+	return () => {
+		state = (state + 0x6d2b79f5) | 0;
+
+		let t = Math.imul(state ^ (state >>> 15), 1 | state);
+
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+
+/**
+ * Drives the page like a person: the cursor glides along a slight arc with
+ * Fitts-like durations, settles briefly before pressing, and typing and pauses
+ * vary a little.
+ */
 export class Demo {
+	private readonly page: Page;
+	private readonly random: () => number;
+	private x = 0;
+	private y = 0;
+
 	/** Shows a caption at the top of the frame for `ms`, clear of the chat form. */
 	async caption(text: string, ms = 2200): Promise<void> {
 		await this.page.evaluate((t) => {
@@ -92,43 +120,74 @@ export class Demo {
 			el.textContent = t;
 			el.classList.add('visible');
 		}, text);
-		await this.pause(ms);
+		await this.page.waitForTimeout(ms);
 		await this.page.evaluate(() =>
 			document.getElementById('demo-caption')?.classList.remove('visible')
 		);
-		await this.pause(250);
+		await this.page.waitForTimeout(250);
 	}
 
 	async click(target: Locator, ms = 400): Promise<void> {
 		await this.moveTo(target);
-		await this.pause(200);
+		await this.page.waitForTimeout(this.between(80, 160));
 		await this.page.mouse.down();
+		await this.page.waitForTimeout(this.between(50, 90));
 		await this.page.mouse.up();
 		await this.pause(ms);
 	}
 
-	constructor(private readonly page: Page) {}
+	constructor(page: Page, seed: string) {
+		this.page = page;
+		this.random = createRandom(seed);
+
+		const viewport = page.viewportSize();
+
+		this.x = (viewport?.width ?? 0) / 2;
+		this.y = (viewport?.height ?? 0) / 2;
+	}
 
 	async hover(target: Locator, ms = 350): Promise<void> {
 		await this.moveTo(target);
 		await this.pause(ms);
 	}
 
-	/** Glides the cursor to the center of `target`. */
-	async moveTo(target: Locator, steps = 12): Promise<void> {
+	/** Glides the cursor to a point near the center of `target`. */
+	async moveTo(target: Locator): Promise<void> {
 		await target.scrollIntoViewIfNeeded();
 		const box = await target.boundingBox();
 
 		if (!box) throw new Error(`demo: ${target} has no bounding box`);
 
-		const x = box.x + box.width / 2;
-		const y = box.y + box.height / 2;
+		const x = box.x + box.width * this.between(0.4, 0.6);
+		const y = box.y + box.height * this.between(0.4, 0.6);
+		const dx = x - this.x;
+		const dy = y - this.y;
+		const distance = Math.hypot(dx, dy);
+		const duration = 110 + 55 * Math.log2(distance / 40 + 1);
+		// bow the path a little to one side, like a wrist turning
+		const bow = distance * this.between(-0.08, 0.08);
+		const fromX = this.x;
+		const fromY = this.y;
+		const started = Date.now();
 
-		await this.page.mouse.move(x, y, { steps });
+		for (;;) {
+			const t = Math.min((Date.now() - started) / duration, 1);
+			const p = easeInOut(t);
+			const arc = Math.sin(Math.PI * p) * bow;
+
+			this.x = fromX + dx * p - (dy / (distance || 1)) * arc;
+			this.y = fromY + dy * p + (dx / (distance || 1)) * arc;
+			await this.page.mouse.move(this.x, this.y);
+
+			if (t === 1) break;
+
+			await this.page.waitForTimeout(8);
+		}
 	}
 
+	/** Waits about `ms`, varied by up to 15% so pauses don't feel metronomic. */
 	async pause(ms = 800): Promise<void> {
-		await this.page.waitForTimeout(ms);
+		await this.page.waitForTimeout(ms * this.between(0.85, 1.15));
 	}
 
 	async press(key: string, ms = 600): Promise<void> {
@@ -150,10 +209,22 @@ export class Demo {
 		await this.pause(ms);
 	}
 
+	/** Types quickly with uneven key timing, a little slower after spaces and punctuation. */
 	async type(target: Locator, text: string, ms = 500): Promise<void> {
 		await this.click(target, 200);
-		await target.pressSequentially(text, { delay: 40 });
+
+		for (const char of text) {
+			await this.page.keyboard.type(char);
+			await this.page.waitForTimeout(
+				this.between(15, 45) + (/[\s.,!?]/.test(char) ? this.between(20, 60) : 0)
+			);
+		}
+
 		await this.pause(ms);
+	}
+
+	private between(min: number, max: number): number {
+		return min + (max - min) * this.random();
 	}
 }
 
@@ -210,12 +281,10 @@ async function importTraces(page: Page, file: string): Promise<void> {
 }
 
 export const test = base.extend<DemoOptions & { demo: Demo }>({
-	demo: async ({ page }, use) => {
-		await use(new Demo(page));
+	demo: async ({ page }, use, testInfo) => {
+		await use(new Demo(page, `${testInfo.file}:${testInfo.title}`));
 	},
 	page: async ({ page, settings, startPath, traces }, use, testInfo) => {
-		const createdAt = Date.now();
-
 		await page.addInitScript(installCursorOverlay);
 		await page.addInitScript(seedSettings, {
 			mcpServers: JSON.stringify(demoMcpServerSettings()),
@@ -243,26 +312,25 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 
 		if (viewport) await page.mouse.move(viewport.width / 2, viewport.height / 2);
 
-		// let MCP connections and fonts settle before the visible part starts
+		// let MCP connections and fonts settle before the recording starts
 		await page.waitForTimeout(1500);
 
-		const trimStart = (Date.now() - createdAt) / 1000;
+		const recorder = new ScreencastRecorder(testInfo.outputPath('frames'));
 
+		await recorder.start(page);
 		await use(page);
-
-		const video = page.video();
-
+		await recorder.stop();
 		await page.close();
 
-		if (!video || testInfo.status !== testInfo.expectedStatus) return;
+		if (testInfo.status !== testInfo.expectedStatus) return;
 
 		const file = basename(testInfo.file).replace(/\.demo\.ts$/, '');
 		const name = testInfo.title === 'demo' ? file : `${file}--${slugify(testInfo.title)}`;
-		const webm = resolve(VIDEOS_DIR, `${name}.webm`);
+		const mp4 = resolve(VIDEOS_DIR, `${name}.mp4`);
 
 		mkdirSync(VIDEOS_DIR, { recursive: true });
-		await video.saveAs(webm);
-		exportMp4(webm, resolve(VIDEOS_DIR, `${name}.mp4`), trimStart);
+		recorder.encode(mp4);
+		console.log(`demo video: ${mp4}`);
 	},
 
 	settings: [{}, { option: true }],
@@ -279,38 +347,4 @@ function slugify(text: string): string {
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, '-')
 		.replace(/^-|-$/g, '');
-}
-
-/** Converts to H.264 mp4 (what GitHub accepts in PR descriptions), cutting the page load. */
-function exportMp4(webm: string, mp4: string, trimStart: number): void {
-	try {
-		execFileSync(
-			'ffmpeg',
-			[
-				'-y',
-				'-loglevel',
-				'error',
-				'-ss',
-				trimStart.toFixed(2),
-				'-i',
-				webm,
-				'-c:v',
-				'libx264',
-				'-preset',
-				'slow',
-				'-crf',
-				'18',
-				'-pix_fmt',
-				'yuv420p',
-				'-movflags',
-				'+faststart',
-				mp4
-			],
-			{ stdio: 'inherit' }
-		);
-		rmSync(webm);
-		console.log(`demo video: ${mp4}`);
-	} catch {
-		console.warn(`demo video: ffmpeg not available, kept ${webm}`);
-	}
 }

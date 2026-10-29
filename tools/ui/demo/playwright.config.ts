@@ -30,6 +30,8 @@ const LLAMA_SERVER =
 	process.env.DEMO_LLAMA_SERVER ?? resolve(import.meta.dirname, '../../../build/bin/llama-server');
 
 export const VIEWPORT = { height: 900, width: 1440 };
+/** Device pixel ratio the demos render and record at. */
+const SCALE = Number(process.env.DEMO_SCALE ?? 2);
 
 export default defineConfig({
 	expect: {
@@ -40,7 +42,7 @@ export default defineConfig({
 	projects: [
 		{
 			name: 'chromium',
-			use: { ...devices['Desktop Chrome'], viewport: VIEWPORT }
+			use: { ...devices['Desktop Chrome'], deviceScaleFactor: SCALE, viewport: VIEWPORT }
 		}
 	],
 	reporter: 'line',
@@ -52,7 +54,10 @@ export default defineConfig({
 		actionTimeout: 10000,
 		baseURL: `http://localhost:${UI_PORT}`,
 		colorScheme: process.env.DEMO_COLOR_SCHEME === 'dark' ? 'dark' : 'light',
-		video: { mode: 'on', size: VIEWPORT },
+		// headless Chromium screencasts at 1x unless the scale is forced at launch
+		launchOptions: { args: [`--force-device-scale-factor=${SCALE}`] },
+		// recorded through the screencast in recorder.ts, at the device pixel ratio
+		video: 'off',
 		viewport: VIEWPORT
 	},
 	webServer: [
