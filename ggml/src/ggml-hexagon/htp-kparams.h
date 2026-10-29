@@ -29,6 +29,7 @@
 #include "htp/ssm-conv.h"
 #include "htp/sum-rows-ops.h"
 #include "htp/unary-ops.h"
+#include "htp/upscale-ops.h"
 
 #include <type_traits>
 #include <utility>
@@ -133,5 +134,20 @@ bool htp_kparams_solve_unary_mul_glu(
     const struct ggml_tensor * dst,
     struct htp_glu_kernel_params * kparams
 );
+
+bool htp_kparams_solve_upscale(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    struct htp_upscale_kernel_params * kparams
+);
+
+static inline bool htp_kparams_solve_upscale(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_upscale_kernel_params * kparams
+) {
+    return htp_kparams_solve_upscale(sess, op->src[0], op, kparams);
+}
 
 #endif // HTP_KPARAMS_H
