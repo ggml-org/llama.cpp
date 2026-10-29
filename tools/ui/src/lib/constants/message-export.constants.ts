@@ -22,3 +22,11 @@ export const EXPORT_CONV = {
 	NON_ALPHANUMERIC_REGEX: /[^a-z0-9]/gi,
 	NONALNUM_REPLACEMENT: '_'
 } as const;
+
+/** Archive layout of a project export. */
+export const EXPORT_PROJECT = {
+	/** Folder holding one .jsonl per conversation of the project. */
+	CONVERSATIONS_DIR: 'conversations/',
+	/** Project row, at the archive root. */
+	PROJECT_ENTRY: 'project.json'
+} as const;

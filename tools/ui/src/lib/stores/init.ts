@@ -2,6 +2,7 @@
 import { conversationsStore } from './conversations/index.svelte';
 import { groupsStore } from './groups.svelte';
 import { permissionsStore } from './permissions.svelte';
+import { projectsStore } from './projects.svelte';
 import { settingsStore } from './settings/index.svelte';
 import { tabsStore } from './tabs.svelte';
 import { toolsStore } from './tools.svelte';
@@ -36,6 +37,7 @@ export function initStores(): Promise<void> {
 		toolsStore.initialize();
 		void versionStore.initialize();
 		void groupsStore.initialize();
+		void projectsStore.initialize();
 
 		// the full conversation list loads in the background; once it is back,
 		// prune persisted tabs against the conversations that still exist

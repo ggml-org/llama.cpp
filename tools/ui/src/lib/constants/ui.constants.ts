@@ -48,6 +48,8 @@ export const SIDEBAR_SECTION_IDS = {
 	/** Followed by the group id: one section per group. */
 	GROUP_PREFIX: 'group:',
 	PINNED: 'pinned',
+	/** Followed by the project id: one section per project. */
+	PROJECT_PREFIX: 'project:',
 	RECENT: 'recent'
 } as const;
 

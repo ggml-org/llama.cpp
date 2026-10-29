@@ -6,13 +6,14 @@
  * DB access and store refreshes stay in conversationsStore.
  */
 
-import { EXPORT_CONV, NEWLINE, ZIP_MAGIC } from '$lib/constants';
+import { EXPORT_CONV, EXPORT_PROJECT, NEWLINE, ZIP_MAGIC } from '$lib/constants';
 import {
 	FileExtensionText,
 	MimeTypeApplication,
 	MimeTypeText,
 	SessionRecordType
 } from '$lib/enums';
+import type { Project } from '$lib/types/projects';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 export class ConversationTransferService {
@@ -50,35 +51,40 @@ export class ConversationTransferService {
 			return;
 		}
 
-		const usedNames = new Set<string>();
 		const files: Record<string, Uint8Array> = {};
 
-		for (const session of data) {
-			const baseName = ConversationTransferService.generateConversationFilename(
-				session.conv,
-				session.messages
-			);
+		ConversationTransferService.addSessionsToArchive(files, data);
 
-			// Disambiguate any duplicate filenames within the archive.
-			let entryName = baseName;
-			let suffix = 1;
-
-			while (usedNames.has(entryName)) {
-				entryName = baseName.replace(
-					new RegExp(`${FileExtensionText.JSONL}$`),
-					`_${suffix++}${FileExtensionText.JSONL}`
-				);
-			}
-			usedNames.add(entryName);
-
-			files[entryName] = strToU8(ConversationTransferService.serializeSessionToJsonl(session));
-		}
-
-		const archiveName = `${new Date().toISOString().split(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+		const archiveName = `${ConversationTransferService.exportDate()}_conversations${FileExtensionText.ZIP}`;
 		const zipped = zipSync(files);
 		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
 
 		ConversationTransferService.triggerDownload(blob, archiveName);
+	}
+
+	/**
+	 * Triggers a browser download of a project and the conversations it holds
+	 * as a `.zip`: the project row at the root, one `.jsonl` per conversation
+	 * in its own folder.
+	 * @param project - The project to export
+	 * @param data - The conversations that belong to the project
+	 */
+	static downloadProjectArchive(project: Project, data: ExportedConversation[]): void {
+		const files: Record<string, Uint8Array> = {
+			[EXPORT_PROJECT.PROJECT_ENTRY]: strToU8(JSON.stringify(project, null, 2))
+		};
+
+		ConversationTransferService.addSessionsToArchive(files, data, EXPORT_PROJECT.CONVERSATIONS_DIR);
+
+		const name =
+			ConversationTransferService.sanitizeName(project.name, EXPORT_CONV.NAME_SUFFIX_MAX_LENGTH) ||
+			'project';
+		const archiveName = `${ConversationTransferService.exportDate()}_project_${name}${FileExtensionText.ZIP}`;
+
+		ConversationTransferService.triggerDownload(
+			new Blob([zipSync(files)], { type: MimeTypeApplication.ZIP }),
+			archiveName
+		);
 	}
 
 	/**
@@ -91,11 +97,10 @@ export class ConversationTransferService {
 		conversation: { id?: string; name?: string },
 		msgs?: DatabaseMessage[]
 	): string {
-		const conversationName = (conversation.name ?? '').trim().toLowerCase();
-		const sanitizedName = conversationName
-			.replace(EXPORT_CONV.NON_ALPHANUMERIC_REGEX, EXPORT_CONV.NONALNUM_REPLACEMENT)
-			.replace(EXPORT_CONV.MULTIPLE_UNDERSCORE_REGEX, '_')
-			.substring(0, EXPORT_CONV.NAME_SUFFIX_MAX_LENGTH);
+		const sanitizedName = ConversationTransferService.sanitizeName(
+			conversation.name ?? '',
+			EXPORT_CONV.NAME_SUFFIX_MAX_LENGTH
+		);
 		// If we have messages, use the timestamp of the newest message
 		const referenceDate = msgs?.length
 			? new Date(Math.max(...msgs.map((m) => m.timestamp)))
@@ -229,6 +234,48 @@ export class ConversationTransferService {
 	}
 
 	/**
+	 * Serializes conversations into archive entries, disambiguating duplicate
+	 * filenames within the archive.
+	 * @param files - Entries collected so far, keyed by entry name
+	 * @param data - The conversations to add
+	 * @param dir - Optional folder the entries are placed in
+	 */
+	private static addSessionsToArchive(
+		files: Record<string, Uint8Array>,
+		data: ExportedConversation[],
+		dir = ''
+	): void {
+		const usedNames = new Set(Object.keys(files));
+
+		for (const session of data) {
+			const baseName = ConversationTransferService.generateConversationFilename(
+				session.conv,
+				session.messages
+			);
+
+			let entryName = dir + baseName;
+			let suffix = 1;
+
+			while (usedNames.has(entryName)) {
+				entryName =
+					dir +
+					baseName.replace(
+						new RegExp(`${FileExtensionText.JSONL}$`),
+						`_${suffix++}${FileExtensionText.JSONL}`
+					);
+			}
+			usedNames.add(entryName);
+
+			files[entryName] = strToU8(ConversationTransferService.serializeSessionToJsonl(session));
+		}
+	}
+
+	/** Date prefix of an export filename, `YYYY-MM-DD`. */
+	private static exportDate(): string {
+		return new Date().toISOString().split(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR)[0];
+	}
+
+	/**
 	 * Reports whether the text is the JSONL session format, whose first non-empty
 	 * line is a `SessionRecordType.SESSION` record. A legacy JSON export starts
 	 * with an array or an object that has no such discriminator.
@@ -245,6 +292,20 @@ export class ConversationTransferService {
 			// Not a standalone JSON record, so not the JSONL format.
 			return false;
 		}
+	}
+
+	/**
+	 * Makes a name safe to use as a filename segment.
+	 * @param name - The raw name, e.g. a conversation or project title
+	 * @param maxLength - Maximum length of the result
+	 */
+	private static sanitizeName(name: string, maxLength: number): string {
+		return name
+			.trim()
+			.toLowerCase()
+			.replace(EXPORT_CONV.NON_ALPHANUMERIC_REGEX, EXPORT_CONV.NONALNUM_REPLACEMENT)
+			.replace(EXPORT_CONV.MULTIPLE_UNDERSCORE_REGEX, '_')
+			.substring(0, maxLength);
 	}
 
 	/**

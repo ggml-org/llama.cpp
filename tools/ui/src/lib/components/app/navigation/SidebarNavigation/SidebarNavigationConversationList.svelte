@@ -2,6 +2,7 @@
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import SidebarNavigationDropZone from './SidebarNavigationDropZone.svelte';
 	import SidebarNavigationGroupSection from './SidebarNavigationGroupSection.svelte';
+	import SidebarNavigationProjectSection from './SidebarNavigationProjectSection.svelte';
 	import SidebarNavigationSectionHeading from './SidebarNavigationSectionHeading.svelte';
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
 	import SidebarNavigationShowMore from './SidebarNavigationShowMore.svelte';
@@ -18,6 +19,7 @@
 		conversationsStore,
 		deviceStore,
 		groupsStore,
+		projectsStore,
 		sidebarDragStore,
 		uiStore
 	} from '$lib/stores';
@@ -85,13 +87,25 @@
 	// the Recent heading's "more actions" dropdown and its right-click menu, and
 	// a right-click anywhere else in the list that no row or heading takes
 	const recentActions: MenuAction[] = [
-		{ icon: FolderPlus, label: 'New group', onclick: () => uiStore.openGroupDialog() }
+		{ icon: FolderPlus, label: 'New group', onclick: () => uiStore.openGroupDialog() },
+		{ icon: FolderPlus, label: 'New project', onclick: () => uiStore.openProjectDialog() }
 	];
 
 	let conversationTree = $derived(buildConversationTree(conversations));
 
-	// beside group sections it holds the chats in none of them
-	let recentLabel = $derived(groupsStore.groups.length > 0 ? 'Ungrouped' : 'Recent conversations');
+	let visibleProjects = $derived(projectsStore.projects.filter((project) => !project.hidden));
+
+	// in a project still there; a chat in one shows in its project's section, not its group's
+	function inProject(conversation: DatabaseConversation): boolean {
+		return Boolean(conversation.projectId && projectsStore.get(conversation.projectId));
+	}
+
+	// beside group and project sections it holds the chats in none of them
+	let recentLabel = $derived(
+		groupsStore.groups.length > 0 || visibleProjects.length > 0
+			? 'Ungrouped'
+			: 'Recent conversations'
+	);
 
 	// Every group is a section of its own, between Pinned and Recent. A pinned
 	// chat stays in Pinned; any other chat in a group shows in its section only,
@@ -100,8 +114,20 @@
 		groupsStore.groups.map((group) => ({
 			group,
 			items: conversationTree.filter(
-				({ conversation }) => conversation.groupId === group.id && !conversation.pinned
+				({ conversation }) =>
+					conversation.groupId === group.id && !conversation.pinned && !inProject(conversation)
 			)
+		}))
+	);
+
+	// Every visible project is a section of its own too, and a hidden project's
+	// chats stay off the sidebar.
+	let projectSections = $derived(
+		visibleProjects.map((project) => ({
+			conversations: conversations
+				.filter((conversation) => conversation.projectId === project.id && !conversation.pinned)
+				.sort((a, b) => b.lastModified - a.lastModified),
+			project
 		}))
 	);
 
@@ -111,14 +137,15 @@
 
 	let unpinnedConversations = $derived(
 		conversationTree.filter(
-			({ conversation }) => !conversation.pinned && !groupsStore.groupIdOf(conversation)
+			({ conversation }) =>
+				!conversation.pinned && !groupsStore.groupIdOf(conversation) && !inProject(conversation)
 		)
 	);
 
 	/** How long the other sections take to slide aside for a moved one. */
 	const SECTION_MOVE_MS = 200;
 
-	// Pinned, the groups, then Recent by default; dragging a heading reorders them
+	// Pinned, the groups, the projects, then Recent by default; dragging a heading reorders them
 	let savedSections = $derived(
 		uiStore.orderSidebarSections([
 			...(pinnedConversations.length > 0
@@ -128,6 +155,11 @@
 				...section,
 				id: `${SIDEBAR_SECTION_IDS.GROUP_PREFIX}${section.group.id}`,
 				kind: SidebarSectionKind.GROUP as const
+			})),
+			...projectSections.map((section) => ({
+				...section,
+				id: `${SIDEBAR_SECTION_IDS.PROJECT_PREFIX}${section.project.id}`,
+				kind: SidebarSectionKind.PROJECT as const
 			})),
 			{ id: SIDEBAR_SECTION_IDS.RECENT as string, kind: SidebarSectionKind.RECENT as const }
 		])
@@ -163,11 +195,16 @@
 		return Boolean(findConversation(convId)?.pinned);
 	}
 
-	// the chats Ungrouped shows: neither pinned nor in a group that is still there
+	// the chats Ungrouped shows: neither pinned nor in a group or project that is still there
 	function isUngrouped(convId: string): boolean {
 		const conversation = findConversation(convId);
 
-		return Boolean(conversation && !conversation.pinned && !groupsStore.groupIdOf(conversation));
+		return Boolean(
+			conversation &&
+			!conversation.pinned &&
+			!groupsStore.groupIdOf(conversation) &&
+			!inProject(conversation)
+		);
 	}
 
 	/** Dropping on Pinned pins the chat, wherever it came from. */
@@ -178,7 +215,7 @@
 			await conversationsStore.toggleConversationPin(convId);
 	}
 
-	/** Dropping on Recent unpins the chat and takes it out of its group. */
+	/** Dropping on Recent unpins the chat and takes it out of its group and project. */
 	async function handleDropRecent(convId: string) {
 		const conversation = conversationsStore.conversations.find((item) => item.id === convId);
 
@@ -187,6 +224,8 @@
 		if (conversation.pinned) await conversationsStore.toggleConversationPin(convId);
 
 		if (conversation.groupId) await conversationsStore.setConversationGroup(convId, null);
+
+		if (conversation.projectId) await conversationsStore.setConversationProject(convId, null);
 	}
 </script>
 
@@ -220,6 +259,13 @@
 						conversationRow={conversationItem}
 						group={section.group}
 						items={section.items}
+					/>
+				{:else if section.kind === SidebarSectionKind.PROJECT}
+					<SidebarNavigationProjectSection
+						class={className}
+						conversationRow={conversationItem}
+						conversations={section.conversations}
+						project={section.project}
 					/>
 				{:else}
 					{@render recentSection()}
@@ -267,7 +313,8 @@
 			id: conversation.id,
 			lastModified: conversation.lastModified,
 			name: conversation.name,
-			pinned: conversation.pinned
+			pinned: conversation.pinned,
+			projectId: conversation.projectId
 		}}
 		{depth}
 		isActive={currentChatId === conversation.id}
@@ -281,6 +328,9 @@
 		{onSelectionClick}
 		{onStop}
 		{onToggleSelect}
+		project={conversation.pinned && conversation.projectId
+			? projectsStore.get(conversation.projectId)
+			: undefined}
 	/>
 {/snippet}
 
@@ -325,7 +375,7 @@
 		sectionId={SIDEBAR_SECTION_IDS.RECENT}
 	>
 		{#snippet heading()}
-			<!-- shown even with no chats yet: its menu is where a group is created -->
+			<!-- shown even with no chats yet: its menus are where groups and projects are created -->
 			<ContextMenuActions bind:open={recentMenuOpen} actions={recentActions}>
 				<SidebarNavigationSectionHeading
 					dragId={SIDEBAR_SECTION_IDS.RECENT}

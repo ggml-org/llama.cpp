@@ -23,6 +23,7 @@ import {
 } from '$lib/stores/conversations/preferences.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tabsStore } from '$lib/stores/tabs.svelte';
+import type { Project } from '$lib/types';
 import {
 	collectForkFamily,
 	filterByLeafNodeId,
@@ -137,6 +138,37 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			await this.setConversationGroup(active.id, groupId);
 		} else {
 			this.preferences.pendingGroupId = groupId;
+		}
+	}
+
+	/**
+	 * Puts the active conversation into a project, or out of one with null.
+	 * With no active conversation the pick is buffered and the next created
+	 * chat joins that project, starting in the project's folder when it has
+	 * one. A folder the user picked themselves stays unless the project
+	 * brings its own.
+	 *
+	 * @param project - Target project, null to leave the current one
+	 */
+	async assignActiveConversationProject(project: Project | null): Promise<void> {
+		const active = this.activeConversation;
+
+		if (active) {
+			await this.setConversationProject(active.id, project?.id ?? null);
+
+			return;
+		}
+
+		const preferences = this.preferences;
+
+		preferences.pendingProjectId = project?.id ?? null;
+
+		if (project?.cwd) {
+			preferences.pendingCwd = project.cwd;
+			preferences.pendingCwdFromProject = true;
+		} else if (preferences.pendingCwdFromProject) {
+			preferences.pendingCwd = null;
+			preferences.pendingCwdFromProject = false;
 		}
 	}
 
@@ -299,12 +331,15 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		const conversation = await DatabaseService.createConversation(conversationName, {
 			cwd: this.preferences.pendingCwd ?? undefined,
 			groupId: this.preferences.pendingGroupId ?? undefined,
+			projectId: this.preferences.pendingProjectId ?? undefined,
 			reasoningEffort: this.preferences.pendingReasoningEffort,
 			...this.preferences.getToolPolicySnapshot()
 		});
 
 		this.preferences.pendingCwd = null;
 		this.preferences.pendingGroupId = null;
+		this.preferences.pendingCwdFromProject = false;
+		this.preferences.pendingProjectId = null;
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -576,6 +611,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			// Drop any cwd the user drafted on the empty new-chat screen -
 			// it doesn't belong to this conversation.
 			this.preferences.pendingCwd = null;
+			this.preferences.pendingCwdFromProject = false;
 
 			const allMessages = await DatabaseService.getConversationMessages(convId);
 
@@ -721,6 +757,26 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			}
 		} catch (error) {
 			console.error('Failed to move conversation to group:', error);
+		}
+	}
+
+	/**
+	 * Moves a conversation into a project, or out of one when `projectId` is null.
+	 * The project holds shared instructions and context, the chat keeps its own
+	 * working directory and history.
+	 *
+	 * @param convId - Conversation to move
+	 * @param projectId - Target project, null to remove the conversation from its project
+	 */
+	async setConversationProject(convId: string, projectId: string | null): Promise<void> {
+		try {
+			await DatabaseService.updateConversation(convId, {
+				projectId: projectId ?? undefined
+			});
+
+			this.applyConversationUpdate(convId, { projectId: projectId ?? undefined });
+		} catch (error) {
+			console.error('Failed to move conversation to project:', error);
 		}
 	}
 

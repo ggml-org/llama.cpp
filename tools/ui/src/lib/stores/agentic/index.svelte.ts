@@ -10,7 +10,7 @@
  * the permission/continue/steering gates owned by {@link AgenticGates}.
  */
 
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE, PROJECT_TOOL_NAMES } from '$lib/constants';
 import {
 	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -29,6 +29,7 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import { ChatService } from '$lib/services';
+import { ProjectToolsService } from '$lib/services/project-tools.service';
 import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
@@ -823,6 +824,12 @@ class AgenticStore {
 
 							if (toolName === BuiltInTool.BROWSER_GET_DATETIME) {
 								executionResult = executeGetDatetimeTool();
+							} else if (PROJECT_TOOL_NAMES.includes(toolName)) {
+								executionResult = await ProjectToolsService.executeTool(
+									toolName,
+									args,
+									conversationsStore.activeConversation?.projectId
+								);
 							} else if (toolName === BuiltInTool.SERVER_GET_INFO) {
 								executionResult = executeBrowserInfoTool();
 							} else if (toolName === BuiltInTool.BROWSER_READ_MEDIA) {

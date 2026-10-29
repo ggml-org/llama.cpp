@@ -11,6 +11,7 @@ import { browser } from '$app/environment';
 import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
+	buildProjectToolDefinitions,
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
@@ -30,6 +31,7 @@ import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
+import { projectsStore } from '$lib/stores/projects.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ApiError, buildSandboxToolDefinition } from '$lib/utils';
@@ -121,6 +123,9 @@ class ToolsStore {
 		const readMedia = this.readMediaTool();
 
 		if (readMedia) tools.push(readMedia);
+
+		// the project tools only make sense once there is a project to read or edit
+		if (projectsStore.projects.length > 0) tools.push(...buildProjectToolDefinitions());
 
 		// provide browser's get_info tool if server doesn't provide one
 		if (!this.hasServerTool(BuiltInTool.SERVER_GET_INFO)) {

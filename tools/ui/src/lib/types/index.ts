@@ -200,6 +200,8 @@ export type {
 
 // Group types
 export type { Group } from './groups';
+// Project types
+export type { Project, ProjectContextItem, ProjectDraft } from './projects';
 
 // Search result types
 export type { SearchResult } from './search';

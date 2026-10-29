@@ -254,6 +254,14 @@ export { default as ChatFormInput } from './ChatForm/ChatFormInput/ChatFormInput
 export { default as ChatFormCurrentWorkingDirectory } from './ChatForm/ChatFormCurrentWorkingDirectory/ChatFormCurrentWorkingDirectory.svelte';
 
 /**
+ * **ChatFormProjectChip** - The chat's project under the chat form
+ *
+ * Shown beside the working directory. A click changes the project and the
+ * hover × takes the chat out of it.
+ */
+export { default as ChatFormProjectChip } from './ChatForm/ChatFormProjectChip/ChatFormProjectChip.svelte';
+
+/**
  * **ChatFormPickerMcpPrompts** - MCP prompt selection interface
  *
  * Floating picker for browsing and selecting MCP Server Prompts.

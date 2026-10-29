@@ -10,7 +10,8 @@ import {
 	Eye as VisionIcon,
 	File as FileIcon,
 	FileText as FileTextIcon,
-	FolderOpen as CwdCommandIcon,
+	Folder as CwdCommandIcon,
+	FolderOpen as ProjectIcon,
 	FoldVertical as CompactCommandIcon,
 	Image as ImageIcon,
 	Lightbulb as ReasoningIcon,
@@ -46,6 +47,12 @@ export const DEFAULT_FILE_ICON = FileIcon;
 
 /** The mark for a model, wherever one is listed. */
 export const MODEL_ICON = ModelIcon;
+
+/**
+ * The mark for a project, wherever one is listed: an open folder. The working
+ * directory, which a project may have, is the closed folder.
+ */
+export const PROJECT_ICON = ProjectIcon;
 
 /** The mark for the Discover Models surface and its entry points. */
 export const DISCOVER_ICON = DiscoverIcon;

@@ -7,6 +7,7 @@
 // (see ChatMessageToolCallBlockGetDatetime and
 // ChatMessageToolCallBlockSearchResults for prior art).
 
+import { PROJECT_ICON } from './icons.constants';
 import {
 	Braces,
 	Clock,
@@ -16,6 +17,8 @@ import {
 	FileSearch,
 	FileText,
 	Info,
+	List,
+	Paperclip,
 	SearchCode,
 	Terminal
 } from '@lucide/svelte';
@@ -23,15 +26,35 @@ import { BuiltInTool, ToolSource } from '$lib/enums';
 import type { ToolUiEntry } from '$lib/types';
 
 export const TOOL_UI: Readonly<Record<BuiltInTool, ToolUiEntry>> = {
+	[BuiltInTool.BROWSER_ADD_PROJECT_CONTEXT]: {
+		icon: Paperclip,
+		label: 'Add project context',
+		source: ToolSource.BROWSER
+	},
 	[BuiltInTool.BROWSER_GET_DATETIME]: {
 		icon: Clock,
 		label: 'Current time',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_GET_PROJECT]: {
+		icon: PROJECT_ICON,
+		label: 'Read project',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_LIST_PROJECTS]: {
+		icon: List,
+		label: 'List projects',
 		source: ToolSource.BROWSER
 	},
 	[BuiltInTool.BROWSER_READ_MEDIA]: { icon: Eye, label: 'Read media', source: ToolSource.BROWSER },
 	[BuiltInTool.BROWSER_RUN_JAVASCRIPT]: {
 		icon: Braces,
 		label: 'Run JavaScript',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_UPDATE_PROJECT]: {
+		icon: FilePen,
+		label: 'Update project',
 		source: ToolSource.BROWSER
 	},
 	[BuiltInTool.SERVER_EDIT_FILE]: { icon: FilePen, label: 'Edit file', source: ToolSource.SERVER },

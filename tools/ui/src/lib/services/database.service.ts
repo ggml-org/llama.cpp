@@ -1,9 +1,11 @@
 /**
- * DatabaseService - IndexedDB persistence for conversations, messages and groups
+ * DatabaseService - IndexedDB persistence for conversations, messages, groups
+ * and projects
  *
- * Thin Dexie layer over the conversations/messages/groups tables: CRUD, tree
- * navigation (descendants, reparenting) and cascading deletes. No reactive
- * state; consumed by conversationsStore, groupsStore and the chat flows.
+ * Thin Dexie layer over the conversations/messages/groups/projects tables:
+ * CRUD, tree navigation (descendants, reparenting) and cascading deletes. No
+ * reactive state; consumed by conversationsStore, groupsStore, projectsStore
+ * and the chat flows.
  */
 
 import {
@@ -11,12 +13,14 @@ import {
 	IDXDB_STORES_V1,
 	IDXDB_TABLES,
 	IDXDB_VERSION,
+	IDXDB_VERSION_GROUPS,
 	STORAGE_APP_NAME
 } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
 import type { Group } from '$lib/types/groups';
+import type { Project } from '$lib/types/projects';
 import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
 import Dexie, { type EntityTable } from 'dexie';
 
@@ -24,13 +28,17 @@ class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
 	[IDXDB_TABLES.groups]!: EntityTable<Group, 'id'>;
 	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
+	[IDXDB_TABLES.projects]!: EntityTable<Project, 'id'>;
 
 	constructor() {
 		super(STORAGE_APP_NAME);
 
 		this.version(1).stores(IDXDB_STORES_V1);
-		this.version(IDXDB_VERSION).stores({
+		this.version(IDXDB_VERSION_GROUPS).stores({
 			[IDXDB_TABLES.groups]: IDXDB_STORE_SCHEMAS.groups
+		});
+		this.version(IDXDB_VERSION).stores({
+			[IDXDB_TABLES.projects]: IDXDB_STORE_SCHEMAS.projects
 		});
 	}
 }
@@ -218,6 +226,17 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Creates a new project.
+	 *
+	 * @returns The created project
+	 */
+	static async createProject(project: Project): Promise<Project> {
+		await db[IDXDB_TABLES.projects].add(project);
+
+		return project;
+	}
+
+	/**
 	 * Creates a root message for a new conversation.
 	 * Root messages are not displayed but serve as the tree root for branching.
 	 *
@@ -399,6 +418,15 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Deletes a project. Its conversations are kept: they are not owned by the project.
+	 *
+	 * @param id - Project ID
+	 */
+	static async deleteProject(id: string): Promise<void> {
+		await db[IDXDB_TABLES.projects].delete(id);
+	}
+
+	/**
 	 * Forks a conversation at a specific message, creating a new conversation
 	 * containing all messages from the root up to (and including) the target message.
 	 *
@@ -503,6 +531,15 @@ export class DatabaseService {
 		const groups = await db[IDXDB_TABLES.groups].toArray();
 
 		return groups.sort((a, b) => b.createdAt - a.createdAt);
+	}
+
+	/**
+	 * Gets all projects, sorted by last update time (newest first).
+	 *
+	 * @returns Array of projects
+	 */
+	static async getAllProjects(): Promise<Project[]> {
+		return await db[IDXDB_TABLES.projects].orderBy('updatedAt').reverse().toArray();
 	}
 
 	/**
@@ -707,6 +744,17 @@ export class DatabaseService {
 		updates: Partial<Omit<DatabaseMessage, 'id'>>
 	): Promise<void> {
 		await db[IDXDB_TABLES.messages].update(id, updates);
+	}
+
+	/**
+	 * Updates a project. `updatedAt` is never stamped implicitly; pass it in
+	 * `updates` to bump the project in recency ordering.
+	 *
+	 * @param id - Project ID
+	 * @param updates - Partial updates to apply
+	 */
+	static async updateProject(id: string, updates: Partial<Omit<Project, 'id'>>): Promise<void> {
+		await db[IDXDB_TABLES.projects].update(id, updates);
 	}
 
 	/**

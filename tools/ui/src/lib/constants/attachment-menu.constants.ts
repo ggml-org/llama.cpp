@@ -58,6 +58,7 @@ export const ATTACHMENT_TOOLTIP_TEXT = 'Add files, prompts, tools or MCP Servers
 export const ATTACHMENT_MENU_TEXT = {
 	ADD_FILES: 'Add files',
 	ADD_TO_CHAT: 'Add to chat',
+	ADD_TO_PROJECT: 'Add to project',
 	DESCRIPTION: 'Add files, system prompt or pick the tools the model may call',
 	SYSTEM_MESSAGE: 'System Message',
 	TOOLS: 'Tools'

@@ -42,9 +42,13 @@ export enum GlobSearchType {
  * the UI while keeping a single wire name.
  */
 export enum BuiltInTool {
+	BROWSER_ADD_PROJECT_CONTEXT = 'add_project_context',
 	BROWSER_GET_DATETIME = 'get_datetime',
+	BROWSER_GET_PROJECT = 'get_project',
+	BROWSER_LIST_PROJECTS = 'list_projects',
 	BROWSER_READ_MEDIA = 'read_media',
 	BROWSER_RUN_JAVASCRIPT = 'run_javascript',
+	BROWSER_UPDATE_PROJECT = 'update_project',
 	SERVER_EDIT_FILE = 'edit_file',
 	SERVER_EXEC_SHELL_COMMAND = 'exec_shell_command',
 	SERVER_FILE_GLOB_SEARCH = 'file_glob_search',

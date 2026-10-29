@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Loader2, Square, X } from '@lucide/svelte';
+	import { ProjectPrefix } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import {
@@ -18,6 +19,8 @@
 		icon?: Component;
 		id: string;
 		name: string;
+		/** Name of the project the chat belongs to, shown muted before the title. */
+		prefix?: string;
 	}
 
 	interface Props {
@@ -69,14 +72,15 @@
 		TAB_SURFACE_CLASS,
 		// each tab sits in its context-menu trigger, so the first trigger marks
 		// the first tab
-		'relative max-w-52 min-w-0 shrink-0 gap-1 pr-1 [:first-child>&]:ml-2',
+		'relative min-w-0 shrink-0 gap-1 pr-1 [:first-child>&]:ml-2',
+		tab.prefix ? 'max-w-80' : 'max-w-52',
 		isLoading ? 'pl-1' : 'pl-3',
 		isActive ? TAB_SURFACE_ACTIVE_CLASS : TAB_SURFACE_IDLE_CLASS
 	)}
 >
 	<a
 		aria-current={isActive ? 'page' : undefined}
-		aria-label={tab.name}
+		aria-label={tab.prefix ? `${tab.prefix} / ${tab.name}` : tab.name}
 		class="absolute inset-0 z-0 rounded-lg"
 		href={tab.href}
 		onauxclick={(e) => onAuxClick?.(tab.id, e)}
@@ -113,6 +117,13 @@
 	{#if tab.icon}
 		<tab.icon
 			class="pointer-events-none {ICON_CLASS_SM} shrink-0 transition-opacity {contentOpacity}"
+		/>
+	{/if}
+
+	{#if tab.prefix}
+		<ProjectPrefix
+			class="pointer-events-none max-w-36 shrink-0 transition-opacity {contentOpacity}"
+			name={tab.prefix}
 		/>
 	{/if}
 

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
+	import { projectsStore } from '$lib/stores';
 	import { buildConversationTree } from '$lib/utils';
 
 	interface Props {
@@ -78,6 +79,7 @@
 						{onSelectionClick}
 						{onStop}
 						{onToggleSelect}
+						project={projectsStore.get(conversation.projectId ?? '')}
 					/>
 				</li>
 			{/each}

@@ -29,6 +29,8 @@ export interface DatabaseConversation {
 	forkedFromConversationId?: string;
 	/** Sidebar group the conversation is sorted into. */
 	groupId?: string;
+	/** Project this conversation belongs to, when started from one. */
+	projectId?: string;
 	pinned?: boolean;
 }
 
