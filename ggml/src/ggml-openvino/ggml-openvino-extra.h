@@ -128,9 +128,11 @@ bool ggml_openvino_kv_slice_enabled();
 // On by default: back NPU buffers with Level Zero host memory; GGML_OPENVINO_NPU_L0_HOST_TENSORS=0 turns it off.
 bool ggml_openvino_npu_l0_host_tensors_enabled();
 
+// On by default: build the static prefill mask directly in the input tensor; GGML_OPENVINO_NPU_FAST_MASK=0 turns it off.
+bool ggml_openvino_npu_fast_mask_enabled();
+
 // NPU-only opt-in performance toggles (all default off). Centralized here so each
 // env-var name lives in one place; see docs/backend/OPENVINO.md for semantics.
-bool ggml_openvino_npu_fast_mask_enabled();
 bool ggml_openvino_npu_hfa_prefill_enabled();
 bool ggml_openvino_npu_decode_unfold_enabled();
 bool ggml_openvino_npu_parallel_compile_enabled();
