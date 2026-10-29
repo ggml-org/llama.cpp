@@ -145,7 +145,7 @@
 	}
 </script>
 
-<div class="flex flex-col gap-2">
+<div class="flex flex-col gap-4">
 	{#each sections as section (section.id)}
 		{@const isDragged = section.id === sidebarDragStore.sectionId}
 
@@ -192,9 +192,7 @@
 {#snippet showMore(sectionId: string, total: number)}
 	{#if total > SIDEBAR_SECTION_PREVIEW_COUNT}
 		<!-- only an opened section is long enough for its row to need to stick -->
-		<li
-			class={uiStore.isSidebarSectionExpanded(sectionId) ? SIDEBAR_SHOW_MORE_ROW_CLASS : 'mb-1 p-0'}
-		>
+		<li class={uiStore.isSidebarSectionExpanded(sectionId) ? SIDEBAR_SHOW_MORE_ROW_CLASS : 'p-0'}>
 			<SidebarNavigationShowMore
 				expanded={uiStore.isSidebarSectionExpanded(sectionId)}
 				onToggle={() => uiStore.toggleSidebarSectionExpanded(sectionId)}
@@ -248,12 +246,9 @@
 		{/snippet}
 
 		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.PINNED)}>
-			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-1 {className}">
+			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0.5 {className}">
 				{#each previewOf(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations) as { conversation, depth } (conversation.id)}
-					<li
-						transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }}
-						class="group/item relative mb-1 p-0"
-					>
+					<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
 						{@render conversationItem(conversation, depth)}
 					</li>
 				{/each}
@@ -283,12 +278,9 @@
 		{/snippet}
 
 		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}>
-			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0">
+			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0.5">
 				{#each previewOf(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations) as { conversation, depth } (conversation.id)}
-					<li
-						transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }}
-						class="group/item relative mb-1 p-0"
-					>
+					<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
 						{@render conversationItem(conversation, depth)}
 					</li>
 				{/each}

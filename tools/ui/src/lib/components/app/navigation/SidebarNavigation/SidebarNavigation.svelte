@@ -650,7 +650,7 @@
 				: ''} {isStripHidden ? 'md:opacity-0 md:invisible' : ''}"
 		>
 			<SidebarNavigationActions
-				class="px-2"
+				class="px-2 md:my-3"
 				onAction={handleSidebarAction}
 				onNavigate={() => {
 					if (deviceStore.isMobile) {

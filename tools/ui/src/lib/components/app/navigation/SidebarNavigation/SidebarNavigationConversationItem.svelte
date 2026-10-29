@@ -256,13 +256,13 @@
 
 <ContextMenuActions bind:open={contextMenuOpen} {actions} disabled={isSelectionMode}>
 	<button
-		class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isLanding
+		class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left md:min-h-8 md:py-1 transition-colors hover:bg-foreground/10 hover:text-foreground {isLanding
 			? 'invisible'
-			: ''} {isActive ? 'bg-foreground/5 text-accent-foreground' : ''} {contextMenuOpen
-			? 'bg-foreground/10'
-			: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
-			? 'is-selection-mode'
-			: ''} px-2"
+			: ''} {isActive
+			? 'bg-foreground/5 text-accent-foreground'
+			: 'text-foreground/75'} {contextMenuOpen ? 'bg-foreground/10' : ''} {isSelected
+			? 'bg-primary/10 hover:bg-primary/15'
+			: ''} {isSelectionMode ? 'is-selection-mode' : ''} px-2"
 		{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
 		onauxclick={handleAuxClick}
 		onclick={(e) => handleSelect(e)}
@@ -345,7 +345,7 @@
 				</Tooltip.Root>
 			{/if}
 
-			<TruncatedText class="text-sm font-medium" showTooltip={false} text={conversation.name} />
+			<TruncatedText class="text-sm" showTooltip={false} text={conversation.name} />
 		</div>
 
 		{#if !isSelectionMode && renderActionsDropdown}

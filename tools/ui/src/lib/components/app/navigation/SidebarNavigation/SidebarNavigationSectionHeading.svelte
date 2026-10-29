@@ -36,7 +36,7 @@
      section still reads as one -->
 <!-- dragging the title moves the whole section among the others -->
 <div
-	class="group/heading flex h-8 min-w-0 shrink-0 items-center gap-0.5 pr-1 text-xs font-medium text-muted-foreground {highlighted
+	class="group/heading flex h-8 min-w-0 shrink-0 items-center gap-0.5 pr-1 text-[13px] font-semibold text-foreground {highlighted
 		? 'text-foreground'
 		: ''} {className}"
 >
