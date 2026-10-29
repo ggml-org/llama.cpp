@@ -154,3 +154,51 @@ __kernel void flash_attn_blk_f16(
 
     blk[((ulong) mask_slice * (ulong) n_q_blocks + (ulong) q_block_idx) * (ulong) n_kv_blocks + (ulong) kv_block_idx] = res;
 }
+
+// V^T for the decomposed flash attention: [dv, n_kv, n_head_kv] (strided) -> [n_kv, dv, n_head_kv]
+// (contiguous). This is the layout the Adreno KQV image GEMM reads. A local tile keeps both the
+// read and the write coalesced, and the +1 column avoids bank conflicts.
+#define FA_VT_TILE 32
+#define FA_VT_ROWS 8
+__kernel void flash_attn_v_transpose_f16(
+    const global void * v_void, ulong v_offset,
+    global void * vt_void,
+    const int n_kv,
+    const int dv,
+    const int n_head_kv,
+    const ulong v_nb1,
+    const ulong v_nb2
+) {
+    __local half tile[FA_VT_TILE][FA_VT_TILE + 1];
+
+    const int d0 = get_group_id(0) * FA_VT_TILE;
+    const int k0 = get_group_id(1) * FA_VT_TILE;
+    const int head_kv_idx = get_group_id(2);
+
+    const int lx = get_local_id(0);
+    const int ly = get_local_id(1);
+
+    const global char * v_head = (const global char *) v_void + v_offset + (ulong) head_kv_idx * v_nb2;
+
+    for (int r = 0; r < FA_VT_TILE; r += FA_VT_ROWS) {
+        const int d  = d0 + lx;
+        const int kv = k0 + ly + r;
+        half val = (half) 0.0f;
+        if (d < dv && kv < n_kv) {
+            val = ((const global half *) (v_head + (ulong) kv * v_nb1))[d];
+        }
+        tile[ly + r][lx] = val;
+    }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    global half * vt_head = (global half *) vt_void + (ulong) head_kv_idx * (ulong) n_kv * (ulong) dv;
+
+    for (int r = 0; r < FA_VT_TILE; r += FA_VT_ROWS) {
+        const int kv = k0 + lx;
+        const int d  = d0 + ly + r;
+        if (d < dv && kv < n_kv) {
+            vt_head[(ulong) d * (ulong) n_kv + (ulong) kv] = tile[lx][ly + r];
+        }
+    }
+}

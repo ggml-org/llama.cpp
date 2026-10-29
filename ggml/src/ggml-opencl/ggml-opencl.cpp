@@ -79,6 +79,11 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
 static bool ggml_cl_is_q4_0_soa(const ggml_tensor * tensor);
 static bool ggml_cl_is_q8_0_soa(const ggml_tensor * tensor);
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+static void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+static void ggml_cl_fa_decompose_soft_max(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst, cl_mem sums);
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+static void ggml_cl_mul_mat_kq_kqv_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool is_kq);
+#endif
 
 // See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
 // Precompute mp (m' in the paper) and L such that division
@@ -571,6 +576,8 @@ struct ggml_opencl_fa_kernels {
     std::map<std::pair<int, int>, cl_kernel> kv_pad_f16;
     std::map<std::pair<int, int>, cl_kernel> mask_pad_f16;
     std::map<std::pair<int, int>, cl_kernel> blk_f16;
+    // decomposed prefill: V^T, built with the prepass
+    std::map<std::pair<int, int>, cl_kernel> v_transpose_f16;
     // generic prefill tile dims (f16 / f32 paths)
     std::map<std::pair<int, int>, int>       bm;
     std::map<std::pair<int, int>, int>       bn;
@@ -760,6 +767,12 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_src1;
     ggml_cl_buffer prealloc_top_k;
 
+    // scratch for the decomposed flash attention prefill, sized per query chunk
+    ggml_cl_buffer prealloc_fa_vt;
+    ggml_cl_buffer prealloc_fa_kq;
+    ggml_cl_buffer prealloc_fa_kqv;
+    ggml_cl_buffer prealloc_fa_sums;
+
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_buffer prealloc_adreno_xmem_const;
     bool adreno_xmem_gemm_enabled = false;
@@ -871,6 +884,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_diag_f32;
     cl_kernel kernel_soft_max, kernel_soft_max_4;
     cl_kernel kernel_soft_max_f16, kernel_soft_max_4_f16;
+    cl_kernel kernel_fa_decompose_soft_max_4_f16, kernel_fa_decompose_scale_rows_f32;
     ggml_opencl_fa_kernels fa;
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_adreno_xmem_attn_state adreno_xmem_attn;
@@ -4178,6 +4192,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_soft_max_4_f16 = clCreateKernel(backend_ctx->program_softmax_4_f16, "kernel_soft_max_4_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_fa_decompose_soft_max_4_f16 = clCreateKernel(backend_ctx->program_softmax_4_f16, "kernel_fa_decompose_soft_max_4_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_fa_decompose_scale_rows_f32 = clCreateKernel(backend_ctx->program_softmax_4_f16, "kernel_fa_decompose_scale_rows_f32", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -7825,6 +7841,11 @@ static void ggml_opencl_ensure_fa_pre_kernels(ggml_backend_opencl_context * back
     backend_ctx->fa.kv_pad_f16[{dk, dv}]   = k_kv_pad_f16;
     backend_ctx->fa.mask_pad_f16[{dk, dv}] = k_mask_pad_f16;
     backend_ctx->fa.blk_f16[{dk, dv}]      = k_blk_f16;
+    // optional, the decomposed prefill checks for it and falls back to the fused tile
+    cl_kernel k_v_transpose_f16 = clCreateKernel(prog_pre_f16, "flash_attn_v_transpose_f16", &err);
+    if (err == CL_SUCCESS) {
+        backend_ctx->fa.v_transpose_f16[{dk, dv}] = k_v_transpose_f16;
+    }
     clReleaseProgram(prog_pre_f16);
 }
 
@@ -22696,6 +22717,253 @@ static void ggml_cl_flash_attn_prefill_bin(ggml_backend_t backend, const ggml_te
 }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
+static void ggml_cl_fa_decompose_scratch_tensor(
+    ggml_tensor & t, ggml_tensor_extra_cl & extra, cl_mem buffer, ggml_type type,
+    int64_t ne0, int64_t ne1, int64_t ne2
+) {
+    memset(&t, 0, sizeof(t));
+    t.type  = type;
+    t.ne[0] = ne0; t.ne[1] = ne1; t.ne[2] = ne2; t.ne[3] = 1;
+    t.nb[0] = ggml_type_size(type);
+    t.nb[1] = t.nb[0]*ne0;
+    t.nb[2] = t.nb[1]*ne1;
+    t.nb[3] = t.nb[2]*ne2;
+
+    extra.reset();
+    extra.data_device = buffer;
+    t.extra = &extra;
+}
+
+// Decomposed flash attention prefill.
+//
+// On Adreno the fused prefill tile is slow at large head sizes, while the
+// KQ / KQV image GEMMs are fast. -fa 0 uses those GEMMs, but it keeps KQ for
+// the whole ubatch in the graph. Here the FLASH_ATTN_EXT node stays, and the
+// queries are split into chunks. For each chunk: KQ -> softmax -> KQV into
+// backend scratch, so the scratch size depends on the chunk and not on the
+// ubatch, and the KV cache keeps the flash attention layout.
+//
+// Returns false when the shape is not supported, then the fused tile runs.
+// GGML_OPENCL_FA_DECOMPOSE=0 disables it, =1 enables it for any Adreno GPU and
+// head size. GGML_OPENCL_FA_DECOMPOSE_MB sets the KQ scratch budget (default 256).
+static bool ggml_cl_flash_attn_decompose(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    const ggml_tensor * v     = dst->src[2];
+    const ggml_tensor * mask  = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
+
+    if (backend_ctx->gpu_family != ADRENO) {
+        return false;
+    }
+
+    static const int env = []{
+        const char * e = getenv("GGML_OPENCL_FA_DECOMPOSE");
+        return (e && e[0]) ? (e[0] != '0' ? 1 : 0) : -1;
+    }();
+    if (env == 0) {
+        return false;
+    }
+
+    const int64_t n_q       = q->ne[1];
+    const int64_t n_kv      = k->ne[1];
+    const int64_t dk        = q->ne[0];
+    const int64_t dv        = v->ne[0];
+    const int64_t n_head    = q->ne[2];
+    const int64_t n_head_kv = k->ne[2];
+
+    // Only on by default where it was measured, and only for head size >= 256.
+    // The extra KQ traffic costs ~1/(dk+dv) of the attention compute, and the
+    // fused tile is only weak at large head sizes.
+    const bool measured_gen = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+                              backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X ||
+                              backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E;
+    if (env != 1 && !(measured_gen && dk >= 256)) {
+        return false;
+    }
+
+    // Prefill only, f32 Q, f16 KV, single stream.
+    if (n_q < 2) {
+        return false;
+    }
+    if (q->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        k->type != GGML_TYPE_F16 || v->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (q->ne[3] != 1 || k->ne[3] != 1 || v->ne[3] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+    if (n_head_kv <= 0 || n_head % n_head_kv != 0) {
+        return false;
+    }
+    if (k->nb[0] != ggml_type_size(k->type) || v->nb[0] != ggml_type_size(v->type)) {
+        return false;
+    }
+    // K and Q must be packed [dk, head, row], as the KV cache and the permuted Q
+    // are. mul_mat sends the KQ to the image KQ kernel only for this layout;
+    // other K views can reach the KQV image kernel there and give wrong results.
+    if (k->nb[2] != (size_t) dk * sizeof(ggml_fp16_t) || k->nb[1] != (size_t) dk * n_head_kv * sizeof(ggml_fp16_t) ||
+        q->nb[0] != sizeof(float) || q->nb[2] != (size_t) dk * sizeof(float) || q->nb[1] != (size_t) dk * n_head * sizeof(float)) {
+        return false;
+    }
+
+    // soft_max applies scale, mask, ALiBi and sinks, but not the softcap.
+    float scale, max_bias, logit_softcap;
+    memcpy(&scale,         (const float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias,      (const float *) dst->op_params + 1, sizeof(float));
+    memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
+    if (logit_softcap != 0.0f) {
+        return false;
+    }
+
+    // The deferred softmax kernel needs an f16 mask and rows that divide by 4.
+    if (mask == nullptr || mask->type != GGML_TYPE_F16 || mask->ne[0] < n_kv || (n_kv % 4) != 0) {
+        return false;
+    }
+
+    const std::pair<int, int> dk_dv = {(int) dk, (int) dv};
+    if (backend_ctx->fa.v_transpose_f16.count(dk_dv) == 0) {
+        return false;
+    }
+
+    // Chunk size: a byte budget for KQ, at least 8 tiles of 32 queries so the
+    // GEMMs get usable shapes, and below the image1d_buffer limit of the KQ dst.
+    static const size_t budget_bytes = []{
+        const char * e = getenv("GGML_OPENCL_FA_DECOMPOSE_MB");
+        const int mb = (e && e[0]) ? atoi(e) : 256;
+        return (size_t)(mb > 0 ? mb : 256) * 1024 * 1024;
+    }();
+    const size_t kq_row_bytes = (size_t) n_kv * n_head * sizeof(float);
+    int64_t n_q_chunk = MIN((int64_t)(budget_bytes / kq_row_bytes), n_q);
+    n_q_chunk = MAX(n_q_chunk, MIN((int64_t) 8 * 32, n_q));
+    n_q_chunk = MIN(n_q_chunk, (int64_t)(backend_ctx->image_max_buffer_size / (n_kv * n_head)));
+    if (n_q_chunk < 32 && n_q_chunk < n_q) {
+        return false;
+    }
+    // even out the chunks, then align to the 32-wide n-tile
+    const int64_t n_chunks = (n_q + n_q_chunk - 1) / n_q_chunk;
+    n_q_chunk = MIN(n_q_chunk, ((n_q + n_chunks - 1) / n_chunks + 31) & ~(int64_t) 31);
+
+    // The image GEMMs work in 64 x 32 tiles and can touch past the exact extent,
+    // so size each scratch by the padded shape plus one extra head.
+    auto pad_up = [](int64_t x, int64_t a) { return ((x + a - 1) / a) * a; };
+    const int64_t kq_m   = pad_up(n_kv, 64);
+    const int64_t kqv_m  = pad_up(dv, 64);
+    const int64_t tile_n = pad_up(n_q_chunk, 32);
+
+    backend_ctx->prealloc_fa_vt.allocate(backend_ctx->context,   (size_t)(n_kv * kqv_m * (n_head_kv + 1)) * sizeof(ggml_fp16_t));
+    backend_ctx->prealloc_fa_kq.allocate(backend_ctx->context,   (size_t)(kq_m * tile_n * (n_head + 1)) * sizeof(float));
+    backend_ctx->prealloc_fa_kqv.allocate(backend_ctx->context,  (size_t)(kqv_m * tile_n * (n_head + 1)) * sizeof(float));
+    backend_ctx->prealloc_fa_sums.allocate(backend_ctx->context, (size_t)(n_q_chunk * n_head) * sizeof(float));
+
+    // V^T once per call: [dv, n_kv, n_head_kv] -> [n_kv, dv, n_head_kv]
+    {
+        ggml_tensor_extra_cl * extra_v = (ggml_tensor_extra_cl *)v->extra;
+        cl_kernel kernel = backend_ctx->fa.v_transpose_f16.at(dk_dv);
+
+        const cl_ulong offset_v = extra_v->offset + v->view_offs;
+        const cl_ulong v_nb1 = v->nb[1];
+        const cl_ulong v_nb2 = v->nb[2];
+        const int n_kv_i = (int) n_kv;
+        const int dv_i = (int) dv;
+        const int n_head_kv_i = (int) n_head_kv;
+
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra_v->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset_v));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &backend_ctx->prealloc_fa_vt.buffer));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int),      &n_kv_i));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &dv_i));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n_head_kv_i));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &v_nb1));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_ulong), &v_nb2));
+
+        size_t gws[3] = { (size_t)((dv + 31) / 32) * 32, (size_t)((n_kv + 31) / 32) * 8, (size_t) n_head_kv };
+        size_t lws[3] = { 32, 8, 1 };
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
+    }
+
+    ggml_tensor_extra_cl extra_vt, extra_kq, extra_kqv;
+    ggml_tensor vt, kq, kqv;
+    ggml_cl_fa_decompose_scratch_tensor(vt, extra_vt, backend_ctx->prealloc_fa_vt.buffer, GGML_TYPE_F16, n_kv, dv, n_head_kv);
+
+    for (int64_t q0 = 0; q0 < n_q; q0 += n_q_chunk) {
+        const int64_t nqc = MIN(n_q_chunk, n_q - q0);
+
+        // KQ: [dk, n_kv, n_head_kv] x [dk, nqc, n_head] -> [n_kv, nqc, n_head]
+        ggml_cl_fa_decompose_scratch_tensor(kq, extra_kq, backend_ctx->prealloc_fa_kq.buffer, GGML_TYPE_F32, n_kv, nqc, n_head);
+        {
+            ggml_tensor q_chunk = *q;
+            q_chunk.ne[1]     = nqc;
+            q_chunk.view_offs = q->view_offs + (size_t) q0 * q->nb[1];
+            ggml_cl_mul_mat(backend, k, &q_chunk, &kq);
+        }
+
+        // softmax in place, the row sums go to prealloc_fa_sums
+        {
+            memcpy((float *) kq.op_params + 0, &scale,    sizeof(float));
+            memcpy((float *) kq.op_params + 1, &max_bias, sizeof(float));
+
+            ggml_tensor mask_chunk = *mask;
+            mask_chunk.ne[1]     = nqc;
+            mask_chunk.view_offs = mask->view_offs + (size_t) q0 * mask->nb[1];
+
+            ggml_cl_fa_decompose_soft_max(backend, &kq, &mask_chunk, sinks, &kq, backend_ctx->prealloc_fa_sums.buffer);
+        }
+
+        // KQV: [n_kv, dv, n_head_kv] x [n_kv, nqc, n_head] -> [dv, nqc, n_head]
+        // V^T is contiguous, so mul_mat would not pick the KQV image kernel; call it here.
+        ggml_cl_fa_decompose_scratch_tensor(kqv, extra_kqv, backend_ctx->prealloc_fa_kqv.buffer, GGML_TYPE_F32, dv, nqc, n_head);
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (backend_ctx->kernel_mul_mm_f16_f32_kqv != nullptr &&
+            (dv % 64) == 0 && (n_kv % 16) == 0 && nqc >= 32 &&
+            ((size_t)(vt.nb[2] * n_head_kv / 4) / 4 <= backend_ctx->image_max_buffer_size) &&
+            ((size_t)(dv * nqc * n_head) <= backend_ctx->image_max_buffer_size)) {
+            ggml_cl_mul_mat_kq_kqv_adreno(backend, &vt, &kq, &kqv, /*is_kq =*/ false);
+        } else
+#endif
+        {
+            ggml_cl_mul_mat(backend, &vt, &kq, &kqv);
+        }
+
+        // apply the deferred 1/sum to the KQV rows
+        {
+            cl_kernel kernel = backend_ctx->kernel_fa_decompose_scale_rows_f32;
+            const cl_ulong offset_kqv  = 0;
+            const cl_ulong offset_sums = 0;
+            const int dv_i  = (int) dv;
+            const int nqc_i = (int) nqc;
+
+            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &backend_ctx->prealloc_fa_kqv.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset_kqv));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &backend_ctx->prealloc_fa_sums.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offset_sums));
+            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &dv_i));
+            CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &nqc_i));
+
+            size_t gws[3] = { (size_t) 64 * nqc, (size_t) n_head, 1 };
+            size_t lws[3] = { 64, 1, 1 };
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
+        }
+
+        // permute into dst: [dv, nqc, n_head] -> dst[dv, n_head, q0 .. q0+nqc)
+        {
+            ggml_tensor kqv_perm = kqv;
+            kqv_perm.ne[1] = n_head;
+            kqv_perm.ne[2] = nqc;
+            kqv_perm.nb[1] = kqv.nb[2];
+            kqv_perm.nb[2] = kqv.nb[1];
+
+            ggml_tensor dst_chunk = *dst;
+            dst_chunk.ne[2]     = nqc;
+            dst_chunk.view_offs = dst->view_offs + (size_t) q0 * dst->nb[2];
+
+            ggml_cl_cpy(backend, &kqv_perm, &dst_chunk, nullptr);
+        }
+    }
+
+    return true;
+}
+
 static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
     const ggml_tensor * v = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
@@ -22814,6 +23082,12 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     if (mq_decode_shape && n_kv >= 32) {
         ggml_opencl_ensure_fa_f32_f16_mq_decode(backend_ctx, d_head_q, d_head_v, mq_gqa);
     }
+
+    // after all lazy compiles, so the decode kernels are built during warmup as on the fused path
+    if (n_q > 1 && ggml_cl_flash_attn_decompose(backend, q, k, dst)) {
+        return;
+    }
+
     const bool use_native_q8_0_q1 = is_q8_0 && n_q == 1 &&
                                     backend_ctx->fa.f32_q8_0_q1.count(dk_dv) > 0;
     // Native q8_0 prefill — reads q8_0 directly, wg_size = cfg->bm.
@@ -37399,6 +37673,102 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel, 22, sizeof(float),    &m0));
     CL_CHECK(clSetKernelArg(kernel, 23, sizeof(float),    &m1));
     CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int),      &n_head_log2));
+
+    size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
+    size_t local_work_size[] = {(size_t)nth, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+}
+
+// Softmax for the decomposed flash attention: like ggml_cl_soft_max, but dst keeps
+// exp(x - max) and the row sums go to `sums`, one float per (row, head). src2 is the
+// optional sinks tensor.
+static void ggml_cl_fa_decompose_soft_max(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst, cl_mem sums) {
+    GGML_ASSERT(src0 && src0->extra);
+    GGML_ASSERT(src1 && src1->extra && src1->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst && dst->extra);
+    GGML_ASSERT(sums != nullptr);
+    GGML_ASSERT(src0->ne[0] % 4 == 0);
+
+    if (src2) {
+        GGML_ASSERT(src2->extra);
+    }
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
+    ggml_tensor_extra_cl * extra2 = src2 ? (ggml_tensor_extra_cl *)src2->extra : nullptr;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offset2 = extra2 ? extra2->offset + src2->view_offs : offset0;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+    cl_ulong offsets = 0;
+
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
+    const int ne02 = src0->ne[2];
+    const int ne03 = src0->ne[3];
+
+    const cl_ulong nb01 = src0->nb[1];
+    const cl_ulong nb02 = src0->nb[2];
+    const cl_ulong nb03 = src0->nb[3];
+
+    const int ne12 = src1->ne[2];
+    const int ne13 = src1->ne[3];
+
+    const cl_ulong nb11 = src1->nb[1];
+    const cl_ulong nb12 = src1->nb[2];
+    const cl_ulong nb13 = src1->nb[3];
+
+    const cl_ulong nb1 = dst->nb[1];
+    const cl_ulong nb2 = dst->nb[2];
+    const cl_ulong nb3 = dst->nb[3];
+
+    float scale, max_bias;
+    memcpy(&scale,    dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias, dst->op_params + 1, sizeof(float));
+
+    const int n_head      = src0->ne[2];
+    const int n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
+
+    const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
+    const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    // one wave per row, same as ggml_cl_soft_max on Adreno
+    const int nth = 64;
+
+    cl_kernel kernel = backend_ctx->kernel_fa_decompose_soft_max_4_f16;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   extra2 ? &extra2->data_device : &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset2));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_mem),   &sums));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &offsets));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne13));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb11));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nb12));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb13));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong), &nb3));
+    CL_CHECK(clSetKernelArg(kernel, 22, sizeof(float),    &scale));
+    CL_CHECK(clSetKernelArg(kernel, 23, sizeof(float),    &max_bias));
+    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(float),    &m0));
+    CL_CHECK(clSetKernelArg(kernel, 25, sizeof(float),    &m1));
+    CL_CHECK(clSetKernelArg(kernel, 26, sizeof(int),      &n_head_log2));
 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
