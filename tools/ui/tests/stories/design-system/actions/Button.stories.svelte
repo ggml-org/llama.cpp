@@ -1,6 +1,6 @@
 <script lang="ts" module>
-	import StateGallery from '../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
+	import StateGallery from '../../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import { Plus, Trash2 } from '@lucide/svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { Button } from '$lib/components/ui/button';
@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Button'
+		title: 'Design system/Actions/Button'
 	});
 
 	const variants: NonNullable<ButtonVariant>[] = [
