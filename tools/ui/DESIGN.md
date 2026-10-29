@@ -611,10 +611,10 @@ icon buttons in the chat form are fully round.
 
 - **Buttons:** five variants.
   - `default`: the solid primary button, including the chat submit button.
-  - `secondary`: the matte glass button, the same fill as the chat form with a faint border.
+  - `secondary`: the matte glass button, the same fill as the chat form with a faint border,
+    also used for the chat form's Stop and Skip reasoning buttons.
   - `outline`: no fill and a normal border, for secondary actions in dialogs and forms.
-  - `ghost`: no fill until hovered, for icon buttons and quiet actions, including the chat
-    form's Stop and Skip reasoning buttons.
+  - `ghost`: no fill until hovered, for icon buttons and quiet actions.
   - `destructive`: red, for deleting and other irreversible actions.
 
   All except ghost carry `matte-key`. Sizes are sm (32px), default (36px) and lg (40px), plus
