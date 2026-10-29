@@ -1,8 +1,8 @@
 <script lang="ts">
 	import ModelId from './ModelId.svelte';
-	import { Package } from '@lucide/svelte';
 	import { ActionIconCopyToClipboard, BadgeInfo } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { MODEL_ICON } from '$lib/constants';
 	import { modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
@@ -29,7 +29,7 @@
 {#snippet badgeContent(triggerProps?: Record<string, unknown>)}
 	<BadgeInfo {...triggerProps ?? {}} class={className} {onclick}>
 		{#snippet icon()}
-			<Package class="h-3 w-3" />
+			<MODEL_ICON class="h-3 w-3" />
 		{/snippet}
 
 		{#if model}

@@ -1,6 +1,8 @@
 import {
 	MEDIUM_DURATION_THRESHOLD,
 	MS_PER_SECOND,
+	RELATIVE_TIME_MAX_DAYS,
+	SECONDS_PER_DAY,
 	SECONDS_PER_HOUR,
 	SECONDS_PER_MINUTE,
 	SHORT_DURATION_THRESHOLD
@@ -54,6 +56,25 @@ export function formatParameters(params: number | unknown): string {
 	return params.toString();
 }
 
+/** Separator between the context values shown for one model, e.g. `8192 / 4096`. */
+const CONTEXT_VALUE_SEPARATOR = ' / ';
+/** Unit the context values are shown in. */
+const CONTEXT_UNIT = 'tokens';
+/** Shown where a value is unknown. */
+const UNKNOWN_VALUE = '-';
+
+/**
+ * Context window of a model: `configured / supported tokens`, or whichever is known.
+ * Equal values collapse to one, `131 072 tokens` instead of `131 072 / 131 072 tokens`.
+ */
+export function formatContextLength(values: number[]): string {
+	const unique = [...new Set(values)];
+
+	return unique.length
+		? `${unique.map((value) => formatNumber(value)).join(CONTEXT_VALUE_SEPARATOR)} ${CONTEXT_UNIT}`
+		: UNKNOWN_VALUE;
+}
+
 /**
  * Format number with locale-specific thousands separators
  *
@@ -81,6 +102,34 @@ export function formatJsonPretty(jsonString: string): string {
 	} catch {
 		return jsonString;
 	}
+}
+
+/**
+ * Formats a past timestamp as a coarse relative label.
+ * Examples: "just now", "37 minutes ago", "1 hour ago", "3 days ago"
+ *
+ * @param timestamp - Epoch milliseconds in the past
+ * @returns Relative time string
+ */
+export function formatRelativeTime(timestamp: number): string {
+	const elapsedSeconds = (Date.now() - timestamp) / MS_PER_SECOND;
+	const plural = (value: number, unit: string) => `${value} ${unit}${value === 1 ? '' : 's'} ago`;
+
+	if (elapsedSeconds < SECONDS_PER_MINUTE) return 'just now';
+
+	if (elapsedSeconds < SECONDS_PER_HOUR) {
+		return plural(Math.floor(elapsedSeconds / SECONDS_PER_MINUTE), 'minute');
+	}
+
+	if (elapsedSeconds < SECONDS_PER_DAY) {
+		return plural(Math.floor(elapsedSeconds / SECONDS_PER_HOUR), 'hour');
+	}
+
+	if (elapsedSeconds < RELATIVE_TIME_MAX_DAYS * SECONDS_PER_DAY) {
+		return plural(Math.floor(elapsedSeconds / SECONDS_PER_DAY), 'day');
+	}
+
+	return new Date(timestamp).toLocaleDateString();
 }
 
 /**

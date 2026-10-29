@@ -69,6 +69,7 @@ class GGMLQuants:
             "tq1_0", "tq2_0",
             "mxfp4",
             "nvfp4",
+            "q1_0", "q2_0",
             "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m",
             "iq4_nl", "iq4_xs",
         ):

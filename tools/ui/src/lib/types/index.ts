@@ -68,6 +68,7 @@ export type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	ChatMessageAgenticTimings,
+	ChatMessageCompactionTimings,
 	ChatMessageAgenticTurnStats,
 	ChatMessageToolCallTiming,
 	ChatStreamCallbacks,
@@ -105,11 +106,23 @@ export type {
 	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadEntry,
 	ModelDownloadFileProgress,
 	ModelDownloadProgress,
 	ModelLoadProgress,
+	ModelSidecarBadge,
 	ModalityCapabilities
 } from './models';
+
+// Models discover types
+export type {
+	ModelBitDepthRow,
+	ModelCompanionDraft,
+	ModelDownloadEntryState,
+	ModelQuantChip,
+	ModelQuantOption,
+	ModelSelectableFile
+} from './models-discover';
 
 // Settings types
 export type {

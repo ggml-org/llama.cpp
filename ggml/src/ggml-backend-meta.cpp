@@ -1046,7 +1046,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             } break;
             case GGML_OP_DSV4_HC_COMB:
             case GGML_OP_DSV4_HC_PRE:
-            case GGML_OP_DSV4_HC_POST: {
+            case GGML_OP_DSV4_HC_POST:
+            case GGML_OP_TOP_K_MASK: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
             case GGML_OP_UNARY: {
@@ -1176,7 +1177,22 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     return ret;
 }
 
+static bool ggml_backend_meta_is_host_view(const struct ggml_tensor * tensor) {
+    return ggml_is_view(tensor) && ggml_backend_buffer_is_host(tensor->view_src->buffer);
+}
+
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync) {
+    // [TAG_META_HOST_VIEWS]
+    // TODO: technically, this check should not be needed if the backend scheduler correctly prevents assigning
+    //       such host-buffer views to the meta backend. figure out how to update the scheduler logic to achieve that
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/30217
+    if (!ggml_backend_buffer_is_meta(tensor->buffer)) {
+        GGML_ASSERT(ggml_backend_meta_is_host_view(tensor));
+
+        // the view is not allocated in the meta buffer, it is not split across the sub-devices
+        return { GGML_BACKEND_SPLIT_AXIS_NONE, {0}, {1}, 1 };
+    }
+
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
     return ggml_backend_meta_get_split_state(buf_ctx->get_simple_tensor_container(tensor), tensor, assume_sync);
 }
@@ -2026,9 +2042,11 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
-                if (node->view_src != nullptr && node->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(node->view_src->buffer)) {
-                    // FIXME s_copy_main is on the CPU and its view seems to be incorrectly added to the graph nodes.
-                    // For regular usage this doesn't matter since it's a noop but trying to call ggml_backend_meta_buffer_simple_tensor results in a crash.
+                if (!ggml_backend_buffer_is_meta(node->buffer)) {
+                    // [TAG_META_HOST_VIEWS]
+                    GGML_ASSERT(ggml_backend_meta_is_host_view(node));
+
+                    // keep the node as is, mapping it to a simple tensor is not possible
                     bcj.nodes[i] = node;
                     continue;
                 }
@@ -2267,8 +2285,8 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             backend_ctx->ctx.reset(ggml_init(params));
             for (size_t j = 0; j < n_backends; j++) {
                 auto & bcj = backend_ctx->backend_configs[j];
-                for (size_t i = 0; i < n_subgraphs; i++) {
-                    bcj.cgraphs[i].cgraph_main = ggml_new_graph_custom(backend_ctx->ctx.get(), cgraph->n_nodes, /*grads =*/ false);
+                for (size_t i = 0; i < backend_ctx->max_subgraphs; i++) {
+                    bcj.cgraphs[i].cgraph_main = ggml_new_graph_custom(backend_ctx->ctx.get(), backend_ctx->max_nnodes, /*grads =*/ false);
                 }
             }
             backend_ctx->cgraphs_aux.resize(n_backends*n_cgraphs_per_device*backend_ctx->max_subgraphs);

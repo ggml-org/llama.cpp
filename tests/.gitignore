@@ -2,6 +2,7 @@
 !*.*
 !snapshots/
 !fusion/
+!llama-context/
 *.o
 ggml-common.h
 **/*.swp

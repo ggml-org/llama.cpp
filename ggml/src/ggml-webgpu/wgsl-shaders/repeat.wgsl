@@ -45,9 +45,12 @@ var<storage, read_write> dst: array<DataType>;
 var<uniform> params: Params;
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x < params.ne) {
-        var i = gid.x;
+fn main(@builtin(num_workgroups) num_wg: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+
+    let gid_i = gid.x + (num_wg.x * u32(WG_SIZE)) * gid.y;
+    if (gid_i < params.ne) {
+        var i = gid_i;
         let i3 = i / (params.ne2 * params.ne1 * params.ne0);
         i = i % (params.ne2 * params.ne1 * params.ne0);
         let i2 = i / (params.ne1 * params.ne0);
@@ -65,6 +68,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                            a_i2 * params.stride_src0_2 +
                            a_i3 * params.stride_src0_3;
 
-        dst[params.offset_dst + gid.x] = src0[params.offset_src0 + a_index];
+        dst[params.offset_dst + gid_i] = src0[params.offset_src0 + a_index];
     }
 }

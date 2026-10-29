@@ -30,23 +30,13 @@ enum htp_data_type {
     HTP_TYPE_IQ4_NL = 20,
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
+    HTP_TYPE_BF16   = 30,
     HTP_TYPE_MXFP4  = 39,
-
-    // types used internally for repack, dyn.quant, etc
-    HTP_TYPE_Q4_0_TILED = 200,
-    HTP_TYPE_Q4_1_TILED,
-    HTP_TYPE_Q8_0_TILED,
-    HTP_TYPE_MXFP4_TILED,
+    HTP_TYPE_Q1_0   = 41,
+    HTP_TYPE_Q2_0   = 42,
 
     HTP_TYPE_INVALID
 };
-
-// Constats for internal types
-#define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
-#define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
-#define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
-
-
 
 // Do not reorder first 4 (used as an index)
 enum htp_op_code {
@@ -106,6 +96,8 @@ enum htp_op_code {
     HTP_OP_CLAMP,
     HTP_OP_LEAKY_RELU,
     HTP_OP_IM2COL,
+    HTP_OP_CONV_2D,
+    HTP_OP_CONV_2D_DW,
     HTP_OP_FENCE,
     HTP_OP_ALLREDUCE,
     HTP_OP_ALLREDUCE_ADD,
@@ -118,6 +110,13 @@ enum htp_op_code {
     HTP_OP_POOL_2D,
     HTP_OP_POOL_1D,
     HTP_OP_UNARY_GELU_QUICK,
+    HTP_OP_IM2COL_3D,
+    HTP_OP_HADAMARD,
+    HTP_OP_GLU_REGLU,
+    HTP_OP_GLU_SIGMOID,
+    HTP_OP_UNARY_CEIL,
+    HTP_OP_UNARY_SGN,
+    HTP_OP_UPSCALE,
 
     HTP_OP_INVALID
 };
@@ -128,8 +127,8 @@ enum htp_op_code {
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
 #define HTP_OP_MAX_KERN_PARAMS 32
 
-#define HTP_OP_MAX_BUFS    16
-#define HTP_OP_MAX_TENSORS 8192 // must stay under 64K (uint16)
+#define HTP_OP_MAX_BUFS    64
+#define HTP_OP_MAX_TENSORS 65534 // must stay under 64K (uint16)
 
 #define HTP_FENCE_TIMEOUT  (1000000000ULL)
 #define HTP_FENCE_SLOT_SIZE 128
@@ -138,10 +137,13 @@ enum htp_op_code {
 
 #define HTP_MMAP_MAX_VMEM  (2147483648u)
 
+#define HTP_DDR_SPAD_SIZE  (512 * 1024)
+
 enum htp_tensor_flags {
-    HTP_TENSOR_WEIGHT  = (1U << 0), // Tensor buffer model weight data (not compute)
-    HTP_TENSOR_REPACK  = (1U << 1), // Tensor is in repacked tiled format
-    HTP_TENSOR_FENCE   = (1U << 2)  // Tensor is synchronization fence (explicitly managed)
+    HTP_TENSOR_WEIGHT   = (1U << 0), // Tensor buffer model weight data (not compute)
+    HTP_TENSOR_TILED    = (1U << 1), // Tensor is in tiled format
+    HTP_TENSOR_FENCE    = (1U << 2), // Tensor is synchronization fence (explicitly managed)
+    HTP_TENSOR_FUSEABLE = (1U << 3), // Tensor can be fused (host-only)
 };
 
 enum htp_buf_flags {
@@ -194,6 +196,20 @@ enum htp_profiler_mode {
     HTP_PROF_BASIC    = 1,
     HTP_PROF_PMU      = 2,
     HTP_PROF_TRACE    = 3,
+};
+
+// DCVS/HMX power profile requested for the session.
+enum htp_power_mode {
+    HTP_POWER_MODE_LOW_POWER_SAVER            = 0,
+    HTP_POWER_MODE_POWER_SAVER                = 1,
+    HTP_POWER_MODE_HIGH_POWER_SAVER           = 2,
+    HTP_POWER_MODE_LOW_BALANCED               = 3,
+    HTP_POWER_MODE_BALANCED                   = 4,
+    HTP_POWER_MODE_HIGH_PERFORMANCE           = 5,
+    HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE = 6,
+    HTP_POWER_MODE_BURST                      = 7,
+
+    HTP_POWER_MODE_COUNT
 };
 
 enum htp_trace_event_id {

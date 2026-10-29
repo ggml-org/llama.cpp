@@ -29,7 +29,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 60
+DEFAULT_HTTP_TIMEOUT = 600
 
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
@@ -94,6 +94,7 @@ class ServerProcess:
     api_key: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
+    models_memory_margin: int | None = None
     models_preset: str | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
@@ -101,6 +102,7 @@ class ServerProcess:
     spec_type: str | None = None
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
+    spec_draft_n_ubatch: int | None = None
     spec_synth_len: float | None = None
     spec_synth_rates: List[float] | None = None
     no_ui: bool | None = None
@@ -115,6 +117,7 @@ class ServerProcess:
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
+    override_kv: str | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
@@ -125,6 +128,7 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    llama_cache: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -143,7 +147,9 @@ class ServerProcess:
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
         }
-        if "LLAMA_CACHE" not in os.environ:
+        if self.llama_cache is not None:
+            env["LLAMA_CACHE"] = self.llama_cache
+        elif "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
@@ -183,6 +189,8 @@ class ServerProcess:
             server_args.extend(["--models-dir", self.models_dir])
         if self.models_max is not None:
             server_args.extend(["--models-max", self.models_max])
+        if self.models_memory_margin is not None:
+            server_args.extend(["--models-memory-margin", self.models_memory_margin])
         if self.models_preset:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
@@ -252,6 +260,8 @@ class ServerProcess:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
+        if self.spec_draft_n_ubatch:
+            server_args.extend(["--spec-draft-n-ubatch", self.spec_draft_n_ubatch])
         if self.spec_synth_len is not None:
             server_args.extend(["--spec-synth-len", self.spec_synth_len])
         if self.spec_synth_rates is not None:
@@ -283,6 +293,8 @@ class ServerProcess:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
         if self.cache_ram is not None:
             server_args.extend(["--cache-ram", self.cache_ram])
+        if self.override_kv:
+            server_args.extend(["--override-kv", self.override_kv])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:

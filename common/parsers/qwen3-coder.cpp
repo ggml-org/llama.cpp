@@ -56,7 +56,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             data.generation_prompt += msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     std::vector<std::string> tool_call_starts = { "<tool_call>" };
@@ -71,14 +71,15 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         });
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(GEN_PREFIX);
 
         auto reasoning = p.eps();
         if (supports_reasoning && extract_reasoning) {
+            // The template strips the newline before </think>, so leave it out of the reasoning
             reasoning = p.optional("<think>" + p.space() +
-                                   p.reasoning(p.until_one_of({ "</think>", "<tool_call>" })) +
-                                   (p.literal("</think>") | p.peek(p.literal("<tool_call>"))));
+                                   p.reasoning(p.until_one_of({ "\n</think>", "</think>", "<tool_call>" })) +
+                                   (p.literal("\n</think>") | p.literal("</think>") | p.peek(p.literal("<tool_call>"))));
         }
 
         // Response format parser
@@ -166,21 +167,26 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             auto calls      = inputs.parallel_tool_calls ? tool_call_first + p.zero_or_more(tool_call) : tool_call_first;
             auto tool_calls = p.trigger_rule("tool-call-root", p.repeat(calls, min_calls, 1));
 
+            // The templates separate content from the tool calls with one or two newlines,
+            // stop the content before them
+            std::vector<std::string> content_ends;
+            for (const auto & start : tool_call_starts) {
+                content_ends.insert(content_ends.end(), { "\n\n" + start, "\n" + start, start });
+            }
+
             return generation_prompt +
-                   (reasoning << p.content(p.until_one_of(tool_call_starts)) << tool_calls);
+                   (reasoning << p.content(p.until_one_of(content_ends)) << tool_calls);
         }
 
         // Content only parser
         return generation_prompt + (reasoning << p.content(p.rest()));
     });
 
-    data.parser = parser.save();
-
     if (include_grammar) {
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         if (data.grammar_lazy) {

@@ -835,7 +835,7 @@ const bool llama_mlock::SUPPORTED = false;
 #endif
 
 void llama_prefetch(llama_memory_ranges mr) {
-#if defined(__linux__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
+#if defined(__linux__) || defined(__APPLE__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
     if (mr.empty()) {
         return;
     }
@@ -865,22 +865,7 @@ void llama_prefetch(llama_memory_ranges mr) {
     });
 
     uintptr_t begin = 0, end = 0;
-#if defined(_WIN32)
-    // collect the mr and prefetch them in one call, so the reads can be issued concurrently
-    std::vector<WIN32_MEMORY_RANGE_ENTRY> entries;
-    auto prefetch = [&]() {
-        entries.push_back({ (PVOID) begin, (SIZE_T) (end - begin) });
-        return true;
-    };
-#else
-    auto prefetch = [&]() {
-        if (madvise((void *) begin, end - begin, MADV_WILLNEED) != 0) {
-            LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
-            return false;
-        }
-        return true;
-    };
-#endif
+    size_t n_ranges = 0;
     for (const auto & range : mr) {
         if (!range.addr || range.size == 0) {
             continue;
@@ -889,9 +874,7 @@ void llama_prefetch(llama_memory_ranges mr) {
         const uintptr_t first = pointer / page * page;
         const uintptr_t last = (pointer + range.size + page - 1) / page * page;
         if (end && first > end) {
-            if (!prefetch()) {
-                return;
-            }
+            mr[n_ranges++] = { (const void *) begin, end - begin };
             end = 0;
         }
         if (!end) {
@@ -900,12 +883,27 @@ void llama_prefetch(llama_memory_ranges mr) {
         end = std::max(end, last);
     }
     if (end) {
-        prefetch();
+        mr[n_ranges++] = { (const void *) begin, end - begin };
     }
+    mr.resize(n_ranges);
 #if defined(_WIN32)
+    // prefetch the merged ranges in one call, so the reads can be issued concurrently
+    std::vector<WIN32_MEMORY_RANGE_ENTRY> entries;
+    entries.reserve(mr.size());
+    for (const auto & range : mr) {
+        entries.push_back({ const_cast<PVOID>(range.addr), (SIZE_T) range.size });
+    }
     if (!entries.empty() && !pPrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
         LLAMA_LOG_WARN("llama_prefetch: PrefetchVirtualMemory failed: %s\n",
                 llama_format_win_err(GetLastError()).c_str());
+    }
+#else
+    for (const auto & range : mr) {
+        // TODO: in a follow-up, use posix_madvise(.., POSIX_MADV_WILLNEED) to match the rest of this file
+        if (madvise(const_cast<void *>(range.addr), range.size, MADV_WILLNEED) != 0) {
+            LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
+            return;
+        }
     }
 #endif
 #else

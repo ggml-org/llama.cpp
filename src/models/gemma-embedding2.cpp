@@ -210,8 +210,6 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_embd", -1);
     res->t_embd = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // equivalent to EmbeddingGemma2TextPLE in python code

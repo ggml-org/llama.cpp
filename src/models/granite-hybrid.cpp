@@ -153,6 +153,8 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
     }
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         struct ggml_tensor * inpSA = inpL;
 
         // norm
@@ -195,8 +197,6 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
     }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_granite_hybrid::graph::build_attention_layer(ggml_tensor *             cur,
