@@ -406,7 +406,9 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     int sections[4];
     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
-    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
+    const char * staging_env = getenv("MOE_PLE_STAGING");
+    ggml_tensor * inpL = build_inp_embd(model.tok_embd, 1.0f,
+            cparams.moe_direct_io && (!staging_env || atoi(staging_env) != 0));
     cb(inpL, "model.input_embed", -1);
     ggml_build_forward_expand(gf, inpL);
 
@@ -452,6 +454,28 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
 
         if (hparams.is_ple(il)) {
             res_hc = build_ple(inp->get_recr(), ple_emb, res_hc, il);
+        }
+
+        const char * prekick_env = getenv("MOE_PREKICK");
+        const char * doorbell_env = getenv("MOE_DOORBELL");
+        const char * split_env = getenv("MOE_SPLIT");
+        if (n_tokens == 1 && !cparams.warmup && cparams.moe_direct_io &&
+            prekick_env && atoi(prekick_env) != 0 && (!doorbell_env || atoi(doorbell_env) != 0) &&
+            (!split_env || atoi(split_env) != 0) &&
+            moe_n_layer > il && moe_table && moe_table[il] && moe_up && moe_up[il]) {
+            ggml_tensor * pre_ffn = build_hc_mix(res_hc,
+                    model.layers[il].hc_ffn_norm, model.layers[il].hc_ffn_down,
+                    model.layers[il].hc_ffn_up, nullptr, nullptr, il);
+            ggml_tensor * pre_logits = build_lora_mm(model.layers[il].ffn_gate_inp, pre_ffn);
+            const char * count_env = getenv("MOE_PREKICK_M");
+            const int count = count_env && atoi(count_env) == 4 ? 4 : 8;
+            ggml_tensor * pre_topk = ggml_cont(ctx0, ggml_argsort_top_k(ctx0, pre_logits, count));
+            cb(pre_topk, "pre_attn_topk", il);
+            const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
+            ggml_tensor * prekick = ggml_moe_slot_prekick(ctx0, pre_topk,
+                    (ggml_tensor *) moe_table[il], il, sentinel);
+            cb(prekick, "ffn_moe_prekick", il);
+            ggml_build_forward_expand(gf, prekick);
         }
 
         ggml_tensor * inject = nullptr;
@@ -1158,6 +1182,69 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
         }
     }
 
+    auto build_shared = [&]() -> ggml_tensor * {
+        if (!model.layers[il].ffn_up_shexp) return nullptr;
+        ggml_tensor * shared = build_ffn(cur,
+                model.layers[il].ffn_up_shexp, nullptr, model.layers[il].ffn_up_shexp_s,
+                model.layers[il].ffn_gate_shexp, nullptr, model.layers[il].ffn_gate_shexp_s,
+                model.layers[il].ffn_down_shexp, nullptr, model.layers[il].ffn_down_shexp_s,
+                nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(shared, "ffn_shexp", il);
+        ggml_tensor * shared_gate = build_lora_mm(model.layers[il].ffn_gate_inp_shexp, cur);
+        cb(shared_gate, "shared_expert_gate", il);
+        shared_gate = ggml_sigmoid(ctx0, shared_gate);
+        cb(shared_gate, "shared_expert_gate_sigmoid", il);
+        shared = ggml_mul(ctx0, shared, shared_gate);
+        cb(shared, "ffn_shexp_gated", il);
+        return shared;
+    };
+
+    ggml_tensor * router_logits = nullptr;
+    ggml_tensor * selected = nullptr;
+    ggml_tensor * slot_ids = nullptr;
+    ggml_tensor * router_weights = nullptr;
+    ggml_tensor * ffn_shexp = nullptr;
+    const char * doorbell_env = getenv("MOE_DOORBELL");
+    const char * split_env = getenv("MOE_SPLIT");
+    if (n_tokens == 1 && cur->ne[1] == 1 && !cparams.warmup && cparams.moe_direct_io &&
+        (!doorbell_env || atoi(doorbell_env) != 0) && (!split_env || atoi(split_env) != 0) &&
+        moe_n_layer > il && moe_table && moe_table[il] &&
+        moe_gate && moe_gate[il] && moe_up && moe_up[il] && moe_down && moe_down[il] &&
+        (model.layers[il].ffn_gate_up_exps == nullptr ||
+         model.layers[il].ffn_gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1])) {
+        router_logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
+        cb(router_logits, "ffn_moe_logits", il);
+        ggml_tensor * probs = ggml_soft_max(ctx0, router_logits);
+        cb(probs, "ffn_moe_probs", il);
+        selected = ggml_argsort_top_k(ctx0, probs, n_expert_used);
+        cb(selected->src[0], "ffn_moe_argsort", il);
+        cb(selected, "ffn_moe_topk", il);
+        router_weights = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, probs, 1, n_expert, 1), selected);
+        cb(router_weights, "ffn_moe_weights", il);
+        router_weights = ggml_reshape_2d(ctx0, router_weights, n_expert_used, 1);
+        ggml_tensor * weights_sum = ggml_sum_rows(ctx0, router_weights);
+        cb(weights_sum, "ffn_moe_weights_sum", il);
+        weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
+        cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
+        router_weights = ggml_div(ctx0, router_weights, weights_sum);
+        cb(router_weights, "ffn_moe_weights_norm", il);
+        router_weights = ggml_reshape_3d(ctx0, router_weights, 1, n_expert_used, 1);
+        if (hparams.expert_weights_scale != 0.0f && hparams.expert_weights_scale != 1.0f) {
+            router_weights = ggml_scale(ctx0, router_weights, hparams.expert_weights_scale);
+            cb(router_weights, "ffn_moe_weights_scaled", il);
+        }
+        ggml_build_forward_expand(gf, router_weights);
+        const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
+        ggml_tensor * kick = ggml_moe_slot_resolve_kick(ctx0, ggml_cont(ctx0, selected),
+                (ggml_tensor *) moe_table[il], il, sentinel);
+        cb(kick, "ffn_moe_kick", il);
+        ggml_build_forward_expand(gf, kick);
+        ffn_shexp = build_shared();
+        if (ffn_shexp) ggml_build_forward_expand(gf, ffn_shexp);
+        slot_ids = ggml_moe_slot_resolve_wait(ctx0, kick, ffn_shexp);
+        cb(slot_ids, "ffn_moe_slot_ids", il);
+    }
+
     ggml_tensor * moe_out =
         build_moe_ffn(cur,
             model.layers[il].ffn_gate_inp,
@@ -1169,34 +1256,16 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
             LLM_FFN_SILU, true,
             hparams.expert_weights_scale,
             LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
-            nullptr, model.layers[il].ffn_gate_up_exps,
+            router_logits, model.layers[il].ffn_gate_up_exps,
             model.layers[il].ffn_up_exps_s,
             model.layers[il].ffn_gate_exps_s,
             model.layers[il].ffn_down_exps_s,
-            nullptr, lookahead);
+            selected, lookahead, slot_ids, router_weights);
     cb(moe_out, "ffn_moe_out", il);
 
     // shared experts, as in the Qwen3Next reference
-    if (model.layers[il].ffn_up_shexp != nullptr) {
-        ggml_tensor * ffn_shexp =
-            build_ffn(cur,
-                model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
-                model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
-                model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
-        cb(ffn_shexp, "ffn_shexp", il);
-
-        // shared expert has its own sigmoided gate (ffn_gate_inp_shexp, one value per token)
-        ggml_tensor * shared_gate = build_lora_mm(model.layers[il].ffn_gate_inp_shexp, cur);
-        cb(shared_gate, "shared_expert_gate", il);
-
-        shared_gate = ggml_sigmoid(ctx0, shared_gate);
-        cb(shared_gate, "shared_expert_gate_sigmoid", il);
-
-        ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
-        cb(ffn_shexp, "ffn_shexp_gated", il);
-
+    if (!slot_ids) ffn_shexp = build_shared();
+    if (ffn_shexp) {
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
         cb(cur, "ffn_out", il);
     } else {
@@ -1220,10 +1289,13 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override {
         mctx = static_cast<const llama_memory_hybrid_idx_context *>(params.mctx)->get_attn();
-        return rows->ne[0] == (int64_t) model.hparams.ple_n_heads * params.ubatch.n_tokens;
+        return staging ? staging->ne[1] == params.ubatch.n_tokens :
+            rows->ne[0] == (int64_t) model.hparams.ple_n_heads * params.ubatch.n_tokens;
     }
 
     ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
+    ggml_tensor * staging = nullptr;
+    std::vector<float> gathered;
 
     const llama_model & model;
 
@@ -1304,7 +1376,26 @@ void llm_graph_input_qwen4exp_ple::set_input(const llama_ubatch * ubatch) {
         }
     }
 
-    ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
+    if (staging) {
+        const ggml_tensor * ple = model.per_layer_tok_embd;
+        const int64_t width = ple->ne[0];
+        gathered.resize((size_t) width * idx.size());
+        const auto * traits = ggml_get_type_traits(ple->type);
+        for (size_t selected = 0; selected < idx.size(); ++selected) {
+            GGML_ASSERT(idx[selected] >= 0 && idx[selected] < ple->ne[1]);
+            const char * source = (const char *) ple->data + (size_t) idx[selected] * ple->nb[1];
+            float * destination = gathered.data() + selected * (size_t) width;
+            if (ple->type == GGML_TYPE_F32) {
+                memcpy(destination, source, (size_t) width * sizeof(float));
+            } else {
+                GGML_ASSERT(traits->to_float != nullptr);
+                traits->to_float(source, destination, width);
+            }
+        }
+        ggml_backend_tensor_set(staging, gathered.data(), 0, gathered.size() * sizeof(float));
+    } else {
+        ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
+    }
 }
 
 // Read a conv history out of its own recurrent row and write the new tail back.
@@ -1369,6 +1460,21 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
 
     // the attention cells see every ubatch regardless of the layer types
     auto ple_inp = std::make_unique<llm_graph_input_qwen4exp_ple>(model, mctx_hyb->get_attn());
+
+    ggml_backend_t backend = ggml_backend_sched_get_backend(sched, 0);
+    const char * staging_env = getenv("MOE_PLE_STAGING");
+    if (cparams.moe_direct_io && (!staging_env || atoi(staging_env) != 0) &&
+        ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_GPU &&
+        ggml_backend_buffer_is_host(model.per_layer_tok_embd->buffer)) {
+        ple_inp->staging = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32,
+                hparams.ple_head_dim * n_heads, n_tokens);
+        ggml_set_input(ple_inp->staging);
+        ggml_backend_sched_set_tensor_backend(sched, ple_inp->staging, backend);
+        ggml_tensor * emb = ple_inp->staging;
+        cb(emb, "ple_embd", -1);
+        res->add_input(std::move(ple_inp));
+        return emb;
+    }
 
     ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
     ggml_set_input(ple_inp->rows);

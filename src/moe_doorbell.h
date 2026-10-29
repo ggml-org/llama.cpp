@@ -15,13 +15,30 @@ struct alignas(64) LayerDoorbell {
     int32_t  miss_experts[32];      // Expert IDs that missed VRAM
     int32_t  assigned_slots[32];    // VRAM slots assigned by host pager
     int32_t  evicted_experts[32];   // Expert IDs evicted from VRAM slots
+    uint64_t selected;
+    uint64_t misses;
+    uint64_t decode_layers;
+    uint64_t decode_selected;
+    uint64_t decode_misses;
 };
 
 bool moe_doorbell_init(int n_layer, int n_expert, int s_per_layer);
+
+struct alignas(64) DoorbellPrekick {
+    volatile uint32_t state;
+    uint32_t generation;
+    uint32_t n;
+    uint32_t compared;
+    uint32_t overlap;
+    int32_t experts[8];
+};
+
+DoorbellPrekick * moe_doorbell_prekick_host(int il);
 void moe_doorbell_free();
 bool moe_doorbell_is_active();
 LayerDoorbell * moe_doorbell_get_host_ptr();
 LayerDoorbell * moe_doorbell_get_dev_ptr();
+void moe_doorbell_log_stats();
 void moe_doorbell_signal_unblock(int il, void * stream);
 
 
@@ -45,7 +62,8 @@ void moe_doorbell_resolve_launch(
     int64_t lnk,
     int32_t il,
     int32_t n_exp,
-    int32_t sentinel
+    int32_t sentinel,
+    int32_t op
 );
 
 #ifdef __cplusplus

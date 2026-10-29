@@ -2458,12 +2458,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_dsv4_hc_post(ctx, dst);
             break;
         case GGML_OP_MOE_SLOT_RESOLVE:
+        case GGML_OP_MOE_SLOT_RESOLVE_KICK:
+        case GGML_OP_MOE_SLOT_RESOLVE_WAIT:
+        case GGML_OP_MOE_SLOT_PREKICK:
             {
                 GGML_ASSERT(ggml_cuda_moe_slot_resolve_fn != nullptr);
-                const ggml_tensor * topk  = dst->src[0];
+                const ggml_tensor * topk  = dst->op == GGML_OP_MOE_SLOT_RESOLVE_WAIT ? dst->src[3] : dst->src[0];
                 const ggml_tensor * table = dst->src[1];
-                const ggml_tensor * full  = dst->src[2];
-                const ggml_tensor * look  = dst->src[3];
+                const ggml_tensor * full  = dst->op == GGML_OP_MOE_SLOT_RESOLVE ? dst->src[2] : nullptr;
+                const ggml_tensor * look  = dst->op == GGML_OP_MOE_SLOT_RESOLVE ? dst->src[3] : nullptr;
                 ggml_cuda_moe_slot_resolve_fn(ctx.stream(),
                     (const int32_t *) topk->data, (const int32_t *) table->data, (int32_t *) dst->data,
                     topk->ne[0], topk->ne[1], topk->nb[0], topk->nb[1], table->nb[0], dst->nb[0], dst->nb[1],
@@ -2473,7 +2476,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     look ? (const int32_t *) look->data : nullptr,
                     look ? look->ne[0] * look->ne[1] : 0,
                     ggml_get_op_params_i32(dst, 0), (int32_t) (table->ne[0] * table->ne[1]),
-                    ggml_get_op_params_i32(dst, 1));
+                    ggml_get_op_params_i32(dst, 1), dst->op);
             } break;
         case GGML_OP_RWKV_WKV7:
             ggml_cuda_op_rwkv_wkv7(ctx, dst);
@@ -2665,6 +2668,10 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
         }
 
         if (node->op == GGML_OP_MOE_SLOT_RESOLVE) {
+            use_cuda_graph = false;
+        }
+        if ((node->op == GGML_OP_MOE_SLOT_RESOLVE_KICK || node->op == GGML_OP_MOE_SLOT_RESOLVE_WAIT ||
+             node->op == GGML_OP_MOE_SLOT_PREKICK) && node->src[0]->ne[1] != 1) {
             use_cuda_graph = false;
         }
 
@@ -4571,6 +4578,21 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         }
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+        static bool logged_capture = false;
+        static bool logged_replay = false;
+        if ((!logged_capture || !logged_replay) && getenv("MOE_DIAG")) {
+            for (int index = 0; index < cgraph->n_nodes; ++index) {
+                if (cgraph->nodes[index]->op != GGML_OP_MOE_SLOT_RESOLVE_KICK) continue;
+                if (cuda_graph_update_required && !logged_capture) {
+                    fprintf(stderr, "[moe_graph] decode CUDA graph captured, nodes=%d\n", cgraph->n_nodes);
+                    logged_capture = true;
+                } else if (!cuda_graph_update_required && !logged_replay) {
+                    fprintf(stderr, "[moe_graph] decode CUDA graph replay active, nodes=%d\n", cgraph->n_nodes);
+                    logged_replay = true;
+                }
+                break;
+            }
+        }
 #else
         GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
@@ -5791,6 +5813,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_MOE_SLOT_RESOLVE:
             return op->src[0]->type == GGML_TYPE_I32 && op->src[1]->type == GGML_TYPE_I32 &&
                 op->type == GGML_TYPE_I32;
+        case GGML_OP_MOE_SLOT_RESOLVE_KICK:
+        case GGML_OP_MOE_SLOT_RESOLVE_WAIT:
+        case GGML_OP_MOE_SLOT_PREKICK:
+            return ggml_cuda_moe_slot_resolve_fn != nullptr &&
+                op->src[0]->type == GGML_TYPE_I32 && op->src[0]->ne[1] == 1 &&
+                op->src[1]->type == GGML_TYPE_I32 && op->type == GGML_TYPE_I32;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
         case GGML_OP_CROSS_ENTROPY_LOSS:

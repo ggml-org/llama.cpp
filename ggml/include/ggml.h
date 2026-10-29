@@ -586,6 +586,9 @@ extern "C" {
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
         GGML_OP_MOE_SLOT_RESOLVE,
+        GGML_OP_MOE_SLOT_RESOLVE_KICK,
+        GGML_OP_MOE_SLOT_RESOLVE_WAIT,
+        GGML_OP_MOE_SLOT_PREKICK,
 
         GGML_OP_UNARY,
 
@@ -2733,6 +2736,25 @@ extern "C" {
             struct ggml_tensor  * table,
             struct ggml_tensor  * full,
             struct ggml_tensor  * look,
+            int32_t               il,
+            int32_t               sentinel);
+
+    GGML_API struct ggml_tensor * ggml_moe_slot_resolve_kick(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * topk,
+            struct ggml_tensor  * table,
+            int32_t               il,
+            int32_t               sentinel);
+
+    GGML_API struct ggml_tensor * ggml_moe_slot_resolve_wait(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * kick,
+            struct ggml_tensor  * dependency);
+
+    GGML_API struct ggml_tensor * ggml_moe_slot_prekick(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * topk,
+            struct ggml_tensor  * table,
             int32_t               il,
             int32_t               sentinel);
 

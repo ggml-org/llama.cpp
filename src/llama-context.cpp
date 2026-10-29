@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 #include <cuda_runtime.h>
 #include <liburing.h>
+#include <linux/ioprio.h>
 
 static thread_local double moe_diag_publish_ms = 0.0;
 #include <cmath>
@@ -163,7 +164,84 @@ static void start_doorbell_worker(llama_context * ctx) {
         double t_read = 0.0, t_wait = 0.0;
         long n_read = 0;
 
+        const char * prekick_env = getenv("MOE_PREKICK");
+        const char * split_env = getenv("MOE_SPLIT");
+        struct io_uring spec_ring;
+        bool spec_ok = ring_ok && prekick_env && atoi(prekick_env) != 0 && ctx->pager.pack_mode() &&
+            (!split_env || atoi(split_env) != 0) &&
+            io_uring_queue_init(16, &spec_ring, 0) == 0;
+        char * spec_stage = nullptr;
+        if (spec_ok && posix_memalign((void **) &spec_stage, 4096, stride * 8) != 0) {
+            io_uring_queue_exit(&spec_ring);
+            spec_ok = false;
+        }
+        int spec_layer = -1;
+        uint32_t spec_generation = 0;
+        int spec_count = 0, spec_next = 0, spec_pending = -1;
+        bool spec_cancel_pending = false;
+        int32_t spec_experts[8] = {};
+        uint32_t spec_lengths[8] = {};
+        bool spec_ready[8] = {};
+        long spec_submitted = 0, spec_reused = 0;
+        const char * io_diag_env = getenv("MOE_IO_DIAG");
+        const bool io_diag = io_diag_env && atoi(io_diag_env) != 0;
+        const char * spec_async_env = getenv("MOE_PREKICK_ASYNC");
+        const bool spec_async = !spec_async_env || atoi(spec_async_env) != 0;
+        uint64_t logical_bytes = 0, demand_bytes = 0, spec_bytes = 0;
+        long demand_queued = 0, spec_completed = 0, spec_cancelled = 0, spec_short = 0;
+        long cancel_requested = 0, ready_reused = 0, inflight_eligible = 0, inflight_joined = 0;
+        long join_retries = 0, duplicate_submissions = 0;
+        double spec_elapsed_ms = 0.0, join_lead_ms = 0.0, spec_submit_ms = 0.0;
+        auto spec_started = std::chrono::steady_clock::now();
+        auto log_io = [&]() {
+            if (!io_diag) return;
+            fprintf(stderr, "[moe_io] served=%ld logical_bytes=%llu demand_queued=%ld demand_bytes=%llu spec_submitted=%ld spec_bytes=%llu spec_completed=%ld spec_cancelled=%ld spec_short=%ld cancel_requested=%ld ready_reused=%ld inflight_eligible=%ld inflight_joined=%ld join_retries=%ld duplicate_submissions=%ld spec_ms=%.3f join_lead_ms=%.3f submit_ms=%.3f\n",
+                    served, (unsigned long long) logical_bytes, demand_queued, (unsigned long long) demand_bytes,
+                    spec_submitted, (unsigned long long) spec_bytes, spec_completed, spec_cancelled, spec_short,
+                    cancel_requested, ready_reused, inflight_eligible, inflight_joined, join_retries, duplicate_submissions,
+                    spec_completed ? spec_elapsed_ms / spec_completed : 0.0,
+                    inflight_eligible ? join_lead_ms / inflight_eligible : 0.0,
+                    spec_submitted ? spec_submit_ms / spec_submitted : 0.0);
+        };
+        auto drain_spec = [&]() {
+            if (!spec_ok) return;
+            struct io_uring_cqe * completion = nullptr;
+            while (io_uring_peek_cqe(&spec_ring, &completion) == 0) {
+                const uint64_t tag = completion->user_data;
+                if (tag == UINT64_MAX) {
+                    spec_cancel_pending = false;
+                } else if (tag >= 1 && tag <= 8) {
+                    const int selected = (int) tag - 1;
+                    spec_ready[selected] = completion->res == (int) spec_lengths[selected];
+                    if (io_diag) {
+                        if (spec_ready[selected]) {
+                            spec_completed++;
+                            spec_elapsed_ms += std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - spec_started).count();
+                        } else if (completion->res == -ECANCELED) {
+                            spec_cancelled++;
+                        } else {
+                            spec_short++;
+                        }
+                    }
+                    spec_pending = -1;
+                }
+                io_uring_cqe_seen(&spec_ring, completion);
+            }
+        };
+
+        auto cancel_spec = [&]() {
+            if (!spec_ok || spec_pending < 0 || spec_cancel_pending) return;
+            struct io_uring_sqe * cancellation = io_uring_get_sqe(&spec_ring);
+            if (!cancellation) return;
+            io_uring_prep_cancel64(cancellation, (uint64_t) spec_pending + 1, 0);
+            cancellation->user_data = UINT64_MAX;
+            spec_cancel_pending = io_uring_submit(&spec_ring) > 0;
+            if (spec_cancel_pending) cancel_requested++;
+        };
+
         while (g_doorbell_running.load(std::memory_order_relaxed)) {
+            drain_spec();
             bool handled = false;
             for (int il = 0; il < n_layer; ++il) {
                 if (dbs[il].state != 1) continue;
@@ -210,6 +288,17 @@ static void start_doorbell_worker(llama_context * ctx) {
                 }
                 std::sort(misses.begin(), misses.end());
                 misses.erase(std::unique(misses.begin(), misses.end()), misses.end());
+                const DoorbellPrekick * pre_plan = moe_doorbell_prekick_host(il);
+                const bool join_spec = ring_ok && spec_pending >= 0 && spec_layer == il && pre_plan &&
+                    pre_plan->generation == spec_generation &&
+                    std::find(misses.begin(), misses.end(), spec_experts[spec_pending]) != misses.end();
+                const int pending_on_demand = join_spec ? spec_pending : -1;
+                if (io_diag && join_spec) {
+                    inflight_eligible++;
+                    join_lead_ms += std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - spec_started).count();
+                }
+                if (!join_spec) cancel_spec();
 
                 const size_t gb = ctx->moe.host_gate[il];
                 const size_t ub = ctx->moe.host_up[il];
@@ -351,6 +440,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                         if (rfd_ci < 0 || loc.len > stride) { read_fail[(size_t) ci] = 1; continue; }
                         exp_len[(size_t) ci * 3] = loc.len;
                         left[(size_t) ci] = 1;
+                        if (io_diag) logical_bytes += loc.len;
                     } else if (fd_gguf >= 0) {
                         exp_len[(size_t) ci * 3 + 0] = (uint32_t) gb;
                         exp_len[(size_t) ci * 3 + 1] = (uint32_t) ub;
@@ -362,9 +452,39 @@ static void start_doorbell_worker(llama_context * ctx) {
                 }
 
                 const auto t_read0 = std::chrono::high_resolution_clock::now();
+                drain_spec();
+                int spec_copy = -1, spec_read = -1;
+                DoorbellPrekick * prediction = moe_doorbell_prekick_host(il);
+                if (spec_ok && spec_layer == il && prediction && prediction->generation == spec_generation) {
+                    for (int ci = 0; ci < ncopy; ++ci) {
+                        if (read_fail[(size_t) ci]) continue;
+                        for (int selected = 0; selected < spec_count; ++selected) {
+                            if (spec_experts[selected] != misses[(size_t) ci] ||
+                                spec_lengths[selected] != locs[(size_t) ci].len) continue;
+                            if (!spec_ready[selected]) {
+                                if (join_spec && spec_pending == selected) {
+                                    spec_copy = ci;
+                                    spec_read = selected;
+                                    left[(size_t) ci] = 0;
+                                    inflight_joined++;
+                                }
+                                continue;
+                            }
+                            memcpy(stage_host + (size_t) ci * stride,
+                                    spec_stage + (size_t) selected * stride, spec_lengths[selected]);
+                            left[(size_t) ci] = 0;
+                            publish_ready(ci);
+                            spec_reused++;
+                            ready_reused++;
+                            if (selected == pending_on_demand) inflight_joined++;
+                            break;
+                        }
+                    }
+                }
                 if (!ring_ok) {
                     // no io_uring: serve the layer with synchronous reads
                     for (int ci = 0; ci < ncopy; ++ci) {
+                        if (done[(size_t) ci]) continue;
                         if (left[(size_t) ci] == 0) { fail_ci(ci); continue; }
                         char * dst = stage_host + (size_t) ci * stride;
                         bool ok = true;
@@ -408,6 +528,12 @@ static void start_doorbell_worker(llama_context * ctx) {
                             if (!sqe) { submit_ok = false; break; }
                             io_uring_prep_read(sqe, rfd[(size_t) ci], dst, loc.len, (off_t) loc.off);
                             io_uring_sqe_set_data(sqe, (void *) (uintptr_t) ((size_t) ci * 3));
+                            if (io_diag) {
+                                demand_queued++;
+                                demand_bytes += loc.len;
+                                if (spec_pending >= 0 && spec_layer == il &&
+                                    spec_experts[spec_pending] == misses[(size_t) ci]) duplicate_submissions++;
+                            }
                             n_sqe++;
                         } else {
                             const moe_expert_slice * s = ctx->pager.slices(il, misses[(size_t) ci]);
@@ -444,15 +570,44 @@ static void start_doorbell_worker(llama_context * ctx) {
 
                     // pre-failed experts must release the kernel now
                     for (int ci = 0; ci < ncopy; ++ci) {
-                        if (left[(size_t) ci] == 0) fail_ci(ci);
+                        if (left[(size_t) ci] == 0 && ci != spec_copy) fail_ci(ci);
                     }
 
                     // reap completions and publish each expert as it lands; the
                     // kernel copies it while the later reads are still in flight
                     int remaining = n_sqe;
-                    while (remaining > 0 && ring_ok) {
+                    while ((remaining > 0 || spec_copy >= 0) && ring_ok) {
+                        if (spec_copy >= 0) {
+                            drain_spec();
+                            if (spec_pending < 0) {
+                                if (spec_ready[spec_read]) {
+                                    memcpy(stage_host + (size_t) spec_copy * stride,
+                                            spec_stage + (size_t) spec_read * stride, spec_lengths[spec_read]);
+                                    publish_ready(spec_copy);
+                                    spec_reused++;
+                                } else {
+                                    join_retries++;
+                                    const auto location = locs[(size_t) spec_copy];
+                                    size_t got = 0;
+                                    while (got < location.len) {
+                                        const ssize_t result = pread(rfd[(size_t) spec_copy],
+                                                stage_host + (size_t) spec_copy * stride + got,
+                                                location.len - got, (off_t) (location.off + got));
+                                        if (result < 0 && errno == EINTR) continue;
+                                        if (result <= 0) break;
+                                        got += (size_t) result;
+                                    }
+                                    if (got == location.len) publish_ready(spec_copy);
+                                    else fail_ci(spec_copy);
+                                }
+                                spec_copy = -1;
+                            }
+                        }
+                        if (remaining == 0) continue;
                         struct io_uring_cqe * cqe = nullptr;
-                        if (io_uring_wait_cqe(&ring, &cqe) < 0) break;
+                        const int ready = spec_copy >= 0 ? io_uring_peek_cqe(&ring, &cqe) : io_uring_wait_cqe(&ring, &cqe);
+                        if (ready == -EAGAIN) continue;
+                        if (ready < 0) break;
                         const uint64_t ud = (uint64_t) (uintptr_t) io_uring_cqe_get_data(cqe);
                         const int ci = (int) (ud / 3);
                         const int r  = (int) (ud % 3);
@@ -534,6 +689,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                         std::chrono::high_resolution_clock::now() - t_read1).count();
 
                 if ((served % 512) == 0) {
+                    log_io();
                     fprintf(stderr, "[doorbell] served=%ld layer=%d n=%d miss=%zu copy=%d failed=%ld "
                             "hit=%.1f%% read=%.2f ms/expert wait=%.2f ms/expert\n",
                             served, il, n, misses.size(), ncopy, failed,
@@ -542,9 +698,77 @@ static void start_doorbell_worker(llama_context * ctx) {
                             n_read ? t_wait / n_read : 0.0);
                     t_read = t_wait = 0.0;
                     n_read = 0;
+                    if (spec_ok) {
+                        uint64_t compared = 0, overlap = 0;
+                        for (int layer = 0; layer < n_layer; ++layer) {
+                            const DoorbellPrekick * prediction = moe_doorbell_prekick_host(layer);
+                            compared += prediction->compared;
+                            overlap += prediction->overlap;
+                        }
+                        fprintf(stderr, "[prekick] pre_attn_topk/post_attn_topk overlap=%.2f%% matched=%llu compared=%llu submitted=%ld reused=%ld\n",
+                                compared ? 100.0 * (double) overlap / compared : 0.0,
+                                (unsigned long long) overlap, (unsigned long long) compared, spec_submitted, spec_reused);
+                    }
                 }
             }
             if (!handled) {
+                if (spec_ok && ring_ok && spec_pending < 0 && !spec_cancel_pending) {
+                    bool demand_pending = false;
+                    for (int layer = 0; layer < n_layer; ++layer) {
+                        if (dbs[layer].state == 1) demand_pending = true;
+                    }
+                    if (demand_pending) continue;
+                    for (int layer = 0; layer < n_layer; ++layer) {
+                        DoorbellPrekick * prediction = moe_doorbell_prekick_host(layer);
+                        uint32_t expected_state = 1;
+                        if (!__atomic_compare_exchange_n(&prediction->state, &expected_state, 2, false,
+                                __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) continue;
+                        std::atomic_thread_fence(std::memory_order_seq_cst);
+                        spec_layer = layer;
+                        spec_generation = prediction->generation;
+                        spec_count = std::min<int>(prediction->n, 8);
+                        spec_next = 0;
+                        for (int selected = 0; selected < spec_count; ++selected) {
+                            spec_experts[selected] = prediction->experts[selected];
+                            spec_ready[selected] = false;
+                        }
+                        break;
+                    }
+                    if (spec_layer >= 0 && moe_doorbell_prekick_host(spec_layer)->state == 2) {
+                        while (spec_next < spec_count && spec_pending < 0) {
+                            const int selected = spec_next++;
+                            const int expert = spec_experts[selected];
+                            if (expert < 0 || expert >= n_exp ||
+                                ctx->moe.slot_of[(size_t) spec_layer * n_exp + expert] >= 0) continue;
+                            const auto location = ctx->pager.pack_loc(spec_layer, expert);
+                            if (location.fd < 0 || location.len > stride) continue;
+                            bool demand_arrived = false;
+                            for (int layer = 0; layer < n_layer; ++layer) {
+                                if (dbs[layer].state == 1) demand_arrived = true;
+                            }
+                            if (demand_arrived || moe_doorbell_prekick_host(spec_layer)->state != 2) break;
+                            struct io_uring_sqe * read = io_uring_get_sqe(&spec_ring);
+                            if (!read) break;
+                            io_uring_prep_read(read, location.fd, spec_stage + (size_t) selected * stride,
+                                    location.len, (off_t) location.off);
+                            read->ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+                            if (spec_async) read->flags |= IOSQE_ASYNC;
+                            read->user_data = (uint64_t) selected + 1;
+                            spec_lengths[selected] = location.len;
+                            const auto submit_started = std::chrono::steady_clock::now();
+                            if (io_uring_submit(&spec_ring) > 0) {
+                                spec_pending = selected;
+                                spec_submitted++;
+                                if (io_diag) {
+                                    spec_bytes += location.len;
+                                    spec_started = submit_started;
+                                    spec_submit_ms += std::chrono::duration<double, std::milli>(
+                                            std::chrono::steady_clock::now() - submit_started).count();
+                                }
+                            }
+                        }
+                    }
+                }
 #if defined(__x86_64__) || defined(_M_X64)
                 _mm_pause();
 #else
@@ -555,6 +779,13 @@ static void start_doorbell_worker(llama_context * ctx) {
         if (ring_ok) {
             io_uring_queue_exit(&ring);
         }
+        if (spec_ok) {
+            cancel_spec();
+            while (spec_pending >= 0 || spec_cancel_pending) drain_spec();
+            io_uring_queue_exit(&spec_ring);
+            free(spec_stage);
+        }
+        log_io();
         if (fd_gguf >= 0) {
             close(fd_gguf);
         }
@@ -589,7 +820,8 @@ static void moe_slot_resolve_sync(
     int64_t lnk,
     int32_t il,
     int32_t n_exp,
-    int32_t sentinel);
+    int32_t sentinel,
+    int32_t op);
 
 static void moe_slot_resolve_register_ctx(llama_context * ctx) {
     g_moe_resolve_ctx = ctx;
@@ -616,7 +848,9 @@ static void moe_slot_resolve_sync(
     int64_t lnk,
     int32_t il,
     int32_t n_exp,
-    int32_t sentinel) {
+    int32_t sentinel,
+    int32_t op) {
+    (void) op;
     (void) table;
     (void) table_nb0;
     (void) out_nb0;
@@ -1797,14 +2031,15 @@ llama_context::llama_context(
                                 static int drop = -1;
                                 if (drop < 0) {
                                     const char * e = getenv("MOE_DROP_MMAP");
-                                    drop = (e && atoi(e) != 0) ? 1 : 0;
+                                    drop = (!e || atoi(e) != 0) ? 1 : 0;
                                 }
                                 model.audit_residency();
                                 model.advise_mmap_random();
                                 if (drop) {
                                     const size_t dropped = model.drop_mmap_cache();
-                                    LLAMA_LOG_INFO("%s: GGUF mmap page cache released (%.2f MiB mapped)\n",
-                                                   __func__, (double) dropped / 1048576.0);
+                                    const bool dropped_backing = dropped > 0 && pager.pack_mode() && pager.drop_gguf_pages();
+                                    fprintf(stderr, "[moe_cache] GGUF mmap residency released (%.2f MiB mapped), backing cache drop=%d\n",
+                                            (double) dropped / 1048576.0, dropped_backing ? 1 : 0);
                                 }
                             }
                         } // staging reserved
@@ -2256,6 +2491,7 @@ void llama_context::synchronize() {
     }
 
     ggml_backend_sched_synchronize(sched.get());
+    moe_doorbell_log_stats();
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -6887,6 +7123,20 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     const char * nm = ggml_get_name(t);
     if (!nm) {
         return false;
+    }
+    const char * verify_path = getenv("MOE_VERIFY_ROUTER");
+    if (verify_path && verify_path[0] && strncmp(nm, "ffn_moe_logits-", 15) == 0) {
+        if (ask) return true;
+        static FILE * verify_file = fopen(verify_path, "wb");
+        if (!verify_file) return false;
+        GGML_ASSERT(t->type == GGML_TYPE_F32);
+        const int32_t header[3] = { atoi(nm + 15), (int32_t) t->ne[0], (int32_t) t->ne[1] };
+        std::vector<float> logits((size_t) ggml_nelements(t));
+        ggml_backend_tensor_get(t, logits.data(), 0, logits.size() * sizeof(float));
+        fwrite(header, sizeof(header), 1, verify_file);
+        fwrite(logits.data(), sizeof(float), logits.size(), verify_file);
+        fflush(verify_file);
+        return true;
     }
     // MOE_TRACE_LOGITS: dump the continuous router scores (the tensor feeding
     // argsort_top_k) so a logit-space transition model can be trained offline.

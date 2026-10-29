@@ -140,6 +140,12 @@ public:
     ggml_tensor * mixed_slots  = nullptr; // I64 [n_tok_rows], mixed path: batch index of the token rows
     ggml_tensor * mixed_embd   = nullptr; // F32 [n_embd, n_batch], mixed path: embd rows, token rows are overwritten
     ggml_tensor * scale_rows   = nullptr; // F32 [1, n_batch], per-row scale: scale_tok for token rows, 1 for embd rows
+    ggml_tensor * token_embd_host = nullptr;
+    ggml_tensor * staged_tokens = nullptr;
+    ggml_tensor * staged_mixed_tokens = nullptr;
+    std::vector<float> gathered_tokens;
+
+    void set_staged_tokens(ggml_tensor * target, const llama_token * ids, int64_t count);
 
     float scale_tok = 1.0f;
 
@@ -1157,7 +1163,9 @@ struct llm_graph_context {
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr,
              ggml_tensor * selected_experts_in = nullptr,
-             ggml_tensor * lookahead_in = nullptr) const;
+             ggml_tensor * lookahead_in = nullptr,
+             ggml_tensor * slot_ids_in = nullptr,
+             ggml_tensor * weights_in = nullptr) const;
 
     ggml_tensor * build_moe_ffn(
              ggml_tensor * cur,
@@ -1184,14 +1192,16 @@ struct llm_graph_context {
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr,
              ggml_tensor * selected_experts_in = nullptr,
-             ggml_tensor * lookahead_in = nullptr) const;
+             ggml_tensor * lookahead_in = nullptr,
+             ggml_tensor * slot_ids_in = nullptr,
+             ggml_tensor * weights_in = nullptr) const;
 
     //
     // inputs
     //
 
     // tok_scale: applied to token rows only
-    ggml_tensor * build_inp_embd(ggml_tensor * tok_embd, float tok_scale = 1.0f) const;
+    ggml_tensor * build_inp_embd(ggml_tensor * tok_embd, float tok_scale = 1.0f, bool stage_host = false) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;

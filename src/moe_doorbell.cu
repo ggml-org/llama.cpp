@@ -47,12 +47,16 @@ static LayerDoorbell * g_doorbells_host = nullptr;
 static LayerDoorbell * g_doorbells_dev  = nullptr;
 static DoorbellPlan  * g_plans_host     = nullptr;
 static DoorbellPlan  * g_plans_dev      = nullptr;
+static DoorbellPrekick * g_prekick_host = nullptr;
+static DoorbellPrekick * g_prekick_dev = nullptr;
 static char * g_stage_host = nullptr;
 static char * g_stage_dev  = nullptr;
 static size_t g_stage_stride = 0;
 static int g_stage_cap = 0;
 static int g_n_layer = 0;
 static bool g_active = false;
+static bool g_count_enabled = false;
+static uint64_t g_logged_selected = 0;
 
 __device__ __forceinline__ uint32_t pci_ld_u32(const volatile uint32_t * addr) {
     uint32_t val;
@@ -112,6 +116,7 @@ __global__ void moe_resolve_slots_kernel(
     int32_t    * __restrict__ slot_map,
     LayerDoorbell * __restrict__ doorbells,
     DoorbellPlan  * __restrict__ plans,
+    DoorbellPrekick * __restrict__ prekick_plans,
     int nk,
     int nt,
     size_t topk_nb0,
@@ -120,7 +125,9 @@ __global__ void moe_resolve_slots_kernel(
     size_t out_nb1,
     int n_exp,
     int sentinel,
-    int total
+    int total,
+    int op,
+    bool count_enabled
 ) {
     const int tid = (int) (blockIdx.x * blockDim.x + threadIdx.x);
     LayerDoorbell & db = doorbells[layer];
@@ -153,6 +160,33 @@ __global__ void moe_resolve_slots_kernel(
     }
     __syncthreads();
 
+    if (tid == 0 && count_enabled && op != GGML_OP_MOE_SLOT_RESOLVE_WAIT) {
+        db.selected += (uint64_t) total;
+        db.misses += (uint64_t) s_miss;
+        if (nt == 1) {
+            db.decode_layers++;
+            db.decode_selected += (uint64_t) total;
+            db.decode_misses += (uint64_t) s_miss;
+        }
+    }
+
+    if (tid == 0 && op == GGML_OP_MOE_SLOT_RESOLVE_KICK) {
+        DoorbellPrekick & pre = prekick_plans[layer];
+        if (pre.n > 0) {
+            for (uint32_t pred = 0; pred < pre.n; ++pred) {
+                for (int selected = 0; selected < total; ++selected) {
+                    const int32_t actual = *(const int32_t *) (topk + (size_t) selected * topk_nb0);
+                    if (pre.experts[pred] == actual) {
+                        pre.overlap++;
+                        break;
+                    }
+                }
+            }
+            pre.compared += pre.n;
+            pci_st_u32(&pre.state, 0);
+        }
+    }
+
     if (s_miss == 0) {
         if (tid < total) {
             const int k = tid % nk;
@@ -162,19 +196,30 @@ __global__ void moe_resolve_slots_kernel(
         return;
     }
 
-    if (tid == 0) {
+    if (tid == 0 && op != GGML_OP_MOE_SLOT_RESOLVE_WAIT) {
         pci_st_u32(&db.gpu_ready, 0);
         db.miss_count = (uint32_t) s_miss;
         pl.n      = (uint32_t) total;
         pl.n_miss = (uint32_t) s_miss;
+        pl.n_copy = 0;
         for (int i = 0; i < total; ++i) {
             const int k = i % nk;
             const int t = i / nk;
             pl.sel[i] = *(const int32_t *) (topk + (size_t) t * topk_nb1 + (size_t) k * topk_nb0);
+            pci_st_u32(&pl.copy_ready[i], 0);
         }
         __threadfence_system();
         pci_st_u32(&db.state, 1);
         __threadfence_system();
+    }
+
+    if (op == GGML_OP_MOE_SLOT_RESOLVE_KICK) {
+        if (tid < total) {
+            const int selected = tid % nk;
+            const int token = tid / nk;
+            *(int32_t *) (out + (size_t) token * out_nb1 + (size_t) selected * out_nb0) = slot;
+        }
+        return;
     }
 
     // Every thread spins so the block stays together. The host stages the
@@ -250,6 +295,27 @@ __global__ void moe_resolve_slots_kernel(
     }
 }
 
+static __global__ void moe_prekick_kernel(
+        const char * topk, char * out, DoorbellPrekick * plans,
+        int layer, int count, size_t topk_nb0, size_t out_nb0) {
+    if (threadIdx.x != 0) return;
+    DoorbellPrekick & plan = plans[layer];
+    plan.generation++;
+    plan.n = (uint32_t) count;
+    for (int selected = 0; selected < count; ++selected) {
+        const int32_t expert = *(const int32_t *) (topk + (size_t) selected * topk_nb0);
+        plan.experts[selected] = expert;
+        *(int32_t *) (out + (size_t) selected * out_nb0) = expert;
+    }
+    __threadfence_system();
+    pci_st_u32(&plan.state, 1);
+    __threadfence_system();
+}
+
+DoorbellPrekick * moe_doorbell_prekick_host(int il) {
+    return g_prekick_host && il >= 0 && il < g_n_layer ? &g_prekick_host[il] : nullptr;
+}
+
 // Fallback for batches wider than the doorbell plan. It only reads the table;
 // the caller must have published every mapping before the node runs.
 static __global__ void moe_prefill_resolve_kernel(
@@ -304,7 +370,8 @@ void moe_doorbell_resolve_launch(
     int64_t lnk,
     int32_t il,
     int32_t n_exp,
-    int32_t sentinel
+    int32_t sentinel,
+    int32_t op
 ) {
     (void) table_nb0;
     (void) full; (void) fnk; (void) fnt; (void) full_nb1; (void) look; (void) lnk;
@@ -314,6 +381,11 @@ void moe_doorbell_resolve_launch(
     if (total64 <= 0) return;
 
     cudaStream_t s = (cudaStream_t) stream;
+    if (op == GGML_OP_MOE_SLOT_PREKICK) {
+        moe_prekick_kernel<<<1, 32, 0, s>>>(
+            (const char *) topk, (char *) out, g_prekick_dev, il, (int) nk, topk_nb0, out_nb0);
+        return;
+    }
     if (!g_stage_dev) {
         // no pinned stage: resolve from the table only, never spin
         const int total = (int) total64;
@@ -328,9 +400,9 @@ void moe_doorbell_resolve_launch(
         const int total = (int) total64;
         moe_resolve_slots_kernel<<<1, 1024, 0, s>>>(
             il, (const char *) topk, (char *) out, const_cast<int32_t *>(table),
-            g_doorbells_dev, g_plans_dev,
+            g_doorbells_dev, g_plans_dev, g_prekick_dev,
             (int) nk, (int) nt, topk_nb0, topk_nb1, out_nb0, out_nb1,
-            n_exp, sentinel, total
+            n_exp, sentinel, total, op, g_count_enabled
         );
     } else {
         const int total = (int) total64;
@@ -405,6 +477,9 @@ bool moe_doorbell_init(int n_layer, int n_expert, int s_per_layer) {
     if (g_active) return true;
     if (n_layer <= 0) return false;
     g_n_layer = n_layer;
+    const char * count_env = getenv("MOE_IO_DIAG");
+    g_count_enabled = count_env && atoi(count_env) != 0;
+    g_logged_selected = 0;
 
     const size_t db_bytes    = sizeof(LayerDoorbell) * (size_t) n_layer;
     const size_t plan_bytes  = sizeof(DoorbellPlan)  * (size_t) n_layer;
@@ -450,6 +525,22 @@ bool moe_doorbell_init(int n_layer, int n_expert, int s_per_layer) {
     memset(g_doorbells_host, 0, db_bytes);
     memset(g_plans_host, 0, plan_bytes);
 
+    err = cudaHostAlloc((void **) &g_prekick_host, sizeof(DoorbellPrekick) * (size_t) n_layer,
+            cudaHostAllocMapped | cudaHostAllocPortable);
+    if (err == cudaSuccess) {
+        err = cudaHostGetDevicePointer((void **) &g_prekick_dev, g_prekick_host, 0);
+    }
+    if (err != cudaSuccess) {
+        if (g_prekick_host) cudaFreeHost(g_prekick_host);
+        cudaFreeHost(g_plans_host);
+        cudaFreeHost(g_doorbells_host);
+        g_prekick_host = g_prekick_dev = nullptr;
+        g_plans_host = g_plans_dev = nullptr;
+        g_doorbells_host = g_doorbells_dev = nullptr;
+        return false;
+    }
+    memset(g_prekick_host, 0, sizeof(DoorbellPrekick) * (size_t) n_layer);
+
     ggml_cuda_moe_slot_resolve_register(moe_doorbell_resolve_launch);
     g_active = true;
     fprintf(stderr, "moe_doorbell_init: SUCCESS, %zu + %zu bytes for %d layers (plan cap %d)\n",
@@ -466,6 +557,10 @@ void moe_doorbell_free() {
         g_stage_cap = 0;
     }
     if (!g_active) return;
+    if (g_prekick_host) {
+        cudaFreeHost(g_prekick_host);
+        g_prekick_host = g_prekick_dev = nullptr;
+    }
     if (g_plans_host) {
         cudaFreeHost(g_plans_host);
         g_plans_host = nullptr;
@@ -482,3 +577,22 @@ void moe_doorbell_free() {
 bool moe_doorbell_is_active() { return g_active; }
 LayerDoorbell * moe_doorbell_get_host_ptr() { return g_doorbells_host; }
 LayerDoorbell * moe_doorbell_get_dev_ptr() { return g_doorbells_dev; }
+
+void moe_doorbell_log_stats() {
+    if (!g_active || !g_count_enabled) return;
+    uint64_t selected = 0, misses = 0, decode_layers = 0, decode_selected = 0, decode_misses = 0;
+    for (int layer = 0; layer < g_n_layer; ++layer) {
+        const LayerDoorbell & db = g_doorbells_host[layer];
+        selected += db.selected;
+        misses += db.misses;
+        decode_layers += db.decode_layers;
+        decode_selected += db.decode_selected;
+        decode_misses += db.decode_misses;
+    }
+    if (selected == g_logged_selected) return;
+    g_logged_selected = selected;
+    fprintf(stderr, "[moe_slots] selected=%llu misses=%llu decode_layers=%llu decode_selected=%llu decode_misses=%llu hit=%.3f%%\n",
+            (unsigned long long) selected, (unsigned long long) misses, (unsigned long long) decode_layers,
+            (unsigned long long) decode_selected, (unsigned long long) decode_misses,
+            selected ? 100.0 * (double) (selected - misses) / selected : 0.0);
+}

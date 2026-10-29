@@ -72,6 +72,9 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
         const int64_t n_tokens = ubatch->n_tokens;
 
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+        if (staged_tokens && !ubatch->is_mixed()) {
+            set_staged_tokens(staged_tokens, ubatch->token, n_tokens);
+        }
     }
 
     if (ubatch->embd && embd && !ubatch->is_mixed()) {
@@ -96,6 +99,10 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT((int64_t) ids.size() == mixed_tokens->ne[0]);
         GGML_ASSERT(n_embd == mixed_embd->ne[0]);
 
+        if (staged_mixed_tokens) {
+            set_staged_tokens(staged_mixed_tokens, ids.data(), ids.size());
+        }
+
         ggml_backend_tensor_set(mixed_tokens, ids.data(),    0, ggml_nbytes(mixed_tokens));
         ggml_backend_tensor_set(mixed_slots,  slots.data(),  0, ggml_nbytes(mixed_slots));
         ggml_backend_tensor_set(mixed_embd,   ubatch->embd,  0, ggml_nbytes(mixed_embd));
@@ -111,6 +118,25 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
         }
         ggml_backend_tensor_set(scale_rows, data.data(), 0, ggml_nbytes(scale_rows));
     }
+}
+
+void llm_graph_input_embd::set_staged_tokens(ggml_tensor * target, const llama_token * ids, int64_t count) {
+    GGML_ASSERT(count == target->ne[1]);
+    const int64_t width = token_embd_host->ne[0];
+    gathered_tokens.assign((size_t) n_embd * (size_t) count, 0.0f);
+    const auto * traits = ggml_get_type_traits(token_embd_host->type);
+    for (int64_t token = 0; token < count; ++token) {
+        GGML_ASSERT(ids[token] >= 0 && ids[token] < token_embd_host->ne[1]);
+        const char * source = (const char *) token_embd_host->data + (size_t) ids[token] * token_embd_host->nb[1];
+        float * destination = gathered_tokens.data() + (size_t) token * (size_t) n_embd;
+        if (token_embd_host->type == GGML_TYPE_F32) {
+            memcpy(destination, source, (size_t) width * sizeof(float));
+        } else {
+            GGML_ASSERT(traits->to_float != nullptr);
+            traits->to_float(source, destination, width);
+        }
+    }
+    ggml_backend_tensor_set(target, gathered_tokens.data(), 0, gathered_tokens.size() * sizeof(float));
 }
 
 // number of token rows of the mixed path, a non-mixed ubatch is sized for the worst case
@@ -2024,7 +2050,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
          ggml_tensor * selected_experts_in,
-         ggml_tensor * lookahead_in) const {
+         ggml_tensor * lookahead_in,
+         ggml_tensor * slot_ids_in,
+         ggml_tensor * weights_in) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -2046,7 +2074,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         gate_exps_s,
         down_exps_s,
         selected_experts_in,
-        lookahead_in
+        lookahead_in,
+        slot_ids_in,
+        weights_in
     );
 }
 
@@ -2075,7 +2105,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
          ggml_tensor * selected_experts_in,
-         ggml_tensor * lookahead_in) const {
+         ggml_tensor * lookahead_in,
+         ggml_tensor * slot_ids_in,
+         ggml_tensor * weights_in) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -2178,7 +2210,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // union cannot overflow the slots (measured worst case 59 < 72 at 8
     // tokens); larger batches keep the full tensors. the fused gate_up path
     // is unsupported (falls back to full tensors).
-    ggml_tensor * slot_ids = selected_experts;
+    ggml_tensor * slot_ids = slot_ids_in ? slot_ids_in : selected_experts;
     // pool engages for decode and for prefill micro-chunks; the paging
     // callback uses the same ceiling, so both sides always agree
     const int64_t moe_chunk_max = cparams.moe_chunk_max;
@@ -2226,7 +2258,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             const char * e = getenv("MOE_DOORBELL");
             doorbell = (!e || atoi(e) != 0) ? 1 : 0;
         }
-        if (doorbell == 1 && n_tokens >= 1) {
+        if (slot_ids_in) {
+            GGML_ASSERT(n_tokens == 1 && ggml_are_same_shape(slot_ids_in, selected_experts));
+        } else if (doorbell == 1 && n_tokens >= 1) {
             const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
             ggml_tensor * sel_c = ggml_cont(ctx0, selected_experts);
             slot_ids = ggml_moe_slot_resolve(ctx0, sel_c,
@@ -2250,18 +2284,18 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         probs = ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens);
     }
 
-    ggml_tensor * weights = ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
+    ggml_tensor * weights = weights_in ? weights_in : ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
 
-    if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
+    if (!weights_in && gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
         weights = ggml_soft_max(ctx0, weights); // [n_expert_used, n_tokens]
         weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
         cb(weights, "ffn_moe_weights_softmax", il);
     }
 
-    if (norm_w) {
+    if (!weights_in && norm_w) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
 
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, n_tokens]
@@ -2276,7 +2310,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
         weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
     }
-    if (w_scale != 0.0f && w_scale != 1.0f) {
+    if (!weights_in && w_scale != 0.0f && w_scale != 1.0f) {
         weights = ggml_scale(ctx0, weights, w_scale);
         cb(weights, "ffn_moe_weights_scaled", il);
     }
@@ -2551,7 +2585,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 }
 
 // input embeddings with optional lora
-ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float tok_scale) const {
+ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float tok_scale, bool stage_host) const {
     const int64_t n_embd_inp = hparams.n_embd_inp();
     const int64_t n_embd     = hparams.n_embd;
 
@@ -2570,6 +2604,18 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
 
     // token embeddings with lora and padding
     auto build_tok = [&](ggml_tensor * ids) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, 0);
+        if (stage_host && loras->empty() && ggml_backend_buffer_is_host(tok_embd->buffer) &&
+            ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            inp->token_embd_host = tok_embd;
+            ggml_tensor * staged = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ids->ne[0]);
+            ggml_set_input(staged);
+            ggml_backend_sched_set_tensor_backend(sched, staged, backend);
+            ggml_build_forward_expand(gf, ids);
+            if (ids == inp->tokens) inp->staged_tokens = staged;
+            else inp->staged_mixed_tokens = staged;
+            return staged;
+        }
         ggml_tensor * cur = ggml_get_rows(ctx0, tok_embd, ids);
 
         // apply lora for embedding tokens if needed
