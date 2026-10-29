@@ -4958,9 +4958,10 @@ private:
 
                 const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
 
+                // the recurrent snapshots are only guaranteed for batches of up to n_rs_seq + 1 tokens, so a longer draft uses its checkpoint
                 const bool use_ckpt_tgt =
                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
-                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_rollback > llama_n_rs_seq(ctx_tgt));
+                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft > llama_n_rs_seq(ctx_tgt));
 
                 // check for partial draft acceptance
                 if (n_rollback > 0) {
