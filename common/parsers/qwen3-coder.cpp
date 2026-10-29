@@ -84,6 +84,11 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
         // Response format parser
         if (has_response_format) {
+            // The answer must be bare JSON, so the think block is consumed even when it is not extracted
+            if (supports_reasoning && !extract_reasoning) {
+                reasoning = p.optional("<think>" + p.space() + p.until_one_of({ "\n</think>", "</think>", "<tool_call>" }) +
+                                       (p.literal("\n</think>") | p.literal("</think>") | p.peek(p.literal("<tool_call>"))));
+            }
             return generation_prompt + (reasoning << p.content(p.schema(p.json(), "response-format", inputs.json_schema)));
         }
 
