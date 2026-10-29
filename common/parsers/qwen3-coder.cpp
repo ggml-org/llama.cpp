@@ -183,7 +183,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
     });
 
     if (include_grammar) {
-        data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = !has_response_format && has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
             data.parser.build_grammar(builder, data.grammar_lazy);

@@ -2348,6 +2348,20 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
+        // a response format with tools and tool_choice=auto must not produce a lazy grammar
+        tst.test(
+               "I need to output the invoice details in JSON\n"
+               "</think>\n\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ get_time_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
         // a tool call ends the prefilled thinking block, with or without a closing </think>
         tst.test(
                "<tool_call>\n"
@@ -2687,6 +2701,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                R"({"amount": 123.45, "date": "2025-12-03"})"
                "\n```")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(
+               "[THINK]I need to output the invoice details in JSON[/THINK]"
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_AUTO)
             .json_schema(invoice_schema)
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
@@ -4269,6 +4296,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // instead of an empty <think></think> pair.
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V4.jinja", detailed_debug);
+
+        // A response format with tools and tool_choice=auto must not produce a lazy grammar
+        tst.test(
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
 
         // Pure content (non-thinking mode; generation prompt ends with </think>)
         tst.test("Hello, world!\nWhat's up?")
