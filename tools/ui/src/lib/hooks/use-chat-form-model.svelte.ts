@@ -40,10 +40,12 @@ export function useChatFormModel() {
 			!conversationModel
 		) {
 			lastSyncedConversationModel = null;
-			// a model that is loading wins over one that is already up
+			// a model that is loading wins over one that is already up; a model the
+			// selector doesn't list is never picked
+			const visible = modelsStore.getVisibleModels();
 			const first =
-				modelsStore.models.find((m) => modelsStore.isModelLoading(m.model)) ??
-				modelsStore.models.find((m) => modelsStore.loadedModelIds.includes(m.model));
+				visible.find((m) => modelsStore.isModelLoading(m.model)) ??
+				visible.find((m) => modelsStore.loadedModelIds.includes(m.model));
 
 			if (first) modelsStore.selectModelById(first.id);
 		}

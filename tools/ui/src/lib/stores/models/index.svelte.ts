@@ -378,6 +378,16 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	}
 
+	/**
+	 * Models the selector lists: not flagged out of the UI (ui === false) and not
+	 * hidden by the user, so an automatic pick never lands on one it doesn't show.
+	 */
+	getVisibleModels(): ModelOption[] {
+		return this.models.filter(
+			(option) => this.props.getModelProps(option.model)?.ui !== false && !this.isHidden(option.id)
+		);
+	}
+
 	hasModel(modelName: string): boolean {
 		return this.models.some((model) => model.model === modelName);
 	}
@@ -657,18 +667,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				})
 		);
 	}
-
 	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
 	private async fetchModelModeInternal(): Promise<ModelOption[]> {
 		const response = await ModelsService.list();
 
 		return this.buildModelOptions(response);
-	}
-	/**
-	 * Filter to models visible in the UI (ui !== false).
-	 */
-	private getVisibleModels(): ModelOption[] {
-		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
 	}
 
 	private loadFavoritesFromStorage(): Set<string> {
