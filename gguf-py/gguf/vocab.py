@@ -621,8 +621,8 @@ class LlamaHfVocab(Vocab):
                 "You can install it with `pip install transformers`."
             ) from e
 
-        # some checkpoints ship "extra_special_tokens" as a list instead of a dict, which
-        # crashes transformers on load - pass an empty dict to override the malformed value
+        # some checkpoints ship "extra_special_tokens" as a list, which crashes transformers on load
+        # pass an empty dict to override the malformed value
         from_pretrained_kwargs: dict[str, Any] = {}
         tokenizer_config_file = base_path / 'tokenizer_config.json'
         if tokenizer_config_file.is_file():
