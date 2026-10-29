@@ -175,8 +175,10 @@ llama_kv_cache::llama_kv_cache(
                                      "with plain attention layers");
         }
         // the paged decode kernel (ggml-cuda/fattn-paged-decode) is the only fast path for paged K/V
-        if (type_k != GGML_TYPE_Q8_0 || type_v != GGML_TYPE_Q4_0) {
-            throw std::runtime_error("KV streaming requires a q8_0 K cache and a q4_0 V cache");
+        if (type_k != GGML_TYPE_Q8_0 ||
+                (type_v != GGML_TYPE_Q4_0 && type_v != GGML_TYPE_Q5_0 &&
+                 type_v != GGML_TYPE_Q5_1 && type_v != GGML_TYPE_Q8_0)) {
+            throw std::runtime_error("KV streaming requires a q8_0 K cache and a q4_0, q5_0, q5_1, or q8_0 V cache");
         }
 
         size_t bytes_per_cell = 0;
