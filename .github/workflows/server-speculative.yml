@@ -32,12 +32,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Restore compact model cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/spec-models
-          key: spec-methods-compact-v1-86835bf9-bc640142-5cbf9d20-5bee8a38
-
       - name: Install dependencies
         run: |
           sudo apt update
@@ -58,7 +52,7 @@ jobs:
       - name: Test speculative decoding
         env:
           SPEC_METHODS: compact
-          SPEC_MODEL_DIR: ${{ runner.temp }}/spec-models
+          SPEC_MODEL_DIR: ${{ vars.SPEC_METHOD_MODEL_DIR || format('{0}/spec-models', runner.temp) }}
           N_GPU_LAYERS: 99
         run: |
           cd tools/server/tests

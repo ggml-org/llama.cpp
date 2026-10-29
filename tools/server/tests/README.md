@@ -65,8 +65,9 @@ verified compact DFlash2 GGUF or compact LiLiCorr checkpoint is available. `SPEC
 tiers and downloads about 43.7 GiB.
 
 The `Server (speculative decoding)` workflow runs only by explicit manual dispatch on the dedicated
-A100 runner and persists the compact model set with the GitHub Actions cache. Heavyweight DFlash2 and
-LiLiCorr measurements belong in the internal nightly performance/quality runs.
+A100 runner. It does not use the GitHub Actions cache. Set the `SPEC_METHOD_MODEL_DIR` repository
+variable to the mounted hf-jobs persistent model directory when that storage is enabled. Heavyweight
+DFlash2 and LiLiCorr measurements belong in the internal nightly performance/quality runs.
 
 The compact acceptance floors use one-sided regression checks: improvements do not fail. Three
 identical CUDA calibration runs produced MTP `0.7275 / 3.1583`, DFlash `0.1143 / 2.6096`, and DSpark
