@@ -158,9 +158,10 @@ struct moe_cache_lru {
 
         // update the CRF of all selected experts and promote hits before choosing victims for misses
         for (int32_t e : uniq) {
-            use(il, il*n_expert + e);
+            const int32_t key = il*n_expert + e;
+            use(il, key);
             if (slots[e] >= 0) {
-                move(slots[e], class_of(il*n_expert + e));
+                move(slots[e], class_of(key));
                 n_hit++;
             }
         }
