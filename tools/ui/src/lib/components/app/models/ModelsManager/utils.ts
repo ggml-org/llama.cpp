@@ -72,6 +72,19 @@ export function downloadGroups(
 	});
 }
 
+/** Model with this qualified id or raw name, from the listing or else the tracked downloads. */
+export function findModelOption(
+	key: string | null,
+	models: ModelOption[],
+	downloads: ModelQuantGroup[]
+): ModelOption | null {
+	if (!key) return null;
+
+	const matches = (candidate: ModelOption) => candidate.id === key || candidate.model === key;
+
+	return models.find(matches) ?? downloads.find((group) => matches(group.base))?.base ?? null;
+}
+
 /** One collapsible block of the manager's table. */
 export interface ModelsTableGroup {
 	/** One entry per repo, its quants hanging off it. */
@@ -79,6 +92,14 @@ export interface ModelsTableGroup {
 	key: string;
 	kind: ModelsTableGroupKind;
 	label: string;
+}
+
+/** Controls in a model row that act on their own, so a row click passes them by. */
+const ROW_CONTROL_SELECTOR = 'button, a, input, [role="menuitem"]';
+
+/** Whether a click on a model row landed on one of its own controls. */
+export function isRowControlClick(event: MouseEvent): boolean {
+	return event.target instanceof Element && event.target.closest(ROW_CONTROL_SELECTOR) !== null;
 }
 
 /** Context the model runs with: what a loaded model reports. */

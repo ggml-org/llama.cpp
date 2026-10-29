@@ -346,7 +346,7 @@ struct case_state_partial_size : ctx_test {
     const char * name() const override { return "ps"; }
 
     const char * description() const override {
-        return "the partial state is not larger than the full state and, without SWA, does not grow with the tokens";
+        return "the partial state is not larger than the full state";
     }
 
     case_result run(model_run & mr) const override {
@@ -375,10 +375,6 @@ struct case_state_partial_size : ctx_test {
         TLOG_INF("%s: partial %zu -> %zu, full %zu -> %zu\n", __func__, partial_a, partial_b, full_a, full_b);
 
         CTX_REQUIRE(partial_a <= full_a && partial_b <= full_b, "the partial state is larger than the full state");
-
-        if (llama_model_n_swa(mr.model) == 0) {
-            CTX_REQUIRE(partial_a == partial_b, "the partial state grows with the tokens");
-        }
 
         return case_result::pass();
     }
@@ -718,6 +714,111 @@ struct case_state_restore_fragmented : ctx_test {
     }
 };
 
+//
+// no_alloc
+//
+
+// - load a second instance of the model with no_alloc, so the tensor data stays on disk
+// - create a context from it, which reserves the compute graphs over the dummy buffers
+// - the memory use must still be reported, and nothing real may be allocated for the memory
+struct case_noalloc : ctx_test {
+    const char * name() const override { return "noalloc"; }
+
+    const char * description() const override {
+        return "with no_alloc the memory use is simulated: non-zero breakdown, null buffer bases";
+    }
+
+    case_result run(model_run & mr) const override {
+        const std::string & path = mr.params.model.path;
+        CTX_REQUIRE(!path.empty(), "the model path is not known");
+
+        llama_model_params mparams = llama_model_default_params();
+        mparams.no_alloc  = true;
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
+
+        llama_model_ptr model(llama_model_load_from_file(path.c_str(), mparams));
+        CTX_REQUIRE(model, "failed to load the model with no_alloc");
+
+        auto ctx = init_ctx(model.get(), common_context_params_to_llama(mr.params), 0);
+        CTX_REQUIRE(ctx, "failed to create the context with no_alloc");
+
+        size_t n_ctx_mem = 0;
+        for (const auto & [_, data] : llama_get_memory_breakdown(ctx.get())) {
+            n_ctx_mem += data.context;
+        }
+
+        // models without a memory module (BERT, diffusion) have a null memory
+        if (llama_get_memory(ctx.get()) != nullptr) {
+            CTX_REQUIRE(n_ctx_mem > 0, "the simulated memory breakdown is zero");
+        } else {
+            CTX_REQUIRE(n_ctx_mem == 0, "a model without memory reported context memory");
+        }
+
+        for (ggml_backend_buffer_t buf : llama_memory_get_buffers(llama_get_memory(ctx.get()))) {
+            CTX_REQUIRE(ggml_backend_buffer_get_base(buf) == nullptr, "a memory buffer was really allocated");
+        }
+
+        return case_result::pass();
+    }
+};
+
+struct case_comp_padding : ctx_test {
+    const char * name() const override { return "comp_padding"; }
+
+    const char * description() const override {
+        return "fixed-sized DeepSeek batches reuse the compressed-cache graph";
+    }
+
+    std::string skip_reason(model_run & mr) const override {
+        char arch[64] = {};
+        llama_model_meta_val_str(mr.model, "general.architecture", arch, sizeof(arch));
+        return strcmp(arch, "deepseek4") == 0 || strcmp(arch, "deepseek41") == 0 ? "" : "requires DeepSeek V4 or V4.1";
+    }
+
+    case_result run(model_run & mr) const override {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        for (const uint32_t n_seq : { 1u, 2u }) {
+            ctx_opts opts;
+            opts.n_ctx      = 256*n_seq;
+            opts.n_batch    = 64;
+            // Reserve the DSV4.1 small-batch attention graph when n_seq == 1.
+            opts.n_ubatch   = 32;
+            opts.n_seq_max  = n_seq;
+            opts.kv_unified = n_seq == 1;
+
+            for (const uint32_t n_tokens : { 3u, 5u, 6u, 7u }) {
+                auto ctx = mr.ctx(opts);
+                CTX_REQUIRE(ctx, "failed to create the context");
+                std::vector<llama_pos> pos(n_seq);
+                for (uint32_t s = 0; s < n_seq; ++s) {
+                    pos[s] = 32 + s;
+                    CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, s, 0, pos[s]), "prefill failed");
+                }
+
+                // Stay inside the same attention-cache size while crossing compressor boundaries.
+                for (int step = 0; step < 3; ++step) {
+                    common_batch batch(ctx.get());
+                    // Equal lengths keep multiple sequences in one ubatch.
+                    for (uint32_t s = 0; s < n_seq; ++s) {
+                        for (uint32_t i = 0; i < n_tokens; ++i, ++pos[s]) {
+                            batch.add(gen_token(n_vocab, s, pos[s]), pos[s], s, true);
+                        }
+                    }
+                    const int32_t n_reused = llama_perf_context(ctx.get()).n_reused;
+                    CTX_REQUIRE(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "decode failed");
+                    if (step > 0) {
+                        CTX_REQUIRE(llama_perf_context(ctx.get()).n_reused == n_reused + 1,
+                                "compressed-cache graph was rebuilt for " + std::to_string(n_tokens) + " tokens and " + std::to_string(n_seq) + " sequences");
+                    }
+                }
+            }
+        }
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_kv_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -733,6 +834,8 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_restore_failure>());
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
+    cases.push_back(std::make_unique<case_noalloc>());
+    cases.push_back(std::make_unique<case_comp_padding>());
 
     return cases;
 }

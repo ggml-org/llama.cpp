@@ -42,6 +42,7 @@ struct htp_binary_context {
     uint32_t nrows_per_thread;
     uint32_t total_rows;
     uint32_t row_start;
+    uint32_t n_srcs;
     size_t   src0_row_size_aligned;
     size_t   src1_row_size_aligned;
     size_t   dst_row_size_aligned;
@@ -380,6 +381,7 @@ static void binary_thread_vector_same_shape(unsigned int nth, unsigned int ith, 
     size_t dst_spad_half  = layout->dst_spad_half_size;
 
     dma_queue * dma_q = octx->ctx->dma[ith];
+    const uint32_t n_srcs = bctx->n_srcs;
     uint32_t ir_prefetch = start_row;
     int spad_idx = 0;
 
@@ -391,12 +393,7 @@ static void binary_thread_vector_same_shape(unsigned int nth, unsigned int ith, 
         i02 = fastdiv(rem, &bctx->src0_dim1_div);
         i01 = rem - i02 * ne01;
 
-        uint32_t i13 = (ne13 == 1) ? 0 : i03;
-        uint32_t i12 = (ne12 == 1) ? 0 : i02;
-        uint32_t i11 = (ne11 == 1) ? 0 : i01;
-
         dma_addr_t src0_curr = src0->data + i03 * nb03 + i02 * nb02 + i01 * nb01;
-        dma_addr_t src1_curr = src1->data + i13 * nb13 + i12 * nb12 + i11 * nb11;
         dma_addr_t dst_curr  = dst->data  + i03 * nb3  + i02 * nb2  + i01 * nb1;
 
         uint8_t * s0_spad = src0_spad_base + spad_idx * src0_spad_half;
@@ -405,7 +402,15 @@ static void binary_thread_vector_same_shape(unsigned int nth, unsigned int ith, 
 
         dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
         dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
-        dma_queue_push(dma_q, dma_make_data(s1_spad, src1_curr), bctx->src1_row_size_aligned, nb11, row_size_bytes, current_block_size);
+        for (uint32_t s = 1; s < n_srcs; s++) {
+            const struct htp_tensor * src_s = octx->src[s];
+            uint32_t is3 = (src_s->ne[3] == 1) ? 0 : i03;
+            uint32_t is2 = (src_s->ne[2] == 1) ? 0 : i02;
+            uint32_t is1 = (src_s->ne[1] == 1) ? 0 : i01;
+            dma_addr_t s_curr = src_s->data + is3 * src_s->nb[3] + is2 * src_s->nb[2] + is1 * src_s->nb[1];
+            uint8_t * s_spad = s1_spad + (s - 1) * 2 * src1_spad_half;
+            dma_queue_push(dma_q, dma_make_data(s_spad, s_curr), bctx->src1_row_size_aligned, src_s->nb[1], row_size_bytes, current_block_size);
+        }
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -422,6 +427,11 @@ static void binary_thread_vector_same_shape(unsigned int nth, unsigned int ith, 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         compute(d_spad, s0_spad, s1_spad, current_block_size,
                 bctx->dst_row_size_aligned, bctx->src0_row_size_aligned, bctx->src1_row_size_aligned, ne00);
+        for (uint32_t s = 2; s < n_srcs; s++) {
+            uint8_t * ss_spad = (uint8_t *) dma_queue_pop(dma_q).dst;
+            compute(d_spad, d_spad, ss_spad, current_block_size,
+                    bctx->dst_row_size_aligned, bctx->dst_row_size_aligned, bctx->src1_row_size_aligned, ne00);
+        }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         uint32_t i03, i02, i01, rem;
@@ -440,15 +450,18 @@ static void binary_thread_vector_same_shape(unsigned int nth, unsigned int ith, 
             p02 = fastdiv(prem, &bctx->src0_dim1_div);
             p01 = prem - p02 * ne01;
 
-            uint32_t p13 = (ne13 == 1) ? 0 : p03;
-            uint32_t p12 = (ne12 == 1) ? 0 : p02;
-            uint32_t p11 = (ne11 == 1) ? 0 : p01;
-
             dma_addr_t s0_next = src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-            dma_addr_t s1_next = src1->data + p13 * nb13 + p12 * nb12 + p11 * nb11;
-
             dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
-            dma_queue_push(dma_q, dma_make_data(s1_spad, s1_next), bctx->src1_row_size_aligned, nb11, row_size_bytes, next_block_size);
+
+            for (uint32_t s = 1; s < n_srcs; s++) {
+                const struct htp_tensor * src_s = octx->src[s];
+                uint32_t ps3 = (src_s->ne[3] == 1) ? 0 : p03;
+                uint32_t ps2 = (src_s->ne[2] == 1) ? 0 : p02;
+                uint32_t ps1 = (src_s->ne[1] == 1) ? 0 : p01;
+                dma_addr_t s_next = src_s->data + ps3 * src_s->nb[3] + ps2 * src_s->nb[2] + ps1 * src_s->nb[1];
+                uint8_t * s_spad = s1_spad + (s - 1) * 2 * src1_spad_half;
+                dma_queue_push(dma_q, dma_make_data(s_spad, s_next), bctx->src1_row_size_aligned, src_s->nb[1], row_size_bytes, next_block_size);
+            }
 
             ir_prefetch += next_block_size;
         }
@@ -859,6 +872,7 @@ struct binary_chunked_context {
     uint32_t                 chunk_size;
     uint32_t                 chunks_per_thread;
     uint32_t                 total_chunks;
+    uint32_t                 n_srcs;
     bool                     is_scalar;
     float                    scalar_f32;
     _Float16                 scalar_f16;
@@ -872,7 +886,6 @@ static void binary_thread_chunked(unsigned int nth, unsigned int ith, void * dat
     struct binary_chunked_context * ctx = (struct binary_chunked_context *) data;
     struct htp_ops_context * octx = ctx->octx;
     const struct htp_tensor * src0 = octx->src[0];
-    const struct htp_tensor * src1 = octx->src[1];
     const struct htp_tensor * dst  = octx->dst;
 
     const uint32_t start_chunk = ctx->chunks_per_thread * ith;
@@ -895,6 +908,7 @@ static void binary_thread_chunked(unsigned int nth, unsigned int ith, void * dat
     uint8_t * dst_spad_base  = VTCM_LAYOUT_PTR(uint8_t, ctx->vtcm_base, layout->off_dst)  + (ith * layout->dst_bytes_per_thread);
 
     dma_queue * dma_q = octx->ctx->dma[ith];
+    const uint32_t n_srcs = ctx->n_srcs;
     uint32_t prefetch_chunk = start_chunk;
     int spad_idx = 0;
 
@@ -913,9 +927,12 @@ static void binary_thread_chunked(unsigned int nth, unsigned int ith, void * dat
         dma_queue_push(dma_q, dma_make_data(d_curr, d_spad), chunk_bytes, chunk_bytes, cur_bytes, 0);
         dma_queue_push(dma_q, dma_make_data(s0_spad, s0_curr), chunk_bytes, chunk_bytes, cur_bytes, 1);
         if (!ctx->is_scalar) {
-            dma_addr_t s1_curr = src1->data + (size_t) c_start * elem_size;
             uint8_t * s1_spad = src1_spad_base + spad_idx * chunk_bytes;
-            dma_queue_push(dma_q, dma_make_data(s1_spad, s1_curr), chunk_bytes, chunk_bytes, cur_bytes, 1);
+            for (uint32_t s = 1; s < n_srcs; s++) {
+                dma_addr_t s_curr = octx->src[s]->data + (size_t) c_start * elem_size;
+                uint8_t * s_spad  = s1_spad + (s - 1) * 2 * chunk_bytes;
+                dma_queue_push(dma_q, dma_make_data(s_spad, s_curr), chunk_bytes, chunk_bytes, cur_bytes, 1);
+            }
         }
 
         prefetch_chunk++;
@@ -943,6 +960,10 @@ static void binary_thread_chunked(unsigned int nth, unsigned int ith, void * dat
             }
         } else {
             ctx->compute(d_spad, s0_spad, s1_spad, cur_elems);
+            for (uint32_t s = 2; s < n_srcs; s++) {
+                uint8_t * s_spad = (uint8_t *) dma_queue_pop(dma_q).dst;
+                ctx->compute(d_spad, d_spad, s_spad, cur_elems);
+            }
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) c);
 
@@ -958,8 +979,11 @@ static void binary_thread_chunked(unsigned int nth, unsigned int ith, void * dat
             dma_addr_t s0_next = src0->data + (size_t) pc_start * elem_size;
             dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), chunk_bytes, chunk_bytes, p_bytes, 1);
             if (!ctx->is_scalar) {
-                dma_addr_t s1_next = src1->data + (size_t) pc_start * elem_size;
-                dma_queue_push(dma_q, dma_make_data(s1_spad, s1_next), chunk_bytes, chunk_bytes, p_bytes, 1);
+                for (uint32_t s = 1; s < n_srcs; s++) {
+                    dma_addr_t s_next = octx->src[s]->data + (size_t) pc_start * elem_size;
+                    uint8_t * s_spad  = s1_spad + (s - 1) * 2 * chunk_bytes;
+                    dma_queue_push(dma_q, dma_make_data(s_spad, s_next), chunk_bytes, chunk_bytes, p_bytes, 1);
+                }
             }
 
             prefetch_chunk++;
@@ -974,6 +998,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     const struct htp_tensor * src1 = octx->src[1];
     const struct htp_tensor * dst  = octx->dst;
     const struct htp_binary_kernel_params * kparams = (const struct htp_binary_kernel_params *) octx->kernel_params;
+    const uint32_t n_srcs = kparams->n_srcs > 2 ? kparams->n_srcs : 2;
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
 
@@ -985,7 +1010,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     const size_t dst_row_size  = dst->ne[0]  * elem_size;
 
     if (kparams->kernel_type == HTP_BINARY_KERNEL_CHUNKED) {
-        const bool is_scalar = kparams->is_scalar || (src1->ne[0] == 1 && src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
+        const bool is_scalar = kparams->is_scalar;
 
         compute_binary_chunked_t compute = NULL;
         compute_binary_scalar_chunked_f32_t compute_scalar_f32 = NULL;
@@ -1045,12 +1070,16 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         const uint32_t elems_per_line = (src0_type == HTP_TYPE_F32) ? 32 : 64;
 
         if (octx->ctx->mdev.count > 1) {
-            const bool can_split = htp_tensor_mdev_data_aligned(dst) &&
-                                   htp_tensor_mdev_data_aligned(src0) &&
-                                   (is_scalar || htp_tensor_mdev_data_aligned(src1)) &&
-                                   htp_tensor_is_contiguous(dst, elem_size) &&
-                                   htp_tensor_is_contiguous(src0, elem_size) &&
-                                   (is_scalar || htp_tensor_is_contiguous(src1, elem_size));
+            bool can_split = htp_tensor_mdev_data_aligned(dst) &&
+                             htp_tensor_mdev_data_aligned(src0) &&
+                             (is_scalar || htp_tensor_mdev_data_aligned(src1)) &&
+                             htp_tensor_is_contiguous(dst, elem_size) &&
+                             htp_tensor_is_contiguous(src0, elem_size) &&
+                             (is_scalar || htp_tensor_is_contiguous(src1, elem_size));
+            for (uint32_t s = 2; can_split && s < n_srcs; s++) {
+                can_split = htp_tensor_mdev_data_aligned(octx->src[s]) &&
+                            htp_tensor_is_contiguous(octx->src[s], elem_size);
+            }
             const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
                 total_elems, can_split ? elems_per_line : 0,
                 octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
@@ -1072,7 +1101,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
             return HTP_STATUS_VTCM_TOO_SMALL;
         }
 
-        const uint32_t chunk_size = kparams->chunk_size > 0 ? kparams->chunk_size : (32768 / elem_size);
+        const uint32_t chunk_size = kparams->chunk_size;
         const uint32_t total_chunks = (nelem + chunk_size - 1) / chunk_size;
         const uint32_t n_threads = (total_chunks >= 2) ? MIN(octx->n_threads, total_chunks) : 1;
         const uint32_t chunks_per_thread = (total_chunks + n_threads - 1) / n_threads;
@@ -1101,6 +1130,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
             .chunk_size          = chunk_size,
             .chunks_per_thread   = chunks_per_thread,
             .total_chunks        = total_chunks,
+            .n_srcs              = n_srcs,
             .is_scalar           = is_scalar,
             .scalar_f32          = scalar_f32,
             .scalar_f16          = scalar_f16,
@@ -1145,65 +1175,6 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     if (bctx.vtcm_layout.rows_per_buffer == 0 || bctx.vtcm_layout.total_bytes > octx->ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
-
-    dma_queue * dma_q = octx->ctx->dma[0];
-    uint8_t * vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src1);
-    if (kparams->kernel_type == HTP_BINARY_KERNEL_ROW_BCAST) {
-        dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1->ne[0] * elem_size, 1);
-    } else if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR ||
-               kparams->kernel_type == HTP_BINARY_KERNEL_REPEAT ||
-               kparams->kernel_type == HTP_BINARY_KERNEL_COMPLEX) {
-        if (!kparams->src1_strided) {
-            const size_t src1_bytes = (size_t) src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3] * elem_size;
-            dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1_bytes, 1);
-        } else {
-            const uint32_t ne11 = src1->ne[1];
-            const uint32_t ne12 = src1->ne[2];
-            const uint32_t ne13 = src1->ne[3];
-            const size_t row_bytes = src1->ne[0] * elem_size;
-            for (uint32_t i13 = 0; i13 < ne13; i13++) {
-                for (uint32_t i12 = 0; i12 < ne12; i12++) {
-                    dma_addr_t src_addr = src1->data + i13 * src1->nb[3] + i12 * src1->nb[2];
-                    uint8_t * dst_ptr = vtcm_src1 + (i13 * ne12 * ne11 + i12 * ne11) * row_bytes;
-                    while (!dma_queue_push(dma_q, dma_make_data(dst_ptr, src_addr),
-                                           row_bytes, src1->nb[1], row_bytes, ne11)) {
-                        dma_queue_pop(dma_q);
-                    }
-                }
-            }
-        }
-    } else if (kparams->kernel_type == HTP_BINARY_KERNEL_ADD_ID) {
-        const struct htp_tensor * src2 = octx->src[2];
-        uint8_t * vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src2);
-        dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data),
-                       kparams->src1_row_size_aligned, src1->nb[1],
-                       src1->ne[0] * elem_size, src1->ne[1]);
-        const size_t src2_row_bytes = src2->ne[0] * sizeof(int32_t);
-        dma_queue_push(dma_q, dma_make_data(vtcm_src2, src2->data),
-                       src2_row_bytes, src2->nb[1],
-                       src2_row_bytes, src2->ne[1]);
-    }
-
-    bctx.octx                  = octx;
-    bctx.nrows_per_thread      = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
-    bctx.total_rows            = nrows;
-    bctx.row_start             = row_start;
-    bctx.block_max             = bctx.vtcm_layout.rows_per_buffer;
-    bctx.src0_row_size_aligned = src0_row_size_aligned;
-    bctx.src1_row_size_aligned = src1_row_size_aligned;
-    bctx.dst_row_size_aligned  = dst_row_size_aligned;
-    bctx.row_size_bytes        = src0_row_size;
-
-    bctx.src0_dim1_div  = init_fastdiv_values(src0->ne[1]);
-    bctx.src0_dim2_div  = init_fastdiv_values(src0->ne[2]);
-    bctx.src0_dim12_div = init_fastdiv_values(src0->ne[1] * src0->ne[2]);
-
-    bctx.src1_dim1_div  = init_fastdiv_values(src1->ne[1]);
-    bctx.src1_dim2_div  = init_fastdiv_values(src1->ne[2]);
-    bctx.src1_dim3_div  = init_fastdiv_values(src1->ne[3]);
-
-    bctx.split_at_ne01  = kparams->split_at_ne01;
-    bctx.split_at_ne02  = kparams->split_at_ne02;
 
     worker_callback_t worker_func = NULL;
     void * compute_func = NULL;
@@ -1322,7 +1293,70 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    bctx.compute = compute_func;
+    dma_queue * dma_q = octx->ctx->dma[0];
+    uint8_t * vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src1);
+    if (kparams->kernel_type == HTP_BINARY_KERNEL_ROW_BCAST) {
+        dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1->ne[0] * elem_size, 1);
+    } else if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR ||
+               kparams->kernel_type == HTP_BINARY_KERNEL_REPEAT ||
+               kparams->kernel_type == HTP_BINARY_KERNEL_COMPLEX) {
+        if (!kparams->src1_strided) {
+            const size_t src1_bytes = (size_t) src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3] * elem_size;
+            dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1_bytes, 1);
+            if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR && octx->src[2] != NULL) {
+                uint8_t * vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src2);
+                dma_queue_push(dma_q, dma_make_data(vtcm_src2, octx->src[2]->data), bctx.vtcm_layout.src2_size, 0, src1_bytes, 1);
+            }
+        } else {
+            const uint32_t ne11 = src1->ne[1];
+            const uint32_t ne12 = src1->ne[2];
+            const uint32_t ne13 = src1->ne[3];
+            const size_t row_bytes = src1->ne[0] * elem_size;
+            for (uint32_t i13 = 0; i13 < ne13; i13++) {
+                for (uint32_t i12 = 0; i12 < ne12; i12++) {
+                    dma_addr_t src_addr = src1->data + i13 * src1->nb[3] + i12 * src1->nb[2];
+                    uint8_t * dst_ptr = vtcm_src1 + (i13 * ne12 * ne11 + i12 * ne11) * row_bytes;
+                    while (!dma_queue_push(dma_q, dma_make_data(dst_ptr, src_addr),
+                                           row_bytes, src1->nb[1], row_bytes, ne11)) {
+                        dma_queue_pop(dma_q);
+                    }
+                }
+            }
+        }
+    } else if (kparams->kernel_type == HTP_BINARY_KERNEL_ADD_ID) {
+        const struct htp_tensor * src2 = octx->src[2];
+        uint8_t * vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src2);
+        dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data),
+                       kparams->src1_row_size_aligned, src1->nb[1],
+                       src1->ne[0] * elem_size, src1->ne[1]);
+        const size_t src2_row_bytes = src2->ne[0] * sizeof(int32_t);
+        dma_queue_push(dma_q, dma_make_data(vtcm_src2, src2->data),
+                       src2_row_bytes, src2->nb[1],
+                       src2_row_bytes, src2->ne[1]);
+    }
+
+    bctx.octx                  = octx;
+    bctx.nrows_per_thread      = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+    bctx.total_rows            = nrows;
+    bctx.row_start             = row_start;
+    bctx.n_srcs                = n_srcs;
+    bctx.block_max             = bctx.vtcm_layout.rows_per_buffer;
+    bctx.src0_row_size_aligned = src0_row_size_aligned;
+    bctx.src1_row_size_aligned = src1_row_size_aligned;
+    bctx.dst_row_size_aligned  = dst_row_size_aligned;
+    bctx.row_size_bytes        = src0_row_size;
+
+    bctx.src0_dim1_div  = kparams->div_ne01;
+    bctx.src0_dim2_div  = kparams->div_ne02;
+    bctx.src0_dim12_div = kparams->div_ne012;
+
+    bctx.src1_dim1_div  = kparams->div_ne11;
+    bctx.src1_dim2_div  = kparams->div_ne12;
+    bctx.src1_dim3_div  = kparams->div_ne13;
+
+    bctx.split_at_ne01  = kparams->split_at_ne01;
+    bctx.split_at_ne02  = kparams->split_at_ne02;
+    bctx.compute        = compute_func;
 
     if (kparams->kernel_type == HTP_BINARY_KERNEL_ROW_BCAST ||
         kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR ||
@@ -1330,6 +1364,15 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         kparams->kernel_type == HTP_BINARY_KERNEL_COMPLEX ||
         kparams->kernel_type == HTP_BINARY_KERNEL_ADD_ID) {
         dma_queue_flush(dma_q);
+        if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR && octx->src[2] != NULL && octx->op == HTP_OP_MUL) {
+            uint8_t * vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src2);
+            const uint32_t n_scalars = src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3];
+            if (src0_type == HTP_TYPE_F32) {
+                hvx_mul_f32_aaa(vtcm_src1, vtcm_src1, vtcm_src2, n_scalars);
+            } else if (src0_type == HTP_TYPE_F16) {
+                hvx_mul_f16_aaa(vtcm_src1, vtcm_src1, vtcm_src2, n_scalars);
+            }
+        }
     }
 
     work_queue_run(octx->ctx->work_queue, worker_func, &bctx, n_threads);

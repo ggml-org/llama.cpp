@@ -97,4 +97,12 @@ static inline HVX_Vector hvx_vec_floor_f32(HVX_Vector in_vec) {
     return vout;
 }
 
+// ceil(x) = -floor(-x); keep +-0 as is since floor(-0) returns -1
+static inline HVX_Vector hvx_vec_ceil_f32(HVX_Vector in_vec) {
+    HVX_Vector     vout   = hvx_vec_neg_f32(hvx_vec_floor_f32(hvx_vec_neg_f32(in_vec)));
+    HVX_Vector     vabs   = Q6_V_vand_VV(in_vec, Q6_V_vsplat_R(0x7fffffff));
+    HVX_VectorPred q_zero = Q6_Q_vcmp_eq_VwVw(vabs, Q6_V_vzero());
+    return Q6_V_vmux_QVV(q_zero, in_vec, vout);
+}
+
 #endif /* HVX_FLOOR_H */

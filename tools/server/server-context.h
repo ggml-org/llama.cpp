@@ -33,7 +33,7 @@ struct server_context_meta {
 
     // chat params
     server_chat_params & chat_params;
-    std::map<std::string, bool> chat_template_caps;
+    json chat_template_caps;
 
     // tokens
     std::string bos_token_str;
@@ -57,31 +57,6 @@ struct server_context_meta {
     uint64_t model_size;
     std::string model_ftype;
 };
-
-enum server_state {
-    SERVER_STATE_DOWNLOADING,
-    SERVER_STATE_LOADING,
-    SERVER_STATE_READY,
-    SERVER_STATE_SLEEPING,
-};
-
-static std::string server_state_to_str(server_state state) {
-    switch (state) {
-        case SERVER_STATE_DOWNLOADING: return "downloading";
-        case SERVER_STATE_LOADING:     return "loading";
-        case SERVER_STATE_READY:       return "ready";
-        case SERVER_STATE_SLEEPING:    return "sleeping";
-        default: GGML_ASSERT(false && "invalid server_state");
-    }
-}
-
-static server_state server_state_from_str(const std::string & str) {
-    if (str == "downloading") return SERVER_STATE_DOWNLOADING;
-    if (str == "loading")     return SERVER_STATE_LOADING;
-    if (str == "ready")       return SERVER_STATE_READY;
-    if (str == "sleeping")    return SERVER_STATE_SLEEPING;
-    GGML_ASSERT(false && "invalid server_state string");
-}
 
 using server_state_callback_t = std::function<void(server_state, json /* payload */)>;
 
@@ -177,6 +152,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
+    std::unique_ptr<server_res_generator> handle_rerank_impl(const server_http_req & req);
     std::unique_ptr<server_res_generator> handle_count_tokens(const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const

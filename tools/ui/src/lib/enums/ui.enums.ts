@@ -26,18 +26,13 @@ export enum SidebarAction {
 	MANAGE_MODELS = 'manage-models',
 	MCP = 'mcp',
 	NEW_CHAT = 'new-chat',
+	SEARCH = 'search',
 	SETTINGS = 'settings'
 }
 
 /**
  * MCP prompt display variant
  */
-/** View the models dialog renders. */
-export enum ModelsDialogView {
-	DISCOVER = 'discover',
-	MANAGE = 'manage'
-}
-
 export enum McpPromptVariant {
 	ATTACHMENT = 'attachment',
 	MESSAGE = 'message'

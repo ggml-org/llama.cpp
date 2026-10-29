@@ -350,6 +350,12 @@ class ModelBase:
             def dequant_simple(weight: Tensor, scale: Tensor, block_size: Sequence[int] | None = None) -> Tensor:
                 scale = scale.float()
 
+                # ModelOpt block scales are pre-shaped for broadcasting, e.g. [out/128, 1, in/128, 1]
+                if block_size is None and scale.ndim == 2 * weight.ndim and all(n == 1 for n in scale.shape[1::2]):
+                    assert all(w % n == 0 for w, n in zip(weight.shape, scale.shape[0::2]))
+                    block_size = [w // n for w, n in zip(weight.shape, scale.shape[0::2])]
+                    scale = scale.reshape(tuple(scale.shape[0::2]))
+
                 if block_size is not None:
                     dim_offset = scale.ndim - len(block_size)
                     for i, size in enumerate(block_size):
@@ -1035,7 +1041,7 @@ class ModelBase:
         expert_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_input_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_shapes: dict[tuple[int, str], list[int]] = {}
-        n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
+        n_experts = self.find_hparam(["num_local_experts", "num_experts", "n_routed_experts"], optional=True) or 0
         consumed: list[str] = []
 
         for name in self.model_tensors.keys():
@@ -1701,7 +1707,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func", "router_score_function"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -1837,6 +1843,9 @@ class TextModel(ModelBase):
         if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
             # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
             res = "minerva-7b"
+        if chkhsh == "6e4d72c6e5260b90606e26a0931fa15e4b42ec6e97719d12919f2b1f93478262":
+            # ref: https://huggingface.co/domyn/Domyn-Small-v1.0
+            res = "domyn-small"
         if chkhsh == "7e57df22b1fe23a7b1e1c7f3dc4e3f96d43a4eb0836d0c6bdc3436d7b2f1c664":
             # ref: https://huggingface.co/tencent/Hunyuan-A13B-Instruct
             res = "hunyuan"
@@ -1939,6 +1948,9 @@ class TextModel(ModelBase):
         if chkhsh == "52df12b4c8d4176e7481aab4b6e8454d1fd0a210a04a574f6d4e067d10e23c3e":
             # ref: https://huggingface.co/CohereLabs/North-Mini-Code-1.0
             res = "cohere2moe"
+        if chkhsh == "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637":
+            # ref: https://huggingface.co/RecursiveSI/flint
+            res = "flint"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
@@ -2666,7 +2678,13 @@ class TextModel(ModelBase):
         )
 
         if vocab.tokenizer_type == MistralTokenizerType.tekken:
-            self.gguf_writer.add_tokenizer_pre("tekken")
+            with open(vocab.fname_tokenizer, encoding="utf-8") as f:
+                pattern = json.load(f)["config"]["pattern"]
+            # newer tekken.json split numbers into right-aligned groups of 3 digits instead of single digits
+            if "\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))" in pattern:
+                self.gguf_writer.add_tokenizer_pre("tekken-num3")
+            else:
+                self.gguf_writer.add_tokenizer_pre("tekken")
             self.gguf_writer.add_token_merges(
                 vocab.extract_vocab_merges_from_model()
             )
@@ -3143,7 +3161,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead
