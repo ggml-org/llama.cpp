@@ -1,6 +1,8 @@
 #include "llama-kv-cache.h"
 #include "llama-model.h"
 
+#include <numeric>
+
 static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams = {};
     model.hparams.n_layer_all = n_layer;
@@ -8,6 +10,7 @@ static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams.n_embd_head_v_full = 4;
     model.hparams.n_head_arr.fill(1);
     model.hparams.n_head_kv_arr.fill(1);
+    std::iota(model.hparams.kv_source_impl.begin(), model.hparams.kv_source_impl.end(), 0);
     model.layers.resize(n_layer);
 }
 
