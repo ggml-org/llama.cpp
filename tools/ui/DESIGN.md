@@ -609,8 +609,9 @@ matches the role of the surface instead of combining raw shadows.
 - **`matte-float`** and **`matte-float-modal`:** menus, popovers, select lists, hover cards
   and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge
   and a deeper shadow.
-- **`matte-key`:** buttons. Adds a light blur, a thin inner rim and a small drop shadow on
-  top of the button's own fill. It never changes the button colour.
+- **`matte-key`:** buttons. Adds a light blur and a small drop shadow on top of the
+  button's own fill. It never changes the button colour and draws no rim of its own: every
+  `matte-key` control has a border, and a rim inside it would double the edge.
 - **`matte-well`:** inputs, textareas, checkboxes and switches. A shallow inset shade so
   fields read as recessed.
 - **`matte-chip`:** badges. A thin inner rim only.
