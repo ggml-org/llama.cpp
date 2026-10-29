@@ -1582,6 +1582,9 @@ class GGUFWriter:
     def add_audio_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Attention.HEAD_COUNT, value)
 
+    def add_audio_head_count_kv(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Attention.HEAD_COUNT_KV, value)
+
     def add_audio_head_dim(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Attention.HEAD_DIM, value)
 

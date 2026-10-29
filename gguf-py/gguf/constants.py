@@ -436,6 +436,8 @@ class Keys:
         N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
         WA_LAYER_INDEXES      = "clip.vision.wa_layer_indexes" # used by youtuvl
         WA_PATTERN_MODE       = "clip.vision.wa_pattern_mode"  # used by mimovl, per-layer -1/0/1
+        FUSION_LAYER          = "clip.vision.fusion_layer"     # youtu-omni: 1 = cross-modal attention
+        VIDEO_GROUP_ATTENTION = "clip.vision.video_group_attention"
         IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
         WINDOW_SIZE           = "clip.vision.window_size"
         FEATURE_LAYERS        = "clip.vision.feature_layer" # Granite4 Vision
@@ -482,6 +484,7 @@ class Keys:
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
+            HEAD_COUNT_KV   = "clip.audio.attention.head_count_kv" # used by youtu-omni (GQA)
             HEAD_DIM        = "clip.audio.attention.head_dim" # set when qkv width != n_embd
             LAYERNORM_EPS   = "clip.audio.attention.layer_norm_epsilon"
 
@@ -6382,6 +6385,7 @@ class VisionProjectorType:
     GLM4V = "glm4v"
     GLM5V = "glm5v"
     YOUTUVL = "youtuvl"
+    YOUTU_OMNI = "youtu_omni"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
     NEMOTRON_OMNI = "nemotron_omni"
     QWEN3TTS_SPKENC = "qwen3tts_spkenc" # audio: ECAPA-TDNN speaker encoder

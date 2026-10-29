@@ -1755,8 +1755,17 @@ class TextModel(ModelBase):
         tokens: list[str] = []
         toktypes: list[int] = []
 
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        from transformers import AutoTokenizer, PreTrainedTokenizerFast
+        # Youtu-Parsing-Omni names its tokenizer TokenizersBackend, which older
+        # transformers builds do not ship. The tokenizer.json is still a fast BPE.
+        tokenizer_class = None
+        tokenizer_config = self.dir_model / "tokenizer_config.json"
+        if tokenizer_config.is_file():
+            tokenizer_class = json.loads(tokenizer_config.read_text(encoding="utf-8")).get("tokenizer_class")
+        if tokenizer_class == "TokenizersBackend":
+            tokenizer = PreTrainedTokenizerFast.from_pretrained(self.dir_model)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
         assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
@@ -3104,8 +3113,8 @@ def jinja_str_or_json(name: str) -> str:
 def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
     # TODO @ngxson : this won't work correctly if the model has both audio & vision encoders
     # maybe we should fallback to text model's arch in that case, since not many models have both
-    text_config = hparams.get("text_config", {})
-    vision_config = hparams.get("vision_config", {})
+    text_config = hparams.get("text_config") or {}
+    vision_config = hparams.get("vision_config") or {}
     arch = None
     if (arches := hparams.get("architectures")) is not None and len(arches) > 0:
         arch = arches[0]

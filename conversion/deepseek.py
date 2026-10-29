@@ -231,8 +231,9 @@ class DeepseekModel(TextModel):
     "KimiK25ForConditionalGeneration",
     "YoutuForCausalLM",
     "YoutuVLForConditionalGeneration",
+    "YoutuVITAForCausalLM",
 )
-@ModelBase.example("deepseek-ai/DeepSeek-V2-Lite", "deepseek-ai/DeepSeek-V3")
+@ModelBase.example("deepseek-ai/DeepSeek-V2-Lite", "deepseek-ai/DeepSeek-V3", "tencent/Youtu-Parsing-Omni")
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
@@ -259,6 +260,9 @@ class DeepseekV2Model(TextModel):
         name, _ = item
         # DeepSeek-OCR vision encoder (SAM + DeepSeek-OCR-2 qwen2 tower)
         if "sam_model" in name or "qwen2_model" in name:
+            return None
+        # Youtu-Parsing-Omni keeps the shared vision/audio tower here; mmproj writes it.
+        if name.startswith("model.omni_model."):
             return None
         return super().filter_tensors(item)
 
@@ -435,13 +439,21 @@ class DeepseekV2Model(TextModel):
             name_kb = name.replace("kv_b_proj", "k_b_proj")
             name_vb = name.replace("kv_b_proj", "v_b_proj")
 
+            n_head = self.hparams["num_attention_heads"]
             n_head_kv = self.hparams["num_key_value_heads"]
             v_head_dim = self.hparams["v_head_dim"]
             qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+            per_head = v_head_dim + qk_nope_head_dim
+            # kv_b is one (nope, v) pair per attention head. DeepSeek configs set
+            # num_key_value_heads equal to that; Youtu sets it to the GQA count.
+            if data_torch.shape[0] == n_head * per_head:
+                n_split = n_head
+            elif data_torch.shape[0] == n_head_kv * per_head:
+                n_split = n_head_kv
+            else:
+                raise ValueError(f"Unexpected {name} shape {tuple(data_torch.shape)}; expected {n_head} or {n_head_kv} heads")
 
-            assert data_torch.shape[0] == n_head_kv * (v_head_dim + qk_nope_head_dim)
-
-            kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
+            kv_b = data_torch.view(n_split, per_head, data_torch.shape[-1])
             k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
             k_b = k_b.transpose(1, 2)
 
