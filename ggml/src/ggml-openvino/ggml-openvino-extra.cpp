@@ -354,7 +354,7 @@ bool ggml_openvino_kv_slice_enabled() {
 }
 
 bool ggml_openvino_npu_fast_mask_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_FAST_MASK") != 0;
+    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_FAST_MASK", 1) != 0;
 }
 
 bool ggml_openvino_npu_l0_host_tensors_enabled() {
