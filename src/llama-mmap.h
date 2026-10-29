@@ -8,6 +8,7 @@
 
 // staging buffer size for direct I/O reads, 64MB works well for NVMe drives
 #define LLAMA_DIRECT_IO_BUFFER_SIZE (64 * 1024 * 1024)
+static constexpr size_t LLAMA_FILE_IO_CHUNK_SIZE = LLAMA_DIRECT_IO_BUFFER_SIZE;
 
 struct llama_file;
 struct llama_mmap;
