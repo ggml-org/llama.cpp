@@ -73,6 +73,8 @@
 #define KEY_WIN_ATTN_PATTERN       "clip.vision.n_wa_pattern"
 #define KEY_WIN_ATTN_LAYER_INDEXES "clip.vision.wa_layer_indexes"
 #define KEY_WA_PATTERN_MODE        "clip.vision.wa_pattern_mode"
+#define KEY_VISION_FUSION_LAYER    "clip.vision.fusion_layer"
+#define KEY_VIDEO_GROUP_ATTENTION  "clip.vision.video_group_attention"
 #define KEY_ATTN_WINDOW_SIZE       "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION       "clip.minicpmv_version"
 #define KEY_MINICPMV_QUERY_NUM     "clip.minicpmv_query_num"
@@ -741,6 +743,49 @@ static inline int clip_youtu_omni_audio_tokens(int n_frames) {
     return inner / 2 + 1 + n_full * 13;
 }
 
+// One video frame is 100/8 = 12.5 audio tokens on the shared time axis.
+// ggml RoPE positions are int32, so the group graph stores every channel in
+// half-steps and sets freq_scale to 0.5. 12.5 becomes 25.
+static inline int clip_youtu_half(int value) {
+    return value * 2;
+}
+
+static inline int clip_youtu_frame_half(int frame_index) {
+    return frame_index * 25;
+}
+
+// kind 0 = vision pixels (nx, ny, 3), kind 1 = mel (nx frames, ny bins).
+struct clip_youtu_event {
+    int kind = 0;
+    const float * data = nullptr;
+    int nx = 0;
+    int ny = 0;
+    int n_out = 0; // output embeddings of this event
+};
+
+struct clip_youtu_span {
+    int kind = 0;
+    int n_tok = 0;
+    int n_out = 0;
+    int pw = 0;
+    int ph = 0;
+};
+
+static inline clip_youtu_span clip_youtu_span_of(const clip_youtu_event & ev, int patch, int merge) {
+    clip_youtu_span span;
+    span.kind = ev.kind;
+    span.n_out = ev.n_out;
+    if (ev.kind == 0) {
+        GGML_ASSERT(patch > 0 && merge > 0 && ev.nx % (patch * merge) == 0 && ev.ny % (patch * merge) == 0);
+        span.pw = ev.nx / patch;
+        span.ph = ev.ny / patch;
+        span.n_tok = span.pw * span.ph;
+    } else {
+        span.n_tok = ev.n_out;
+    }
+    return span;
+}
+
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
 // For seq, buf.size() == nx*ny*3*nt
@@ -758,6 +803,10 @@ struct clip_image_f32 {
     int32_t lead_pad = 0;
     // valid mel frames before the conv chunk padding. 0 means "use nx" (already a multiple of 100)
     int32_t audio_n_frames = 0;
+    // youtu-omni video: non-owned group in event order, encoded in one graph.
+    // The event buffers have to stay alive until clip_encode returns.
+    int32_t youtu_n_events = 0;
+    const clip_youtu_event * youtu_events = nullptr;
     // separators appended after the image tokens
     clip_suffix_type suffix_type = CLIP_SUFFIX_NONE;
 

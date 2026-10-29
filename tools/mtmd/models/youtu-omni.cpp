@@ -1,10 +1,17 @@
 #include "models.h"
 
-// Shared omni encoder for images and audio.
+#include <cstdio>
+#include <vector>
+
+// Shared omni encoder for images, audio, and grouped video.
 // RoPE is chunked MTHW with m_dim = 0: sections [T, H, W] over head_dim/2,
 // each section using its own theta base. ggml_rope_multi(VISION) resets
 // theta per section but scales it by the full n_dims, so a constant
 // freq_factors tensor restores the per-section bases.
+
+static bool youtu_omni_fusion_layer(const clip_hparams & hparams, int il) {
+    return il >= 0 && il < (int) hparams.fusion_layer.size() && hparams.fusion_layer[il] != 0;
+}
 
 ggml_tensor * clip_graph_youtu_omni::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
@@ -68,14 +75,14 @@ ggml_tensor * clip_graph_youtu_omni::build_audio_merger(ggml_tensor * cur) {
         FFN_GELU_ERF, -1);
 }
 
-static ggml_tensor * youtu_omni_rope(clip_graph & g, ggml_tensor * cur, ggml_tensor * pos, ggml_tensor * freq) {
+static ggml_tensor * youtu_omni_rope(clip_graph & g, ggml_tensor * cur, ggml_tensor * pos, ggml_tensor * freq, float freq_scale) {
     const int n_rot = g.d_head / 2;
     const int per   = n_rot / 3;
     int sections[4] = {per, per, n_rot - per * 2, 0};
     return ggml_rope_multi(
         g.ctx0, cur, pos, freq,
         n_rot, sections, GGML_ROPE_TYPE_VISION,
-        32768, g.hparams.rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+        32768, g.hparams.rope_theta, freq_scale, 0.0f, 1.0f, 32.0f, 1.0f);
 }
 
 static ggml_tensor * youtu_omni_inp_i32(ggml_context * ctx0, const char * name, int64_t n) {
@@ -85,10 +92,90 @@ static ggml_tensor * youtu_omni_inp_i32(ggml_context * ctx0, const char * name, 
     return t;
 }
 
+// One attention group: frames and audio chunks in event order.
+// Fusion layers see the whole group. Other layers keep each event to itself.
+// Time is stored in half-steps (freq_scale 0.5) so a later frame can sit at 12.5.
+ggml_cgraph * clip_graph_youtu_omni::build_group(ggml_tensor * freq) {
+    const int n_events = img.youtu_n_events;
+    const clip_youtu_event * events = img.youtu_events;
+    GGML_ASSERT(n_events > 0 && events != nullptr);
+    GGML_ASSERT(model.mm_norm_pre_w && model.mm_1_w && model.mm_2_w);
+
+    std::vector<clip_youtu_span> spans;
+    spans.reserve(n_events);
+    int n_seq = 0;
+    ggml_tensor * seq = nullptr;
+    for (int i = 0; i < n_events; i++) {
+        const clip_youtu_event & ev = events[i];
+        const clip_youtu_span span = clip_youtu_span_of(ev, patch_size, hparams.n_merge);
+        GGML_ASSERT(span.n_tok > 0 && span.n_out > 0);
+
+        char name[32];
+        snprintf(name, sizeof(name), "youtu_ev_%d", i);
+        ggml_tensor * tok = nullptr;
+        if (ev.kind == 0) {
+            GGML_ASSERT(span.n_tok / (hparams.n_merge * hparams.n_merge) == span.n_out);
+            ggml_tensor * raw = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, ev.nx, ev.ny, 3);
+            ggml_set_name(raw, name);
+            ggml_set_input(raw);
+            tok = build_image_tokens(raw, span.pw, span.ph);
+        } else {
+            ggml_tensor * mel = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, ev.nx, ev.ny);
+            ggml_set_name(mel, name);
+            ggml_set_input(mel);
+            tok = build_audio_tokens(mel, span.n_tok);
+        }
+        seq = seq ? ggml_concat(ctx0, seq, tok, 1) : tok;
+        n_seq += span.n_tok;
+        spans.push_back(span);
+    }
+
+    ggml_tensor * positions       = youtu_omni_inp_i32(ctx0, "positions",       n_seq * 4);
+    ggml_tensor * positions_local = youtu_omni_inp_i32(ctx0, "positions_local", n_seq * 4);
+
+    auto add_pos = [&](ggml_tensor * cur, const clip_layer & layer) {
+        const int il = (int) (&layer - model.layers.data());
+        ggml_tensor * pos = youtu_omni_fusion_layer(hparams, il) ? positions : positions_local;
+        return youtu_omni_rope(*this, cur, pos, freq, 0.5f);
+    };
+
+    build_vit_opts opts;
+    ggml_tensor * mask = build_inp_attn_mask(n_seq, n_seq);
+    opts.attn_mask_layers.resize(n_layer);
+    for (int il = 0; il < n_layer; il++) {
+        opts.attn_mask_layers[il] = youtu_omni_fusion_layer(hparams, il) ? nullptr : mask;
+    }
+
+    ggml_tensor * cur = build_vit(seq, n_seq, NORM_TYPE_RMS, FFN_SILU, nullptr, add_pos, opts);
+
+    // vision embeddings first, then audio, each in event order
+    ggml_tensor * vis = nullptr;
+    ggml_tensor * aud = nullptr;
+    int offset = 0;
+    for (const clip_youtu_span & span : spans) {
+        ggml_tensor * part = ggml_cont(ctx0, ggml_view_2d(
+            ctx0, cur, n_embd, span.n_tok, cur->nb[1], (int64_t) offset * cur->nb[1]));
+        offset += span.n_tok;
+        ggml_tensor *& dst = span.kind == 0 ? vis : aud;
+        dst = dst ? ggml_concat(ctx0, dst, part, 1) : part;
+    }
+    GGML_ASSERT(vis);
+    cur = build_vision_merger(vis);
+    if (aud) {
+        cur = ggml_concat(ctx0, cur, build_audio_merger(aud), 1);
+    }
+    ggml_build_forward_expand(gf, cur);
+    return gf;
+}
+
 ggml_cgraph * clip_graph_youtu_omni::build() {
     ggml_tensor * freq = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, d_head / 2);
     ggml_set_name(freq, "youtu_omni_rope_factors");
     ggml_set_input(freq);
+
+    if (model.modality != CLIP_MODALITY_AUDIO && img.youtu_n_events > 0) {
+        return build_group(freq);
+    }
 
     ggml_tensor * inp = nullptr;
     int n_pos = 0;
@@ -105,7 +192,7 @@ ggml_cgraph * clip_graph_youtu_omni::build() {
 
     ggml_tensor * positions = youtu_omni_inp_i32(ctx0, "positions", n_pos * 4);
     auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
-        return youtu_omni_rope(*this, cur, positions, freq);
+        return youtu_omni_rope(*this, cur, positions, freq, 1.0f);
     };
 
     ggml_tensor * cur = build_vit(inp, n_pos, NORM_TYPE_RMS, FFN_SILU, nullptr, add_pos);

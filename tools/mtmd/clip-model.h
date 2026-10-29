@@ -102,6 +102,9 @@ struct clip_hparams {
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
     std::vector<int32_t> wa_pattern_mode; // mimovl: per-layer window-attention mode
+    // youtu-omni video: 1 = this layer attends across the frame and its audio
+    std::vector<int32_t> fusion_layer;
+    bool video_group_attention = true;
 
     // deepseek4v: resize solver caps the LLM token count of the aligner grid
     int32_t dsv4_max_n_token  = 0;

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <vector>
 
 //#define MTMD_AUDIO_DEBUG
@@ -612,6 +613,37 @@ struct mtmd_helper_video {
     std::string pending_text; // text queued to be returned before the next frame
     bool        start_emitted = false;
 
+    // youtu-omni: frames and audio pieces in the layout of the reference video processor, see build_plan()
+    struct plan_item {
+        std::string   text;
+        mtmd_bitmap * bitmap;
+        std::string   id_suffix;
+    };
+    bool    interleave_audio = false;
+    int     sample_rate      = 0;
+    float   src_fps          = 0.0f;
+    int64_t src_n_frames     = -1;
+    double  duration_sec     = 0.0;
+    double  select_step      = 0.0; // > 0: keep source frames floor(k * select_step), instead of the fps filter
+    std::vector<double> frame_sec;
+    std::vector<float> pcm;
+    std::vector<mtmd_bitmap *> frames;
+    std::vector<plan_item> plan;
+    size_t plan_pos = 0;
+
+    ~mtmd_helper_video() {
+        for (auto * frame : frames) {
+            if (frame) {
+                mtmd_bitmap_free(frame);
+            }
+        }
+        for (auto & item : plan) {
+            if (item.bitmap) {
+                mtmd_bitmap_free(item.bitmap);
+            }
+        }
+    }
+
     bool is_buf_input() const {
         return !input_buf.empty();
     }
@@ -685,6 +717,8 @@ struct mtmd_helper_video {
         if (duration < 0.0f && n_frames_orig > 0) {
             duration = (float)n_frames_orig / orig_fps;
         }
+        src_fps      = orig_fps;
+        src_n_frames = n_frames_orig > 0 ? n_frames_orig : duration > 0.0f ? (int64_t) std::llround(duration * orig_fps) : -1;
 
         fps_target = fps_target_arg > 0.0f ? fps_target_arg : orig_fps;
         info.width    = width;
@@ -697,9 +731,48 @@ struct mtmd_helper_video {
         return true;
     }
 
+    void push_ffmpeg_input(std::vector<const char *> & cmd) const {
+        cmd.push_back("-nostdin");
+        if (is_buf_input()) {
+            // remove the 64KB read-ahead limit of cache:, or else ffmpeg cannot reach a moov atom at end of file
+            cmd.push_back("-read_ahead_limit");
+            cmd.push_back("-1");
+        }
+        cmd.push_back("-i");
+        // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
+        // backwards for container headers (e.g. MP4 moov atom at end of file)
+        cmd.push_back(is_buf_input() ? "cache:pipe:0" : path.c_str());
+    }
+
+    // cmd must be null-terminated
+    bool spawn_ffmpeg(subprocess_handle & h, const std::vector<const char *> & cmd) {
+        LOG_DBG("%s: launching:", __func__);
+        for (size_t i = 0; cmd[i]; i++) {
+            LOG_DBG(" %s", cmd[i]);
+        }
+        LOG_DBG("\n");
+
+        int ret = subprocess_create(
+            cmd.data(),
+            subprocess_option_search_user_path | subprocess_option_inherit_environment,
+            &h.proc);
+
+        h.created = (ret == 0);
+        h.alive   = (ret == 0);
+        LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)h.alive);
+
+        if (h.alive && is_buf_input()) {
+            LOG_DBG("%s: starting feeder thread for %zu-byte buffer\n", __func__, input_buf.size());
+            h.start_feeder(input_buf);
+        }
+
+        return h.alive;
+    }
+
     bool start_ffmpeg(float seek_seconds) {
         char seek_buf[64];
         char fps_buf[64];
+        char select_buf[128];
 
         std::vector<const char *> cmd;
         cmd.push_back(ffmpeg_bin.c_str());
@@ -711,16 +784,7 @@ struct mtmd_helper_video {
             cmd.push_back(seek_buf);
         }
 
-        cmd.push_back("-nostdin");
-        if (is_buf_input()) {
-            // remove the 64KB read-ahead limit of cache:, or else ffmpeg cannot reach a moov atom at end of file
-            cmd.push_back("-read_ahead_limit");
-            cmd.push_back("-1");
-        }
-        cmd.push_back("-i");
-        // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
-        // backwards for container headers (e.g. MP4 moov atom at end of file)
-        cmd.push_back(is_buf_input() ? "cache:pipe:0" : path.c_str());
+        push_ffmpeg_input(cmd);
 
         if (seek_seconds > 0.0f && is_buf_input()) {
             // output-side seek: frame-accurate but decodes and discards frames up to seek point
@@ -729,7 +793,14 @@ struct mtmd_helper_video {
             cmd.push_back(seek_buf);
         }
 
-        if (fps_target > 0.0f) {
+        if (select_step > 0.0) {
+            // step is an integer or n/128, so %.7f is exact
+            snprintf(select_buf, sizeof(select_buf), "select='eq(n,floor(ceil(n/%.7f)*%.7f))'", select_step, select_step);
+            cmd.push_back("-vf");
+            cmd.push_back(select_buf);
+            cmd.push_back("-fps_mode");
+            cmd.push_back("passthrough");
+        } else if (fps_target > 0.0f) {
             snprintf(fps_buf, sizeof(fps_buf), "fps=%.6f", fps_target);
             cmd.push_back("-vf");
             cmd.push_back(fps_buf);
@@ -744,27 +815,7 @@ struct mtmd_helper_video {
         cmd.push_back("error");
         cmd.push_back(nullptr);
 
-        LOG_DBG("%s: launching:", __func__);
-        for (size_t i = 0; cmd[i]; i++) {
-            LOG_DBG(" %s", cmd[i]);
-        }
-        LOG_DBG("\n");
-
-        int ret = subprocess_create(
-            cmd.data(),
-            subprocess_option_search_user_path | subprocess_option_inherit_environment,
-            &sp.proc);
-
-        sp.created = (ret == 0);
-        sp.alive   = (ret == 0);
-        LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
-
-        if (sp.alive && is_buf_input()) {
-            LOG_DBG("%s: starting feeder thread for %zu-byte buffer\n", __func__, input_buf.size());
-            sp.start_feeder(input_buf);
-        }
-
-        return sp.alive;
+        return spawn_ffmpeg(sp, cmd);
     }
 
     void stop_ffmpeg() {
@@ -804,7 +855,192 @@ struct mtmd_helper_video {
         return frame;
     }
 
+    bool extract_pcm() {
+        const std::string sr = std::to_string(sample_rate);
+        std::vector<const char *> cmd;
+        cmd.push_back(ffmpeg_bin.c_str());
+        push_ffmpeg_input(cmd);
+        cmd.push_back("-vn");
+        cmd.push_back("-ac");
+        cmd.push_back("1");
+        cmd.push_back("-ar");
+        cmd.push_back(sr.c_str());
+        cmd.push_back("-f");
+        cmd.push_back("f32le");
+        cmd.push_back("-loglevel");
+        cmd.push_back("error");
+        cmd.push_back("pipe:1");
+        cmd.push_back(nullptr);
+
+        subprocess_handle audio;
+        if (!spawn_ffmpeg(audio, cmd)) {
+            return false;
+        }
+        FILE * fp = audio.stdout_pipe();
+        std::vector<float> buf(4096);
+        while (true) {
+            size_t n = fread(buf.data(), sizeof(float), buf.size(), fp);
+            if (n == 0) {
+                break;
+            }
+            pcm.insert(pcm.end(), buf.begin(), buf.begin() + n);
+        }
+        audio.stop();
+        return !pcm.empty();
+    }
+
+    // youtu-omni: at most 128 frames and at most 1 fps, a frame is at (source frame index) / round(fps) seconds
+    void setup_sampling() {
+        const int    max_frames = 128;
+        const double fps_r = std::max(1.0, std::nearbyint((double) src_fps));
+        const double step  = src_n_frames > 0 ? std::max(fps_r, (double) src_n_frames / max_frames) : fps_r;
+        for (int i = 0; i < max_frames; i++) {
+            const int64_t idx = (int64_t) (i * step);
+            if (src_n_frames > 0 && idx >= src_n_frames) {
+                break;
+            }
+            frame_sec.push_back(1.0 / fps_r * idx);
+        }
+        select_step   = step;
+        fps_target    = (float) (fps_r / step);
+        info.fps      = fps_target;
+        info.n_frames = (int32_t) frame_sec.size();
+        duration_sec  = src_n_frames > 0 ? src_n_frames / (double) src_fps : 0.0;
+    }
+
+    bool drain_frames() {
+        const int cap = 128;
+        while ((int) frames.size() < cap) {
+            mtmd_bitmap * frame = read_next_frame();
+            if (!frame) {
+                break;
+            }
+            mtmd_bitmap_set_mergeable(frame, false);
+            frames.push_back(frame);
+        }
+        stop_ffmpeg();
+        return !frames.empty();
+    }
+
+    static std::string timestamp_hhmmss(int sec) {
+        if (sec < 0) {
+            sec = 0;
+        }
+        const int h = sec / 3600;
+        const int m = (sec % 3600) / 60;
+        const int s = sec % 60;
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
+        return buf;
+    }
+
+    // <|video_start|> {chunk} ... <|video_end|>, a chunk is "[ts] frame" for each of its frames, then "[ts] audio" pieces.
+    // Each frame owns the audio up to the next frame. A chunk is closed once its audio reaches 1.5 s, and the audio of a single frame is split at 29.5 s.
+    // Audio pieces are cut at mel frame borders, so mtmd can compute the mel of the whole track and slice it.
+    void build_plan() {
+        const size_t  n_fr      = std::min(frames.size(), frame_sec.size());
+        const int64_t hop       = sample_rate / 100;
+        const int64_t n_mel     = hop > 0 ? (int64_t) pcm.size() / hop : 0;
+        const double  total_sec = n_mel > 0 ? (double) pcm.size() / sample_rate : 0.0;
+
+        std::vector<int64_t> beg(n_fr, 0);
+        std::vector<int64_t> end(n_fr, 0);
+        int64_t n_used = 0;
+        for (size_t i = 0; i < n_fr && n_mel > 0; i++) {
+            const double ed = i + 1 < n_fr ? frame_sec[i + 1] : total_sec;
+            beg[i] = std::min(n_mel, (int64_t) (frame_sec[i] / total_sec * n_mel));
+            end[i] = std::max(beg[i], std::min(n_mel, (int64_t) (ed / total_sec * n_mel)));
+            n_used += end[i] - beg[i];
+        }
+        const double sec_per_mel = n_used > 0 ? (duration_sec > 0.0 ? duration_sec : total_sec) / n_used : 0.0;
+
+        int n_audio = 0;
+        auto add_text = [&](const std::string & text) {
+            plan.push_back({text, nullptr, {}});
+        };
+        auto add_ts = [&](double sec) {
+            add_text(timestamp_hhmmss((int) std::nearbyint(sec)));
+        };
+        auto add_frame = [&](size_t i) {
+            add_ts(frame_sec[i]);
+            plan.push_back({{}, frames[i], "+" + std::to_string(i)});
+            frames[i] = nullptr;
+        };
+        auto add_audio = [&](int64_t b, int64_t e, double sec) {
+            if (e <= b) {
+                return;
+            }
+            const size_t s0 = (size_t) (b * hop);
+            const size_t s1 = e == n_mel ? pcm.size() : (size_t) (e * hop);
+            add_ts(sec);
+            plan.push_back({{}, mtmd_bitmap_init_from_audio(s1 - s0, pcm.data() + s0), "+a" + std::to_string(n_audio++)});
+        };
+
+        std::vector<size_t> pending;
+        double pending_sec = 0.0;
+        auto flush = [&]() {
+            if (pending.empty()) {
+                return;
+            }
+            for (size_t i : pending) {
+                add_frame(i);
+            }
+            add_audio(beg[pending.front()], end[pending.back()], frame_sec[pending.front()]);
+            pending.clear();
+            pending_sec = 0.0;
+        };
+
+        const double min_sec = 1.5;
+        const double max_sec = 29.5;
+        add_text("<|video_start|>");
+        for (size_t i = 0; i < n_fr; i++) {
+            if (n_used == 0) {
+                add_frame(i);
+                continue;
+            }
+            const double sec = (end[i] - beg[i]) * sec_per_mel;
+            if (sec + pending_sec < min_sec) {
+                pending.push_back(i);
+                pending_sec += sec;
+            } else if (sec + pending_sec <= max_sec) {
+                pending.push_back(i);
+                flush();
+            } else {
+                flush(); // the reference expects nothing pending here
+                add_frame(i);
+                const int64_t piece = std::max<int64_t>(1, (int64_t) (max_sec / sec_per_mel));
+                double piece_sec = frame_sec[i];
+                for (int64_t b = beg[i]; b < end[i]; b += piece) {
+                    const int64_t e = std::min(end[i], b + piece);
+                    add_audio(b, e, piece_sec);
+                    piece_sec += (e - b) * sec_per_mel;
+                }
+            }
+        }
+        flush();
+        add_text("<|video_end|>");
+    }
+
+    int32_t read_next_interleaved(mtmd_bitmap ** out_bitmap, char ** out_text) {
+        *out_bitmap = nullptr;
+        *out_text   = nullptr;
+        if (plan_pos >= plan.size()) {
+            return -1;
+        }
+        plan_item & item = plan[plan_pos++];
+        if (item.bitmap) {
+            *out_bitmap = item.bitmap;
+            item.bitmap = nullptr;
+            return 0;
+        }
+        *out_text = mtmd_strdup(item.text);
+        return *out_text ? 0 : -2;
+    }
+
     int32_t read_next(mtmd_bitmap ** out_bitmap, char ** out_text) {
+        if (interleave_audio) {
+            return read_next_interleaved(out_bitmap, out_text);
+        }
         *out_bitmap = nullptr;
         *out_text   = nullptr;
 
@@ -901,6 +1137,14 @@ static std::string video_resolve_bin(const char * bin_dir, const char * name) {
 #ifdef MTMD_VIDEO
 static void mtmd_helper_video_set_id(mtmd_helper_video * vctx, const std::string & id) {
     vctx->id = id;
+    // the plan is built during init, before the file id is known
+    // placeholder mode has no hash, but mtmd still needs the suffix to find the video
+    const std::string base = id.empty() ? "video" : id;
+    for (auto & item : vctx->plan) {
+        if (item.bitmap) {
+            mtmd_bitmap_set_id(item.bitmap, (base + item.id_suffix).c_str());
+        }
+    }
 }
 
 static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
@@ -941,17 +1185,37 @@ mtmd_helper_video * mtmd_helper_video_init(
     ctx->ffmpeg_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
     ctx->ffprobe_bin          = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
     ctx->timestamp_interval_ms = params.timestamp_interval_ms;
+    ctx->interleave_audio     = mctx && mtmd_video_interleave_audio(mctx);
+    ctx->sample_rate          = ctx->interleave_audio ? mtmd_get_audio_sample_rate(mctx) : 0;
+    const float fps = ctx->interleave_audio ? 0.0f : params.fps_target;
 
-    if (!ctx->probe(params.fps_target)) {
+    if (!ctx->probe(fps)) {
         LOG_ERR("%s: ffprobe failed for '%s' (is ffprobe in PATH?)\n", __func__, path);
         delete ctx;
         return nullptr;
+    }
+
+    if (ctx->interleave_audio) {
+        ctx->setup_sampling();
+    }
+
+    if (ctx->interleave_audio && !ctx->extract_pcm()) {
+        LOG_WRN("%s: no audio track in '%s'\n", __func__, path);
     }
 
     if (!ctx->start_ffmpeg(0.0f)) {
         LOG_ERR("%s: failed to start ffmpeg for '%s' (is ffmpeg in PATH?)\n", __func__, path);
         delete ctx;
         return nullptr;
+    }
+
+    if (ctx->interleave_audio) {
+        if (!ctx->drain_frames()) {
+            LOG_ERR("%s: failed to read frames from '%s'\n", __func__, path);
+            delete ctx;
+            return nullptr;
+        }
+        ctx->build_plan();
     }
 
     return ctx;
@@ -976,17 +1240,37 @@ mtmd_helper_video * mtmd_helper_video_init_from_buf(
     ctx->ffmpeg_bin            = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
     ctx->ffprobe_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
     ctx->timestamp_interval_ms = params.timestamp_interval_ms;
+    ctx->interleave_audio      = mctx && mtmd_video_interleave_audio(mctx);
+    ctx->sample_rate           = ctx->interleave_audio ? mtmd_get_audio_sample_rate(mctx) : 0;
+    const float fps = ctx->interleave_audio ? 0.0f : params.fps_target;
 
-    if (!ctx->probe(params.fps_target)) {
+    if (!ctx->probe(fps)) {
         LOG_ERR("%s: ffprobe failed on buffer (is ffprobe in PATH?)\n", __func__);
         delete ctx;
         return nullptr;
+    }
+
+    if (ctx->interleave_audio) {
+        ctx->setup_sampling();
+    }
+
+    if (ctx->interleave_audio && !ctx->extract_pcm()) {
+        LOG_WRN("%s: no audio track in buffer\n", __func__);
     }
 
     if (!ctx->start_ffmpeg(0.0f)) {
         LOG_ERR("%s: failed to start ffmpeg on buffer (is ffmpeg in PATH?)\n", __func__);
         delete ctx;
         return nullptr;
+    }
+
+    if (ctx->interleave_audio) {
+        if (!ctx->drain_frames()) {
+            LOG_ERR("%s: failed to read frames from buffer\n", __func__);
+            delete ctx;
+            return nullptr;
+        }
+        ctx->build_plan();
     }
 
     return ctx;

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -1925,6 +1926,15 @@ struct clip_model_loader {
                             get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                             get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                             get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                            std::vector<int> fusion;
+                            get_arr_int(KEY_VISION_FUSION_LAYER, fusion);
+                            if ((int) fusion.size() != hparams.n_layer) {
+                                throw std::runtime_error(string_format(
+                                    "%s: %s has %zu entries, expected %d\n",
+                                    __func__, KEY_VISION_FUSION_LAYER, fusion.size(), hparams.n_layer));
+                            }
+                            hparams.fusion_layer.assign(fusion.begin(), fusion.end());
+                            get_bool(KEY_VIDEO_GROUP_ATTENTION, hparams.video_group_attention, false);
                             // one merge-aligned tile is enough to build the graph
                             hparams.warmup_image_size = std::max(hparams.patch_size * hparams.n_merge, 32);
                         }
@@ -2814,22 +2824,24 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_YOUTU_OMNI:
                 {
-                    if (model.modality != CLIP_MODALITY_AUDIO) {
+                    const bool is_audio = model.modality == CLIP_MODALITY_AUDIO;
+                    if (!is_audio) {
                         model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                         model.mm_merger_fc1_w = get_tensor(string_format(TN_MM_MERGER_FC1, "weight"));
                         model.mm_merger_fc2_w = get_tensor(string_format(TN_MM_MERGER_FC2, "weight"));
-                    } else {
-                        model.conv2d_1_w    = get_tensor(string_format(TN_CONV2D, 1, "weight"));
-                        model.conv2d_1_b    = get_tensor(string_format(TN_CONV2D, 1, "bias"));
-                        model.conv2d_2_w    = get_tensor(string_format(TN_CONV2D, 2, "weight"));
-                        model.conv2d_2_b    = get_tensor(string_format(TN_CONV2D, 2, "bias"));
-                        model.conv2d_3_w    = get_tensor(string_format(TN_CONV2D, 3, "weight"));
-                        model.conv2d_3_b    = get_tensor(string_format(TN_CONV2D, 3, "bias"));
-                        model.conv_out_w    = get_tensor(string_format(TN_CONV_OUT, "weight"));
-                        model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"));
-                        model.mm_1_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                        model.mm_2_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
                     }
+                    // the vision context also loads the audio stem and merger, so a
+                    // video frame and its audio can share one transformer pass
+                    model.conv2d_1_w    = get_tensor(string_format(TN_CONV2D, 1, "weight"), is_audio);
+                    model.conv2d_1_b    = get_tensor(string_format(TN_CONV2D, 1, "bias"),   is_audio);
+                    model.conv2d_2_w    = get_tensor(string_format(TN_CONV2D, 2, "weight"), is_audio);
+                    model.conv2d_2_b    = get_tensor(string_format(TN_CONV2D, 2, "bias"),   is_audio);
+                    model.conv2d_3_w    = get_tensor(string_format(TN_CONV2D, 3, "weight"), is_audio);
+                    model.conv2d_3_b    = get_tensor(string_format(TN_CONV2D, 3, "bias"),   is_audio);
+                    model.conv_out_w    = get_tensor(string_format(TN_CONV_OUT, "weight"),  is_audio);
+                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"),   is_audio);
+                    model.mm_1_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"), is_audio);
+                    model.mm_2_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"), is_audio);
                 } break;
             case PROJECTOR_TYPE_YASA2:
                 {
@@ -4521,6 +4533,11 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 if (ctx->model.modality == CLIP_MODALITY_AUDIO) {
                     const int n_valid = img->audio_n_frames > 0 ? img->audio_n_frames : img->nx();
                     n_patches = clip_youtu_omni_audio_tokens(n_valid);
+                } else if (img->youtu_n_events > 0 && img->youtu_events != nullptr) {
+                    n_patches = 0;
+                    for (int i = 0; i < img->youtu_n_events; i++) {
+                        n_patches += img->youtu_events[i].n_out;
+                    }
                 } else {
                     n_patches /= params.n_merge * params.n_merge;
                 }
@@ -4780,6 +4797,16 @@ bool clip_image_encode(struct clip_ctx * ctx, int n_threads, const clip_image_f3
     return clip_image_batch_encode(ctx, n_threads, &imgs, out_vec);
 }
 
+// RGBRGB... --> RR..GG..BB..
+static void clip_rgb_to_planar(const float * src, int nx, int ny, float * dst) {
+    const size_t n = (size_t) nx * ny;
+    for (size_t i = 0; i < n; i++) {
+        dst[      i] = src[3*i    ];
+        dst[1*n + i] = src[3*i + 1];
+        dst[2*n + i] = src[3*i + 2];
+    }
+}
+
 bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd) {
     clip_encode_params params;
     params.imgs = imgs_c_ptr;
@@ -4974,7 +5001,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     };
 
     // set input pixel values
-    if (!imgs.is_audio) {
+    if (!imgs.is_audio && imgs.entries[0].youtu_n_events > 0) {
+        // A video group uploads each event under its own name.
+    } else if (!imgs.is_audio) {
         size_t nelem = 0;
         for (const auto & img : imgs.entries) {
             nelem += img.nx() * img.ny() * 3;
@@ -5001,17 +5030,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
             for (int b = 0; b < n_batch_cur; b++) {
                 LOG_DBG("%s: copying image %d/%d to input buffer (nx=%d, ny=%d)\n", __func__, b+1, n_batch_cur, nx, ny);
-                const auto & buf = imgs.entries[b].get_ro_buf();
-                float * batch_entry = inp_raw.data() + b * (3*n);
-                for (int y = 0; y < ny; y++) {
-                    for (int x = 0; x < nx; x++) {
-                        size_t base_src = 3*(y * nx + x);
-                        size_t base_dst =    y * nx + x;
-                        batch_entry[      base_dst] = buf[base_src    ];
-                        batch_entry[1*n + base_dst] = buf[base_src + 1];
-                        batch_entry[2*n + base_dst] = buf[base_src + 2];
-                    }
-                }
+                clip_rgb_to_planar(imgs.entries[b].get_ro_buf().data(), nx, ny, inp_raw.data() + b * (3*n));
             }
         }
         set_input_f32("inp_raw", inp_raw);
@@ -5312,6 +5331,23 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 }
                 set_input_f32("youtu_omni_rope_factors", factors);
 
+                // block-diagonal: every segment only attends to itself
+                auto set_segment_mask = [&](const std::vector<int> & seg_len) {
+                    int n = 0;
+                    for (int len : seg_len) {
+                        n += len;
+                    }
+                    std::vector<float> mask((size_t) n * n, std::numeric_limits<float>::lowest());
+                    int off = 0;
+                    for (int len : seg_len) {
+                        for (int r = off; r < off + len; r++) {
+                            std::fill_n(mask.begin() + (size_t) r * n + off, len, 0.0f);
+                        }
+                        off += len;
+                    }
+                    set_input_attn_mask(mask);
+                };
+
                 // (h, w) of each patch, in the 2x2 merge order of build_image_tokens()
                 auto for_each_patch = [](int pw, int ph, const std::function<void(int, int, int)> & fn) {
                     int i = 0;
@@ -5337,12 +5373,61 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     break;
                 }
 
-                std::vector<int32_t> positions((size_t) num_patches * 4, 0);
-                for_each_patch(pos_w, pos_h, [&](int i, int h, int w) {
-                    positions[    num_patches + i] = h;
-                    positions[2 * num_patches + i] = w;
-                });
+                const int n_events = imgs.entries[0].youtu_n_events;
+                if (n_events == 0) {
+                    std::vector<int32_t> positions((size_t) num_patches * 4, 0);
+                    for_each_patch(pos_w, pos_h, [&](int i, int h, int w) {
+                        positions[    num_patches + i] = h;
+                        positions[2 * num_patches + i] = w;
+                    });
+                    set_input_i32("positions", positions);
+                    break;
+                }
+
+                // video group: fusion layers use the shared time axis, the others restart per event
+                const clip_youtu_event * events = imgs.entries[0].youtu_events;
+                std::vector<clip_youtu_span> spans;
+                std::vector<int> seg_len;
+                int n_seq = 0;
+                for (int i = 0; i < n_events; i++) {
+                    spans.push_back(clip_youtu_span_of(events[i], patch_size, hparams.n_merge));
+                    seg_len.push_back(spans.back().n_tok);
+                    n_seq += spans.back().n_tok;
+                }
+                std::vector<int32_t> positions((size_t) n_seq * 4, 0);
+                std::vector<int32_t> positions_local((size_t) n_seq * 4, 0);
+                int cursor  = 0;
+                int frame_i = 0;
+                int audio_t = 0;
+                for (int i = 0; i < n_events; i++) {
+                    const clip_youtu_event & ev = events[i];
+                    const clip_youtu_span & span = spans[i];
+                    char name[32];
+                    snprintf(name, sizeof(name), "youtu_ev_%d", i);
+                    if (span.kind == 0) {
+                        const int t_half = clip_youtu_frame_half(frame_i++);
+                        for_each_patch(span.pw, span.ph, [&](int k, int h, int w) {
+                            const int tok = cursor + k;
+                            positions[tok] = t_half;
+                            positions[    n_seq + tok] = positions_local[    n_seq + tok] = clip_youtu_half(h);
+                            positions[2 * n_seq + tok] = positions_local[2 * n_seq + tok] = clip_youtu_half(w);
+                        });
+                        std::vector<float> planar((size_t) ev.nx * ev.ny * 3);
+                        clip_rgb_to_planar(ev.data, ev.nx, ev.ny, planar.data());
+                        set_input_f32(name, planar);
+                    } else {
+                        for (int t = 0; t < span.n_tok; t++) {
+                            positions[cursor + t]       = clip_youtu_half(audio_t + t);
+                            positions_local[cursor + t] = clip_youtu_half(t);
+                        }
+                        audio_t += span.n_tok;
+                        set_input_f32(name, std::vector<float>(ev.data, ev.data + (size_t) ev.nx * ev.ny));
+                    }
+                    cursor += span.n_tok;
+                }
                 set_input_i32("positions", positions);
+                set_input_i32("positions_local", positions_local);
+                set_segment_mask(seg_len);
             } break;
         case PROJECTOR_TYPE_STEP3VL:
             {

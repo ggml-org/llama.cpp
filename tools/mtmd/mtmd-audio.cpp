@@ -800,6 +800,36 @@ bool mtmd_audio_preprocessor_youtu_omni::preprocess(const float *               
     return true;
 }
 
+bool mtmd_audio_preprocessor_youtu_omni::preprocess_pieces(const float *                 samples,
+                                                            size_t                        n_samples,
+                                                            const std::vector<size_t> &   piece_len,
+                                                            std::vector<mtmd_audio_mel> & output) const {
+    const size_t hop = hparams.audio_hop_len;
+    const int64_t n_frames = (int64_t)(n_samples / hop);
+    if (n_frames == 0 || piece_len.empty()) {
+        return false;
+    }
+    mtmd_audio_mel mel_full;
+    if (!compute_mel(samples, n_samples, n_frames, mel_full)) {
+        return false;
+    }
+
+    std::vector<mtmd_audio_mel> pieces;
+    size_t  end_sample = 0;
+    int64_t off = 0;
+    for (size_t i = 0; i < piece_len.size(); i++) {
+        end_sample += piece_len[i];
+        const int64_t end = i + 1 == piece_len.size() ? n_frames : std::min(n_frames, (int64_t)(end_sample / hop));
+        if (end <= off) {
+            return false;
+        }
+        pieces.push_back(slice_mel(mel_full, off, end - off));
+        off = end;
+    }
+    output = std::move(pieces);
+    return true;
+}
+
 //
 // mtmd_audio_preprocessor_dots3note
 //

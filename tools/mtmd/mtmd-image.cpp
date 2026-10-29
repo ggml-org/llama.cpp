@@ -1768,7 +1768,10 @@ mtmd_image_preproc_out mtmd_image_preprocessor_youtuvl::preprocess(const clip_im
 //
 
 mtmd_image_preproc_out mtmd_image_preprocessor_youtu_omni::preprocess(const clip_image_u8 & img) const {
-    const int64_t max_px = hparams.image_max_pixels;
+    return preprocess(img, hparams.image_max_pixels);
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_youtu_omni::preprocess(const clip_image_u8 & img, int64_t max_px) const {
     GGML_ASSERT(hparams.image_min_pixels > 0 && max_px > 0);
     const int64_t factor = hparams.patch_size * hparams.n_merge;
     const int64_t min_px = hparams.image_min_pixels;

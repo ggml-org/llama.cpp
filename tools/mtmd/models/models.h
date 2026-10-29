@@ -88,6 +88,7 @@ struct clip_graph_youtu_omni : clip_graph {
     ggml_tensor * build_audio_tokens(ggml_tensor * mel, int n_keep);
     ggml_tensor * build_vision_merger(ggml_tensor * cur);
     ggml_tensor * build_audio_merger(ggml_tensor * cur);
+    ggml_cgraph * build_group(ggml_tensor * freq);
 };
 
 struct clip_graph_yasa2 : clip_graph {

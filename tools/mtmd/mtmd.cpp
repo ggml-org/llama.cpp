@@ -25,6 +25,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <climits>
+#include <map>
+#include <memory>
 #include <type_traits>
 #include <vector>
 
@@ -231,6 +233,26 @@ enum mtmd_pos_type {
 };
 
 
+// youtu-omni video: frames and audio chunks that are encoded together
+struct mtmd_youtu_event {
+    int kind = 0; // 0 vision, 1 audio
+    std::vector<float> data;
+    int32_t nx = 0;
+    int32_t ny = 0;
+    int32_t n_out = 0;
+};
+
+struct mtmd_youtu_group {
+    std::vector<mtmd_youtu_event> events;
+};
+
+// membership of an image or audio chunk in a youtu-omni video group
+struct mtmd_youtu_ref {
+    std::shared_ptr<mtmd_youtu_group> group;
+    int32_t event = -1;
+    std::string key;
+};
+
 struct mtmd_image_tokens {
     uint32_t nx = 0; // number of tokens in x direction
     uint32_t ny = 0; // number of tokens in y direction
@@ -268,6 +290,7 @@ struct mtmd_image_tokens {
     }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
+    mtmd_youtu_ref youtu;
 
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
@@ -289,7 +312,7 @@ struct mtmd_image_tokens {
 
     bool can_batch_with(const mtmd_image_tokens & other) {
         // a canvas chunk holds a whole image group, its layout is not given by nx/ny alone
-        // youtu-omni rows are interleaved with newlines per image
+        // youtu-omni rows are interleaved with newlines per image, and video frames are encoded per group
         return nx == other.nx && ny == other.ny && pos == other.pos
             && pos != MTMD_POS_TYPE_CANVAS && pos != MTMD_POS_TYPE_YOUTU_OMNI;
     }
@@ -302,7 +325,8 @@ struct mtmd_image_tokens {
             image_idx,
             n_temporal_merge,
             batch_f32.clone(),
-            id
+            id,
+            youtu,
         };
     }
 
@@ -336,6 +360,7 @@ struct mtmd_audio_tokens {
     uint32_t n_tokens = 0; // number of tokens
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
+    mtmd_youtu_ref youtu;
 
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
@@ -351,7 +376,8 @@ struct mtmd_audio_tokens {
         return mtmd_audio_tokens{
             n_tokens,
             batch_f32.clone(),
-            id
+            id,
+            youtu,
         };
     }
 
@@ -538,6 +564,9 @@ struct mtmd_context {
 
     bool print_timings;
     int n_threads;
+    // youtu-omni video groups: id counter, and embeddings of the chunks that are not encoded yet
+    mutable uint64_t youtu_pair_seq = 0;
+    std::map<std::string, std::vector<float>> youtu_stash;
     std::string media_marker;
     const int n_embd_text = -1; // -1 means llm context not provided, skip checking this
     const llama_vocab * vocab = nullptr; // can be nullptr if text_model is not provided
@@ -1232,6 +1261,122 @@ std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::
     return output;
 }
 
+static std::string mtmd_youtu_file_key(const std::string & id, bool audio) {
+    if (audio) {
+        const size_t plus = id.rfind("+a");
+        if (plus == std::string::npos || plus == 0) {
+            return {};
+        }
+        return id.substr(0, plus);
+    }
+    const size_t plus = id.rfind('+');
+    if (plus == std::string::npos || plus == 0 || plus + 1 >= id.size() || id[plus + 1] == 'a') {
+        return {};
+    }
+    return id.substr(0, plus);
+}
+
+static void mtmd_youtu_index_pairs(const mtmd_context * ctx, mtmd_input_chunks & chunks) {
+    if (!ctx->ctx_v || !ctx->ctx_a || clip_get_projector_type(ctx->ctx_v) != PROJECTOR_TYPE_YOUTU_OMNI) {
+        return;
+    }
+    const clip_hparams * hp = clip_get_hparams(ctx->ctx_v);
+    bool any_fusion = false;
+    for (int32_t layer : hp->fusion_layer) {
+        if (layer) {
+            any_fusion = true;
+            break;
+        }
+    }
+    if (!any_fusion) {
+        return;
+    }
+
+    struct ref {
+        size_t index;
+        int kind;
+        std::string file;
+    };
+    std::vector<ref> media;
+    const size_t n = chunks.entries.size();
+    for (size_t i = 0; i < n; i++) {
+        auto & chunk = chunks.entries[i];
+        if (chunk.type == MTMD_INPUT_CHUNK_TYPE_IMAGE && chunk.tokens_image) {
+            const std::string file = mtmd_youtu_file_key(chunk.tokens_image->id, false);
+            if (!file.empty() && chunk.tokens_image->batch_f32.entries.size() == 1) {
+                media.push_back({i, 0, file});
+            }
+        } else if (chunk.type == MTMD_INPUT_CHUNK_TYPE_AUDIO && chunk.tokens_audio) {
+            const std::string file = mtmd_youtu_file_key(chunk.tokens_audio->id, true);
+            if (!file.empty() && chunk.tokens_audio->batch_f32.entries.size() == 1) {
+                media.push_back({i, 1, file});
+            }
+        }
+    }
+
+    size_t begin = 0;
+    while (begin < media.size()) {
+        size_t end = begin + 1;
+        while (end < media.size() && media[end].file == media[begin].file) {
+            end++;
+        }
+        bool has_image = false;
+        for (size_t k = begin; k < end; k++) {
+            has_image = has_image || media[k].kind == 0;
+        }
+        // a video without audio is still one group of frames
+        if (has_image) {
+            // video_group_attention splits only at A -> I. Otherwise the file is one group,
+            // and each later frame moves the shared time cursor by 12.5.
+            std::vector<std::pair<size_t, size_t>> groups;
+            size_t g0 = begin;
+            if (hp->video_group_attention) {
+                int prev = -1;
+                for (size_t k = begin; k < end; k++) {
+                    if (media[k].kind == 0 && prev == 1) {
+                        groups.push_back({g0, k});
+                        g0 = k;
+                    }
+                    prev = media[k].kind;
+                }
+            }
+            groups.push_back({g0, end});
+
+            for (const auto & bounds : groups) {
+                bool g_image = false;
+                for (size_t k = bounds.first; k < bounds.second; k++) {
+                    g_image = g_image || media[k].kind == 0;
+                }
+                if (!g_image) {
+                    continue;
+                }
+                auto group = std::make_shared<mtmd_youtu_group>();
+                const std::string key = media[bounds.first].file + "#" + std::to_string(++ctx->youtu_pair_seq);
+                int event = 0;
+                for (size_t k = bounds.first; k < bounds.second; k++) {
+                    auto & chunk = chunks.entries[media[k].index];
+                    const bool is_image = media[k].kind == 0;
+                    const clip_image_f32 & src = is_image
+                        ? chunk.tokens_image->batch_f32.entries[0]
+                        : chunk.tokens_audio->batch_f32.entries[0];
+                    mtmd_youtu_event ev;
+                    ev.kind  = media[k].kind;
+                    ev.data  = src.get_ro_buf();
+                    ev.nx    = src.nx();
+                    ev.ny    = src.ny();
+                    ev.n_out = is_image
+                        ? (int32_t) (chunk.tokens_image->nx * chunk.tokens_image->ny)
+                        : (int32_t) chunk.tokens_audio->n_tokens;
+                    mtmd_youtu_ref & ref = is_image ? chunk.tokens_image->youtu : chunk.tokens_audio->youtu;
+                    ref = {group, event++, key};
+                    group->events.push_back(std::move(ev));
+                }
+            }
+        }
+        begin = end;
+    }
+}
+
 struct mtmd_tokenizer {
     const mtmd_context * ctx;
 
@@ -1248,6 +1393,10 @@ struct mtmd_tokenizer {
 
     mtmd_input_chunks cur;
     uint32_t n_images_added = 0; // 0-based index assigned to the next image chunk
+
+    // youtu-omni video: pixel budget of each frame, and audio mel cut from the mel of the whole track
+    std::map<const mtmd_bitmap *, int> youtu_frame_max_pixels;
+    std::map<const mtmd_bitmap *, mtmd_audio_mel> youtu_audio_mel;
 
     ~mtmd_tokenizer() {
         // note: mtmd::bitmap is already RAII
@@ -1367,6 +1516,8 @@ struct mtmd_tokenizer {
 
         auto merged_bitmaps = mtmd_group_mergeable_bitmaps(parts, n_merge_frames);
 
+        youtu_prepare_video();
+
         size_t i_bm = 0;
         for (const auto & p : parts) {
             if (p.bitmap != nullptr) {
@@ -1416,9 +1567,73 @@ struct mtmd_tokenizer {
             return 1;
         }
 
+        mtmd_youtu_index_pairs(ctx, cur);
         *output = std::move(cur);
 
         return 0;
+    }
+
+    // the bitmaps of one video are next to each other, and the first one is frame 0 (see mtmd-helper)
+    void youtu_prepare_video() {
+        if (!ctx->ctx_v || !ctx->ctx_a || ctx->proj_type_v() != PROJECTOR_TYPE_YOUTU_OMNI || ctx->proj_type_a() != PROJECTOR_TYPE_YOUTU_OMNI) {
+            return;
+        }
+        struct video {
+            std::vector<const mtmd_bitmap *> frames;
+            std::vector<const mtmd_bitmap *> audio;
+        };
+        std::vector<video> videos;
+        std::string cur_key;
+        for (const auto & p : parts) {
+            const mtmd_bitmap * bmp = p.bitmap;
+            if (bmp == nullptr) {
+                continue;
+            }
+            const std::string key = mtmd_youtu_file_key(bmp->id, bmp->is_audio);
+            if (key.empty()) {
+                cur_key.clear();
+                continue;
+            }
+            const bool first_frame = !bmp->is_audio && bmp->id.compare(key.size(), std::string::npos, "+0") == 0;
+            if (first_frame || key != cur_key) {
+                videos.emplace_back();
+                cur_key = key;
+            }
+            (bmp->is_audio ? videos.back().audio : videos.back().frames).push_back(bmp);
+        }
+
+        // video_max_num_tokens and video_image_max_num_tokens of the reference processor
+        const clip_hparams * hp = clip_get_hparams(ctx->ctx_v);
+        const int64_t px_per_tok = (int64_t) hp->patch_size * hp->n_merge * hp->patch_size * hp->n_merge;
+        const auto & audio_preproc = static_cast<const mtmd_audio_preprocessor_youtu_omni &>(*ctx->audio_preproc);
+        for (const auto & v : videos) {
+            if (!v.frames.empty()) {
+                const int max_px = (int) std::min(px_per_tok * 32768 / (int64_t) v.frames.size(), px_per_tok * 1024);
+                for (const auto * frame : v.frames) {
+                    youtu_frame_max_pixels[frame] = max_px;
+                }
+            }
+
+            std::vector<float>  track;
+            std::vector<size_t> piece_len;
+            for (const auto * piece : v.audio) {
+                if (piece->is_placeholder()) {
+                    piece_len.clear();
+                    break;
+                }
+                const auto & buf = piece->get_ro_buf();
+                const float * samples = (const float *) buf.data();
+                track.insert(track.end(), samples, samples + buf.size() / sizeof(float));
+                piece_len.push_back(buf.size() / sizeof(float));
+            }
+            std::vector<mtmd_audio_mel> mels;
+            if (piece_len.empty() || !audio_preproc.preprocess_pieces(track.data(), track.size(), piece_len, mels)) {
+                continue;
+            }
+            for (size_t i = 0; i < mels.size(); i++) {
+                youtu_audio_mel[v.audio[i]] = std::move(mels[i]);
+            }
+        }
     }
 
     void add_text(const std::string & txt, bool parse_special) {
@@ -1491,7 +1706,10 @@ struct mtmd_tokenizer {
                 img_u8.cpy_buf(bmp->get_ro_buf());
 
                 // preprocess image
-                mtmd_image_preproc_out tmp_preproc_out = ctx->image_preproc->preprocess(img_u8);
+                const auto frame_px = youtu_frame_max_pixels.find(bmp);
+                mtmd_image_preproc_out tmp_preproc_out = frame_px != youtu_frame_max_pixels.end()
+                    ? static_cast<const mtmd_image_preprocessor_youtu_omni &>(*ctx->image_preproc).preprocess(img_u8, frame_px->second)
+                    : ctx->image_preproc->preprocess(img_u8);
 
                 // move entries and grid dimensions to the "global" preproc_out
                 for (auto & entry : tmp_preproc_out.entries) {
@@ -1654,9 +1872,11 @@ struct mtmd_tokenizer {
                     image_tokens->nx  = clip_n_output_tokens_x(ctx->ctx_v, &e0);
                     image_tokens->ny  = clip_n_output_tokens_y(ctx->ctx_v, &e0);
                     image_tokens->pos = MTMD_POS_TYPE_YOUTU_OMNI;
-                    // resolution is height*width in resized pixels, followed by a newline
+                    // resolution is height*width in resized pixels, followed by a newline for images only
                     add_text(std::to_string(e0.ny()) + "*" + std::to_string(e0.nx()), true);
-                    add_text("\n", true);
+                    if (youtu_frame_max_pixels.count(bitmaps[0]) == 0) {
+                        add_text("\n", true);
+                    }
                 }
 
                 clip_image_f32_batch batch_f32;
@@ -1739,7 +1959,11 @@ struct mtmd_tokenizer {
                     LOG_ERR("%s: this model takes audio input only via mtmd_audio_stream\n", __func__);
                     return 2;
                 }
-                bool ok = ctx->audio_preproc->preprocess(samples, n_samples, mel_spec_chunks);
+                const auto video_mel = youtu_audio_mel.find(bitmap);
+                if (video_mel != youtu_audio_mel.end()) {
+                    mel_spec_chunks.push_back(std::move(video_mel->second));
+                }
+                bool ok = !mel_spec_chunks.empty() || ctx->audio_preproc->preprocess(samples, n_samples, mel_spec_chunks);
                 if (!ok) {
                     LOG_ERR("Unable to preprocess audio\n");
                     return 2;
@@ -2073,6 +2297,78 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
     return ok ? 0 : 1;
 }
 
+// The first chunk of a youtu-omni video group encodes the whole group in one graph,
+// and stashes the embeddings of the later chunks until they are encoded.
+static int32_t mtmd_encode_youtu(mtmd_context * ctx, const mtmd_youtu_ref & ref, std::vector<float> & out_embd) {
+    const auto & events = ref.group->events;
+    const int n_embd = ctx->n_embd_out();
+    auto stash_key = [&](size_t i) {
+        return ref.key + "/" + std::to_string(i);
+    };
+
+    if (ref.event != 0) {
+        auto it = ctx->youtu_stash.find(stash_key(ref.event));
+        if (it == ctx->youtu_stash.end()) {
+            LOG_ERR("%s: embedding for event %d is missing, the group leader must be encoded first\n", __func__, ref.event);
+            return 1;
+        }
+        const size_t expect = (size_t) events[ref.event].n_out * n_embd;
+        const bool ok = it->second.size() == expect;
+        if (ok) {
+            out_embd = std::move(it->second);
+        } else {
+            LOG_ERR("%s: embedding size %zu, expected %zu\n", __func__, it->second.size(), expect);
+        }
+        ctx->youtu_stash.erase(it);
+        return ok ? 0 : 1;
+    }
+
+    std::vector<clip_youtu_event> views(events.size());
+    const mtmd_youtu_event * first_image = nullptr;
+    size_t n_vis_out = 0;
+    size_t n_out     = 0;
+    for (size_t i = 0; i < events.size(); i++) {
+        const mtmd_youtu_event & ev = events[i];
+        views[i] = {ev.kind, ev.data.data(), ev.nx, ev.ny, ev.n_out};
+        if (ev.kind == 0) {
+            n_vis_out += ev.n_out;
+            first_image = first_image ? first_image : &ev;
+        }
+        n_out += ev.n_out;
+    }
+    if (first_image == nullptr) {
+        LOG_ERR("%s: a video group needs at least one frame\n", __func__);
+        return 1;
+    }
+
+    clip_image_f32 frame;
+    frame.set_size({first_image->nx, first_image->ny}, false, false);
+    frame.cpy_buf(first_image->data);
+    frame.youtu_n_events = (int32_t) views.size();
+    frame.youtu_events   = views.data();
+    GGML_ASSERT((size_t) clip_n_output_tokens(ctx->ctx_v, &frame) == n_out);
+
+    clip_image_f32_batch batch;
+    batch.entries.push_back(std::move(frame));
+    std::vector<float> combined(n_out * n_embd);
+    if (!clip_image_batch_encode(ctx->ctx_v, ctx->n_threads, &batch, combined)) {
+        LOG_ERR("%s: video group encode failed\n", __func__);
+        return 1;
+    }
+
+    // the encoder outputs all vision embeddings first, then all audio embeddings
+    size_t vis_off = 0;
+    size_t aud_off = n_vis_out * n_embd;
+    for (size_t i = 0; i < events.size(); i++) {
+        size_t & off = events[i].kind == 0 ? vis_off : aud_off;
+        const size_t n = (size_t) events[i].n_out * n_embd;
+        std::vector<float> & dst = i == 0 ? out_embd : ctx->youtu_stash[stash_key(i)];
+        dst.assign(combined.begin() + off, combined.begin() + off + n);
+        off += n;
+    }
+    return 0;
+}
+
 static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
@@ -2090,6 +2386,13 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
             return 1;
         }
+        if (chunk->tokens_image->youtu.group) {
+            std::vector<float> rows;
+            if (mtmd_encode_youtu(ctx, chunk->tokens_image->youtu, rows) != 0) {
+                return 1;
+            }
+            return mtmd_youtu_add_row_newlines(ctx, chunk->tokens_image.get(), rows, out_embd);
+        }
         return mtmd_encode_impl(ctx, chunk->tokens_image.get(), out_embd);
     } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
         if (!ctx->ctx_a) {
@@ -2103,6 +2406,9 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         if (chunk->tokens_audio->is_placeholder()) {
             LOG_ERR("%s: audio tokens batch is placeholder\n", __func__);
             return 1;
+        }
+        if (chunk->tokens_audio->youtu.group) {
+            return mtmd_encode_youtu(ctx, chunk->tokens_audio->youtu, out_embd);
         }
         int n_mmproj_embd = ctx->n_embd_out();
         out_embd.resize((size_t)chunk->tokens_audio->n_tokens * n_mmproj_embd);
@@ -2476,6 +2782,11 @@ bool mtmd_support_vision(const mtmd_context * ctx) {
 
 bool mtmd_support_audio(const mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
+}
+
+bool mtmd_video_interleave_audio(const mtmd_context * ctx) {
+    return ctx->ctx_v && ctx->ctx_a
+        && clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_YOUTU_OMNI;
 }
 
 int mtmd_get_audio_sample_rate(const mtmd_context * ctx) {
