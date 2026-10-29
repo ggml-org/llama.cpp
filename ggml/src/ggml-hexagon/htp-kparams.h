@@ -7,6 +7,7 @@
 #include "htp/argsort-ops.h"
 #include "htp/binary-ops.h"
 #include "htp/concat-ops.h"
+#include "htp/conv2d-ops.h"
 #include "htp/cpy-ops.h"
 #include "htp/cumsum-ops.h"
 #include "htp/diag-ops.h"

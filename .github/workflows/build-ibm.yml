@@ -43,9 +43,9 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  ubuntu-24-s390x:
-    name: ubuntu-24-s390x (VXE ${{ matrix.vxe }})
-    runs-on: ubuntu-24.04-s390x
+  ubuntu-26-s390x:
+    name: ubuntu-26-s390x (VXE ${{ matrix.vxe }})
+    runs-on: ubuntu-26.04-s390x
 
     strategy:
       fail-fast: false
@@ -65,12 +65,6 @@ jobs:
             python3 python3-pip python3-dev python3-wheel \
             libjpeg-dev build-essential libssl-dev \
             git-lfs
-
-      - name: Toolchain workaround (GCC 14)
-        run: |
-          sudo apt-get install -y gcc-14 g++-14
-          echo "CC=gcc-14" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Python Dependencies
         id: python_depends
@@ -116,30 +110,19 @@ jobs:
 
   ubuntu-26-zdnn-s390x:
     name: ubuntu-26-zdnn-s390x
-    runs-on: ubuntu-24.04-s390x
-    container: ubuntu:26.04  # required to get GCC 15.1 and binutils 2.44
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-26.04-s390x
 
     steps:
-      - name: Build Dependencies
-        id: build_depends
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential cmake git ca-certificates \
-            libssl-dev libzdnn-dev
-
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Toolchain workaround (GCC 15)
+      - name: Build Dependencies
+        id: build_depends
         run: |
-          apt-get install -y gcc-15 g++-15
-          echo "CC=gcc-15" >> "$GITHUB_ENV"
-          echo "CXX=g++-15" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libzdnn-dev
 
       - name: Build with zDNN Backend
         id: cmake_build

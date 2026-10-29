@@ -96,6 +96,8 @@ enum htp_op_code {
     HTP_OP_CLAMP,
     HTP_OP_LEAKY_RELU,
     HTP_OP_IM2COL,
+    HTP_OP_CONV_2D,
+    HTP_OP_CONV_2D_DW,
     HTP_OP_FENCE,
     HTP_OP_ALLREDUCE,
     HTP_OP_ALLREDUCE_ADD,
@@ -133,6 +135,8 @@ enum htp_op_code {
 #define HTP_OP_MAX_VMEM_DEFAULT (3355443200u)
 
 #define HTP_MMAP_MAX_VMEM  (2147483648u)
+
+#define HTP_DDR_SPAD_SIZE  (512 * 1024)
 
 enum htp_tensor_flags {
     HTP_TENSOR_WEIGHT   = (1U << 0), // Tensor buffer model weight data (not compute)
