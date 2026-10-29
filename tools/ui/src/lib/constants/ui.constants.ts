@@ -24,6 +24,16 @@ export const COLLAPSIBLE_TRANSITION_MS = 200;
 export const NATIVE_CONTEXT_MENU_SELECTOR =
 	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
 
+/** Chats a sidebar section shows before its "Show more" row. */
+export const SIDEBAR_SECTION_PREVIEW_COUNT = 6;
+
+/**
+ * The "Show less" row of an opened section stays at the bottom of the sidebar
+ * while the section scrolls under it, with room below it and a fade above
+ * (see app.css). "Show more" is a plain row.
+ */
+export const SIDEBAR_SHOW_MORE_ROW_CLASS = 'sidebar-show-more sticky bottom-0 z-10 pb-2';
+
 /** Ids of the sidebar's conversation sections, for their folded state. */
 export const SIDEBAR_SECTION_IDS = {
 	PINNED: 'pinned',

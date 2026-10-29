@@ -2,9 +2,14 @@
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import SidebarNavigationSectionHeading from './SidebarNavigationSectionHeading.svelte';
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
+	import SidebarNavigationShowMore from './SidebarNavigationShowMore.svelte';
 	import { Pin } from '@lucide/svelte';
 	import { CollapsibleRegion } from '$lib/components/app';
-	import { SIDEBAR_SECTION_IDS } from '$lib/constants';
+	import {
+		SIDEBAR_SECTION_IDS,
+		SIDEBAR_SECTION_PREVIEW_COUNT,
+		SIDEBAR_SHOW_MORE_ROW_CLASS
+	} from '$lib/constants';
 	import { uiStore } from '$lib/stores';
 	import { buildConversationTree } from '$lib/utils';
 
@@ -69,6 +74,13 @@
 	let unpinnedConversations = $derived(
 		conversationTree.filter(({ conversation }) => !conversation.pinned)
 	);
+
+	// a section lists its first chats until its "Show more" row opens all of it
+	function previewOf<T>(sectionId: string, items: T[]): T[] {
+		return uiStore.isSidebarSectionExpanded(sectionId)
+			? items
+			: items.slice(0, SIDEBAR_SECTION_PREVIEW_COUNT);
+	}
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
@@ -84,11 +96,13 @@
 
 		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.PINNED)}>
 			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-1 {className}">
-				{#each pinnedConversations as { conversation, depth } (conversation.id)}
+				{#each previewOf(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations) as { conversation, depth } (conversation.id)}
 					<li class="group/item relative mb-1 p-0">
 						{@render conversationItem(conversation, depth)}
 					</li>
 				{/each}
+
+				{@render showMore(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations.length)}
 			</ul>
 		</CollapsibleRegion>
 	{/if}
@@ -105,7 +119,7 @@
 		<div class="min-h-0 flex-1 md:overflow-y-auto">
 			<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}>
 				<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0">
-					{#each unpinnedConversations as { conversation, depth } (conversation.id)}
+					{#each previewOf(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations) as { conversation, depth } (conversation.id)}
 						<li class="group/item relative mb-1 p-0">
 							{@render conversationItem(conversation, depth)}
 						</li>
@@ -116,6 +130,8 @@
 							<p class="mb-4 p-4 text-sm text-muted-foreground">No conversations yet</p>
 						</li>
 					{/if}
+
+					{@render showMore(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations.length)}
 				</ul>
 			</CollapsibleRegion>
 		</div>
@@ -138,6 +154,20 @@
 		/>
 	{/if}
 </div>
+
+{#snippet showMore(sectionId: string, total: number)}
+	{#if total > SIDEBAR_SECTION_PREVIEW_COUNT}
+		<!-- only an opened section is long enough for its row to need to stick -->
+		<li
+			class={uiStore.isSidebarSectionExpanded(sectionId) ? SIDEBAR_SHOW_MORE_ROW_CLASS : 'mb-1 p-0'}
+		>
+			<SidebarNavigationShowMore
+				expanded={uiStore.isSidebarSectionExpanded(sectionId)}
+				onToggle={() => uiStore.toggleSidebarSectionExpanded(sectionId)}
+			/>
+		</li>
+	{/if}
+{/snippet}
 
 {#snippet conversationItem(conversation: DatabaseConversation, depth = 0)}
 	<SidebarNavigationConversationItem

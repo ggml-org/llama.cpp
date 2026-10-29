@@ -43,14 +43,16 @@ function loadCollapsedSidebarSections(): SvelteSet<string> {
 class UiStore {
 	/** Sidebar conversation sections the user folded, kept across reloads. */
 	collapsedSidebarSections = loadCollapsedSidebarSections();
-
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
 	composerFocusRequested = $state(false);
 
 	/** Repo the Discover dialog selects when it opens, set by a model row. */
 	discoverModelFocus = $state<string | null>(null);
+
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
+	/** Sidebar sections showing all their chats past the preview, for this session. */
+	expandedSidebarSections = new SvelteSet<string>();
 
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);
@@ -110,6 +112,10 @@ class UiStore {
 	/** Close any open models selector. */
 	closeModelsSelector(): void {
 		this.modelsSelectorCloseSignal++;
+	}
+
+	isSidebarSectionExpanded(id: string): boolean {
+		return this.expandedSidebarSections.has(id);
 	}
 
 	isSidebarSectionOpen(id: string): boolean {
@@ -175,6 +181,15 @@ class UiStore {
 			);
 		} catch {
 			// the fold still applies for this session
+		}
+	}
+
+	/** Show all of a sidebar section's chats, or only its first ones again. */
+	toggleSidebarSectionExpanded(id: string): void {
+		if (this.expandedSidebarSections.has(id)) {
+			this.expandedSidebarSections.delete(id);
+		} else {
+			this.expandedSidebarSections.add(id);
 		}
 	}
 

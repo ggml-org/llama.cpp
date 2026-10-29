@@ -251,6 +251,29 @@
 		);
 	}
 
+	/* The sidebar's "Show more" row, stuck to its bottom: an opaque copy of the
+	   panel's translucent muted tint, and a fade above it, like the one under
+	   the tab bar, so the rows scrolling beneath end softly */
+	.sidebar-show-more {
+		--sidebar-surface: color-mix(in oklab, var(--muted) 60%, var(--background));
+		background: var(--sidebar-surface);
+
+		&::before {
+			content: '';
+			position: absolute;
+			inset-inline: 0;
+			bottom: 100%;
+			height: 1rem;
+			pointer-events: none;
+			background: linear-gradient(
+				to top,
+				var(--sidebar-surface) 0%,
+				color-mix(in srgb, var(--sidebar-surface) 60%, transparent) 50%,
+				transparent 100%
+			);
+		}
+	}
+
 	.shimmer-text {
 		background: linear-gradient(
 			90deg,
