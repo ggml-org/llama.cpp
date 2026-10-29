@@ -7,34 +7,31 @@ on:
 cache-mode: none
 permissions:
   pull-requests: write
+  issues: write
 
 jobs:
   video-demo-label:
     runs-on: ubuntu-slim
     steps:
       - name: Add or remove the video demo label
-        uses: actions/github-script@v8
-        with:
-          script: |
-            // The body is only matched, never run or interpolated, so it is safe to read from a fork.
-            const body = context.payload.pull_request.body ?? '';
-            const label = 'video demo';
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # passed through env, so the body is only matched, never run, and is safe to read from a fork
+          BODY: ${{ github.event.pull_request.body }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'video demo') }}
+        run: |
+          # sections written by demo:pr (see tools/ui/demo/cli.ts): the managed comment
+          # markers, or a preview linking to a demo video uploaded for this PR
+          has_demo=false
+          if { grep -qF '<!-- demo:start -->' <<< "$BODY" && grep -qF '<!-- demo:end -->' <<< "$BODY"; } ||
+            grep -qE "/resolve/videos/pr/$PR_NUMBER/[0-9a-f]{10}\.mp4" <<< "$BODY"; then
+            has_demo=true
+          fi
 
-            // Sections written by demo:pr (see tools/ui/demo/cli.ts): the managed
-            // comment markers, or a preview linking to a demo video uploaded for this PR.
-            const hasMarkers = /<!-- demo:start -->[\s\S]*<!-- demo:end -->/.test(body);
-            const hasVideo = /\/resolve\/videos\/pr\/\d+\/[0-9a-f]{10}\.mp4/.test(body);
-            const hasDemo = hasMarkers || hasVideo;
-
-            const { owner, repo } = context.repo;
-            const issue_number = context.payload.pull_request.number;
-            const labels = (
-              await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number })
-            ).data.map((l) => l.name);
-            const has = labels.includes(label);
-
-            if (hasDemo && !has) {
-              await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [label] });
-            } else if (!hasDemo && has) {
-              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
-            }
+          if [ "$has_demo" = true ] && [ "$HAS_LABEL" = false ]; then
+            gh pr edit "$PR_URL" --add-label 'video demo'
+          elif [ "$has_demo" = false ] && [ "$HAS_LABEL" = true ]; then
+            gh pr edit "$PR_URL" --remove-label 'video demo'
+          fi
