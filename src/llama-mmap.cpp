@@ -308,13 +308,14 @@ struct llama_file::impl {
 
         const size_t aligned_offset = offset & ~(alignment - 1);
         const size_t offset_from_alignment = offset - aligned_offset;
-        if (len > (size_t) -1 - offset_from_alignment - (alignment - 1)) {
-            throw std::runtime_error("read size is too large");
-        }
         const size_t bytes_to_read = (offset_from_alignment + len + alignment - 1) & ~(alignment - 1);
+        const size_t buffer_size = std::min<size_t>(bytes_to_read, LLAMA_DIRECT_IO_BUFFER_SIZE);
 
-        void * raw_buffer = _aligned_malloc(bytes_to_read, alignment);
-        if (raw_buffer == nullptr) {
+        struct aligned_buffer_deleter {
+            void operator()(void * p) const { _aligned_free(p); }
+        };
+        std::unique_ptr<void, aligned_buffer_deleter> buffer(_aligned_malloc(buffer_size, alignment));
+        if (!buffer) {
             LLAMA_LOG_WARN("%s: Falling back to buffered I/O due to %s\n",
                            __func__, GetErrorMessageWin32(ERROR_NOT_ENOUGH_MEMORY).c_str());
             CloseHandle(fp_win32_direct);
@@ -325,16 +326,22 @@ struct llama_file::impl {
             return;
         }
 
-        struct aligned_buffer_deleter {
-            void operator()(void * p) const { _aligned_free(p); }
-        };
-        std::unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
-
         seek(aligned_offset, SEEK_SET);
-        read_raw_unsafe(buffer.get(), bytes_to_read);
 
-        memcpy(dest, reinterpret_cast<char *>(buffer.get()) + offset_from_alignment, len);
-        seek(offset + len, SEEK_SET);
+        size_t skip   = offset_from_alignment;
+        size_t copied = 0;
+        for (size_t done = 0; done < bytes_to_read; ) {
+            const size_t n = std::min(buffer_size, bytes_to_read - done);
+            read_raw_unsafe(buffer.get(), n);
+
+            const size_t chunk_skip = std::min(skip, n);
+            const size_t count = std::min(n - chunk_skip, len - copied);
+            memcpy(reinterpret_cast<char *>(dest) + copied, reinterpret_cast<char *>(buffer.get()) + chunk_skip, count);
+
+            copied += count;
+            skip   -= chunk_skip;
+            done   += n;
+        }
     }
 
     void read_raw(void * ptr, size_t len) {

@@ -107,14 +107,19 @@ static void check_file(testing & t, const std::filesystem::path & path, bool use
         { alignment - 1, alignment + 3 },
         { LLAMA_FILE_IO_CHUNK_SIZE - 11, 27 },
         { test_file_size - 31, 31 },
+        { 1, LLAMA_DIRECT_IO_BUFFER_SIZE + 31 },
+        { 1, test_file_size - 1 },
         {0, test_file_size}
     };
     for (const auto & range : ranges) {
         std::vector<uint8_t> buffer(range.second);
         file.seek(range.first, SEEK_SET);
+        const bool direct_io = file.has_direct_io();
         file.read_raw(buffer.data(), buffer.size());
         t.assert_true("read expected bytes", matches(buffer.data(), range.first, buffer.size()));
-        t.assert_equal(range.first + range.second, file.tell());
+        if (!direct_io) {
+            t.assert_equal(range.first + range.second, file.tell());
+        }
     }
 
     std::vector<uint8_t> buffer(test_io_size);
