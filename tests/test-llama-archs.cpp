@@ -6,6 +6,7 @@
 #include "ggml-cpp.h"
 #include "llama.h"
 #include "llama-cpp.h"
+
 #include "../src/llama-ext.h"
 
 #include <algorithm>
@@ -893,6 +894,40 @@ static bool check_causal_attn_toggle(
     return ok;
 }
 
+static void test_spark_final_layer_features(
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
+    const uint32_t n_layer = llama_model_n_layer(model);
+    const uint32_t n_embd = llama_model_n_embd(model);
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    std::vector<float> features_ref;
+    std::vector<float> logits_ref;
+    common_batch batch(lctx);
+
+    llama_set_embeddings_layer_inp(lctx, n_layer, true);
+    for (bool all_logits : {true, false}) {
+        llama_memory_clear(llama_get_memory(lctx), true);
+        batch.clear();
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            batch.add(tokens[i], i, 0, all_logits || i == tokens.size() - 1);
+        }
+        GGML_ASSERT(llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+
+        const float * features = llama_get_embeddings_layer_inp(lctx, n_layer);
+        const float * logits = llama_get_logits_ith(lctx, -1);
+        GGML_ASSERT(features != nullptr && logits != nullptr);
+        const std::vector<float> features_cur(features, features + tokens.size() * n_embd);
+        const std::vector<float> logits_cur(logits, logits + n_vocab);
+        if (all_logits) {
+            features_ref = features_cur;
+            logits_ref = logits_cur;
+        } else {
+            GGML_ASSERT(nmse(features_ref, features_cur) < 1e-6);
+            GGML_ASSERT(nmse(logits_ref, logits_cur) < 1e-6);
+        }
+    }
+    llama_set_embeddings_layer_inp(lctx, n_layer, false);
+}
+
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_FLINT:
@@ -1272,6 +1307,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         test_executed = true;
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
+                        if (arch == LLM_ARCH_SPARK2_5) {
+                            for (size_t n_tokens : {size_t(6), tokens.size()}) {
+                                test_spark_final_layer_features(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(),
+                                    std::vector<llama_token>(tokens.begin(), tokens.begin() + n_tokens));
+                            }
+                        }
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
