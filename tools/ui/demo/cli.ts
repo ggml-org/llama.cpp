@@ -11,6 +11,7 @@
 import { DEMO_TRACES, generateTrace } from './fixtures/traces.ts';
 import { type DemoStorage, getDemoStorage, getPublicUrl } from './storage.ts';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
 	existsSync,
 	mkdirSync,
@@ -126,6 +127,17 @@ function upload(storage: DemoStorage, files: Record<string, string>): void {
 	}
 }
 
+/**
+ * Public URL with a content hash, so a re-recorded file at the same key gets a new
+ * URL: GitHub's image proxy caches previews by URL.
+ */
+function versionedUrl(key: string, file: string): null | string {
+	const url = getPublicUrl(key);
+	const version = createHash('sha1').update(readFileSync(file)).digest('hex').slice(0, 10);
+
+	return url && `${url}?v=${version}`;
+}
+
 function demoSection(gifUrl: string, mp4Url: string, sha: string): string {
 	return [
 		SECTION_START,
@@ -199,8 +211,8 @@ async function recordPr(number: string): Promise<void> {
 			[`${prefix}.mp4`]: mp4
 		});
 
-		const gifUrl = getPublicUrl(`${prefix}.gif`);
-		const mp4Url = getPublicUrl(`${prefix}.mp4`);
+		const gifUrl = versionedUrl(`${prefix}.gif`, gif);
+		const mp4Url = versionedUrl(`${prefix}.mp4`, mp4);
 
 		if (!gifUrl || !mp4Url) {
 			console.log('DEMO_STORAGE_PUBLIC_URL is not set: not linking the video in the PR.');
