@@ -236,6 +236,12 @@ class DeepseekModel(TextModel):
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        # MLA projections do not have runtime weight-scale support.
+        if name.endswith((".q_a_proj.weight", ".q_b_proj.weight", ".kv_a_proj_with_mqa.weight", ".kv_b_proj.weight")):
+            return ()
+        return super()._map_fp8_weight_names(name)
+
     # TODO @ngxson : remove this when we support MTP for deepseek models
     skip_mtp = True
 
