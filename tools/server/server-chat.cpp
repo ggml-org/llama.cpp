@@ -3,6 +3,32 @@
 
 #include <sstream>
 
+json server_chat_convert_responses_tools(const json & tools) {
+    if (!tools.is_array()) {
+        throw std::invalid_argument("'tools' must be an array of objects");
+    }
+    json chatcmpl_tools = json::array();
+    for (json resp_tool : tools) {
+        json chatcmpl_tool;
+
+        const std::string type = json_value(resp_tool, "type", std::string());
+        if (type != "function") {
+            // Non-function Responses tools have no Chat Completions equivalent.
+            SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
+            continue;
+        }
+        resp_tool.erase("type");
+        chatcmpl_tool["type"] = "function";
+
+        if (!resp_tool.contains("strict")) {
+            resp_tool["strict"] = true;
+        }
+        chatcmpl_tool["function"] = resp_tool;
+        chatcmpl_tools.push_back(chatcmpl_tool);
+    }
+    return chatcmpl_tools;
+}
+
 json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
@@ -264,28 +290,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     chatcmpl_body["messages"] = chatcmpl_messages;
 
     if (response_body.contains("tools")) {
-        if (!response_body.at("tools").is_array()) {
-            throw std::invalid_argument("'tools' must be an array of objects");
-        }
-        std::vector<json> chatcmpl_tools;
-        for (json resp_tool : response_body.at("tools")) {
-            json chatcmpl_tool;
-
-            const std::string type = json_value(resp_tool, "type", std::string());
-            if (type != "function") {
-                // Non-function Responses tools have no Chat Completions equivalent.
-                SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
-                continue;
-            }
-            resp_tool.erase("type");
-            chatcmpl_tool["type"] = "function";
-
-            if (!resp_tool.contains("strict")) {
-                resp_tool["strict"] = true;
-            }
-            chatcmpl_tool["function"] = resp_tool;
-            chatcmpl_tools.push_back(chatcmpl_tool);
-        }
+        const json chatcmpl_tools = server_chat_convert_responses_tools(response_body.at("tools"));
         chatcmpl_body.erase("tools");
         if (!chatcmpl_tools.empty()) {
             chatcmpl_body["tools"] = chatcmpl_tools;
@@ -720,4 +725,23 @@ json convert_transcriptions_to_chatcmpl(
     }
 
     return chatcmpl_body;
+}
+
+llama_tokens server_chat_get_asr_prompt(const llama_model * model) {
+    const char * src = llama_model_chat_template(model, "asr");
+    if (src == nullptr) {
+        return {};
+    }
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const llama_token bos = llama_vocab_bos(vocab);
+    const common_chat_template tmpl(src, bos == LLAMA_TOKEN_NULL ? "" : common_token_to_piece(vocab, bos, true), "");
+    jinja::context ctx(tmpl.source());
+    jinja::global_from_json(ctx, json {
+        {"bos_token",             tmpl.bos_token()},
+        {"messages",              json::array()},
+        {"add_generation_prompt", true},
+    }, false);
+    jinja::runtime runtime(ctx);
+    const std::string prompt = jinja::runtime::gather_string_parts(runtime.execute(tmpl.prog))->as_string().str();
+    return common_tokenize(vocab, prompt, false, true);
 }

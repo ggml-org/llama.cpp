@@ -220,6 +220,8 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
         case COMMON_DECISION_TYPE_H2O_LIGHTNING:
         case COMMON_DECISION_TYPE_MINICPM_OCR_JEV:
+        case COMMON_DECISION_TYPE_LFM3_D1:
+        case COMMON_DECISION_TYPE_LFM3_D1_OMNI:
             out = {"decisions"};
             break;
         case COMMON_DECISION_TYPE_GRANITE_SWITCH:
@@ -1442,7 +1444,7 @@ json oaicompat_chat_params_parse(
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
     inputs.use_jinja              = opt.use_jinja;
-    inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
+    inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps.at("supports_parallel_tool_calls").get<bool>());
     inputs.add_generation_prompt  = json_value(body, "add_generation_prompt", true);
     inputs.continue_final_message = body.contains("continue_final_message") ?
         common_chat_continuation_parse(body.at("continue_final_message")) :

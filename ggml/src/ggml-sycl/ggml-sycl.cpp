@@ -108,6 +108,7 @@ int g_ggml_sycl_enable_mkl_fa = 1;
 int g_ggml_sycl_lightning_indexer = 0;
 int g_ggml_sycl_lightning_indexer_xmx_types = GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES_DEFAULT;
 int g_ggml_sycl_lightning_indexer_xmx_shapes = GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT;
+int g_ggml_sycl_fa_dpas = 1;
 int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
@@ -213,10 +214,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
     int64_t total_vram = 0;
 /* This is a bit misleading;  reserved for later */
-// #if defined(SYCL_USE_XMX)
-//     GGML_LOG_INFO("%s: SYCL_USE_XMX: yes\n", __func__);
+// #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
+//     GGML_LOG_INFO("%s: GGML_SYCL_SUPPORT_XMX: yes\n", __func__);
 // #else
-//     GGML_LOG_INFO("%s: SYCL_USE_XMX: no\n", __func__);
+//     GGML_LOG_INFO("%s: GGML_SYCL_SUPPORT_XMX: no\n", __func__);
 // #endif
     for (int i = 0; i < info.device_count; ++i) {
         dpct::device_info prop;
@@ -441,6 +442,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_lightning_indexer = ggml_sycl_get_env("GGML_SYCL_LIGHTNING_INDEXER", 0);
         g_ggml_sycl_lightning_indexer_xmx_types = ggml_sycl_get_env("GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES", GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES_DEFAULT);
         g_ggml_sycl_lightning_indexer_xmx_shapes = ggml_sycl_get_env("GGML_SYCL_LIGHTNING_INDEXER_XMX_SHAPES", GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT);
+        g_ggml_sycl_fa_dpas = ggml_sycl_get_env("GGML_SYCL_FA_DPAS", 1);
         g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
@@ -511,6 +513,12 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: no\n");
 #endif
 
+#if defined(GGML_SYCL_SUPPORT_XMX)
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_XMX: yes\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_XMX: no\n");
+#endif
+
 #if defined(GGML_SYCL_GRAPH)
         GGML_LOG_INFO("  GGML_SYCL_GRAPH: yes\n");
 #else
@@ -555,6 +563,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_LIGHTNING_INDEXER: %d\n", g_ggml_sycl_lightning_indexer);
         GGML_LOG_INFO("  GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES: %d\n", g_ggml_sycl_lightning_indexer_xmx_types);
         GGML_LOG_INFO("  GGML_SYCL_LIGHTNING_INDEXER_XMX_SHAPES: %d\n", g_ggml_sycl_lightning_indexer_xmx_shapes);
+        GGML_LOG_INFO("  GGML_SYCL_FA_DPAS: %d\n", g_ggml_sycl_fa_dpas);
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE: %d\n", g_ggml_sycl_memtrace);
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE_STEP: %d\n", g_ggml_sycl_memtrace_step);
 #ifdef SYCL_FLASH_ATTN
@@ -620,10 +629,10 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_SPARSE_FA_MARGIN: %d\n", g_ggml_sycl_sparse_fa_margin);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
-#if defined(SYCL_USE_XMX)
-        fprintf(stderr, "%s: SYCL_USE_XMX: yes\n", __func__);
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
+        fprintf(stderr, "%s: GGML_SYCL_SUPPORT_XMX: yes\n", __func__);
 #else
-        fprintf(stderr, "%s: SYCL_USE_XMX: no\n", __func__);
+        fprintf(stderr, "%s: GGML_SYCL_SUPPORT_XMX: no\n", __func__);
 #endif
 */
 #ifdef GGML_SYCL_GRAPH
@@ -3019,6 +3028,35 @@ static void top_k_f32_sycl(
         return;
     }
 
+    // Short rows: one work-item per column and k work-group argmax rounds.
+    // Ties take the lower column.
+    const int wg = std::max(WARP_SIZE, next_power_of_2((int) ncols));
+    if (wg <= ggml_sycl_info().max_work_group_sizes[ctx.device]) {
+        main_stream->parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(nrows * wg), sycl::range<1>(wg)),
+            [=](sycl::nd_item<1> item_ct1) {
+                const int64_t row = item_ct1.get_group(0);
+                const int     tid = item_ct1.get_local_id(0);
+                const auto    grp = item_ct1.get_group();
+
+                // NaN is never preferred, and every round still has a winner since k <= ncols
+                const float x     = tid < ncols ? src[row * ncols + tid] : -INFINITY;
+                const float val   = sycl::isnan(x) ? -INFINITY : x;
+                bool        taken = tid >= ncols;
+                for (int i = 0; i < k; i++) {
+                    const float cand   = taken ? -INFINITY : val;
+                    const float best   = sycl::reduce_over_group(grp, cand, sycl::maximum<float>());
+                    const int   winner = sycl::reduce_over_group(grp, !taken && cand == best ? tid : INT_MAX,
+                                                                 sycl::minimum<int>());
+                    if (tid == winner) {
+                        dst_indices[row * k + i] = tid;
+                        taken = true;
+                    }
+                }
+            });
+        return;
+    }
+
     const int block_size = 128;
 
     const sycl::range<1> block_dims(block_size);
@@ -5151,11 +5189,11 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     if (!ggml_sycl_supports_mmq(src0->type) || src0->type == GGML_TYPE_IQ2_XXS) {
         return false;
     }
-#ifdef SYCL_USE_XMX
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
     if (src1->ne[1] > MMQ_MAX_BATCH_SIZE) {
         return false;
     }
-#endif // SYCL_USE_XMX
+#endif // GGML_SYCL_SUPPORT_XMX && !GGML_SYCL_FORCE_MMQ
     return src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 }
 

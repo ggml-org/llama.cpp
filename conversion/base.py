@@ -350,6 +350,12 @@ class ModelBase:
             def dequant_simple(weight: Tensor, scale: Tensor, block_size: Sequence[int] | None = None) -> Tensor:
                 scale = scale.float()
 
+                # ModelOpt block scales are pre-shaped for broadcasting, e.g. [out/128, 1, in/128, 1]
+                if block_size is None and scale.ndim == 2 * weight.ndim and all(n == 1 for n in scale.shape[1::2]):
+                    assert all(w % n == 0 for w, n in zip(weight.shape, scale.shape[0::2]))
+                    block_size = [w // n for w, n in zip(weight.shape, scale.shape[0::2])]
+                    scale = scale.reshape(tuple(scale.shape[0::2]))
+
                 if block_size is not None:
                     dim_offset = scale.ndim - len(block_size)
                     for i, size in enumerate(block_size):
@@ -1035,7 +1041,7 @@ class ModelBase:
         expert_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_input_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_shapes: dict[tuple[int, str], list[int]] = {}
-        n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
+        n_experts = self.find_hparam(["num_local_experts", "num_experts", "n_routed_experts"], optional=True) or 0
         consumed: list[str] = []
 
         for name in self.model_tensors.keys():
@@ -2672,7 +2678,13 @@ class TextModel(ModelBase):
         )
 
         if vocab.tokenizer_type == MistralTokenizerType.tekken:
-            self.gguf_writer.add_tokenizer_pre("tekken")
+            with open(vocab.fname_tokenizer, encoding="utf-8") as f:
+                pattern = json.load(f)["config"]["pattern"]
+            # newer tekken.json split numbers into right-aligned groups of 3 digits instead of single digits
+            if "\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))" in pattern:
+                self.gguf_writer.add_tokenizer_pre("tekken-num3")
+            else:
+                self.gguf_writer.add_tokenizer_pre("tekken")
             self.gguf_writer.add_token_merges(
                 vocab.extract_vocab_merges_from_model()
             )

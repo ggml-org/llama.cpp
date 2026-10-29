@@ -37,7 +37,7 @@ struct case_multi_seq_split_replay : ctx_test {
         // both contexts have the same layout, only what they decode differs
         const auto make_ctx_multi = [&]() {
             ctx_opts opts;
-            opts.n_ctx      = 256;
+            opts.n_ctx      = 512;
             opts.n_batch    = 256;
             opts.n_ubatch   = n_ubatch;
             opts.n_seq_max  = n_seqs;
@@ -367,7 +367,7 @@ struct case_shared_seq_reserve : ctx_test {
         constexpr uint32_t n_continue = 32;
 
         ctx_opts opts;
-        opts.n_ctx      = 512;
+        opts.n_ctx      = 256;
         opts.n_batch    = 256;
         opts.n_ubatch   = 64;
         opts.n_seq_max  = n_seqs;

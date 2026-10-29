@@ -11,8 +11,8 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf
-from .lfm2 import lfm2_feed_forward_length
+from .base import MmprojModel, ModelBase, TextModel, gguf, logger
+from .lfm2 import D1Model, lfm2_feed_forward_length
 
 
 @ModelBase.register("Lfm3ForCausalLM", "Lfm3VlForConditionalGeneration", "Lfm3OmniForConditionalGeneration")
@@ -119,6 +119,63 @@ class LFM3Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+# d1 on LFM3-VL / LFM3-Omni: the stock weights, the d1 prompt read at its last token
+_D1_TYPES = {"lfm3_vl": gguf.DecisionType.LFM3_D1, "lfm3_omni": gguf.DecisionType.LFM3_D1_OMNI}
+
+
+def _is_lfm3_d1_checkpoint(dir_model: Path) -> bool:
+    if not (dir_model / "config.json").is_file():
+        return False
+    with open(dir_model / "config.json", encoding="utf-8") as f:
+        config = json.load(f)
+    return config.get("architectures") == ["D1Model"] and config.get("model_type") in _D1_TYPES
+
+
+@ModelBase.register_hparams_loader(_is_lfm3_d1_checkpoint)
+def _load_lfm3_d1_hparams(dir_model: Path) -> dict[str, Any]:
+    logger.info("gguf: detected LFM3 d1 checkpoint")
+    hparams = ModelBase.load_hparams(dir_model, False, guess=False)
+    hparams["d1_family"] = hparams["model_type"]
+    # the mmproj is the base model's, the text model writes the decision
+    hparams["architectures"] = ["Lfm3VlForConditionalGeneration" if hparams["model_type"] == "lfm3_vl" else "Lfm3OmniForConditionalGeneration"]
+    hparams["text_config"]["architectures"] = ["Lfm3D1Model"]
+    return hparams
+
+
+@ModelBase.register("Lfm3D1Model")
+@ModelBase.example("LiquidAI/d1-2B", "LiquidAI/d1-omni-2B")
+class LFM3D1Model(LFM3Model):
+    model_arch = gguf.MODEL_ARCH.LFM3
+
+    # how the checkpoint serves, hard-coded in the server: assert the checkpoint records the same
+    _served = {"d1_codes": 2, "d1_attention": "set"}
+
+    def set_vocab(self):
+        # the vocab without the speech task templates of LFM3-Audio/Omni, d1 only decides
+        TextModel.set_vocab(self)
+        # the d1 prompt of LFM2, the LFM3 template writes an empty thought before the answer
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": D1Model._systemone_template() + "<think></think>"}])
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        for key, value in self._served.items():
+            if self.hparams.get(key) != value:
+                raise ValueError(f"unsupported d1 checkpoint: {key} = {self.hparams.get(key)!r}, expected {value!r}")
+
+        # a lone question reads the whole prompt both ways on the full attention layers
+        self.gguf_writer.add_causal_attention(False)
+        self.gguf_writer.add_decision_type(_D1_TYPES[self.hparams["d1_family"]])
+
+        # the option answers share one temperature
+        with open(self.dir_model / "calibration.json", encoding="utf-8") as f:
+            calibration = json.load(f)
+        if calibration.get("temperatures"):
+            raise ValueError("unsupported d1 calibration: per-bucket temperatures")
+        for name in ("noul", "choice", "score"):
+            self.gguf_writer.add_decision_temperature(name, calibration["default"])
+
+
 class LFM3VLVisionMixin(MmprojModel):
     """LFM3-VL vision tower and projector, shared with LFM3-Omni."""
 
@@ -146,6 +203,24 @@ class LFM3VLVisionMixin(MmprojModel):
         if resize_algo is None:
             raise ValueError(f"unsupported resample: {resample}")
         self.gguf_writer.add_vision_image_resize_algo(resize_algo)
+        self._check_video_config()
+
+    # mtmd_get_video_ts_style and the lfm3vl video frame sizing hardcode these, conversion fails on a mismatch
+    _video = {"fps": 2.0, "min_frames": 4, "temporal_patch_size": 2, "size": {"shortest_edge": 4096, "longest_edge": 25165824}}
+    _video_max_frames = 768
+
+    def _check_video_config(self):
+        import json
+        video = self.preprocessor_config.get("video_processor")
+        path = self.dir_model / "video_preprocessor_config.json"
+        if video is None and path.is_file():
+            with open(path, encoding="utf-8") as f:
+                video = json.load(f)
+        if video is None:
+            return
+        for k, v in {**self._video, "max_frames": self._video_max_frames}.items():
+            if video.get(k) != v:
+                raise ValueError(f"unsupported video {k}={video.get(k)!r}, expected {v!r}")
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if "patch_embd" in new_name:
@@ -505,6 +580,7 @@ class LFM3OmniMmprojModel(LFM3VLVisionMixin, LFM3AudioMmprojModel):
     has_audio_encoder = True
 
     _audio_sampling = {"audio_temperature": 0.4, "audio_repetition_penalty": 1.2, "audio_repetition_window": 64}
+    _video_max_frames = 384
 
     # the audio side is the LFM3-Audio model under the HF-native names
     _audio_renames = (

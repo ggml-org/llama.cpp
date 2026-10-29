@@ -34,6 +34,7 @@ enum llama_non_causal_type {
     LLAMA_NON_CAUSAL_TYPE_ALL      = 0, // all layers non-causal, SWA still applied (gemma 3, qwen-vl, ...)
     LLAMA_NON_CAUSAL_TYPE_SWA_ONLY = 1, // SWA layers non-causal, dense layers stay causal (gemma 4)
     LLAMA_NON_CAUSAL_TYPE_SWA_FULL = 2, // all layers non-causal, SWA not applied between tokens of the current ubatch (deepseek 4)
+    LLAMA_NON_CAUSAL_TYPE_DENSE_ONLY = 3, // dense layers non-causal, SWA layers stay causal (lfm3 d1)
 };
 
 // M-RoPE: which input position slot feeds each RoPE section
@@ -83,6 +84,9 @@ struct llama_hparams {
 
     // TODO: this needs to be reworked
     int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
+
+    // layer il reads the KV cache of layer kv_source_impl[il] (own cache if equal to il)
+    std::array<uint32_t, LLAMA_MAX_LAYERS> kv_source_impl;
 
     // different head size for full_attention and SWA layers
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
@@ -225,6 +229,13 @@ struct llama_hparams {
     uint32_t n_hrm_h_cycles = 0;
     uint32_t n_hrm_l_cycles = 0;
     bool     hrm_prefix_lm = false;
+
+    // limite
+    float    f_xsa_eps = 0.0f;
+    std::array<float, 3> final_logit_sigmoid_capping = {}; // scale, shift, temperature
+    uint32_t n_mudd_ff   = 0;
+    uint32_t n_mudd_taps = 0;
+    std::array<int32_t, LLAMA_MAX_LAYERS> mudd_tap_idx; // [n_layer][n_mudd_taps], -1 = no mixing
 
     bool ssm_dt_b_c_rms = false;
 
@@ -506,6 +517,8 @@ struct llama_hparams {
     uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
+
+    uint32_t kv_source(uint32_t il) const;
 
     bool has_rope(uint32_t il) const;
 

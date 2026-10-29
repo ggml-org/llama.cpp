@@ -899,7 +899,9 @@ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
     if (pipeline.cnt) {
         const int n = pipeline.c4 ? ggml_nelements(op)/4 : ggml_nelements(op);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, 1, 1, 1);
+        const int nth = MIN(256, n);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (n + nth - 1)/nth, 1, 1, nth, 1, 1);
     } else {
         const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
         const int nth = MIN(args.ne00, nth_max);
@@ -952,7 +954,9 @@ int ggml_metal_op_glu(ggml_metal_op_t ctx, int idx) {
 
     const int64_t nrows = ggml_nrows(op->src[0]);
 
-    const int32_t nth = std::max(1, std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), ne00/2));
+    // split each row over several threadgroups: with a single row (decode) one threadgroup would run on one GPU core
+    const int32_t nth = std::max(1, std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), std::min(256, ne0)));
+    const int32_t nk  = (ne0 + nth - 1)/nth;
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -964,7 +968,7 @@ int ggml_metal_op_glu(ggml_metal_op_t ctx, int idx) {
     }
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, nk, nrows, 1, nth, 1, 1);
 
     return 1;
 }
@@ -4328,7 +4332,9 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, bid_dst,  3);
 
     if (pipeline.cnt) {
-        ggml_metal_encoder_dispatch_threadgroups(enc, args.ne0, ggml_nrows(op), 1, 1, 1, 1);
+        const int nth = MIN(256, args.ne0);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (args.ne0 + nth - 1)/nth, ggml_nrows(op), 1, nth, 1, 1);
     } else {
         const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 

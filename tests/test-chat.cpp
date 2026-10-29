@@ -2473,7 +2473,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({
                 run_in_terminal_tool
         })
-            .expect_content("Let me inspect the current directory.\n")
+            .expect_content("Let me inspect the current directory.")
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
@@ -2495,7 +2495,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 run_in_terminal_tool
         })
             .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
-            .expect_content("Let me inspect the current directory.\n")
+            .expect_content("Let me inspect the current directory.")
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
@@ -2604,7 +2604,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
                 .messages({ user_start, assistant_todos, tool_result, user_continue })
                 .expect_reasoning("I need to run a terminal command.")
-                .expect_content("Let me inspect the current directory.\n")
+                .expect_content("Let me inspect the current directory.")
                 .expect_tool_calls({
                     { "run_in_terminal", R"({"command": "pwd"})", {} },
                 })
@@ -7738,7 +7738,7 @@ static void test_template_generation_prompt() {
         preserve_reasoning_inputs.chat_template_kwargs["preserve_reasoning"] = "true";
         auto preserve_reasoning_params = common_chat_templates_apply(tmpls.get(), preserve_reasoning_inputs);
         assert_contains(preserve_reasoning_params.prompt.str(), "<｜Assistant｜><think>Previous reasoning</think>Previous answer");
-        assert_equals(true, common_chat_templates_get_caps(tmpls.get()).at("supports_preserve_reasoning"));
+        assert_equals(true, common_chat_templates_get_caps(tmpls.get()).at("supports_preserve_reasoning").get<bool>());
 
         auto no_preserve_reasoning_inputs = default_history_inputs;
         no_preserve_reasoning_inputs.chat_template_kwargs["preserve_reasoning"] = "false";
@@ -8146,12 +8146,12 @@ static void test_chat_session() {
         for (size_t i = 0; i < thinking.size(); i += 3) {
             session.feed(common_chat_input(thinking.substr(i, 3)));
         }
-        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n"), session.msg());
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking"), session.msg());
 
         for (size_t i = thinking.size(); i < output.size(); i += 3) {
             session.feed(common_chat_input(output.substr(i, 3)));
         }
-        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n", "special_function", "{\"arg1\":1}"), session.finish());
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}"), session.finish());
     }
 
     // a copy does not see what is fed to the original
@@ -8176,7 +8176,7 @@ static void test_chat_session() {
         common_chat_session session(tmpls.get(), nullptr, cont);
         assert_equals(std::string("<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, "),
                       session.generation_prompt());
-        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking\n"), session.msg());
+        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking"), session.msg());
         session.feed(common_chat_input("world!"));
         assert_equals(std::string("Hello, world!"), session.msg().content);
 
@@ -8311,7 +8311,7 @@ static void test_reasoning_effort_caps() {
 
     auto assert_supports_effort = [](const std::string & path, bool expected) {
         auto tmpls = read_templates(path);
-        assert_equals(expected, common_chat_templates_get_caps(tmpls.get()).at("supports_reasoning_effort"));
+        assert_equals(expected, common_chat_templates_get_caps(tmpls.get()).at("supports_reasoning_effort").get<bool>());
     };
 
     assert_supports_effort("models/templates/deepseek-ai-DeepSeek-V4.jinja", true);
@@ -8322,6 +8322,24 @@ static void test_reasoning_effort_caps() {
     assert_supports_effort("models/templates/Cohere2MoE.jinja", true);
     assert_supports_effort("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja", false);
     assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
+
+    auto assert_effort_levels = [](const std::string & path, const std::vector<std::string> & expected) {
+        auto tmpls = read_templates(path);
+        assert_equals(json(expected).dump(), common_chat_templates_get_caps(tmpls.get()).at("reasoning_effort_levels").dump());
+    };
+
+    const std::vector<std::string> all_levels = { "minimal", "low", "medium", "high", "xhigh", "max" };
+
+    assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4.jinja", { "max" });
+    assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja", { "high", "max" });
+    assert_effort_levels("models/templates/IFM-K2-Horizon.jinja", { "low", "medium", "high" });
+    assert_effort_levels("models/templates/tencent-Hy3.jinja", { "low", "high" });
+    assert_effort_levels("models/templates/muse-spark.jinja", { "minimal", "low", "medium", "high" });
+    assert_effort_levels("models/templates/upstage-Solar-Open-100B.jinja", { "low" });
+    assert_effort_levels("models/templates/muse-glimmer.jinja", all_levels);
+    assert_effort_levels("models/templates/openai-gpt-oss-120b.jinja", all_levels);
+    assert_effort_levels("models/templates/Cohere2MoE.jinja", {});
+    assert_effort_levels("models/templates/Qwen-Qwen3-0.6B.jinja", {});
 }
 
 static void test_msg_diffs_compute() {

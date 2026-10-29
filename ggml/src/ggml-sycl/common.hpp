@@ -144,6 +144,7 @@ enum ggml_sycl_lightning_indexer_xmx_type {
 static constexpr int GGML_SYCL_LIGHTNING_INDEXER_XMX_TYPES_DEFAULT = 7;
 extern int g_ggml_sycl_lightning_indexer_xmx_types;
 extern int g_ggml_sycl_lightning_indexer_xmx_shapes;
+extern int g_ggml_sycl_fa_dpas;
 extern int g_ggml_sycl_memtrace;
 extern int g_ggml_sycl_memtrace_step;
 extern int g_ggml_sycl_graph_eviction_timeout;
@@ -170,12 +171,6 @@ extern int g_ggml_sycl_graph_eviction_timeout;
 #define VER_GEN13 (VER_GEN12 + 1030) // todo for hardware optimize.
 
 #define GGML_SYCL_MAX_NODES 8192 // TODO: adapt to hardwares
-
-// define for XMX in Intel GPU
-// TODO: currently, it's not used for XMX really.
-#if !defined(GGML_SYCL_FORCE_MMQ)
-    #define SYCL_USE_XMX
-#endif
 
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32

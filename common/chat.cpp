@@ -1803,6 +1803,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.text.c_str());
 
     common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
+    if (!is_partial) {
+        flags |= COMMON_PEG_PARSE_FLAG_COMPLETE;
+    }
     if (params.debug) {
         flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
     }
@@ -1940,12 +1943,13 @@ const common_chat_msg & common_chat_session::finish(const common_chat_input & ch
     return result;
 }
 
-std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
+common_json common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
     GGML_ASSERT(chat_templates != nullptr);
     GGML_ASSERT(chat_templates->template_default != nullptr);
-    if (chat_templates->template_tool_use != nullptr) {
-        // take the more expressive template when available
-        return chat_templates->template_tool_use->caps.to_map();
-    }
-    return chat_templates->template_default->caps.to_map();
+    // take the more expressive template when available
+    const auto & caps = chat_templates->template_tool_use != nullptr ? chat_templates->template_tool_use->caps
+                                                                      : chat_templates->template_default->caps;
+    common_json result = caps.to_map();
+    result["reasoning_effort_levels"] = caps.reasoning_effort_levels;
+    return result;
 }

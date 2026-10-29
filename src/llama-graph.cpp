@@ -479,7 +479,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = self_kq_mask->ne[0];
     const int64_t n_tokens = ubatch->n_tokens;
 
-    const auto fill_mask = [&](auto * data, int64_t ne, int n_swa, llama_swa_type swa_type) {
+    const auto fill_mask = [&](auto * data, int64_t ne, int n_swa, llama_swa_type swa_type, bool causal) {
         using T = std::remove_reference_t<decltype(*data)>;
         std::fill(data, data + ne, llama_cast<T>(-INFINITY));
 
@@ -499,7 +499,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                 }
 
                 // mask future tokens
-                if (cparams.causal_attn && p0 > p1) {
+                if (causal && p0 > p1) {
                     continue;
                 }
 
@@ -517,21 +517,25 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
         }
     };
 
+    // see llama_non_causal_type
+    const bool causal     = cparams.causal_attn;
+    const bool causal_swa = cparams.causal_attn || hparams.non_causal_type == LLAMA_NON_CAUSAL_TYPE_DENSE_ONLY;
+
     GGML_ASSERT(self_kq_mask);
     GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
     if (self_kq_mask->type == GGML_TYPE_F16) {
-        fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE, causal);
     } else {
-        fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE, causal);
     }
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         GGML_ASSERT(self_kq_mask_swa);
         GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
         if (self_kq_mask_swa->type == GGML_TYPE_F16) {
-            fill_mask((ggml_fp16_t *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+            fill_mask((ggml_fp16_t *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type, causal_swa);
         } else {
-            fill_mask((float       *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+            fill_mask((float       *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type, causal_swa);
         }
     }
 }
@@ -3425,13 +3429,20 @@ ggml_tensor * llm_graph_context::build_attn(
     // by doing so, the number of splits in the graph is reduced
     // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
-    ggml_build_forward_expand(gf, v_cur);
-    ggml_build_forward_expand(gf, k_cur);
+
+    if (v_cur) {
+        ggml_build_forward_expand(gf, v_cur);
+    }
+
+    if (k_cur) {
+        ggml_build_forward_expand(gf, k_cur);
+    }
 
     const auto * mctx_cur = inp->mctx->get_mla();
 
     // store to KV cache
-    {
+    // note: k_cur is null for layers that reuse the KV cache of another layer
+    if (k_cur) {
         const auto & k_idxs = inp->get_k_idxs_mla();
 
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
@@ -3477,7 +3488,10 @@ ggml_tensor * llm_graph_context::build_attn(
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-    ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
+
+    // MLA: V is a view of the first n_embd_v elements of K
+    const int64_t n_embd_v = v_cur ? v_cur->ne[0] : v_mla->ne[0];
+    ggml_tensor * v = ggml_view_4d(ctx0, k, n_embd_v, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, top_k->ne[0], kq_scale, il);
     cb(cur, "kqv_out", il);

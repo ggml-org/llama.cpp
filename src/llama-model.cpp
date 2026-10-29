@@ -218,6 +218,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_glm_dsa(params);
         case LLM_ARCH_MISTRAL4:
             return new llama_model_mistral4(params);
+        case LLM_ARCH_MISTRAL_LARGE4:
+            return new llama_model_mistral_large4(params);
         case LLM_ARCH_CHATGLM:
             return new llama_model_chatglm(params);
         case LLM_ARCH_GLM4:
@@ -332,6 +334,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_hrm_text(params);
         case LLM_ARCH_BEAM:
             return new llama_model_beam(params);
+        case LLM_ARCH_LIMITE:
+            return new llama_model_limite(params);
         case LLM_ARCH_COGVLM:
             return new llama_model_cogvlm(params);
         case LLM_ARCH_PANGU_EMBED:
@@ -1465,6 +1469,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     std::fill(hparams.is_swa_impl.begin(),   hparams.is_swa_impl.end(), 0);
     std::fill(hparams.is_recr_impl.begin(),  hparams.is_recr_impl.end(),  llm_arch_is_recurrent(ml.get_arch()) ? 1 : 0);
     std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 0);
+    std::iota(hparams.kv_source_impl.begin(), hparams.kv_source_impl.end(), 0);
 
     std::fill(hparams.xielu_alpha_n.begin(), hparams.xielu_alpha_n.end(), 0.0f);
     std::fill(hparams.xielu_alpha_p.begin(), hparams.xielu_alpha_p.end(), 0.0f);
@@ -2627,7 +2632,7 @@ void llama_model::print_info() const {
         if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_DEEPSEEK2OCR ||
                 arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA ||
                 arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_MISTRAL4 ||
-                arch == LLM_ARCH_HY_V4) {
+                arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HY_V4) {
             LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
             LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
             LLAMA_LOG_INFO("%s: n_lora_kv             = %d\n",     __func__, hparams.n_lora_kv);
@@ -2801,8 +2806,11 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
     llama_memory_i * res;
 
-    // the non-causal LFM2 decision graph reads the whole prompt in one batch, nothing is kept
+    // the non-causal LFM2 and LFM3 decision graphs read the whole prompt in one batch, nothing is kept
     if (arch == LLM_ARCH_LFM2 && !hparams.causal_attn && hparams.n_layer_decision > 0) {
+        return nullptr;
+    }
+    if (arch == LLM_ARCH_LFM3 && !hparams.causal_attn) {
         return nullptr;
     }
 
@@ -2902,6 +2910,32 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             filter_lid,
                             nullptr);
                 }
+            } break;
+        case LLM_ARCH_MISTRAL_LARGE4:
+            {
+                // only "full" layers own an indexer, so the shared layers need no indexer cache
+                llama_kv_cache::layer_filter_cb filter_lid = [&](uint32_t il) { return hparams.is_indexer_full(il); };
+
+                // layers without own KV read the MLA cache of their source layer
+                llama_kv_cache::layer_reuse_cb reuse = [&](int32_t il) -> int32_t {
+                    return hparams.has_kv(il) ? -1 : (int32_t) hparams.kv_source(il);
+                };
+
+                res = new llama_kv_cache_dsa(
+                        *this,
+                        params.no_alloc,
+                        params.type_k,
+                        params.type_v,
+                        !cparams.flash_attn,
+                        cparams.offload_kqv,
+                        cparams.kv_unified,
+                        cparams.n_ctx_seq,
+                        cparams.n_seq_max,
+                        hparams.n_swa,
+                        hparams.swa_type,
+                        nullptr,
+                        filter_lid,
+                        reuse);
             } break;
         case LLM_ARCH_GLM5_NEXT:
             {
@@ -3086,8 +3120,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             } break;
         case LLM_ARCH_DFLASH:
             {
-                // DSV4 DSpark stages store a single MLA-style K per position (window = the draft ring)
-                if (hparams.dsv4_hc_mult > 0) {
+                // DSV4 and ML4 DSpark stages store a single MLA-style K per position (window = the draft ring)
+                if (hparams.dsv4_hc_mult > 0 || hparams.n_lora_kv > 0) {
                     GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
 
                     res = new llama_kv_cache_iswa(
@@ -3566,12 +3600,14 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_EAGLE3:
         case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_MISTRAL_LARGE4:
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_POCKETTTS:
+        case LLM_ARCH_LIMITE:
             return LLAMA_ROPE_TYPE_NORM;
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope
@@ -3669,8 +3705,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             if (const auto & s = model->hparams.rope_sections; s[0] || s[1] || s[2] || s[3]) {
                 return LLAMA_ROPE_TYPE_MROPE;
             }
-            // DSV4 DSpark drafters use DeepSeek-V4's normal RoPE; legacy DFlash backbones are NeoX
-            return model->hparams.dsv4_hc_mult > 0 ? LLAMA_ROPE_TYPE_NORM : LLAMA_ROPE_TYPE_NEOX;
+            // DSV4 and ML4 DSpark drafters use normal RoPE; legacy DFlash backbones are NeoX
+            return model->hparams.dsv4_hc_mult > 0 || model->hparams.n_lora_kv > 0 ? LLAMA_ROPE_TYPE_NORM : LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_SENSENOVA_U1:
         case LLM_ARCH_QWEN2VL:

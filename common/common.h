@@ -981,6 +981,8 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_GRANITE_SWITCH, // same as openjev, run by the decision aLoRA of granite switch
     COMMON_DECISION_TYPE_H2O_LIGHTNING, // same as openjev, the labels are read after an answer prefill
     COMMON_DECISION_TYPE_MINICPM_OCR_JEV, // one score per class, the pooled embeddings output of the last token
+    COMMON_DECISION_TYPE_LFM3_D1,       // same as lfm2-d1, non-causal, label codes A..Z then AA, AB..
+    COMMON_DECISION_TYPE_LFM3_D1_OMNI,  // same as lfm3-d1
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
@@ -1235,8 +1237,9 @@ struct common_control_vector_load_info {
 };
 
 // Load control vectors, scale each by strength, and add them together.
+// Direction layer indices must be in [1, n_layer].
 // On error, returns {-1, empty}
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer);
 
 //
 // Split utils

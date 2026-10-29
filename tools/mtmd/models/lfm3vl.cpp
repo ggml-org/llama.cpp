@@ -4,7 +4,7 @@ ggml_cgraph * clip_graph_lfm3vl::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.lfm3vl_embedding_norm_w != nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
-    GGML_ASSERT(n_batch == 1);
+    GGML_ASSERT(n_batch == 1 || n_batch == 2);
 
     const int batch_size       = 1;
     const int n_pos            = n_patches;
@@ -15,12 +15,13 @@ ggml_cgraph * clip_graph_lfm3vl::build() {
     // 2D rope: pairs (j, j+n_dims); first d_head/4 pairs rotate by y, next d_head/4 by x
     int mrope_sections[4] = {d_head/4, d_head/4, 0, 0};
 
-    ggml_tensor * inp_raw = build_inp_raw();
-
-    // one patchifier kernel per temporal slice: a still image fills both slices, so both kernels apply to it
-    ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-    if (model.patch_embeddings_1) {
-        inp = ggml_add(ctx0, inp, ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1));
+    // one patchifier kernel per temporal slice: a still image fills both slices, video frames are merged in pairs
+    ggml_tensor * inp;
+    if (model.patch_embeddings_1 == nullptr) {
+        GGML_ASSERT(n_batch == 1);
+        inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, build_inp_raw(), patch_size, patch_size, 0, 0, 1, 1);
+    } else {
+        inp = build_inp_temporal_merge();
     }
     inp = ggml_reshape_2d(ctx0, inp, n_pos, n_embd);
     inp = ggml_cont(ctx0, ggml_transpose(ctx0, inp));

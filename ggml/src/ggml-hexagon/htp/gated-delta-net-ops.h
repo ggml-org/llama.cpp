@@ -204,7 +204,7 @@ static inline void htp_gdn_hmx_vtcm_layout_build(
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_g_f32[1], bh * dma_scalar_sz, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_b_f32[0], bh * dma_scalar_sz);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_b_f32[1], bh * dma_scalar_sz, pipeline);
-    const size_t raw_gb_sz = hex_round_up(bh * chunk_size * sizeof(float), 128);
+    const size_t raw_gb_sz = hex_round_up((bh + 1) * chunk_size * sizeof(float), 128);
     VTCM_LAYOUT_ALLOC(off, off_g_raw[0], raw_gb_sz);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_g_raw[1], raw_gb_sz, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_b_raw[0], raw_gb_sz);
