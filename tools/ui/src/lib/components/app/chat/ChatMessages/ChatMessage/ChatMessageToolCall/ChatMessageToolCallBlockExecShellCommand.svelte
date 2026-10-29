@@ -229,6 +229,7 @@
 {/snippet}
 
 <ToolCallBlock
+	emptyResultIsInterrupted
 	extraLiveStreaming={isLive}
 	{isStreaming}
 	meta={execShellMeta ? { errorMessage: execShellError } : null}

@@ -52,6 +52,12 @@
 		 */
 		spinIconWhenActive?: boolean;
 		/**
+		 * Treat an empty result as interrupted too. For tools that create
+		 * their result message before running (`exec_shell_command`), so a
+		 * stop mid-run leaves an empty result rather than none.
+		 */
+		emptyResultIsInterrupted?: boolean;
+		/**
 		 * Wrapper component that renders the title row and the body
 		 * children. Defaults to CollapsibleContentBlock;
 		 * `exec_shell_command` uses CollapsibleTerminalBlock for its
@@ -66,6 +72,7 @@
 
 	let {
 		children,
+		emptyResultIsInterrupted = false,
 		extraLiveStreaming = false,
 		isStreaming,
 		meta,
@@ -82,11 +89,11 @@
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming) || extraLiveStreaming);
 	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
-	// A finished call with no result message was stopped before it returned
-	// (user abort or the page went away mid-execution).
+	// A finished call with no result was stopped before it returned (user
+	// abort, or the page went away mid-execution).
 	const isInterrupted = $derived(
 		section.type === AgenticSectionType.TOOL_CALL &&
-			section.toolResult === undefined &&
+			(section.toolResult === undefined || (emptyResultIsInterrupted && !section.toolResult)) &&
 			!showSpinner
 	);
 

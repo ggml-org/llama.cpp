@@ -246,6 +246,22 @@ describe('exec_shell_command interrupted call', () => {
 		expect(container.textContent).not.toContain('Executing command...');
 	});
 
+	it('marks a command stopped before any output as interrupted', async () => {
+		// exec_shell_command creates its result message before running, so a
+		// stop mid-run leaves an empty result rather than none.
+		const { container } = render(ChatMessageAgenticContent, {
+			isLastAssistantMessage: true,
+			isStreaming: false,
+			message: messageWithArgs('{"command":"sleep 40"}'),
+			toolMessages: [toolResultMessage('', CWD)]
+		});
+
+		await tick();
+
+		expect(triggerText(container)).toContain('interrupted');
+		expect(container.textContent).toContain('Command interrupted');
+	});
+
 	it('does not keep spinning in an earlier message while a newer reply streams', async () => {
 		const { container } = render(ChatMessageAgenticContent, {
 			isLastAssistantMessage: false,
