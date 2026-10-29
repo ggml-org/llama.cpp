@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import { AI_TUTORIAL_MD } from './fixtures/ai-tutorial.js';
+	import { AI_TUTORIAL_MD } from '../fixtures/ai-tutorial.js';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { MarkdownContent } from '$lib/components/app';
 
@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Chat/MarkdownContent'
+		title: 'Content/MarkdownContent'
 	});
 </script>
 
