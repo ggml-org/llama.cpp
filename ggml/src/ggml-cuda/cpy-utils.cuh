@@ -27,16 +27,16 @@ static __device__ void quantize_f32_q4_0_block(const float * __restrict__ x, blo
     }
 
     const float d  = vmax / -8;
-    const float id = d ? 1.0f/d : 0.0f;
+    const float id = d ? __frcp_rn(d) : 0.0f; // -use_fast_math makes 1.0f/d approximate
 
     y->d = d;
 
     for (int j = 0; j < QK4_0/2; ++j) {
-        const float x0 = x[0       + j]*id;
-        const float x1 = x[QK4_0/2 + j]*id;
+        const float x0 = __fmul_rn(x[0       + j], id); // _rn intrinsics are never fused into an FMA
+        const float x1 = __fmul_rn(x[QK4_0/2 + j], id);
 
-        const uint8_t xi0 = min(15, (int8_t)(x0 + 8.5f));
-        const uint8_t xi1 = min(15, (int8_t)(x1 + 8.5f));
+        const uint8_t xi0 = min(15, (int8_t)__fadd_rn(x0, 8.5f));
+        const uint8_t xi1 = min(15, (int8_t)__fadd_rn(x1, 8.5f));
 
         y->qs[j]  = xi0;
         y->qs[j] |= xi1 << 4;
@@ -84,17 +84,17 @@ static __device__ void quantize_f32_q5_0_block(const float * __restrict__ x, blo
     }
 
     const float d  = vmax / -16;
-    const float id = d ? 1.0f/d : 0.0f;
+    const float id = d ? __frcp_rn(d) : 0.0f; // -use_fast_math makes 1.0f/d approximate
 
     y->d = d;
 
     uint32_t qh = 0;
     for (int j = 0; j < QK5_0/2; ++j) {
-        const float x0 = x[0       + j]*id;
-        const float x1 = x[QK5_0/2 + j]*id;
+        const float x0 = __fmul_rn(x[0       + j], id); // _rn intrinsics are never fused into an FMA
+        const float x1 = __fmul_rn(x[QK5_0/2 + j], id);
 
-        const uint8_t xi0 = min(31, (int8_t)(x0 + 16.5f));
-        const uint8_t xi1 = min(31, (int8_t)(x1 + 16.5f));
+        const uint8_t xi0 = min(31, (int8_t)__fadd_rn(x0, 16.5f));
+        const uint8_t xi1 = min(31, (int8_t)__fadd_rn(x1, 16.5f));
 
         y->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
