@@ -53,7 +53,16 @@ static inline int64_t whcn_output_index(int64_t n, int64_t c, int64_t y, int64_t
     return n * (P.OC * P.OW * P.OH) + c * P.OW * P.OH + y * P.OW + x;
 }
 
-template <typename T>
+// cwhn layout helpers: buffers are [N][H][W][C] input and [KH][KW][IC][OC] kernel
+static inline int64_t cwhn_input_index(int64_t n, int64_t c, int64_t y, int64_t x, const conv2d_params & P) {
+    return ((n * P.IH + y) * P.IW + x) * P.IC + c;
+}
+
+static inline int64_t cwhn_kernel_index(int64_t c_out, int64_t c_in, int64_t ky, int64_t kx, const conv2d_params & P) {
+    return ((ky * P.KW + kx) * P.IC + c_in) * P.OC + c_out;
+}
+
+template <typename T, bool CWHN>
 static void conv2d_kernel(const float * input, const T * kernel, float * output,
                           const conv2d_params P, const sycl::nd_item<3> & item_ct1) {
     const int64_t global_idx = item_ct1.get_local_id(2) +
@@ -77,8 +86,8 @@ static void conv2d_kernel(const float * input, const T * kernel, float * output,
             const int64_t in_y = calculate_input_coord(out_y, ky, P.ST_Y, P.DL_Y, P.PD_Y);
             for (int64_t kx = bounds.x_min; kx < bounds.x_max; ++kx) {
                 const int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
-                const float input_val  = input[whcn_input_index(n, c_in, in_y, in_x, P)];
-                const T     kernel_val = kernel[whcn_kernel_index(c_out, c_in, ky, kx, P)];
+                const float input_val  = input[CWHN ? cwhn_input_index(n, c_in, in_y, in_x, P) : whcn_input_index(n, c_in, in_y, in_x, P)];
+                const T     kernel_val = kernel[CWHN ? cwhn_kernel_index(c_out, c_in, ky, kx, P) : whcn_kernel_index(c_out, c_in, ky, kx, P)];
                 acc += input_val * ggml_sycl_cast<float>(kernel_val);
             }
         }
@@ -87,7 +96,7 @@ static void conv2d_kernel(const float * input, const T * kernel, float * output,
     output[whcn_output_index(n, c_out, out_y, out_x, P)] = acc;
 }
 
-template <typename T>
+template <typename T, bool CWHN>
 static void conv2d_sycl(const float * X_D, const T * K_D, float * Y_D,
                         const conv2d_params P, const queue_ptr & stream) {
     const int num_blocks = (P.TOTAL + SYCL_CONV2D_BLOCK_SIZE - 1) / SYCL_CONV2D_BLOCK_SIZE;
@@ -95,7 +104,7 @@ static void conv2d_sycl(const float * X_D, const T * K_D, float * Y_D,
     const sycl::range<3> block_nums(1, 1, num_blocks);
     stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) {
-            conv2d_kernel<T>(X_D, K_D, Y_D, P, item_ct1);
+            conv2d_kernel<T, CWHN>(X_D, K_D, Y_D, P, item_ct1);
         });
 }
 
@@ -108,7 +117,14 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const float *       X_D    = (const float *) input->data;
     float *             Y_D    = (float *) dst->data;
 
-    GGML_ASSERT(ggml_is_contiguous(kernel));
+    // WHCN: contiguous [KW,KH,IC,OC] kernel and [W,H,C,N] input
+    // CWHN: channel-fastest buffer [N][H][W][C] input and [KH][KW][IC][OC] kernel (OC fastest)
+    const bool whcn = ggml_is_contiguous(kernel) && ggml_is_contiguous(input);
+    const bool cwhn = input->nb[2]  == ggml_type_size(input->type) &&
+                      kernel->nb[3] == ggml_type_size(kernel->type);
+    GGML_ASSERT(whcn || cwhn);
+    const bool cwhn_layout = !whcn && cwhn; // prefer whcn when both match (degenerate size-1 dims)
+
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);
     GGML_ASSERT(input->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -126,9 +142,6 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int       DL_X = p[4];
     const int       DL_Y = p[5];
 
-    // no cwhn layout support
-    GGML_ASSERT(p[6] == 0);
-
     const int IW = input->ne[0];
     const int IH = input->ne[1];
     const int OW = dst->ne[0];
@@ -142,9 +155,17 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t     total  = (int64_t) B * OC * OH * OW;
     const conv2d_params params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total };
 
-    if (kernel->type == GGML_TYPE_F16) {
-        conv2d_sycl<sycl::half>(X_D, (const sycl::half *) K_D, Y_D, params, stream);
+    if (cwhn_layout) {
+        if (kernel->type == GGML_TYPE_F16) {
+            conv2d_sycl<sycl::half, true>(X_D, (const sycl::half *) K_D, Y_D, params, stream);
+        } else {
+            conv2d_sycl<float, true>(X_D, K_D, Y_D, params, stream);
+        }
     } else {
-        conv2d_sycl<float>(X_D, K_D, Y_D, params, stream);
+        if (kernel->type == GGML_TYPE_F16) {
+            conv2d_sycl<sycl::half, false>(X_D, (const sycl::half *) K_D, Y_D, params, stream);
+        } else {
+            conv2d_sycl<float, false>(X_D, K_D, Y_D, params, stream);
+        }
     }
 }

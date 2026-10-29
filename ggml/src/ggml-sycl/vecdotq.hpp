@@ -442,7 +442,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
         }
 
         return vec_dot_q4_0_q8_1_impl(v, u, d, *q8_1_ds);
-    };
+    }
 };
 
 // Load four contiguous dwords per operand instead of loading each value separately.

@@ -1446,6 +1446,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->type == GGML_TYPE_BF16) {
             return {false, "SCALE with BF16 type is not supported"};
         }
+        // The result is copied back densely, so an in-place SCALE on a strided view would be written wrongly.
+        if (op->view_src != nullptr && !ggml_is_contiguous(op)) {
+            return {false, "SCALE in place on a non-contiguous view is not supported"};
+        }
         break;
     }
     case GGML_OP_ADD_ID: {

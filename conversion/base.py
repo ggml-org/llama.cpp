@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from enum import IntEnum
 from pathlib import Path
 from hashlib import sha256
@@ -1625,7 +1626,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_head_count_kv(n_head_kv)
             logger.info(f"gguf: key-value head count = {n_head_kv}")
 
-        if self.hparams.get("is_causal") is False:
+        if self.hparams.get("is_causal") is False or self.hparams.get("use_bidirectional_attention") is True:
             self.gguf_writer.add_causal_attention(False)
             logger.info("gguf: causal attention = False")
 
@@ -1700,7 +1701,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func", "router_score_function"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -1836,6 +1837,9 @@ class TextModel(ModelBase):
         if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
             # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
             res = "minerva-7b"
+        if chkhsh == "6e4d72c6e5260b90606e26a0931fa15e4b42ec6e97719d12919f2b1f93478262":
+            # ref: https://huggingface.co/domyn/Domyn-Small-v1.0
+            res = "domyn-small"
         if chkhsh == "7e57df22b1fe23a7b1e1c7f3dc4e3f96d43a4eb0836d0c6bdc3436d7b2f1c664":
             # ref: https://huggingface.co/tencent/Hunyuan-A13B-Instruct
             res = "hunyuan"
@@ -1872,6 +1876,9 @@ class TextModel(ModelBase):
         if chkhsh == "f5c965e4198da6e7525072d87d1ecf4c51d981fd486c7c4ec728ef9cec7e03fc":
             # ref: https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B
             res = "gpt-4o"
+        if chkhsh == "6e040dfe72e4b85855588c53acf4909ac4e98e55bc3a33cd7db499180dc42a78":
+            # ref: https://huggingface.co/Aleph-Alpha/Kolibri-1
+            res = "qwen2"
         if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
             # ref: https://huggingface.co/aari1995/German_Semantic_V3
             res = "jina-v2-de"
@@ -1935,6 +1942,9 @@ class TextModel(ModelBase):
         if chkhsh == "52df12b4c8d4176e7481aab4b6e8454d1fd0a210a04a574f6d4e067d10e23c3e":
             # ref: https://huggingface.co/CohereLabs/North-Mini-Code-1.0
             res = "cohere2moe"
+        if chkhsh == "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637":
+            # ref: https://huggingface.co/RecursiveSI/flint
+            res = "flint"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
@@ -2166,20 +2176,34 @@ class TextModel(ModelBase):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
+    def _is_hybriddna(self) -> bool:
+        tokenizer_config_file = self.dir_model / "tokenizer_config.json"
+        if not tokenizer_config_file.is_file():
+            return False
+        with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+            return json.load(f).get("tokenizer_class") == "HybridDNATokenizer"
+
     def _set_vocab_hybriddna(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
-        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+        vocab = tokenizer.get_vocab()
+        vocab_size = self.hparams.get("vocab_size", len(vocab))
+        assert max(vocab.values()) < vocab_size
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
-        # k-mers can share text with a base-vocab BPE token (e.g. CCCCCC) and get
-        # dropped by get_vocab(); a reserved marker suffix (U+E000) keeps each
-        # k-mer's own id (llama.cpp strips it on detokenization)
-        for kmer in tokenizer.kmers:  # ty: ignore[unresolved-attribute]
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
+        # k-mers can share text with a base-vocab BPE token (e.g. CCCCCC) and get dropped by get_vocab()
+        # a reserved marker suffix (U+E000) keeps each k-mer's own id (llama.cpp strips it on detokenization)
+        # tail="pad_n" (Carbon-14B) adds N-padded tail tokens ("CT" -> "CTNNNN") that get the same marker
+        # llama.cpp detects them to pad with N and strips the padding on detokenization, tail="char" is unsupported
+        tail = getattr(tokenizer, "tail", "pad_a")
+        if tokenizer.k != 6 or tail not in ("pad_a", "pad_n"):
+            raise NotImplementedError(f"HybridDNATokenizer with k={tokenizer.k}, tail={tail!r}")
+        for kmer in [*tokenizer.kmers, *getattr(tokenizer, "npad_tokens", [])]:
             reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"  # ty: ignore[unresolved-attribute]
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
-        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+        # older HybridDNATokenizer versions (Carbon-500M/3B/8B) do not register the base tokenizer's added tokens (<|im_start|>, <think>, ...) as their own
+        # but they are still encoded as special tokens: take their types from the base tokenizer
+        base_tokenizer = getattr(tokenizer, "_base_tokenizer", tokenizer)
+        added_tokens_decoder = {**base_tokenizer.added_tokens_decoder, **tokenizer.added_tokens_decoder}  # ty: ignore[unresolved-attribute]
 
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -2189,7 +2213,7 @@ class TextModel(ModelBase):
                 toktypes.append(gguf.TokenType.UNUSED)
             else:
                 token: str = reverse_vocab[i]
-                if token in added_vocab:
+                if i in added_tokens_decoder:
                     if added_tokens_decoder[i].special or self.does_token_look_special(token):
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
@@ -2201,10 +2225,19 @@ class TextModel(ModelBase):
         tokpre = self.get_vocab_base_pre(tokenizer)
         self.gguf_writer.add_tokenizer_model("hybriddna")
         self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_dna_auto_tags(getattr(tokenizer, "auto_dna_tags", False))
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        if not special_vocab.merges:
+            # Carbon-500M/3B/8B ship only tokenizer.py, no tokenizer.json
+            # take the merges and special token ids from the base BPE tokenizer, keeping the model's own chat template (if any)
+            with tempfile.TemporaryDirectory() as tmp:
+                base_tokenizer.save_pretrained(tmp)
+                base_special_vocab = gguf.SpecialVocab(Path(tmp), load_merges=True)
+            base_special_vocab.chat_template = special_vocab.chat_template
+            special_vocab = base_special_vocab
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_qwen(self):
@@ -3116,7 +3149,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

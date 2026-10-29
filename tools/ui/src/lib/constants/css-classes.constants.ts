@@ -25,6 +25,18 @@ export const DIALOG_SUBMENU_CONTENT = 'w-60';
 export const PANEL_CLOSE_MOBILE_CLASS =
 	'max-md:grid max-md:size-10 max-md:place-items-center max-md:rounded-full max-md:text-muted-foreground max-md:opacity-100 max-md:hover:bg-accent max-md:hover:text-accent-foreground';
 
+/** Shape of a chat tab, shared with the breadcrumb items next to the project tabs. */
+export const TAB_SURFACE_CLASS =
+	'flex h-8 items-center rounded-lg border text-sm whitespace-nowrap backdrop-blur-xl';
+
+/** Tab surface at rest: invisible until hovered. */
+export const TAB_SURFACE_IDLE_CLASS =
+	'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm';
+
+/** Tab surface of the open tab. */
+export const TAB_SURFACE_ACTIVE_CLASS =
+	'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15';
+
 /** Selects the focused chat-form input (either renderer) to restore focus after model actions. */
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';
@@ -54,9 +66,17 @@ export const FILTER_TRIGGER_CLASS = `
     ${INPUT_CLASSES}
 `;
 
-/** One filter toggle of the models manager toolbar. */
+/** The filter toggles' shared box: the same fill, border and shadow as a filter trigger. */
+export const FILTER_TOGGLE_GROUP_CLASS = `
+    h-8
+    overflow-hidden
+    divide-x divide-border/30 dark:divide-border/20
+    ${INPUT_CLASSES}
+`;
+
+/** One filter toggle of the models manager toolbar; its group draws the box. */
 export const FILTER_TOGGLE_ITEM_CLASS =
-	'bg-muted! border-border/30! shadow-none! dark:border-border/20! data-[state=on]:bg-muted-foreground/15! data-[state=on]:text-foreground! dark:data-[state=on]:bg-muted-foreground/25!';
+	'h-full rounded-none hover:bg-muted/80 dark:hover:bg-muted data-[state=on]:bg-muted-foreground/15 data-[state=on]:text-foreground dark:data-[state=on]:bg-muted-foreground/25';
 
 /** Column grid shared by every row of the models manager table. Below md the context,
  *  status and actions columns are dropped, so a phone gives the whole width to the

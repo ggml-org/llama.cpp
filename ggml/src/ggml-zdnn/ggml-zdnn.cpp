@@ -3,6 +3,7 @@
 #include "ggml-backend-impl.h"
 
 #include "ggml-zdnn/common.hpp"
+#include "ggml-zdnn/fattn.hpp"
 #include "ggml-zdnn/mmf.hpp"
 #include "ggml-zdnn/mmq.hpp"
 #include "ggml-zdnn/utils.hpp"
@@ -35,6 +36,11 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_MUL_MAT:
             {
                 ggml_zdnn_compute_forward_mul_mat(ctx, dst);
+            } break;
+
+        case GGML_OP_FLASH_ATTN_EXT:
+            {
+                ggml_zdnn_flash_attn_ext(ctx, dst);
             } break;
 
         default:
@@ -120,6 +126,9 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                 }
             } break;
 
+        case GGML_OP_FLASH_ATTN_EXT:
+            return ggml_zdnn_supports_flash_attn_ext(ctx_dev, op);
+
         default:
             return false;
     }
@@ -204,9 +213,6 @@ static void ggml_zdnn_free(ggml_backend_zdnn_context * ctx) {
 
     for (const auto & it : ctx->zero_bias) {
         ZDNN_CHECK(zdnn_free_ztensor_buffer(&it.second->ztensor));
-    }
-    for (void * scratch : ctx->scratch_ztensor) {
-        free(scratch);
     }
 
     delete ctx;
@@ -309,7 +315,19 @@ static void ggml_backend_zdnn_buffer_memset_tensor(ggml_backend_buffer_t buffer,
 static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     memcpy((char *)tensor->data + offset, data, size);
 
+    // views share the ztensor of their source, which is now stale, and empty tensors have none
+    if (tensor->view_src != nullptr) {
+        ggml_backend_zdnn_buffer * src_extra = (ggml_backend_zdnn_buffer *)tensor->view_src->extra;
+        if (src_extra != nullptr && src_extra->ztensor.is_transformed) {
+            zdnn_reset_ztensor(&src_extra->ztensor);
+        }
+        return;
+    }
+
     ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
+    if (extra == nullptr) {
+        return;
+    }
 
     if (ggml_is_quantized(tensor->type)) {
         GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor));
@@ -319,8 +337,8 @@ static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
 
     // Fixes the LLAMA_SET_ROWS bug
     // see: https://github.com/ggml-org/llama.cpp/issues/15414
-    // compute tensors are transformed on first use instead, as not every op reads the ztensor
-    if (tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+    // only weights are transformed here, others on first use, as not every op reads the ztensor and some data (masks) is not finite
+    if (tensor->buffer->usage != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
         zdnn_reset_ztensor(&extra->ztensor);
         return;
     }
