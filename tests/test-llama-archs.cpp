@@ -7,8 +7,6 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
-#include "../src/llama-model.h"
-#include "../src/llama-model-saver.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -823,41 +821,61 @@ static std::vector<float> get_logits(
     return ret;
 }
 
-static bool check_moe_scaled_roundtrip(llama_model * model, const std::vector<llama_token> & tokens,
-        const std::vector<ggml_backend_dev_t> & devs,
-        const llama_model_tensor_buft_override * overrides, size_t cache_size, size_t seed, float stdev) {
-    size_t ctx_size = 0;
-    for (const auto & layer : model->layers) {
-        if (const ggml_tensor * w = layer.ffn_down_exps) {
-            ctx_size += ggml_tensor_overhead() + GGML_PAD(w->ne[2]*sizeof(float), GGML_MEM_ALIGN);
-        }
+static void write_moe_scales(const std::string & source_path, const std::string & path, int granularity, size_t seed, bool unit_scales) {
+    ggml_context * ctx_raw = nullptr;
+    gguf_context_ptr source(gguf_init_from_file(source_path.c_str(), { false, &ctx_raw }));
+    ggml_context_ptr source_ctx(ctx_raw);
+    if (!source || !source_ctx) {
+        throw std::runtime_error("failed to read MoE scale test fixture");
     }
-    ggml_context_ptr scale_ctx(ggml_init({ ctx_size, nullptr, false }));
-    llama_model_saver ms(model);
-    ms.add_kv_from_model();
-    ms.add_tensors_from_model();
-    for (size_t il = 0; il < model->layers.size(); ++il) {
-        const ggml_tensor * w = model->layers[il].ffn_down_exps;
-        if (w == nullptr) {
+    const int64_t n_tensors = gguf_get_n_tensors(source.get());
+    gguf_context_ptr scaled(gguf_init_empty());
+    gguf_set_kv(scaled.get(), source.get());
+    ggml_context_ptr scale_ctx(ggml_init({ size_t(n_tensors)*ggml_tensor_overhead(), nullptr, true }));
+    const std::regex expert_down("blk\\.[0-9]+\\.ffn_down_exps\\.weight");
+    // GGUF keeps pointers into these buffers until the file is written.
+    std::vector<std::vector<float>> scale_data;
+    for (int64_t i = 0; i < n_tensors; ++i) {
+        const char * name = gguf_get_tensor_name(source.get(), i);
+        const ggml_tensor * w = ggml_get_tensor(source_ctx.get(), name);
+        gguf_add_tensor(scaled.get(), w);
+        if (!std::regex_match(name, expert_down)) {
             continue;
         }
-        ggml_tensor * s = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, w->ne[2]);
-        ggml_set_name(s, LLM_TN(model->arch)(LLM_TENSOR_FFN_DOWN_EXPS, "scale", il).str().c_str());
-        ggml_set_f32(s, 1.0f);
-        ms.add_tensor(s);
+        ggml_tensor * scale = granularity == 2 ? ggml_new_tensor_2d(scale_ctx.get(), GGML_TYPE_F32, w->ne[1], w->ne[2]) :
+            ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, granularity == 0 ? 1 : w->ne[2]);
+        const std::string scale_name = std::string(name, strlen(name) - strlen("weight")) + "scale";
+        ggml_set_name(scale, scale_name.c_str());
+        scale_data.emplace_back(ggml_nelements(scale), 1.0f);
+        if (!unit_scales) {
+            fill_normal(scale_data.back(), scale->name, { seed, 0.25f });
+            for (float & v : scale_data.back()) {
+                v += 1.0f;
+            }
+        }
+        scale->data = scale_data.back().data();
+        gguf_add_tensor(scaled.get(), scale);
     }
+    if (scale_data.empty()) {
+        throw std::runtime_error("MoE scale test fixture has no expert down weights");
+    }
+    if (!gguf_write_to_file(scaled.get(), path.c_str(), false)) {
+        throw std::runtime_error("failed to write MoE scale test fixture");
+    }
+}
+
+static bool check_moe_scaled_roundtrip(const std::string & source_path, const std::vector<llama_token> & tokens,
+        const std::vector<ggml_backend_dev_t> & devs,
+        const llama_model_tensor_buft_override * overrides, size_t cache_size, size_t seed, float stdev) {
     const std::string path = get_tmp_gguf_path();
-    ms.save(path);
+    write_moe_scales(source_path, path, 1, seed, true);
     std::unique_ptr<FILE, int (*)(FILE *)> file(fopen(path.c_str(), "rb"), fclose);
     GGML_ASSERT(file);
     auto scaled = get_model_and_ctx(nullptr, file.get(), seed, stdev, devs, LLAMA_SPLIT_MODE_LAYER, false, overrides, cache_size);
     const auto expected = get_logits(scaled.first.get(), scaled.second.get(), tokens);
 
-    llama_model_saver roundtrip_saver(scaled.first.get());
-    roundtrip_saver.add_kv_from_model();
-    roundtrip_saver.add_tensors_from_model();
     const std::string roundtrip_path = get_tmp_gguf_path();
-    roundtrip_saver.save(roundtrip_path);
+    llama_model_save_to_file(scaled.first.get(), roundtrip_path.c_str());
     std::unique_ptr<FILE, int (*)(FILE *)> roundtrip_file(fopen(roundtrip_path.c_str(), "rb"), fclose);
     GGML_ASSERT(roundtrip_file);
     auto reloaded = get_model_and_ctx(nullptr, roundtrip_file.get(), seed, stdev, devs, LLAMA_SPLIT_MODE_LAYER, false, overrides, cache_size);
@@ -873,38 +891,12 @@ static bool check_moe_scaled_roundtrip(llama_model * model, const std::vector<ll
     return true;
 }
 
-static bool check_moe_cache_scales(llama_model * model, const std::vector<llama_token> & tokens,
+static bool check_moe_cache_scales(const std::string & source_path, const std::vector<llama_token> & tokens,
         const std::vector<ggml_backend_dev_t> & devs, const llama_model_tensor_buft_override * overrides,
         size_t cache_size, size_t seed, float stdev) {
-    size_t ctx_size = 0;
-    for (const auto & layer : model->layers) {
-        if (const ggml_tensor * w = layer.ffn_down_exps) {
-            ctx_size += ggml_tensor_overhead() + GGML_PAD(w->ne[1]*w->ne[2]*sizeof(float), GGML_MEM_ALIGN);
-        }
-    }
     for (int granularity = 0; granularity < 3; ++granularity) {
-        ggml_context_ptr scale_ctx(ggml_init({ ctx_size, nullptr, false }));
-        llama_model_saver ms(model);
-        ms.add_kv_from_model();
-        ms.add_tensors_from_model();
-        for (size_t il = 0; il < model->layers.size(); ++il) {
-            const ggml_tensor * w = model->layers[il].ffn_down_exps;
-            if (w == nullptr) {
-                continue;
-            }
-            ggml_tensor * s = granularity == 2 ? ggml_new_tensor_2d(scale_ctx.get(), GGML_TYPE_F32, w->ne[1], w->ne[2]) :
-                ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, granularity == 0 ? 1 : w->ne[2]);
-            ggml_set_name(s, LLM_TN(model->arch)(LLM_TENSOR_FFN_DOWN_EXPS, "scale", il).str().c_str());
-            std::vector<float> values(ggml_nelements(s));
-            fill_normal(values, s->name, { seed, 0.25f });
-            for (float & v : values) {
-                v += 1.0f;
-            }
-            memcpy(s->data, values.data(), ggml_nbytes(s));
-            ms.add_tensor(s);
-        }
         const std::string path = get_tmp_gguf_path();
-        ms.save(path);
+        write_moe_scales(source_path, path, granularity, seed, false);
         std::unique_ptr<FILE, int (*)(FILE *)> file(fopen(path.c_str(), "rb"), fclose);
         GGML_ASSERT(file);
         auto reference = get_model_and_ctx(nullptr, file.get(), seed, stdev, devs, LLAMA_SPLIT_MODE_LAYER, false, overrides, 0, 2);
@@ -1444,21 +1436,13 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         }
                     }
 
-                    if (dc.moe_cache_size > 0 && arch == LLM_ARCH_QWEN3MOE && !check_moe_cache_scales(model_and_ctx_dev.first.get(), tokens, dc.devs, overrides, dc.moe_cache_size, seed, stdev)) {
-                        test_ok = false;
-                        status_nmse = "\033[1;31mFAIL\033[0m (cache scales)";
-                    }
-
                     if (llama_arch_supports_save(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
                         test_executed = true;
                         GGML_ASSERT(model_and_ctx_dev.first && model_and_ctx_dev.second);
                         // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
                         //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
                         const std::string path = get_tmp_gguf_path();
-                        llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
-                        ms.add_kv_from_model();
-                        ms.add_tensors_from_model();
-                        ms.save(path);
+                        llama_model_save_to_file(model_and_ctx_dev.first.get(), path.c_str());
                         FILE * file = fopen(path.c_str(), "rb");
                         GGML_ASSERT(file != nullptr);
 
@@ -1478,12 +1462,16 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         }
 
                         fclose(file);
-                        std::filesystem::remove(path);
+                        if (dc.moe_cache_size > 0 && arch == LLM_ARCH_QWEN3MOE && !check_moe_cache_scales(path, tokens, dc.devs, overrides, dc.moe_cache_size, seed, stdev)) {
+                            test_ok = false;
+                            status_nmse = "\033[1;31mFAIL\033[0m (cache scales)";
+                        }
                         if (arch == LLM_ARCH_DEEPSEEK2 && moe &&
-                                !check_moe_scaled_roundtrip(model_and_ctx_dev.first.get(), tokens, dc.devs, overrides, dc.moe_cache_size, seed, stdev)) {
+                                !check_moe_scaled_roundtrip(path, tokens, dc.devs, overrides, dc.moe_cache_size, seed, stdev)) {
                             test_ok = false;
                             status_roundtrip = "\033[1;31mFAIL\033[0m (scaled)";
                         }
+                        std::filesystem::remove(path);
                     }
                 }
 
