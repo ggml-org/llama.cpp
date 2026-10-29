@@ -7,6 +7,7 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 #include <unordered_map>
@@ -15,13 +16,15 @@
 namespace {
 
 // ClassLRU: one LRU list per frequency class, over the experts of a group of layers
-// slot_map[il][e] is the slot of expert e of layer il, -1 if not cached, the host slot map tensor
+// slot_map[il][e] is the slot of expert e of layer il, -1 if not cached, the data of host slot map tensor
 // CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of crf_half tokens, retained across evictions
 // class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
 // victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
 struct moe_cache_lru {
     static constexpr int   n_class  = 4;
     static constexpr float crf_half = 128.0f; // tokens
+
+    static constexpr std::array<int32_t, n_class> no_slot = { -1, -1, -1, -1 }; // the lists start empty
 
     int32_t n_expert = 0;
     int32_t n_slots  = 0;
@@ -32,8 +35,8 @@ struct moe_cache_lru {
     // one LRU list per class, the head is the least recently used end
     std::vector<int32_t> prev;    // [n_slots] -1 at the ends
     std::vector<int32_t> next;    // [n_slots]
-    int32_t head[n_class] = { -1, -1, -1, -1 };
-    int32_t tail[n_class] = { -1, -1, -1, -1 };
+    std::array<int32_t, n_class> head = no_slot;
+    std::array<int32_t, n_class> tail = no_slot;
     std::vector<int8_t>  list_of; // [n_slots] class list of the slot
 
     std::vector<float>   crf;      // [n_layer*n_expert]
