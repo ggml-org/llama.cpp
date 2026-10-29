@@ -111,10 +111,6 @@ static __device__ __forceinline__ half2 pd_i8x2(const uint32_t b0, const uint32_
     const uint32_t u = 0x64006400u | ((b0 ^ 0x80u) & 0xFFu) | (((b1 ^ 0x80u) & 0xFFu) << 16);
     return __hsub2(*(const half2 *) &u, __halves2half2(__float2half(1152.0f), __float2half(1152.0f)));
 }
-static __device__ __forceinline__ half2 pd_u4x2(const uint32_t n0, const uint32_t n1) { // two nibbles - 8 as half2
-    const uint32_t u = 0x64006400u | n0 | (n1 << 16);
-    return __hsub2(*(const half2 *) &u, __halves2half2(__float2half(1032.0f), __float2half(1032.0f)));
-}
 
 
 // VTYPE: 0 = Q4_0, 1 = Q5_0, 2 = Q5_1, 3 = Q8_0.
