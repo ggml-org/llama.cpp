@@ -33,6 +33,12 @@ interface GroupDialogOptions {
 	onCreate?: (group: Group) => void;
 }
 
+interface GroupPickerOptions {
+	/** Group ticked in the list: the one the chat is in. */
+	currentGroupId?: string | null;
+	onSelect: (groupId: string) => void;
+}
+
 /** Sidebar sections the user folded, read once on load. */
 function loadCollapsedSidebarSections(): SvelteSet<string> {
 	if (!browser) return new SvelteSet<string>();
@@ -79,6 +85,9 @@ class UiStore {
 
 	/** Open state of the group dialog, `null` while closed. */
 	groupDialog = $state<GroupDialogOptions | null>(null);
+
+	/** Open state of the group picker, a phone's stand-in for the group submenus. */
+	groupPicker = $state<GroupPickerOptions | null>(null);
 
 	/** Whether the main chat form is expanded into its large editor. */
 	isComposerExpanded = $state(false);
@@ -157,6 +166,11 @@ class UiStore {
 	/** Open the group dialog to create a group, or to rename `groupId`. */
 	openGroupDialog(options: GroupDialogOptions = {}): void {
 		this.groupDialog = options;
+	}
+
+	/** Open the group picker, which calls `onSelect` with the picked group. */
+	openGroupPicker(options: GroupPickerOptions): void {
+		this.groupPicker = options;
 	}
 
 	/** Open the model details drawer over the current page, without leaving it. */

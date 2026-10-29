@@ -260,6 +260,7 @@
 		conversation={{
 			currNode: conversation.currNode,
 			forkedFromConversationId: conversation.forkedFromConversationId,
+			groupId: conversation.groupId,
 			id: conversation.id,
 			lastModified: conversation.lastModified,
 			name: conversation.name,

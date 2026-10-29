@@ -187,6 +187,15 @@ export { default as DialogConversationRename } from './DialogConversationRename.
 export { default as DialogGroup } from './DialogGroup.svelte';
 
 /**
+ * **DialogGroupPicker** - Pick the group a chat moves to, on a phone
+ *
+ * Opened through `uiStore.openGroupPicker()` where a desktop menu shows the
+ * group submenu: a search that filters the groups and creates one with
+ * the typed name. Mounted once, in the sidebar.
+ */
+export { default as DialogGroupPicker } from './DialogGroupPicker.svelte';
+
+/**
  *
  * CONTENT PREVIEW DIALOGS
  *
