@@ -47,6 +47,9 @@ extern "C" {
     // Backend buffer
     //
 
+    // TODO: remove `set_tensor`, `get_tensor`, `set_tensor_2d`, `get_tensor_2d` and `cpy_tensor` from the buffer interface
+    //       they are superseded by the `set_tensor_n`, `get_tensor_n`, `cpy_tensor_n` interface
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/30881#discussion_r4400299490
     struct ggml_backend_buffer_i {
         // (optional) free the buffer
         void         (*free_buffer)  (ggml_backend_buffer_t buffer);
