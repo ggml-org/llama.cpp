@@ -42,6 +42,8 @@
 	--action-primary-hover: color-mix(in oklch, var(--neutral-900) 90%, transparent);
 	--action-danger: var(--red-600);
 	--action-danger-hover: color-mix(in oklch, var(--red-600) 90%, transparent);
+	--action-quiet: color-mix(in oklch, var(--neutral-100) 30%, transparent);
+	--action-quiet-hover: var(--neutral-100);
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-500) 10%, transparent);
 
 	/* fields: editable controls */
@@ -111,6 +113,8 @@
 	--action-danger: color-mix(in oklch, var(--red-400) 60%, transparent);
 	/* the dark fill already wins over hover, so hover keeps it */
 	--action-danger-hover: var(--action-danger);
+	--action-quiet: color-mix(in oklch, var(--neutral-400) 15%, transparent);
+	--action-quiet-hover: color-mix(in oklch, var(--neutral-400) 25%, transparent);
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-400) 10%, transparent);
 
 	--field-background: var(--white-a9);

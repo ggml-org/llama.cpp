@@ -29,7 +29,9 @@
 				outline:
 					'matte-key hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) border border-(--button-outline-border)',
 				secondary:
-					'matte-key bg-(--button-secondary-background) border border-(--button-secondary-border) text-(--button-text) hover:bg-(--button-secondary-background-hover)'
+					'matte-key bg-(--button-secondary-background) border border-(--button-secondary-border) text-(--button-text) hover:bg-(--button-secondary-background-hover)',
+				tertiary:
+					'matte-key bg-(--button-tertiary-background) border border-(--button-tertiary-border) text-(--button-text) hover:bg-(--button-tertiary-background-hover)'
 			}
 		}
 	});
