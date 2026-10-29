@@ -1,7 +1,7 @@
 #pragma once
 
-// Decode attention over contiguous or paged K/V for Q8_0 K / Q4_0 V, head size 256, GQA 6, 1-8 query tokens, RDNA4
-// WMMA. Plain HIP (no ggml dependencies); ggml's dispatch lives in fattn-paged-decode.cu.
+// Decode attention over contiguous or paged Q8_0 K and Q4_0/Q5_0/Q5_1/Q8_0 V, head size 256, GQA 6, RDNA4 WMMA.
+// Plain HIP (no ggml dependencies); ggml's dispatch lives in fattn-paged-decode.cu.
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
@@ -17,7 +17,7 @@
 // Rows are (query token, GQA head) pairs, packed into one or two 16-row WMMA tiles (nb * 6 <= 32).
 //
 // Per chunk:
-//   1. raw Q8_0 K rows and Q4_0 V rows go to LDS (coalesced 16 B loads; the next chunk is prefetched into registers),
+//   1. raw Q8_0 K rows go to LDS (coalesced 16 B loads); V rows use a padded format-neutral LDS layout,
 //      the V scales also to a token-contiguous array;
 //   2. S = Q K^T with WMMA, K dequantized to f16 while building the B fragments; wave w owns 16 tokens of one m-tile;
 //   3. online softmax by row through LDS (P stored as f16, per-row rescale factor);
@@ -29,17 +29,17 @@ static constexpr int PD_GQA    = 6;
 static constexpr int PD_CHUNK  = 64;
 static constexpr int PD_PAGE   = 256;
 static constexpr int PD_NWARPS = 8;
-static constexpr int PD_QK     = 32;                       // Q8_0 and Q4_0 block size
+static constexpr int PD_QK     = 32;                       // quantization block size
 static constexpr int PD_Q8_BLK = 34;                       // Q8_0 block bytes
 static constexpr int PD_Q4_BLK = 18;                       // Q4_0 block bytes
+static constexpr int PD_Q5_0_BLK = 22;                     // Q5_0 block bytes
+static constexpr int PD_Q5_1_BLK = 24;                     // Q5_1 block bytes
 static constexpr int PD_K_ROW  = PD_D / PD_QK * PD_Q8_BLK; // 272 B
-static constexpr int PD_V_ROW  = PD_D / PD_QK * PD_Q4_BLK; // 144 B
+static constexpr int PD_V_ROW  = PD_D / PD_QK * PD_Q8_BLK; // padded V LDS row: max supported row size, 272 B
 static constexpr int PD_K_VEC  = PD_K_ROW / 16;                           // 17 x 16 B
-static constexpr int PD_V_VEC  = PD_V_ROW / 16;                           //  9 x 16 B
 static constexpr int PD_K_LOADS = (PD_CHUNK * PD_K_VEC + PD_NWARPS * 32 - 1) / (PD_NWARPS * 32); // 5
-static constexpr int PD_V_LOADS = (PD_CHUNK * PD_V_VEC + PD_NWARPS * 32 - 1) / (PD_NWARPS * 32); // 3
 
-static_assert(PD_K_ROW % 16 == 0 && PD_V_ROW % 16 == 0, "rows must allow 16 B loads");
+static_assert(PD_K_ROW % 16 == 0, "K rows must allow 16 B loads");
 
 // Rows of one KV head. Without a table, token t lives at base + t * nb1 + head * nb2. With one, entry e = table[t / 256]
 // is either a pool page (e >= 0: row e * 256 + t % 256 of base) or a ring page (e < 0: row (-1 - e) * 256 + t % 256 of
@@ -116,9 +116,39 @@ static __device__ __forceinline__ half2 pd_u4x2(const uint32_t n0, const uint32_
     return __hsub2(*(const half2 *) &u, __halves2half2(__float2half(1032.0f), __float2half(1032.0f)));
 }
 
+
+// VTYPE: 0 = Q4_0, 1 = Q5_0, 2 = Q5_1, 3 = Q8_0.
+template <int VTYPE>
+static __device__ __forceinline__ half pd_v_value(const char * block, const int dim) {
+    if constexpr (VTYPE == 0) {
+        const half d = *(const half *) block;
+        const uint8_t packed = (uint8_t) block[2 + (dim & 15)];
+        const int q = ((packed >> (dim >= 16 ? 4 : 0)) & 0x0f) - 8;
+        return __float2half(__half2float(d) * q);
+    } else if constexpr (VTYPE == 1 || VTYPE == 2) {
+        const int qh_off = VTYPE == 1 ? 2 : 4;
+        const int qs_off = VTYPE == 1 ? 6 : 8;
+        const uint8_t packed = (uint8_t) block[qs_off + (dim & 15)];
+        const int lo = (packed >> (dim >= 16 ? 4 : 0)) & 0x0f;
+        const int hi = ((uint8_t) block[qh_off + dim / 8] >> (dim & 7)) & 1;
+        const int q = lo | (hi << 4);
+        const half d = *(const half *) block;
+        if constexpr (VTYPE == 1) {
+            return __float2half(__half2float(d) * (q - 16));
+        } else {
+            const half m = *(const half *) (block + 2);
+            return __float2half(__half2float(d) * q + __half2float(m));
+        }
+    } else {
+        const half d = *(const half *) block;
+        const int8_t q = (int8_t) block[2 + dim];
+        return __float2half(__half2float(d) * q);
+    }
+}
+
 // PAGED selects table addressing at compile time, so contiguous K/V carries no table logic.
 // Rows are split into tiles of R along grid z (prefill: many query tokens); MT bounds the query tokens one tile spans.
-template <int M_TILES, bool PAGED, int MT = 4>
+template <int M_TILES, bool PAGED, int VTYPE, int MT = 4>
 #ifndef PD_MIN_WAVES_PER_SIMD
 #define PD_MIN_WAVES_PER_SIMD 6 // keeps every variant at <= 240 VGPRs: 3 blocks of 8 waves per WGP (P-3: the ring variant
                                  // otherwise reached 256 VGPRs, occupancy 5, and lost about 10%)
@@ -138,7 +168,6 @@ static __global__ void pd_partial(
 
     __shared__ __align__(16) char      Kr[PD_CHUNK * PD_K_ROW];
     __shared__ __align__(16) char      Vr[PD_CHUNK * PD_V_ROW];
-    __shared__ __align__(16) half      Vs[PD_D / PD_QK * PD_CHUNK]; // V scales by block, then token
     __shared__ __align__(16) float     Ss[R * PD_CHUNK];
     __shared__ __align__(16) _Float16  Ps[R * PD_CHUNK];
     __shared__                float    alpha_s[R];
@@ -192,7 +221,6 @@ static __global__ void pd_partial(
     }
 
     uint4 kreg[PD_K_LOADS];
-    uint4 vreg[PD_V_LOADS];
     // Mask values travel with K/V: a separate global read in the S phase would wait for the whole prefetch
     // (vmcnt waits are in order).
     constexpr int M_LOADS = MT * PD_CHUNK / (PD_NWARPS * 32);
@@ -226,13 +254,6 @@ static __global__ void pd_partial(
             kreg[j] = i < PD_CHUNK * PD_K_VEC && t < n_kv ? ((const uint4 *) (PAGED ? kc + r * K.nb1 : K.row(t, head)))[col] : make_uint4(0, 0, 0, 0);
         }
 #pragma unroll
-        for (int j = 0; j < PD_V_LOADS; ++j) {
-            const int i = tid + j * PD_NWARPS * 32;
-            const int r = i / PD_V_VEC, col = i % PD_V_VEC;
-            const int t = c * PD_CHUNK + r;
-            vreg[j] = i < PD_CHUNK * PD_V_VEC && t < n_kv ? ((const uint4 *) (PAGED ? vc + r * V.nb1 : V.row(t, head)))[col] : make_uint4(0, 0, 0, 0);
-        }
-#pragma unroll
         for (int j = 0; j < M_LOADS; ++j) {
             const int i = tid + j * PD_NWARPS * 32;
             const int q = tok0 + i / PD_CHUNK, t = c * PD_CHUNK + i % PD_CHUNK;
@@ -252,19 +273,17 @@ static __global__ void pd_partial(
             const int i = tid + j * PD_NWARPS * 32;
             if (i < PD_CHUNK * PD_K_VEC) ((uint4 *) Kr)[i] = kreg[j];
         }
-#pragma unroll
-        for (int j = 0; j < PD_V_LOADS; ++j) {
-            const int i = tid + j * PD_NWARPS * 32;
-            if (i < PD_CHUNK * PD_V_VEC) {
-                ((uint4 *) Vr)[i] = vreg[j];
-                // 16 B piece v of a row holds the scale of block v at byte 2 * v (v < 8; piece 8 holds none)
-                const int r = i / PD_V_VEC, v = i % PD_V_VEC;
-                if (v < PD_D / PD_QK) {
-                    const uint32_t w = v < 2 ? vreg[j].x : v < 4 ? vreg[j].y : v < 6 ? vreg[j].z : vreg[j].w;
-                    const uint16_t s = (uint16_t) (v % 2 ? w >> 16 : w);
-                    Vs[v * PD_CHUNK + r] = *(const half *) &s;
-                }
+        // Stage V into padded LDS rows. Native rows can be 144, 176, 192, or 272 bytes.
+        const char * vc = PAGED ? V.chunk(c * PD_CHUNK, head) : nullptr;
+        for (int i = tid; i < PD_CHUNK * PD_V_ROW; i += PD_NWARPS * 32) {
+            const int r = i / PD_V_ROW, byte = i % PD_V_ROW;
+            const int t = c * PD_CHUNK + r;
+            char value = 0;
+            if (t < n_kv && byte < V.nb1) {
+                const char * src = PAGED ? vc + r * V.nb1 : V.row(t, head);
+                value = src[byte];
             }
+            Vr[i] = value;
         }
 #pragma unroll
         for (int j = 0; j < M_LOADS; ++j) {
@@ -362,26 +381,17 @@ static __global__ void pd_partial(
             for (int mt = 0; mt < M_TILES; ++mt) {
                 a[mt] = *(const pd_half8 *) (Ps + (mt * 16 + lane % 16) * PD_CHUNK + k0);
             }
-            // The wave's 32 dims are block `warp`: byte lane % 16 holds dims lane % 16 (low nibble, dt 0) and lane % 16 + 16
-            // (high nibble, dt 1). The scales of the 8 tokens are one read of Vs.
-            uint32_t xb[4];
-#pragma unroll
-            for (int j = 0; j < 4; ++j) {
-                const char * blk0 = Vr + (k0 + 2*j + 0) * PD_V_ROW + warp * PD_Q4_BLK;
-                const char * blk1 = Vr + (k0 + 2*j + 1) * PD_V_ROW + warp * PD_Q4_BLK;
-                xb[j] = (uint32_t) (uint8_t) blk0[2 + lane % 16] | ((uint32_t) (uint8_t) blk1[2 + lane % 16] << 8);
-            }
-            const uint4 sv = *(const uint4 *) (Vs + warp * PD_CHUNK + k0);
-            const half2 s2[4] = { *(const half2 *) &sv.x, *(const half2 *) &sv.y, *(const half2 *) &sv.z, *(const half2 *) &sv.w };
+            // Each lane decodes two output dimensions from the native V block layout.
 #pragma unroll
             for (int dt = 0; dt < 2; ++dt) {
-                const int shift = dt * 4;
+                const int dim = lane % 16 + dt * 16;
                 half2 b2[4];
 #pragma unroll
                 for (int j = 0; j < 4; ++j) {
-                    const uint32_t q0 = (xb[j] >> shift) & 0x0F;
-                    const uint32_t q1 = (xb[j] >> (8 + shift)) & 0x0F;
-                    b2[j] = __hmul2(pd_u4x2(q0, q1), s2[j]);
+                    const int vblk = VTYPE == 0 ? PD_Q4_BLK : VTYPE == 1 ? PD_Q5_0_BLK : VTYPE == 2 ? PD_Q5_1_BLK : PD_Q8_BLK;
+                    const char * blk0 = Vr + (k0 + 2*j + 0) * PD_V_ROW + warp * vblk;
+                    const char * blk1 = Vr + (k0 + 2*j + 1) * PD_V_ROW + warp * vblk;
+                    b2[j] = __halves2half2(pd_v_value<VTYPE>(blk0, dim), pd_v_value<VTYPE>(blk1, dim));
                 }
 #pragma unroll
                 for (int mt = 0; mt < M_TILES; ++mt) {
