@@ -5,7 +5,7 @@ description: >-
   Neutral, quiet chat interface for llama-server. Frosted matte surfaces with faint
   blue-grey hairlines, near-flat fills, and red/yellow/green status lamps. Tokens come in
   three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs)
-  and components, mirroring src/lib/styles/tokens/*.css.
+  and components. Generated from src/lib/styles/tokens/*.css.
 colors:
   primary: '{colors.action-primary}'
   neutral-0: 'oklch(1 0 0)'
@@ -78,6 +78,8 @@ colors:
   action-primary-hover: 'oklch(0.205 0 0 / 0.9)'
   action-danger: '{colors.red-600}'
   action-danger-hover: 'oklch(0.55 0.22 27 / 0.9)'
+  action-quiet: 'oklch(0.97 0 0 / 0.3)'
+  action-quiet-hover: '{colors.neutral-100}'
   action-ghost-hover: 'oklch(0.556 0 0 / 0.1)'
   field-background: 'oklch(1 0 0)'
   field-shade: '{colors.black-a6}'
@@ -122,6 +124,8 @@ colors:
   action-primary-hover-dark: 'oklch(0.922 0 0 / 0.9)'
   action-danger-dark: 'oklch(0.69 0.2 27 / 0.6)'
   action-danger-hover-dark: 'oklch(0.69 0.2 27 / 0.6)'
+  action-quiet-dark: 'oklch(0.708 0 0 / 0.15)'
+  action-quiet-hover-dark: 'oklch(0.708 0 0 / 0.25)'
   action-ghost-hover-dark: 'oklch(0.708 0 0 / 0.1)'
   field-background-dark: '{colors.white-a9}'
   field-shade-dark: '{colors.black-a30}'
@@ -300,6 +304,25 @@ components:
     backgroundColor: 'oklch(0.87 0 0 / 0.3)'
   button-secondary-border-dark:
     backgroundColor: 'oklch(1 0 0 / 0.06)'
+  button-tertiary:
+    backgroundColor: '#fcfcfc'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+    height: '36px'
+  button-tertiary-dark:
+    backgroundColor: '#232323'
+    textColor: '{colors.fg-default-dark}'
+  button-tertiary-hover:
+    backgroundColor: '{colors.action-quiet-hover}'
+    textColor: '{colors.fg-default}'
+  button-tertiary-hover-dark:
+    backgroundColor: '#323232'
+    textColor: '{colors.fg-default-dark}'
+  button-tertiary-border:
+    backgroundColor: '{colors.surface-muted}'
+  button-tertiary-border-dark:
+    backgroundColor: '{colors.surface-muted-dark}'
   button-outline:
     textColor: '{colors.fg-default}'
     rounded: '{rounded.control}'
@@ -609,10 +632,13 @@ icon buttons in the chat form are fully round.
 
 ## Components
 
-- **Buttons:** five variants.
+- **Buttons:** six variants.
   - `default`: the solid primary button, including the chat submit button.
   - `secondary`: the matte glass button, the same fill as the chat form with a faint border,
     also used for the chat form's Stop and Skip reasoning buttons.
+  - `tertiary`: a faint grey tint with a soft muted border, quieter than secondary and
+    still a visible button; kept for low-emphasis actions that need more presence than
+    ghost.
   - `outline`: no fill and a normal border, for secondary actions in dialogs and forms.
   - `ghost`: no fill until hovered, for icon buttons and quiet actions.
   - `destructive`: red, for deleting and other irreversible actions.

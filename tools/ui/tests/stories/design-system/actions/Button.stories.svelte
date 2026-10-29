@@ -17,6 +17,7 @@
 	const variants: NonNullable<ButtonVariant>[] = [
 		'default',
 		'secondary',
+		'tertiary',
 		'outline',
 		'ghost',
 		'destructive'
