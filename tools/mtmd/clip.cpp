@@ -907,6 +907,60 @@ ggml_tensor * clip_graph::build_stack(ggml_tensor * cur, int32_t stack_factor, i
     return cur;
 }
 
+ggml_tensor * clip_graph::build_audio_conv2d_stem(ggml_tensor * mel) {
+    const int64_t n_frames   = mel->ne[0]; // total frames, padded to multiple of chunk_size
+    const int64_t n_mel      = mel->ne[1];
+    const int64_t chunk_size = 100;        // n_window * 2 (n_window=50 from model config)
+    const int64_t n_chunks   = n_frames / chunk_size;
+
+    GGML_ASSERT(n_frames % chunk_size == 0); // preprocessor should already pad the input
+    GGML_ASSERT(mel->type == GGML_TYPE_F32);
+    GGML_ASSERT(model.conv2d_1_w && model.conv2d_2_w && model.conv2d_3_w && model.conv_out_w);
+
+    // View mel spectrogram as batched 100-frame chunks: [chunk_size, n_mel, 1, n_chunks]
+    ggml_tensor * cur = ggml_view_4d(ctx0, mel,
+        chunk_size, n_mel, 1, n_chunks,
+        n_frames   * (int64_t)sizeof(float), // nb[1]: stride over mel bins
+        chunk_size * (int64_t)sizeof(float), // nb[2]: stride for C=1 (unused)
+        chunk_size * (int64_t)sizeof(float), // nb[3]: stride over chunks
+        0);
+    cur = ggml_cont(ctx0, cur);
+    cb(cur, "inp_chunks", -1);
+
+    // 3 x conv2d + gelu
+    {
+        // conv output [OW, OH, C_out, n_chunks]
+        auto conv_block = [&](ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) {
+            x = ggml_conv_2d(ctx0, w, x, 2, 2, 1, 1, 1, 1);
+            if (b) {
+                x = ggml_add(ctx0, x, ggml_reshape_4d(ctx0, b, 1, 1, x->ne[2], 1));
+            }
+            return ggml_gelu_erf(ctx0, x);
+        };
+
+        cur = conv_block(cur, model.conv2d_1_w, model.conv2d_1_b);
+        cur = conv_block(cur, model.conv2d_2_w, model.conv2d_2_b);
+        cur = conv_block(cur, model.conv2d_3_w, model.conv2d_3_b);
+        // cur: [OW=13, OH=16, OC=480, n_chunks]
+        cb(cur, "after_conv_blocks", -1);
+    }
+
+    // permute [OW=13, OH=16, OC=480, n_chunks] -> [OH=16, OC=480, OW=13, n_chunks]
+    // reshape to [OH*OC=7680, OW*n_chunks]
+    // feature index h+16*c = c*16+f (matches python code)
+    cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 2, 0, 1, 3));
+    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0] * cur->ne[1], cur->ne[2] * cur->ne[3]);
+
+    // Project to d_model: [d_model, 13*n_chunks]
+    cur = ggml_mul_mat(ctx0, model.conv_out_w, cur);
+    if (model.conv_out_b) {
+        cur = ggml_add(ctx0, cur, model.conv_out_b);
+    }
+    cb(cur, "after_conv_out", -1);
+
+    return cur;
+}
+
 // aka pixel_shuffle / pixel_unshuffle / patch_merger (Kimi-VL)
 // support dynamic resolution
 ggml_tensor * clip_graph::build_suffix(ggml_tensor * cur) {
