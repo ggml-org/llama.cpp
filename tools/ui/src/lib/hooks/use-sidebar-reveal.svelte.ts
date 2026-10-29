@@ -1,11 +1,15 @@
 import {
 	SIDEBAR_REVEAL_EDGE_PX,
 	SIDEBAR_REVEAL_MAX_WIDTH,
+	SIDEBAR_REVEAL_MS,
 	SIDEBAR_REVEAL_RATIO,
 	SIDEBAR_REVEAL_SLOP_PX
 } from '$lib/constants';
 import { deviceStore, uiStore } from '$lib/stores';
 import { remToPx } from '$lib/utils';
+import { untrack } from 'svelte';
+import { quartOut } from 'svelte/easing';
+import { Tween } from 'svelte/motion';
 
 interface RevealGesture {
 	startX: number;
@@ -13,6 +17,49 @@ interface RevealGesture {
 	pointerId: number;
 	wasExpanded: boolean;
 	locked: boolean;
+}
+
+const THEME_COLOR_SELECTOR = 'meta[name="theme-color"][data-sidebar-reveal]';
+
+let colorContext: CanvasRenderingContext2D | null = null;
+
+/** Resolves any CSS color (the computed oklab mix among them) to the plain rgb a theme-color takes. */
+function toRgb(color: string): string {
+	colorContext ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+
+	if (!colorContext) return color;
+
+	colorContext.clearRect(0, 0, 1, 1);
+	colorContext.fillStyle = color;
+	colorContext.fillRect(0, 0, 1, 1);
+
+	const [r, g, b] = colorContext.getImageData(0, 0, 1, 1).data;
+
+	return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
+ * iOS Safari and the installed app tint their bars from theme-color, not from the page. While the
+ * sidebar is open a theme-color of its own, ahead of the app's ones, follows the page background;
+ * once it is closed again it goes, and the app's own theme-color applies as before.
+ */
+function syncThemeColor(progress: number) {
+	let meta = document.head.querySelector<HTMLMetaElement>(THEME_COLOR_SELECTOR);
+
+	if (progress === 0) {
+		meta?.remove();
+
+		return;
+	}
+
+	if (!meta) {
+		meta = document.createElement('meta');
+		meta.name = 'theme-color';
+		meta.dataset.sidebarReveal = '';
+		document.head.prepend(meta);
+	}
+
+	meta.content = toRgb(getComputedStyle(document.body).backgroundColor);
 }
 
 /**
@@ -28,6 +75,27 @@ export function useSidebarReveal() {
 	function revealPx(): number {
 		return Math.min(window.innerWidth * SIDEBAR_REVEAL_RATIO, remToPx(SIDEBAR_REVEAL_MAX_WIDTH));
 	}
+
+	// How far the sidebar is open, which the page and sidebar backgrounds follow (app.css) and
+	// the browser bars with them. It is stepped every frame, since a theme-color cannot transition.
+	const progress = new Tween(0, { duration: SIDEBAR_REVEAL_MS, easing: quartOut });
+
+	$effect(() => {
+		const dragProgress = dragOffset === null ? null : dragOffset / revealPx();
+		const target = deviceStore.isMobile && uiStore.isSidebarExpanded ? 1 : 0;
+
+		untrack(() => {
+			if (dragProgress !== null) void progress.set(dragProgress, { duration: 0 });
+			else void progress.set(target);
+		});
+	});
+
+	$effect(() => {
+		const value = progress.current;
+
+		document.documentElement.style.setProperty('--sidebar-reveal-progress', String(value));
+		syncThemeColor(value);
+	});
 
 	function handlePointerDown(event: PointerEvent) {
 		suppressClick = false;

@@ -19,21 +19,24 @@
 	import {
 		FORK_TREE_DEPTH_PADDING,
 		ICON_CLASS_DEFAULT,
+		ROW_LONG_PRESS_MS,
 		SHORTCUT_DELETE_CONVERSATION,
 		SHORTCUT_EDIT_CONVERSATION,
 		SHORTCUT_EXPORT_CONVERSATION,
 		UI_DATA_ATTRS
 	} from '$lib/constants';
+	import { useLongPress } from '$lib/hooks/use-long-press.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import {
 		chatStore,
 		conversationsStore,
+		deviceStore,
 		settingsStore,
 		sidebarDragStore,
 		tabsStore
 	} from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	interface Props {
 		isActive?: boolean;
@@ -70,6 +73,19 @@
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 	let contextMenuOpen = $state(false);
+	let rowElement = $state<HTMLButtonElement | null>(null);
+
+	// a phone has no three-dot trigger: holding the row opens its menu, anchored to the row
+	const longPress = useLongPress({
+		enabled: () => deviceStore.isMobile && !isSelectionMode,
+		onLongPress: openHoldMenu
+	});
+
+	async function openHoldMenu() {
+		renderActionsDropdown = true;
+		await tick();
+		dropdownOpen = true;
+	}
 
 	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
 	let isLanding = $derived(sidebarDragStore.landingConvId === conversation.id);
@@ -256,16 +272,24 @@
 
 <ContextMenuActions bind:open={contextMenuOpen} {actions} disabled={isSelectionMode}>
 	<button
-		class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left md:min-h-8 md:py-1 transition-colors hover:bg-foreground/10 hover:text-foreground {isLanding
-			? 'invisible'
-			: ''} {isActive
-			? 'bg-foreground/5 text-accent-foreground'
-			: 'text-foreground/75'} {contextMenuOpen ? 'bg-foreground/10' : ''} {isSelected
-			? 'bg-primary/10 hover:bg-primary/15'
-			: ''} {isSelectionMode ? 'is-selection-mode' : ''} px-2"
+		bind:this={rowElement}
+		style:--row-hold-ms="{ROW_LONG_PRESS_MS}ms"
+		class={[
+			'group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-2 py-1.5 text-left select-none [-webkit-touch-callout:none] transition-[background-color,color,scale] hover:bg-foreground/10 hover:text-foreground md:min-h-8 md:py-1',
+			isLanding && 'invisible',
+			isActive ? 'bg-foreground/5 text-accent-foreground' : 'text-foreground/75',
+			contextMenuOpen && 'bg-foreground/10',
+			isSelected && 'bg-primary/10 hover:bg-primary/15',
+			isSelectionMode && 'is-selection-mode',
+			// the row sinks while a finger holds it, and stays lit while its menu is open
+			longPress.isPressing && 'scale-[0.97] bg-foreground/10 duration-(--row-hold-ms) ease-out',
+			deviceStore.isMobile && dropdownOpen && 'bg-foreground/10'
+		]}
 		{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
 		onauxclick={handleAuxClick}
 		onclick={(e) => handleSelect(e)}
+		onclickcapture={longPress.handleClickCapture}
+		oncontextmenu={longPress.handleContextMenu}
 		ondragstart={(e) => e.preventDefault()}
 		onfocusin={handleMouseOver}
 		onfocusout={(e) => {
@@ -276,7 +300,14 @@
 		onmousedown={(e) => handleRowMouseDown(e)}
 		onmouseleave={handleMouseLeave}
 		onmouseover={handleMouseOver}
-		onpointerdown={handlePointerDown}
+		onpointercancel={longPress.handlePointerEnd}
+		onpointerdown={(e) => {
+			// a mouse drags the row, a finger holds it for its menu
+			handlePointerDown(e);
+			longPress.handlePointerDown(e);
+		}}
+		onpointermove={longPress.handlePointerMove}
+		onpointerup={longPress.handlePointerEnd}
 	>
 		<div
 			style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
@@ -349,10 +380,12 @@
 		</div>
 
 		{#if !isSelectionMode && renderActionsDropdown}
-			<div class="actions flex items-center">
+			<!-- a phone opens the menu by holding the row, so it shows no trigger -->
+			<div class="actions flex items-center" hidden={deviceStore.isMobile}>
 				<DropdownMenuActions
 					bind:open={dropdownOpen}
 					{actions}
+					anchor={deviceStore.isMobile ? rowElement : null}
 					triggerIcon={MoreHorizontal}
 					triggerTooltip="More actions"
 				/>
@@ -370,11 +403,6 @@
 		&:is(:hover) :global([data-slot='dropdown-menu-trigger']),
 		&:focus-within :global([data-slot='dropdown-menu-trigger']) {
 			opacity: 1;
-		}
-		@media (max-width: 768px) {
-			:global([data-slot='dropdown-menu-trigger']) {
-				opacity: 1 !important;
-			}
 		}
 
 		&.is-selection-mode :global([data-slot='dropdown-menu-trigger']) {

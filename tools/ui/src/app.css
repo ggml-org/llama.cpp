@@ -74,6 +74,16 @@
 	--sidebar-reveal: min(80dvw, 20rem);
 	/* the desktop sidebar's muted/60 over the page, made opaque so the slid page's corners can match it */
 	--sidebar-reveal-tint: color-mix(in oklab, var(--muted) 60%, var(--background));
+	/* how far the phone sidebar is open, 0 to 1, stepped every frame by useSidebarReveal */
+	--sidebar-reveal-progress: 0;
+	/* the same on a log curve: the sidebar's contents hold on until the page nearly covers them */
+	--sidebar-reveal-ease: calc(log(1 + 9 * var(--sidebar-reveal-progress)) / log(10));
+	/* the page background, blending into the sidebar tint as the phone sidebar opens */
+	--sidebar-reveal-bg: color-mix(
+		in oklab,
+		var(--sidebar-reveal-tint) calc(var(--sidebar-reveal-progress) * 100%),
+		var(--background)
+	);
 	--font-mono:
 		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
 		'Liberation Mono', Menlo, monospace;
@@ -173,7 +183,7 @@
 	}
 
 	body {
-		@apply bg-background text-foreground antialiased;
+		@apply bg-(--sidebar-reveal-bg) text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
 	}
@@ -303,6 +313,18 @@
 		z-index: 1000;
 		border-radius: 0.5rem;
 		pointer-events: none;
+	}
+
+	/* the phone sidebar's contents zoom out and fade as the page slides back over them */
+	.sidebar-reveal-content {
+		opacity: var(--sidebar-reveal-ease);
+		scale: calc(0.98 + 0.02 * var(--sidebar-reveal-ease));
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.sidebar-reveal-content {
+			scale: none;
+		}
 	}
 
 	.shimmer-text {

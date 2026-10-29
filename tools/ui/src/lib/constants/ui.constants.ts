@@ -126,6 +126,8 @@ export const SIDEBAR_TOGGLE_MS = 200;
 /** Phone sidebar reveal: the page slides aside by this share of the screen, up to the max width. */
 export const SIDEBAR_REVEAL_RATIO = 0.8;
 export const SIDEBAR_REVEAL_MAX_WIDTH = '20rem';
+/** Duration of the phone sidebar reveal, matching the page's `duration-300` slide. */
+export const SIDEBAR_REVEAL_MS = 300;
 /** A swipe that starts this close to the left edge can open the phone sidebar. */
 export const SIDEBAR_REVEAL_EDGE_PX = 24;
 /** Movement before a reveal swipe locks to a horizontal drag. */

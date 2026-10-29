@@ -1,11 +1,10 @@
 <script lang="ts">
 	import '../app.css';
-	import { Menu } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { ActionIcon, SidebarNavigation } from '$lib/components/app';
+	import { ActionIcon, MenuIcon, SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
@@ -319,7 +318,9 @@
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<div class="flex flex-col md:flex-row">
+	<!-- clip, not hide: the page slid aside for the phone sidebar must not widen the document,
+		 or iOS pans it sideways and leaves it stuck there -->
+	<div class="flex flex-col overflow-x-clip md:flex-row">
 		<SidebarNavigation />
 
 		<!-- min-w-0 lets the chat column shrink below its content width, so wide
@@ -345,9 +346,9 @@
 			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH)}
 				<ActionIcon
 					ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
-					class="fixed top-2 left-2 z-20 h-10 w-10 rounded-full"
-					icon={Menu}
-					iconSize="h-4.5 w-4.5"
+					class="fixed top-4 left-4 z-20 h-10 w-10 rounded-full bg-muted!"
+					icon={MenuIcon}
+					iconSize="size-6"
 					onclick={() => (uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded)}
 					size="lg"
 				/>
@@ -372,7 +373,7 @@
 				]}
 			>
 				<div
-					class="absolute inset-0 rounded-[2.5rem] shadow-[0_0_0_2.5rem_var(--sidebar-reveal-tint)] {BOX_BORDER}"
+					class="absolute inset-0 rounded-[2.5rem] shadow-[0_0_0_2.5rem_var(--sidebar-reveal-bg)] {BOX_BORDER}"
 				></div>
 			</div>
 		{/if}
