@@ -191,6 +191,10 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
     bool filtered = false;
     int n_tokens_cur = n_tokens;
+    bool need_full_layer_inputs = false;
+    for (bool enabled : cparams.embeddings_layer_inp) {
+        need_full_layer_inputs |= enabled;
+    }
 
     for (int il = 0; il < n_layer; ++il) {
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
@@ -284,13 +288,18 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
-        if (!filtered && !hparams.has_kv(il) && crop_before_nextn(inp_out_ids)) {
+        if (!filtered && !hparams.has_kv(il) && !need_full_layer_inputs && crop_before_nextn(inp_out_ids)) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
 
             ggml_tensor *pos_row = ggml_reshape_2d(ctx0, inp_pos, 1, inp_pos->ne[0]);
             pos_row = ggml_get_rows(ctx0, pos_row, inp_out_ids);
             inp_pos = ggml_reshape_1d(ctx0, pos_row, pos_row->ne[1]);
+
+            auto kq_mask_out = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask(), inp_out_ids), inp_attn->get_kq_mask()->type);
+            auto kq_mask_swa_out = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask_swa(), inp_out_ids), inp_attn->get_kq_mask_swa()->type);
+            inp_attn->self_kq_mask_cnv = kq_mask_out;
+            inp_attn->self_kq_mask_swa_cnv = kq_mask_swa_out;
 
             n_tokens_cur = cur->ne[1];
             filtered = true;
