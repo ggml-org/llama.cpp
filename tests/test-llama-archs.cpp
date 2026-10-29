@@ -279,11 +279,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
-            || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_HY_V4) {
         n_embd = 128;
         n_head = 1;
+        n_ff   = 192;
+    } else if (arch == LLM_ARCH_GLM5_NEXT) {
+        // several heads so that -sm tensor can split them and the MLA flash attention has GQA > 1
+        n_embd = 128;
+        n_head = 16;
         n_ff   = 192;
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
@@ -353,6 +357,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
         if (arch == LLM_ARCH_GLM5_NEXT) {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+            // the MLA cache holds one latent head
+            for (uint32_t & n : n_head_per_layer) {
+                n = std::min(n, uint32_t(1));
+            }
         } else {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
         }

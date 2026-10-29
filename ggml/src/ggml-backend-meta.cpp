@@ -489,6 +489,32 @@ static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct 
     return it->second[index];
 }
 
+// bytes spanned by all dims except skip_dim
+static size_t ggml_backend_meta_inner_extent(const struct ggml_tensor * tensor, int skip_dim) {
+    size_t extent = 0;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (i != skip_dim && tensor->ne[i] > 1) {
+            extent += (size_t) (tensor->ne[i] - 1) * tensor->nb[i];
+        }
+    }
+    return extent;
+}
+
+// the view dim that holds the split axis of src, or -1
+// all other dims of src and view must stay inside one slab of that axis
+static int ggml_backend_meta_view_slab_dim(const struct ggml_tensor * view, const struct ggml_tensor * src, int axis) {
+    const size_t slab = src->nb[axis];
+    if (ggml_backend_meta_inner_extent(src, axis) >= slab) {
+        return -1;
+    }
+    for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
+        if (view->ne[dim] == src->ne[axis] && view->nb[dim] == slab) {
+            return ggml_backend_meta_inner_extent(view, dim) < slab ? dim : -1;
+        }
+    }
+    return -1;
+}
+
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
@@ -702,6 +728,16 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         }
         if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED || src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
             return src_ss[0];
+        }
+        // a view that only regroups dims inside one slab of the split axis keeps the split,
+        // the per-device strides are only rescaled above nb[axis] (e.g. the KV streams of a permuted q)
+        if (axis >= 0 && axis < GGML_MAX_DIMS && tensor->view_offs == tensor->src[0]->view_offs) {
+            const int dim = ggml_backend_meta_view_slab_dim(tensor, tensor->src[0], axis);
+            if (dim >= 0) {
+                ggml_backend_meta_split_state ret = src_ss[0];
+                ret.axis = ggml_backend_meta_split_axis(dim);
+                return ret;
+            }
         }
         GGML_ABORT("view of permuted tensor not implemented");
         //return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};
@@ -1000,8 +1036,13 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 split_state = handle_pad(src_ss);
             } break;
             case GGML_OP_PAD_REFLECT_1D:
-            case GGML_OP_ROLL:
-            case GGML_OP_ARANGE:
+            case GGML_OP_ROLL: {
+                split_state = handle_generic(src_ss, /*scalar_only =*/ true);
+            } break;
+            case GGML_OP_ARANGE: {
+                // no sources, every device computes the full range
+                split_state = {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+            } break;
             case GGML_OP_TIMESTEP_EMBEDDING: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
