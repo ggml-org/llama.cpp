@@ -113,7 +113,8 @@ struct moe_cache_lru {
                 if (key / n_expert == il && seen[key % n_expert] == seen_gen) {
                     continue;
                 }
-                const double score = std::ldexp((double) (clock[key / n_expert] - last_use[key]), -c);
+                const int64_t age   = clock[key / n_expert] - last_use[key];
+                const double  score = std::ldexp((double) age, -c); // age/2^class
                 if (score > res_score) {
                     res       = s;
                     res_score = score;
