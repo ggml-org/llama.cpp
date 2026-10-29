@@ -4470,7 +4470,6 @@ vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_EXT_external_memory_host");
         }
         if (device->external_semaphore) {
-            device_extensions.push_back("VK_KHR_external_semaphore");
             device_extensions.push_back("VK_KHR_external_semaphore_fd");
         }
 
@@ -14392,12 +14391,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             flops_cap = 2'000'000'000ULL * ctx->device->shader_core_count;
         }
     }
-    const uint64_t flops_floor = std::min<uint64_t>(100'000'000ULL, flops_cap);
-    uint64_t flops_per_submit = std::clamp(ctx->last_total_flops / 40u, flops_floor, flops_cap);
     // small graphs gain nothing from splitting, each submit costs CPU time
-    if (ctx->last_total_flops < 1'000'000'000ULL) {
-        flops_per_submit = 0;
-    }
+    uint64_t flops_per_submit = ctx->last_total_flops < 1'000'000'000ULL ? 0 :
+        std::clamp(ctx->last_total_flops / 40u, std::min<uint64_t>(100'000'000ULL, flops_cap), flops_cap);
 
     auto const submit_after = [&](int start, int end) {
         if (ctx->device->serialize_submissions) {

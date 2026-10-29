@@ -33,7 +33,6 @@ static bool ggml_vk_comm_needs_f32(const ggml_tensor * t, int depth = 0) {
 
 // host_bridge: device i signals done[i], a host thread signals go[i] once all peers of i are done
 // sync_fd: a host thread exchanges SYNC_FD semaphores between peers, the wait resolves in the kernel
-//          (Mesa holds wait-before-signal submits in userspace)
 enum class vk_comm_sync {
     host_bridge,
     sync_fd,
@@ -269,18 +268,26 @@ static void ggml_vk_comm_bridge_free(vk_comm_device & d) {
     }
 }
 
-static void ggml_vk_comm_bridge_signal(ggml_backend_vk_comm_context * comm, size_t i, vk_context & c, uint64_t round) {
-    const vk_comm_device & d = comm->devs[i];
+static void ggml_vk_comm_barrier_to_host(vk_context & c) {
     const vk::MemoryBarrier to_host{ vk::AccessFlagBits::eTransferWrite | vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead };
     c->s->buffer->buf.pipelineBarrier(c->p->q->stage_flags, vk::PipelineStageFlagBits::eHost, {}, { to_host }, {}, {});
+}
+
+// the peers' slots were made available to the host before the wait resolved, the submit predates that
+static void ggml_vk_comm_barrier_from_host(vk_context & c) {
+    const vk::MemoryBarrier from_host{ vk::AccessFlagBits::eHostWrite, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eTransferRead };
+    c->s->buffer->buf.pipelineBarrier(vk::PipelineStageFlagBits::eHost, c->p->q->stage_flags, {}, { from_host }, {}, {});
+}
+
+static void ggml_vk_comm_bridge_signal(ggml_backend_vk_comm_context * comm, size_t i, vk_context & c, uint64_t round) {
+    const vk_comm_device & d = comm->devs[i];
+    ggml_vk_comm_barrier_to_host(c);
     ggml_vk_comm_submit(d.ctx, c, d.bridge.done, round);
 }
 
 static void ggml_vk_comm_bridge_wait(ggml_backend_vk_comm_context * comm, size_t i, vk_context & c, uint64_t round) {
     c->s->wait_semaphores.push_back({ comm->devs[i].bridge.go, round });
-    // the peers' slots were made available to the host before go[i] was signalled, the submit predates that
-    const vk::MemoryBarrier from_host{ vk::AccessFlagBits::eHostWrite, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eTransferRead };
-    c->s->buffer->buf.pipelineBarrier(vk::PipelineStageFlagBits::eHost, c->p->q->stage_flags, {}, { from_host }, {}, {});
+    ggml_vk_comm_barrier_from_host(c);
 }
 
 static bool ggml_vk_comm_sfd_supported(vk_comm_device & d) {
@@ -354,17 +361,15 @@ static void ggml_vk_comm_sfd_import(vk_comm_device & d, vk::Semaphore sem, int f
 static void ggml_vk_comm_sfd_exchange(ggml_backend_vk_comm_context * comm, uint64_t r) {
     const size_t n = comm->devs.size();
     for (size_t j = 0; j < n; j++) {
-        const int fd = ggml_vk_comm_sfd_export(comm->devs[j]);
+        const int    fd   = ggml_vk_comm_sfd_export(comm->devs[j]);
+        const size_t last = j == n - 1 ? n - 2 : n - 1;
         for (size_t i = 0; i < n; i++) {
             if (i == j) {
                 continue;
             }
-            const int dup = fd < 0 ? -1 : fcntl(fd, F_DUPFD_CLOEXEC, 0);
-            GGML_ASSERT(dup >= 0 || fd < 0);
-            ggml_vk_comm_sfd_import(comm->devs[i], comm->devs[i].sfd.imp[j], dup);
-        }
-        if (fd >= 0) {
-            close(fd);
+            const int imp_fd = fd < 0 || i == last ? fd : fcntl(fd, F_DUPFD_CLOEXEC, 0);
+            GGML_ASSERT(imp_fd >= 0 || fd < 0);
+            ggml_vk_comm_sfd_import(comm->devs[i], comm->devs[i].sfd.imp[j], imp_fd);
         }
     }
     comm->imported.store(r, std::memory_order_release);
@@ -399,6 +404,7 @@ static void ggml_vk_comm_sfd_free(vk_comm_device & d) {
 
 static void ggml_vk_comm_sfd_signal(ggml_backend_vk_comm_context * comm, size_t i, vk_context & c) {
     vk_comm_device & d = comm->devs[i];
+    ggml_vk_comm_barrier_to_host(c);
     ggml_vk_comm_submit(d.ctx, c, d.sfd.sem, 0);
     for (size_t j = 0; j < comm->devs.size(); j++) {
         d.sfd.imp[j] = j == i ? vk::Semaphore{} : ggml_vk_create_binary_semaphore(d.ctx);
@@ -413,6 +419,7 @@ static void ggml_vk_comm_sfd_wait(ggml_backend_vk_comm_context * comm, size_t i,
     }
     c->s->ready       = &comm->imported;
     c->s->ready_value = round;
+    ggml_vk_comm_barrier_from_host(c);
 }
 
 void ggml_backend_vk_comm_free(void * comm_ctx) {
@@ -498,9 +505,8 @@ void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_backends) {
     return comm;
 }
 
-// A: write partial to own host slot (round & 1) and signal; B: wait on all peers' A, add their slots
+// A: partial to own host slot (round & 1), signal; B: wait on peers' A, add their slots; all A precede any B
 // slot reuse: A(k) follows own B(k-1), which waited on peers' A(k-1), submitted after their B(k-2), the last reader
-// all A submits precede any B submit, so a fence wait never blocks on a peer
 bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor ** tensors) {
     ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
     const size_t n = comm->devs.size();
