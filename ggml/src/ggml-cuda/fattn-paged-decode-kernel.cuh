@@ -130,7 +130,8 @@ static __device__ __forceinline__ half pd_v_value(const char * block, const int 
         const int qs_off = VTYPE == 1 ? 6 : 8;
         const uint8_t packed = (uint8_t) block[qs_off + (dim & 15)];
         const int lo = (packed >> (dim >= 16 ? 4 : 0)) & 0x0f;
-        const int hi = ((uint8_t) block[qh_off + dim / 8] >> (dim & 7)) & 1;
+        const int qh_dim = dim >= 16 ? dim - 16 : dim;
+        const int hi = ((uint8_t) block[qh_off + qh_dim / 8] >> (qh_dim & 7)) & 1;
         const int q = lo | (hi << 4);
         const half d = *(const half *) block;
         if constexpr (VTYPE == 1) {
