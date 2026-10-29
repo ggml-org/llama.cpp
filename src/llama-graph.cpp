@@ -22,6 +22,7 @@
 #include <cstring>
 #include <numeric>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 
@@ -66,6 +67,66 @@ static bool can_reuse_kq_mask(
 }
 
 // impl
+
+void llm_dspark_log_snr_validate(
+        bool    enabled,
+        int64_t dsv4_hc_mult,
+        float   min_log_snr,
+        float   max_log_snr) {
+    if (!enabled) {
+        return;
+    }
+    if (dsv4_hc_mult > 0) {
+        throw std::runtime_error("dspark log-SNR conditioning is not implemented for the DSV4 hyper-connection backbone");
+    }
+    if (!std::isfinite(min_log_snr) || !std::isfinite(max_log_snr) || !(max_log_snr > min_log_snr)) {
+        throw std::runtime_error("dspark log-SNR: invalid bounds");
+    }
+}
+
+std::vector<float> llm_dspark_log_snr_feat(
+        int64_t n_tokens,
+        int64_t n_blocks,
+        float   min_log_snr,
+        float   max_log_snr) {
+    if (n_tokens <= 0 || n_blocks <= 0 || n_tokens < n_blocks || n_tokens % n_blocks != 0) {
+        throw std::runtime_error("dspark log-SNR: tokens must form equal, non-empty blocks");
+    }
+    llm_dspark_log_snr_validate(true, 0, min_log_snr, max_log_snr);
+
+    const int64_t block_drafts = n_tokens / n_blocks;
+    const int64_t half         = LLM_DSPARK_LOG_SNR_N_FREQ / 2;
+    const float   scale        = 1.0f / (max_log_snr - min_log_snr);
+
+    std::vector<float> feat((size_t) (LLM_DSPARK_LOG_SNR_N_FREQ * n_tokens));
+    for (int64_t pos = 0; pos < n_tokens; ++pos) {
+        const float log_snr = (pos % block_drafts == 0) ? max_log_snr : min_log_snr;
+        const float tt      = (log_snr - min_log_snr) * scale * 1000.0f;
+        for (int64_t i = 0; i < half; ++i) {
+            const float freq  = expf(-logf(10000.0f) * (float) i / (float) half);
+            const float angle = tt * freq;
+            feat[(size_t) (pos * LLM_DSPARK_LOG_SNR_N_FREQ + i)]        = sinf(angle);
+            feat[(size_t) (pos * LLM_DSPARK_LOG_SNR_N_FREQ + half + i)] = cosf(angle);
+        }
+    }
+
+    return feat;
+}
+
+void llm_graph_input_dspark_logsnr::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (feat && !v_feat.empty()) {
+        GGML_ASSERT((int64_t) v_feat.size() == ggml_nelements(feat));
+        ggml_backend_tensor_set(feat, v_feat.data(), 0, ggml_nbytes(feat));
+    }
+}
+
+bool llm_graph_input_dspark_logsnr::can_reuse(const llm_graph_params & params) {
+    return feat != nullptr && !v_feat.empty() &&
+        feat->ne[1] == params.ubatch.n_tokens &&
+        n_blocks == params.ubatch.n_seqs_unq;
+}
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {
