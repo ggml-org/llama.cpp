@@ -17,11 +17,9 @@
 	const variants: NonNullable<ButtonVariant>[] = [
 		'default',
 		'secondary',
-		'tertiary',
 		'outline',
 		'ghost',
-		'destructive',
-		'link'
+		'destructive'
 	];
 	const sizes: NonNullable<ButtonSize>[] = ['sm', 'default', 'lg'];
 </script>

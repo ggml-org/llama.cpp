@@ -3,81 +3,142 @@ version: alpha
 name: llama.cpp Web UI - Matte Glass
 description: >-
   Neutral, quiet chat interface for llama-server. Frosted matte surfaces with faint
-  blue-grey hairlines, near-flat fills, and red/yellow/green status lamps. Light mode is
-  the base token set; every token used in dark mode has a "-dark" twin.
+  blue-grey hairlines, near-flat fills, and red/yellow/green status lamps. Tokens come in
+  three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs)
+  and components, mirroring src/lib/styles/tokens/*.css.
 colors:
-  primary: 'oklch(0.205 0 0)'
-  on-primary: 'oklch(0.985 0 0)'
-  secondary: 'oklch(0.95 0 0)'
-  on-secondary: 'oklch(0.205 0 0)'
-  surface: 'oklch(1 0 0)'
-  on-surface: 'oklch(0.145 0 0)'
-  surface-muted: 'oklch(0.97 0 0)'
-  on-surface-muted: 'oklch(0.556 0 0)'
-  surface-raised: 'oklch(1 0 0)'
-  accent: 'oklch(0.95 0 0)'
-  border: 'oklch(0.875 0 0)'
-  input: 'oklch(0.92 0 0)'
-  ring: 'oklch(0.708 0 0)'
-  error: 'oklch(0.577 0.245 27.325)'
-  on-error: 'oklch(0.985 0 0)'
-  code-surface: 'oklch(0.985 0 0)'
-  on-code-surface: 'oklch(0.145 0 0)'
-  glass-fill: 'oklch(0.97 0 0 / 0.6)'
-  glass-edge: 'oklch(0.91 0.005 250)'
-  glass-edge-focus: 'oklch(0.81 0.01 250)'
-  ambient-edge: 'oklch(0.938 0.004 250)'
-  bubble-fill: '#f3f3f3'
-  bubble-edge: 'oklch(0.935 0.003 250)'
-  float-edge: 'oklch(0.9 0.005 250)'
-  status-red: 'oklch(0.6 0.235 27)'
-  status-red-ink: 'oklch(0.43 0.17 27)'
-  status-yellow: 'oklch(0.85 0.17 84)'
-  status-yellow-ink: 'oklch(0.5 0.1 70)'
-  status-green: 'oklch(0.73 0.2 148)'
-  status-green-ink: 'oklch(0.45 0.14 145)'
-  primary-dark: 'oklch(0.922 0 0)'
-  on-primary-dark: 'oklch(0.205 0 0)'
-  secondary-dark: 'oklch(0.29 0 0)'
-  on-secondary-dark: 'oklch(0.985 0 0)'
-  surface-dark: 'oklch(0.16 0 0)'
-  on-surface-dark: 'oklch(0.985 0 0)'
-  surface-muted-dark: 'oklch(0.269 0 0)'
-  on-surface-muted-dark: 'oklch(0.708 0 0)'
-  surface-raised-dark: 'oklch(0.205 0 0)'
-  accent-dark: 'oklch(0.269 0 0)'
-  border-dark: 'oklch(1 0 0 / 30%)'
-  input-dark: 'oklch(1 0 0 / 30%)'
-  ring-dark: 'oklch(0.556 0 0)'
-  error-dark: 'oklch(0.704 0.191 22.216)'
-  error-fill-dark: '#9e4143'
-  code-surface-dark: 'oklch(0.225 0 0)'
-  on-code-surface-dark: 'oklch(0.875 0 0)'
-  glass-fill-dark: 'oklch(0.269 0 0 / 0.75)'
-  glass-edge-dark: 'oklch(1 0 0 / 0.06)'
-  glass-edge-focus-dark: 'oklch(1 0 0 / 0.18)'
-  ambient-edge-dark: 'oklch(1 0 0 / 0.042)'
-  bubble-fill-dark: '#181818'
-  bubble-edge-dark: 'oklch(1 0 0 / 0.035)'
-  float-edge-dark: 'oklch(1 0 0 / 0.09)'
-  status-red-dark: 'oklch(0.63 0.22 25)'
-  status-red-ink-dark: 'oklch(0.4 0.15 27)'
-  status-yellow-dark: 'oklch(0.83 0.16 84)'
-  status-yellow-ink-dark: 'oklch(0.45 0.09 70)'
-  status-green-dark: 'oklch(0.72 0.19 148)'
-  status-green-ink-dark: 'oklch(0.4 0.12 145)'
+  primary: '{colors.action-primary}'
+  neutral-0: 'oklch(1 0 0)'
+  neutral-50: 'oklch(0.985 0 0)'
+  neutral-100: 'oklch(0.97 0 0)'
+  neutral-150: 'oklch(0.95 0 0)'
+  neutral-200: 'oklch(0.922 0 0)'
+  neutral-300: 'oklch(0.87 0 0)'
+  neutral-400: 'oklch(0.708 0 0)'
+  neutral-500: 'oklch(0.556 0 0)'
+  neutral-750: 'oklch(0.29 0 0)'
+  neutral-800: 'oklch(0.269 0 0)'
+  neutral-900: 'oklch(0.205 0 0)'
+  neutral-925: 'oklch(0.16 0 0)'
+  neutral-950: 'oklch(0.145 0 0)'
+  cool-gray-50: 'oklch(0.958 0.002 250)'
+  cool-gray-100: 'oklch(0.938 0.004 250)'
+  cool-gray-200: 'oklch(0.91 0.005 250)'
+  cool-gray-300: 'oklch(0.86 0.007 250)'
+  cool-gray-400: 'oklch(0.81 0.01 250)'
+  red-400: 'oklch(0.69 0.2 27)'
+  red-500: 'oklch(0.6 0.235 27)'
+  red-600: 'oklch(0.55 0.22 27)'
+  red-800: 'oklch(0.43 0.17 27)'
+  yellow-300: 'oklch(0.9 0.14 84)'
+  yellow-400: 'oklch(0.85 0.17 84)'
+  yellow-800: 'oklch(0.5 0.1 84)'
+  green-400: 'oklch(0.81 0.16 148)'
+  green-500: 'oklch(0.73 0.2 148)'
+  green-800: 'oklch(0.45 0.14 148)'
+  white-a2: 'oklch(1 0 0 / 0.02)'
+  white-a4: 'oklch(1 0 0 / 0.04)'
+  white-a6: 'oklch(1 0 0 / 0.06)'
+  white-a9: 'oklch(1 0 0 / 0.09)'
+  white-a12: 'oklch(1 0 0 / 0.12)'
+  white-a18: 'oklch(1 0 0 / 0.18)'
+  white-a20: 'oklch(1 0 0 / 0.2)'
+  white-a30: 'oklch(1 0 0 / 0.3)'
+  white-a50: 'oklch(1 0 0 / 0.5)'
+  black-a6: 'oklch(0 0 0 / 0.06)'
+  black-a30: 'oklch(0 0 0 / 0.3)'
+  black-a40: 'oklch(0 0 0 / 0.4)'
+  surface-page: '{colors.neutral-0}'
+  surface-muted: '{colors.neutral-100}'
+  surface-emphasis: '{colors.neutral-150}'
+  surface-selected: '{colors.neutral-150}'
+  surface-raised: '{colors.neutral-0}'
+  surface-glass: 'oklch(0.97 0 0 / 0.6)'
+  surface-code: '{colors.neutral-50}'
+  surface-overlay: '{colors.black-a40}'
+  fg-default: '{colors.neutral-950}'
+  fg-muted: '{colors.neutral-500}'
+  fg-on-action: '{colors.neutral-50}'
+  fg-on-danger: '{colors.neutral-0}'
+  fg-code: '{colors.neutral-950}'
+  fg-danger: '{colors.red-600}'
+  line-default: '{colors.neutral-300}'
+  line-field: '{colors.neutral-200}'
+  line-focus: '{colors.neutral-400}'
+  line-danger: '{colors.red-600}'
+  edge-rest-side: '{colors.cool-gray-200}'
+  edge-rest-mid: '{colors.cool-gray-100}'
+  edge-focus-side: '{colors.cool-gray-400}'
+  edge-focus-mid: '{colors.cool-gray-300}'
+  edge-ambient-side: '{colors.cool-gray-100}'
+  edge-ambient-mid: '{colors.cool-gray-50}'
+  edge-faint: '{colors.cool-gray-100}'
+  edge-raised: '{colors.cool-gray-200}'
+  action-primary: '{colors.neutral-900}'
+  action-primary-hover: 'oklch(0.205 0 0 / 0.9)'
+  action-danger: '{colors.red-600}'
+  action-danger-hover: 'oklch(0.55 0.22 27 / 0.9)'
+  action-ghost-hover: 'oklch(0.556 0 0 / 0.1)'
+  field-background: 'oklch(1 0 0)'
+  field-shade: '{colors.black-a6}'
+  status-danger: '{colors.red-500}'
+  status-danger-rim: '{colors.red-400}'
+  status-danger-glyph: '{colors.red-800}'
+  status-warning: '{colors.yellow-400}'
+  status-warning-rim: '{colors.yellow-300}'
+  status-warning-glyph: '{colors.yellow-800}'
+  status-success: '{colors.green-500}'
+  status-success-rim: '{colors.green-400}'
+  status-success-glyph: '{colors.green-800}'
+  highlight-inner: '{colors.white-a50}'
+  highlight-inverse: '{colors.white-a12}'
+  sheen-start: '{colors.white-a20}'
+  sheen-end: 'transparent'
+  surface-page-dark: '{colors.neutral-925}'
+  surface-muted-dark: '{colors.neutral-800}'
+  surface-emphasis-dark: '{colors.neutral-750}'
+  surface-selected-dark: '{colors.neutral-800}'
+  surface-raised-dark: '{colors.neutral-900}'
+  surface-glass-dark: 'oklch(0.269 0 0 / 0.75)'
+  surface-code-dark: '{colors.neutral-900}'
+  fg-default-dark: '{colors.neutral-50}'
+  fg-muted-dark: '{colors.neutral-400}'
+  fg-on-action-dark: '{colors.neutral-900}'
+  fg-code-dark: '{colors.neutral-300}'
+  fg-danger-dark: '{colors.red-400}'
+  line-default-dark: '{colors.white-a30}'
+  line-field-dark: '{colors.white-a30}'
+  line-focus-dark: '{colors.neutral-500}'
+  line-danger-dark: '{colors.red-400}'
+  edge-rest-side-dark: '{colors.white-a6}'
+  edge-rest-mid-dark: '{colors.white-a4}'
+  edge-focus-side-dark: '{colors.white-a18}'
+  edge-focus-mid-dark: '{colors.white-a12}'
+  edge-ambient-side-dark: '{colors.white-a4}'
+  edge-ambient-mid-dark: '{colors.white-a2}'
+  edge-faint-dark: '{colors.white-a4}'
+  edge-raised-dark: '{colors.white-a9}'
+  action-primary-dark: '{colors.neutral-200}'
+  action-primary-hover-dark: 'oklch(0.922 0 0 / 0.9)'
+  action-danger-dark: 'oklch(0.69 0.2 27 / 0.6)'
+  action-danger-hover-dark: 'oklch(0.69 0.2 27 / 0.6)'
+  action-ghost-hover-dark: 'oklch(0.708 0 0 / 0.1)'
+  field-background-dark: '{colors.white-a9}'
+  field-shade-dark: '{colors.black-a30}'
+  highlight-inner-dark: '{colors.white-a4}'
+  sheen-start-dark: '{colors.white-a2}'
 typography:
-  headline-lg:
+  heading:
     fontFamily: system-ui
     fontSize: 1.5rem
     fontWeight: 600
     lineHeight: 2rem
-  headline-md:
+  title:
     fontFamily: system-ui
     fontSize: 1.125rem
     fontWeight: 600
     lineHeight: 1.75rem
-  body-md:
+  body:
     fontFamily: system-ui
     fontSize: 1rem
     fontWeight: 400
@@ -87,7 +148,7 @@ typography:
     fontSize: 0.875rem
     fontWeight: 400
     lineHeight: 1.25rem
-  label-md:
+  label:
     fontFamily: system-ui
     fontSize: 0.875rem
     fontWeight: 500
@@ -97,19 +158,23 @@ typography:
     fontSize: 0.75rem
     fontWeight: 500
     lineHeight: 1rem
+  caption:
+    fontFamily: system-ui
+    fontSize: 0.75rem
+    fontWeight: 400
+    lineHeight: 1rem
   code:
     fontFamily: ui-monospace
     fontSize: 0.875rem
     fontWeight: 400
     lineHeight: 1.25rem
 rounded:
-  sm: 6px
-  md: 8px
-  lg: 10px
-  xl: 14px
-  2xl: 16px
-  3xl: 24px
-  4xl: 32px
+  control: 0.5rem
+  panel: 0.625rem
+  card: 0.875rem
+  container: 1rem
+  surface: 1.5rem
+  surface-lg: 2rem
   full: 9999px
 spacing:
   xs: 4px
@@ -119,165 +184,310 @@ spacing:
   xl: 24px
   2xl: 32px
 components:
-  button-primary:
-    backgroundColor: '{colors.primary}'
-    textColor: '{colors.on-primary}'
-    typography: '{typography.label-md}'
-    rounded: '{rounded.md}'
-    height: 36px
-    padding: 0 16px
-  button-primary-dark:
-    backgroundColor: '{colors.primary-dark}'
-    textColor: '{colors.on-primary-dark}'
-  button-secondary:
-    backgroundColor: '{colors.secondary}'
-    textColor: '{colors.on-secondary}'
-    typography: '{typography.label-md}'
-    rounded: '{rounded.md}'
-    height: 36px
-  button-secondary-dark:
-    backgroundColor: '{colors.secondary-dark}'
-    textColor: '{colors.on-secondary-dark}'
-  button-ghost-hover:
-    backgroundColor: '{colors.accent}'
-    textColor: '{colors.on-surface}'
-  button-ghost-hover-dark:
-    backgroundColor: '{colors.accent-dark}'
-    textColor: '{colors.on-surface-dark}'
-  button-destructive:
-    backgroundColor: '{colors.error}'
-    textColor: '{colors.on-error}'
-    rounded: '{rounded.md}'
-  button-destructive-dark:
-    backgroundColor: '{colors.error-fill-dark}'
-    textColor: '{colors.on-error}'
-  input-invalid-dark:
-    backgroundColor: '{colors.error-dark}'
-  input:
-    backgroundColor: '{colors.surface}'
-    textColor: '{colors.on-surface}'
-    typography: '{typography.body-sm}'
-    rounded: '{rounded.md}'
-    height: 36px
-  input-border:
-    backgroundColor: '{colors.input}'
-  input-focus-ring:
-    backgroundColor: '{colors.ring}'
-  input-dark:
-    backgroundColor: '{colors.surface-dark}'
-    textColor: '{colors.on-surface-dark}'
-  input-border-dark:
-    backgroundColor: '{colors.input-dark}'
-  input-focus-ring-dark:
-    backgroundColor: '{colors.ring-dark}'
   chat-form:
-    backgroundColor: '{colors.glass-fill}'
-    textColor: '{colors.on-surface}'
-    typography: '{typography.body-md}'
-    rounded: '{rounded.3xl}'
-  chat-form-edge:
-    backgroundColor: '{colors.glass-edge}'
-  chat-form-edge-focus:
-    backgroundColor: '{colors.glass-edge-focus}'
-  chat-form-placeholder:
-    textColor: '{colors.on-surface-muted}'
+    backgroundColor: '#f9f9f9'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.surface}'
+    typography: '{typography.body}'
   chat-form-dark:
-    backgroundColor: '{colors.glass-fill-dark}'
-    textColor: '{colors.on-surface-dark}'
-  chat-form-edge-dark:
-    backgroundColor: '{colors.glass-edge-dark}'
-  chat-form-edge-focus-dark:
-    backgroundColor: '{colors.glass-edge-focus-dark}'
+    backgroundColor: '#202020'
+    textColor: '{colors.fg-default-dark}'
+  chat-form-placeholder:
+    textColor: '{colors.fg-muted}'
   chat-form-placeholder-dark:
-    textColor: '{colors.on-surface-muted-dark}'
-  sidebar:
-    backgroundColor: '{colors.surface-muted}'
-    textColor: '{colors.on-surface}'
-    rounded: '{rounded.2xl}'
-  sidebar-edge:
-    backgroundColor: '{colors.ambient-edge}'
-  sidebar-dark:
-    backgroundColor: '{colors.surface-muted-dark}'
-    textColor: '{colors.on-surface-dark}'
-  sidebar-edge-dark:
-    backgroundColor: '{colors.ambient-edge-dark}'
-  user-bubble:
-    backgroundColor: '{colors.bubble-fill}'
-    textColor: '{colors.on-surface}'
-    typography: '{typography.body-md}'
-    rounded: '{rounded.3xl}'
-  user-bubble-edge:
-    backgroundColor: '{colors.bubble-edge}'
-  user-bubble-dark:
-    backgroundColor: '{colors.bubble-fill-dark}'
-    textColor: '{colors.on-surface-dark}'
-  user-bubble-edge-dark:
-    backgroundColor: '{colors.bubble-edge-dark}'
-  floating-panel:
-    backgroundColor: '{colors.surface-raised}'
-    textColor: '{colors.on-surface}'
-    typography: '{typography.body-sm}'
-    rounded: '{rounded.lg}'
-  floating-panel-edge:
-    backgroundColor: '{colors.float-edge}'
-  floating-panel-dark:
-    backgroundColor: '{colors.surface-raised-dark}'
-    textColor: '{colors.on-surface-dark}'
-  floating-panel-edge-dark:
-    backgroundColor: '{colors.float-edge-dark}'
+    textColor: '{colors.fg-muted-dark}'
+  chat-form-edge:
+    backgroundColor: '{colors.edge-rest-side}'
+  chat-form-edge-dark:
+    backgroundColor: '{colors.edge-rest-side-dark}'
+  chat-form-edge-focus:
+    backgroundColor: '{colors.edge-focus-side}'
+  chat-form-edge-focus-dark:
+    backgroundColor: '{colors.edge-focus-side-dark}'
   card:
-    backgroundColor: '{colors.glass-fill}'
-    textColor: '{colors.on-surface}'
-    rounded: '{rounded.xl}'
-    padding: 24px
+    backgroundColor: '#f9f9f9'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.card}'
+    padding: '24px'
   card-dark:
-    backgroundColor: '{colors.glass-fill-dark}'
-    textColor: '{colors.on-surface-dark}'
-  badge:
-    backgroundColor: '{colors.secondary}'
-    textColor: '{colors.on-secondary}'
+    backgroundColor: '#202020'
+    textColor: '{colors.fg-default-dark}'
+  card-edge:
+    backgroundColor: '{colors.edge-rest-side}'
+  card-edge-dark:
+    backgroundColor: '{colors.edge-rest-side-dark}'
+  sidebar:
+    backgroundColor: '#f9f9f9'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.container}'
+  sidebar-dark:
+    backgroundColor: '#1c1c1c'
+    textColor: '{colors.fg-default-dark}'
+  sidebar-edge:
+    backgroundColor: '{colors.edge-ambient-side}'
+  sidebar-edge-dark:
+    backgroundColor: '{colors.edge-ambient-side-dark}'
+  user-bubble:
+    backgroundColor: '#f3f3f3'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.surface}'
+    typography: '{typography.body}'
+  user-bubble-dark:
+    backgroundColor: '#181818'
+    textColor: '{colors.fg-default-dark}'
+  user-bubble-edge:
+    backgroundColor: '{colors.edge-faint}'
+  user-bubble-edge-dark:
+    backgroundColor: '{colors.edge-faint-dark}'
+  floating-panel:
+    backgroundColor: '#ffffff'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.panel}'
+    typography: '{typography.body-sm}'
+  floating-panel-dark:
+    backgroundColor: '#161616'
+    textColor: '{colors.fg-default-dark}'
+  floating-panel-edge:
+    backgroundColor: '{colors.edge-raised}'
+  floating-panel-edge-dark:
+    backgroundColor: '{colors.edge-raised-dark}'
+  dialog:
+    backgroundColor: '#ffffff'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.panel}'
+  dialog-dark:
+    backgroundColor: '#0d0d0d'
+    textColor: '{colors.fg-default-dark}'
+  tooltip:
+    backgroundColor: '{colors.action-primary}'
+    textColor: '{colors.fg-on-action}'
+    rounded: '{rounded.control}'
+    typography: '{typography.caption}'
+  tooltip-dark:
+    backgroundColor: '{colors.action-primary-dark}'
+    textColor: '{colors.fg-on-action-dark}'
+  button-primary:
+    backgroundColor: '{colors.action-primary}'
+    textColor: '{colors.fg-on-action}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+    height: '36px'
+  button-primary-dark:
+    backgroundColor: '{colors.action-primary-dark}'
+    textColor: '{colors.fg-on-action-dark}'
+  button-primary-hover:
+    backgroundColor: '#2e2e2e'
+    textColor: '{colors.fg-on-action}'
+  button-primary-hover-dark:
+    backgroundColor: '#cfcfcf'
+    textColor: '{colors.fg-on-action-dark}'
+  button-secondary:
+    backgroundColor: '#f9f9f9'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+    height: '36px'
+  button-secondary-dark:
+    backgroundColor: '#202020'
+    textColor: '{colors.fg-default-dark}'
+  button-secondary-hover:
+    backgroundColor: '#f7f7f7'
+    textColor: '{colors.fg-default}'
+  button-secondary-hover-dark:
+    backgroundColor: '{colors.surface-muted-dark}'
+    textColor: '{colors.fg-default-dark}'
+  button-secondary-border:
+    backgroundColor: 'oklch(0.87 0 0 / 0.3)'
+  button-secondary-border-dark:
+    backgroundColor: 'oklch(1 0 0 / 0.06)'
+  button-outline:
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+    height: '36px'
+  button-outline-dark:
+    textColor: '{colors.fg-default-dark}'
+  button-outline-border:
+    backgroundColor: '{colors.line-default}'
+  button-outline-border-dark:
+    backgroundColor: '{colors.line-field-dark}'
+  button-outline-hover:
+    backgroundColor: '#f1f1f1'
+    textColor: '{colors.fg-default}'
+  button-outline-hover-dark:
+    backgroundColor: '#1c1c1c'
+    textColor: '{colors.fg-default-dark}'
+  button-ghost:
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+  button-ghost-dark:
+    textColor: '{colors.fg-default-dark}'
+  button-ghost-hover:
+    backgroundColor: '#f1f1f1'
+    textColor: '{colors.fg-default}'
+  button-ghost-hover-dark:
+    backgroundColor: '#1c1c1c'
+    textColor: '{colors.fg-default-dark}'
+  button-destructive:
+    backgroundColor: '{colors.action-danger}'
+    textColor: '{colors.fg-on-danger}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+    height: '36px'
+  button-destructive-dark:
+    backgroundColor: '#9e3d37'
+    textColor: '{colors.fg-on-danger}'
+  button-destructive-hover:
+    backgroundColor: '#d82431'
+    textColor: '{colors.fg-on-danger}'
+  button-destructive-hover-dark:
+    backgroundColor: '#9e3d37'
+    textColor: '{colors.fg-on-danger}'
+  input:
+    backgroundColor: '{colors.field-background}'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.body-sm}'
+    height: '36px'
+  input-dark:
+    backgroundColor: '#232323'
+    textColor: '{colors.fg-default-dark}'
+  input-placeholder:
+    textColor: '{colors.fg-muted}'
+  input-placeholder-dark:
+    textColor: '{colors.fg-muted-dark}'
+  input-border:
+    backgroundColor: '{colors.line-field}'
+  input-border-dark:
+    backgroundColor: '{colors.line-field-dark}'
+  input-border-focus:
+    backgroundColor: '{colors.line-focus}'
+  input-border-focus-dark:
+    backgroundColor: '{colors.line-focus-dark}'
+  input-border-invalid:
+    backgroundColor: '{colors.line-danger}'
+  input-border-invalid-dark:
+    backgroundColor: '{colors.line-danger-dark}'
+  badge-default:
+    backgroundColor: '{colors.action-primary}'
+    textColor: '{colors.fg-on-action}'
+    rounded: '{rounded.control}'
     typography: '{typography.label-sm}'
-    rounded: '{rounded.md}'
-    padding: 2px 8px
-  badge-outline-edge:
-    backgroundColor: '{colors.border}'
-  badge-dark:
-    backgroundColor: '{colors.secondary-dark}'
-    textColor: '{colors.on-secondary-dark}'
-  badge-outline-edge-dark:
-    backgroundColor: '{colors.border-dark}'
+    padding: '2px 8px'
+  badge-default-dark:
+    backgroundColor: '{colors.action-primary-dark}'
+    textColor: '{colors.fg-on-action-dark}'
+  badge-secondary:
+    backgroundColor: '#dadada'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label-sm}'
+  badge-secondary-dark:
+    backgroundColor: '#252525'
+    textColor: '{colors.fg-default-dark}'
+  badge-outline:
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label-sm}'
+  badge-outline-dark:
+    textColor: '{colors.fg-default-dark}'
+  badge-outline-border:
+    backgroundColor: '{colors.line-default}'
+  badge-outline-border-dark:
+    backgroundColor: '{colors.line-default-dark}'
+  badge-destructive:
+    backgroundColor: '{colors.fg-danger}'
+    textColor: '{colors.fg-on-danger}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label-sm}'
+  badge-destructive-dark:
+    backgroundColor: '#b6443e'
+    textColor: '{colors.fg-on-danger}'
   code-block:
-    backgroundColor: '{colors.code-surface}'
-    textColor: '{colors.on-code-surface}'
+    backgroundColor: '{colors.surface-code}'
+    textColor: '{colors.fg-code}'
+    rounded: '{rounded.panel}'
     typography: '{typography.code}'
-    rounded: '{rounded.lg}'
   code-block-dark:
-    backgroundColor: '{colors.code-surface-dark}'
-    textColor: '{colors.on-code-surface-dark}'
-  status-lamp-red:
-    backgroundColor: '{colors.status-red}'
-    textColor: '{colors.status-red-ink}'
+    backgroundColor: '{colors.surface-code-dark}'
+    textColor: '{colors.fg-code-dark}'
+  dialog-overlay:
+    backgroundColor: '{colors.surface-overlay}'
+  list-row-selected:
+    backgroundColor: '{colors.surface-selected}'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+  list-row-selected-dark:
+    backgroundColor: '{colors.surface-selected-dark}'
+    textColor: '{colors.fg-default-dark}'
+  panel-muted:
+    backgroundColor: '{colors.surface-muted}'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.panel}'
+  panel-muted-dark:
+    backgroundColor: '{colors.surface-muted-dark}'
+    textColor: '{colors.fg-default-dark}'
+  chip-emphasis:
+    backgroundColor: '{colors.surface-emphasis}'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+  chip-emphasis-dark:
+    backgroundColor: '{colors.surface-emphasis-dark}'
+    textColor: '{colors.fg-default-dark}'
+  page:
+    backgroundColor: '{colors.surface-page}'
+    textColor: '{colors.fg-default}'
+  page-dark:
+    backgroundColor: '{colors.surface-page-dark}'
+    textColor: '{colors.fg-default-dark}'
+  chat-form-edge-mid:
+    backgroundColor: '{colors.edge-rest-mid}'
+  chat-form-edge-mid-dark:
+    backgroundColor: '{colors.edge-rest-mid-dark}'
+  chat-form-edge-mid-focus:
+    backgroundColor: '{colors.edge-focus-mid}'
+  chat-form-edge-mid-focus-dark:
+    backgroundColor: '{colors.edge-focus-mid-dark}'
+  sidebar-edge-mid:
+    backgroundColor: '{colors.edge-ambient-mid}'
+  sidebar-edge-mid-dark:
+    backgroundColor: '{colors.edge-ambient-mid-dark}'
+  glass-highlight:
+    backgroundColor: '{colors.highlight-inner}'
+  glass-highlight-dark:
+    backgroundColor: '{colors.highlight-inner-dark}'
+  tooltip-highlight:
+    backgroundColor: '{colors.highlight-inverse}'
+  user-bubble-sheen:
+    backgroundColor: '{colors.sheen-start}'
+  user-bubble-sheen-dark:
+    backgroundColor: '{colors.sheen-start-dark}'
+  field-shade:
+    backgroundColor: '{colors.field-shade}'
+  field-shade-dark:
+    backgroundColor: '{colors.field-shade-dark}'
+  status-lamp-danger-rim:
+    backgroundColor: '{colors.status-danger-rim}'
+  status-lamp-warning-rim:
+    backgroundColor: '{colors.status-warning-rim}'
+  status-lamp-success-rim:
+    backgroundColor: '{colors.status-success-rim}'
+  status-lamp-danger:
+    backgroundColor: '{colors.status-danger}'
+    textColor: '{colors.status-danger-glyph}'
     rounded: '{rounded.full}'
-    size: 8px
-  status-lamp-yellow:
-    backgroundColor: '{colors.status-yellow}'
-    textColor: '{colors.status-yellow-ink}'
+    size: '8px'
+  status-lamp-warning:
+    backgroundColor: '{colors.status-warning}'
+    textColor: '{colors.status-warning-glyph}'
     rounded: '{rounded.full}'
-    size: 8px
-  status-lamp-green:
-    backgroundColor: '{colors.status-green}'
-    textColor: '{colors.status-green-ink}'
+    size: '8px'
+  status-lamp-success:
+    backgroundColor: '{colors.status-success}'
+    textColor: '{colors.status-success-glyph}'
     rounded: '{rounded.full}'
-    size: 8px
-  status-lamp-red-dark:
-    backgroundColor: '{colors.status-red-dark}'
-    textColor: '{colors.status-red-ink-dark}'
-  status-lamp-yellow-dark:
-    backgroundColor: '{colors.status-yellow-dark}'
-    textColor: '{colors.status-yellow-ink-dark}'
-  status-lamp-green-dark:
-    backgroundColor: '{colors.status-green-dark}'
-    textColor: '{colors.status-green-ink-dark}'
+    size: '8px'
 ---
 
 ## Overview
@@ -288,106 +498,140 @@ rather than shiny plastic. Depth comes from blur, a faint hairline edge and soft
 never from strong gradients. Colour is reserved for meaning: the red, yellow and green
 status lamps, destructive actions, and the content itself.
 
-This file describes intent. The implementation lives in `src/app.css` (tokens on `:root`
-and `.dark`, plus the `matte-*` utilities) and is shown in Storybook under
-**Design system**. When the two disagree, `src/app.css` wins and this file should be updated.
+Design tokens come in three tiers, each in its own file under `src/lib/styles/tokens/`:
 
-Light mode is the base token set. Dark mode uses the token of the same name with a `-dark`
-suffix, and the components below list a `-dark` entry wherever their colours change.
+1. **Primitives** (`primitives.css`): raw values named by what they are, such as
+   `neutral-900`, `cool-gray-200`, `red-500`, `white-a30`, `font-size-14` or `length-24`.
+   Only semantic tokens point at them.
+2. **Semantic tokens** (`semantic.css`): named by purpose, such as `surface-glass`,
+   `fg-muted`, `line-field`, `edge-focus-side`, `action-primary` or `status-warning`. They
+   point at primitives and are the only tier that changes between light and dark. The type,
+   corner, icon size and control height roles live here too and are Tailwind utilities:
+   `text-label`, `rounded-control`, `size-icon-md`, `h-control-md`.
+3. **Component tokens** (`components.css`): one group per component, named
+   `[component]-[variant]-[property]-[state]`, such as `chat-form-edge-side-focus` or
+   `button-secondary-background-hover`. They point at semantic tokens, and components read
+   them as `bg-(--button-primary-background)` and similar.
+
+The front matter of this file mirrors those three files. When they disagree, the CSS wins
+and this file should be updated to match. Storybook shows every tier under **Design
+system > Foundations > Colors**.
+
+Light mode is the base. A semantic token whose dark value differs has a `-dark` twin here,
+and components list a `-dark` entry wherever their colours change. Translucent component
+fills are given as they render over the page, so contrast checks see the real colour.
 
 ## Colors
 
-The palette is achromatic. Hue appears only in the hairline edges (a cool blue-grey at
-hue 250, kept almost neutral) and in status and error colours.
+The palette is achromatic. Hue appears only in the hairline edges (a cool grey at hue 250,
+kept almost neutral) and in status and error colours.
 
-- **Primary (`primary`):** near black in light mode, near white in dark mode. Used for the
-  default button, including the chat submit button, and for strong text. Do not tint it.
-- **Secondary and accent (`secondary`, `accent`):** soft grey fills for secondary buttons,
-  hover states and selected rows.
-- **Surface (`surface`, `surface-muted`, `surface-raised`):** the page, muted panels such
-  as the sidebar, and raised panels such as menus and dialogs.
-- **Text (`on-surface`, `on-surface-muted`):** body text and secondary text, hints and
-  placeholders.
-- **Lines (`border`, `input`, `ring`):** dividers, field outlines and the focus ring.
-- **Error (`error`):** destructive buttons and invalid fields only. In dark mode the
-  destructive button uses `error-dark` at 60% over the page (`error-fill-dark`) with white
-  text, while invalid field outlines use `error-dark` itself.
-- **Glass (`glass-fill`, `glass-edge`, `glass-edge-focus`):** the translucent fill and
-  hairline of matte glass surfaces. The edge darkens on focus in light mode and lightens in
-  dark mode.
-- **Ambient edge (`ambient-edge`):** an even fainter hairline for large, quiet containers
-  such as the sidebar. It does not change on focus.
-- **Status (`status-red`, `status-yellow`, `status-green`):** lamp fills for error or
-  stopped, loading or warning, and ready or connected. Each has an `-ink` shade for glyphs
-  and text on top of the lamp. Known gap: the ink on the red lamp reaches only 2:1 to 2.6:1
-  and on the green lamp about 3.2:1 to 3.8:1, below WCAG AA, so the lamp colour must never be
-  the only signal; pair it with a label or tooltip.
+- **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
+  `surface-emphasis` and `surface-selected` for stronger fills and hover or selected rows,
+  `surface-raised` for menus and dialogs, `surface-glass` for the translucent matte fill,
+  `surface-code` for code and `surface-overlay` behind dialogs.
+- **Foreground:** `fg-default` and `fg-muted` for text and icons, `fg-on-action` and
+  `fg-on-danger` on filled buttons, `fg-code` for code and `fg-danger` for errors.
+- **Lines:** `line-default` for dividers and outlines, `line-field` for inputs, `line-focus`
+  for focus and `line-danger` for invalid fields.
+- **Edges:** the hairlines of matte surfaces, darker at the sides than in the middle.
+  `edge-rest-*` at rest, `edge-focus-*` when focus is inside, `edge-ambient-*` for large
+  quiet containers whose edge never changes, `edge-faint` for the user bubble and
+  `edge-raised` for floating panels.
+- **Actions:** `action-primary` (near black in light mode, near white in dark mode) and its
+  hover, `action-danger` and its hover, and `action-ghost-hover`.
+- **Status:** `status-danger`, `status-warning` and `status-success` are the lamp fills for
+  error or stopped, loading or warning, and ready or connected. Each has a lighter `-rim` and
+  a darker `-glyph`. They are the same in both modes. Known gap: the glyph on the red lamp
+  reaches only about 2:1 and on the green lamp about 3.2:1, below WCAG AA, so the lamp colour
+  must never be the only signal; pair it with a label or tooltip.
 
 ## Typography
 
 The UI uses the system sans-serif stack (`system-ui`) and the system monospace stack for
-code. Most of the interface is small: `body-sm` (14px) and `label-sm` (12px) cover nearly
-all controls, lists and metadata. `body-md` (16px) is for chat messages and the chat input.
-Headlines are rare and stay at `headline-md` or `headline-lg`; there is no display size.
-Use at most two weights on a screen, normally 400 and 500, with 600 reserved for headings.
+code. Type is set through roles that fix size, line height and weight together:
 
-Placeholders in the chat form are engraved: muted text with a 1px highlight below it in
-light mode and a 1px shadow above it in dark mode (the `engraved` utility).
+- `body` (16/24, 400): chat messages and the chat input.
+- `body-sm` (14/20, 400): most text, fields and lists.
+- `label` (14/20, 500): buttons and field labels.
+- `label-sm` (12/16, 500): badges and compact labels.
+- `caption` (12/16, 400): tooltips, hints and metadata.
+- `title` (18/28, 600) and `heading` (24/32, 600): rare headings; there is no display size.
+
+When a component lets callers override the size, keep an explicit weight class next to the
+role (`text-label font-medium`) so a size override does not drop the weight. Placeholders
+in the chat form are engraved: muted text with a 1px highlight below it in light mode and a
+1px shadow above it in dark mode (the `engraved` utility).
 
 ## Layout
 
 Spacing follows a 4px grid. Gaps of 4 to 12px (`xs` to `md`) dominate inside controls and
-lists; 16 to 32px (`lg` to `2xl`) separate sections. The chat column is centred with a
-generous bottom offset so the floating chat form never covers the last message. The desktop
-sidebar is 18rem wide by default, can be resized, and collapses to a 3rem strip.
+lists; 16 to 32px (`lg` to `2xl`) separate sections. Controls are 32, 36 or 40px tall
+(`h-control-sm`, `h-control-md`, `h-control-lg`) and icons are 12, 14, 16 or 20px
+(`size-icon-xs` to `size-icon-lg`). The chat column is centred with a generous bottom
+offset so the floating chat form never covers the last message. The desktop sidebar is 18rem
+wide by default, can be resized, and collapses to a 3rem strip.
 
 ## Elevation & Depth
 
-Depth is built from the matte utilities in `src/app.css`. Pick the one that matches the
-role of the surface instead of combining raw shadows.
+Depth is built from the matte utilities in `src/lib/styles/surfaces.css`. Pick the one that
+matches the role of the surface instead of combining raw shadows.
 
-- **`matte-glass`:** large resting surfaces such as the chat form and cards. A translucent
-  fill with a 24px backdrop blur, an inner highlight, a soft drop shadow and a 1px hairline
-  whose sides are slightly darker than its middle. The hairline is drawn on a masked
-  `::before` so it never tints the translucent fill. Focus inside the surface swaps the
-  hairline to the focus edge; the shadow stays the same.
-- **`matte-float`:** menus, popovers, select lists, hover cards, dialogs and drawers. An
-  86% opaque panel colour with blur, a faint edge and a deeper drop shadow.
+- **`matte-glass`:** large resting surfaces. A translucent fill with a backdrop blur, an
+  inner highlight, a soft drop shadow and a 1px hairline whose sides are slightly darker than
+  its middle. The hairline is drawn on a masked `::before` so it never tints the fill. Focus
+  inside swaps the hairline to the focus edge; the shadow stays the same. Its colours come
+  from slot variables, and `chat-form-surface`, `card-surface` and `sidebar-surface` point
+  those slots at one component's tokens, so each component needs a single class.
+- **`matte-float`** and **`matte-float-modal`:** menus, popovers, select lists, hover cards
+  and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge
+  and a deeper shadow.
 - **`matte-key`:** buttons. Adds a light blur, a thin inner rim and a small drop shadow on
   top of the button's own fill. It never changes the button colour.
 - **`matte-well`:** inputs, textareas, checkboxes and switches. A shallow inset shade so
   fields read as recessed.
 - **`matte-chip`:** badges. A thin inner rim only.
 - **`matte-sheen`:** the user message bubble. An almost invisible top-to-bottom sheen.
-- **`status-lamp` and `orb-red`, `orb-yellow`, `orb-green`:** small status dots.
-  **`matte-orb`** is the larger version used by the recording button.
+- **`status-lamp`** and **`matte-orb`** with `orb-danger`, `orb-warning` or `orb-success`:
+  small status dots and the recording button.
 
-Overlays behind dialogs are black at 40% with a 2px blur.
+The elevation tokens are `elevation-surface`, `elevation-control`, `elevation-raised`,
+`elevation-inset` and `elevation-tooltip`. Overlays behind dialogs are `surface-overlay`
+with a 2px blur.
 
 ## Shapes
 
-Corners are soft and consistent. Small controls use `md` (8px), panels and menus use `lg`
-(10px), cards use `xl` (14px), the sidebar uses `2xl` (16px), and the chat form and message
-bubbles use `3xl` (24px), rising to `4xl` (32px) for the chat form on small screens. Status
-lamps, avatars and icon buttons in the chat form are fully round.
+Corners are soft and consistent, set through roles: `control` (8px) for buttons, fields and
+badges, `panel` (10px) for menus and dialogs, `card` (14px) for cards, `container` (16px) for
+the sidebar, and `surface` (24px) for the chat form and message bubbles, rising to
+`surface-lg` (32px) for the chat form on small screens. Status lamps, avatars and the round
+icon buttons in the chat form are fully round.
 
 ## Components
 
-- **Buttons:** variants are default (primary), secondary, tertiary, outline, ghost,
-  destructive and link. All except ghost and link carry `matte-key`. Sizes are sm (32px),
-  default (36px) and lg (40px), plus square icon sizes.
-- **Chat form:** one `matte-glass` container holding the input, attachments and actions.
-  Its fill is muted grey at 60% in light mode and 75% in dark mode. The submit button is
-  the plain primary button.
-- **User message bubble:** the primary colour at 5% (`bg-primary/5`) with `matte-sheen` and
-  the very faint `bubble-edge` hairline, so it separates from the page without a visible
-  border. `bubble-fill` is that tint as it renders over the page background.
-- **Sidebar:** `matte-glass` with the muted fill at 60%, no inner highlight and the
+- **Buttons:** five variants.
+  - `default`: the solid primary button, including the chat submit button.
+  - `secondary`: the matte glass button, the same fill as the chat form with a faint border.
+  - `outline`: no fill and a normal border, for secondary actions in dialogs and forms.
+  - `ghost`: no fill until hovered, for icon buttons and quiet actions, including the chat
+    form's Stop and Skip reasoning buttons.
+  - `destructive`: red, for deleting and other irreversible actions.
+
+  All except ghost carry `matte-key`. Sizes are sm (32px), default (36px) and lg (40px), plus
+  square icon sizes.
+
+- **Badges:** four variants with the same names: `default`, `secondary` (a light foreground
+  tint), `outline` and `destructive`. Model and capability badges add `matte-chip`.
+- **Chat form:** one `chat-form-surface` holding the input, attachments and actions. Its fill
+  is the muted grey at 60% in light mode and 75% in dark mode.
+- **User message bubble:** the primary colour at 5% with `matte-sheen` and the very faint
+  `edge-faint` hairline, so it separates from the page without a visible border.
+- **Sidebar:** `sidebar-surface`, the muted fill at 60% with no inner highlight and the
   ambient edge. On small screens it keeps a plain `shadow-md` instead.
-- **Fields:** `matte-well` with a 1px `input` outline and the standard 3px focus ring.
-- **Floating panels:** every menu, popover, select list, hover card, dialog and drawer uses
-  `matte-float`. Dialogs base it on the page background colour.
-- **Badges:** model and capability badges use `matte-chip`.
+- **Fields:** `matte-well` with a 1px `line-field` outline and the standard 3px focus ring.
+- **Floating panels:** every menu, popover, select list, hover card and drawer uses
+  `matte-float`; dialogs use `matte-float-modal`.
+- **Tooltips:** the inverse of the page, the primary colour with a faint inner rim.
 - **Status:** server, model and MCP connection states use the status lamps, never coloured
   text alone.
 
@@ -399,11 +643,16 @@ lamps, avatars and icon buttons in the chat form are fully round.
   but never strong.
 - Do keep the shadow the same on focus. Focus is shown by the edge and the focus ring, not by
   lifting the surface.
-- Do use the status lamp colours only for status. Buttons keep their neutral colours, and
-  the submit button stays black in light mode and white in dark mode.
-- Do reach for the `matte-*` utility that matches the surface's role instead of adding raw
+- Do use the status colours only for status. Buttons keep their neutral colours, and the
+  submit button stays black in light mode and white in dark mode.
+- Do read component tokens in components, semantic tokens in shared styles, and primitives
+  only in semantic tokens.
+- Do add a new colour as a primitive first, then give it a semantic name before any
+  component uses it.
+- Do reach for the surface utility that matches the component instead of adding raw
   `shadow-*`, `border-*` and `backdrop-blur-*` combinations.
+- Don't use Tailwind's palette classes (`text-amber-500`, `bg-green-500/10`) for meaning in
+  new code; use the semantic tokens. Some older components still do and are being moved over.
 - Don't introduce new accent hues (such as a blue submit button) without a design decision.
 - Don't put white rims or highlights on large ambient containers such as the sidebar.
 - Don't stack two glass surfaces with blur directly on top of each other.
-- Don't hardcode colours in components; use the tokens so both modes stay in sync.

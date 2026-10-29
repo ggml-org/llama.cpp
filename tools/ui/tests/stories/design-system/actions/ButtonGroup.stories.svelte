@@ -39,11 +39,11 @@
 
 		<StateGalleryItem label="Split" note="with separator">
 			<ButtonGroup.Root>
-				<Button variant="secondary">Send</Button>
+				<Button variant="outline">Send</Button>
 
 				<ButtonGroup.Separator />
 
-				<Button aria-label="More options" size="icon" variant="secondary"><ChevronDown /></Button>
+				<Button aria-label="More options" size="icon" variant="outline"><ChevronDown /></Button>
 			</ButtonGroup.Root>
 		</StateGalleryItem>
 	</StateGallery>
