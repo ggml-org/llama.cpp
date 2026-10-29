@@ -453,9 +453,6 @@ class LFM3AudioMmprojModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if new_name.startswith("a.conv1d.") or "conv_dw" in new_name or new_name.startswith("a.gen.wav.quant."):
             return gguf.GGMLQuantizationType.F32
-        # the codec decoder is small and its log-magnitude/phase output does not survive quantization
-        if new_name.startswith("a.gen.wav."):
-            return gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
