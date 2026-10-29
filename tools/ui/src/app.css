@@ -282,3 +282,22 @@
 .mermaidTooltip {
 	display: none !important;
 }
+
+/*
+ * While the page sticks to its bottom, the pin after the messages is its only
+ * scroll anchor, so the browser keeps the bottom in place as content above it
+ * grows or realizes its size. Browsers without overflow-anchor (WebKit) never
+ * get the attribute, see createStickToBottom.
+ */
+[data-stick-to-bottom] * {
+	overflow-anchor: none;
+}
+
+[data-stick-to-bottom] *:has(.stick-to-bottom-pin),
+[data-stick-to-bottom] .stick-to-bottom-pin {
+	overflow-anchor: auto;
+}
+
+.stick-to-bottom-pin {
+	height: 1px;
+}

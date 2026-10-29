@@ -2,6 +2,7 @@
 	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
 	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
+	import { disableScrollHandling, onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatMessages,
@@ -65,6 +66,7 @@
 	// The page is the scroller: it follows new content while the reader sits at
 	// the bottom, and otherwise leaves their position alone.
 	const stick = createStickToBottom();
+	let stickPin: HTMLDivElement | undefined = $state();
 	const activeModel = useChatScreenActiveModel();
 	const fileUpload = useChatScreenFileUpload({
 		activeModelId: () => activeModel.activeModelId,
@@ -125,6 +127,17 @@
 	}
 
 	let lastScrolledConversationId: string | null = null;
+
+	// Every navigation lands anew: this screen outlives its routes, so coming
+	// back to the conversation it last landed on (via the new-chat screen)
+	// must not count as already landed. The landing also owns the scroll
+	// position, so SvelteKit's own reset (or restore, on back/forward) would
+	// only move the previous conversation, still on screen, to its top.
+	onNavigate((navigation) => {
+		lastScrolledConversationId = null;
+
+		if (navigation.to?.params?.id) disableScrollHandling();
+	});
 
 	// Lands at the bottom of a conversation the first time its messages render.
 	// The resize observer keeps it there while the list settles (lazy rows,
@@ -204,7 +217,7 @@
 	});
 
 	$effect(() => {
-		stick.attach(document.documentElement, document.body);
+		stick.attach(document.documentElement, document.body, stickPin);
 
 		return () => stick.detach();
 	});
@@ -234,6 +247,9 @@
 				onMessagesReady={handleMessagesReady}
 			/>
 		{/if}
+
+		<!-- the scroll anchor that keeps the page at its bottom, see createStickToBottom -->
+		<div bind:this={stickPin} aria-hidden="true" class="stick-to-bottom-pin"></div>
 
 		<div
 			bind:this={formWrapper}

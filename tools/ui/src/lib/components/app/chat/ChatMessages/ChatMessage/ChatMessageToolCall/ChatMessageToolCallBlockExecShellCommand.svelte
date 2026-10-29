@@ -334,10 +334,6 @@
 		}
 	}
 
-	.terminal-output {
-		overscroll-behavior: contain;
-	}
-
 	.terminal-output.is-clamped {
 		max-height: 28rem;
 		overflow-y: auto;
