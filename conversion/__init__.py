@@ -213,6 +213,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Ministral3Model": "mistral3",
     "Mistral3ForConditionalGeneration": "mistral3",
     "Mistral3Model": "mistral3",
+    "MistralLarge4ForConditionalGeneration": "mistral4",
     "VoxtralRealtimeForConditionalGeneration": "mistral3",
     "MistralForCausalLM": "llama",
     "MixtralForCausalLM": "llama",
