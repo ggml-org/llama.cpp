@@ -158,15 +158,12 @@ static void dequantize_row_q4_0_sycl_reorder(const void *vx, dst_t *y, const int
     dpct::has_capability_or_fail(stream->get_device(),
                                     {sycl::aspect::fp16});
 
+    // flat range<1>, four qs bytes (8 outputs) per item: two vectorized stores.
+    // k % QK4_0 == 0 gives whole 32-element blocks, so the k/8 launch covers every row exactly.
     GGML_ASSERT(k % QK4_0 == 0);
-    const int64_t n_groups = ceil_div(k / 2, SYCL_DEQUANTIZE_BLOCK_SIZE);
-    // decrease global range when it exceeds the max int; the kernel loops to cover the rest
-    const int64_t wg_size  = downsample_sycl_global_range(n_groups, SYCL_DEQUANTIZE_BLOCK_SIZE);
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_groups) *
-        sycl::range<3>(1, 1, wg_size),
-        sycl::range<3>(1, 1, wg_size)),
-        [=](sycl::nd_item<3> item_ct1) {
-            dequantize_block_q4_0_reorder(vx, y, k, item_ct1);
+    stream->parallel_for(sycl::range<1>((size_t) (k / 8)),
+        [=](sycl::id<1> idx) {
+            dequantize_block_q4_0_reorder_wide(vx, y, k, idx);
         });
 }
 
@@ -253,7 +250,7 @@ static void dequantize_row_q5_K_sycl_reorder(const void * vx, dst_t * y, const i
         sycl::local_accessor<uint8_t, 1> scale_local_acc(sycl::range<1>(K_SCALE_SIZE), cgh);
 
         cgh.parallel_for(
-            sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 64), sycl::range<3>(1, 1, 64)),
+            sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
             [=](sycl::nd_item<3> item_ct1) {
                 dequantize_block_q5_K_reorder(vx, y + item_ct1.get_group(2) * QK_K, item_ct1.get_group(2), get_pointer(scale_local_acc), item_ct1, nb);
             });
@@ -531,13 +528,13 @@ static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t 
 
 template <typename dst_t>
 static void dequantize_row_mxfp4_sycl_reorder(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+    // flat range<1>, four qs bytes (8 outputs) per item: two vectorized stores.
+    // Each 32-element block holds QK_MXFP4/2 = 16 qs bytes = 4 items, so the
+    // k/8 launch covers the row exactly (k % QK_MXFP4 == 0 asserted).
     GGML_ASSERT(k % QK_MXFP4 == 0);
-    const int n_warp = (k / QK_MXFP4 + WARP_SIZE - 1) / WARP_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) * sycl::range<3>(1, 1, WARP_SIZE),
-                          sycl::range<3>(1, 1, WARP_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_block_mxfp4_reorder(vx, y, k, item_ct1);
+    stream->parallel_for(sycl::range<1>((size_t) (k / 8)),
+        [=](sycl::id<1> idx) {
+            dequantize_block_mxfp4_reorder_wide(vx, y, k, idx);
         });
 }
 
