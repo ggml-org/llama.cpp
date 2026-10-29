@@ -11,7 +11,7 @@ from enum import Enum, auto
 from math import prod
 from pathlib import Path
 from io import BufferedWriter
-from typing import IO, Any, Sequence, Mapping
+from typing import IO, Any, Callable, Sequence, Mapping
 from string import ascii_letters, digits
 
 import numpy as np
@@ -86,7 +86,8 @@ class GGUFWriter:
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+        tensor_filter: Callable[[str], bool] | None = None,
     ):
         self.fout = None
         self.path = Path(path) if path else None
@@ -101,6 +102,7 @@ class GGUFWriter:
         self.split_max_size = split_max_size
         self.dry_run = dry_run
         self.small_first_shard = small_first_shard
+        self.tensor_filter = tensor_filter
         logger.info("gguf: This GGUF file is for {0} Endian only".format(
             "Big" if self.endianess == GGUFEndian.BIG else "Little",
         ))
@@ -381,6 +383,9 @@ class GGUFWriter:
         self, name: str, tensor: np.ndarray[Any, Any], raw_shape: Sequence[int] | None = None,
         raw_dtype: GGMLQuantizationType | None = None, tensor_endianess: GGUFEndian | None = None
     ) -> None:
+        if self.tensor_filter is not None and not self.tensor_filter(name):
+            return
+
         # if tensor endianness is not passed, assume it's native to system
         if tensor_endianess is None:
             tensor_endianess = GGUFEndian.BIG if sys.byteorder == 'big' else GGUFEndian.LITTLE

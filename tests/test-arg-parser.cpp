@@ -245,6 +245,35 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.model.path == "model_file.gguf");
 
+    {
+        auto parse_shards = [&list_str_to_char](std::vector<std::string> args) {
+            common_params shard_params;
+            args.insert(args.begin(), {"binary_name", "-m", "model_file.gguf"});
+            assert(common_params_parse(args.size(), list_str_to_char(args).data(), shard_params, LLAMA_EXAMPLE_COMMON));
+            auto paths = shard_params.model.get_paths();
+            assert(paths.front() == "model_file.gguf");
+            assert(std::vector<std::string>(paths.begin() + 1, paths.end()) == shard_params.model.shards);
+            return shard_params.model.shards;
+        };
+        assert(parse_shards({"--shard", "a.gguf"}) == std::vector<std::string>({"a.gguf"}));
+        const std::vector<std::string> two = {"a.gguf", "b.gguf"};
+        assert(parse_shards({"--shard", "a.gguf", "--shard", "b.gguf"}) == two);
+        assert(parse_shards({"--shard", "a.gguf,b.gguf"}) == two);
+        const std::vector<std::string> three = {"a.gguf", "b.gguf", "c.gguf"};
+        assert(parse_shards({"--shard", "a.gguf,b.gguf", "--shard", "c.gguf"}) == three);
+        assert(parse_shards({"--shard", "a.gguf", "--shard", "b.gguf", "--shard", "c.gguf"}) == three);
+        assert(parse_shards({"--ple", "p.gguf"}) == parse_shards({"--shard", "p.gguf"}));
+    }
+    {
+        common_params shard_params;
+        assert(!common_model_params_to_llama(shard_params).ignore_shard_num_mismatch);
+        for (const auto & option : {"-isnm", "--ignore-shard-num-mismatch", "--no-ignore-shard-num-mismatch"}) {
+            argv = {"binary_name", "-m", "model_file.gguf", option};
+            assert(common_params_parse(argv.size(), list_str_to_char(argv).data(), shard_params, LLAMA_EXAMPLE_COMMON));
+            assert(common_model_params_to_llama(shard_params).ignore_shard_num_mismatch == (std::string(option) != "--no-ignore-shard-num-mismatch"));
+        }
+    }
+
     argv = {"binary_name", "-t", "1234"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.cpuparams.n_threads == 1234);

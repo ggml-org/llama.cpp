@@ -125,6 +125,15 @@ def parse_args() -> argparse.Namespace:
         "--no-nextn", "--no-mtp", dest="no_mtp", action="store_true",
         help="Exclude NextN speculative draft tensors from the converted GGUF. Pair with --mtp or --dspark on a second run to publish target and draft as two files.",
     )
+    ple_group = parser.add_mutually_exclusive_group()
+    ple_group.add_argument(
+        "--ple-only", action="store_true",
+        help="Export only the per-layer embedding table as a separate GGUF for use with --shard (alias: --ple).",
+    )
+    ple_group.add_argument(
+        "--no-ple", action="store_true",
+        help="Exclude the per-layer embedding table while retaining its metadata. Load the table separately with --shard (alias: --ple).",
+    )
     parser.add_argument(
         "--dspark", action="store_true",
         help="Export only the DeepSeek-V4 DSpark draft tensors as a separate GGUF.",
@@ -173,6 +182,10 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
+    if (args.ple_only or args.no_ple) and (args.vocab_only or args.mmproj or args.mtp or args.dspark):
+        parser.error("--ple-only / --no-ple cannot be combined with --vocab-only, --mmproj, --mtp, or --dspark")
+    if args.ple_only and args.no_tensor_first_split:
+        parser.error("--ple-only cannot be combined with --no-tensor-first-split")
     return args
 
 
@@ -299,6 +312,7 @@ def main() -> None:
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
                                      fuse_qkv=args.fuse_qkv,
+                                     ple_only=args.ple_only, no_ple=args.no_ple,
                                      )
 
         if args.vocab_only:

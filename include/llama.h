@@ -354,6 +354,7 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
+        bool ignore_shard_num_mismatch; // use only the given files, in order, without split metadata validation or auto-discovery
     };
 
     struct llama_sampler_seq_config {
