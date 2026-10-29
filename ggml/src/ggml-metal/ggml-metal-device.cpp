@@ -1738,12 +1738,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_merge(ggml
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_topk_moe(
-        ggml_metal_library_t lib, int32_t n_expert, int32_t top_k, bool with_norm) {
+        ggml_metal_library_t lib, int32_t n_expert, int32_t top_k, bool with_norm, bool sigmoid) {
     char base[256];
     char name[256];
 
     snprintf(base, 256, "kernel_topk_moe_f32");
-    snprintf(name, 256, "%s_n_expert=%d_top_k=%d_with_norm=%d", base, n_expert, top_k, with_norm ? 1 : 0);
+    snprintf(name, 256, "%s_n_expert=%d_top_k=%d_with_norm=%d_sigmoid=%d", base, n_expert, top_k, with_norm ? 1 : 0, sigmoid ? 1 : 0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1751,6 +1751,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_topk_moe(
         ggml_metal_cv_set_bool (cv, with_norm, FC_TOPK_MOE + 0);
         ggml_metal_cv_set_int32(cv, n_expert,  FC_TOPK_MOE + 1);
         ggml_metal_cv_set_int32(cv, top_k,     FC_TOPK_MOE + 2);
+        ggml_metal_cv_set_bool (cv, sigmoid,   FC_TOPK_MOE + 3);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
