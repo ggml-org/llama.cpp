@@ -165,7 +165,7 @@ static void check_mmap(testing & t, const std::filesystem::path & path) {
     }
 }
 
-int main(int argc, char * argv[]) {
+int main() {
     testing t;
     temporary_file test_file;
     t.test("write_test_file", [&] (testing &) { write_test_file(test_file.path); });
