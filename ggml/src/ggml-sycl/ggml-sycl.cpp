@@ -22,6 +22,7 @@
 #include <float.h>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <stdint.h>
 #include <stdio.h>
 #include <vector>
@@ -110,6 +111,7 @@ int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_enable_fusion = 1;
+int g_ggml_sycl_gdn_state_gather = 1;
 int g_ggml_sycl_enable_esimd = 1;
 int g_ggml_sycl_mmvq_wide = 1;
 int g_ggml_sycl_enable_xmx_esimd = 1;
@@ -441,6 +443,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
+        g_ggml_sycl_gdn_state_gather = ggml_sycl_get_env("GGML_SYCL_GDN_STATE_GATHER", 1);
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
         g_ggml_sycl_enable_xmx_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_XMX_ESIMD", 1);
@@ -586,6 +589,7 @@ static void ggml_check_sycl() try {
 #endif
 
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
+        GGML_LOG_INFO("  GGML_SYCL_GDN_STATE_GATHER: %d\n", g_ggml_sycl_gdn_state_gather);
         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
 
 #if defined(__INTEL_LLVM_COMPILER)
@@ -6610,6 +6614,91 @@ static bool ggml_sycl_is_view_or_noop(const ggml_tensor * t) {
            t->op == GGML_OP_VIEW || t->op == GGML_OP_PERMUTE || t->op == GGML_OP_NONE;
 }
 
+static const ggml_tensor * ggml_sycl_gdn_base(const ggml_tensor * t) {
+    return t->view_src ? t->view_src : t;
+}
+
+using ggml_sycl_gdn_state_gathers = std::unordered_map<const ggml_tensor *, const ggml_tensor *>;
+
+static ggml_sycl_gdn_state_gathers ggml_sycl_match_gdn_state_gathers(const ggml_cgraph * cgraph) {
+    ggml_sycl_gdn_state_gathers readers;
+    std::unordered_map<const ggml_tensor *, bool> bad;
+    std::vector<const ggml_tensor *> pending;
+    if (!g_ggml_sycl_gdn_state_gather || !g_ggml_sycl_enable_fusion) {
+        return readers;
+    }
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * n = cgraph->nodes[i];
+        if (n->op == GGML_OP_GET_ROWS && (n->flags & GGML_TENSOR_FLAG_COMPUTE) &&
+            n->type == GGML_TYPE_F32 && !(n->flags & GGML_TENSOR_FLAG_OUTPUT) &&
+            n->src[0]->type == GGML_TYPE_F32 && n->src[1]->type == GGML_TYPE_I32 &&
+            n->src[0]->nb[0] == sizeof(float) && n->src[0]->nb[1] % sizeof(float) == 0 &&
+            n->src[0]->nb[1] >= ggml_row_size(GGML_TYPE_F32, n->src[0]->ne[0]) &&
+            n->src[0]->ne[2] == 1 && n->src[0]->ne[3] == 1 && ggml_nelements(n->src[1]) == 1 &&
+            n->ne[1] == 1 && n->ne[2] == 1 && n->ne[3] == 1) {
+            readers[n] = nullptr;
+            pending.push_back(n);
+        }
+        const auto output = readers.find(ggml_sycl_gdn_base(n));
+        if ((n->flags & GGML_TENSOR_FLAG_OUTPUT) && output != readers.end()) {
+            bad[output->first] = true;
+        }
+        if (readers.empty() || ggml_sycl_is_view_or_noop(n) || !(n->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+            continue;
+        }
+        // Delaying the gather must not cross a cache or index write.
+        for (const ggml_tensor * gather : pending) {
+            if (n != gather &&
+                (ggml_sycl_gdn_base(n) == ggml_sycl_gdn_base(gather->src[0]) ||
+                 ggml_sycl_gdn_base(n) == ggml_sycl_gdn_base(gather->src[1]))) {
+                bad[gather] = true;
+            }
+        }
+        for (int k = 0; k < GGML_MAX_SRC; ++k) {
+            const ggml_tensor * src = n->src[k];
+            if (src == nullptr) {
+                continue;
+            }
+            const auto it = readers.find(ggml_sycl_gdn_base(src));
+            if (it == readers.end()) {
+                continue;
+            }
+            // A single sequence owns each state column before writing it back.
+            const bool s0 = n->op == GGML_OP_GATED_DELTA_NET && k == 5 && src->view_offs == 0 &&
+                            n->src[2]->ne[3] == 1 && ggml_nelements(src) == ggml_nelements(it->first) &&
+                            ggml_is_contiguous(src);
+            if (!s0 || it->second != nullptr) {
+                bad[it->first] = true;
+            }
+            it->second = n;
+            pending.erase(std::remove(pending.begin(), pending.end(), it->first), pending.end());
+            if (s0) {
+                // An aliased writeback must keep the same state-column alignment.
+                for (int j = i + 1; j < cgraph->n_nodes; ++j) {
+                    const ggml_tensor * next = cgraph->nodes[j];
+                    if (ggml_sycl_is_view_or_noop(next) || !(next->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+                        continue;
+                    }
+                    const ggml_tensor * cache = it->first->src[0];
+                    if (next->op == GGML_OP_CPY && ggml_sycl_gdn_base(next->src[0]) == n &&
+                        ggml_sycl_gdn_base(next->src[1]) == ggml_sycl_gdn_base(cache)) {
+                        const ggml_tensor * dst = next->src[1];
+                        if (cache->nb[1] == 0 || dst->view_offs % cache->nb[1] != cache->view_offs % cache->nb[1] ||
+                            (dst->ne[2] > 1 && dst->nb[2] % cache->nb[1] != 0)) {
+                            bad[it->first] = true;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    for (auto it = readers.begin(); it != readers.end();) {
+        it = (it->second == nullptr || bad.count(it->first)) ? readers.erase(it) : std::next(it);
+    }
+    return readers;
+}
+
 // match gated_delta_net + the strided cpy that scatters its state snapshots into the cache
 // (slot i -> rollback group i, slot 0 newest), so the kernel can write them and skip the cpy.
 // returns the number of following nodes to skip (0 = no fusion)
@@ -6684,6 +6773,8 @@ static int ggml_sycl_try_gdn_cache_fusion(const ggml_cgraph * cgraph, int node_i
 }
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+    sycl_ctx->gdn_gather = {};
+    const auto gdn_gathers = ggml_sycl_match_gdn_state_gathers(cgraph);
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
         if (ggml_sycl_is_view_or_noop(node)) {
@@ -6691,6 +6782,20 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
+        }
+
+        if (node->op == GGML_OP_GET_ROWS && gdn_gathers.count(node)) {
+            continue;
+        }
+        if (node->op == GGML_OP_GATED_DELTA_NET) {
+            sycl_ctx->gdn_gather = {};
+            const auto it = gdn_gathers.find(ggml_sycl_gdn_base(node->src[5]));
+            if (it != gdn_gathers.end() && it->second == node) {
+                const ggml_tensor * gather = it->first;
+                sycl_ctx->gdn_gather = { node, (const float *) gather->src[0]->data,
+                                        (const int32_t *) gather->src[1]->data,
+                                        (int64_t) (gather->src[0]->nb[1] / sizeof(float)) };
+            }
         }
 
         const int nodes_to_skip = ggml_sycl_fuse(*sycl_ctx, cgraph, i);
@@ -7105,6 +7210,16 @@ static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_ev
     std::exit(1);
 }
 
+static void ggml_backend_sycl_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph,
+                                              ggml_backend_graph_optimize_params * params) {
+    GGML_UNUSED(backend);
+    for (const auto & entry : ggml_sycl_match_gdn_state_gathers(cgraph)) {
+        for (ggml_tensor * t : { entry.first->src[0], entry.first->src[1] }) {
+            params->add_alloc_dep(params->user_data, t->view_src ? t->view_src : t, const_cast<ggml_tensor *>(entry.second));
+        }
+    }
+}
+
 static ggml_backend_i ggml_backend_sycl_interface = {
     /* .get_name                = */ ggml_backend_sycl_get_name,
     /* .free                    = */ ggml_backend_sycl_free,
@@ -7123,7 +7238,7 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .graph_compute           = */ ggml_backend_sycl_graph_compute,
     /* .event_record            = */ ggml_backend_sycl_event_record,
     /* .event_wait              = */ ggml_backend_sycl_event_wait,
-    /* .graph_optimize          = */ NULL,
+    /* .graph_optimize          = */ ggml_backend_sycl_graph_optimize,
 };
 
 static ggml_guid_t ggml_backend_sycl_guid() {

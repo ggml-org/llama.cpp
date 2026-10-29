@@ -69,6 +69,7 @@ void ggml_sycl_host_free(void* ptr);
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
+extern int g_ggml_sycl_gdn_state_gather;
 extern int g_ggml_sycl_enable_esimd;
 extern int g_ggml_sycl_mmvq_wide;
 extern int g_ggml_sycl_enable_xmx_esimd;
@@ -472,10 +473,19 @@ struct ggml_sycl_graph {
 static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
 #endif
 
+// State rows read directly by a GDN whose gather was skipped.
+struct ggml_sycl_gdn_state_gather {
+    const ggml_tensor * gdn        = nullptr;
+    const float *       states     = nullptr;
+    const int32_t *     ids        = nullptr;
+    int64_t             row_stride = 0;
+};
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
     optimize_feature opt_feature;
+    ggml_sycl_gdn_state_gather gdn_gather;
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
