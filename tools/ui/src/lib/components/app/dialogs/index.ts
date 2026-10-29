@@ -178,6 +178,15 @@ export { default as DialogConversationDelete } from './DialogConversationDelete.
 export { default as DialogConversationRename } from './DialogConversationRename.svelte';
 
 /**
+ * **DialogGroup** - Name a new sidebar group, or rename one
+ *
+ * Opened through `uiStore.openGroupDialog()`, from the Recent heading's
+ * menus to create a group and from a group's menus to rename it. Mounted
+ * once, in the sidebar.
+ */
+export { default as DialogGroup } from './DialogGroup.svelte';
+
+/**
  *
  * CONTENT PREVIEW DIALOGS
  *

@@ -22,8 +22,16 @@ import {
 } from '$lib/constants';
 import { deviceStore } from '$lib/stores/device.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
+import type { Group } from '$lib/types/groups';
 import { remToPx } from '$lib/utils/css';
 import { SvelteSet } from 'svelte/reactivity';
+
+interface GroupDialogOptions {
+	/** Group to rename; without it the dialog creates a new one. */
+	groupId?: string;
+	/** Called with the new group after the dialog creates one. */
+	onCreate?: (group: Group) => void;
+}
 
 /** Sidebar sections the user folded, read once on load. */
 function loadCollapsedSidebarSections(): SvelteSet<string> {
@@ -65,8 +73,12 @@ class UiStore {
 
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
+
 	/** Sidebar sections showing all their chats past the preview, for this session. */
 	expandedSidebarSections = new SvelteSet<string>();
+
+	/** Open state of the group dialog, `null` while closed. */
+	groupDialog = $state<GroupDialogOptions | null>(null);
 
 	/** Whether the main chat form is expanded into its large editor. */
 	isComposerExpanded = $state(false);
@@ -140,6 +152,11 @@ class UiStore {
 
 	isSidebarSectionOpen(id: string): boolean {
 		return !this.collapsedSidebarSections.has(id);
+	}
+
+	/** Open the group dialog to create a group, or to rename `groupId`. */
+	openGroupDialog(options: GroupDialogOptions = {}): void {
+		this.groupDialog = options;
 	}
 
 	/** Open the model details drawer over the current page, without leaving it. */
