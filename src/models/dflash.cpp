@@ -1686,8 +1686,8 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
             ggml_tensor * kv = build_kv(inp_g, il).first;
             cb(kv, "kv_injected", il);
 
-            if (inp_attn->self_k_rot_swa) {
-                kv = llama_mul_mat_hadamard(ctx0, kv, inp_attn->self_k_rot_swa);
+            if (inp_attn->self_k_rot_swa[il]) {
+                kv = llama_mul_mat_hadamard(ctx0, kv, inp_attn->self_k_rot_swa[il]);
             }
             ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, kv, inp_attn->get_k_idxs_swa(), il));
         }
