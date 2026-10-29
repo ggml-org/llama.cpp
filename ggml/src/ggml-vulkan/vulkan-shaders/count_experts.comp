@@ -181,8 +181,7 @@ void main() {
         data_d[0] = total_tiles;
     }
 
-    // No experts means there is no first chunk to detect skipped slots.
-    if (skipped_rows != 0 || p.n_experts == 0) {
+    if (skipped_rows != 0) {
         zero_skipped_rows();
     }
 }
