@@ -112,11 +112,15 @@ struct moe_cache_lru {
         return std::min(n_class - 1, (int) std::log2(crf[key]));
     }
 
-    // decay the CRF by the time since the last use; an unused key gets 1 because crf[key] is 0 prior to first use
+    // the CRF of a key, decayed by the time since its last use
+    float decayed_crf(int32_t il, int32_t key) const {
+        return crf[key]*std::exp2(-(clock[il] - last_use[key])/crf_half_life);
+    }
+
+    // an unused key gets 1 because crf[key] is 0 prior to first use
     void use(int32_t il, int32_t key) {
-        const int64_t t = clock[il];
-        crf[key]      = crf[key]*std::exp2(-(t - last_use[key])/crf_half_life) + 1.0f;
-        last_use[key] = t;
+        crf[key]      = decayed_crf(il, key) + 1.0f;
+        last_use[key] = clock[il];
     }
 
     // the experts selected by this plan() must not be evicted, nor the slots this plan() filled already
@@ -270,7 +274,7 @@ struct moe_cache_lru {
             const int32_t s = victim(il);
             if (admit && key_of[s] >= 0) {
                 const int32_t v = key_of[s];
-                if (crf[key] <= crf[v]*std::exp2(-(clock[key_layer(v)] - last_use[v])/crf_half_life)) {
+                if (crf[key] <= decayed_crf(key_layer(v), v)) {
                     const int32_t z = take_zero(e, ids, n_tokens, n_used, n_zero);
                     if (z >= 0) {
                         slots[e] = z;
