@@ -16,7 +16,6 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
-#include "../../src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -4839,7 +4838,6 @@ private:
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
 
-        const llama_outputs * outputs = nullptr;
         iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
@@ -4898,10 +4896,7 @@ private:
             llama_token id;
             {
                 scoped_timer timer(t_sampl, n_sampl);
-                if (!outputs) {
-                    outputs = llama_get_outputs(ctx_tgt);
-                }
-                id = common_sampler_sample_from_outputs(slot.smpl.get(), outputs, tok_idx);
+                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
             }
 
             slot.i_batch = -1;
@@ -4976,15 +4971,10 @@ private:
                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
                 } else if (slot.spec_is_replay && slot.use_spec_rejection()) {
                     accepted = server_accept_replay(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
+                } else if (use_rejection) {
+                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft, slot.spec_draft_q);
                 } else {
-                    if (!outputs) {
-                        outputs = llama_get_outputs(ctx_tgt);
-                    }
-                    if (use_rejection) {
-                        accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft, slot.spec_draft_q);
-                    } else {
-                        accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft);
-                    }
+                    accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
                 }
 
                 GGML_ASSERT(accepted.size() >= 1);
