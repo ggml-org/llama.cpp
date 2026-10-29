@@ -153,6 +153,8 @@ int32_t common_cpu_get_num_physical_cores() {
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
 #include <pthread.h>
 
+#include "cpu-topo.h"
+
 static void cpuid(unsigned leaf, unsigned subleaf,
                   unsigned *eax, unsigned *ebx, unsigned *ecx, unsigned *edx) {
     __asm__("movq\t%%rbx,%%rsi\n\t"
@@ -183,19 +185,99 @@ static bool is_running_on_efficiency_core(void) {
     return core_type == intel_atom;
 }
 
+// x2APIC right-shift for the core id from the SMT level. -1 = no topology
+// leaves, 0 = no SMT (each logical processor is its own core), else shift bits.
+int cpu_smt_shift(int has_topology, int has_smt_level, unsigned smt_eax, unsigned smt_ebx) {
+    if (!has_topology) {
+        return -1;
+    }
+    if (!has_smt_level) {
+        return 0;
+    }
+    // EBX = logical processors at this level. 1 means SMT off/absent (e.g.
+    // Arrow Lake / Lunar Lake) - no shift. EAX[4:0] = SMT mask width = the shift.
+    return (smt_ebx & 0xffffu) > 1 ? (int) (smt_eax & 0x1fu) : 0;
+}
+
+// Distinct physical cores: skip efficiency cores, core id = x2apic >> shift.
+int cpu_count_distinct_cores(const std::vector<unsigned> & x2apic,
+                             const std::vector<char> & is_efficiency,
+                             int shift) {
+    std::vector<unsigned> cores;
+    for (size_t i = 0; i < x2apic.size(); ++i) {
+        if (is_efficiency[i]) {
+            continue;
+        }
+        unsigned core = x2apic[i] >> shift;
+        if (std::find(cores.begin(), cores.end(), core) == cores.end()) {
+            cores.push_back(core);
+        }
+    }
+    return (int) cores.size();
+}
+
+// Returns the SMT shift and writes the topology leaf to *leaf (0xB or 0x1F).
+// Returns -1 when the CPU does not support the topology enumeration leaves.
+static int cpu_topology_shift(unsigned * leaf) {
+    unsigned max_leaf, eax, ebx, ecx, edx;
+    cpuid(0, 0, &max_leaf, &ebx, &ecx, &edx);
+    const int has_topology = max_leaf >= 0xb;
+    int has_smt = 0;
+    unsigned smt_eax = 0, smt_ebx = 0;
+    if (has_topology) {
+        *leaf = max_leaf >= 0x1f ? 0x1f : 0xb;
+        for (unsigned sub = 0; sub < 16; ++sub) {
+            cpuid(*leaf, sub, &eax, &ebx, &ecx, &edx);
+            if ((ecx & 0xff00u) == 0) {
+                break; // level type 0 -> no further levels
+            }
+            if (((ecx >> 8) & 0xffu) == 1) { // SMT level
+                has_smt = 1;
+                smt_eax = eax;
+                smt_ebx = ebx;
+                break;
+            }
+        }
+    }
+    return cpu_smt_shift(has_topology, has_smt, smt_eax, smt_ebx);
+}
+
 static int cpu_count_math_cpus(int n_cpu) {
-    int result = 0;
+    unsigned leaf = 0;
+    const int shift = cpu_topology_shift(&leaf);
+    if (shift < 0) {
+        // no topology leaves - keep the old heuristic
+        int result = 0;
+        for (int cpu = 0; cpu < n_cpu; ++cpu) {
+            if (pin_cpu(cpu)) {
+                return -1;
+            }
+            if (is_running_on_efficiency_core()) {
+                continue; // efficiency cores harm lockstep threading
+            }
+            ++cpu; // hyperthreading isn't useful for linear algebra
+            ++result;
+        }
+        return result;
+    }
+
+    // Collect x2APIC id and efficiency flag per logical CPU, then count distinct
+    // cores. Logical processors are not always SMT sibling pairs, and no-SMT
+    // parts lose every other core to the old `++cpu` (see #28625).
+    std::vector<unsigned> x2apic;
+    std::vector<char> is_eff;
+    x2apic.reserve(n_cpu);
+    is_eff.reserve(n_cpu);
     for (int cpu = 0; cpu < n_cpu; ++cpu) {
         if (pin_cpu(cpu)) {
             return -1;
         }
-        if (is_running_on_efficiency_core()) {
-            continue; // efficiency cores harm lockstep threading
-        }
-        ++cpu; // hyperthreading isn't useful for linear algebra
-        ++result;
+        is_eff.push_back(is_running_on_efficiency_core() ? 1 : 0);
+        unsigned eax, ebx, ecx, edx;
+        cpuid(leaf, 0, &eax, &ebx, &ecx, &edx);
+        x2apic.push_back(edx);
     }
-    return result;
+    return cpu_count_distinct_cores(x2apic, is_eff, shift);
 }
 
 #endif // __x86_64__ && __linux__
