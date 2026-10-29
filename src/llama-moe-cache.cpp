@@ -27,19 +27,20 @@ struct moe_cache_lru {
     std::vector<int32_t *> slot_map; // [n_layer] data of the slot maps, -1 if the expert is not cached
     std::vector<int32_t>   key_of;   // [n_slots] il*n_expert + expert, -1 if empty
 
-    std::vector<int32_t> prev;
-    std::vector<int32_t> next;
+    // one LRU list per class, the head is the least recently used end
+    std::vector<int32_t> prev;    // [n_slots] -1 at the ends
+    std::vector<int32_t> next;    // [n_slots]
     int32_t head[n_class] = { -1, -1, -1, -1 };
     int32_t tail[n_class] = { -1, -1, -1, -1 };
-    std::vector<int8_t> list_of; // [n_slots]
+    std::vector<int8_t>  list_of; // [n_slots] class list of the slot
 
     std::vector<float>   crf;      // [n_layer*n_expert]
     std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
     std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer
 
-    std::vector<uint32_t> seen; // [n_expert]
+    std::vector<uint32_t> seen; // [n_expert] seen[e] == seen_gen if expert e is selected by the current plan()
     uint32_t seen_gen = 0;
-    std::vector<int32_t> uniq;
+    std::vector<int32_t> uniq;  // the distinct selected experts
 
     void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
         this->n_expert = n_expert;
