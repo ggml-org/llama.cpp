@@ -42,9 +42,13 @@ class TestKVCacheScales(unittest.TestCase):
                 model.gguf_writer.write_tensors_to_file()
                 model.gguf_writer.close()
 
-                reader = gguf.GGUFReader(path)
-                self.assertEqual([t.name for t in reader.tensors], ["blk.2.attn_k.k_scale", "blk.2.attn_v.v_scale"])
-                self.assertEqual([float(t.data[0]) for t in reader.tensors], [0.5, 1.0])
+                # Release the reader's memory map before Windows removes the temporary directory.
+                self._check_scales(path)
+
+    def _check_scales(self, path):
+        reader = gguf.GGUFReader(path)
+        self.assertEqual([t.name for t in reader.tensors], ["blk.2.attn_k.k_scale", "blk.2.attn_v.v_scale"])
+        self.assertEqual([float(t.data[0]) for t in reader.tensors], [0.5, 1.0])
 
 
 if __name__ == "__main__":
