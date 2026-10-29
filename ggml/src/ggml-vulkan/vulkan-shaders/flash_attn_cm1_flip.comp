@@ -265,7 +265,6 @@ void main() {
         Oacc[t] = coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0);
     }
 
-    const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
     float M = NEG_FLT_MAX_OVER_2;
     float L = 0;
 

@@ -177,8 +177,6 @@ void main() {
 
     float Lf[rows_per_thread], Mf[rows_per_thread];
 
-    // Use -FLT_MAX/2 rather than -inf to reduce the possibility of NaNs, e.g. when computing Mold-M.
-    const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
 
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         Lf[r] = 0;
@@ -280,7 +278,7 @@ void main() {
                             }
                             mask_cache[idx / WorkGroupSize] = m;
                         } else if (USE_SPARSE) {
-                            mask_cache[idx / WorkGroupSize] = f16vec4(NEG_FLT_MAX_OVER_2);
+                            mask_cache[idx / WorkGroupSize] = f16vec4(NEG_FLT16_MAX);
                         }
                     }
                 }
