@@ -123,6 +123,19 @@ export const SIDEBAR_SETTLE_MS = 300;
 /** Duration of the sidebar's open and close slide, matching its `duration-200` transition. */
 export const SIDEBAR_TOGGLE_MS = 200;
 
+/** Phone sidebar reveal: the page slides aside by this share of the screen, up to the max width. */
+export const SIDEBAR_REVEAL_RATIO = 0.8;
+export const SIDEBAR_REVEAL_MAX_WIDTH = '20rem';
+/** A swipe that starts this close to the left edge can open the phone sidebar. */
+export const SIDEBAR_REVEAL_EDGE_PX = 24;
+/** Movement before a reveal swipe locks to a horizontal drag. */
+export const SIDEBAR_REVEAL_SLOP_PX = 8;
+
+/** Hold time before a phone conversation row opens its action menu. */
+export const ROW_LONG_PRESS_MS = 450;
+/** Drift that cancels a row hold, so scrolling still works. */
+export const ROW_LONG_PRESS_SLOP_PX = 8;
+
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
 

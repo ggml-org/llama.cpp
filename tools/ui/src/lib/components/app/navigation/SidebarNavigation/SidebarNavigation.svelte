@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
+	import { PanelLeftClose, PanelLeftOpen } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
@@ -31,7 +31,6 @@
 	import { RouterService } from '$lib/services/router.service';
 	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
 	import { buildConversationTree, remToPx } from '$lib/utils';
-	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
 
@@ -552,15 +551,11 @@
 	<aside
 		bind:this={asideEl}
 		class={[
-			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 md:z-20 w-[calc(100dvw-1rem)]',
-			'md:h-[calc(100dvh-1.125rem)]',
-			uiStore.isSidebarExpanded &&
-				(deviceStore.isStandalone
-					? 'h-[calc(100dvh-2rem)]'
-					: deviceStore.isIOSDevice
-						? 'h-[calc(100dvh-0.5rem)]'
-						: 'h-[calc(100dvh-1rem)]'),
-			'rounded-3xl md:rounded-2xl',
+			'fixed md:sticky top-0 left-0 md:top-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-0 md:z-20 w-(--sidebar-reveal)',
+			'h-dvh md:h-[calc(100dvh-1.125rem)]',
+			// phone: it stays put under the page, which slides aside to uncover it
+			isOnMobile && 'bg-(--sidebar-reveal-tint)',
+			'md:rounded-2xl',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] duration-200 ease-out',
 			(uiStore.isSidebarResizing || isSnapping) && 'md:duration-0',
@@ -572,6 +567,7 @@
 			isStripHidden && 'md:pointer-events-none',
 			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
+		inert={isOnMobile && !uiStore.isSidebarExpanded}
 		onfocusin={peek}
 		onfocusout={handleAsideFocusOut}
 		onmouseleave={() => (isPeeking = false)}
@@ -616,38 +612,14 @@
 					tooltipSide={TooltipSide.RIGHT}
 				/>
 			</div>
-
-			{#if isOnMobile}
-				<div
-					in:fade={{ delay: 50, duration: 150, easing: circIn }}
-					out:fade={{ duration: 100 }}
-					class="flex items-center transition-all duration-150 ease-out {!uiStore.isSidebarExpanded
-						? 'opacity-0 h-0!'
-						: ''}"
-				>
-					<ActionIcon
-						ariaLabel="Collapse navigation"
-						class="backdrop-blur-none h-10 w-10 rounded-full -mr-1 -mt-1 hover:bg-accent!"
-						icon={X}
-						iconSize="h-4 w-4"
-						onclick={toggleExpandedMode}
-						size="lg"
-						tooltip="Close Sidebar"
-						tooltipSide={TooltipSide.LEFT}
-					/>
-				</div>
-			{/if}
 		</div>
 
 		<div
 			in:fade={{ duration: 200 }}
 			out:fade={{ duration: 200 }}
-			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {deviceStore.isMobile
-				? 'transition-[opacity,height] duration-200 ease-out'
-				: 'md:transition-opacity md:duration-150 md:ease-out'} {deviceStore.isMobile &&
-			!uiStore.isSidebarExpanded
-				? 'opacity-0 invisible !h-0'
-				: ''} {isStripHidden ? 'md:opacity-0 md:invisible' : ''}"
+			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 md:transition-opacity md:duration-150 md:ease-out {isStripHidden
+				? 'md:opacity-0 md:invisible'
+				: ''}"
 		>
 			<SidebarNavigationActions
 				class="px-2 md:my-3"
@@ -747,27 +719,6 @@
 	aside {
 		@media (max-width: 768px) {
 			--size: 1.125rem;
-		}
-	}
-
-	@media (max-width: 768px) {
-		aside {
-			&:not(.is-expanded) {
-				pointer-events: none;
-			}
-		}
-
-		aside.is-expanded::before {
-			content: '';
-			position: fixed;
-			top: -0.5rem;
-			bottom: -0.25rem;
-			left: -0.5rem;
-			right: -0.5rem;
-			z-index: -1;
-			background: var(--background);
-			backdrop-filter: blur(1rem);
-			pointer-events: none;
 		}
 	}
 </style>

@@ -70,6 +70,10 @@
 	--sidebar-ring: oklch(0.708 0 0);
 	--code-background: oklch(0.985 0 0);
 	--code-foreground: oklch(0.145 0 0);
+	/* phone sidebar width, which the page slides aside to reveal */
+	--sidebar-reveal: min(80dvw, 20rem);
+	/* the desktop sidebar's muted/60 over the page, made opaque so the slid page's corners can match it */
+	--sidebar-reveal-tint: color-mix(in oklab, var(--muted) 60%, var(--background));
 	--font-mono:
 		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
 		'Liberation Mono', Menlo, monospace;

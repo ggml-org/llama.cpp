@@ -1,23 +1,27 @@
 <script lang="ts">
 	import '../app.css';
+	import { Menu } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { SidebarNavigation } from '$lib/components/app';
+	import { ActionIcon, SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
+		BOX_BORDER,
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
 		MODELS_ROUTE_ID,
 		NEW_CHAT_TAB_ID,
+		ROUTES,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
+	import { useSidebarReveal } from '$lib/hooks/use-sidebar-reveal.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import {
 		chatStore,
@@ -118,6 +122,20 @@
 			conversationsStore.openNewChat();
 		}
 	}
+
+	const sidebarReveal = useSidebarReveal();
+
+	const isRevealed = $derived(uiStore.isSidebarExpanded || sidebarReveal.dragOffset !== null);
+
+	// phone only: the page slides aside by the sidebar's width, or follows the finger mid-drag
+	const revealTransform = $derived.by(() => {
+		if (!deviceStore.isMobile) return undefined;
+
+		if (sidebarReveal.dragOffset !== null)
+			return `translate3d(${sidebarReveal.dragOffset}px, 0, 0)`;
+
+		return uiStore.isSidebarExpanded ? 'translateX(var(--sidebar-reveal))' : undefined;
+	});
 
 	// the models page returns to wherever it was reached from, by any kind of navigation
 	afterNavigate(() => uiStore.rememberModelsReturnRoute());
@@ -307,9 +325,57 @@
 		<!-- min-w-0 lets the chat column shrink below its content width, so wide
 		     code blocks and tables scroll inside their own containers instead of
 		     stretching the page into a horizontal scrollbar -->
-		<div class="min-w-0 flex-1">
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div
+			style:transform={revealTransform}
+			class={[
+				'min-w-0 flex-1',
+				deviceStore.isMobile && 'relative z-10 min-h-dvh bg-background',
+				deviceStore.isMobile &&
+					sidebarReveal.dragOffset === null &&
+					'transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]'
+			]}
+			onclickcapture={sidebarReveal.handleClickCapture}
+			onpointercancel={sidebarReveal.handlePointerUp}
+			onpointerdown={sidebarReveal.handlePointerDown}
+			onpointermove={sidebarReveal.handlePointerMove}
+			onpointerup={sidebarReveal.handlePointerUp}
+		>
+			<!-- the phone sidebar sits under the page, so its toggle rides on the page -->
+			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH)}
+				<ActionIcon
+					ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
+					class="fixed top-2 left-2 z-20 h-10 w-10 rounded-full"
+					icon={Menu}
+					iconSize="h-4.5 w-4.5"
+					onclick={() => (uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded)}
+					size="lg"
+				/>
+			{/if}
+
 			{@render children?.()}
 		</div>
+
+		<!-- frames the slid page as a rounded card; its corners are masked in the sidebar tint -->
+		{#if deviceStore.isMobile}
+			<div
+				style:transform={revealTransform}
+				aria-hidden="true"
+				class={[
+					'pointer-events-none fixed inset-0 z-20 overflow-hidden',
+					sidebarReveal.dragOffset === null &&
+						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+					// on close the corners hold until the page is nearly home, then fade
+					isRevealed
+						? 'opacity-100'
+						: 'opacity-0 [transition-delay:0ms,150ms] [transition-duration:300ms,150ms]'
+				]}
+			>
+				<div
+					class="absolute inset-0 rounded-[2.5rem] shadow-[0_0_0_2.5rem_var(--sidebar-reveal-tint)] {BOX_BORDER}"
+				></div>
+			</div>
+		{/if}
 	</div>
 
 	<ModeWatcher />

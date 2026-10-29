@@ -16,12 +16,15 @@
 		triggerClass?: string;
 		actions: MenuAction[];
 		align?: 'start' | 'center' | 'end';
+		/** Keeps the anchored menu on a phone too, for a menu opened by a press-and-hold. */
+		anchored?: boolean;
 		open?: boolean;
 	}
 
 	let {
 		actions,
 		align = 'end',
+		anchored = false,
 		open = $bindable(false),
 		triggerClass = '',
 		triggerIcon,
@@ -30,7 +33,7 @@
 
 	// a phone shows the same actions in a drawer, where a thumb reaches them and every
 	// row is a touch target of its own
-	let isMobile = $derived(deviceStore.isMobile);
+	let isMobile = $derived(deviceStore.isMobile && !anchored);
 
 	function runAction(action: MenuAction, event: Event) {
 		open = false;
