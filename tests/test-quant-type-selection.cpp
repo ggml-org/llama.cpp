@@ -497,6 +497,83 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
     return total_fail > 0 ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Local tests: --tensor-type overrides must apply for every target type
+// ---------------------------------------------------------------------------
+
+static bool run_override_test(llama_ftype ftype) {
+    llama_quant_model_desc desc = {};
+    desc.architecture  = "llama";
+    desc.n_embd        = 256;
+    desc.n_ff          = 512;
+    desc.n_layer       = 2;
+    desc.n_head        = 4;
+    desc.n_head_kv     = 4;
+    desc.n_embd_head_k = 64;
+    desc.n_embd_head_v = 64;
+
+    const llama_model_tensor_override overrides[] = {
+        { "blk\\.1\\.ffn_down", GGML_TYPE_Q4_K  },
+        { nullptr,              GGML_TYPE_COUNT },
+    };
+
+    llama_model_quantize_params qparams = llama_model_quantize_default_params();
+    qparams.tt_overrides = overrides;
+
+    llama_model *         model = llama_quant_model_from_metadata(&desc);
+    quantize_state_impl * qs    = llama_quant_init(model, &qparams);
+
+    ggml_init_params params = { 8 * ggml_tensor_overhead(), nullptr, true };
+    ggml_context_ptr ctx(ggml_init(params));
+
+    const char * names[] = { "blk.0.ffn_down.weight", "blk.0.ffn_up.weight", "blk.1.ffn_down.weight", "blk.1.ffn_up.weight" };
+    std::vector<ggml_tensor *> tensors;
+    for (const char * name : names) {
+        ggml_tensor * t = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, desc.n_ff, desc.n_embd);
+        ggml_set_name(t, name);
+        tensors.push_back(t);
+    }
+
+    std::vector<ggml_type> result_types(tensors.size());
+    llama_quant_compute_types(qs, ftype, tensors.data(), result_types.data(), tensors.size());
+
+    const ggml_type default_type = llama_ftype_get_default_type(ftype);
+
+    bool pass = true;
+    for (size_t i = 0; i < tensors.size(); i++) {
+        const char * name   = ggml_get_name(tensors[i]);
+        const bool   manual = strcmp(name, "blk.1.ffn_down.weight") == 0;
+        if (manual && result_types[i] != GGML_TYPE_Q4_K) {
+            printf("  FAIL  %-30s %-6s override not applied, got %s\n", name, llama_ftype_to_name(ftype), ggml_type_name(result_types[i]));
+            pass = false;
+        }
+        // the other tensors keep a non-quantized target type as is
+        if (!manual && !ggml_is_quantized(default_type) && result_types[i] != default_type) {
+            printf("  FAIL  %-30s %-6s expected %s, got %s\n", name, llama_ftype_to_name(ftype), ggml_type_name(default_type), ggml_type_name(result_types[i]));
+            pass = false;
+        }
+    }
+
+    llama_quant_free(qs);
+    llama_model_free(model);
+    return pass;
+}
+
+static int run_override_tests() {
+    const llama_ftype ftypes[] = { LLAMA_FTYPE_ALL_F32, LLAMA_FTYPE_MOSTLY_F16, LLAMA_FTYPE_MOSTLY_BF16, LLAMA_FTYPE_MOSTLY_Q8_0, LLAMA_FTYPE_MOSTLY_Q4_K_M };
+    const int         n_ftypes = (int) (sizeof(ftypes) / sizeof(ftypes[0]));
+
+    printf("=== tensor type overrides ===\n");
+    int n_fail = 0;
+    for (const llama_ftype ftype : ftypes) {
+        if (!run_override_test(ftype)) {
+            n_fail++;
+        }
+    }
+    printf("  %s  tensor type overrides: %d/%d ftypes passed\n\n", n_fail == 0 ? "PASS" : "FAIL", n_ftypes - n_fail, n_ftypes);
+    return n_fail;
+}
+
 int main(int argc, char ** argv) {
     std::string snapshot_dir = SNAPSHOT_DIR;
     bool        generate     = false;
@@ -516,5 +593,8 @@ int main(int argc, char ** argv) {
     // suppress llama log warnings during test (e.g. tensor type fallback messages)
     llama_log_set([](enum ggml_log_level, const char *, void *) {}, nullptr);
 
-    return run_remote_tests(snapshot_dir, argv[0]);
+    const int n_fail = run_override_tests();
+    const int ret    = run_remote_tests(snapshot_dir, argv[0]);
+
+    return (ret != 0 || n_fail > 0) ? 1 : 0;
 }
