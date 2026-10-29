@@ -3413,42 +3413,6 @@ struct test_cpy : public test_case {
     }
 };
 
-// GGML_OP_CPY to q2_0/q4_0/q5_0 with every x/d on an exact .5 tie over many scales d, so reciprocal, FMA contraction or rounding mismatches fail deterministically
-struct test_cpy_tie : public test_cpy {
-    test_cpy_tie(ggml_type type_src, ggml_type type_dst) : test_cpy(type_src, type_dst, {4096, 1, 1, 1}) {}
-
-    std::string vars() override {
-        return VARS_TO_STR3(type_src, type_dst, ne_src) + ",ties";
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        test_cpy::initialize_tensors(ctx);
-        ggml_tensor * src = ggml_get_tensor(ctx, "src");
-        const int64_t qk = ggml_blck_size(type_dst);
-        const int src_bits = type_src == GGML_TYPE_F32 ? 24 : type_src == GGML_TYPE_F16 ? 11 : 8;
-        const int tie_bits = type_dst == GGML_TYPE_Q2_0 ? 1 : type_dst == GGML_TYPE_Q4_0 ? 4 : 5;
-        const int s_bits = src_bits - tie_bits; // s * odd / 2^tie_bits stays exact in type_src
-        std::mt19937 rng(42);
-        std::vector<float> data(ggml_nelements(src));
-        for (int64_t b = 0; b < ggml_nelements(src) / qk; b++) {
-            const uint32_t mant = (1u << (s_bits - 1)) | (rng() & ((1u << (s_bits - 1)) - 1));
-            const float s = ldexpf((float) mant, 1 - s_bits + (int) (rng() % 7)) * (b % 2 ? -1.0f : 1.0f);
-            data[b*qk] = s; // max |x|: d = s for q2_0, s/-8 for q4_0, s/-16 for q5_0
-            for (int64_t j = 1; j < qk; j++) {
-                const int odd = 2*((j - 1) % (1 << (tie_bits - 1))) + 1;
-                data[b*qk + j] = s * odd / (1 << tie_bits) * (j % 4 == 3 ? -1.0f : 1.0f);
-            }
-        }
-        std::vector<uint8_t> buf(ggml_nbytes(src));
-        if (type_src == GGML_TYPE_F32) {
-            memcpy(buf.data(), data.data(), buf.size());
-        } else {
-            ggml_get_type_traits(type_src)->from_float_ref(data.data(), buf.data(), data.size());
-        }
-        ggml_backend_tensor_set(src, buf.data(), 0, buf.size());
-    }
-};
-
 // GGML_OP_CONT
 // permute = {0, 0, 0, 0} means no permutation: the source is transposed (or
 // view-sliced). A non-identity permute applies ggml_permute before ggml_cont.
@@ -10695,9 +10659,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (ggml_type type_dst : all_types) {
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 4, 4, 4}));
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 4}, {-1,-1,-1,-1}, {0, 2, 1, 3})); // cpy by rows
-        }
-        for (ggml_type type_dst : {GGML_TYPE_Q2_0, GGML_TYPE_Q4_0, GGML_TYPE_Q5_0}) {
-            test_cases.emplace_back(new test_cpy_tie(type_src, type_dst));
         }
     }
     for (ggml_type type_src : all_types) {

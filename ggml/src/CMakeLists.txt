@@ -216,13 +216,6 @@ set_target_properties(ggml-base PROPERTIES
 configure_file(ggml-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.h @ONLY)
 
 target_include_directories(ggml-base PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
-
-# keep the reference quantizers rounding the same on every platform: with an FMA target (e.g. aarch64)
-# GCC fuses x*id + c across statements, which changes the result at exact .5 ties
-if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|IntelLLVM")
-    set_source_files_properties(ggml-quants.c PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
-endif()
-
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
