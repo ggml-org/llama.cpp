@@ -176,6 +176,22 @@
 		scrollbar-gutter: stable;
 	}
 
+	/* While the chat form is a full-screen sheet on a phone, the page around it takes
+	   the sheet's fill (the translucent card over the page, made solid): iOS paints
+	   the installed app's status bar and home indicator areas, and Safari tints its
+	   bars, from this background, so the sheet reaches the screen's edges */
+	@media (width < 48rem) {
+		html[data-chat-form-sheet],
+		html[data-chat-form-sheet] body {
+			background-color: color-mix(in oklab, var(--muted) 60%, var(--background));
+		}
+
+		html.dark[data-chat-form-sheet],
+		html.dark[data-chat-form-sheet] body {
+			background-color: color-mix(in oklab, var(--muted) 75%, var(--background));
+		}
+	}
+
 	/* no elastic bounce past the ends of the page: it drags the sticky and
 	   fixed bars (tab bar, chat form) along and they jump back on release */
 	html,

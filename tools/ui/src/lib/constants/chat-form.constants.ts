@@ -34,3 +34,9 @@ export const CHAT_GREETING_ENTER_DELAY_MS = CHAT_FORM_MOVE_IN_MS / 2;
  * the greeting waits for it, so it fades in over a form that has settled.
  */
 export const CHAT_FORM_RESIZE_MS = 400;
+
+/**
+ * On a phone the expanded form is a full-screen sheet that moves by transform,
+ * more slowly and without the overshoot (see ChatForm's animateSheet).
+ */
+export const CHAT_FORM_SHEET_MS = 500;
