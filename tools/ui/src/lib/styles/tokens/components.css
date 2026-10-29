@@ -59,6 +59,9 @@
 	--button-secondary-background: var(--surface-glass);
 	--button-secondary-background-hover: color-mix(in oklch, var(--surface-muted) 80%, transparent);
 	--button-secondary-border: color-mix(in oklch, var(--line-default) 30%, transparent);
+	--button-tertiary-background: var(--action-quiet);
+	--button-tertiary-background-hover: var(--action-quiet-hover);
+	--button-tertiary-border: var(--surface-muted);
 	--button-ghost-background-hover: var(--action-ghost-hover);
 	--button-outline-border: var(--line-default);
 	--button-text: var(--fg-default);
