@@ -48,9 +48,9 @@
 				variant="secondary"
 			>
 				{#if copied}
-					<Check class="size-3.5 text-green-500" />
+					<Check class="size-icon-sm text-fg-success" />
 				{:else}
-					<Copy class="size-3.5" />
+					<Copy class="size-icon-sm" />
 				{/if}
 
 				Copy
