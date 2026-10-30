@@ -560,7 +560,7 @@
 		<div
 			class={[
 				'flex min-h-0 flex-1 flex-col',
-				isOnMobile && 'sidebar-reveal-content px-2 pt-[calc(0.5rem+var(--safe-area-top))]'
+				isOnMobile && 'sidebar-reveal-content px-2 pt-[calc(var(--corner-control-top)-0.5rem)]'
 			]}
 		>
 			<div class="px-2 flex items-center justify-between">

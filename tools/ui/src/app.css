@@ -38,6 +38,8 @@
 	/* the page runs under the status bar (viewport-fit=cover); what is pinned
 	   to the top of the screen pads itself clear by this */
 	--safe-area-top: env(safe-area-inset-top, 0px);
+	/* where the phone's corner controls (menu toggle, context gauge, sidebar logo) sit */
+	--corner-control-top: calc(1rem + var(--safe-area-top));
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
 	--background: oklch(1 0 0);
@@ -103,6 +105,11 @@
    the screen. A page that reaches past it gets the full screen, after which this is 100%,
    capped at the screen so it never scrolls; elsewhere the inset is 0 and it is 100% too. */
 @media (display-mode: standalone) {
+	/* the installed app's status bar already sets them apart from the screen's edge */
+	:root {
+		--corner-control-top: calc(0.25rem + var(--safe-area-top));
+	}
+
 	html {
 		min-height: min(100lvh, calc(100% + var(--safe-area-top)));
 	}
