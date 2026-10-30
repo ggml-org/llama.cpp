@@ -42,7 +42,8 @@
 
 	/* floating panels: menus, popovers, select lists, hover cards, drawers, dialogs */
 	--float-panel-background: color-mix(in oklch, var(--surface-raised) 86%, transparent);
-	--float-panel-background-modal: color-mix(in oklch, var(--surface-page) 86%, transparent);
+	/* in light mode a translucent modal greys over the dimmed page, so it stays solid white */
+	--float-panel-background-modal: var(--surface-page);
 	--float-panel-text: var(--fg-default);
 	--float-panel-edge: var(--edge-raised);
 	--float-panel-highlight: var(--highlight-inner);
@@ -148,6 +149,7 @@
 	--toggle-group-key-background-idle-hover: var(--action-ghost-hover);
 	/* on the near-white track the thumb stays dark and opaque */
 	--switch-thumb-on: var(--surface-raised);
+	--float-panel-background-modal: color-mix(in oklch, var(--surface-page) 86%, transparent);
 }
 
 /* the user bubble is a card with an even, fainter edge */
