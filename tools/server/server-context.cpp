@@ -4438,6 +4438,7 @@ private:
                             SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
                             send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
                             slot.release();
+                            slot.prompt_clear(); // error path: purge partial KV state so the next request starts clean
                             return; // the slot is done, skip it entirely
                         }
 
@@ -4545,7 +4546,16 @@ private:
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
                         slot.state = SLOT_STATE_DONE_PROMPT;
 
-                        GGML_ASSERT(batch.size() > 0);
+                        // the prompt was consumed entirely by mtmd chunks (e.g. an image-only
+                        // request whose chat template produced no text tokens) -- there is no
+                        // token left to sample from, so generation cannot start
+                        if (batch.size() == 0) {
+                            SLT_ERR(slot, "prompt finished with an empty batch (no text tokens to sample from)%s\n", "");
+                            send_error(slot, "the request must include text alongside the media (the chat template produced no text tokens)", ERROR_TYPE_INVALID_REQUEST);
+                            slot.release();
+                            slot.prompt_clear(); // error path: purge partial KV state so the next request starts clean
+                            return;
+                        }
 
                         // extract the logits only for the last token
                         batch.set_output(batch.size() - 1, true);
