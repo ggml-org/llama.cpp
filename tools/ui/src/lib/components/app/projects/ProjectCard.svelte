@@ -97,7 +97,13 @@
 			<p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{project.description}</p>
 		{/if}
 
-		<p class="mt-auto pt-6 text-sm text-muted-foreground">{formatUpdatedAt(project.updatedAt)}</p>
+		<div class="mt-auto flex items-center gap-2 pt-6 text-sm text-muted-foreground">
+			<p class="min-w-0 flex-1">{formatUpdatedAt(project.updatedAt)}</p>
+
+			{#if project.pinned}
+				<Pin aria-label="Pinned" class="h-3.5 w-3.5 shrink-0 opacity-60" role="img" />
+			{/if}
+		</div>
 	</Card.Root>
 </ContextMenuActions>
 
