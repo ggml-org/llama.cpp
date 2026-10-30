@@ -133,7 +133,7 @@ int main(int argc, char ** argv) {
             batch_prompt.add(inp[i], i, seq_id, false);
         }
 
-        if (is_mtp_mem_shared) {
+        if (is_mtp_mem_shared && batch_prompt.size() > 0) {
             batch_prompt.set_output(batch_prompt.size() - 1, true);
         }
         llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_prompt.get());
