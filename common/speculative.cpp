@@ -2718,8 +2718,15 @@ common_speculative_init_result::common_speculative_init_result(
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     }
 
-    // the draft context holds as many tokens per sequence as the target context
-    cparams.n_ctx = llama_n_ctx(ctx_tgt);
+    // draft per-sequence context follows target, capped by training context
+    uint32_t n_ctx_seq_dft = llama_n_ctx_seq(ctx_tgt);
+    const uint32_t n_ctx_train_tgt = llama_model_n_ctx_train(model_tgt);
+    if (n_ctx_train_tgt > 0) {
+        n_ctx_seq_dft = std::min(n_ctx_seq_dft, n_ctx_train_tgt);
+    }
+    cparams.n_ctx = cparams.kv_unified
+        ? n_ctx_seq_dft
+        : (uint32_t) std::min<uint64_t>((uint64_t) n_ctx_seq_dft * cparams.n_seq_max, UINT32_MAX);
 
     // note: for small models maybe we can set this to the maximum possible draft from all speculative types
     //       the extra memory for small models is likely negligible?
@@ -2738,6 +2745,14 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->model.reset(model_dft);
+
+        const uint32_t n_ctx_train_dft = llama_model_n_ctx_train(model_dft);
+        if (n_ctx_train_dft > 0 && n_ctx_seq_dft > n_ctx_train_dft) {
+            n_ctx_seq_dft = n_ctx_train_dft;
+            cparams.n_ctx = cparams.kv_unified
+                ? n_ctx_seq_dft
+                : (uint32_t) std::min<uint64_t>((uint64_t) n_ctx_seq_dft * cparams.n_seq_max, UINT32_MAX);
+        }
 
         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
         if (ctx_dft == nullptr) {
