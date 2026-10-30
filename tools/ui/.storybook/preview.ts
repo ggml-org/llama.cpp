@@ -22,6 +22,8 @@ const preview: Preview = {
 				order: [
 					'Introduction',
 					['Overview', 'Design guidelines'],
+					'Brand',
+					['Logo', 'App icons'],
 					'Design system',
 					[
 						'Foundations',
