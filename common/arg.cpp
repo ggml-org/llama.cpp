@@ -38,6 +38,7 @@ static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_SERVER,
     LLAMA_EXAMPLE_CLI,
     LLAMA_EXAMPLE_TTS,
+    LLAMA_EXAMPLE_FIT_PARAMS,
 };
 
 static std::string read_file(const std::string & fname) {
@@ -4236,7 +4237,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.speculative.draft.devices = parse_device_list(value);
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_FIT_PARAMS}));
     GGML_ASSERT(params.speculative.draft.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"--spec-draft-ngl", "-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft"}, "N",
@@ -4256,7 +4257,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
             }
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_GPU_LAYERS_DRAFT"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_N_GPU_LAYERS_DRAFT"));
     add_opt(common_arg(
         {"--spec-draft-model", "-md", "--model-draft"}, "FNAME",
         "draft model for speculative decoding (default: unused)",
@@ -4264,7 +4265,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.mparams.path = value;
             params.speculative.draft.mparams.hf_file = value; // will be used if --spec-draft-hf is set
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_IMATRIX}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
         {"--spec-type"}, common_speculative_all_types_str(),
         string_format("comma-separated list of types of speculative decoding to use (default: %s)\n",
@@ -4274,7 +4275,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             auto types = common_speculative_types_from_names(types_str);
             params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
