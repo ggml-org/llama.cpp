@@ -62,6 +62,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
+          echo $(nproc)
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp
 
   cpu-arm64-high-perf-graviton4:
