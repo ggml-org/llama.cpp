@@ -1,5 +1,6 @@
 import { DEFAULT_AGENTIC_CONFIG } from './agentic.constants';
 import { CLI_FLAGS } from './cli-flags.constants';
+import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
@@ -177,6 +178,21 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: COMPACTION.DEFAULT_PROMPT,
+				help: 'Optional override for the instruction sent to the model when compacting a conversation.',
+				key: SETTINGS_KEYS.COMPACTION_PROMPT,
+				label: 'Compaction prompt',
+				type: SettingsFieldType.TEXTAREA
+			},
+			{
+				defaultValue: COMPACTION.DEFAULT_PRESERVED_STEPS,
+				help: 'Last steps a compaction keeps as written after the summary: a user message, or an assistant message with its tool results.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.COMPACTION_PRESERVED_STEPS,
+				label: 'Compaction preserved steps',
+				type: SettingsFieldType.INPUT
+			},
+			{
 				defaultValue: false,
 				help: 'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
 				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
@@ -264,7 +280,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
+				help: 'Stop the view from following new content while messages stream, so you control the viewport position yourself.',
 				key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
 				label: 'Disable automatic scroll',
 				type: SettingsFieldType.CHECKBOX

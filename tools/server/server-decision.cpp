@@ -162,9 +162,13 @@ void server_decision_context::init(const llama_model * model) {
         noul_criteria_order = true;
         strict_payload      = true;
         canonical_legend    = true;
-    } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1) {
+    } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1 || model_type == COMMON_DECISION_TYPE_LFM3_D1 || model_type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) {
         n_options_max   = 255;
         noul_true_first = true;
+        if (model_type != COMMON_DECISION_TYPE_LFM2_D1) {
+            // the texts of the special tokens are broken in the input
+            init_quoted_spellings(LLAMA_TOKEN_ATTR_CONTROL, 2);
+        }
     } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
         token_marker = llama_vocab_mask(vocab);
         if (token_marker == LLAMA_TOKEN_NULL) {
@@ -186,24 +190,18 @@ void server_decision_context::init(const llama_model * model) {
             throw std::runtime_error("decision model has no labels");
         }
         // the texts of the control and user-defined tokens are quoted in the input, so that they stay text
-        for (llama_token id = 0; id < llama_vocab_n_tokens(vocab); id++) {
-            if (llama_vocab_get_attr(vocab, id) & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
-                const std::string text = llama_vocab_get_text(vocab, id);
-                if (!text.empty()) {
-                    quoted_spellings.push_back(text);
-                }
-            }
-        }
-        std::stable_sort(quoted_spellings.begin(), quoted_spellings.end(), [](const std::string & a, const std::string & b) {
-            return a.size() > b.size();
-        });
-        for (const auto & spelling : quoted_spellings) {
-            if (quoted_first.find(spelling[0]) == std::string::npos) {
-                quoted_first += spelling[0];
-            }
-        }
+        init_quoted_spellings(LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED, 1);
         n_options_max   = labels.size();
         noul_true_first = true;
+    } else if (model_type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+        // the classes come from the GGUF classifier labels, the request API is binary: [inconsistent, consistent]
+        const uint32_t n_classes = llama_model_n_cls_out(model);
+        if (n_classes != 2 || llama_model_n_embd_out(model) != (int32_t) n_classes) {
+            throw std::runtime_error(string_format("decision model must have 2 classifier labels and output one score per class, got %u labels and %d scores",
+                n_classes, llama_model_n_embd_out(model)));
+        }
+        n_options_max = n_classes;
+        choice_sorted = true;
     } else {
         throw std::runtime_error("unsupported decision model type: " + type_name);
     }
@@ -212,17 +210,42 @@ void server_decision_context::init(const llama_model * model) {
     SRV_INF("decision model type: %s\n", type_name.c_str());
 }
 
+void server_decision_context::init_quoted_spellings(uint32_t attrs, size_t min_size) {
+    for (llama_token id = 0; id < llama_vocab_n_tokens(vocab); id++) {
+        if (llama_vocab_get_attr(vocab, id) & attrs) {
+            const std::string text = llama_vocab_get_text(vocab, id);
+            if (text.size() >= min_size) {
+                quoted_spellings.push_back(text);
+            }
+        }
+    }
+    std::stable_sort(quoted_spellings.begin(), quoted_spellings.end(), [](const std::string & a, const std::string & b) {
+        return a.size() > b.size();
+    });
+    for (const auto & spelling : quoted_spellings) {
+        if (quoted_first.find(spelling[0]) == std::string::npos) {
+            quoted_first += spelling[0];
+        }
+    }
+}
+
 //
 // request parsing
 //
+
+// lfm3-d1-omni: a spoken question, its instructions are an input_audio part
+static bool decision_is_spoken(const json & instructions) {
+    return instructions.is_object() && json_value(instructions, "type", std::string()) == "input_audio";
+}
 
 static bool decision_is_payload(const json & val) {
     return val.is_string() || val.is_object() || val.is_array();
 }
 
 std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
-    // lfm2-d1, lfm2-d1-omni and vllm-d3 accept a null state, for example to ask about images only
-    if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1 && type != COMMON_DECISION_TYPE_LFM2_D1_OMNI && type != COMMON_DECISION_TYPE_VLLM_D3)) {
+    // lfm2-d1, lfm2-d1-omni, lfm3-d1 and vllm-d3 accept a null state, for example to ask about images only
+    const bool null_state = type == COMMON_DECISION_TYPE_LFM2_D1 || type == COMMON_DECISION_TYPE_LFM2_D1_OMNI || type == COMMON_DECISION_TYPE_VLLM_D3 || type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI;
+    if (!body.contains("state") || (body.at("state").is_null() && !null_state)) {
         throw std::invalid_argument("\"state\" must be provided");
     }
     if (strict_payload && !decision_is_payload(body.at("state"))) {
@@ -230,6 +253,9 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
     }
     if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
         throw std::invalid_argument("\"questions\" must be a non-empty object");
+    }
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV && body.at("questions").size() != 1) {
+        throw std::invalid_argument("this model answers exactly one question");
     }
 
     std::vector<server_decision_question> questions;
@@ -244,11 +270,16 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
         // h2o-lightning: the instructions can be left out, the template has a default, and the type defaults to choice
         const bool is_h2o = type == COMMON_DECISION_TYPE_H2O_LIGHTNING;
         const json instructions = q.contains("instructions") ? q.at("instructions") : (is_h2o ? json(std::string()) : json());
-        if (instructions.is_null() && type != COMMON_DECISION_TYPE_VLLM_D3 && !is_h2o) {
+        // minicpm-ocr-jev answers one fixed question, the prompt is entirely in the template
+        const bool is_ocr_jev = type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV;
+        if (instructions.is_null() && type != COMMON_DECISION_TYPE_VLLM_D3 && !is_h2o && !is_ocr_jev) {
             throw err("\"instructions\" must be provided");
         }
         if (strict_payload && (!decision_is_payload(instructions) || instructions == "")) {
             throw err("\"instructions\" must be non-empty text, an object or an array");
+        }
+        if (type == COMMON_DECISION_TYPE_LFM3_D1 && decision_is_spoken(instructions)) {
+            throw err("spoken instructions need a model with audio input");
         }
 
         server_decision_question question;
@@ -322,6 +353,26 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
             throw err("\"type\" must be one of: choice, score, noul");
         }
 
+        // the classes are fixed: "0" is inconsistent, "1" is consistent
+        if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+            // the task text is in the template, an instructions from the request would be dropped
+            if (!instructions.is_null()) {
+                throw err("\"instructions\" is not used by this model, the task is part of its prompt");
+            }
+            if (question.type == SERVER_DECISION_QUESTION_CHOICE) {
+                const auto & opts = question.options;
+                if (opts.size() != 2 || opts[0].key != "0" || opts[1].key != "1" || !opts[0].description.is_null() || !opts[1].description.is_null()) {
+                    throw err("\"criteria\" must be {\"0\": null, \"1\": null}");
+                }
+            } else if (question.type == SERVER_DECISION_QUESTION_NOUL) {
+                if (!criteria.is_null()) {
+                    throw err("\"criteria\" is not supported for a noul question");
+                }
+            } else {
+                throw err("only choice and noul questions are supported");
+            }
+        }
+
         if (question.options.size() > n_options_max) {
             throw err(string_format("too many options (%zu), this model supports at most %zu", question.options.size(), n_options_max));
         }
@@ -337,10 +388,10 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
 
 static const size_t DECISION_MAX_IMAGES = 8;
 
-// any media, mtmd tells an audio clip from an image by its content
+// any media, mtmd tells an audio clip or a video from an image by its content
 static void decision_load_image(const json & url, std::vector<raw_buffer> & files) {
     if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:")) {
-        throw std::invalid_argument("images must be data URLs (data:image/...;base64,... or data:audio/...;base64,...)");
+        throw std::invalid_argument("media must be data URLs (data:image/..., data:audio/... or data:video/...;base64,...)");
     }
     if (files.size() >= DECISION_MAX_IMAGES) {
         throw std::invalid_argument(string_format("too many images, the maximum is %zu", DECISION_MAX_IMAGES));
@@ -360,6 +411,9 @@ static void decision_load_audio(const json & data, std::vector<raw_buffer> & fil
 }
 
 json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV && !body.at("state").is_string()) {
+        throw std::invalid_argument("\"state\" must be the OCR text");
+    }
     if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
         throw std::invalid_argument("\"videos\" is not supported");
     }
@@ -374,6 +428,11 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
         for (const auto & url : body.at(key)) {
             decision_load_image(url, files);
         }
+    }
+
+    // the prompt has the original image, then the image rendered from the OCR text
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV && files.size() != 2) {
+        throw std::invalid_argument(string_format("this model needs exactly 2 images (the original, then the rendered one), got %zu", files.size()));
     }
 
     const json & state = body.at("state");
@@ -398,6 +457,9 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
             } else if (part.is_object() && json_value(part, "type", std::string()) == "input_audio" && part.contains("input_audio")) {
                 const json input_audio = json_value(part, "input_audio", json::object());
                 decision_load_audio(input_audio.contains("data") ? input_audio.at("data") : json_value(input_audio, "url", json()), files);
+            } else if (is_lfm3_d1() && part.is_object() && json_value(part, "type", std::string()) == "video_url" && part.contains("video_url")) {
+                const json & video_url = part.at("video_url");
+                decision_load_image(video_url.is_object() && video_url.contains("url") ? video_url.at("url") : video_url, files);
             } else {
                 content.push_back(part);
             }
@@ -539,29 +601,63 @@ static std::string decision_kev_text(const json & val) {
     return server_decision_escape_special_tokens(decision_kev_render(val));
 }
 
-// lfm2-d1-omni: special tokens written in the input must not be parsed as such, in keys too (d1-omni prompt.py: escape)
-static json decision_d1omni_escape(const json & val, int depth = 0) {
+// lfm2-d1-omni, lfm3-d1: special tokens written in the input must not be parsed as such, in keys too
+template <typename F>
+static json decision_escape(const json & val, const F & escape, int depth = 0) {
     if (depth >= RECURSIVE_LIMIT) {
         throw std::invalid_argument("JSON is nested more than " + std::to_string(RECURSIVE_LIMIT) + " levels deep");
     }
     if (val.is_string()) {
-        return server_decision_escape_special_tokens(val.get<std::string>());
+        return escape(val.get<std::string>());
     }
     if (val.is_array()) {
         json out = json::array();
         for (const auto & item : val) {
-            out.push_back(decision_d1omni_escape(item, depth + 1));
+            out.push_back(decision_escape(item, escape, depth + 1));
         }
         return out;
     }
     if (val.is_object()) {
         json out = json::object();
         for (const auto & [key, item] : val.items()) {
-            out[server_decision_escape_special_tokens(key)] = decision_d1omni_escape(item, depth + 1);
+            out[escape(key)] = decision_escape(item, escape, depth + 1);
         }
         return out;
     }
     return val;
+}
+
+std::string server_decision_context::d1_break(const std::string & text) const {
+    static const std::string zwsp = "\xE2\x80\x8B";
+    std::string cur = text;
+    // again for a match that overlapped the one broken before it
+    for (bool changed = true; changed;) {
+        changed = false;
+        std::string out;
+        for (size_t i = 0; i < cur.size();) {
+            const std::string * hit = nullptr;
+            if (quoted_first.find(cur[i]) != std::string::npos) {
+                for (const auto & spelling : quoted_spellings) {
+                    if (cur.compare(i, spelling.size(), spelling) == 0) {
+                        hit = &spelling;
+                        break;
+                    }
+                }
+            }
+            if (hit == nullptr) {
+                out += cur[i++];
+                continue;
+            }
+            // after the first character, its UTF-8 bytes
+            const unsigned char c = (*hit)[0];
+            const size_t n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+            out += hit->substr(0, n) + zwsp + hit->substr(n);
+            i += hit->size();
+            changed = true;
+        }
+        cur = std::move(out);
+    }
+    return cur;
 }
 
 //
@@ -913,6 +1009,9 @@ void server_decision_context::d1_labels(const server_decision_question & questio
             codes.push_back(question.options[i].key);
         } else if (n_options <= 26) {
             codes.push_back(std::string(1, 'A' + i));
+        } else if (type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) {
+            // A..Z, then AA, AB..
+            codes.push_back(i < 26 ? std::string(1, 'A' + i) : std::string{(char) ('A' + (i - 26) / 26), (char) ('A' + (i - 26) % 26)});
         } else {
             codes.push_back(string_format("%02zu", i));
         }
@@ -970,7 +1069,7 @@ json server_decision_context::render_options(const server_decision_question & qu
 
     std::vector<std::string>  d1_texts;
     std::vector<llama_tokens> d1_groups;
-    if (type == COMMON_DECISION_TYPE_LFM2_D1) {
+    if (type == COMMON_DECISION_TYPE_LFM2_D1 || type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) {
         d1_labels(question, d1_texts, d1_groups);
     }
 
@@ -1040,13 +1139,27 @@ std::string server_decision_context::render(
         inp["instructions"] = decision_kev_text(question.instructions);
     }
 
+    // the OCR text must not be parsed as special tokens
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+        inp["state"] = server_decision_escape_special_tokens(state.get<std::string>());
+    }
+
     // the input must not contain the marker of the options
     if (!text_marker.empty()) {
         inp = decision_replace_text(inp, text_marker, " ");
     }
 
+    // lfm3-d1-omni: a spoken question is heard where its text would be, after the media of the state
+    const bool is_spoken = decision_is_spoken(question.instructions);
+    if (is_spoken) {
+        inp["instructions"] = "";
+    }
+    if (is_lfm3_d1()) {
+        inp = decision_escape(inp, [this](const std::string & text) { return d1_break(text); });
+    }
+
     if (type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
-        inp = decision_replace_text(decision_d1omni_escape(inp), D1OMNI_MARKER, "<<d1omni ");
+        inp = decision_replace_text(decision_escape(inp, server_decision_escape_special_tokens), D1OMNI_MARKER, "<<d1omni ");
         inp["audio"]         = is_audio;
         inp["sep"]           = D1OMNI_SEP;
         inp["mark_state"]    = D1OMNI_MARK_STATE;
@@ -1056,13 +1169,16 @@ std::string server_decision_context::render(
 
     // the template puts one media marker per image
     json images = json::array();
-    if (n_images > 0) {
+    if (n_images > 0 || is_spoken) {
         inp = decision_replace_text(inp, get_media_marker(), " ");
         for (size_t i = 0; i < n_images; i++) {
             images.push_back(get_media_marker());
         }
     }
     inp["images"] = images;
+    if (is_spoken) {
+        inp["instructions"] = get_media_marker();
+    }
 
     jinja::context ctx(tmpl->source());
     jinja::global_from_json(ctx, inp, false);
@@ -1092,12 +1208,24 @@ void server_decision_context::fill_task(
 
     const std::string prompt = render(state, questions, question, variant, files.size());
 
+    if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
+        task.tokens          = process_mtmd_prompt(mctx, prompt, files, init_opt);
+        task.decision.pooled = true;
+        return;
+    }
+
+    std::vector<raw_buffer> media = files;
+    if (decision_is_spoken(question.instructions)) {
+        const json audio = json_value(question.instructions, "input_audio", json::object());
+        decision_load_audio(audio.contains("data") ? audio.at("data") : json(), media);
+    }
+
     if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_GRANITE_SWITCH || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_VLLM_D3 ||
         type == COMMON_DECISION_TYPE_H2O_LIGHTNING) {
         // lev reads the ratings of a noul question at its first labels, not at the digits
         task.decision.labels.assign(labels.begin(), labels.begin() + n_outputs(question));
     }
-    if (type == COMMON_DECISION_TYPE_LFM2_D1) {
+    if (type == COMMON_DECISION_TYPE_LFM2_D1 || type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) {
         std::vector<std::string>  texts;
         std::vector<llama_tokens> groups;
         d1_labels(question, texts, groups);
@@ -1105,11 +1233,16 @@ void server_decision_context::fill_task(
             task.decision.labels.insert(task.decision.labels.end(), group.begin(), group.end());
             task.decision.label_groups.push_back(group.size());
         }
+        // the short convs of lfm3 d1 have no memory to separate the sequences of a batch
+        task.decision.no_batching = is_lfm3_d1();
     }
     if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_VLLM_D3 || type == COMMON_DECISION_TYPE_LFM2_D1 ||
-        type == COMMON_DECISION_TYPE_H2O_LIGHTNING) {
-        if (!files.empty()) {
-            task.tokens = process_mtmd_prompt(mctx, prompt, files, init_opt);
+        type == COMMON_DECISION_TYPE_H2O_LIGHTNING || type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) {
+        if (!media.empty()) {
+            // the d1 reference sees the frames of a video, not its soundtrack
+            mtmd_helper_init_opt opt = init_opt;
+            opt.video_params.no_soundtrack = is_lfm3_d1();
+            task.tokens = process_mtmd_prompt(mctx, prompt, media, opt);
             return;
         }
     }
@@ -1503,6 +1636,10 @@ double server_decision_context::get_decision_confidence(server_decision_question
     if (type == COMMON_DECISION_TYPE_VLLM_DECISION2 || type == COMMON_DECISION_TYPE_VLLM_D3) {
         return decision_confidence_entropy(probs);
     }
+    // lfm3-d1: the probability of the answer (d1 api.py)
+    if (is_lfm3_d1()) {
+        return *std::max_element(probs.begin(), probs.end());
+    }
     switch (question_type) {
         case SERVER_DECISION_QUESTION_CHOICE: return decision_confidence_choice(probs);
         case SERVER_DECISION_QUESTION_SCORE:  return decision_confidence_score(probs);
@@ -1531,8 +1668,8 @@ json server_decision_context::format_answer(const server_decision_question & que
         if (s.size() != n) {
             throw std::runtime_error("decision result does not match the number of options");
         }
-        // a joint head returns NaN if it could not use the decision order
-        if (std::any_of(s.begin(), s.end(), [](float v) { return std::isnan(v); })) {
+        // a joint head returns NaN if it could not use the decision order, +inf would make the softmax NaN
+        if (std::any_of(s.begin(), s.end(), [](float v) { return std::isnan(v) || v == INFINITY; })) {
             throw std::runtime_error("the model could not evaluate the decision");
         }
         std::vector<double> logits(s.begin(), s.end());
@@ -1590,6 +1727,16 @@ json server_decision_context::format_answer(const server_decision_question & que
             expected += i * probs[i];
             const json & description = question.options[i].description;
             legend[question.options[i].key] = canonical_legend && !description.is_string() ? json(decision_sort_keys(description).dump()) : description;
+        }
+        // lfm3-d1: the median level, the first whose cumulative probability reaches one half (d1 api.py)
+        if (is_lfm3_d1()) {
+            double mass = 0.0;
+            size_t level = n - 1;
+            for (size_t i = 0; i < n && mass < 0.5; i++) {
+                mass += probs[i];
+                level = i;
+            }
+            expected = (double) level;
         }
         answer["score"]         = expected;
         answer["legend"]        = legend;

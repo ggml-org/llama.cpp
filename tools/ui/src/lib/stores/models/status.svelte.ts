@@ -201,7 +201,7 @@ export class ModelStatusManager {
 
 	private statusWaiters = new SvelteMap<
 		string,
-		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
+		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }[]
 	>();
 	/** Models the user asked to stop (pause or cancel); the download_failed the stop triggers is intentional, not a failure. */
 	private stopRequests = new SvelteMap<string, ModelDownloadStopRequest>();
@@ -369,10 +369,21 @@ export class ModelStatusManager {
 		}
 	}
 
+	/** Resolves once the model is loaded: waits on a load in progress, or starts one. */
 	async ensureLoaded(modelId: string): Promise<void> {
 		if (this.host.isModelLoaded(modelId)) return;
 
-		await this.load(modelId);
+		const status = this.host.routerModels.find((m) => m.id === modelId)?.status?.value;
+
+		if (!this.loadingStates.get(modelId) && status !== ServerModelStatus.LOADING) {
+			await this.load(modelId);
+
+			return;
+		}
+
+		this.subscribe();
+
+		await this.waitForStatus(modelId, ServerModelStatus.LOADED);
 	}
 
 	/**
@@ -788,12 +799,11 @@ export class ModelStatusManager {
 	}
 
 	private rejectStatus(modelId: string, error: Error): void {
-		const waiter = this.statusWaiters.get(modelId);
+		const waiters = this.statusWaiters.get(modelId) ?? [];
 
-		if (waiter) {
-			this.statusWaiters.delete(modelId);
-			waiter.reject(error);
-		}
+		this.statusWaiters.delete(modelId);
+
+		for (const waiter of waiters) waiter.reject(error);
 	}
 
 	private removeRouterModel(modelId: string): void {
@@ -840,18 +850,22 @@ export class ModelStatusManager {
 	}
 
 	private settleStatus(modelId: string, status: ServerModelStatus): void {
-		const waiter = this.statusWaiters.get(modelId);
+		const waiters = this.statusWaiters.get(modelId) ?? [];
+		const pending = waiters.filter((waiter) => waiter.target !== status);
 
-		if (waiter && waiter.target === status) {
-			this.statusWaiters.delete(modelId);
-			waiter.resolve();
-		}
+		if (pending.length) this.statusWaiters.set(modelId, pending);
+		else this.statusWaiters.delete(modelId);
+
+		for (const waiter of waiters) if (waiter.target === status) waiter.resolve();
 	}
 
-	// one operation runs per model at a time, so one waiter per model suffices
+	// a load and the requests that wait on it can each hold a waiter for the same model
 	private waitForStatus(modelId: string, target: ServerModelStatus): Promise<void> {
 		return new Promise((resolve, reject) => {
-			this.statusWaiters.set(modelId, { reject, resolve, target });
+			this.statusWaiters.set(modelId, [
+				...(this.statusWaiters.get(modelId) ?? []),
+				{ reject, resolve, target }
+			]);
 		});
 	}
 }

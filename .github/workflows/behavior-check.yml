@@ -13,6 +13,8 @@ on:
       '**/*.hpp',
       '**/*.c',
       '**/*.cpp',
+      '**/*.py',
+      '**/requirements*.txt',
     ]
 
   pull_request:
@@ -24,7 +26,9 @@ on:
       '**/*.h',
       '**/*.hpp',
       '**/*.c',
-      '**/*.cpp'
+      '**/*.cpp',
+      '**/*.py',
+      '**/requirements*.txt',
     ]
 
 cache-mode: none
@@ -69,7 +73,7 @@ jobs:
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install jinja2==3.1.6
+          pip install -r requirements/requirements-convert_hf_to_gguf.txt
 
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
@@ -107,3 +111,52 @@ jobs:
           source .venv/bin/activate
           cd build
           ctest -L behavior -LE 'model|backend' --verbose --timeout 900
+
+  windows:
+    runs-on: windows-2025
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: behavior-check-windows-2025
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Python Dependencies
+        id: python_depends
+        shell: bash
+        run: |
+          python3 -m venv .venv
+          source .venv/Scripts/activate
+          pip install -r requirements/requirements-convert_hf_to_gguf.txt
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=OFF
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS%
+
+      - name: Test
+        id: cmake_test
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          cd build
+          ctest -C Release -L behavior -LE 'model|backend' --verbose --timeout 900

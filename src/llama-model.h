@@ -600,6 +600,14 @@ struct llama_layer {
     struct ggml_tensor * indexer_proj     = nullptr;
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+    struct ggml_tensor * indexer_q_norm   = nullptr;
+    struct ggml_tensor * indexer_q_norm_b = nullptr;
+
+    // SSMax: per-head query scale s * log(pos + 1) + b
+    struct ggml_tensor * attn_ssmax_s    = nullptr;
+    struct ggml_tensor * attn_ssmax_b    = nullptr;
+    struct ggml_tensor * indexer_ssmax_s = nullptr;
+    struct ggml_tensor * indexer_ssmax_b = nullptr;
 
     // glm5-next k-pool indexer
     struct ggml_tensor * indexer_kpool_gate = nullptr;
@@ -637,6 +645,15 @@ struct llama_layer {
 
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
+
+    // limite
+    struct ggml_tensor * attn_ve_gate     = nullptr;
+    struct ggml_tensor * attn_xsa_alpha   = nullptr;
+    struct ggml_tensor * attn_resid_scale = nullptr;
+    struct ggml_tensor * ffn_resid_scale  = nullptr;
+    struct ggml_tensor * mudd_down        = nullptr;
+    struct ggml_tensor * mudd_up          = nullptr;
+    struct ggml_tensor * mudd_up_b        = nullptr;
 
     struct llama_layer_posnet posnet;
 
@@ -734,6 +751,9 @@ struct llama_model {
     std::vector<std::string> classifier_labels;
     std::vector<std::string> decision_labels;
 
+    // deepseek41 Engram: token id -> id of its normalized form, hashed into the n-grams
+    std::vector<int32_t> engram_token_map;
+
     struct ggml_tensor * tok_embd   = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;
@@ -780,6 +800,9 @@ struct llama_model {
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
 
+    // limite value embeddings
+    struct ggml_tensor * value_embd = nullptr;
+
     struct ggml_tensor * hc_head_norm = nullptr;
     struct ggml_tensor * hc_head_down = nullptr;
     struct ggml_tensor * hc_head_up   = nullptr;
@@ -798,6 +821,9 @@ struct llama_model {
     struct ggml_tensor * dspark_markov_w2_s = nullptr;
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
+    struct ggml_tensor * dspark_joint_proj   = nullptr; // rnn markov head
+    struct ggml_tensor * dspark_joint_proj_b = nullptr;
+    struct ggml_tensor * dspark_mask_embd    = nullptr; // per-slot mask embeddings
 
     struct ggml_tensor * dflash_selector_prev   = nullptr;
     struct ggml_tensor * dflash_selector_next   = nullptr;
@@ -883,6 +909,7 @@ struct llama_model {
 
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
+    bool no_alloc() const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
