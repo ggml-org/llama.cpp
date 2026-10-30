@@ -2505,12 +2505,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     if (!clamped) {
         budget_bytes = total_budget_bytes - total_fixed_bytes;
         if (!pinned_tensors.empty() && budget_bytes > max_total_bytes) {
-            LLAMA_LOG_WARN("\t%s: target %s is not reachable with current --tensor-type selection (maximum ~%s); clamping to maximum\n",
+            LLAMA_LOG_WARN("\t%s: target %s is not reachable with the pinned tensors (maximum ~%s); clamping to maximum\n",
                 func, requested.c_str(), size_str(total_fixed_bytes + max_total_bytes).c_str());
         }
     } else {
         if (total_budget_bytes >= unpinned_min_bytes) {
-            throw std::runtime_error(format("%s: target %s is not reachable with current --tensor-type selection (minimum ~%s)",
+            throw std::runtime_error(format("%s: target %s is not reachable with the pinned tensors (minimum ~%s)",
                 func, requested.c_str(), size_str(min_bytes).c_str()));
         }
 
@@ -2939,6 +2939,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<size_t> role;
         std::vector<size_t> siblings;
         const double down_bpw = mean_bpw(expert_ffn_down, &role);
+        // mean_bpw appends so siblings gets both the gate and the up tensors
         const double gate_bpw = mean_bpw(expert_ffn_gate, &siblings);
         const double up_bpw = mean_bpw(expert_ffn_up,   &siblings);
         const double sibling_bpw = std::max(gate_bpw, up_bpw);
@@ -3384,16 +3385,37 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                             __func__, p.pattern.c_str(), ggml_type_name(p.type));
                     }
                 }
+
+                const std::pair<const char *, ggml_type> type_flags[] = {
+                    { "--token-embedding-type", params->token_embedding_type },
+                    { "--output-tensor-type",   params->output_tensor_type },
+                };
+                for (const auto & [flag, type] : type_flags) {
+                    if (type < GGML_TYPE_COUNT && qs.ignored_types[type]) {
+                        LLAMA_LOG_WARN("%s: %s pins type %s which is ignored by --target-exclude, keeping the pinned type\n", __func__, flag, ggml_type_name(type));
+                    }
+                }
             }
 
-            // Build locked tensor type map from --tensor-type patterns
+            // Build tensor type map from --tensor-type + embedding + output flags
             std::unordered_map<std::string, ggml_type> locked_tensors;
             for (size_t i = 0; i < tensors.size(); ++i) {
                 if (!metadata[i].allows_quantization) { continue; }
                 const char * name = ggml_get_name(tensors[i]->tensor);
-                if (const ggml_type locked = tensor_type_override_for(qs, name); locked != GGML_TYPE_COUNT) {
-                    locked_tensors[name] = locked;
+                ggml_type locked = tensor_type_override_for(qs, name);
+                if (metadata[i].category == TENSOR_CATEGORY_TOKEN_EMBD) {
+                    const bool named = locked != GGML_TYPE_COUNT && std::strcmp(name, "per_layer_token_embd.weight") == 0;
+                    if (params->token_embedding_type < GGML_TYPE_COUNT && !named) {
+                        locked = params->token_embedding_type;
+                    } else if (locked == GGML_TYPE_COUNT && qs.has_tied_embeddings && params->output_tensor_type < GGML_TYPE_COUNT) {
+                        // tied embeddings take the output type, same as in llama_tensor_get_type_impl
+                        locked = params->output_tensor_type;
+                    }
+                } else if (metadata[i].category == TENSOR_CATEGORY_OUTPUT && params->output_tensor_type < GGML_TYPE_COUNT) {
+                    locked = params->output_tensor_type;
                 }
+
+                if (locked != GGML_TYPE_COUNT) { locked_tensors[name] = locked; }
             }
 
             // do not allocate budget to unused kv tensors

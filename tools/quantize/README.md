@@ -72,6 +72,8 @@ Advanced options:
 * `--state-file` file name to store or load the bpw/size scores. If left unspecified it defaults to `<model name>-<hash>.bpw_state`; progress is automatically preserved upon interruptions (SIGTERM or Ctrl-C) allowing execution of the same command to resume the process
 * `--target-exclude` comma-separated list of quant types (names or ordinals) that automatic quant type selection must ignore; for use with `--target-bpw`/`--target-size`. May be specified multiple times. A state checkpoint is not written while this option is active
 
+When using `--target-bpw` or `--target-size`, any tensors specified by `--tensor-type`, `--token-embedding-type`, or `--output-tensor-type` retain their defined types, with their total size counted toward the overall target. Quantization will fail if the budget allocated to these tensors leaves insufficient capacity for the remainder of the model.
+
 ## (Optional) Convert the multimodal components
 
 llama.cpp will convert the LLM portion of the source model, which is enough for conversational applications. If the model accepts multimodal inputs and you wish to take advantage of them, you need to create a separate GGUF file. This file is generically known as `mmproj`, for "multimedia projector"; however, it may contain various components such as vision or audio encoders in addition to projections.
