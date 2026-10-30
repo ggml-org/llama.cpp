@@ -24,12 +24,6 @@
 #endif
 
 
-// NOTE: this is copied from common.cpp to avoid linking with libcommon
-static std::string fs_path_to_utf8(const std::filesystem::path & path) {
-    const auto value = path.u8string();
-    return std::string(value.begin(), value.end());
-}
-
 // common_get_path_from_env() is adapted to avoid utf8_to_wstring
 static std::filesystem::path common_get_path_from_env(const std::string & name) {
 #ifdef _WIN32
@@ -244,10 +238,10 @@ int main(int argc, char * argv[]) {
         std::error_code ec;
         common_create_directories(cache_dir_path, ec);
         if (ec) {
-            fprintf(stderr, "Failed to create cache directory: %s\n", fs_path_to_utf8(cache_dir_path).c_str());
+            fprintf(stderr, "Failed to create cache directory: %s\n", cache_dir_path.string().c_str());
             return 1;
         }
-        cache_dir_str = fs_path_to_utf8(cache_dir_path);
+        cache_dir_str = cache_dir_path.string();
         cache_dir = cache_dir_str.c_str();
     }
 
