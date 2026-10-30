@@ -35,6 +35,7 @@ colors:
   yellow-800: 'oklch(0.5 0.1 84)'
   green-400: 'oklch(0.81 0.16 148)'
   green-500: 'oklch(0.73 0.2 148)'
+  green-600: 'oklch(0.55 0.16 148)'
   green-800: 'oklch(0.45 0.14 148)'
   white-a2: 'oklch(1 0 0 / 0.02)'
   white-a4: 'oklch(1 0 0 / 0.04)'
@@ -64,6 +65,7 @@ colors:
   fg-on-danger: '{colors.neutral-0}'
   fg-code: '{colors.neutral-950}'
   fg-danger: '{colors.red-600}'
+  fg-success: '{colors.green-600}'
   line-default: '{colors.neutral-300}'
   line-field: '{colors.neutral-200}'
   line-control: '{colors.neutral-300}'
@@ -113,6 +115,7 @@ colors:
   fg-on-action-dark: '{colors.neutral-900}'
   fg-code-dark: '{colors.neutral-300}'
   fg-danger-dark: '{colors.red-400}'
+  fg-success-dark: '{colors.green-400}'
   line-default-dark: '{colors.white-a30}'
   line-field-dark: '{colors.white-a30}'
   line-control-dark: '{colors.white-a12}'
@@ -461,6 +464,12 @@ components:
     backgroundColor: '{colors.surface-lifted}'
   switch-thumb-on-dark:
     backgroundColor: '{colors.surface-raised-dark}'
+  copy-feedback:
+    backgroundColor: '{colors.surface-page}'
+    textColor: '{colors.fg-success}'
+  copy-feedback-dark:
+    backgroundColor: '{colors.surface-page-dark}'
+    textColor: '{colors.fg-success-dark}'
   input:
     backgroundColor: '{colors.field-background}'
     textColor: '{colors.fg-default}'
@@ -649,7 +658,8 @@ kept almost neutral) and in status and error colours.
   recessed track, `surface-pressed` for a key pressed in, `surface-glass` for the translucent matte fill, `surface-code` for code and
   `surface-overlay` behind dialogs.
 - **Foreground:** `fg-default` and `fg-muted` for text and icons, `fg-on-action` and
-  `fg-on-danger` on filled buttons, `fg-code` for code and `fg-danger` for errors.
+  `fg-on-danger` on filled buttons, `fg-code` for code, `fg-danger` for errors and
+  `fg-success` for confirmations such as a copied check.
 - **Lines:** `line-default` for dividers, `line-control` for outlined controls (soft in dark
   mode), `line-field` for inputs, `line-focus` for focus and `line-danger` for invalid fields.
 - **Edges:** the hairlines of matte surfaces, darker at the sides than in the middle.
@@ -780,6 +790,9 @@ icon buttons in the chat form are fully round.
 - **Fields:** `matte-well` with a 1px `line-field` outline and the standard 3px focus ring.
 - **Floating panels:** every menu, popover, select list, hover card and drawer uses
   `matte-float`; dialogs use `matte-float-modal`.
+- **Copy feedback:** a copy action turns its icon into a `fg-success` check for 1.5s
+  (`COPY_FEEDBACK_RESET_MS`), only when the copy succeeded, then back. The icon pops in with a
+  150ms fade and scale, skipped on first render and with reduced motion.
 - **Tooltips:** the inverse of the page, the primary colour with a faint inner rim.
 - **Status:** server, model and MCP connection states use the status lamps, never coloured
   text alone.
