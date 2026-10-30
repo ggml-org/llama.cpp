@@ -43,6 +43,7 @@ const preview: Preview = {
 					'MCP',
 					'Navigation',
 					'Settings',
+					['DialogSettingsChat', 'Navigation', 'Sections'],
 					'App'
 				]
 			}
