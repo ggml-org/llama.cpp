@@ -3710,46 +3710,92 @@ static bool htp_kparams_conv2d_tiled(
     const uint32_t n_owt = (OW + 31) / 32;
     const uint32_t n_ct  = N * OH * n_owt;
     const uint32_t wk    = (std::min)(k_pad, 512u);
-    const uint32_t nth   = htp_session_n_threads(sess);
+    const uint32_t max_threads = htp_session_n_threads(sess);
     const size_t   tile  = 2048;
 
     uint32_t rt_block = n_rt;
-    uint32_t ct       = (std::min)(n_ct, 64u);
-    uint32_t seg      = (std::min)(8u, n_owt);
+    uint32_t ct       = 0;
+    uint32_t seg      = 0;
+    uint32_t nth      = 0;
     uint32_t n_stage  = 1;
     uint32_t sr       = 0;
-    size_t   stage = 0, ostage = 0, prow = 0, wpack = 0;
-    size_t   w_size = 0, act_size = 0, out_size = 0, thr_size = 0, total = 0;
+    size_t       stage     = 0, thr_size = 0;
+    size_t       best_cost = SIZE_MAX;
+    const size_t wpack     = kmajor ? 2 * (size_t) wk * 64 * sizeof(float) + 96 * 128 : 2 * (size_t) 32 * wk * (sizeof(float) + sizeof(uint16_t));
+    const size_t budget    = htp_session_vtcm_size(sess);
+    // Approximate chunk overhead in patch K-tile work units.
+    const size_t c_chunk   = 8;
 
-    while (true) {
-        const uint32_t wb = 32 * seg + (KW - 1) * d0;
-        sr     = cwhn ? hex_round_up(wb * Cin, 64) : hex_round_up(wb, 32);
-        stage  = cwhn ? (size_t) KH * sr * sizeof(float) : (size_t) Cin * KH * sr * sizeof(float);
-        ostage = 2 * 32 * (size_t) seg * 32 * sizeof(float);
-        prow   = cwhn ? stage / 2 + 256 + 64 * 128 : 0;
-        wpack  = kmajor ? 2 * (size_t) wk * 64 * sizeof(float) + 96 * 128 : 2 * (size_t) 32 * wk * (sizeof(float) + sizeof(uint16_t));
-        thr_size = hex_round_up((std::max)(stage + ostage + prow, wpack), tile);
-        w_size   = (size_t) rt_block * n_kt * tile;
-        act_size = (size_t) ct * n_kt * tile;
-        out_size = (size_t) rt_block * ct * tile;
-        struct htp_conv2d_vtcm_layout L;
-        htp_conv2d_vtcm_layout_build(&L, rt_block, w_size, act_size, out_size, thr_size, nth);
-        total    = L.total_bytes;
-        if (total <= htp_session_vtcm_size(sess)) {
-            break;
-        }
-        if (ct > 8) {
-            ct /= 2;
-        } else if (seg > 1) {
-            seg--;
-        } else if (rt_block > 1) {
-            rt_block = (rt_block + 1) / 2;
-        } else if (ct > 1) {
-            ct /= 2;
-        } else {
-            return false;
+    // Keep the kernel resident to avoid regenerating the input for each rt block.
+    // Balance patch work per thread and chunk overhead before reducing rt.
+    for (uint32_t rb = n_rt; rb > 0 && ct == 0; rb = rb > 1 ? (rb + 1) / 2 : 0) {
+        for (uint32_t nt = max_threads; nt > 0; nt /= 2) {
+            for (uint32_t sg = (std::min)(8u, n_owt); sg > 0; --sg) {
+                const uint64_t wb = (uint64_t) 32 * sg + (uint64_t) (KW - 1) * d0;
+                if (wb > budget / sizeof(float) || wb > INT32_MAX) {
+                    continue;
+                }
+                const uint64_t width = cwhn ? wb * Cin : wb;
+                if (width > budget / sizeof(float) || width > UINT32_MAX - 63) {
+                    continue;
+                }
+                const uint32_t row  = hex_round_up((uint32_t) width, cwhn ? 64 : 32);
+                const uint64_t rows = cwhn ? KH : (uint64_t) Cin * KH;
+                if (rows > budget / ((uint64_t) row * sizeof(float))) {
+                    continue;
+                }
+                const size_t input_stage  = cwhn ? (size_t) KH * row * sizeof(float) : (size_t) Cin * KH * row * sizeof(float);
+                const size_t output_stage = 2 * 32 * (size_t) sg * 32 * sizeof(float);
+                const size_t transpose    = cwhn ? input_stage / 2 + 256 + 64 * 128 : 0;
+                const size_t scratch      = hex_round_up((std::max)(input_stage + output_stage + transpose, wpack), tile);
+                htp_conv2d_vtcm_layout fixed;
+                htp_conv2d_vtcm_layout_build(&fixed, rb, (size_t) rb * n_kt * tile, 0, 0, scratch, nt);
+                if (fixed.total_bytes >= budget) {
+                    continue;
+                }
+
+                // Each spatial tile adds two activation tiles and two output tiles per rt.
+                const size_t   per_ct        = 2 * ((size_t) n_kt + rb) * tile;
+                const uint32_t nc            = (uint32_t) (std::min)((size_t) (std::min)(n_ct, 64u), (budget - fixed.total_bytes) / per_ct);
+                const uint32_t candidates[2] = { nc, nc / nt * nt };
+                for (uint32_t i = 0; i < 2; i++) {
+                    const uint32_t candidate = candidates[i];
+                    if (candidate == 0 || (i > 0 && candidate == candidates[0])) {
+                        continue;
+                    }
+                    const uint32_t per_thread = (candidate + nt - 1) / nt;
+                    if (sg > per_thread) {
+                        continue;
+                    }
+                    const size_t work   = (size_t) (n_ct / candidate) * per_thread + (n_ct % candidate + nt - 1) / nt;
+                    const size_t chunks = n_ct / candidate + (n_ct % candidate != 0);
+                    const size_t cost   = work * n_kt + c_chunk * chunks;
+                    if (cost < best_cost) {
+                        best_cost = cost;
+                        rt_block  = rb;
+                        ct        = candidate;
+                        seg       = sg;
+                        nth       = nt;
+                        sr        = row;
+                        stage     = input_stage;
+                        thr_size  = scratch;
+                    }
+                }
+            }
         }
     }
+    if (ct == 0) {
+        return false;
+    }
+
+    const size_t w_size   = (size_t) rt_block * n_kt * tile;
+    const size_t act_size = (size_t) ct * n_kt * tile;
+    const size_t out_size = (size_t) rt_block * ct * tile;
+    const size_t ostage   = 2 * 32 * (size_t) seg * 32 * sizeof(float);
+    const size_t prow     = cwhn ? stage / 2 + 256 + 64 * 128 : 0;
+    struct htp_conv2d_vtcm_layout L;
+    htp_conv2d_vtcm_layout_build(&L, rt_block, w_size, act_size, out_size, thr_size, nth);
+    size_t total = L.total_bytes;
 
     // Second stage buffer: DMA of the next segment overlaps HVX pack of this one.
     // Skip large stages. They already fill VTCM, and the extra DMA slows HMX.
