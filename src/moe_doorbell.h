@@ -40,6 +40,8 @@ LayerDoorbell * moe_doorbell_get_host_ptr();
 LayerDoorbell * moe_doorbell_get_dev_ptr();
 void moe_doorbell_log_stats();
 void moe_doorbell_signal_unblock(int il, void * stream);
+bool moe_doorbell_dma_enabled();
+bool moe_doorbell_dma_submit(int il, int copy_index);
 
 
 void moe_doorbell_resolve_launch(

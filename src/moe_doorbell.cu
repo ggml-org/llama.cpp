@@ -57,6 +57,10 @@ static int g_n_layer = 0;
 static bool g_active = false;
 static bool g_count_enabled = false;
 static uint64_t g_logged_selected = 0;
+static cudaStream_t g_stream_h2d = nullptr;
+static uint32_t * g_dma_done = nullptr;
+static uint32_t * g_dma_one = nullptr;
+static int g_device = 0;
 
 __device__ __forceinline__ uint32_t pci_ld_u32(const volatile uint32_t * addr) {
     uint32_t val;
@@ -127,7 +131,9 @@ __global__ void moe_resolve_slots_kernel(
     int sentinel,
     int total,
     int op,
-    bool count_enabled
+    bool count_enabled,
+    uint32_t * dma_done,
+    bool use_dma
 ) {
     const int tid = (int) (blockIdx.x * blockDim.x + threadIdx.x);
     LayerDoorbell & db = doorbells[layer];
@@ -160,6 +166,7 @@ __global__ void moe_resolve_slots_kernel(
     }
     __syncthreads();
 
+    if (tid == 0 && op != GGML_OP_MOE_SLOT_RESOLVE_WAIT) pl.pad0 = use_dma ? 1 : 0;
     if (tid == 0 && count_enabled && op != GGML_OP_MOE_SLOT_RESOLVE_WAIT) {
         db.selected += (uint64_t) total;
         db.misses += (uint64_t) s_miss;
@@ -207,6 +214,7 @@ __global__ void moe_resolve_slots_kernel(
             const int t = i / nk;
             pl.sel[i] = *(const int32_t *) (topk + (size_t) t * topk_nb1 + (size_t) k * topk_nb0);
             pci_st_u32(&pl.copy_ready[i], 0);
+            if (dma_done) dma_done[layer * MOE_DOORBELL_PLAN_MAX + i] = 0;
         }
         __threadfence_system();
         pci_st_u32(&db.state, 1);
@@ -261,13 +269,18 @@ __global__ void moe_resolve_slots_kernel(
         __syncthreads();
         const int32_t cslot = s_cslot;
         if (s_ready == 1 && cslot >= 0 && (uint32_t) cslot < s_spl) {
-            const char * src = (const char *) (uintptr_t) s_stage + (size_t) ci * s_stride + s_cpre;
-            char * g = (char *) (uintptr_t) s_dgate + (size_t) cslot * s_gb;
-            char * u = (char *) (uintptr_t) s_dup   + (size_t) cslot * s_ub;
-            char * d = (char *) (uintptr_t) s_ddown + (size_t) cslot * s_db;
-            doorbell_copy(g, src,             s_gb, tid, nthr);
-            doorbell_copy(u, src + s_gb,      s_ub, tid, nthr);
-            doorbell_copy(d, src + s_gb + s_ub, s_db, tid, nthr);
+            if (use_dma) {
+                while (pci_ld_u32(&dma_done[layer * MOE_DOORBELL_PLAN_MAX + ci]) == 0) doorbell_spin();
+                __threadfence_system();
+            } else {
+                const char * src = (const char *) (uintptr_t) s_stage + (size_t) ci * s_stride + s_cpre;
+                char * g = (char *) (uintptr_t) s_dgate + (size_t) cslot * s_gb;
+                char * u = (char *) (uintptr_t) s_dup   + (size_t) cslot * s_ub;
+                char * d = (char *) (uintptr_t) s_ddown + (size_t) cslot * s_db;
+                doorbell_copy(g, src,             s_gb, tid, nthr);
+                doorbell_copy(u, src + s_gb,      s_ub, tid, nthr);
+                doorbell_copy(d, src + s_gb + s_ub, s_db, tid, nthr);
+            }
         }
         __syncthreads();
     }
@@ -381,6 +394,9 @@ void moe_doorbell_resolve_launch(
     if (total64 <= 0) return;
 
     cudaStream_t s = (cudaStream_t) stream;
+    cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+    if (g_dma_done) GGML_ASSERT(cudaStreamIsCapturing(s, &capture_status) == cudaSuccess);
+    const bool use_dma = g_dma_done && capture_status == cudaStreamCaptureStatusActive;
     if (op == GGML_OP_MOE_SLOT_PREKICK) {
         moe_prekick_kernel<<<1, 32, 0, s>>>(
             (const char *) topk, (char *) out, g_prekick_dev, il, (int) nk, topk_nb0, out_nb0);
@@ -402,7 +418,7 @@ void moe_doorbell_resolve_launch(
             il, (const char *) topk, (char *) out, const_cast<int32_t *>(table),
             g_doorbells_dev, g_plans_dev, g_prekick_dev,
             (int) nk, (int) nt, topk_nb0, topk_nb1, out_nb0, out_nb1,
-            n_exp, sentinel, total, op, g_count_enabled
+            n_exp, sentinel, total, op, g_count_enabled, g_dma_done, use_dma
         );
     } else {
         const int total = (int) total64;
@@ -438,12 +454,23 @@ void moe_doorbell_signal_unblock(int il, void * stream) {
 #endif
 }
 
-// Pinned host staging shared by the worker and the resolve kernel. The worker
-// reads expert bytes here; the kernel copies them to the pool, so the worker
-// never needs a CUDA call on the miss path.
+static bool moe_doorbell_dma_init() {
+    const char * dma_env = getenv("MOE_DMA");
+    if ((dma_env && atoi(dma_env) == 0) || g_dma_done || !g_stage_host || g_n_layer <= 0) return true;
+    cudaError_t error = cudaGetDevice(&g_device);
+    if (error == cudaSuccess) error = cudaStreamCreateWithFlags(&g_stream_h2d, cudaStreamNonBlocking);
+    if (error == cudaSuccess) error = cudaMalloc((void **) &g_dma_done, (size_t) g_n_layer * MOE_DOORBELL_PLAN_MAX * sizeof(uint32_t));
+    if (error == cudaSuccess) error = cudaMemset(g_dma_done, 0, (size_t) g_n_layer * MOE_DOORBELL_PLAN_MAX * sizeof(uint32_t));
+    if (error == cudaSuccess) error = cudaHostAlloc((void **) &g_dma_one, sizeof(uint32_t), cudaHostAllocPortable);
+    if (error != cudaSuccess) GGML_ABORT("moe_doorbell_dma_init failed: %s", cudaGetErrorString(error));
+    *g_dma_one = 1;
+    fprintf(stderr, "[moe_dma] enabled, dedicated nonblocking H2D stream\n");
+    return true;
+}
+
 extern "C" bool moe_doorbell_stage_init(size_t stride, int n_slots) {
     if (g_stage_host) return true;
-    if (stride == 0 || n_slots <= 0) return false;
+    if (stride == 0 || n_slots <= 0 || (size_t) n_slots > SIZE_MAX / stride) return false;
     const size_t bytes = stride * (size_t) n_slots;
     cudaError_t err = cudaHostAlloc((void **) &g_stage_host, bytes,
             cudaHostAllocMapped | cudaHostAllocPortable);
@@ -462,6 +489,7 @@ extern "C" bool moe_doorbell_stage_init(size_t stride, int n_slots) {
     }
     g_stage_stride = stride;
     g_stage_cap = n_slots;
+    moe_doorbell_dma_init();
     fprintf(stderr, "moe_doorbell_stage_init: %zu bytes (%d x %zu), dev=%p\n",
             bytes, n_slots, stride, (void *) g_stage_dev);
     return true;
@@ -471,6 +499,32 @@ extern "C" void * moe_doorbell_stage_host() { return g_stage_host; }
 extern "C" void * moe_doorbell_stage_dev()  { return g_stage_dev; }
 extern "C" size_t moe_doorbell_stage_stride() { return g_stage_stride; }
 extern "C" int moe_doorbell_stage_cap() { return g_stage_cap; }
+
+bool moe_doorbell_dma_enabled() { return g_dma_done != nullptr; }
+
+bool moe_doorbell_dma_submit(int il, int copy_index) {
+    if (!g_dma_done || il < 0 || il >= g_n_layer || copy_index < 0 ||
+        copy_index >= g_stage_cap || copy_index >= MOE_DOORBELL_PLAN_MAX) return false;
+    DoorbellPlan & plan = g_plans_host[il];
+    if (!plan.pad0) return true;
+    const int slot = plan.copy_slot[copy_index];
+    if (slot < 0 || (uint32_t) slot >= plan.s_pl) return false;
+    if (cudaSetDevice(g_device) != cudaSuccess) return false;
+    const char * source = g_stage_host + (size_t) copy_index * g_stage_stride + plan.copy_pre[copy_index];
+    const uint64_t destinations[3] = {plan.dst_gate, plan.dst_up, plan.dst_down};
+    const size_t lengths[3] = {plan.gate_bytes, plan.up_bytes, plan.down_bytes};
+    size_t offset = 0;
+    cudaError_t error = cudaSuccess;
+    for (int role = 0; role < 3 && error == cudaSuccess; ++role) {
+        char * destination = (char *) (uintptr_t) destinations[role] + (size_t) slot * lengths[role];
+        error = cudaMemcpyAsync(destination, source + offset, lengths[role], cudaMemcpyHostToDevice, g_stream_h2d);
+        offset += lengths[role];
+    }
+    if (error == cudaSuccess) error = cudaMemcpyAsync(g_dma_done + il * MOE_DOORBELL_PLAN_MAX + copy_index,
+        g_dma_one, sizeof(uint32_t), cudaMemcpyHostToDevice, g_stream_h2d);
+    if (error != cudaSuccess) fprintf(stderr, "[moe_dma] submission failed: %s\n", cudaGetErrorString(error));
+    return error == cudaSuccess;
+}
 
 bool moe_doorbell_init(int n_layer, int n_expert, int s_per_layer) {
     (void) n_expert; (void) s_per_layer;
@@ -543,12 +597,21 @@ bool moe_doorbell_init(int n_layer, int n_expert, int s_per_layer) {
 
     ggml_cuda_moe_slot_resolve_register(moe_doorbell_resolve_launch);
     g_active = true;
+    moe_doorbell_dma_init();
     fprintf(stderr, "moe_doorbell_init: SUCCESS, %zu + %zu bytes for %d layers (plan cap %d)\n",
             db_bytes, plan_bytes, n_layer, MOE_DOORBELL_PLAN_MAX);
     return true;
 }
 
 void moe_doorbell_free() {
+    if (g_stream_h2d) {
+        cudaStreamSynchronize(g_stream_h2d);
+        cudaStreamDestroy(g_stream_h2d);
+        g_stream_h2d = nullptr;
+    }
+    if (g_dma_done) cudaFree(g_dma_done);
+    if (g_dma_one) cudaFreeHost(g_dma_one);
+    g_dma_done = g_dma_one = nullptr;
     if (g_stage_host) {
         cudaFreeHost(g_stage_host);
         g_stage_host = nullptr;
@@ -556,7 +619,10 @@ void moe_doorbell_free() {
         g_stage_stride = 0;
         g_stage_cap = 0;
     }
-    if (!g_active) return;
+    if (!g_active) {
+        g_n_layer = 0;
+        return;
+    }
     if (g_prekick_host) {
         cudaFreeHost(g_prekick_host);
         g_prekick_host = g_prekick_dev = nullptr;
@@ -572,6 +638,7 @@ void moe_doorbell_free() {
         g_doorbells_dev = nullptr;
     }
     g_active = false;
+    g_n_layer = 0;
 }
 
 bool moe_doorbell_is_active() { return g_active; }

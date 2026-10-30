@@ -188,6 +188,7 @@ static void start_doorbell_worker(llama_context * ctx) {
         const char * spec_async_env = getenv("MOE_PREKICK_ASYNC");
         const bool spec_async = !spec_async_env || atoi(spec_async_env) != 0;
         uint64_t logical_bytes = 0, demand_bytes = 0, spec_bytes = 0;
+        uint64_t dma_copies = 0, dma_bytes = 0;
         long demand_queued = 0, spec_completed = 0, spec_cancelled = 0, spec_short = 0;
         long cancel_requested = 0, ready_reused = 0, inflight_eligible = 0, inflight_joined = 0;
         long join_retries = 0, duplicate_submissions = 0;
@@ -202,6 +203,8 @@ static void start_doorbell_worker(llama_context * ctx) {
                     spec_completed ? spec_elapsed_ms / spec_completed : 0.0,
                     inflight_eligible ? join_lead_ms / inflight_eligible : 0.0,
                     spec_submitted ? spec_submit_ms / spec_submitted : 0.0);
+            if (moe_doorbell_dma_enabled()) fprintf(stderr, "[moe_dma_io] copies=%llu h2d_bytes=%llu\n",
+                (unsigned long long) dma_copies, (unsigned long long) dma_bytes);
         };
         auto drain_spec = [&]() {
             if (!spec_ok) return;
@@ -390,6 +393,13 @@ static void start_doorbell_worker(llama_context * ctx) {
                 done.assign((size_t) ncopy, 0);
 
                 auto publish_ready = [&](int ci) {
+                    if (moe_doorbell_dma_enabled() && pl->pad0 && pl->copy_slot[ci] >= 0) {
+                        if (!moe_doorbell_dma_submit(il, ci)) GGML_ABORT("demand DMA submission failed");
+                        if (io_diag) {
+                            dma_copies++;
+                            dma_bytes += gb + ub + db;
+                        }
+                    }
                     pl->copy_ready[ci] = 1;
 #if defined(__x86_64__) || defined(_M_X64)
                     _mm_clflush((const void *) (uintptr_t) &pl->copy_ready[ci]);
