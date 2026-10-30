@@ -30,7 +30,7 @@ class SpecCase:
     spec_type: str
     target: str  # <repo>/<file>
     draft: str | None  # <repo>/<file>, None when the heads are part of the target (MTP)
-    n_max: int | None
+    n_max: int
     min_accept_rate: float
     min_accept_len: float
 
@@ -43,7 +43,7 @@ CASES = [
         spec_type="draft-mtp",
         target="unsloth/Qwen3.5-4B-MTP-GGUF/Qwen3.5-4B-Q4_K_M.gguf",
         draft=None,
-        n_max=None,
+        n_max=3,
         min_accept_rate=0.6975,
         min_accept_len=2.9583,
     ),
@@ -52,9 +52,9 @@ CASES = [
         spec_type="draft-dflash",
         target="Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf",
         draft="Anbeeld/Qwen3-4B-DFlash-b16-GGUF/Qwen3-4B-DFlash-b16-Q4_K_M.gguf",
-        n_max=15,
-        min_accept_rate=0.0843,
-        min_accept_len=2.4096,
+        n_max=7,
+        min_accept_rate=0.1829,
+        min_accept_len=2.2516,
     ),
     SpecCase(
         name="dspark",
@@ -115,7 +115,7 @@ def make_server(case: SpecCase) -> ServerProcess:
     server.model_hf_repo = None
     server.model_hf_file = None
     server.model_file = model_path(case.target)
-    server.n_ctx = 4096
+    server.n_ctx = 1024
     server.n_slots = 1
     server.n_gpu_layer = int(os.environ.get("N_GPU_LAYERS", 99))
     server.fa = "on"
@@ -152,6 +152,8 @@ def generate(server: ServerProcess) -> list[list[int]]:
 
 
 def spec_metrics(server: ServerProcess) -> dict[str, float]:
+    # Use exact cumulative counters: the equivalent server log values are rounded
+    # and emitted separately for each request.
     res = server.make_request("GET", "/metrics")
     assert res.status_code == 200
     values = {}

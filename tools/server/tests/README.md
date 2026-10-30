@@ -70,7 +70,7 @@ variable to the runner's persistent model directory when its mount path is confi
 DFlash2 and LiLiCorr measurements belong in the internal nightly performance/quality runs.
 
 The compact acceptance floors use one-sided regression checks: improvements do not fail. Three
-identical CUDA calibration runs produced MTP `0.7275 / 3.1583`, DFlash `0.1143 / 2.6096`, and DSpark
+identical CUDA calibration runs produced MTP `0.7275 / 3.1583`, DFlash `0.2129 / 2.4516`, and DSpark
 `0.3454 / 3.3421` for acceptance rate and length. The enforced floors subtract three percentage
 points and 0.2 accepted tokens per verification step. Confirm the calibration on DGX Spark before
 making the workflow a required check.
