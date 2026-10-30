@@ -5162,6 +5162,17 @@ void clip_gen_state_reset(clip_gen_state * state) {
     }
 }
 
+int32_t clip_gen_n_voices(const clip_ctx * ctx) {
+    return (int32_t) ctx->model.gen_voices.size();
+}
+
+const char * clip_gen_voice_name(const clip_ctx * ctx, int32_t idx) {
+    if (idx < 0 || idx >= (int32_t) ctx->model.gen_voices.size()) {
+        return nullptr;
+    }
+    return std::next(ctx->model.gen_voices.begin(), idx)->first.c_str();
+}
+
 int32_t clip_gen_get_voice(const clip_ctx * ctx, const char * name, const float ** embd) {
     const auto it = ctx->model.gen_voices.find(name);
     if (it == ctx->model.gen_voices.end()) {
