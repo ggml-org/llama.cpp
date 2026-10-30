@@ -3616,6 +3616,84 @@ static bool htp_kparams_conv2d_win(
         }
     }
 
+    uint32_t n_threads = nth;
+    // Keep the fold schedule, where output traffic can dominate input packing.
+    if (!fold && rt_block < n_rt && ct > 0 && nth > 0) {
+        const uint32_t old_rt  = rt_block;
+        const uint32_t ct_max  = (std::min)((std::min)((std::max)(4 * halo, (n_tiles + 3) / 4), 512u), n_tiles);
+        const size_t   budget  = htp_session_vtcm_size(sess);
+        // Approximate chunk overhead in input crouton work units.
+        const size_t   c_chunk = 8;
+        const uint32_t tail    = n_tiles % ct;
+        const size_t   work =
+            (size_t) (n_tiles / ct) * ((ct + halo + nth - 1) / nth) + (tail ? (tail + halo + nth - 1) / nth : 0);
+        size_t best_cost =
+            (size_t) ((n_rt + rt_block - 1) / rt_block) * (n_cc * work + c_chunk * (n_tiles / ct + (tail != 0)));
+        bool found = false;
+
+        // Keep output DMA segments. Try larger kernel blocks to avoid rebuilding input croutons.
+        for (uint32_t rb = n_rt; rb > old_rt && !found; rb = (rb + 1) / 2) {
+            for (uint32_t nt = nth; nt > 0; nt /= 2) {
+                for (uint32_t sb = 8; sb > 0; sb /= 2) {
+                    const size_t input_stage = hex_round_up(cwhn ? (size_t) sb * 32 * Cin * sizeof(float) + 256 : (size_t) n_ch * sb * 32 * sizeof(float), 128);
+                    const size_t scratch = hex_round_up(
+                        (std::max)(2 * input_stage + (size_t) HTP_CONV2D_WIN_OBUF * 32 * seg_t * 32 * sizeof(float),
+                                   wscr),
+                        tile);
+                    if (n_cc == 0 || n_wt > budget / tile / n_cc / rb || halo > budget / tile / n_cc ||
+                        scratch > budget / nt) {
+                        continue;
+                    }
+                    const size_t weights = (size_t) rb * n_wt * n_cc * tile;
+                    htp_conv2d_vtcm_layout fixed;
+                    htp_conv2d_vtcm_layout_build(&fixed, rb, weights, (size_t) n_cc * halo * tile, 0, scratch, nt);
+                    if (fixed.total_bytes >= budget) {
+                        continue;
+                    }
+                    const size_t   per_ct        = 2 * ((size_t) n_cc + rb) * tile;
+                    const uint32_t cap           = (uint32_t) (std::min)((size_t) ct_max, (budget - fixed.total_bytes) / per_ct);
+                    const uint32_t aligned       = (cap + halo) / nt * nt;
+                    const uint32_t candidates[2] = { cap, aligned > halo ? aligned - halo : 0 };
+                    for (uint32_t i = 0; i < 2; i++) {
+                        const uint32_t candidate = candidates[i];
+                        if (candidate == 0 || (i > 0 && candidate == cap)) {
+                            continue;
+                        }
+                        if (hex_round_up((size_t) T * sizeof(uint32_t), 128) + 2 * hex_round_up((size_t) candidate, 128) > HTP_DDR_SPAD_SIZE) {
+                            continue;
+                        }
+                        const uint32_t rem        = n_tiles % candidate;
+                        const size_t   input_work = (size_t) (n_tiles / candidate) * ((candidate + halo + nt - 1) / nt) + (rem ? (rem + halo + nt - 1) / nt : 0);
+                        const size_t   chunks     = n_tiles / candidate + (rem != 0);
+                        const size_t   cost       = (size_t) ((n_rt + rb - 1) / rb) * (n_cc * input_work + c_chunk * chunks);
+                        if (cost < best_cost) {
+                            const size_t input  = (size_t) n_cc * (candidate + halo) * tile;
+                            const size_t output = (size_t) rb * candidate * tile;
+                            htp_conv2d_vtcm_layout L;
+                            htp_conv2d_vtcm_layout_build(&L, rb, weights, input, output, scratch, nt);
+                            if (L.total_bytes > budget) {
+                                continue;
+                            }
+                            found     = true;
+                            best_cost = cost;
+                            rt_block  = rb;
+                            ct        = candidate;
+                            seg_b     = sb;
+                            n_threads = nt;
+                            stage     = input_stage;
+                            thr       = scratch;
+                            act       = input;
+                            out       = output;
+                            w_size    = weights;
+                            total     = L.total_bytes;
+                            n_bc      = candidate + halo;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if (hex_round_up((size_t) T * sizeof(uint32_t), 128) + 2 * hex_round_up((size_t) ct, 128) > HTP_DDR_SPAD_SIZE) {
         return false;
     }
@@ -3626,7 +3704,7 @@ static bool htp_kparams_conv2d_win(
     const uint32_t n_cs = (32 + CS - 1) / CS;
 
     kp->kernel_type        = (uint8_t) HTP_CONV2D_KERNEL_HMX_WINDOW;
-    kp->n_threads          = (uint8_t) nth;
+    kp->n_threads          = (uint8_t) n_threads;
     kp->cwhn               = cwhn ? 1 : 0;
     kp->w_kmajor           = !w_rows ? 1 : 0;
     kp->n_row_tiles        = n_rt;
