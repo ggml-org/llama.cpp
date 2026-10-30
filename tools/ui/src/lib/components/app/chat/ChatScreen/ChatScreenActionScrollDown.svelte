@@ -9,7 +9,7 @@
 <div class="pointer-events-auto flex justify-center relative h-0">
 	<ActionIcon
 		ariaLabel="Scroll to bottom"
-		class="matte-key h-9 w-9 rounded-full bg-muted/60 border border-border/20 text-accent-foreground absolute bottom-4"
+		class="matte-key size-9 rounded-full bg-muted/60 border border-border/20 text-accent-foreground absolute bottom-4"
 		icon={ArrowDown}
 		iconSize={ICON_CLASS_DEFAULT}
 		{onclick}

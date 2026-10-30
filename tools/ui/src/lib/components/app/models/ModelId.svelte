@@ -240,7 +240,7 @@
 
 				{#if contextLength}
 					<span class="inline-flex items-center gap-1 text-muted-foreground">
-						<ScrollText class="h-3 w-3" />
+						<ScrollText class="size-icon-xs" />
 
 						<span class="text-xs">{formatParameters(contextLength)}</span>
 					</span>
@@ -248,7 +248,7 @@
 
 				{#if sizeRange}
 					<span class="inline-flex items-center gap-1 text-muted-foreground">
-						<Database class="h-3 w-3" />
+						<Database class="size-icon-xs" />
 
 						<span class="text-xs"
 							>{HuggingFaceService.formatSizeRange(sizeRange.min, sizeRange.max)}</span

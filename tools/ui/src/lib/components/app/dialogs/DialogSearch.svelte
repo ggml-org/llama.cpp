@@ -182,7 +182,7 @@
 
 				<ActionIcon
 					ariaLabel="Close search"
-					class="h-8 w-8 shrink-0 text-muted-foreground"
+					class="size-8 shrink-0 text-muted-foreground"
 					icon={X}
 					iconSize={ICON_CLASS_DEFAULT}
 					onclick={() => handleOpenChange(false)}

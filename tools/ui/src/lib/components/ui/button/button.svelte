@@ -27,7 +27,7 @@
 				ghost:
 					'hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) backdrop-blur-sm',
 				outline:
-					'matte-key hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) border border-(--button-outline-border)',
+					'matte-key bg-(--button-outline-background) hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) border border-(--button-outline-border)',
 				secondary:
 					'matte-key bg-(--button-secondary-background) border border-(--button-secondary-border) text-(--button-text) hover:bg-(--button-secondary-background-hover)',
 				tertiary:
@@ -66,6 +66,7 @@
 		aria-disabled={disabled}
 		class={cn(buttonVariants({ size, variant }), className)}
 		data-slot="button"
+		data-variant={variant}
 		href={disabled ? undefined : href}
 		role={disabled ? 'link' : undefined}
 		tabindex={disabled ? -1 : undefined}
@@ -78,6 +79,7 @@
 		bind:this={ref}
 		class={cn(buttonVariants({ size, variant }), className)}
 		data-slot="button"
+		data-variant={variant}
 		{disabled}
 		{type}
 		{...restProps}

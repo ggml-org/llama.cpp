@@ -151,7 +151,7 @@
 	}
 </script>
 
-<div in:fade={{ duration: 150 }} class="mx-auto flex h-full w-full flex-col">
+<div in:fade={{ duration: 150 }} class="mx-auto flex size-full flex-col">
 	<div class="flex flex-1 flex-col md:flex-row md:gap-4">
 		<SettingsChatDesktopSidebar
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
@@ -187,7 +187,7 @@
 									<SettingsResetButton onReset={handleReset} />
 
 									<Button onclick={() => window.location.reload()} variant="outline">
-										<RefreshCw class="h-3 w-3" />
+										<RefreshCw class="size-icon-md" />
 										Reload app
 									</Button>
 								</div>

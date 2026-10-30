@@ -55,7 +55,9 @@
 				{#if icon}
 					{@const IconComponent = icon}
 
-					<IconComponent class="h-5 w-5 {variant === 'destructive' ? 'text-destructive' : ''}" />
+					<IconComponent
+						class="size-icon-lg {variant === 'destructive' ? 'text-destructive' : ''}"
+					/>
 				{/if}
 				{title}
 			</AlertDialog.Title>

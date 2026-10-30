@@ -45,11 +45,11 @@
 			type="button"
 		>
 			{#if attachment.loading}
-				<Loader2 class="h-3 w-3 animate-spin text-muted-foreground" />
+				<Loader2 class="size-icon-xs animate-spin text-muted-foreground" />
 			{:else if attachment.error}
-				<AlertCircle class="h-3 w-3 text-red-500" />
+				<AlertCircle class="size-icon-xs text-red-500" />
 			{:else}
-				<ResourceIcon class="h-3 w-3 text-muted-foreground" />
+				<ResourceIcon class="size-icon-xs text-muted-foreground" />
 			{/if}
 
 			<span class="max-w-[150px] truncate text-xs">
@@ -60,7 +60,7 @@
 				<ActionIcon
 					class="-my-2 -mr-1.5 bg-transparent"
 					icon={X}
-					iconSize="h-2 w-2"
+					iconSize="size-icon-md"
 					onclick={() => onRemove?.(attachment.id)}
 					stopPropagationOnClick
 					tooltip="Remove"
@@ -74,7 +74,7 @@
 			{#if favicon}
 				<img
 					alt={attachment.resource.serverName}
-					class="h-3 w-3 shrink-0 rounded-sm"
+					class="size-3 shrink-0 rounded-sm"
 					onerror={(e) => {
 						(e.currentTarget as HTMLImageElement).style.display = 'none';
 					}}

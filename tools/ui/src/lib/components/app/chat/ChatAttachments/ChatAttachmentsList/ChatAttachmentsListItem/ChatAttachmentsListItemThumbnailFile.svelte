@@ -107,7 +107,7 @@
 
 {#snippet fileIcon()}
 	<div
-		class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
+		class="flex size-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
 	>
 		{#if isAudio}
 			<Music class="{ICON_CLASS_DEFAULT} text-white/70" />

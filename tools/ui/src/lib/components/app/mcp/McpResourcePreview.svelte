@@ -77,7 +77,7 @@
 <div class={['flex flex-col gap-3', className]}>
 	{#if !resource}
 		<div class="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
-			<FileText class="h-8 w-8 opacity-50" />
+			<FileText class="size-8 opacity-50" />
 
 			<span class="text-sm">Select a resource to preview</span>
 		</div>
@@ -101,14 +101,14 @@
 				/>
 
 				<Button
-					class="h-7 w-7 p-0"
+					class="size-7 p-0"
 					disabled={isLoading || !getResourceTextContent(content)}
 					onclick={handleDownload}
 					size="sm"
 					title="Download content"
 					variant="ghost"
 				>
-					<Download class="h-3.5 w-3.5" />
+					<Download class="size-icon-md" />
 				</Button>
 			</div>
 		</div>
@@ -116,11 +116,11 @@
 		<div class="min-h-[200px] overflow-auto rounded-md border bg-muted/30 p-3 break-all">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
-					<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+					<Loader2 class="size-6 animate-spin text-muted-foreground" />
 				</div>
 			{:else if error}
 				<div class="flex flex-col items-center justify-center gap-2 py-8 text-red-500">
-					<AlertCircle class="h-6 w-6" />
+					<AlertCircle class="size-6" />
 
 					<span class="text-sm">{error}</span>
 				</div>

@@ -49,7 +49,7 @@
 				<span>{HuggingFaceService.formatFileSize(companion.size)}</span>
 
 				<Download
-					class="h-3.5 w-3.5 text-muted-foreground transition-colors duration-150 group-hover:text-foreground"
+					class="size-icon-sm text-muted-foreground transition-colors duration-150 group-hover:text-foreground"
 				/>
 			</button>
 		{/snippet}

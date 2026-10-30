@@ -24,7 +24,7 @@
 <!-- Static skeleton of ModelsDiscoverListItem: avatar, name and badge rows. -->
 <li>
 	<div class="flex w-full items-start gap-2.5 rounded-lg p-2.5 text-left">
-		<Skeleton class="h-9 w-9 shrink-0 rounded-md" />
+		<Skeleton class="size-9 shrink-0 rounded-md" />
 
 		<div class="min-w-0 flex-1 space-y-1.5">
 			<Skeleton class="{nameWidth} h-4 max-w-full" />

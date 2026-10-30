@@ -40,7 +40,7 @@
 				size="sm"
 				variant="secondary"
 			>
-				<DISCOVER_ICON class="h-3.5 w-3.5" />
+				<DISCOVER_ICON class="size-icon-md" />
 
 				Discover Models
 			</Button>

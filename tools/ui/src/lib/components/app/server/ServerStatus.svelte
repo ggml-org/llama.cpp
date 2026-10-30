@@ -40,14 +40,14 @@
 
 <div class="flex items-center space-x-3 {className}">
 	<div class="flex items-center space-x-2">
-		<div class="h-2 w-2 rounded-full {getStatusColor()}"></div>
+		<div class="size-2 rounded-full {getStatusColor()}"></div>
 
 		<span class="text-sm text-muted-foreground">{getStatusText()}</span>
 	</div>
 
 	{#if serverData && !error}
 		<Badge class="text-xs" variant="outline">
-			<Server class="mr-1 h-3 w-3" />
+			<Server class="mr-1 size-icon-xs" />
 
 			{model || 'Unknown Model'}
 		</Badge>

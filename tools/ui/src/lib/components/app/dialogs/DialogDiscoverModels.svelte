@@ -36,7 +36,7 @@
 	>
 		<Dialog.Header class="flex flex-row items-center p-2 pr-8">
 			<Dialog.Title class="flex min-h-7 items-center gap-2">
-				<DISCOVER_ICON class="h-5 w-5" />
+				<DISCOVER_ICON class="size-icon-lg" />
 
 				<span>Discover</span>
 			</Dialog.Title>

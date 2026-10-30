@@ -138,7 +138,7 @@
 	{/if}
 
 	<Button class="h-7 px-3 text-xs" onclick={attemptCancel} size="sm" variant="ghost">
-		<X class="mr-1 h-3 w-3" />
+		<X class="mr-1 size-icon-md" />
 
 		Cancel
 	</Button>

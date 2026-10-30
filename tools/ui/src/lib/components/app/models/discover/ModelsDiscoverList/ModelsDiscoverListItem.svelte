@@ -210,7 +210,7 @@
 				<span class="hidden items-center gap-0.5 group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
 						icon={state.isPaused ? Play : Pause}
-						iconSize="h-4 w-4"
+						iconSize="size-icon-md"
 						onclick={() => void modelsStore.status.toggleDownload(state.repoWithTag)}
 						stopPropagationOnClick
 						tooltip={state.isPaused ? 'Resume downloading' : 'Pause downloading'}
@@ -220,7 +220,7 @@
 					<ActionIcon
 						class="text-muted-foreground hover:text-destructive"
 						icon={X}
-						iconSize="h-4 w-4"
+						iconSize="size-icon-md"
 						onclick={() => state.onRequestCancel?.(state.repoWithTag)}
 						stopPropagationOnClick
 						tooltip="Cancel downloading"

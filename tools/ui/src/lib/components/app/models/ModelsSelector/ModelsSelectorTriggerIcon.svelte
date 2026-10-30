@@ -9,7 +9,7 @@
 		option?: ModelOption | null;
 	}
 
-	let { class: className = 'h-3.5 w-3.5', option }: Props = $props();
+	let { class: className = 'size-icon-sm', option }: Props = $props();
 </script>
 
 {#if option}

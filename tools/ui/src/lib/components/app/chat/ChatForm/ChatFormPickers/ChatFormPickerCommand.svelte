@@ -121,7 +121,7 @@
 					if (!command.disabled) nav.setHover(index);
 				}}
 			>
-				<Icon class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+				<Icon class="mt-0.5 size-icon-md shrink-0 text-muted-foreground" />
 
 				<div class="flex min-w-0 flex-1 flex-col">
 					<span class="font-mono text-sm font-medium">/{command.name}</span>
