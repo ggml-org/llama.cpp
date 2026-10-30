@@ -13,6 +13,11 @@ if (DEFINED ENV{VULKAN_SDK})
 endif()
 find_package(SPIRV-Headers CONFIG REQUIRED)
 
+if (GGML_VULKAN_SPIRV_INCLUDE_DIR)
+    set_property(TARGET SPIRV-Headers::SPIRV-Headers PROPERTY
+        INTERFACE_INCLUDE_DIRECTORIES "${GGML_VULKAN_SPIRV_INCLUDE_DIR}")
+endif()
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
