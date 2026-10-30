@@ -82,6 +82,14 @@ void ggml_cl_load_kernels_repack(ggml_backend_opencl_context * backend_ctx) {
         CL_CHECK((backend_ctx->repack.kernel_restore_block_q3_K = clCreateKernel(prog, "kernel_restore_block_q3_K", &err), err));
         CL_CHECK((backend_ctx->repack.kernel_convert_block_q2_K = clCreateKernel(prog, "kernel_convert_block_q2_K", &err), err));
         CL_CHECK((backend_ctx->repack.kernel_restore_block_q2_K = clCreateKernel(prog, "kernel_restore_block_q2_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_iq2_xxs = clCreateKernel(prog, "kernel_convert_block_iq2_xxs", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_iq2_xxs = clCreateKernel(prog, "kernel_restore_block_iq2_xxs", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_iq2_xs = clCreateKernel(prog, "kernel_convert_block_iq2_xs", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_iq2_xs = clCreateKernel(prog, "kernel_restore_block_iq2_xs", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_iq2_s = clCreateKernel(prog, "kernel_convert_block_iq2_s", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_iq2_s = clCreateKernel(prog, "kernel_restore_block_iq2_s", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q2_0 = clCreateKernel(prog, "kernel_convert_block_q2_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q2_0 = clCreateKernel(prog, "kernel_restore_block_q2_0", &err), err));
         CL_CHECK((backend_ctx->repack.kernel_convert_block_q6_K  = clCreateKernel(prog, "kernel_convert_block_q6_K", &err), err));
         CL_CHECK((backend_ctx->repack.kernel_restore_block_q6_K  = clCreateKernel(prog, "kernel_restore_block_q6_K", &err), err));
         CL_CHECK((backend_ctx->repack.kernel_convert_block_q6_K_noshuffle  = clCreateKernel(prog, "kernel_convert_block_q6_K_noshuffle", &err), err));
@@ -171,9 +179,12 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         GGML_ASSERT(size_qs + size_sc + size_dm == ggml_nbytes(tensor) && "Incorrect tensor size");
 
         cl_int err;
-        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE, ggml_nbytes(tensor), NULL, &err);
+        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+            ggml_nbytes(tensor), NULL, &err);
         CL_CHECK(err);
-        CL_CHECK(clEnqueueWriteBuffer(queue, data_device, CL_TRUE, 0, ggml_nbytes(tensor), data, 0, NULL, NULL));
+        CL_CHECK(clEnqueueWriteBuffer(
+            queue, data_device, CL_TRUE, 0,
+            ggml_nbytes(tensor), data, 0, NULL, NULL));
 
         cl_buffer_region region;
         region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
@@ -192,7 +203,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
         cl_kernel kernel = extra->noshuffle ? backend_ctx->repack.kernel_convert_block_q2_k_noshuffle
                                            : backend_ctx->repack.kernel_convert_block_q2_K;
-        cl_ulong nb_arg = (cl_ulong)n_blk;
+        cl_ulong nb_arg  = (cl_ulong)n_blk;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra->qs));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra->sc));
@@ -208,13 +219,14 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         CL_CHECK(clReleaseEvent(evt));
         CL_CHECK(clReleaseMemObject(data_device));
 
+
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (extra->noshuffle) {
             const int m = tensor->ne[1];
             const int k = tensor->ne[0];
             transpose_2d_as_8b(backend_ctx, extra->qs, extra->qs, size_qs, k/4, m, true, true);
             transpose_2d_as_8b(backend_ctx, extra->sc, extra->sc, size_sc, k/16, m, true, true);
-            transpose_2d_as_32b(backend_ctx, extra->dm, extra->dm, size_dm, k/(int)blck, m, true, true);
+            transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_32_buf, extra->dm, extra->dm, size_dm, k/(int)blck, m, true, true);
         }
 #endif
 
@@ -275,12 +287,12 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         cl_kernel kernel = extra->noshuffle ? backend_ctx->repack.kernel_convert_block_q3_k_noshuffle
                                            : backend_ctx->repack.kernel_convert_block_q3_K;
         cl_ulong nb_arg = (cl_ulong)n_blk;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &data_device));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra->qs));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra->hm));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &extra->sc));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &extra->d));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong), &nb_arg));
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &data_device));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &extra->qs));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &extra->hm));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &extra->sc));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),    &extra->d));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong),  &nb_arg));
 
         size_t global_work_size[] = { (size_t)CEIL_DIV(n_blk, 64)*64, 1, 1 };
         size_t local_work_size[]  = { 64, 1, 1 };
@@ -305,6 +317,241 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         extra->size_qs = size_qs;
         extra->size_hm = size_hm;
         extra->size_sc = size_sc;
+        extra->size_d = size_d;
+
+        tensor->extra = extra;
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ2_S) {
+        GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor));
+        ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
+        GGML_ASSERT(extra_orig && "Tensors in OpenCL backend should have been allocated and initialized");
+
+        ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
+        ggml_tensor_extra_cl_iq2_s * extra = ctx->ggml_opencl_alloc_temp_tensor_extra_iq2_s();
+        extra->noshuffle = ggml_cl_iq2_s_use_noshuffle(backend_ctx, tensor);
+
+        const size_t blck  = (size_t)ggml_blck_size(tensor->type);
+        const size_t n_blk = ggml_nelements(tensor) / blck;
+
+        const size_t size_qs = n_blk * 32;
+        const size_t size_sg = n_blk * 32;
+        const size_t size_qh = n_blk * 8;
+        const size_t size_sc = n_blk * 8;
+        const size_t size_d = n_blk * 2;
+        GGML_ASSERT(size_qs + size_sg + size_qh + size_sc + size_d == ggml_nbytes(tensor) && "Incorrect tensor size");
+
+        cl_int err;
+        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+            ggml_nbytes(tensor), NULL, &err);
+        CL_CHECK(err);
+        CL_CHECK(clEnqueueWriteBuffer(
+            queue, data_device, CL_TRUE, 0,
+            ggml_nbytes(tensor), data, 0, NULL, NULL));
+
+        cl_buffer_region region;
+        region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
+        region.size = size_qs;
+        CL_CHECK((extra->qs = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_qs, backend_ctx->alignment);
+        region.size = size_sg;
+        CL_CHECK((extra->sg = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_sg, backend_ctx->alignment);
+        region.size = size_qh;
+        CL_CHECK((extra->qh = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_qh, backend_ctx->alignment);
+        region.size = size_sc;
+        CL_CHECK((extra->sc = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_sc, backend_ctx->alignment);
+        region.size = size_d;
+        CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_iq2_s;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &data_device));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &extra->qs));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &extra->sg));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &extra->qh));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),    &extra->sc));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),    &extra->d));
+        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong),  &nb_arg));
+
+        size_t global_work_size[] = { (size_t)CEIL_DIV(n_blk, 64)*64, 1, 1 };
+        size_t local_work_size[]  = { 64, 1, 1 };
+
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clReleaseMemObject(data_device));
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (extra->noshuffle) {
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d_as_8b(backend_ctx, extra->qs, extra->qs, size_qs, k/8, m, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->sg, extra->sg, size_sg, k/8, m, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->qh, extra->qh, size_qh, k/32, m, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->sc, extra->sc, size_sc, k/32, m, true, true);
+            transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_16_buf, extra->d, extra->d, size_d, k/(int)blck, m, true, true);
+        }
+#endif
+
+        extra->size_qs = size_qs;
+        extra->size_sg = size_sg;
+        extra->size_qh = size_qh;
+        extra->size_sc = size_sc;
+        extra->size_d = size_d;
+
+        tensor->extra = extra;
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ2_XS) {
+        GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor));
+        ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
+        GGML_ASSERT(extra_orig && "Tensors in OpenCL backend should have been allocated and initialized");
+
+        ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
+        ggml_tensor_extra_cl_iq2_xs * extra = ctx->ggml_opencl_alloc_temp_tensor_extra_iq2_xs();
+        extra->noshuffle = ggml_cl_iq2_xs_use_noshuffle(backend_ctx, tensor);
+
+        const size_t blck  = (size_t)ggml_blck_size(tensor->type);
+        const size_t n_blk = ggml_nelements(tensor) / blck;
+
+        const size_t size_qs = n_blk * 64;
+        const size_t size_sc = n_blk * 8;
+        const size_t size_d = n_blk * 2;
+        GGML_ASSERT(size_qs + size_sc + size_d == ggml_nbytes(tensor) && "Incorrect tensor size");
+
+        cl_int err;
+        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+            ggml_nbytes(tensor), NULL, &err);
+        CL_CHECK(err);
+        CL_CHECK(clEnqueueWriteBuffer(
+            queue, data_device, CL_TRUE, 0,
+            ggml_nbytes(tensor), data, 0, NULL, NULL));
+
+        cl_buffer_region region;
+        region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
+        region.size = size_qs;
+        CL_CHECK((extra->qs = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_qs, backend_ctx->alignment);
+        region.size = size_sc;
+        CL_CHECK((extra->sc = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_sc, backend_ctx->alignment);
+        region.size = size_d;
+        CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_iq2_xs;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &data_device));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &extra->qs));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &extra->sc));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &extra->d));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong),  &nb_arg));
+
+        size_t global_work_size[] = { (size_t)CEIL_DIV(n_blk, 64)*64, 1, 1 };
+        size_t local_work_size[]  = { 64, 1, 1 };
+
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clReleaseMemObject(data_device));
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (extra->noshuffle) {
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_16_buf, extra->qs, extra->qs, size_qs, k/8, m, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->sc, extra->sc, size_sc, k/32, m, true, true);
+            transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_16_buf, extra->d, extra->d, size_d, k/(int)blck, m, true, true);
+        }
+#endif
+
+        extra->size_qs = size_qs;
+        extra->size_sc = size_sc;
+        extra->size_d = size_d;
+
+        tensor->extra = extra;
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ2_XXS) {
+        GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor));
+        ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
+        GGML_ASSERT(extra_orig && "Tensors in OpenCL backend should have been allocated and initialized");
+
+        ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
+        ggml_tensor_extra_cl_iq2_xxs * extra = ctx->ggml_opencl_alloc_temp_tensor_extra_iq2_xxs();
+        extra->noshuffle = ggml_cl_iq2_xxs_use_noshuffle(backend_ctx, tensor);
+
+        const size_t blck  = (size_t)ggml_blck_size(tensor->type);
+        const size_t n_blk = ggml_nelements(tensor) / blck;
+
+        const size_t size_qs = n_blk * 32;
+        const size_t size_sas = n_blk * 32;
+        const size_t size_d = n_blk * 2;
+        GGML_ASSERT(size_qs + size_sas + size_d == ggml_nbytes(tensor) && "Incorrect tensor size");
+
+        cl_int err;
+        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+            ggml_nbytes(tensor), NULL, &err);
+        CL_CHECK(err);
+        CL_CHECK(clEnqueueWriteBuffer(
+            queue, data_device, CL_TRUE, 0,
+            ggml_nbytes(tensor), data, 0, NULL, NULL));
+
+        cl_buffer_region region;
+        region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
+        region.size = size_qs;
+        CL_CHECK((extra->qs = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_qs, backend_ctx->alignment);
+        region.size = size_sas;
+        CL_CHECK((extra->sas = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_sas, backend_ctx->alignment);
+        region.size = size_d;
+        CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_iq2_xxs;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &data_device));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &extra->qs));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &extra->sas));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &extra->d));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong),  &nb_arg));
+
+        size_t global_work_size[] = { (size_t)CEIL_DIV(n_blk, 64)*64, 1, 1 };
+        size_t local_work_size[]  = { 64, 1, 1 };
+
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clReleaseMemObject(data_device));
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (extra->noshuffle) {
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d_as_8b(backend_ctx, extra->qs, extra->qs, size_qs, k/8, m, true, true);
+            transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_32_buf, extra->sas, extra->sas, size_sas, k/32, m, true, true);
+            transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_16_buf, extra->d, extra->d, size_d, k/(int)blck, m, true, true);
+        }
+#endif
+
+        extra->size_qs = size_qs;
+        extra->size_sas = size_sas;
         extra->size_d = size_d;
 
         tensor->extra = extra;
@@ -387,13 +634,79 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
         return;
     }
+
+    if (tensor->type == GGML_TYPE_Q2_0) {
+        GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor));
+        ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
+        GGML_ASSERT(extra_orig && "Tensors in OpenCL backend should have been allocated and initialized");
+
+        ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
+        ggml_tensor_extra_cl_q2_0 * extra = ctx->ggml_opencl_alloc_temp_tensor_extra_q2_0();
+        extra->noshuffle = ggml_cl_q2_0_use_noshuffle(backend_ctx, tensor);
+
+        const size_t blck  = (size_t)ggml_blck_size(tensor->type);
+        const size_t n_blk = ggml_nelements(tensor) / blck;
+
+        const size_t size_qs = n_blk * 16;
+        const size_t size_d = n_blk * 2;
+        GGML_ASSERT(size_qs + size_d == ggml_nbytes(tensor) && "Incorrect tensor size");
+
+        cl_int err;
+        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+            ggml_nbytes(tensor), NULL, &err);
+        CL_CHECK(err);
+        CL_CHECK(clEnqueueWriteBuffer(
+            queue, data_device, CL_TRUE, 0,
+            ggml_nbytes(tensor), data, 0, NULL, NULL));
+
+        cl_buffer_region region;
+        region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
+        region.size = size_qs;
+        CL_CHECK((extra->qs = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        region.origin = align_to(region.origin + size_qs, backend_ctx->alignment);
+        region.size = size_d;
+        CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q2_0;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &data_device));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &extra->qs));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &extra->d));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong),  &nb_arg));
+
+        size_t global_work_size[] = { (size_t)CEIL_DIV(n_blk, 64)*64, 1, 1 };
+        size_t local_work_size[]  = { 64, 1, 1 };
+
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clReleaseMemObject(data_device));
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (extra->noshuffle) {
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d_as_8b(backend_ctx, extra->qs, extra->qs, size_qs, k/4, m, true, true);
+            transpose_2d_as_16b(backend_ctx, extra->d, extra->d, size_d, k/64, m, true, true);
+        }
+#endif
+
+        extra->size_qs = size_qs;
+        extra->size_d = size_d;
+
+        tensor->extra = extra;
+        return;
+    }
+
     // We separate the quantized bits and scale from block_q4_0 by using an
     // additional kernel, where each thread handles a block. We first read the
     // original weights into a temporary buffer, then create two separate
     // buffers for quantized bits and scales, which are then populated by the
     // conversion kernel.
     if (tensor->type == GGML_TYPE_Q4_0) {
-        // Views can't SoA-ify here - parent owns the layout (see q8_0 guard).
+        // Views can't SoA-ify here — parent owns the layout (see q8_0 guard).
         // A view of an AoS tensor (the KV cache, written by a state restore)
         // is written in place.
         if (tensor->view_src != nullptr || !ggml_is_contiguous(tensor)) {
@@ -1933,7 +2246,6 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
                 transpose_2d_as_16b(backend_ctx,
                     extra->s, extra->s, size_s, K/16/2, M);
             }
-
             // Transpose d as ushort
             transpose_2d_as_16b(backend_ctx,
                 extra->d, extra->d, size_d, K/256, M);

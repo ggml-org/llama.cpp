@@ -1366,6 +1366,30 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             } else if (op->src[0]->type == GGML_TYPE_Q4_0) {
                 // Non-contig src0 routes through on-device dequant-to-f16.
                 return op->src[1]->type == GGML_TYPE_F32;
+            } else if (op->src[0]->type == GGML_TYPE_IQ2_XXS) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq2_xxs_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_IQ2_XS) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq2_xs_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_IQ2_S) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq2_s_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_Q2_0) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_q2_0_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q3_K) {
                 const ggml_tensor * weight = op->src[0]->view_src;
                 if (weight && ggml_cl_q3_k_use_noshuffle(backend_ctx, weight)) {
@@ -1753,6 +1777,9 @@ static ggml_backend_buffer_i ggml_backend_opencl_buffer_interface = {
     /* .cpy_tensor      = */ NULL,
     /* .clear           = */ ggml_backend_opencl_buffer_clear,
     /* .reset           = */ ggml_backend_opencl_buffer_reset,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 //
