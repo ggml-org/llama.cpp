@@ -3678,7 +3678,7 @@ static bool htp_kparams_conv2d_tiled(
     const uint32_t N    = dst->ne[3];
     const size_t   es   = ggml_type_size(src0->type);
 
-    if (s0 != 1 || dst->nb[0] != sizeof(float)) {
+    if (s0 <= 0 || dst->nb[0] != sizeof(float)) {
         return false;
     }
 
@@ -3731,7 +3731,8 @@ static bool htp_kparams_conv2d_tiled(
     for (uint32_t rb = n_rt; rb > 0 && ct == 0; rb = rb > 1 ? (rb + 1) / 2 : 0) {
         for (uint32_t nt = max_threads; nt > 0; nt /= 2) {
             for (uint32_t sg = (std::min)(8u, n_owt); sg > 0; --sg) {
-                const uint64_t wb = (uint64_t) 32 * sg + (uint64_t) (KW - 1) * d0;
+                // Keep the unused final stride lane for full-vector loads during packing.
+                const uint64_t wb = (uint64_t) 32 * sg * s0 + (uint64_t) (KW - 1) * d0;
                 if (wb > budget / sizeof(float) || wb > INT32_MAX) {
                     continue;
                 }
@@ -3880,6 +3881,10 @@ static bool htp_kparams_solve_conv2d(
     const int32_t p1 = ggml_get_op_params_i32(op, 3);
     const int32_t d0 = ggml_get_op_params_i32(op, 4);
     const int32_t d1 = ggml_get_op_params_i32(op, 5);
+
+    if (s0 <= 0 || s1 <= 0 || d0 <= 0 || d1 <= 0) {
+        return false;
+    }
 
     const int64_t ow = (src1->ne[0] + 2 * p0 - d0 * (src0->ne[0] - 1) - 1) / s0 + 1;
     const int64_t oh = (src1->ne[1] + 2 * p1 - d1 * (src0->ne[1] - 1) - 1) / s1 + 1;
