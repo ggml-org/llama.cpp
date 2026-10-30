@@ -30,7 +30,9 @@ const preview: Preview = {
 						'Forms',
 						'Display',
 						'Overlays',
-						'Patterns'
+						'Navigation',
+						'Patterns',
+						'Proposals'
 					],
 					'Chat',
 					['ChatScreen', ['ChatScreen', '*']],

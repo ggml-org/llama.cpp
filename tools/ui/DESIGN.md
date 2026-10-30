@@ -53,6 +53,8 @@ colors:
   surface-emphasis: '{colors.neutral-150}'
   surface-selected: '{colors.neutral-150}'
   surface-raised: '{colors.neutral-0}'
+  surface-lifted: '{colors.neutral-0}'
+  surface-pressed: '{colors.neutral-0}'
   surface-glass: 'oklch(0.97 0 0 / 0.6)'
   surface-code: '{colors.neutral-50}'
   surface-overlay: '{colors.black-a40}'
@@ -64,6 +66,7 @@ colors:
   fg-danger: '{colors.red-600}'
   line-default: '{colors.neutral-300}'
   line-field: '{colors.neutral-200}'
+  line-control: '{colors.neutral-300}'
   line-focus: '{colors.neutral-400}'
   line-danger: '{colors.red-600}'
   edge-rest-side: '{colors.cool-gray-200}'
@@ -101,6 +104,8 @@ colors:
   surface-emphasis-dark: '{colors.neutral-750}'
   surface-selected-dark: '{colors.neutral-800}'
   surface-raised-dark: '{colors.neutral-900}'
+  surface-lifted-dark: 'oklch(0.371 0 0 / 0.8)'
+  surface-pressed-dark: 'oklch(0.985 0 0 / 0.14)'
   surface-glass-dark: 'oklch(0.269 0 0 / 0.75)'
   surface-code-dark: '{colors.neutral-900}'
   fg-default-dark: '{colors.neutral-50}'
@@ -110,6 +115,7 @@ colors:
   fg-danger-dark: '{colors.red-400}'
   line-default-dark: '{colors.white-a30}'
   line-field-dark: '{colors.white-a30}'
+  line-control-dark: '{colors.white-a12}'
   line-focus-dark: '{colors.neutral-500}'
   line-danger-dark: '{colors.red-400}'
   edge-rest-side-dark: '{colors.white-a6}'
@@ -324,16 +330,18 @@ components:
   button-tertiary-border-dark:
     backgroundColor: '{colors.surface-muted-dark}'
   button-outline:
+    backgroundColor: '{colors.field-background}'
     textColor: '{colors.fg-default}'
     rounded: '{rounded.control}'
     typography: '{typography.label}'
     height: '36px'
   button-outline-dark:
+    backgroundColor: '#232323'
     textColor: '{colors.fg-default-dark}'
   button-outline-border:
-    backgroundColor: '{colors.line-default}'
+    backgroundColor: '{colors.line-control}'
   button-outline-border-dark:
-    backgroundColor: '{colors.line-field-dark}'
+    backgroundColor: '{colors.line-control-dark}'
   button-outline-hover:
     backgroundColor: '#f1f1f1'
     textColor: '{colors.fg-default}'
@@ -367,6 +375,92 @@ components:
   button-destructive-hover-dark:
     backgroundColor: '#9e3d37'
     textColor: '{colors.fg-on-danger}'
+  toggle-on:
+    backgroundColor: '{colors.surface-selected}'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+    height: '36px'
+  toggle-on-dark:
+    backgroundColor: '{colors.surface-selected-dark}'
+    textColor: '{colors.fg-default-dark}'
+  toggle-hover:
+    backgroundColor: '#f1f1f1'
+    textColor: '{colors.fg-default}'
+  toggle-hover-dark:
+    backgroundColor: '#1c1c1c'
+    textColor: '{colors.fg-default-dark}'
+  toggle-group:
+    backgroundColor: '#f9f9f9'
+    textColor: '{colors.fg-default}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+    height: '32px'
+  toggle-group-dark:
+    backgroundColor: '#202020'
+    textColor: '{colors.fg-default-dark}'
+  toggle-group-border:
+    backgroundColor: 'oklch(0.87 0 0 / 0.3)'
+  toggle-group-border-dark:
+    backgroundColor: 'oklch(1 0 0 / 0.06)'
+  toggle-group-seam:
+    backgroundColor: '{colors.line-control}'
+  toggle-group-seam-dark:
+    backgroundColor: '{colors.line-control-dark}'
+  toggle-group-key-muted:
+    backgroundColor: '{colors.surface-muted}'
+    textColor: 'oklch(0.145 0 0 / 0.7)'
+  toggle-group-key-muted-dark:
+    backgroundColor: '{colors.surface-muted-dark}'
+    textColor: 'oklch(0.985 0 0 / 0.7)'
+  toggle-group-key-on:
+    backgroundColor: '{colors.surface-pressed}'
+    textColor: '{colors.fg-default}'
+  toggle-group-key-on-dark:
+    backgroundColor: '#2e2e2e'
+    textColor: '{colors.fg-default-dark}'
+  tabs-list:
+    backgroundColor: '{colors.surface-muted}'
+    rounded: '{rounded.panel}'
+    height: '36px'
+    padding: '2px'
+  tabs-list-dark:
+    backgroundColor: '{colors.surface-muted-dark}'
+  tabs-trigger:
+    backgroundColor: '{colors.surface-muted}'
+    textColor: 'oklch(0.145 0 0 / 0.7)'
+    rounded: '{rounded.control}'
+    typography: '{typography.label}'
+  tabs-trigger-dark:
+    backgroundColor: '{colors.surface-muted-dark}'
+    textColor: 'oklch(0.985 0 0 / 0.7)'
+  tabs-trigger-active:
+    backgroundColor: '{colors.surface-lifted}'
+    textColor: '{colors.fg-default}'
+  tabs-trigger-active-dark:
+    backgroundColor: '#363636'
+    textColor: '{colors.fg-default-dark}'
+  switch-track:
+    backgroundColor: '{colors.surface-muted}'
+    rounded: '{rounded.full}'
+    height: '18px'
+    width: '32px'
+  switch-track-dark:
+    backgroundColor: '{colors.surface-muted-dark}'
+  switch-track-on:
+    backgroundColor: '{colors.action-primary}'
+  switch-track-on-dark:
+    backgroundColor: '{colors.action-primary-dark}'
+  switch-thumb:
+    backgroundColor: '{colors.surface-lifted}'
+    rounded: '{rounded.full}'
+    size: '16px'
+  switch-thumb-dark:
+    backgroundColor: '{colors.surface-lifted-dark}'
+  switch-thumb-on:
+    backgroundColor: '{colors.surface-lifted}'
+  switch-thumb-on-dark:
+    backgroundColor: '{colors.surface-raised-dark}'
   input:
     backgroundColor: '{colors.field-background}'
     textColor: '{colors.fg-default}'
@@ -551,12 +645,13 @@ kept almost neutral) and in status and error colours.
 
 - **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
   `surface-emphasis` and `surface-selected` for stronger fills and hover or selected rows,
-  `surface-raised` for menus and dialogs, `surface-glass` for the translucent matte fill,
-  `surface-code` for code and `surface-overlay` behind dialogs.
+  `surface-raised` for menus and dialogs, `surface-lifted` for a selection raised on a
+  recessed track, `surface-pressed` for a key pressed in, `surface-glass` for the translucent matte fill, `surface-code` for code and
+  `surface-overlay` behind dialogs.
 - **Foreground:** `fg-default` and `fg-muted` for text and icons, `fg-on-action` and
   `fg-on-danger` on filled buttons, `fg-code` for code and `fg-danger` for errors.
-- **Lines:** `line-default` for dividers and outlines, `line-field` for inputs, `line-focus`
-  for focus and `line-danger` for invalid fields.
+- **Lines:** `line-default` for dividers, `line-control` for outlined controls (soft in dark
+  mode), `line-field` for inputs, `line-focus` for focus and `line-danger` for invalid fields.
 - **Edges:** the hairlines of matte surfaces, darker at the sides than in the middle.
   `edge-rest-*` at rest, `edge-focus-*` when focus is inside, `edge-ambient-*` for large
   quiet containers whose edge never changes, `edge-faint` for the user bubble and
@@ -591,9 +686,11 @@ in the chat form are engraved: muted text with a 1px highlight below it in light
 Spacing follows a 4px grid. Gaps of 4 to 12px (`xs` to `md`) dominate inside controls and
 lists; 16 to 32px (`lg` to `2xl`) separate sections. Controls are 32, 36 or 40px tall
 (`h-control-sm`, `h-control-md`, `h-control-lg`) and icons are 12, 14, 16 or 20px
-(`size-icon-xs` to `size-icon-lg`). The chat column is centred with a generous bottom
-offset so the floating chat form never covers the last message. The desktop sidebar is 18rem
-wide by default, can be resized, and collapses to a 3rem strip.
+(`size-icon-xs` to `size-icon-lg`). Square boxes use `size-N`, never a matching `h-N w-N`
+pair, and icons use the `size-icon-*` roles. Inside buttons, toggles and menu items an icon is
+16px (`size-icon-md`) unless a smaller control calls for less. The chat column is centred with
+a generous bottom offset so the floating chat form never covers the last message. The desktop
+sidebar is 18rem wide by default, can be resized, and collapses to a 3rem strip.
 
 ## Elevation & Depth
 
@@ -612,7 +709,7 @@ matches the role of the surface instead of combining raw shadows.
 - **`matte-key`:** buttons. Adds a light blur and a small drop shadow on top of the
   button's own fill. It never changes the button colour and draws no rim of its own: every
   `matte-key` control has a border, and a rim inside it would double the edge.
-- **`matte-well`:** inputs, textareas, checkboxes and switches. A shallow inset shade so
+- **`matte-well`:** inputs, textareas and checkboxes. A shallow inset shade so
   fields read as recessed.
 - **`matte-chip`:** badges. A thin inner rim only.
 - **`matte-sheen`:** the user message bubble. An almost invisible top-to-bottom sheen.
@@ -640,7 +737,8 @@ icon buttons in the chat form are fully round.
   - `tertiary`: a faint grey tint with a soft muted border, quieter than secondary and
     still a visible button; kept for low-emphasis actions that need more presence than
     ghost.
-  - `outline`: no fill and a normal border, for secondary actions in dialogs and forms.
+  - `outline`: the input fill with a `line-control` border, for secondary actions in dialogs
+    and forms.
   - `ghost`: no fill until hovered, for icon buttons and quiet actions.
   - `destructive`: red, for deleting and other irreversible actions.
 
@@ -649,6 +747,30 @@ icon buttons in the chat form are fully round.
 
 - **Badges:** four variants with the same names: `default`, `secondary` (a light foreground
   tint), `outline` and `destructive`. Model and capability badges add `matte-chip`.
+- **Toggles:** the same corners, type, heights, padding and icon size as buttons, with
+  square `icon-sm`, `icon` and `icon-lg` sizes for icon-only toggles. `default` has no fill
+  until hovered; `outline` borrows the outline button. Pressed toggles take
+  `toggle-background-on`.
+- **Button groups:** joined buttons share one shadow, drawn by the group, and one border at
+  each seam. A group separator replaces the seam border. Filled buttons draw a seam in their
+  own text colour (`button-primary-seam`, `button-danger-seam`) instead.
+- **Selection on a track:** a choice that moves along a track is a recessed track with the
+  selection raised on it, never a row of outlined buttons. The track is `surface-muted` with
+  the inset shade (`elevation-inset`); the selection is a `surface-lifted` chip with
+  `elevation-control`, and unselected options are softened text with no fill. Tabs use the
+  same track for their list, with the active tab raised (`tabs-*`); a `line` variant
+  underlines the active tab instead. The chip or underline slides between tabs in 300ms on a
+  plain ease-out, with a stretch of at most 5% along the move that is gone by the time it
+  lands; with reduced motion it jumps instead. The switch is the same track with a raised
+  thumb; switched on, the track takes the primary colour. The message statistics view switcher
+  uses the tabs tokens.
+- **Toggle groups:** a row of keys, like an old stereo's, not a track. At rest the group is
+  a secondary button, the same glass fill, border and shadow as a select trigger, with a
+  `line-control` seam between keys. A pressed key turns white (`surface-pressed`, the lightest
+  fill in dark mode) and sinks in under a subtle inner shadow (`elevation-pressed`), its label
+  a pixel lower. While any key is pressed, the others turn grey in light mode
+  (`surface-muted`) and mute their labels, so the pressed one stands out. A group is as tall
+  as a control of its size.
 - **Chat form:** one `chat-form-surface` holding the input, attachments and actions. Its fill
   is the muted grey at 60% in light mode and 75% in dark mode.
 - **User message bubble:** the primary colour at 5% with `matte-sheen` and the very faint
@@ -676,10 +798,36 @@ icon buttons in the chat form are fully round.
   only in semantic tokens.
 - Do add a new colour as a primitive first, then give it a semantic name before any
   component uses it.
+- Do give motion a job: show where something went or what changed, like a selection sliding
+  to its new place. A barely visible stretch along a move, or a settle past the target by a
+  pixel or two, can make that feel physical; keep it under about 5% and 300ms, and drop it
+  entirely with reduced motion. Never let a bounce carry something past the edge of its
+  container, such as a tab indicator past its track; there, slide without one. If you notice
+  the effect itself rather than the change it shows, it is too much.
 - Do reach for the surface utility that matches the component instead of adding raw
   `shadow-*`, `border-*` and `backdrop-blur-*` combinations.
 - Don't use Tailwind's palette classes (`text-amber-500`, `bg-green-500/10`) for meaning in
   new code; use the semantic tokens. Some older components still do and are being moved over.
 - Don't introduce new accent hues (such as a blue submit button) without a design decision.
 - Don't put white rims or highlights on large ambient containers such as the sidebar.
+- Don't animate for decoration: no motion on things that did not change, no bounces on
+  entrances, and nothing that delays the user.
 - Don't stack two glass surfaces with blur directly on top of each other.
+
+## Proposing changes
+
+Visual changes are decided in Storybook before they reach the components.
+
+1. **Prototype first.** Add a temporary story at `tests/stories/design-system/proposals/`
+   titled `Design system/Proposals/<topic>`, with one story per question.
+2. **Show current and proposed side by side.** Use `StateGallery` with two columns: each row
+   is a pair of `StateGalleryItem`s labelled `Current` and `Proposed`, with a short note
+   saying what differs. Render the current state with the real component, and the proposal
+   in context next to the variants it sits among, not on its own.
+3. **Leave the components alone.** Prototype with classes or a small global style in the
+   story; the real components, tokens and app code change only once a proposal is chosen.
+4. **Check both themes.** Review every proposal in light and dark mode before asking for a
+   decision.
+5. **Apply, then delete the proposal.** Once chosen, move the change into tokens and
+   components, update the regular stories and this file, and remove the proposal story so
+   it never ships.
