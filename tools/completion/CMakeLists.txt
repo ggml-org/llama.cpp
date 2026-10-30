@@ -17,6 +17,10 @@ endif()
 set(TARGET llama-completion)
 
 add_executable(${TARGET} main.cpp)
+if (MSVC)
+    # long model paths (> 260 chars) require longPathAware in the embedded manifest
+    target_sources(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/common/llama.manifest)
+endif()
 target_link_libraries(${TARGET} PRIVATE llama-completion-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 

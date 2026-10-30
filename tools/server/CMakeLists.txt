@@ -69,6 +69,10 @@ endif()
 set(TARGET llama-server)
 
 add_executable(${TARGET} main.cpp)
+if (MSVC)
+    # long model paths (> 260 chars) require longPathAware in the embedded manifest
+    target_sources(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/common/llama.manifest)
+endif()
 install(TARGETS ${TARGET} RUNTIME)
 
 target_link_libraries(${TARGET} PRIVATE llama-server-impl)
