@@ -525,13 +525,13 @@ struct ggml_opencl_fa_kernels {
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_c8;
     // NSG_SPLIT=2 specializations (WG=128): the c8 kernel's register footprint
     // caps its per-kernel WG at 128 on X2, below the stock 256/192 requirement.
-    // 2 subgroups × FA_CL_NCL streams still gives 16 in-flight rows per WG.
+    // 2 subgroups Ã— FA_CL_NCL streams still gives 16 in-flight rows per WG.
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_c8_ns2;
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_c8_ns2;
     // FA_CL_C=32 / MQ_GQA=8 / NSG_SPLIT=2 specialization for the DK=DV=256
     // GQA=8 class (Qwen3.5/3.6-35B-A3B: 16 Q heads, 2 KV heads). o_acc =
-    // DV_VEC/32 × 8 = 128B/lane (in budget); the baseline fa1 path for this
-    // shape has NO MQ/FD at all and pays an 8× KV re-read per Q head.
+    // DV_VEC/32 Ã— 8 = 128B/lane (in budget); the baseline fa1 path for this
+    // shape has NO MQ/FD at all and pays an 8Ã— KV re-read per Q head.
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_c32;
     // alternative decode
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_local_tile;
@@ -725,6 +725,12 @@ struct ggml_backend_opencl_context {
     // scratch copy of the router weights to avoid dst aliasing
     ggml_cl_buffer prealloc_moe_combine_w;
     ggml_cl_buffer prealloc_splitk_partial;  // [ksplit * M] partials for split-K GEMV
+    ggml_cl_buffer iq2_s_grid_buffer;
+    ggml_cl_buffer iq2_xs_grid_buffer;
+    ggml_cl_buffer iq2_xxs_grid_buffer;
+    cl_mem iq2_s_grid_image = nullptr;
+    cl_mem iq2_xs_grid_image = nullptr;
+    cl_mem iq2_xxs_grid_image = nullptr;
 
     // pool of persistent image1d_buffer views over kv-cache layers, keyed by
     // (parent buffer, offset within parent)
@@ -982,6 +988,18 @@ struct ggml_backend_opencl_context {
             *bin_size = sz;
         }
         return kernel_bin;
+    }
+
+    ~ggml_backend_opencl_context() {
+        if (iq2_xxs_grid_image) {
+            CL_CHECK(clReleaseMemObject(iq2_xxs_grid_image));
+        }
+        if (iq2_xs_grid_image) {
+            CL_CHECK(clReleaseMemObject(iq2_xs_grid_image));
+        }
+        if (iq2_s_grid_image) {
+            CL_CHECK(clReleaseMemObject(iq2_s_grid_image));
+        }
     }
 
     void free() {
@@ -1600,6 +1618,84 @@ struct ggml_tensor_extra_cl_q3_K {
     }
 };
 
+struct ggml_tensor_extra_cl_iq2_xxs {
+    bool noshuffle = false;
+    cl_mem qs = nullptr; // grid indices
+    cl_mem sas = nullptr; // packed sign codes and scales
+    cl_mem d = nullptr; // super-block scales
+
+    size_t size_qs = 0, size_sas = 0, size_d = 0;
+
+    ~ggml_tensor_extra_cl_iq2_xxs() { reset(); }
+
+    void reset() {
+        noshuffle = false;
+        if (qs != nullptr) { CL_CHECK(clReleaseMemObject(qs)); qs = nullptr; }
+        if (sas != nullptr) { CL_CHECK(clReleaseMemObject(sas)); sas = nullptr; }
+        if (d != nullptr) { CL_CHECK(clReleaseMemObject(d)); d = nullptr; }
+        size_qs = size_sas = size_d = 0;
+    }
+};
+
+struct ggml_tensor_extra_cl_iq2_xs {
+    bool noshuffle = false;
+    cl_mem qs = nullptr; // packed grid indices and sign codes
+    cl_mem sc = nullptr; // packed scales
+    cl_mem d = nullptr; // super-block scales
+
+    size_t size_qs = 0, size_sc = 0, size_d = 0;
+
+    ~ggml_tensor_extra_cl_iq2_xs() { reset(); }
+
+    void reset() {
+        noshuffle = false;
+        if (qs != nullptr) { CL_CHECK(clReleaseMemObject(qs)); qs = nullptr; }
+        if (sc != nullptr) { CL_CHECK(clReleaseMemObject(sc)); sc = nullptr; }
+        if (d != nullptr) { CL_CHECK(clReleaseMemObject(d)); d = nullptr; }
+        size_qs = size_sc = size_d = 0;
+    }
+};
+
+struct ggml_tensor_extra_cl_iq2_s {
+    bool noshuffle = false;
+    cl_mem qs = nullptr; // grid index low bits
+    cl_mem sg = nullptr; // sign bits
+    cl_mem qh = nullptr; // grid index high bits
+    cl_mem sc = nullptr; // packed scales
+    cl_mem d = nullptr; // super-block scales
+
+    size_t size_qs = 0, size_sg = 0, size_qh = 0, size_sc = 0, size_d = 0;
+
+    ~ggml_tensor_extra_cl_iq2_s() { reset(); }
+
+    void reset() {
+        noshuffle = false;
+        if (qs != nullptr) { CL_CHECK(clReleaseMemObject(qs)); qs = nullptr; }
+        if (sg != nullptr) { CL_CHECK(clReleaseMemObject(sg)); sg = nullptr; }
+        if (qh != nullptr) { CL_CHECK(clReleaseMemObject(qh)); qh = nullptr; }
+        if (sc != nullptr) { CL_CHECK(clReleaseMemObject(sc)); sc = nullptr; }
+        if (d != nullptr) { CL_CHECK(clReleaseMemObject(d)); d = nullptr; }
+        size_qs = size_sg = size_qh = size_sc = size_d = 0;
+    }
+};
+
+struct ggml_tensor_extra_cl_q2_0 {
+    bool noshuffle = false;
+    cl_mem qs = nullptr;
+    cl_mem d = nullptr;
+
+    size_t size_qs = 0, size_d = 0;
+
+    ~ggml_tensor_extra_cl_q2_0() { reset(); }
+
+    void reset() {
+        noshuffle = false;
+        if (qs != nullptr) { CL_CHECK(clReleaseMemObject(qs)); qs = nullptr; }
+        if (d != nullptr) { CL_CHECK(clReleaseMemObject(d)); d = nullptr; }
+        size_qs = size_d = 0;
+    }
+};
+
 struct ggml_tensor_extra_cl_q6_K {
     // Lower 4 bits of quantized weights.
     cl_mem ql = nullptr;
@@ -1735,22 +1831,46 @@ struct ggml_backend_opencl_buffer_context {
         for (ggml_tensor_extra_cl_q4_K * e : temp_tensor_extras_q4_K_in_use) {
             delete e;
         }
-        for (ggml_tensor_extra_cl_q2_K * e : temp_tensor_extras_q2_K) {
+        for (ggml_tensor_extra_cl_q6_K * e : temp_tensor_extras_q6_K) {
             delete e;
         }
-        for (ggml_tensor_extra_cl_q2_K * e : temp_tensor_extras_q2_K_in_use) {
+        for (ggml_tensor_extra_cl_q2_K * e : temp_tensor_extras_q2_K) {
             delete e;
         }
         for (ggml_tensor_extra_cl_q3_K * e : temp_tensor_extras_q3_K) {
             delete e;
         }
-        for (ggml_tensor_extra_cl_q3_K * e : temp_tensor_extras_q3_K_in_use) {
+        for (ggml_tensor_extra_cl_iq2_s * e : temp_tensor_extras_iq2_s) {
             delete e;
         }
-        for (ggml_tensor_extra_cl_q6_K * e : temp_tensor_extras_q6_K) {
+        for (ggml_tensor_extra_cl_iq2_xs * e : temp_tensor_extras_iq2_xs) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_iq2_xxs * e : temp_tensor_extras_iq2_xxs) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_q2_0 * e : temp_tensor_extras_q2_0) {
             delete e;
         }
         for (ggml_tensor_extra_cl_q6_K * e : temp_tensor_extras_q6_K_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_q2_K * e : temp_tensor_extras_q2_K_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_q3_K * e : temp_tensor_extras_q3_K_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_iq2_s * e : temp_tensor_extras_iq2_s_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_iq2_xs * e : temp_tensor_extras_iq2_xs_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_iq2_xxs * e : temp_tensor_extras_iq2_xxs_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_q2_0 * e : temp_tensor_extras_q2_0_in_use) {
             delete e;
         }
         for (ggml_tensor_extra_cl_q5_K * e : temp_tensor_extras_q5_K) {
@@ -1956,6 +2076,66 @@ struct ggml_backend_opencl_buffer_context {
         return extra;
     }
 
+    ggml_tensor_extra_cl_iq2_s * ggml_opencl_alloc_temp_tensor_extra_iq2_s() {
+        ggml_tensor_extra_cl_iq2_s * extra;
+        if (temp_tensor_extras_iq2_s.empty()) {
+            extra = new ggml_tensor_extra_cl_iq2_s();
+        } else {
+            extra = temp_tensor_extras_iq2_s.back();
+            temp_tensor_extras_iq2_s.pop_back();
+        }
+
+        temp_tensor_extras_iq2_s_in_use.push_back(extra);
+
+        extra->reset();
+        return extra;
+    }
+
+    ggml_tensor_extra_cl_iq2_xs * ggml_opencl_alloc_temp_tensor_extra_iq2_xs() {
+        ggml_tensor_extra_cl_iq2_xs * extra;
+        if (temp_tensor_extras_iq2_xs.empty()) {
+            extra = new ggml_tensor_extra_cl_iq2_xs();
+        } else {
+            extra = temp_tensor_extras_iq2_xs.back();
+            temp_tensor_extras_iq2_xs.pop_back();
+        }
+
+        temp_tensor_extras_iq2_xs_in_use.push_back(extra);
+
+        extra->reset();
+        return extra;
+    }
+
+    ggml_tensor_extra_cl_iq2_xxs * ggml_opencl_alloc_temp_tensor_extra_iq2_xxs() {
+        ggml_tensor_extra_cl_iq2_xxs * extra;
+        if (temp_tensor_extras_iq2_xxs.empty()) {
+            extra = new ggml_tensor_extra_cl_iq2_xxs();
+        } else {
+            extra = temp_tensor_extras_iq2_xxs.back();
+            temp_tensor_extras_iq2_xxs.pop_back();
+        }
+
+        temp_tensor_extras_iq2_xxs_in_use.push_back(extra);
+
+        extra->reset();
+        return extra;
+    }
+
+    ggml_tensor_extra_cl_q2_0 * ggml_opencl_alloc_temp_tensor_extra_q2_0() {
+        ggml_tensor_extra_cl_q2_0 * extra;
+        if (temp_tensor_extras_q2_0.empty()) {
+            extra = new ggml_tensor_extra_cl_q2_0();
+        } else {
+            extra = temp_tensor_extras_q2_0.back();
+            temp_tensor_extras_q2_0.pop_back();
+        }
+
+        temp_tensor_extras_q2_0_in_use.push_back(extra);
+
+        extra->reset();
+        return extra;
+    }
+
     ggml_tensor_extra_cl_q6_K * ggml_opencl_alloc_temp_tensor_extra_q6_K() {
         ggml_tensor_extra_cl_q6_K * extra;
         if (temp_tensor_extras_q6_K.empty()) {
@@ -2027,6 +2207,11 @@ struct ggml_backend_opencl_buffer_context {
         }
         temp_tensor_extras_q5_K_in_use.clear();
 
+        for (ggml_tensor_extra_cl_q6_K * e : temp_tensor_extras_q6_K_in_use) {
+            temp_tensor_extras_q6_K.push_back(e);
+        }
+        temp_tensor_extras_q6_K_in_use.clear();
+
         for (ggml_tensor_extra_cl_q2_K * e : temp_tensor_extras_q2_K_in_use) {
             temp_tensor_extras_q2_K.push_back(e);
         }
@@ -2037,10 +2222,25 @@ struct ggml_backend_opencl_buffer_context {
         }
         temp_tensor_extras_q3_K_in_use.clear();
 
-        for (ggml_tensor_extra_cl_q6_K * e : temp_tensor_extras_q6_K_in_use) {
-            temp_tensor_extras_q6_K.push_back(e);
+        for (ggml_tensor_extra_cl_iq2_s * e : temp_tensor_extras_iq2_s_in_use) {
+            temp_tensor_extras_iq2_s.push_back(e);
         }
-        temp_tensor_extras_q6_K_in_use.clear();
+        temp_tensor_extras_iq2_s_in_use.clear();
+
+        for (ggml_tensor_extra_cl_iq2_xs * e : temp_tensor_extras_iq2_xs_in_use) {
+            temp_tensor_extras_iq2_xs.push_back(e);
+        }
+        temp_tensor_extras_iq2_xs_in_use.clear();
+
+        for (ggml_tensor_extra_cl_iq2_xxs * e : temp_tensor_extras_iq2_xxs_in_use) {
+            temp_tensor_extras_iq2_xxs.push_back(e);
+        }
+        temp_tensor_extras_iq2_xxs_in_use.clear();
+
+        for (ggml_tensor_extra_cl_q2_0 * e : temp_tensor_extras_q2_0_in_use) {
+            temp_tensor_extras_q2_0.push_back(e);
+        }
+        temp_tensor_extras_q2_0_in_use.clear();
 
         q8_0_soa_tensors.clear();
         q4_0_soa_tensors.clear();
@@ -2074,9 +2274,17 @@ struct ggml_backend_opencl_buffer_context {
     std::vector<ggml_tensor_extra_cl_q5_K *> temp_tensor_extras_q5_K;
     std::vector<ggml_tensor_extra_cl_q5_K *> temp_tensor_extras_q5_K_in_use;
     std::vector<ggml_tensor_extra_cl_q2_K *> temp_tensor_extras_q2_K;
-    std::vector<ggml_tensor_extra_cl_q2_K *> temp_tensor_extras_q2_K_in_use;
     std::vector<ggml_tensor_extra_cl_q3_K *> temp_tensor_extras_q3_K;
+    std::vector<ggml_tensor_extra_cl_iq2_s *> temp_tensor_extras_iq2_s;
+    std::vector<ggml_tensor_extra_cl_iq2_xs *> temp_tensor_extras_iq2_xs;
+    std::vector<ggml_tensor_extra_cl_iq2_xxs *> temp_tensor_extras_iq2_xxs;
+    std::vector<ggml_tensor_extra_cl_q2_K *> temp_tensor_extras_q2_K_in_use;
     std::vector<ggml_tensor_extra_cl_q3_K *> temp_tensor_extras_q3_K_in_use;
+    std::vector<ggml_tensor_extra_cl_iq2_s *> temp_tensor_extras_iq2_s_in_use;
+    std::vector<ggml_tensor_extra_cl_iq2_xs *> temp_tensor_extras_iq2_xs_in_use;
+    std::vector<ggml_tensor_extra_cl_iq2_xxs *> temp_tensor_extras_iq2_xxs_in_use;
+    std::vector<ggml_tensor_extra_cl_q2_0 *> temp_tensor_extras_q2_0;
+    std::vector<ggml_tensor_extra_cl_q2_0 *> temp_tensor_extras_q2_0_in_use;
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K;
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K_in_use;
 
@@ -2107,7 +2315,6 @@ struct ggml_backend_opencl_buffer_context {
     std::string name;
 };
 
-
 std::string read_file(const std::string & path);
 cl_program build_program_from_source_ex(
         cl_context ctx, cl_device_id dev, const char * program_buffer,
@@ -2132,7 +2339,8 @@ void transpose_2d_as_8b(ggml_backend_opencl_context * backend_ctx, cl_mem src, c
                         size_t size, cl_int stride, cl_int rows,
                         bool blocking = true, bool rows_soa = false);
 void transpose_2d_as_16b(ggml_backend_opencl_context * backend_ctx, cl_mem src, cl_mem dst,
-                         size_t size, cl_int stride, cl_int rows, bool blocking = true);
+                         size_t size, cl_int stride, cl_int rows,
+                         bool blocking = true, bool auto_local = false);
 void transpose_2d_as_32b(ggml_backend_opencl_context * backend_ctx, cl_mem src, cl_mem dst,
                          size_t size, cl_int stride, cl_int rows,
                          bool blocking = true, bool auto_local = false);
@@ -2143,6 +2351,10 @@ bool use_q6_k_bin_kernels(const ggml_backend_opencl_context * backend_ctx, const
 bool use_adreno_kernels(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool ggml_cl_q2_k_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool ggml_cl_q3_k_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
+bool ggml_cl_q2_0_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
+bool ggml_cl_iq2_s_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
+bool ggml_cl_iq2_xs_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
+bool ggml_cl_iq2_xxs_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool adreno_e17_compiler_quirks(const ggml_backend_opencl_context * backend_ctx);
 bool use_adreno_moe_kernels(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool enable_adreno_trans_weight(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
