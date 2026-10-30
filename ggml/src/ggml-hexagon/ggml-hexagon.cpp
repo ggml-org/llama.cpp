@@ -22,6 +22,7 @@
 #include <regex>
 #include <queue>
 #include <deque>
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
@@ -66,6 +67,50 @@
 using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
+
+// Directory of the HTP skel as an ASCII path with a trailing '\', or empty if it cannot be resolved.
+// The skel is next to this module or in ../lib.
+static std::string htp_skel_dir(unsigned int arch) {
+#ifdef _WIN32
+    namespace fs = std::filesystem;
+
+    HMODULE hm = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR) &htp_skel_dir, &hm)) {
+        return {};
+    }
+
+    std::wstring buf(MAX_PATH, L'\0');
+    DWORD        n = GetModuleFileNameW(hm, &buf[0], (DWORD) buf.size());
+    if (n == 0 || n >= buf.size()) {
+        return {};
+    }
+    buf.resize(n);
+
+    const fs::path mod_dir = fs::path(buf).parent_path();
+    const fs::path skel    = "libggml-htp-v" + std::to_string(arch) + ".so";
+
+    auto is_ascii = [](const std::wstring & s) {
+        return std::all_of(s.begin(), s.end(), [](wchar_t c) { return c < 0x80; });
+    };
+
+    for (const fs::path & d : { mod_dir, mod_dir / ".." / "lib" }) {
+        std::error_code ec;
+        if (!fs::is_regular_file(d / skel, ec)) {
+            continue;
+        }
+
+        const std::wstring dir = d.lexically_normal().wstring();
+        if (!is_ascii(dir)) {
+            return {};
+        }
+        return std::string(dir.begin(), dir.end()) + "\\";
+    }
+#else
+    GGML_UNUSED(arch);
+#endif
+    return {};
+}
 
 #define GGML_HEXAGON_MAX_SESSIONS          16
 
@@ -2114,10 +2159,12 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
         }
     }
 
-    char session_uri[256];
-    {
-        char htp_uri[256];
-        snprintf(htp_uri, sizeof(htp_uri), "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
+    // Open a session for the skel at `prefix` ("file:///" or "file:///<dir>")
+    auto open_session = [&](const std::string & prefix, std::string & uri_out) -> int {
+        char session_uri[1024];
+        char htp_uri[512];
+        snprintf(htp_uri, sizeof(htp_uri), "%slibggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0",
+                 prefix.c_str(), opt_arch);
 
         struct remote_rpc_get_uri u = {};
         u.session_id      = this->session_id;
@@ -2136,12 +2183,29 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
             GGML_LOG_WARN("ggml-hex: %s failed to get URI (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n",
                           this->c_name(), phys_idx, virt_idx, err, session_uri);
         }
-    }
+
+        uri_out = session_uri;
+        return htp_iface_open(session_uri, &this->handle);
+    };
 
     // Open session
-    int err = htp_iface_open(session_uri, &this->handle);
+    // Prefer the absolute skel path: a bare name depends on the library search path of the process
+    const std::string skel_dir = htp_skel_dir(opt_arch);
+
+    std::string session_uri;
+    int         err = AEE_EFAILED;
+    if (!skel_dir.empty()) {
+        err = open_session("file:///" + skel_dir, session_uri);
+        if (err != AEE_SUCCESS) {
+            GGML_LOG_WARN("ggml-hex: %s failed to open session : uri %s error 0x%x. Retrying with bare skel name\n",
+                          this->c_name(), session_uri.c_str(), err);
+        }
+    }
     if (err != AEE_SUCCESS) {
-        GGML_LOG_ERROR("ggml-hex: %s failed to open session : uri %s error 0x%x\n", this->c_name(), session_uri, err);
+        err = open_session("file:///", session_uri);
+    }
+    if (err != AEE_SUCCESS) {
+        GGML_LOG_ERROR("ggml-hex: %s failed to open session : uri %s error 0x%x\n", this->c_name(), session_uri.c_str(), err);
         throw std::runtime_error("ggml-hex: failed to open session (see log for details)");
     }
 
@@ -2191,7 +2255,7 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
     }
 
     GGML_LOG_INFO("ggml-hex: %s new session : session-id %d domain-id %d uri %s handle 0x%lx\n", this->c_name(),
-                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
+                  this->session_id, this->domain_id, session_uri.c_str(), (unsigned long) this->handle);
 
     const size_t req_q_size = (sizeof(htp_opbatch_req) * opt_opqueue * 2) + 1024;
     const size_t rsp_q_size = (sizeof(htp_opbatch_rsp) * opt_opqueue * 2) + 1024;
