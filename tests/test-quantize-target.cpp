@@ -227,6 +227,12 @@ static size_t count_type_changes(const quant_run & a, const quant_run & b) {
     return n;
 }
 
+// the type name of a tensor in a run's output, or "none" if the output has no such tensor
+static std::string type_name_of(const quant_run & run, const std::string & name) {
+    const auto it = run.types.find(name);
+    return it == run.types.end() ? "none" : ggml_type_name(it->second);
+}
+
 // tensor quantization mix rows
 static std::vector<std::string> mix_rows(const quant_run & run) {
     std::vector<std::string> rows;
@@ -802,6 +808,68 @@ static void test_signal_handlers(testing & t, const fixture & f) {
 #endif
 }
 
+static void test_type_flags(testing & t, const fixture & f) {
+    t.assert_true("without the flags, neither tensor has its flag's type", type_name_of(f.base, "token_embd.weight") != "q8_0" && type_name_of(f.base, "output.weight") != "q6_K");
+
+    // a copy of the checkpoint, so that nothing is scored
+    const std::string fname = sibling_path(f, "flags.bpw_state");
+    write_file(fname, read_file(f.fname_state));
+    llama_model_quantize_params params = base_params(f);
+    params.state_file           = fname.c_str();
+    params.token_embedding_type = GGML_TYPE_Q8_0;
+    params.output_tensor_type   = GGML_TYPE_Q6_K;
+    const quant_run flags = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    // the same two tensors pinned through --tensor-type
+    const llama_model_tensor_override same[] = {
+        { "^token_embd\\.weight$", GGML_TYPE_Q8_0 }, { "^output\\.weight$", GGML_TYPE_Q6_K }, { nullptr, GGML_TYPE_COUNT },
+    };
+    llama_model_quantize_params patterns = base_params(f);
+    patterns.state_file   = fname.c_str();
+    patterns.tt_overrides = same;
+    const quant_run by_pattern = quantize(f.fname_model, f.fname_out, f.im, patterns);
+
+    // --tensor-type names both tensors too, at another type
+    const llama_model_tensor_override other[] = {
+        { "^token_embd\\.weight$", GGML_TYPE_Q5_0 }, { "^output\\.weight$", GGML_TYPE_Q5_0 }, { nullptr, GGML_TYPE_COUNT },
+    };
+    params.tt_overrides = other;
+    const quant_run named = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    // the flags' types barred
+    constexpr ggml_type exclude[] = { GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_COUNT };
+    params.tt_overrides   = nullptr;
+    params.target_exclude = exclude;
+    const quant_run barred = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    // only --output-tensor-type: the model is not tied, so the token embedding is not pinned
+    params.token_embedding_type = GGML_TYPE_COUNT;
+    params.target_exclude       = nullptr;
+    const quant_run output_only = quantize(f.fname_model, f.fname_out, f.im, params);
+
+    const double bpw = 8.0 * flags.n_bytes / flags.n_elements;
+    t.log("realised bpw with the flags " + std::to_string(bpw));
+    t.assert_equal("quantize succeeds", 0u, flags.rc);
+    t.assert_equal("--token-embedding-type sets the token embedding", std::string("q8_0"), type_name_of(flags, "token_embd.weight"));
+    t.assert_equal("--output-tensor-type sets the output", std::string("q6_K"), type_name_of(flags, "output.weight"));
+    t.assert_equal("flags pin two tensors", (size_t) 2, count_matches(flags.log, "(pinned)"));
+    t.assert_true("bpw does not exceed the target", bpw <= target_bpw);
+    t.assert_true("bpw is within 0.05 of the target", bpw > target_bpw - 0.05);
+    t.assert_equal("quantize succeeds", 0u, by_pattern.rc);
+    t.assert_equal("flags and same --tensor-type pins, mix rows that differ", (size_t) 0, count_row_changes(by_pattern, flags));
+    t.assert_equal("quantize succeeds", 0u, named.rc);
+    t.assert_equal("--token-embedding-type beats --tensor-type", std::string("q8_0"), type_name_of(named, "token_embd.weight"));
+    t.assert_equal("--output-tensor-type beats --tensor-type", std::string("q6_K"), type_name_of(named, "output.weight"));
+    t.assert_equal("quantize succeeds", 0u, barred.rc);
+    t.assert_equal("excluded --token-embedding-type is reported", (size_t) 1, count_matches(barred.log, "--token-embedding-type pins type q8_0 which is ignored by --target-exclude, keeping the pinned type"));
+    t.assert_equal("excluded --output-tensor-type is reported", (size_t) 1, count_matches(barred.log, "--output-tensor-type pins type q6_K which is ignored by --target-exclude, keeping the pinned type"));
+    t.assert_equal("excluded --token-embedding-type keeps its type", std::string("q8_0"), type_name_of(barred, "token_embd.weight"));
+    t.assert_equal("excluded --output-tensor-type keeps its type", std::string("q6_K"), type_name_of(barred, "output.weight"));
+    t.assert_equal("quantize succeeds", 0u, output_only.rc);
+    t.assert_equal("--output-tensor-type alone sets the output", std::string("q6_K"), type_name_of(output_only, "output.weight"));
+    t.assert_equal("--output-tensor-type alone pins one tensor", (size_t) 1, count_matches(output_only.log, "(pinned)"));
+}
+
 static int run_tests(testing & t, const std::filesystem::path & dir) {
     fixture f;
     f.fname_model = (dir / "model-f32.gguf").string();
@@ -844,6 +912,7 @@ static int run_tests(testing & t, const std::filesystem::path & dir) {
     t.test("abort_callback",       [&](testing & t) { test_abort_callback(t, f); });
     t.test("interrupt_first_call", [&](testing & t) { test_interrupt_first_call(t, f); });
     t.test("signal_handlers",      [&](testing & t) { test_signal_handlers(t, f); });
+    t.test("type_flags",           [&](testing & t) { test_type_flags(t, f); });
 
     return t.summary();
 }
