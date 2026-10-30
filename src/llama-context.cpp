@@ -403,6 +403,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                 done.assign((size_t) ncopy, 0);
 
                 auto publish_ready = [&](int ci) {
+                    std::atomic_thread_fence(std::memory_order_seq_cst);
                     if (moe_doorbell_dma_enabled() && pl->pad0 && pl->copy_slot[ci] >= 0) {
                         if (!moe_doorbell_dma_submit(il, ci)) GGML_ABORT("demand DMA submission failed");
                         if (io_diag) {
@@ -1397,6 +1398,17 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud);
 // Non-uniform "Arrival Slack" slot allocation (Pillar 2)
 static int g_moe_slots_total = 0; // 0 = fixed table; else scaled total
 static inline int moe_fixed_slots(int il, int n_layer) {
+    static const bool profiled = [] {
+        const char * env = getenv("MOE_POOL_PROFILE");
+        return !env || atoi(env) != 0;
+    }();
+    static const int profiled_slots[48] = {
+        220, 220, 220, 220, 220, 120, 136, 120, 80, 80, 80, 80,
+        128, 80, 80, 80, 80, 88, 120, 80, 80, 96, 136, 80,
+        80, 80, 96, 80, 112, 80, 80, 80, 80, 80, 112, 80,
+        80, 88, 128, 80, 80, 80, 88, 80, 80, 80, 80, 88,
+    };
+    if (profiled && n_layer == 48 && il >= 0 && il < n_layer) return profiled_slots[il];
     if (il >= 0 && il < 5) return 220;
     if (il >= 5 && il < 43) return 92;
     if (il >= 43 && il < n_layer) return 80;
@@ -1925,12 +1937,15 @@ llama_context::llama_context(
                         moe.exp_rank.assign((size_t) n_layer * n_exp, 0);
                         moe.step_sel.assign((size_t) n_layer * n_used, -1);
                         moe.step_topk.assign((size_t) n_layer, nullptr);
-                        // staging for demand plus lookahead: 2 layers of layer-ahead
-                        // plus token-ahead, all potentially unclaimed (65% predictor
-                        // miss), plus margin so demand never starves
                         const char * cm = getenv("MOE_CACHE_MIB");
                         const size_t cache_bytes = cm ? (size_t) atoi(cm) * 1048576u : 0u;
-                        if (!pager.reserve_staging_split(384, 64)) {
+                        const char * doorbell_env = getenv("MOE_DOORBELL");
+                        const char * predictor_env = getenv("MOE_PRED");
+                        const bool demand_only = pager.pack_mode() && (!doorbell_env || atoi(doorbell_env) != 0) && (!predictor_env || atoi(predictor_env) == 0);
+                        const char * stage_env = getenv("MOE_PAGER_STAGES");
+                        const int pager_stages = stage_env && atoi(stage_env) > 0 ? std::max(64, std::min(384, atoi(stage_env))) : (demand_only ? 64 : 384);
+                        LLAMA_LOG_INFO("%s: moe pager staging %d slots (64 demand)\n", __func__, pager_stages);
+                        if (!pager.reserve_staging_split(pager_stages, 64)) {
                             LLAMA_LOG_ERROR("%s: staging reserve failed -> moe_direct_io OFF\n", __func__);
                         } else if (cache_bytes && !pager.init_cache(cache_bytes)) {
                             LLAMA_LOG_WARN("%s: Tier 1 host cache unavailable (%zu MiB asked)\n",
@@ -1985,7 +2000,7 @@ llama_context::llama_context(
                                 per = std::max(per, blobmax);
                                 per = (per + 4095) & ~(size_t) 4095;
                                 const char * he = getenv("MOE_HOST_SLOTS");
-                                int hslots = (he && atoi(he) > 0) ? atoi(he) : 80;
+                                int hslots = (he && atoi(he) > 0) ? atoi(he) : (demand_only ? 8 : 80);
                                 moe.host_slot_bytes = per;
                                 moe.host_odirect = false;
                                 if (cudaHostAlloc((void **) &moe.host_pool,

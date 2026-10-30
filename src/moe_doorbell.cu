@@ -1,4 +1,5 @@
 #include "moe_doorbell.h"
+#include <atomic>
 #include "ggml-cuda.h"
 
 extern "C" {
@@ -493,8 +494,10 @@ extern "C" bool moe_doorbell_stage_init(size_t stride, int n_slots) {
     if (g_stage_host) return true;
     if (stride == 0 || n_slots <= 0 || (size_t) n_slots > SIZE_MAX / stride) return false;
     const size_t bytes = stride * (size_t) n_slots;
-    cudaError_t err = cudaHostAlloc((void **) &g_stage_host, bytes,
-            cudaHostAllocMapped | cudaHostAllocPortable);
+    const char * wc_env = getenv("MOE_STAGE_WC");
+    const bool write_combined = !wc_env || atoi(wc_env) != 0;
+    const unsigned int flags = cudaHostAllocMapped | cudaHostAllocPortable | (write_combined ? cudaHostAllocWriteCombined : 0);
+    cudaError_t err = cudaHostAlloc((void **) &g_stage_host, bytes, flags);
     if (err != cudaSuccess) {
         fprintf(stderr, "moe_doorbell_stage_init: cudaHostAlloc(%zu) failed: %s (%d)\n",
                 bytes, cudaGetErrorString(err), (int) err);
@@ -528,6 +531,7 @@ const uint64_t * moe_doorbell_lru_host(int il) {
 }
 
 bool moe_doorbell_dma_submit(int il, int copy_index) {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     if (!g_dma_done || il < 0 || il >= g_n_layer || copy_index < 0 ||
         copy_index >= g_stage_cap || copy_index >= MOE_DOORBELL_PLAN_MAX) return false;
     DoorbellPlan & plan = g_plans_host[il];
