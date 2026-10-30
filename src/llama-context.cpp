@@ -271,6 +271,16 @@ static void start_doorbell_worker(llama_context * ctx) {
                 for (int s = 0; s < s_pl; ++s) {
                     old_keys[(size_t) s] = ctx->moe.slot_key[(size_t) base + s];
                 }
+                if (const uint64_t * touch = moe_doorbell_lru_host(il)) {
+                    for (int slot = 0; slot < s_pl; ++slot) {
+                        const int expert = old_keys[(size_t) slot] - il * n_exp;
+                        if (expert < 0 || expert >= n_exp) {
+                            ctx->moe.lru.last[(size_t) base + slot] = 0;
+                        } else if (touch[expert] != 0) {
+                            ctx->moe.lru.last[(size_t) base + slot] = touch[expert] + (uint64_t) n_exp;
+                        }
+                    }
+                }
 
                 sel.resize((size_t) n);
                 misses.clear();

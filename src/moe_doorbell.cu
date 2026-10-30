@@ -61,6 +61,10 @@ static cudaStream_t g_stream_h2d = nullptr;
 static uint32_t * g_dma_done = nullptr;
 static uint32_t * g_dma_one = nullptr;
 static int g_device = 0;
+static int g_n_expert = 0;
+static uint64_t * g_lru_host = nullptr;
+static uint64_t * g_lru_dev = nullptr;
+static uint64_t * g_lru_epoch = nullptr;
 
 __device__ __forceinline__ uint32_t pci_ld_u32(const volatile uint32_t * addr) {
     uint32_t val;
@@ -133,7 +137,9 @@ __global__ void moe_resolve_slots_kernel(
     int op,
     bool count_enabled,
     uint32_t * dma_done,
-    bool use_dma
+    bool use_dma,
+    uint64_t * lru_touch,
+    uint64_t * lru_epoch
 ) {
     const int tid = (int) (blockIdx.x * blockDim.x + threadIdx.x);
     LayerDoorbell & db = doorbells[layer];
@@ -165,6 +171,20 @@ __global__ void moe_resolve_slots_kernel(
         }
     }
     __syncthreads();
+
+    if (tid == 0 && lru_touch && op != GGML_OP_MOE_SLOT_RESOLVE_WAIT) {
+        const uint64_t epoch = ++lru_epoch[layer];
+        for (int selected = 0; selected < total; ++selected) {
+            const int selected_rank = selected % nk;
+            const int selected_token = selected / nk;
+            const int32_t expert = *(const int32_t *) (topk + (size_t) selected_token * topk_nb1 + (size_t) selected_rank * topk_nb0);
+            if (expert >= 0 && expert < n_exp) {
+                uint64_t * address = lru_touch + (size_t) layer * n_exp + expert;
+                asm volatile("st.sys.relaxed.u64 [%0], %1;" :: "l"(address), "l"(epoch));
+            }
+        }
+        __threadfence_system();
+    }
 
     if (tid == 0 && op != GGML_OP_MOE_SLOT_RESOLVE_WAIT) pl.pad0 = use_dma ? 1 : 0;
     if (tid == 0 && count_enabled && op != GGML_OP_MOE_SLOT_RESOLVE_WAIT) {
@@ -390,6 +410,7 @@ void moe_doorbell_resolve_launch(
     (void) full; (void) fnk; (void) fnt; (void) full_nb1; (void) look; (void) lnk;
 
     if (!g_active || !g_doorbells_dev || !g_plans_dev) return;
+    if (g_lru_dev) GGML_ASSERT(n_exp == g_n_expert);
     const int64_t total64 = nk * nt;
     if (total64 <= 0) return;
 
@@ -418,7 +439,7 @@ void moe_doorbell_resolve_launch(
             il, (const char *) topk, (char *) out, const_cast<int32_t *>(table),
             g_doorbells_dev, g_plans_dev, g_prekick_dev,
             (int) nk, (int) nt, topk_nb0, topk_nb1, out_nb0, out_nb1,
-            n_exp, sentinel, total, op, g_count_enabled, g_dma_done, use_dma
+            n_exp, sentinel, total, op, g_count_enabled, g_dma_done, use_dma, g_lru_dev, g_lru_epoch
         );
     } else {
         const int total = (int) total64;
@@ -502,6 +523,10 @@ extern "C" int moe_doorbell_stage_cap() { return g_stage_cap; }
 
 bool moe_doorbell_dma_enabled() { return g_dma_done != nullptr; }
 
+const uint64_t * moe_doorbell_lru_host(int il) {
+    return g_lru_host && il >= 0 && il < g_n_layer ? g_lru_host + (size_t) il * g_n_expert : nullptr;
+}
+
 bool moe_doorbell_dma_submit(int il, int copy_index) {
     if (!g_dma_done || il < 0 || il >= g_n_layer || copy_index < 0 ||
         copy_index >= g_stage_cap || copy_index >= MOE_DOORBELL_PLAN_MAX) return false;
@@ -527,10 +552,11 @@ bool moe_doorbell_dma_submit(int il, int copy_index) {
 }
 
 bool moe_doorbell_init(int n_layer, int n_expert, int s_per_layer) {
-    (void) n_expert; (void) s_per_layer;
+    (void) s_per_layer;
     if (g_active) return true;
-    if (n_layer <= 0) return false;
+    if (n_layer <= 0 || n_expert <= 0 || (size_t) n_layer > SIZE_MAX / sizeof(uint64_t) / (size_t) n_expert) return false;
     g_n_layer = n_layer;
+    g_n_expert = n_expert;
     const char * count_env = getenv("MOE_IO_DIAG");
     g_count_enabled = count_env && atoi(count_env) != 0;
     g_logged_selected = 0;
@@ -595,6 +621,18 @@ bool moe_doorbell_init(int n_layer, int n_expert, int s_per_layer) {
     }
     memset(g_prekick_host, 0, sizeof(DoorbellPrekick) * (size_t) n_layer);
 
+    const char * lru_env = getenv("MOE_GPU_LRU");
+    if (!lru_env || atoi(lru_env) != 0) {
+        const size_t touch_bytes = (size_t) n_layer * n_expert * sizeof(uint64_t);
+        err = cudaHostAlloc((void **) &g_lru_host, touch_bytes, cudaHostAllocMapped | cudaHostAllocPortable);
+        if (err == cudaSuccess) err = cudaHostGetDevicePointer((void **) &g_lru_dev, g_lru_host, 0);
+        if (err == cudaSuccess) err = cudaMalloc((void **) &g_lru_epoch, (size_t) n_layer * sizeof(uint64_t));
+        if (err == cudaSuccess) err = cudaMemset(g_lru_epoch, 0, (size_t) n_layer * sizeof(uint64_t));
+        if (err != cudaSuccess) GGML_ABORT("doorbell LRU allocation failed: %s", cudaGetErrorString(err));
+        memset(g_lru_host, 0, touch_bytes);
+        fprintf(stderr, "[moe_gpu_lru] tracking all expert selections, %zu bytes\n", touch_bytes);
+    }
+
     ggml_cuda_moe_slot_resolve_register(moe_doorbell_resolve_launch);
     g_active = true;
     moe_doorbell_dma_init();
@@ -612,6 +650,10 @@ void moe_doorbell_free() {
     if (g_dma_done) cudaFree(g_dma_done);
     if (g_dma_one) cudaFreeHost(g_dma_one);
     g_dma_done = g_dma_one = nullptr;
+    if (g_lru_epoch) cudaFree(g_lru_epoch);
+    if (g_lru_host) cudaFreeHost(g_lru_host);
+    g_lru_host = g_lru_dev = g_lru_epoch = nullptr;
+    g_n_expert = 0;
     if (g_stage_host) {
         cudaFreeHost(g_stage_host);
         g_stage_host = nullptr;
