@@ -123,7 +123,7 @@
 		type="button"
 	>
 		{#if copied}
-			<Check class="size-icon-sm text-green-500" />
+			<Check class="size-icon-sm text-fg-success" />
 		{:else}
 			<Copy class="size-icon-sm" />
 		{/if}
