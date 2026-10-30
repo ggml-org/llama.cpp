@@ -1,9 +1,12 @@
-import { Markdown, Meta, Source } from '@storybook/addon-docs/blocks';
+import { Markdown, Meta, Source, Unstyled } from '@storybook/addon-docs/blocks';
 import designMd from '../../DESIGN.md?raw';
 
 export const [, tokens, guidelines] = designMd.split(/^---$/m);
 
 <Meta title="Introduction/Design guidelines" />
+
+<Unstyled>
+<div className="ds-docs">
 
 # Design guidelines
 
@@ -16,3 +19,6 @@ Rendered from `tools/ui/DESIGN.md`. The implementation lives in `src/app.css`, a
 The machine-readable half of `tools/ui/DESIGN.md`, in the [DESIGN.md format](https://github.com/google-labs-code/design.md). Check it with `npx @google/design.md lint DESIGN.md`.
 
 <Source code={tokens.trim()} language="yaml" dark />
+
+</div>
+</Unstyled>

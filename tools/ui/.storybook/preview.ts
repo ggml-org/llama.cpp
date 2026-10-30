@@ -1,7 +1,12 @@
 import type { Preview } from '@storybook/sveltekit';
 import '../src/app.css';
+import './docs.css';
+import { applyColorScheme } from './color-scheme';
 import ModeWatcherDecorator from './decorators/ModeWatcherDecorator.svelte';
 import TooltipProviderDecorator from './decorators/TooltipProviderDecorator.svelte';
+
+applyColorScheme();
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyColorScheme);
 
 const preview: Preview = {
 	parameters: {
