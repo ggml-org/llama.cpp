@@ -168,6 +168,53 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
 #endif // !defined(GGML_USE_MUSA)
 }
 
+// The kernel versions without the GQA optimizations are also used for ALiBi, if there is no mask, or if the KV cache is not padded:
+bool ggml_cuda_fattn_ext_use_gqa_opt(
+        const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * mask, const float max_bias) {
+    bool use_gqa_opt = mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    for (const ggml_tensor * t : {Q, K, V, mask}) {
+        if (t == nullptr || ggml_is_quantized(t->type)) {
+            continue;
+        }
+        for (size_t i = 1; i < GGML_MAX_DIMS; ++i) {
+            if (t->nb[i] % 16 != 0) {
+                return false;
+            }
+        }
+    }
+    return use_gqa_opt;
+}
+
+// The two helpers below duplicate the inline predicates of switch_ncols1 verbatim so that get_alloc_size can predict its routing
+// without modifying upstream's function (the allocation must match the kernel actually chosen, or the f16 scratch region is sized
+// wrong). A mismatch is a sizing bug only for quantized-KV ops that qualify for the fused path, and the GGML_CUDA_FATTN_MMA_FUSED=2
+// routing pin in ggml_cuda_flash_attn_ext_mma_f16_case aborts on exactly that case. Keep these in sync with upstream's switch_ncols1.
+// Predicts whether switch_ncols1 routes to the sparse kernel at ncols1=1. Must be called with the same may_use_sparse guard as switch_ncols1:
+template <int DKQ, int DV, int ncols2>
+static bool ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile(const int cc, const ggml_tensor * dst) {
+    // a sparse variant at the full tile width gathers the union of its queries once, prefer it for large batches
+    constexpr bool has_wide_sparse = ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 64/ncols2, ncols2);
+    const ggml_tensor * Q = dst->src[0];
+    return !(has_wide_sparse && Q->ne[1] > 32/ncols2) && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, ncols2);
+}
+
+// Dense (non-sparse) ncols1 selection made from the same predicates as switch_ncols1:
+template <int DKQ>
+static int ggml_cuda_fattn_ext_mma_f16_get_ncols1(const int cc, const int ne11, const int ncols2) {
+    // for ncols2 > 8/16 the 8/ncols2, 16/ncols2 terms round to 0 and ne11 >= 1, i.e. those branches are skipped like in switch_ncols1
+    if (turing_mma_available(cc) && ne11 <= 8/ncols2) {
+        return 8/ncols2;
+    }
+    if (ne11 <= 16/ncols2) {
+        return 16/ncols2;
+    }
+    if (ne11 <= 32/ncols2 || (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_TURING) ||
+            (GGML_CUDA_CC_IS_AMD(cc) && DKQ > 256)) {
+        return 32/ncols2;
+    }
+    return 64/ncols2;
+}
+
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -755,6 +802,39 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_TILE;
 }
 
+// Predicts whether ggml_cuda_flash_attn_ext_mma_f16_case will use the fused quantized dequant path,
+// via the same selection helpers as the dispatch chain. Must agree with that function or the f16 scratch region will be sized wrong.
+static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_tensor * dst) {
+    if (ggml_cuda_fattn_mma_f16_fused_q_switch() == 0) {
+        return false;
+    }
+
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+
+    if (Q->ne[0] != 256 || V->ne[0] != 256) {
+        return false;
+    }
+
+    float max_bias = 0.0f;
+    memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+
+    const int gqa_ratio = Q->ne[2] / K->ne[2];
+    if (!ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, dst->src[3], max_bias) || gqa_ratio <= 4) {
+        return false; // switch_ncols2 doesn't pick ncols2 == 8
+    }
+
+    if (ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<256, 256, 8>(cc, dst)) {
+        return false; // the sparse kernel is selected instead, it has no fused dequant path
+    }
+
+    const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<256>(cc, Q->ne[1], 8);
+    const int nstages = ggml_cuda_fattn_mma_get_nstages(256, 256, ncols1, 8, cc);
+
+    return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, 256, 256, 8, nstages);
+}
+
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
     GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
 
@@ -776,11 +856,11 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
             need_f16_V = true;
             break;
         case BEST_FATTN_KERNEL_MMA_F16: {
-            // The fused q8_0 dequant path reads the raw cache, no f16 scratch needed:
+            // The fused quantized dequant path reads the raw cache, no f16 scratch needed:
             const int cc = ggml_cuda_info().devices[device].cc;
-            const bool fused_q8 = ggml_cuda_fattn_mma_f16_fused_q8_applies(cc, dst);
-            need_f16_K = !fused_q8;
-            need_f16_V = !fused_q8;
+            const bool fused_q = ggml_cuda_fattn_mma_f16_fused_q_applies(cc, dst);
+            need_f16_K = !fused_q;
+            need_f16_V = !fused_q;
         } break;
         case BEST_FATTN_KERNEL_VEC: {
             const bool f16_fallback = ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) == nullptr;
