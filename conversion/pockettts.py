@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable, TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -43,6 +44,86 @@ def _tensor_shapes(dir_model: Path) -> dict[str, tuple[int, ...]]:
         return {}
     with gguf.utility.SafetensorsLocal(dir_model / part_names[0]) as part:
         return {name: tuple(part[name].shape) for name in part.keys()}
+
+
+def _has_voice_encoder(dir_model: Path) -> bool:
+    # the checkpoints without voice cloning ship the mimi encoder zeroed out
+    part_names = ModelBase.get_model_part_names(dir_model, "model", ".safetensors")
+    with gguf.utility.SafetensorsLocal(dir_model / part_names[0]) as part:
+        nonzero = {bool(part[name].mmap_bytes().any()) for name in part.keys() if name.startswith("mimi.encoder")}
+    if len(nonzero) != 1:
+        raise ValueError(f"{dir_model}: the mimi encoder is partly zeroed out")
+    return nonzero.pop()
+
+
+def _load_safetensors(path: Path, prefixes: tuple[str, ...]) -> dict[str, Tensor]:
+    dtypes = {"F32": torch.float32, "BF16": torch.bfloat16, "I64": torch.int64}
+    with gguf.utility.SafetensorsLocal(path) as part:
+        return {name: torch.from_numpy(part[name].mmap_bytes()).view(dtypes[part[name].dtype]).reshape(part[name].shape)
+                for name in part.keys() if name.startswith(prefixes)}
+
+
+def _voice_prompt_embd(weights: dict[str, Tensor], kv0: Tensor, v1: Tensor,
+                       n_head: int, rope_theta: float) -> tuple[Tensor, float]:
+    # a voice prompt is bos_before_voice, then one frame speaker_proj @ latent per 80 ms of audio,
+    # the voice state only keeps its keys and values, this takes those of layer 0 [k/v, pos, n_embd] and the values of layer 1:
+    # - layer 0: v = Wv @ norm1(x) gives norm1(x), so each frame up to its scale (its mean is lost, no norm sees it)
+    # - layer 1: the values set the scale of each frame, found by a 1-D search
+    # returns the frames without the leading bos_before_voice, which is added in front of any voice prompt
+    w = {name: t.double() for name, t in weights.items()}
+    k0, v0, v1 = kv0[0].double(), kv0[1].double(), v1.double()
+    n_pos, n_embd = v0.shape
+    head_dim = n_embd // n_head
+
+    def p(il: int, name: str) -> Tensor:
+        return w[f"flow_lm.transformer.layers.{il}.{name}"]
+
+    def norm(x: Tensor, il: int, name: str) -> Tensor:
+        return F.layer_norm(x, (n_embd,), p(il, f"{name}.weight"), p(il, f"{name}.bias"), 1e-5)
+
+    wq, _, wv = p(0, "self_attn.in_proj.weight").chunk(3)
+    h = torch.linalg.solve(wv, v0.T).T                 # norm1(x)
+    z = (h - p(0, "norm1.bias")) / p(0, "norm1.weight")  # (x - mean(x)) / std(x)
+
+    bos = w["flow_lm.bos_before_voice"].reshape(-1)
+    bos_err = ((z[0] - (bos - bos.mean()) / bos.std(unbiased=False)).norm() / z[0].norm()).item()
+    if bos_err > 0.05:
+        raise ValueError(f"the voice state does not start with bos_before_voice (error {bos_err:.2e})")
+
+    # z[i] = (speaker_proj @ latent - mean) / std, the latent direction is the fit on [speaker_proj, 1]
+    proj = w["flow_lm.speaker_proj_weight"]
+    fit = torch.linalg.lstsq(torch.cat([proj, torch.ones(n_embd, 1, dtype=proj.dtype)], 1), z[1:].T).solution
+    frames = (proj @ fit[:-1]).T
+
+    # layer 0 attention output from the stored keys, rotated by adjacent pairs
+    angle = torch.arange(n_pos, dtype=torch.float64)[:, None, None] * \
+        rope_theta ** (-torch.arange(0, head_dim, 2, dtype=torch.float64) / head_dim)
+    q = (h @ wq.T).view(n_pos, n_head, head_dim // 2, 2)
+    q = torch.stack([q[..., 0] * angle.cos() - q[..., 1] * angle.sin(),
+                     q[..., 0] * angle.sin() + q[..., 1] * angle.cos()], -1)
+
+    def heads(t: Tensor) -> Tensor:
+        return t.reshape(n_pos, n_head, head_dim).transpose(0, 1)
+
+    attn = F.scaled_dot_product_attention(heads(q), heads(k0), heads(v0), is_causal=True)
+    attn = attn.transpose(0, 1).reshape(n_pos, n_embd)[1:] @ p(0, "self_attn.out_proj.weight").T
+
+    wv1 = p(1, "self_attn.in_proj.weight").chunk(3)[2]
+
+    def err(scale: Tensor) -> Tensor:  # relative error on the layer 1 values, per frame
+        x = scale[:, None] * frames + attn
+        x = x + F.gelu(norm(x, 0, "norm2") @ p(0, "linear1.weight").T) @ p(0, "linear2.weight").T
+        return (norm(x, 1, "norm1") @ wv1.T - v1[1:]).norm(dim=1) / v1[1:].norm(dim=1)
+
+    grid = torch.logspace(-3, 3, 49, dtype=torch.float64)
+    best = torch.stack([err(s.expand(n_pos - 1)) for s in grid]).argmin(0)
+    lo, hi = grid[(best - 1).clamp(min=0)], grid[(best + 1).clamp(max=len(grid) - 1)]
+    for _ in range(40):  # golden section search, all frames at once
+        m1, m2 = hi - 0.618 * (hi - lo), lo + 0.618 * (hi - lo)
+        left = err(m1) < err(m2)
+        lo, hi = torch.where(left, lo, m1), torch.where(left, m2, hi)
+    scale = (lo + hi) / 2
+    return scale[:, None] * frames, err(scale).max().item()
 
 
 @ModelBase.register_hparams_loader(lambda dir_model: "flow_lm.bos_emb" in _tensor_shapes(dir_model))
@@ -194,22 +275,28 @@ class PocketTTSMmprojModel(MmprojModel):
         (gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_V),
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # without voice cloning the voice-prompt encoder is left out, a reference wav is then rejected
+        self.has_audio_encoder = _has_voice_encoder(self.dir_model)
+
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
         assert self.hparams_audio is not None
 
         # voice-prompt encoder: mimi encoder + speaker_proj
-        self.gguf_writer.add_clip_has_audio_encoder(True)
-        # note: the 24kHz sample rate is hardcoded on the clip.cpp side, like the other audio models
-        self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.POCKETTTS_SPKENC)
-        self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
-        self.gguf_writer.add_audio_block_count(self.hparams_audio["num_hidden_layers"])
-        self.gguf_writer.add_audio_embedding_length(self.hparams_audio["hidden_size"])
-        self.gguf_writer.add_audio_feed_forward_length(self.hparams_audio["intermediate_size"])
-        self.gguf_writer.add_audio_head_count(self.hparams_audio["num_attention_heads"])
-        self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
-        # mimi convolves the waveform directly, it is passed around as a 1-row "mel"
-        self.gguf_writer.add_audio_num_mel_bins(1)
+        if self.has_audio_encoder:
+            self.gguf_writer.add_clip_has_audio_encoder(True)
+            # note: the 24kHz sample rate is hardcoded on the clip.cpp side, like the other audio models
+            self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.POCKETTTS_SPKENC)
+            self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
+            self.gguf_writer.add_audio_block_count(self.hparams_audio["num_hidden_layers"])
+            self.gguf_writer.add_audio_embedding_length(self.hparams_audio["hidden_size"])
+            self.gguf_writer.add_audio_feed_forward_length(self.hparams_audio["intermediate_size"])
+            self.gguf_writer.add_audio_head_count(self.hparams_audio["num_attention_heads"])
+            self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+            # mimi convolves the waveform directly, it is passed around as a 1-row "mel"
+            self.gguf_writer.add_audio_num_mel_bins(1)
 
         # generation: flow-matching decoder + mimi decoder
         # the SEANet and flow net hparams are constant across the family, clip.cpp holds them
@@ -229,11 +316,48 @@ class PocketTTSMmprojModel(MmprojModel):
         # conv1d/conv1d_dw kernels must be F16, ggml_conv_1d(_dw) has no BF16 path
         if ".seanet." in new_name or new_name in ("a.downsample.conv.weight", "a.gen.wav.upsample.weight"):
             return gguf.GGMLQuantizationType.F16
+        # voices are read on the host as prompt embeddings
+        if new_name.startswith("voice."):
+            return gguf.GGMLQuantizationType.F32
         return False
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # predefined voices shipped next to the weights, embeddings/<name>.safetensors: the backbone keys and
+        # values after the voice prompt, see get_state_for_audio_prompt() in the reference
+        # they are turned back into the prompt embeddings, which go in where an encoded speaker reference would
+        paths = sorted((self.dir_model / "embeddings").glob("*.safetensors"))
+        if not paths:
+            return
+        weights = _load_safetensors(self.dir_model / "model.safetensors",
+                                    ("flow_lm.transformer.layers.0.", "flow_lm.transformer.layers.1.",
+                                     "flow_lm.speaker_proj_weight", "flow_lm.bos_before_voice"))
+        for path in paths:
+            state = _load_safetensors(path, ("transformer.layers.0.", "transformer.layers.1."))
+            kv = []
+            for il in range(2):
+                prefix = f"transformer.layers.{il}.self_attn/"
+                n_pos = int(state[prefix + "offset"].item())
+                if int(state[prefix + "pad"].item()) != 0:
+                    raise ValueError(f"{path}: padded voice prompts are not supported")
+                kv.append(state[prefix + "cache"][:, 0, :n_pos].flatten(2))  # [k/v, pos, n_embd]
+            embd, err = _voice_prompt_embd(weights, kv[0], kv[1][1], self.global_config["num_attention_heads"],
+                                           self.global_config["rope_theta"])
+            if err > 0.02:  # the released voices stay within 0.006, the rounding of the bf16 weights
+                raise ValueError(f"{path}: the voice state does not match the backbone (error {err:.2e})")
+            logger.info(f"voice {path.stem}: {embd.shape[0]} frames, max error on the layer 1 values {err:.2e}")
+            yield (f"voice.{path.stem}", embd.float())
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # the block index of the mimi transformers is parsed here, not by the base class
         T = gguf.MODEL_TENSOR
+
+        if name.startswith("voice."):
+            yield (name, data_torch)
+            return
+
+        if not self.has_audio_encoder and (name.startswith("mimi.encoder") or name.startswith("mimi.downsample.") or
+                                           name == "flow_lm.speaker_proj_weight"):
+            return  # voice-prompt encoder
 
         if name in ("flow_lm.bos_emb", "flow_lm.bos_before_voice", "flow_lm.conditioner.embed.weight"):
             return  # folded into the backbone embedding table

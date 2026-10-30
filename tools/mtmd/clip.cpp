@@ -3501,6 +3501,27 @@ struct clip_model_loader {
                         layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN,    p, il, "weight"));
                         layer.ls_2_w    = get_tensor(string_format(TN_LS_2,        p, il, "weight"));
                     }
+
+                    // predefined voices are only read on the host, as the prompt prefix
+                    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
+                        const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
+                        if (strncmp(name, "voice.", 6) != 0) {
+                            continue;
+                        }
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name);
+                        if (t->type != GGML_TYPE_F32 || ggml_n_dims(t) > 2 || t->ne[0] != model.gen_input_lin_w->ne[1]) {
+                            throw std::runtime_error(string_format("%s: invalid voice tensor %s\n", __func__, name));
+                        }
+                        auto & embd = model.gen_voices[name + 6];
+                        embd.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(embd.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name));
+                        }
+                    }
+                    if (!model.gen_voices.empty()) {
+                        LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
+                    }
                 } break;
             case PROJECTOR_TYPE_LFM3A_GEN:
                 {
@@ -5139,6 +5160,15 @@ void clip_gen_state_reset(clip_gen_state * state) {
     if (state->buf) {
         ggml_backend_buffer_clear(state->buf.get(), 0);
     }
+}
+
+int32_t clip_gen_get_voice(const clip_ctx * ctx, const char * name, const float ** embd) {
+    const auto it = ctx->model.gen_voices.find(name);
+    if (it == ctx->model.gen_voices.end()) {
+        return 0;
+    }
+    *embd = it->second.data();
+    return (int32_t) (it->second.size() / ctx->model.gen_input_lin_w->ne[1]);
 }
 
 clip_enc_state * clip_enc_state_init(clip_ctx * ctx, int32_t n_frames_max) {

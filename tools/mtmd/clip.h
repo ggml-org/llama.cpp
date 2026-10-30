@@ -139,6 +139,10 @@ struct clip_gen_state * clip_gen_state_init(struct clip_ctx * ctx, uint32_t seed
 void                    clip_gen_state_free(struct clip_gen_state * state);
 void                    clip_gen_state_reset(struct clip_gen_state * state);
 
+// predefined voice of an audio generation model: the backbone input embeddings of its voice prompt
+// returns the number of rows of clip_n_mmproj_embd() floats, 0 if there is no voice with this name
+int32_t clip_gen_get_voice(const struct clip_ctx * ctx, const char * name, const float ** embd);
+
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated
 //                       do NOT add new functions like this

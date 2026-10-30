@@ -6516,6 +6516,10 @@ void server_routes::init_routes() {
         }
 
         if (speaker_ref_len > 0) {
+            if (!mtmd_support_audio(ctx_server.mctx)) {
+                res->error(format_error_response("this model has no voice encoder, \"speaker_ref\" cannot be used", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
             auto wrapper = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, speaker_ref_data, speaker_ref_len, false, ctx_server.init_opt);
             if (!wrapper.bitmap) {
                 res->error(format_error_response("failed to decode \"speaker_ref\"", ERROR_TYPE_INVALID_REQUEST));

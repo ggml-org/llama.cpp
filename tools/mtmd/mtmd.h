@@ -472,6 +472,11 @@ struct mtmd_gen_audio_info {
 
 MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
 
+// predefined voice of the audio generation model (pocket-tts): the input embeddings of its voice prompt,
+// in place of an encoded speaker reference
+// returns the number of rows of n_embd floats (n_embd of the text model), 0 if there is no voice with this name
+MTMD_API int32_t mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name, const float ** embd);
+
 
 enum mtmd_gen_process_type {
     MTMD_GEN_PROCESS_TYPE_GEN_CODE, // h_state to semantic (codes, mel-spectrogram, etc.)
