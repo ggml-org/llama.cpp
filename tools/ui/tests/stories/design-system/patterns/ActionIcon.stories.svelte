@@ -27,7 +27,7 @@
 			</div>
 		</StateGalleryItem>
 
-		<StateGalleryItem label="Copy to clipboard">
+		<StateGalleryItem label="Copy to clipboard" note="a green check for 1.5s after copying">
 			<ActionIconCopyToClipboard text="llama-server -m model.gguf" />
 		</StateGalleryItem>
 
