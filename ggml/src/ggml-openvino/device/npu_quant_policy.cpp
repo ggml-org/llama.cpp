@@ -45,12 +45,6 @@ std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const gg
 }
 
 std::optional<ExtraQuantType> ggml_openvino_npu_weight_requant_type(const ggml_tensor * tensor) {
-    // Q4_0 is already u4, so regrouping it to 128-element blocks only saves scale storage
-    // while round-tripping the whole tensor through f32. Taking the direct extract path
-    // instead does compile, but the resulting group-32 graph hangs the NPU at inference
-    // (ZE_RESULT_ERROR_DEVICE_LOST, driver TDR), so it stays off by default.
-    if (tensor->type == GGML_TYPE_Q4_0 && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KEEP_Q4_0")) {
-        return std::nullopt;
-    }
+    GGML_UNUSED(tensor);
     return ggml_openvino_get_npu_requant_type();
 }
