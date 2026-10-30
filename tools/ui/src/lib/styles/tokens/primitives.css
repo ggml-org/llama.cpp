@@ -39,6 +39,7 @@
 
 	--green-400: oklch(0.81 0.16 148);
 	--green-500: oklch(0.73 0.2 148);
+	--green-600: oklch(0.55 0.16 148);
 	--green-800: oklch(0.45 0.14 148);
 
 	/* translucent white and black, named by opacity in percent */

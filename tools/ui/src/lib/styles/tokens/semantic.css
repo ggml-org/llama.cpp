@@ -22,6 +22,7 @@
 	--fg-on-danger: var(--neutral-0);
 	--fg-code: var(--neutral-950);
 	--fg-danger: var(--red-600);
+	--fg-success: var(--green-600);
 
 	/* lines: borders, dividers and focus */
 	--line-default: var(--neutral-300);
@@ -99,6 +100,7 @@
 	--fg-on-action: var(--neutral-900);
 	--fg-code: var(--neutral-300);
 	--fg-danger: var(--red-400);
+	--fg-success: var(--green-400);
 
 	--line-default: var(--white-a30);
 	--line-field: var(--white-a30);
@@ -194,6 +196,7 @@
 	--text-color-fg-muted: var(--fg-muted);
 	--text-color-fg-on-action: var(--fg-on-action);
 	--text-color-fg-danger: var(--fg-danger);
+	--text-color-fg-success: var(--fg-success);
 	--border-color-line-default: var(--line-default);
 	--border-color-line-field: var(--line-field);
 	--border-color-line-control: var(--line-control);
