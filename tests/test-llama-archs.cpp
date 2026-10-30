@@ -16,6 +16,7 @@
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <random>
 #include <regex>
 #include <stdexcept>
@@ -281,10 +282,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_MISTRAL4
+            || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
+        if (arch == LLM_ARCH_MISTRAL_LARGE4) {
+            n_layer = 4; // cover NoPE, shared indexer and KV sharing layers
+        }
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_CHAMELEON) {
@@ -376,7 +381,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
-            || arch == LLM_ARCH_MISTRAL4) {
+            || arch == LLM_ARCH_MISTRAL4
+            || arch == LLM_ARCH_MISTRAL_LARGE4) {
         // GLM5 next MLA is nope only, the cache row is the compressed latent alone.
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       arch == LLM_ARCH_GLM5_NEXT ? uint32_t(512) : uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
@@ -537,6 +543,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             indexer_types.push_back(il % 2 ? 0 : 1);
         }
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+    }
+
+    if (arch == LLM_ARCH_MISTRAL_LARGE4) {
+        // layer 3 reads the KV cache of layer 2, both are NoPE
+        ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN,     std::vector<uint32_t>({1, 1, 0, 0}));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,    std::vector<uint32_t>({1, 0, 1, 1}));
+        ms.add_kv(LLM_KV_ATTENTION_KV_SOURCE_MAP,    std::vector<uint32_t>({0, 1, 2, 2}));
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,    30.0f);
     }
 
     if (arch == LLM_ARCH_DEEPSEEK4) {
@@ -946,6 +960,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_MISTRAL_LARGE4:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_LAGUNA:
         case LLM_ARCH_MAPLE:

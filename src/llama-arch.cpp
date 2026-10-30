@@ -155,6 +155,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_EAGLE3,           "eagle3"           },
     { LLM_ARCH_DFLASH,           "dflash"           },
     { LLM_ARCH_MISTRAL4,         "mistral4"         },
+    { LLM_ARCH_MISTRAL_LARGE4,   "mistral-large4"   },
     { LLM_ARCH_PADDLEOCR,        "paddleocr"        },
     { LLM_ARCH_MIMO2,            "mimo2"            },
     { LLM_ARCH_STEP35,           "step35"           },
@@ -330,6 +331,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,      "%s.attention.compress_rope_freq_base"      },
     { LLM_KV_ATTENTION_COMPRESS_RATIOS,              "%s.attention.compress_ratios"              },
     { LLM_KV_ATTENTION_SHARED_KV_LAYERS,             "%s.attention.shared_kv_layers"             },
+    { LLM_KV_ATTENTION_KV_SOURCE_MAP,                "%s.attention.kv_source_map"                },
     { LLM_KV_ATTENTION_RECURRENT_LAYERS,             "%s.attention.recurrent_layers"             },
 
     { LLM_KV_HYPER_CONNECTION_COUNT,                 "%s.hyper_connection.count"                 },
@@ -779,6 +781,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_POS_NET_ATTN_V,                         "posnet.%d.attn_v" },
     { LLM_TENSOR_POS_NET_ATTN_OUT,                       "posnet.%d.attn_output" },
     { LLM_TENSOR_ATTN_SINKS,                             "blk.%d.attn_sinks" },
+    { LLM_TENSOR_ATTN_SSMAX,                             "blk.%d.attn_ssmax" },
     { LLM_TENSOR_SHORTCONV_CONV,                         "blk.%d.shortconv.conv" },
     { LLM_TENSOR_SHORTCONV_INPROJ,                       "blk.%d.shortconv.in_proj" },
     { LLM_TENSOR_SHORTCONV_OUTPROJ,                      "blk.%d.shortconv.out_proj" },
@@ -797,6 +800,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_INDEXER_Q_PROJ,                         "blk.%d.indexer.q_proj" },
     { LLM_TENSOR_INDEXER_K_PROJ,                         "blk.%d.indexer.k_proj" },
     { LLM_TENSOR_INDEXER_Q_NORM,                         "blk.%d.indexer.q_norm" },
+    { LLM_TENSOR_INDEXER_SSMAX,                          "blk.%d.indexer.ssmax" },
     { LLM_TENSOR_INDEXER_COMPRESSOR_WKV,                 "blk.%d.indexer_compressor_kv" },
     { LLM_TENSOR_INDEXER_COMPRESSOR_WGATE,               "blk.%d.indexer_compressor_gate" },
     { LLM_TENSOR_INDEXER_COMPRESSOR_APE,                 "blk.%d.indexer_compressor_ape" },
@@ -812,6 +816,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_DSPARK_MARKOV_W1,                       "markov_w1" },
     { LLM_TENSOR_DSPARK_MARKOV_W2,                       "markov_w2" },
     { LLM_TENSOR_DSPARK_CONF_PROJ,                       "conf_proj" },
+    { LLM_TENSOR_DSPARK_JOINT_PROJ,                      "joint_proj" },
+    { LLM_TENSOR_DSPARK_MASK_EMBD,                       "mask_embd" },
     { LLM_TENSOR_ENGRAM_KV,                              "blk.%d.engram_kv" },
     { LLM_TENSOR_ENGRAM_GATE,                            "blk.%d.engram_gate" },
     { LLM_TENSOR_DFLASH_ATTN_CONV_BASE,                  "blk.%d.attn_conv_base" },
@@ -944,6 +950,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_ATTN_K_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ATTN_V_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ATTN_SINKS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SCALE}},
+    {LLM_TENSOR_ATTN_SSMAX,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_DEC_ATTN_Q,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_DEC_ATTN_K,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_DEC_ATTN_V,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -1125,6 +1132,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_INDEXER_Q_PROJ,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_K_PROJ,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_Q_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_INDEXER_SSMAX,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_INDEXER_COMPRESSOR_WKV,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_COMPRESSOR_WGATE,   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_COMPRESSOR_APE,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS}},
@@ -1164,6 +1172,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_DSPARK_MARKOV_W1,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
     {LLM_TENSOR_DSPARK_MARKOV_W2,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_DSPARK_CONF_PROJ,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DSPARK_JOINT_PROJ,          {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DSPARK_MASK_EMBD,           {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_ENGRAM_KV,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ENGRAM_GATE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_DFLASH_ATTN_CONV_BASE,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1372,6 +1382,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_MISTRAL_LARGE4:
         case LLM_ARCH_MELLUM: // [TAG_MOE_AMAX_SCALE]
         case LLM_ARCH_FLINT:  // [TAG_MOE_AMAX_SCALE]
         case LLM_ARCH_LAGUNA: // [TAG_MOE_AMAX_SCALE]

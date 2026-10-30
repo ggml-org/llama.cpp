@@ -83,6 +83,15 @@ class Qwen2Model(TextModel):
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.removesuffix(".weight").endswith(".mlp.experts.gate_up_proj"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
+            )
+        return super()._map_fp8_weight_names(name)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
@@ -381,6 +390,16 @@ class _QwenMtpMixin:
 @ModelBase.example("Qwen/Qwen3-Next-80B-A3B-Instruct")
 class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
+
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            # Both split projections keep the original per-tensor scales.
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid),
+            )
+        return super()._map_fp8_weight_names(name)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
