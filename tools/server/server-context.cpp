@@ -1767,7 +1767,7 @@ private:
         }
 
         if (ret) {
-            update_cache = update_cache && prompt_cache;
+            update_cache = update_cache && prompt_cache && task.params.cache_prompt;
 
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
