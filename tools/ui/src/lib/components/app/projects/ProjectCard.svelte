@@ -1,5 +1,13 @@
 <script lang="ts">
-	import { MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from '@lucide/svelte';
+	import {
+		Archive,
+		ArchiveRestore,
+		MoreHorizontal,
+		Pencil,
+		Pin,
+		PinOff,
+		Trash2
+	} from '@lucide/svelte';
 	import { ContextMenuActions, DialogConfirmation, DropdownMenuActions } from '$lib/components/app';
 	import * as Card from '$lib/components/ui/card';
 	import { projectsStore, uiStore } from '$lib/stores';
@@ -30,10 +38,20 @@
 	// the "more actions" dropdown and the right-click menu offer the same actions
 	const actions = $derived<MenuAction[]>([
 		{ icon: Pencil, label: 'Edit project', onclick: open },
+		// pinning places the sidebar row, which an archived project does not have
+		...(project.archived
+			? []
+			: [
+					{
+						icon: project.pinned ? PinOff : Pin,
+						label: project.pinned ? 'Unpin' : 'Pin',
+						onclick: () => void projectsStore.setPinned(project.id, !project.pinned)
+					}
+				]),
 		{
-			icon: project.pinned ? PinOff : Pin,
-			label: project.pinned ? 'Unpin' : 'Pin',
-			onclick: () => void projectsStore.setPinned(project.id, !project.pinned)
+			icon: project.archived ? ArchiveRestore : Archive,
+			label: project.archived ? 'Restore' : 'Archive',
+			onclick: () => void projectsStore.setArchived(project.id, !project.archived)
 		},
 		{
 			icon: Trash2,
@@ -100,7 +118,7 @@
 		<div class="mt-auto flex items-center gap-2 pt-6 text-sm text-muted-foreground">
 			<p class="min-w-0 flex-1">{formatUpdatedAt(project.updatedAt)}</p>
 
-			{#if project.pinned}
+			{#if project.pinned && !project.archived}
 				<Pin aria-label="Pinned" class="h-3.5 w-3.5 shrink-0 opacity-60" role="img" />
 			{/if}
 		</div>

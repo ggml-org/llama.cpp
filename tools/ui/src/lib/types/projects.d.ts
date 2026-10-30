@@ -21,6 +21,8 @@ export interface ProjectContextItem {
 
 /** A project groups chats under shared instructions and context. */
 export interface Project {
+	/** Put away: off the sidebar and the pickers, with its chats, until restored. */
+	archived?: boolean;
 	contextItems: ProjectContextItem[];
 	createdAt: number;
 	/** Working directory new conversations in this project start in. */

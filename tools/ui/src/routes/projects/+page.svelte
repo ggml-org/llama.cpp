@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus } from '@lucide/svelte';
+	import { Archive, Plus } from '@lucide/svelte';
 	import { ProjectCard } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
@@ -10,8 +10,19 @@
 	/** Placeholder cards while the projects table is read. */
 	const PROJECT_CARD_SKELETONS = [0, 1, 2];
 
-	// the most recently edited first
-	let projects = $derived([...projectsStore.projects].sort((a, b) => b.updatedAt - a.updatedAt));
+	const TABS = [
+		{ archived: false, label: 'Your projects' },
+		{ archived: true, label: 'Archived' }
+	];
+
+	let showArchived = $state(false);
+
+	// the most recently edited first, archived ones in their own tab
+	let projects = $derived(
+		projectsStore.projects
+			.filter((project) => Boolean(project.archived) === showArchived)
+			.sort((a, b) => b.updatedAt - a.updatedAt)
+	);
 </script>
 
 <svelte:head>
@@ -35,12 +46,44 @@
 		</Button>
 	</div>
 
+	<!-- the selected tab is a secondary button, the other a ghost one -->
+	<div class="flex gap-1" role="tablist">
+		{#each TABS as tab (tab.label)}
+			{@const selected = tab.archived === showArchived}
+
+			<Button
+				aria-selected={selected}
+				class={selected ? '' : 'text-muted-foreground'}
+				onclick={() => (showArchived = tab.archived)}
+				role="tab"
+				size="sm"
+				variant={selected ? 'secondary' : 'ghost'}
+			>
+				{tab.label}
+			</Button>
+		{/each}
+	</div>
+
 	{#if !projectsStore.isInitialized && projects.length === 0}
 		<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
 			{#each PROJECT_CARD_SKELETONS as index (index)}
 				<Skeleton class="h-28 rounded-xl" />
 			{/each}
 		</div>
+	{:else if projects.length === 0 && showArchived}
+		<Empty.Root class="border py-16">
+			<Empty.Header>
+				<Empty.Media variant="icon">
+					<Archive />
+				</Empty.Media>
+
+				<Empty.Title>No archived projects</Empty.Title>
+
+				<Empty.Description>
+					An archived project and its chats leave the sidebar, and wait here until restored.
+				</Empty.Description>
+			</Empty.Header>
+		</Empty.Root>
 	{:else if projects.length === 0}
 		<Empty.Root class="border py-16">
 			<Empty.Header>

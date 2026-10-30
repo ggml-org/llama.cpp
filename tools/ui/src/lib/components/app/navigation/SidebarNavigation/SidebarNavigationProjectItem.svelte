@@ -3,6 +3,7 @@
 	import SidebarNavigationGroupSubmenu from './SidebarNavigationGroupSubmenu.svelte';
 	import SidebarNavigationShowMore from './SidebarNavigationShowMore.svelte';
 	import {
+		Archive,
 		ChevronRight,
 		Download,
 		FolderInput,
@@ -158,6 +159,11 @@
 			icon: Download,
 			label: 'Export',
 			onclick: () => void projectsStore.exportArchive(project.id)
+		},
+		{
+			icon: Archive,
+			label: 'Archive',
+			onclick: () => void projectsStore.setArchived(project.id, true)
 		},
 		{
 			icon: Trash2,

@@ -155,6 +155,11 @@ class ProjectsStore {
 		);
 	}
 
+	/** Archives the project, taking it and its chats off the sidebar, or restores it. */
+	async setArchived(id: string, archived: boolean): Promise<void> {
+		await this.apply(id, { archived: archived || undefined });
+	}
+
 	/**
 	 * Moves the project's sidebar row into a group, or out of one with null.
 	 *

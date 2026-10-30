@@ -106,9 +106,12 @@
 	let recentLabel = $derived(groupsStore.groups.length > 0 ? 'Ungrouped' : 'Recent conversations');
 
 	// A project is a row that sits in Pinned, a group or Ungrouped like a chat,
-	// above the chats there and by name, so the rows do not jump around.
+	// above the chats there and by name, so the rows do not jump around. An
+	// archived one is off the sidebar, its chats with it.
 	let sortedProjects = $derived(
-		[...projectsStore.projects].sort((a, b) => a.name.localeCompare(b.name))
+		projectsStore.projects
+			.filter((project) => !project.archived)
+			.sort((a, b) => a.name.localeCompare(b.name))
 	);
 	let pinnedProjects = $derived(sortedProjects.filter((project) => project.pinned));
 	let ungroupedProjects = $derived(

@@ -86,6 +86,7 @@
 				icon: PROJECT_ICON,
 				id: `project-${project.id}`,
 				label: project.name,
+				meta: project.archived ? 'Archived' : undefined,
 				run: () => close(() => uiStore.openProjectDialog({ projectId: project.id }))
 			}))
 	);
