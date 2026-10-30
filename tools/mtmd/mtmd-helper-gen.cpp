@@ -584,17 +584,21 @@ public:
         // a predefined voice takes the place of the encoded speaker reference
         std::vector<float> voice;
         if (inp->voice && inp->voice[0]) {
-            if (inp->speaker_ref) {
-                LOG_WRN("mtmd_helper_gen_audio: both a voice and a speaker reference given, using voice \"%s\"\n", inp->voice);
-            }
             const float * embd = nullptr;
             const int32_t n_rows = mtmd_gen_audio_get_voice(mctx, inp->voice, &embd);
-            if (n_rows == 0) {
+            if (n_rows > 0) {
+                if (inp->speaker_ref) {
+                    LOG_WRN("mtmd_helper_gen_audio: both a voice and a speaker reference given, using voice \"%s\"\n", inp->voice);
+                }
+                voice.assign(embd, embd + (size_t) n_rows * n_embd);
+            } else if (mtmd_gen_audio_get_info(mctx).n_voices > 0) {
                 LOG_ERR("mtmd_helper_gen_audio: no voice \"%s\" in this model\n", inp->voice);
                 return 1;
+            } else {
+                LOG_WRN("mtmd_helper_gen_audio: this model has no predefined voices, \"%s\" is ignored\n", inp->voice);
             }
-            voice.assign(embd, embd + (size_t) n_rows * n_embd);
-        } else if (inp->speaker_ref) {
+        }
+        if (voice.empty() && inp->speaker_ref) {
             if (!encode_speaker(inp->speaker_ref, voice)) {
                 return 1;
             }

@@ -6486,6 +6486,14 @@ void server_routes::init_routes() {
         const std::string lang       = json_value(body, "lang", std::string());
         const std::string voice      = json_value(body, "voice", std::string());
         const std::string tts_prompt = common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
+        // a model with predefined voices only speaks with one of them
+        if (!voice.empty() && info.n_voices > 0) {
+            const float * embd = nullptr;
+            if (mtmd_gen_audio_get_voice(ctx_server.mctx, voice.c_str(), &embd) == 0) {
+                res->error(format_error_response("unknown voice \"" + voice + "\", see \"voices\" in GET /props", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
         task.tts_inp.set_prompt(tts_prompt.empty() ? prompt : tts_prompt);
         task.tts_inp.set_lang(lang);
         task.tts_inp.set_voice(voice);
