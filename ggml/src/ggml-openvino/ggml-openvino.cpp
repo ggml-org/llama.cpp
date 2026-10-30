@@ -1645,10 +1645,8 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             return {false, "FLASH_ATTN_EXT with K/V row lists is not supported"};
         }
 
-        if (op->src[4] != nullptr) {
-            if (op->src[4] != nullptr && op->src[3] == nullptr) {
-               return {false, "FLASH_ATTN_EXT with sinks but no mask is not supported"};
-            }
+        if (op->src[4] != nullptr && op->src[3] == nullptr) {
+            return {false, "FLASH_ATTN_EXT with sinks but no mask is not supported"};
         }
         if (!is_supported_flash_attn_pattern(op)) {
             return {false, "FLASH_ATTN_EXT unsupported attention pattern"};
@@ -1660,6 +1658,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // head size for Q, K and V
         if (logit_softcap != 0 && (op->src[1]->ne[0] != op->src[0]->ne[0] || op->src[2]->ne[0] != op->src[0]->ne[0])) {
             return {false, "FLASH_ATTN_EXT with logit_softcap != 0 needs one head size for Q, K and V"};
+        }
+        // sinks are applied only by SDPA, which has no soft-capping
+        if (logit_softcap != 0 && op->src[4] != nullptr) {
+            return {false, "FLASH_ATTN_EXT with sinks and logit_softcap != 0 is not supported"};
         }
         break;
     }
