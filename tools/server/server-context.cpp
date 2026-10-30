@@ -2100,6 +2100,10 @@ private:
         if (slot.task->params.return_tokens || slot.task->params.stream) {
             slot.generated_tokens.push_back(result.tok);
         }
+        if (slot.task->params.sampling.n_probs > 0) {
+            // Keep token bytes before text buffering and stop-string handling.
+            slot.add_token(result);
+        }
         slot.has_next_token = true;
 
         // check if there is incomplete UTF-8 character at the end
@@ -2131,7 +2135,6 @@ private:
                 result.text_to_send = "";
             }
 
-            slot.add_token(result);
             if (slot.task->params.stream) {
                 send_partial_response(slot, result, false);
             }
@@ -2321,6 +2324,7 @@ private:
             res->content = slot.generated.substr(slot.n_sent_text - tkn.text_to_send.size(), tkn.text_to_send.size());
             // UTF-8 buffering can delay several tokens before a partial response.
             res->tokens.swap(slot.generated_tokens);
+            res->probs_output.swap(slot.generated_token_probs);
         }
 
         res->n_decoded             = slot.stats.n_gen;
@@ -2332,11 +2336,6 @@ private:
         res->res_type          = slot.task->params.res_type;
         res->oaicompat_model   = slot.task->params.oaicompat_model;
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
-
-        // populate res.probs_output
-        if (slot.task->params.sampling.n_probs > 0) {
-            res->prob_output = tkn; // copy the token probs
-        }
 
         // populate timings if this is final response or timings_per_token is enabled
         if (slot.stop != STOP_TYPE_NONE || slot.task->params.timings_per_token) {
@@ -2399,21 +2398,8 @@ private:
         res->oaicompat_model   = slot.task->params.oaicompat_model;
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
 
-        // populate res.probs_output
-        if (slot.task->params.sampling.n_probs > 0) {
-            if (!slot.task->params.stream && slot.stop == STOP_TYPE_WORD) {
-                const llama_tokens stop_word_toks = common_tokenize(ctx_tgt, slot.stopping_word, false);
-
-                size_t safe_offset = std::min(slot.generated_token_probs.size(), stop_word_toks.size());
-                res->probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end() - safe_offset);
-            } else {
-                res->probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end());
-            }
-        }
+        // Match generated tokens; streaming keeps only records not sent yet.
+        res->probs_output = std::move(slot.generated_token_probs);
 
         res->generation_params = slot.task->params; // copy the parameters
 

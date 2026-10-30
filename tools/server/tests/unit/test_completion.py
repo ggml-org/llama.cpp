@@ -105,6 +105,12 @@ def test_completion_stream_vs_non_stream():
     ("A\u20acB", 16, {"return_progress": True}),
     ("A\u20acB", 16, {"return_tokens": False}),
     ("A\u20acB", 16, {"stop": ["\u20ac"]}),
+    ("A\u20ac\u20acB", 16, {"n_probs": 5}),
+    ("A\u07ffB", 16, {"n_probs": 5}),
+    ("A\U0001f642B", 16, {"n_probs": 5, "post_sampling_probs": True}),
+    ("\u20ac", 2, {"n_probs": 5}),
+    ("A\u20acB", 16, {"n_probs": 5, "return_progress": True, "return_tokens": False}),
+    ("A\u20acB", 16, {"n_probs": 5, "stop": ["\u20ac"]}),
 ])
 def test_completion_stream_token_ids(text: str, n_predict: int, options: dict):
     global server
@@ -124,18 +130,176 @@ def test_completion_stream_token_ids(text: str, n_predict: int, options: dict):
     assert reference.status_code == 200
     assert len(reference.body["tokens"]) == reference.body["tokens_predicted"]
 
+    if not body["return_tokens"]:
+        hidden = server.make_request("POST", "/completion", data=body)
+        assert hidden.status_code == 200
+        assert hidden.body["tokens"] == []
+        assert hidden.body["content"] == reference.body["content"]
+        assert hidden.body.get("completion_probabilities") == reference.body.get("completion_probabilities")
+
     # Reuse the slot to check that pending tokens are cleared between requests.
     for _ in range(2):
         chunks = list(server.make_stream_request("POST", "/completion", data={**body, "stream": True}))
         assert chunks[-1]["stop"]
         assert sum(chunk["stop"] for chunk in chunks) == 1
         assert [token for chunk in chunks for token in chunk["tokens"]] == reference.body["tokens"]
+        if options.get("n_probs"):
+            for chunk in chunks:
+                assert [p["id"] for p in chunk.get("completion_probabilities", [])] == chunk["tokens"]
+            probabilities = [p for chunk in chunks for p in chunk.get("completion_probabilities", [])]
+            assert [p["id"] for p in reference.body["completion_probabilities"]] == reference.body["tokens"]
+            assert probabilities == reference.body["completion_probabilities"]
+            if reference.body["stop_type"] != "word":
+                expected = text.encode("utf-8")
+                if reference.body["stop_type"] == "limit":
+                    # The length-limited fixture uses one byte per token.
+                    expected = expected[:n_predict]
+                assert bytes(b for p in probabilities for b in p["bytes"]) == expected
         if reference.body["stop_type"] != "limit":
             assert "".join(chunk["content"] for chunk in chunks) == reference.body["content"]
         if options.get("return_progress"):
             progress = [chunk for chunk in chunks if "prompt_progress" in chunk]
             assert progress
             assert all(chunk["tokens"] == [] and chunk["content"] == "" for chunk in progress)
+
+    if options.get("n_probs"):
+        chunks = list(server.make_stream_request("POST", "/completion", data={**body, "stream": True, "n_probs": 0}))
+        assert [token for chunk in chunks for token in chunk["tokens"]] == reference.body["tokens"]
+        assert all("completion_probabilities" not in chunk for chunk in chunks)
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/completions", "/v1/chat/completions"])
+@pytest.mark.parametrize("text,n_predict,stop,expected_bytes", [
+    ("A\u20ac\u20acB", 16, [], b"A\xe2\x82\xac\xe2\x82\xacB"),
+    ("\u20ac", 2, [], b"\xe2\x82"),
+    ("A\u20acB", 16, ["\u20ac"], b"A\xe2\x82\xac"),
+])
+def test_completion_stream_probabilities_oaicompat(endpoint: str, text: str, n_predict: int, stop: list, expected_bytes: bytes):
+    global server
+    server.start()
+    body = {
+        "grammar": "root ::= " + json.dumps(text, ensure_ascii=False),
+        "max_tokens": n_predict,
+        "temperature": 0,
+        "seed": 42,
+        "cache_prompt": False,
+        "id_slot": 0,
+        "stop": stop,
+    }
+    if endpoint == "/v1/chat/completions":
+        body.update({"messages": [{"role": "user", "content": "Hello " * 12}], "logprobs": True, "top_logprobs": 5})
+    else:
+        body.update({"prompt": "Hello " * 12, "logprobs": 5})
+
+    reference = server.make_request("POST", endpoint, data=body)
+    assert reference.status_code == 200
+    stream_body = {**body, "stream": True}
+    if endpoint == "/v1/chat/completions":
+        stream_body["stream_options"] = {"include_usage": True}
+    chunks = list(server.make_stream_request("POST", endpoint, data=stream_body))
+    probabilities = [
+        p for chunk in chunks for choice in chunk["choices"]
+        for p in (choice.get("logprobs") or {}).get("content", [])
+    ]
+    assert probabilities == reference.body["choices"][0]["logprobs"]["content"]
+    assert bytes(b for p in probabilities for b in p["bytes"]) == expected_bytes
+    assert len(probabilities) == reference.body["usage"]["completion_tokens"]
+    assert sum(choice["finish_reason"] is not None for chunk in chunks for choice in chunk["choices"]) == 1
+    if endpoint == "/v1/chat/completions":
+        assert chunks[-1]["choices"] == []
+        assert chunks[-1]["usage"] == reference.body["usage"]
+        assert sum(not chunk["choices"] for chunk in chunks) == 1
+    if stop:
+        content_key = "delta" if endpoint == "/v1/chat/completions" else "text"
+        content = [choice[content_key] for chunk in chunks for choice in chunk["choices"]]
+        assert "".join((part.get("content") or "") if isinstance(part, dict) else part for part in content) == "A"
+
+    # Turning logprobs off on the same slot must not leak the previous records.
+    stream_body.pop("top_logprobs", None)
+    stream_body["logprobs"] = False if endpoint == "/v1/chat/completions" else 0
+    chunks = list(server.make_stream_request("POST", endpoint, data=stream_body))
+    assert all(choice.get("logprobs") is None for chunk in chunks for choice in chunk["choices"])
+
+
+@pytest.mark.parametrize("text,options", [
+    ("Hello world ", {"stop": ["ld "]}),
+    ("A\u20acB", {"stop": ["\u20ac"]}),
+    ("ABCD", {"stop": ["BC"]}),
+    ("ABCD", {"stop": ["BX"]}),
+    ("A\nB\nC", {"n_indent": 2}),
+    ("A\n  B\nC", {"n_indent": 2}),
+    ("A\U0001f642B", {"stop": ["\U0001f642"]}),
+    ("A\u20ac\u20acB", {"stop": ["\u20acB"]}),
+    ("\u20ac", {"n_predict": 2}),
+    ("AB", {}),
+])
+@pytest.mark.parametrize("speculative,post_sampling", [(False, False), (False, True), (True, False)])
+def test_completion_probabilities_follow_generated_tokens(text: str, options: dict, speculative: bool, post_sampling: bool):
+    global server
+    if speculative:
+        server.model_draft = server.model_file
+        server.model_draft_hf_repo = server.model_hf_repo
+        server.spec_type = "draft-simple"
+        server.spec_draft_n_min = 1
+        server.spec_draft_n_max = 4
+        server.fa = "off"
+    server.start()
+    body = {
+        "prompt": "Hello " * 12,
+        "grammar": "root ::= " + json.dumps(text, ensure_ascii=False),
+        "id_slot": 0,
+        "n_predict": 32,
+        "temperature": 0,
+        "seed": 42,
+        "cache_prompt": False,
+        "return_tokens": True,
+        "n_probs": 5,
+        "post_sampling_probs": post_sampling,
+        **options,
+    }
+    reference = server.make_request("POST", "/completion", data=body)
+    assert reference.status_code == 200
+    chunks = list(server.make_stream_request("POST", "/completion", data={**body, "stream": True}))
+    assert [p["id"] for p in reference.body.get("completion_probabilities", [])] == reference.body["tokens"]
+    assert [tok for chunk in chunks for tok in chunk["tokens"]] == reference.body["tokens"]
+    for chunk in chunks:
+        assert [p["id"] for p in chunk.get("completion_probabilities", [])] == chunk["tokens"]
+    assert [p for chunk in chunks for p in chunk.get("completion_probabilities", [])] == reference.body["completion_probabilities"]
+    assert sum(chunk["stop"] for chunk in chunks) == 1
+    if speculative and len(reference.body["tokens"]) > 2:
+        assert reference.body["timings"]["draft_n"] > 0
+
+
+@pytest.mark.parametrize("post_sampling", [False, True])
+def test_completion_probabilities_speculative_records(post_sampling: bool):
+    global server
+    server.model_draft = server.model_file
+    server.model_draft_hf_repo = server.model_hf_repo
+    server.spec_type = "draft-simple"
+    server.spec_draft_n_min = 1
+    server.spec_draft_n_max = 4
+    server.fa = "off"
+    server.start()
+    body = {
+        "prompt": "Once upon a time",
+        "n_predict": 12,
+        "ignore_eos": True,
+        "temperature": 0,
+        "cache_prompt": False,
+        "return_tokens": True,
+        "n_probs": 5,
+        "post_sampling_probs": post_sampling,
+    }
+    reference = server.make_request("POST", "/completion", data=body)
+    assert reference.status_code == 200
+    assert len(reference.body["tokens"]) == 12
+    assert reference.body["timings"]["draft_n_accepted"] > 0
+    # Post-sampling values are unsupported with speculation; only check record alignment.
+    assert [p["id"] for p in reference.body["completion_probabilities"]] == reference.body["tokens"]
+    chunks = list(server.make_stream_request("POST", "/completion", data={**body, "stream": True}))
+    assert [token for chunk in chunks for token in chunk["tokens"]] == reference.body["tokens"]
+    for chunk in chunks:
+        assert [p["id"] for p in chunk.get("completion_probabilities", [])] == chunk["tokens"]
 
 
 def test_completion_with_openai_library():
@@ -546,9 +710,8 @@ def test_n_probs_stream():
         "stream": True,
     })
     for data in res:
-        if data["stop"] == False:
-            assert "completion_probabilities" in data
-            assert len(data["completion_probabilities"]) == 1
+        assert [p["id"] for p in data.get("completion_probabilities", [])] == data["tokens"]
+        if data.get("completion_probabilities"):
             for tok in data["completion_probabilities"]:
                 assert "id" in tok and tok["id"] > 0
                 assert "token" in tok and type(tok["token"]) == str
