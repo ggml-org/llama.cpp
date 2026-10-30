@@ -973,11 +973,11 @@ static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t exper
                                         const ggml_sycl_gg_tile * tiles_ptr, const typename S::tsb * packed, float * dst,
                                         const int M, const int Npad, const int K, const int64_t n_tiles,
                                         const int64_t groups_m, dpct::queue_ptr stream, ggml_sycl_gg_rows dst_rows = {}) {
-    if constexpr (fg_esimd_combo<S>() && reordered && ggml_sycl_grouped_gemm_esimd_has<block_q_t>) {
-        // the register-operand ESIMD kernel: no SLM A image (GGML_SYCL_MMID_ESIMD)
+    if constexpr (fg_esimd_combo<S>() && ggml_sycl_grouped_gemm_esimd_has<block_q_t>) {
+        // the register-operand ESIMD kernel, either weight layout: no SLM A image (GGML_SYCL_MMID_ESIMD)
         if (ggml_sycl_grouped_gemm_esimd_enabled() &&
             ggml_sycl_grouped_gemm_esimd<block_q_t, typename S::tsb>(src0_dd, expert_stride, tiles_ptr, packed, dst, M,
-                                                                     Npad, K, dst_rows, n_tiles, stream)) {
+                                                                     Npad, K, dst_rows, reordered, n_tiles, stream)) {
             return;
         }
     }
@@ -1084,15 +1084,13 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
 // A call the ESIMD kernel then declines (a shape it does not take) runs that combination's joint_matrix
 // kernel.
 static int fg_esimd_remap(dpct::queue_ptr stream, int combo, ggml_type src0_type, bool reordered) {
-    if (combo < 0 || !reordered || !ggml_sycl_grouped_gemm_esimd_enabled()) {
+    if (combo < 0 || !ggml_sycl_grouped_gemm_esimd_enabled()) {
         return combo;
     }
     bool covered = false;
-    fg_visit_type(src0_type, true, [&](auto tag) {
+    fg_visit_type(src0_type, reordered, [&](auto tag) {
         using T = decltype(tag);
-        if constexpr (T::reordered) {
-            covered = ggml_sycl_grouped_gemm_esimd_has<typename T::type>;
-        }
+        covered = ggml_sycl_grouped_gemm_esimd_has<typename T::type>;
     });
     if (!covered) {
         return combo;
