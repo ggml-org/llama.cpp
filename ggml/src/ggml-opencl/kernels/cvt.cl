@@ -3055,3 +3055,36 @@ kernel void kernel_restore_block_iq2_xxs(
         q[3] = (ushort)(sas >> 16);
     }
 }
+
+struct block_q2_0 {
+    half d;
+    uchar qs[16];
+};
+
+kernel void kernel_convert_block_q2_0(
+    global struct block_q2_0 * src0,
+    global uchar * dst_qs,
+    global half * dst_d,
+    ulong n_blocks
+) {
+    const ulong i = get_global_id(0);
+    if (i >= n_blocks) { return; }
+    dst_d[i] = src0[i].d;
+    for (int j = 0; j < 16; ++j) {
+        dst_qs[16*i + j] = src0[i].qs[j];
+    }
+}
+
+kernel void kernel_restore_block_q2_0(
+    global uchar * src_qs,
+    global half * src_d,
+    global struct block_q2_0 * dst,
+    ulong n_blocks
+) {
+    const ulong i = get_global_id(0);
+    if (i >= n_blocks) { return; }
+    dst[i].d = src_d[i];
+    for (int j = 0; j < 16; ++j) {
+        dst[i].qs[j] = src_qs[16*i + j];
+    }
+}
