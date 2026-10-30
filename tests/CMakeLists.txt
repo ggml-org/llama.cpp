@@ -363,6 +363,7 @@ llama_build_and_test(test-autorelease.cpp       LABEL "model behavior")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
 
 if (APPLE)
+    llama_build(test-staging-buffer-release.cpp)
     llama_build(test-rset-release.cpp)
     llama_build_and_test(test-host-buffer-release.cpp LINK ggml)
 endif()
