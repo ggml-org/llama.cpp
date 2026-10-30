@@ -154,3 +154,204 @@ __kernel void flash_attn_blk_f16(
 
     blk[((ulong) mask_slice * (ulong) n_q_blocks + (ulong) q_block_idx) * (ulong) n_kv_blocks + (ulong) kv_block_idx] = res;
 }
+
+// V transpose for the decomposed prefill: FA gets V as [dv, n_kv, n_head_kv], the KQV GEMM
+// (mul_mm_f16_f32_kqv) wants [n_kv, dv] with n_kv contiguous. Tiled through local memory so reads
+// and writes are both coalesced; the +1 row padding avoids bank conflicts.
+#define FA_VT_TILE 32
+#define FA_VT_ROWS 8
+__kernel void flash_attn_v_transpose_f16(
+    const global void * v_void, ulong v_offset,
+    global void * vt_void,
+    const int n_kv,
+    const int dv,
+    const int n_head_kv,
+    const ulong v_nb1,
+    const ulong v_nb2,
+    const ulong v_nb3
+) {
+    __local half tile[FA_VT_TILE][FA_VT_TILE + 1];
+
+    const int d0 = get_group_id(0) * FA_VT_TILE;
+    const int k0 = get_group_id(1) * FA_VT_TILE;
+    const int head_kv_idx = get_group_id(2) % n_head_kv;
+    const int batch_idx   = get_group_id(2) / n_head_kv;
+
+    const int lx = get_local_id(0);
+    const int ly = get_local_id(1);
+
+    const global char * v_head = (const global char *) v_void + v_offset +
+        (ulong) batch_idx * v_nb3 + (ulong) head_kv_idx * v_nb2;
+
+    for (int r = 0; r < FA_VT_TILE; r += FA_VT_ROWS) {
+        const int d  = d0 + lx;
+        const int kv = k0 + ly + r;
+        half val = (half) 0.0f;
+        if (d < dv && kv < n_kv) {
+            val = ((const global half *) (v_head + (ulong) kv * v_nb1))[d];
+        }
+        tile[ly + r][lx] = val;
+    }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    global half * vt_head = (global half *) vt_void +
+        ((ulong) batch_idx * (ulong) n_head_kv + (ulong) head_kv_idx) * (ulong) n_kv * (ulong) dv;
+
+    for (int r = 0; r < FA_VT_TILE; r += FA_VT_ROWS) {
+        const int kv = k0 + lx;
+        const int d  = d0 + ly + r;
+        if (d < dv && kv < n_kv) {
+            vt_head[(ulong) d * (ulong) n_kv + (ulong) kv] = tile[lx][ly + r];
+        }
+    }
+}
+
+// V transpose that emits int8 + a per-32-block scale instead of f16, for the dp4a KQV path.
+// A tile row (FA_VT_TILE = 32 along kv, the contiguous output axis) is exactly one quantisation
+// block, so the scales come from the existing staging. Lane t owns block d = d0+t and reads
+// tile[0..31][t], a conflict-free column walk of the padded LDS tile.
+__kernel void flash_attn_v_transpose_q8(
+    const global void * v_void, ulong v_offset,
+    global void * vt_q_void,            // char, [n_head_kv][dv][n_kv]
+    global void * vt_d_void,            // half, [n_head_kv][dv][n_kv/32]
+    const int n_kv,
+    const int dv,
+    const int n_head_kv,
+    const ulong v_nb1,
+    const ulong v_nb2,
+    const ulong v_nb3,
+    const int kv_pitch                  // bytes per V^T row, >= n_kv, multiple of 32
+) {
+    __local half tile[FA_VT_TILE][FA_VT_TILE + 1];
+
+    const int d0 = get_group_id(0) * FA_VT_TILE;
+    const int k0 = get_group_id(1) * FA_VT_TILE;
+    const int head_kv_idx = get_group_id(2) % n_head_kv;
+    const int batch_idx   = get_group_id(2) / n_head_kv;
+
+    const int lx = get_local_id(0);
+    const int ly = get_local_id(1);
+
+    const global char * v_head = (const global char *) v_void + v_offset +
+        (ulong) batch_idx * v_nb3 + (ulong) head_kv_idx * v_nb2;
+
+    for (int r = 0; r < FA_VT_TILE; r += FA_VT_ROWS) {
+        const int d  = d0 + lx;
+        const int kv = k0 + ly + r;
+        half val = (half) 0.0f;
+        if (d < dv && kv < n_kv) {
+            val = ((const global half *) (v_head + (ulong) kv * v_nb1))[d];
+        }
+        tile[ly + r][lx] = val;
+    }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    const int lid  = ly * FA_VT_TILE + lx;
+    const int nblk = kv_pitch / FA_VT_TILE;
+
+    if (lid < FA_VT_TILE) {
+        const int d = d0 + lid;
+        if (d < dv) {
+            const ulong hbase = ((ulong) batch_idx * (ulong) n_head_kv + (ulong) head_kv_idx);
+
+            global char * qrow = (global char *) vt_q_void + hbase*(ulong)kv_pitch*(ulong)dv + (ulong) d * (ulong) kv_pitch;
+            global half * drow = (global half *) vt_d_void + hbase*(ulong)nblk*(ulong)dv + (ulong) d * (ulong) nblk;
+
+            float v[FA_VT_TILE];
+            float amax = 0.0f;
+
+            for (int i = 0; i < FA_VT_TILE; ++i) {
+                v[i] = (float) tile[i][lid];
+                amax = fmax(amax, fabs(v[i]));
+            }
+
+            const float dq = amax / 127.0f;
+            const float id = amax > 0.0f ? 127.0f / amax : 0.0f;
+
+            drow[k0 / FA_VT_TILE] = (half) dq;
+
+            for (int i = 0; i < FA_VT_TILE; ++i) {
+                const int kv = k0 + i;
+                if (kv < n_kv) {
+                    qrow[kv] = (char) clamp((int) rint(v[i] * id), -127, 127);
+                }
+            }
+        }
+    }
+}
+
+// The same int8 V^T from a q8_0 V cache. The cache blocks run along dv and the KQV contraction
+// runs along n_kv, so the scales have to be rebuilt along n_kv; the q8_0 values are expanded in
+// registers (the tile holds d*q as float) and requantised straight into V^T, never through an
+// f16 copy of V. A tile column (FA_VT_TILE = 32 consecutive d) is exactly one q8_0 block, so
+// each row load is one scale plus one byte per lane.
+__kernel void flash_attn_v_transpose_q8_q8_0(
+    const global void * v_void, ulong v_offset,
+    global void * vt_q_void,            // char, [n_head_kv][dv][n_kv]
+    global void * vt_d_void,            // half, [n_head_kv][dv][n_kv/32]
+    const int n_kv,
+    const int dv,
+    const int n_head_kv,
+    const ulong v_nb1,
+    const ulong v_nb2,
+    const ulong v_nb3,
+    const int kv_pitch                  // bytes per V^T row, >= n_kv, multiple of 32
+) {
+    __local float tile[FA_VT_TILE][FA_VT_TILE + 1];
+
+    const int d0 = get_group_id(0) * FA_VT_TILE;
+    const int k0 = get_group_id(1) * FA_VT_TILE;
+    const int head_kv_idx = get_group_id(2) % n_head_kv;
+    const int batch_idx   = get_group_id(2) / n_head_kv;
+
+    const int lx = get_local_id(0);
+    const int ly = get_local_id(1);
+
+    const global char * v_head = (const global char *) v_void + v_offset +
+        (ulong) batch_idx * v_nb3 + (ulong) head_kv_idx * v_nb2;
+
+    for (int r = 0; r < FA_VT_TILE; r += FA_VT_ROWS) {
+        const int d  = d0 + lx;
+        const int kv = k0 + ly + r;
+        float val = 0.0f;
+        if (d < dv && kv < n_kv) {
+            const global char * blk = v_head + (ulong) kv * v_nb1 + (ulong) (d / 32) * 34;
+            val = vload_half(0, (const global half *) blk) * (float) blk[2 + (d % 32)];
+        }
+        tile[ly + r][lx] = val;
+    }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    const int lid  = ly * FA_VT_TILE + lx;
+    const int nblk = kv_pitch / FA_VT_TILE;
+
+    if (lid < FA_VT_TILE) {
+        const int d = d0 + lid;
+        if (d < dv) {
+            const ulong hbase = ((ulong) batch_idx * (ulong) n_head_kv + (ulong) head_kv_idx);
+
+            global char * qrow = (global char *) vt_q_void + hbase*(ulong)kv_pitch*(ulong)dv + (ulong) d * (ulong) kv_pitch;
+            global half * drow = (global half *) vt_d_void + hbase*(ulong)nblk*(ulong)dv + (ulong) d * (ulong) nblk;
+
+            float amax = 0.0f;
+            for (int i = 0; i < FA_VT_TILE; ++i) {
+                amax = fmax(amax, fabs(tile[i][lid]));
+            }
+
+            const float dq = amax / 127.0f;
+            const float id = amax > 0.0f ? 127.0f / amax : 0.0f;
+
+            drow[k0 / FA_VT_TILE] = (half) dq;
+
+            for (int i = 0; i < FA_VT_TILE; ++i) {
+                const int kv = k0 + i;
+                if (kv < n_kv) {
+                    qrow[kv] = (char) clamp((int) rint(tile[i][lid] * id), -127, 127);
+                }
+            }
+        }
+    }
+}
