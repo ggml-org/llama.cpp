@@ -8,6 +8,7 @@ on:
         required: false
         type: string
 
+cache-mode: none
 permissions:
   contents: read
 
@@ -22,7 +23,8 @@ concurrency:
 
 jobs:
   server-speculative:
-    runs-on: "hf-jobs-a100-large:cuda13"
+    runs-on: [self-hosted, Linux, gb10, perf]
+    container: "nvidia/cuda:13.4.3-devel-ubuntu26.04"
     timeout-minutes: 60
 
     steps:
@@ -34,8 +36,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y cmake libssl-dev python3 python3-venv python3-pip
+          apt update
+          apt install -y cmake libssl-dev python3 python3-venv python3-pip
 
       - name: Build
         run: |
