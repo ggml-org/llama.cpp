@@ -33,7 +33,9 @@
 
 {#if isTruncated && showTooltip}
 	<Tooltip.Root>
-		<Tooltip.Trigger class="{className} min-w-0">
+		<!-- as wide as the plain span below: a trigger that shrank to its text would stop
+		     truncating, flip back to the plain span and loop -->
+		<Tooltip.Trigger class="{className} block w-full min-w-0 text-left">
 			<span bind:this={textElement} class="block truncate">
 				{text}
 			</span>
