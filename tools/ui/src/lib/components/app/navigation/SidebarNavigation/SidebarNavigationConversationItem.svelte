@@ -396,15 +396,6 @@
 
 <style>
 	button {
-		:global([data-slot='dropdown-menu-trigger']:not([data-state='open'])) {
-			opacity: 0;
-		}
-
-		&:is(:hover) :global([data-slot='dropdown-menu-trigger']),
-		&:focus-within :global([data-slot='dropdown-menu-trigger']) {
-			opacity: 1;
-		}
-
 		&.is-selection-mode :global([data-slot='dropdown-menu-trigger']) {
 			display: none !important;
 		}
@@ -418,14 +409,27 @@
 				display: block;
 			}
 		}
+	}
 
-		&:is(:hover) .stop-button {
-			:global(.stop-icon) {
-				display: block;
-			}
+	/* the row's menu waits for a hover where there is one; a touch screen shows it all along */
+	@media (hover: hover) and (pointer: fine) {
+		button :global([data-slot='dropdown-menu-trigger']:not([data-state='open'])) {
+			opacity: 0;
+		}
 
-			:global(.loading-icon) {
-				display: none;
+		button:is(:hover, :focus-within) :global([data-slot='dropdown-menu-trigger']) {
+			opacity: 1;
+		}
+
+		button:hover {
+			.stop-button {
+				:global(.stop-icon) {
+					display: block;
+				}
+
+				:global(.loading-icon) {
+					display: none;
+				}
 			}
 		}
 	}

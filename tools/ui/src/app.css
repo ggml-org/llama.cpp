@@ -35,6 +35,9 @@
 
 :root {
 	--radius: 0.625rem;
+	/* the page runs under the status bar (viewport-fit=cover); what is pinned
+	   to the top of the screen pads itself clear by this */
+	--safe-area-top: env(safe-area-inset-top, 0px);
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
 	--background: oklch(1 0 0);
@@ -193,6 +196,30 @@
 	html,
 	body {
 		overscroll-behavior: none;
+	}
+
+	/* no gray flash over a tapped control, which has its own press state, and
+	   no text inflation when a phone turns to landscape */
+	html {
+		-webkit-tap-highlight-color: transparent;
+		-webkit-text-size-adjust: 100%;
+		text-size-adjust: 100%;
+	}
+
+	/* a tap clicks at once rather than waiting to see if it is a double-tap zoom */
+	button,
+	a,
+	[role='button'] {
+		touch-action: manipulation;
+	}
+
+	/* holding a control does not select its label or pop the link callout;
+	   links stay selectable, as in a message they are content */
+	button,
+	[role='button'] {
+		-webkit-touch-callout: none;
+		-webkit-user-select: none;
+		user-select: none;
 	}
 
 	/* same for dialogs, whose panels and lists scroll on their own with sticky

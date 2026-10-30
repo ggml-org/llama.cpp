@@ -331,7 +331,11 @@
 			style:transform={revealTransform}
 			class={[
 				'min-w-0 flex-1',
-				deviceStore.isMobile && 'relative z-10 min-h-dvh bg-background',
+				deviceStore.isMobile && 'relative z-10 bg-background',
+				// the installed iOS app sizes the locked, slid page to the screen less its status bar,
+				// so it reaches down by that much more; locked, it cannot scroll by it
+				deviceStore.isMobile &&
+					(sidebarReveal.isRevealed ? 'min-h-[calc(100dvh+var(--safe-area-top))]' : 'min-h-dvh'),
 				deviceStore.isMobile &&
 					sidebarReveal.dragOffset === null &&
 					'transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
@@ -349,7 +353,7 @@
 			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH)}
 				<ActionIcon
 					ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
-					class="sidebar-reveal-pin-top fixed top-4 left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
+					class="sidebar-reveal-pin-top fixed top-[calc(1rem+var(--safe-area-top))] left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
 					icon={MenuIcon}
 					iconSize="size-6"
 					onclick={() => (uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded)}
@@ -385,6 +389,13 @@
 	<ModeWatcher />
 
 	<Toaster closeButton richColors />
+
+	<!-- loaded on demand, so it stays out of the production bundle -->
+	{#if import.meta.env.DEV && import.meta.env.VITE_DEBUG}
+		{#await import('$lib/components/app/misc/ViewportProbe.svelte') then { default: ViewportProbe }}
+			<ViewportProbe />
+		{/await}
+	{/if}
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->

@@ -557,7 +557,12 @@
 		onmouseleave={() => (isPeeking = false)}
 	>
 		<!-- phone: inset so the logo lands where the page's menu toggle sits -->
-		<div class={['flex min-h-0 flex-1 flex-col', isOnMobile && 'sidebar-reveal-content px-2 pt-2']}>
+		<div
+			class={[
+				'flex min-h-0 flex-1 flex-col',
+				isOnMobile && 'sidebar-reveal-content px-2 pt-[calc(0.5rem+var(--safe-area-top))]'
+			]}
+		>
 			<div class="px-2 flex items-center justify-between">
 				<div
 					class="relative"
