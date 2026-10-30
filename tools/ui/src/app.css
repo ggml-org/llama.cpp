@@ -1,5 +1,7 @@
 @import 'tailwindcss';
 @source '.';
+/* stories may use classes the app does not, so tailwind scans them too */
+@source '../tests/stories';
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';

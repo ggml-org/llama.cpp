@@ -46,5 +46,47 @@
 				<Button aria-label="More options" size="icon" variant="outline"><ChevronDown /></Button>
 			</ButtonGroup.Root>
 		</StateGalleryItem>
+
+		<StateGalleryItem label="Small split" note="as in tool permission requests">
+			<ButtonGroup.Root>
+				<Button size="sm" variant="outline">Allow once</Button>
+
+				<ButtonGroup.Separator />
+
+				<Button aria-label="More allow options" class="px-2" size="sm" variant="outline">
+					<ChevronDown />
+				</Button>
+			</ButtonGroup.Root>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Primary split">
+			<ButtonGroup.Root>
+				<Button>Send</Button>
+
+				<ButtonGroup.Separator />
+
+				<Button aria-label="More options" size="icon"><ChevronDown /></Button>
+			</ButtonGroup.Root>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Primary">
+			<ButtonGroup.Root>
+				<Button>Copy</Button>
+
+				<Button>Edit</Button>
+
+				<Button>Delete</Button>
+			</ButtonGroup.Root>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Secondary">
+			<ButtonGroup.Root>
+				<Button variant="secondary">Copy</Button>
+
+				<Button variant="secondary">Edit</Button>
+
+				<Button variant="secondary">Delete</Button>
+			</ButtonGroup.Root>
+		</StateGalleryItem>
 	</StateGallery>
 </Story>
