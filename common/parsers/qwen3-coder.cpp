@@ -74,20 +74,23 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(GEN_PREFIX);
 
+        // The template strips the newline before </think>, so leave it out of the reasoning
+        auto think_body  = p.until_one_of({ "\n</think>", "</think>", "<tool_call>" });
+        auto think_close = p.literal("\n</think>") | p.literal("</think>") | p.peek(p.literal("<tool_call>"));
+
+        auto reasoning_extracted = p.optional("<think>" + p.space() + p.reasoning(think_body) + think_close);
+        auto reasoning_skipped   = p.optional("<think>" + p.space() + think_body + think_close);
+
         auto reasoning = p.eps();
         if (supports_reasoning && extract_reasoning) {
-            // The template strips the newline before </think>, so leave it out of the reasoning
-            reasoning = p.optional("<think>" + p.space() +
-                                   p.reasoning(p.until_one_of({ "\n</think>", "</think>", "<tool_call>" })) +
-                                   (p.literal("\n</think>") | p.literal("</think>") | p.peek(p.literal("<tool_call>"))));
+            reasoning = reasoning_extracted;
         }
 
         // Response format parser
         if (has_response_format) {
             // The answer must be bare JSON, so the think block is consumed even when it is not extracted
             if (supports_reasoning && !extract_reasoning) {
-                reasoning = p.optional("<think>" + p.space() + p.until_one_of({ "\n</think>", "</think>", "<tool_call>" }) +
-                                       (p.literal("\n</think>") | p.literal("</think>") | p.peek(p.literal("<tool_call>"))));
+                reasoning = reasoning_skipped;
             }
             return generation_prompt + (reasoning << p.content(p.schema(p.json(), "response-format", inputs.json_schema)));
         }
