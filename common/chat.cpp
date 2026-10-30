@@ -1466,7 +1466,9 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     autoparser::generation_params params;
-    params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
+    if (inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+        params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
+    }
     const auto & tmpl =
         params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
     const auto & src             = tmpl.source();
