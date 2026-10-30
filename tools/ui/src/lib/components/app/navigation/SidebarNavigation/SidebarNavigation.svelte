@@ -22,6 +22,7 @@
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		SIDEBAR_OVERSTRETCH_PX,
+		SIDEBAR_REVEAL_ACTION_DELAY_MS,
 		SIDEBAR_SETTLE_MS,
 		SIDEBAR_TOGGLE_MS
 	} from '$lib/constants';
@@ -134,8 +135,6 @@
 	$effect(() => {
 		if (!uiStore.isSidebarExpanded) {
 			if (isSelectionMode) exitSelectionMode();
-
-			cancelMobileCollapse();
 		}
 	});
 
@@ -151,7 +150,7 @@
 	// a phone shows the search page instead of the spotlight overlay
 	function openSearch() {
 		if (deviceStore.isMobile) {
-			void goto(ROUTES.SEARCH);
+			afterMobileClose(() => void goto(ROUTES.SEARCH));
 
 			return;
 		}
@@ -299,12 +298,8 @@
 		marquee.rowClick(id, options.shiftKey);
 	}
 
-	async function selectConversation(id: string) {
-		if (deviceStore.isMobile) {
-			scheduleMobileCollapse();
-		}
-
-		await goto(RouterService.chat(id));
+	function selectConversation(id: string) {
+		afterMobileClose(() => void goto(RouterService.chat(id)));
 	}
 
 	async function handleEditConversation(id: string) {
@@ -370,24 +365,20 @@
 		chatStore.stopGenerationForChat(id);
 	}
 
-	let pendingCollapse = $state<ReturnType<typeof setTimeout> | null>(null);
+	/**
+	 * A phone slides its open sidebar shut first, and only then follows a tap in it, so the page
+	 * it goes to or the dialog it opens appears once the sidebar is out of the way. Anything else
+	 * acts at once.
+	 */
+	function afterMobileClose(run: () => void): void {
+		if (!deviceStore.isMobile || !uiStore.isSidebarExpanded) {
+			run();
 
-	function scheduleMobileCollapse() {
-		if (pendingCollapse) {
-			clearTimeout(pendingCollapse);
+			return;
 		}
 
-		pendingCollapse = setTimeout(() => {
-			uiStore.isSidebarExpanded = false;
-			pendingCollapse = null;
-		}, 100);
-	}
-
-	function cancelMobileCollapse() {
-		if (pendingCollapse) {
-			clearTimeout(pendingCollapse);
-			pendingCollapse = null;
-		}
+		uiStore.isSidebarExpanded = false;
+		setTimeout(run, SIDEBAR_REVEAL_ACTION_DELAY_MS);
 	}
 
 	let asideEl = $state<HTMLElement | null>(null);
@@ -506,22 +497,14 @@
 
 	/** A dialog owns the screen on a phone, so the expanded list steps aside for it. */
 	function openDialog(open: () => void): void {
-		if (deviceStore.isMobile) {
-			scheduleMobileCollapse();
-		}
-
-		open();
+		afterMobileClose(open);
 	}
 
 	/** Runs a sidebar action, whether picked from the icon strip, the search dialog or a shortcut. */
 	function handleSidebarAction(action: SidebarAction): void {
 		switch (action) {
 			case SidebarAction.NEW_CHAT:
-				if (deviceStore.isMobile) {
-					scheduleMobileCollapse();
-				}
-
-				void conversationsStore.openNewChat();
+				afterMobileClose(() => void conversationsStore.openNewChat());
 
 				break;
 			case SidebarAction.SEARCH:
@@ -629,7 +612,7 @@
 					onAction={handleSidebarAction}
 					onNavigate={() => {
 						if (deviceStore.isMobile) {
-							scheduleMobileCollapse();
+							uiStore.isSidebarExpanded = false;
 						}
 					}}
 				/>

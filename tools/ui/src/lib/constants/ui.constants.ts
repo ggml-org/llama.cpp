@@ -128,6 +128,8 @@ export const SIDEBAR_REVEAL_RATIO = 0.8;
 export const SIDEBAR_REVEAL_MAX_WIDTH = '20rem';
 /** Duration of the phone sidebar reveal, matching the page's `duration-300` slide. */
 export const SIDEBAR_REVEAL_MS = 300;
+/** Wait after a tap in the phone sidebar closes it, before the tap's page or dialog appears. */
+export const SIDEBAR_REVEAL_ACTION_DELAY_MS = 180;
 /** A swipe that starts this close to the left edge can open the phone sidebar. */
 export const SIDEBAR_REVEAL_EDGE_PX = 24;
 /** Movement before a reveal swipe locks to a horizontal drag. */
