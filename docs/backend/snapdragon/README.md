@@ -324,6 +324,9 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 - `GGML_HEXAGON_NHVX=0`
   Controls the number of HVX hardware threads to use. The default is all (actual number varies depending on the hardware version).
 
+- `GGML_HEXAGON_VTCM_SIZE=0`
+  Overrides the VTCM size used by each session. Accepts `K`, `M` and `G` suffixes; a plain number is in MB. The default (0) uses the size the hardware reports. Values above the hardware size will fail to start the session.
+
 - `GGML_HEXAGON_HOSTBUF=1` (default: 0, disabled)
   Enables allocating host buffers for debugging. By default, host buffers are disabled.
 

@@ -3,6 +3,32 @@
 
 #include <sstream>
 
+json server_chat_convert_responses_tools(const json & tools) {
+    if (!tools.is_array()) {
+        throw std::invalid_argument("'tools' must be an array of objects");
+    }
+    json chatcmpl_tools = json::array();
+    for (json resp_tool : tools) {
+        json chatcmpl_tool;
+
+        const std::string type = json_value(resp_tool, "type", std::string());
+        if (type != "function") {
+            // Non-function Responses tools have no Chat Completions equivalent.
+            SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
+            continue;
+        }
+        resp_tool.erase("type");
+        chatcmpl_tool["type"] = "function";
+
+        if (!resp_tool.contains("strict")) {
+            resp_tool["strict"] = true;
+        }
+        chatcmpl_tool["function"] = resp_tool;
+        chatcmpl_tools.push_back(chatcmpl_tool);
+    }
+    return chatcmpl_tools;
+}
+
 json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
@@ -264,28 +290,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     chatcmpl_body["messages"] = chatcmpl_messages;
 
     if (response_body.contains("tools")) {
-        if (!response_body.at("tools").is_array()) {
-            throw std::invalid_argument("'tools' must be an array of objects");
-        }
-        std::vector<json> chatcmpl_tools;
-        for (json resp_tool : response_body.at("tools")) {
-            json chatcmpl_tool;
-
-            const std::string type = json_value(resp_tool, "type", std::string());
-            if (type != "function") {
-                // Non-function Responses tools have no Chat Completions equivalent.
-                SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
-                continue;
-            }
-            resp_tool.erase("type");
-            chatcmpl_tool["type"] = "function";
-
-            if (!resp_tool.contains("strict")) {
-                resp_tool["strict"] = true;
-            }
-            chatcmpl_tool["function"] = resp_tool;
-            chatcmpl_tools.push_back(chatcmpl_tool);
-        }
+        const json chatcmpl_tools = server_chat_convert_responses_tools(response_body.at("tools"));
         chatcmpl_body.erase("tools");
         if (!chatcmpl_tools.empty()) {
             chatcmpl_body["tools"] = chatcmpl_tools;
@@ -464,7 +469,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                         // Single-pass: build both text and content_parts, decide format at the end
                         std::string result_text;
                         json content_parts = json::array();
-                        bool has_images = false;
+                        bool keep_parts = false; // images or tool references
 
                         for (const auto & c : result_content) {
                             std::string c_type = json_value(c, "type", std::string());
@@ -476,7 +481,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                                     {"text", text}
                                 });
                             } else if (c_type == "image") {
-                                has_images = true;
+                                keep_parts = true;
                                 json source = json_value(c, "source", json::object());
                                 std::string source_type = json_value(source, "type", std::string());
                                 if (source_type == "base64") {
@@ -493,10 +498,17 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                                         {"image_url", {{"url", json_value(source, "url", std::string())}}}
                                     });
                                 }
+                            } else if (c_type == "tool_reference") {
+                                // tool search result naming a deferred tool
+                                keep_parts = true;
+                                content_parts.push_back({
+                                    {"type", "tool_reference"},
+                                    {"name", json_value(c, "tool_name", std::string())}
+                                });
                             }
                         }
 
-                        if (!has_images) {
+                        if (!keep_parts) {
                             // Text-only: collapse to a plain string for maximum compatibility
                             tool_results.push_back({
                                 {"role", "tool"},
@@ -504,7 +516,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                                 {"content", result_text}
                             });
                         } else {
-                            // Mixed or image-only: use array content parts (OpenAI multimodal tool format)
+                            // images or tool references: keep array content parts
                             tool_results.push_back({
                                 {"role", "tool"},
                                 {"tool_call_id", tool_use_id},
@@ -559,6 +571,9 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                         {"parameters", tool.contains("input_schema") ? tool.at("input_schema") : json::object()}
                     }}
                 });
+                if (tool.contains("defer_loading")) {
+                    oai_tools.back()["defer_loading"] = tool.at("defer_loading");
+                }
             }
             oai_body["tools"] = oai_tools;
         }
@@ -677,11 +692,11 @@ json convert_transcriptions_to_chatcmpl(
     if (response_format != "json") {
         throw std::invalid_argument("Only 'json' response_format is supported for transcription");
     }
-    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls);
+    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
     if (prompt.empty()) {
         prompt = preset.user;
     }
-    if (!language.empty()) {
+    if (!language.empty() && !preset.has_language) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
     prompt += get_media_marker();
@@ -710,4 +725,23 @@ json convert_transcriptions_to_chatcmpl(
     }
 
     return chatcmpl_body;
+}
+
+llama_tokens server_chat_get_asr_prompt(const llama_model * model) {
+    const char * src = llama_model_chat_template(model, "asr");
+    if (src == nullptr) {
+        return {};
+    }
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const llama_token bos = llama_vocab_bos(vocab);
+    const common_chat_template tmpl(src, bos == LLAMA_TOKEN_NULL ? "" : common_token_to_piece(vocab, bos, true), "");
+    jinja::context ctx(tmpl.source());
+    jinja::global_from_json(ctx, json {
+        {"bos_token",             tmpl.bos_token()},
+        {"messages",              json::array()},
+        {"add_generation_prompt", true},
+    }, false);
+    jinja::runtime runtime(ctx);
+    const std::string prompt = jinja::runtime::gather_string_parts(runtime.execute(tmpl.prog))->as_string().str();
+    return common_tokenize(vocab, prompt, false, true);
 }

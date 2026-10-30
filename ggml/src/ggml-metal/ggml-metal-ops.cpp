@@ -345,6 +345,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_lightning_indexer(ctx, idx);
             } break;
+        case GGML_OP_TOP_K_MASK:
+            {
+                n_fuse = ggml_metal_op_top_k_mask(ctx, idx);
+            } break;
         case GGML_OP_DSV4_HC_COMB:
         case GGML_OP_DSV4_HC_PRE:
         case GGML_OP_DSV4_HC_POST:
@@ -895,7 +899,9 @@ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
     if (pipeline.cnt) {
         const int n = pipeline.c4 ? ggml_nelements(op)/4 : ggml_nelements(op);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, 1, 1, 1);
+        const int nth = MIN(256, n);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (n + nth - 1)/nth, 1, 1, nth, 1, 1);
     } else {
         const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
         const int nth = MIN(args.ne00, nth_max);
@@ -948,7 +954,9 @@ int ggml_metal_op_glu(ggml_metal_op_t ctx, int idx) {
 
     const int64_t nrows = ggml_nrows(op->src[0]);
 
-    const int32_t nth = std::max(1, std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), ne00/2));
+    // split each row over several threadgroups: with a single row (decode) one threadgroup would run on one GPU core
+    const int32_t nth = std::max(1, std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), std::min(256, ne0)));
+    const int32_t nk  = (ne0 + nth - 1)/nth;
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -960,7 +968,7 @@ int ggml_metal_op_glu(ggml_metal_op_t ctx, int idx) {
     }
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, nk, nrows, 1, nth, 1, 1);
 
     return 1;
 }
@@ -1420,6 +1428,124 @@ int ggml_metal_op_lightning_indexer(ggml_metal_op_t ctx, int idx) {
             (k->ne[2] + nkptg - 1)/nkptg,
             (q->ne[2] + nbptg - 1)/nbptg,
             q->ne[3], 32, nsg, 1);
+
+    return 1;
+}
+
+int ggml_metal_op_top_k_mask(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    const ggml_tensor * mask   = op->src[0];
+    const ggml_tensor * top_k  = op->src[1];
+    const ggml_tensor * score  = op->src[2];
+    const ggml_tensor * blocks = op->src[3];
+    const ggml_tensor * extra  = op->src[4];
+
+    GGML_ASSERT(op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
+    GGML_ASSERT(mask->type == op->type);
+    GGML_ASSERT(top_k->type == GGML_TYPE_I32);
+    GGML_ASSERT(!score  || score->type  == GGML_TYPE_F32);
+    GGML_ASSERT(!blocks || blocks->type == GGML_TYPE_I32);
+    GGML_ASSERT(!extra  || extra->type  == GGML_TYPE_I32);
+
+    const int32_t n_kv    = mask->ne[0];
+    const int32_t n_top   = (int32_t) top_k->ne[0];
+    const int32_t n_pick  = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+    const int32_t n_blk   = blocks ? blocks->ne[0] : 0;
+    const int32_t n_extra = extra  ? extra->ne[0]  : 0;
+
+    const ggml_metal_buffer_id bid = ggml_metal_get_buffer_id(op);
+
+    // the vector fill stores 4 elements at a time
+    const int32_t ts      = ggml_type_size(op->type);
+    const int64_t n_elems = ggml_nelements(op);
+
+    const bool has_score  = score  != NULL;
+    const bool has_blocks = blocks != NULL;
+    const bool has_extra  = extra  != NULL;
+
+    const bool vec = n_elems % 4 == 0 && bid.offs % (4*ts) == 0;
+
+    ggml_metal_kargs_top_k_mask args = {
+        /*.n_kv    =*/ n_kv,
+        /*.m1      =*/ (int32_t) mask->ne[1],
+        /*.m2      =*/ (int32_t) mask->ne[2],
+        /*.m3      =*/ (int32_t) mask->ne[3],
+        /*.n_top   =*/ n_top,
+        /*.n_pick  =*/ n_pick,
+        /*.n_blk   =*/ n_blk,
+        /*.n_extra =*/ n_extra,
+        /*.n_elems =*/ n_elems,
+        /*.nb1     =*/ op->nb[1],
+        /*.nb2     =*/ op->nb[2],
+        /*.nb3     =*/ op->nb[3],
+        /*.nbm1    =*/ mask->nb[1],
+        /*.nbm2    =*/ mask->nb[2],
+        /*.nbm3    =*/ mask->nb[3],
+        /*.nbk0    =*/ top_k->nb[0],
+        /*.nbk1    =*/ top_k->nb[1],
+        /*.nbk2    =*/ top_k->nb[2],
+        /*.nbk3    =*/ top_k->nb[3],
+        /*.nbs0    =*/ score  ? score->nb[0]  : 0,
+        /*.nbs1    =*/ score  ? score->nb[1]  : 0,
+        /*.nbs2    =*/ score  ? score->nb[2]  : 0,
+        /*.nbs3    =*/ score  ? score->nb[3]  : 0,
+        /*.nbb0    =*/ blocks ? blocks->nb[0] : 0,
+        /*.nbb1    =*/ blocks ? blocks->nb[1] : 0,
+        /*.nbe0    =*/ extra  ? extra->nb[0]  : 0,
+        /*.nbe1    =*/ extra  ? extra->nb[1]  : 0,
+        /*.nbe2    =*/ extra  ? extra->nb[2]  : 0,
+        /*.nbe3    =*/ extra  ? extra->nb[3]  : 0,
+    };
+
+    // the fill covers the whole dst, the scatter overwrites the kept cells with the mask values
+    {
+        auto pipeline_fill = ggml_metal_library_get_pipeline_top_k_mask(lib, op, true, false, false, false, vec);
+
+        const int64_t n_fill  = n_elems/(vec ? 4 : 1);
+        const int32_t nth_max = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_fill);
+
+        int nth = 32; // SIMD width
+
+        while (nth < nth_max && nth < n_fill) {
+            nth *= 2;
+        }
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_fill);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, bid, 1);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (n_fill + nth - 1)/nth, 1, 1, nth, 1, 1);
+
+        ggml_metal_op_concurrency_reset(ctx);
+    }
+
+    {
+        auto pipeline = ggml_metal_library_get_pipeline_top_k_mask(lib, op, false, has_score, has_blocks, has_extra, false);
+
+        const int32_t n_max   = n_top + n_extra;
+        const int32_t nth_max = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
+
+        int nth = 32; // SIMD width
+
+        while (nth < nth_max && nth < n_max) {
+            nth *= 2;
+        }
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(mask),  1);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(top_k), 2);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(score  ? score  : mask), 3);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(blocks ? blocks : mask), 4);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(extra  ? extra  : mask), 5);
+        ggml_metal_encoder_set_buffer(enc, bid, 6);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, op->ne[1], op->ne[2], op->ne[3], nth, 1, 1);
+    }
 
     return 1;
 }
@@ -2812,15 +2938,6 @@ size_t ggml_metal_op_mul_mat_id_extra_ids(const ggml_tensor * op) {
     return ggml_type_size(GGML_TYPE_I32)*(ne20*ne21 + ne02);
 }
 
-size_t ggml_metal_op_mul_mat_id_extra_amax(const ggml_tensor * op) {
-    assert(op->op == GGML_OP_MUL_MAT_ID);
-
-    GGML_UNUSED(op);
-
-    // 2 scaling factors (8 bytes) + N_MM_NPART_AMAX per-threadgroup scales for stage-1
-    return 8 + N_MM_NPART_AMAX*sizeof(float);
-}
-
 int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2872,39 +2989,6 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
         ggml_metal_buffer_id bid_ids = bid_tpe;
         bid_ids.offs += ggml_metal_op_mul_mat_id_extra_tpe(op);
 
-        ggml_metal_buffer_id bid_amax = bid_ids;
-        bid_amax.offs += ggml_metal_op_mul_mat_id_extra_ids(op);
-
-        // src1 prec [TAG_GGML_PREC]
-        const bool use_amax = ggml_get_op_params_i32(op, 3) == GGML_PREC_F32;
-
-        // src1 rescale factors, computed before the matmul
-        // ref: https://github.com/ggml-org/llama.cpp/pull/26223
-        if (use_amax) {
-            ggml_metal_kargs_mul_mm_id_amax args = {
-                /*.ne00 =*/ ne10,
-                /*.ne01 =*/ ne11,
-                /*.ne02 =*/ ne12,
-                /*.nb01 =*/ nb11,
-                /*.nb02 =*/ nb12,
-            };
-
-            auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id_amax_part(lib);
-
-            const size_t smem = pipeline.smem;
-
-            GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
-
-            ggml_metal_encoder_set_pipeline(enc, pipeline);
-            ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-            ggml_metal_encoder_set_buffer  (enc, bid_src1, 1);
-            ggml_metal_encoder_set_buffer  (enc, bid_amax, 2);
-
-            ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
-
-            ggml_metal_encoder_dispatch_threadgroups(enc, N_MM_NPART_AMAX, 1, 1, 256, 1, 1);
-        }
-
         {
             ggml_metal_kargs_mul_mm_id_map0 args = {
                 ne10,
@@ -2954,19 +3038,8 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, ne20, ne21, 1, 32, 1, 1);
         }
 
+        // this barrier is always needed because the next kernel has to wait for the id maps to be computed
         ggml_metal_op_concurrency_reset(ctx);
-
-        if (use_amax) {
-            auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id_amax(lib);
-
-            ggml_metal_encoder_set_pipeline(enc, pipeline);
-            ggml_metal_encoder_set_buffer  (enc, bid_amax, 0);
-
-            ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, 32, 1, 1);
-
-            // the next kernel has to wait for the amax data
-            ggml_metal_op_concurrency_reset(ctx);
-        }
 
         {
             auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id(lib, op);
@@ -2996,7 +3069,6 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_tpe,  3);
             ggml_metal_encoder_set_buffer  (enc, bid_ids,  4);
             ggml_metal_encoder_set_buffer  (enc, bid_dst,  5);
-            ggml_metal_encoder_set_buffer  (enc, bid_amax, 6);
 
             const size_t smem = pipeline.smem;
 
@@ -4260,7 +4332,9 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, bid_dst,  3);
 
     if (pipeline.cnt) {
-        ggml_metal_encoder_dispatch_threadgroups(enc, args.ne0, ggml_nrows(op), 1, 1, 1, 1);
+        const int nth = MIN(256, args.ne0);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (args.ne0 + nth - 1)/nth, ggml_nrows(op), 1, nth, 1, 1);
     } else {
         const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 

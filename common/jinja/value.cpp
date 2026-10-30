@@ -6,6 +6,7 @@
 #include "json.h"
 
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <cctype>
 #include <cfloat>
@@ -299,74 +300,53 @@ static value & get_attribute(const value & val, const value & attr, value & defa
     return default_val;
 }
 
-template<bool is_reject>
-static value selectattr(const func_args & args) {
-    args.ensure_count(2, 4);
-    args.ensure_vals<value_array, value_string, value_string, value_string>(true, true, false, false);
+template<bool is_reject, bool lookup_attr>
+static value select_or_reject(const func_args & args) {
+    // example: array | select("odd") -> test_is_odd(item)
+    // example: array | selectattr("status", "equalto", "active") -> test_is_equalto(item.status, "active")
+    constexpr size_t test_pos = lookup_attr ? 2 : 1;
+    args.ensure_count(test_pos);
+    args.ensure_val<value_array>(args.get_pos(0));
+    value attr;
+    if constexpr (lookup_attr) {
+        attr = args.get_pos(1);
+        args.ensure_val<value_string>(attr);
+    }
+
+    auto & builtins = global_builtins();
+    auto test_it = builtins.end();
+    if (args.count() > test_pos) {
+        args.ensure_val<value_string>(args.get_pos(test_pos));
+        std::string test_name = args.get_pos(test_pos)->as_string().str();
+        test_it = builtins.find("test_is_" + test_name);
+        if (test_it == builtins.end()) {
+            throw raised_exception(args.func_name + ": unknown test '" + test_name + "'");
+        }
+    }
 
     auto arr = args.get_pos(0)->as_array();
-    auto attribute = args.get_pos(1);
     auto out = mk_val<value_array>();
     value val_default = mk_val<value_undefined>();
 
-    if (args.count() == 2) {
-        // example: array | selectattr("active")
-        for (const auto & item : arr) {
-            value attr_val = get_attribute(item, attribute, val_default);
-            bool is_selected = attr_val->as_bool();
-            if constexpr (is_reject) is_selected = !is_selected;
-            if (is_selected) out->push_back(item);
+    for (const auto & item : arr) {
+        value val = item;
+        if constexpr (lookup_attr) {
+            val = get_attribute(item, attr, val_default);
         }
-        return out;
-
-    } else if (args.count() == 3) {
-        // example: array | selectattr("equalto", "text")
-        // translated to: test_is_equalto(item, "text")
-        std::string test_name = args.get_pos(1)->as_string().str();
-        value test_val = args.get_pos(2);
-        auto & builtins = global_builtins();
-        auto it = builtins.find("test_is_" + test_name);
-        if (it == builtins.end()) {
-            throw raised_exception("selectattr: unknown test '" + test_name + "'");
-        }
-        auto test_fn = it->second;
-        for (const auto & item : arr) {
+        bool is_selected;
+        if (test_it == builtins.end()) {
+            is_selected = val->as_bool();
+        } else {
             func_args test_args(args.ctx);
-            test_args.push_back(item); // current object
-            test_args.push_back(test_val); // extra argument
-            value test_result = test_fn(test_args);
-            bool is_selected = test_result->as_bool();
-            if constexpr (is_reject) is_selected = !is_selected;
-            if (is_selected) out->push_back(item);
+            test_args.push_back(val);
+            for (size_t i = test_pos + 1; i < args.count(); i++) {
+                test_args.push_back(args.get_pos(i));
+            }
+            is_selected = test_it->second(test_args)->as_bool();
         }
-        return out;
-
-    } else if (args.count() == 4) {
-        // example: array | selectattr("status", "equalto", "active")
-        // translated to: test_is_equalto(item.status, "active")
-        std::string test_name = args.get_pos(2)->as_string().str();
-        auto extra_arg = args.get_pos(3);
-        auto & builtins = global_builtins();
-        auto it = builtins.find("test_is_" + test_name);
-        if (it == builtins.end()) {
-            throw raised_exception("selectattr: unknown test '" + test_name + "'");
-        }
-        auto test_fn = it->second;
-        for (const auto & item : arr) {
-            value attr_val = get_attribute(item, attribute, val_default);
-            func_args test_args(args.ctx);
-            test_args.push_back(attr_val); // attribute value
-            test_args.push_back(extra_arg); // extra argument
-            value test_result = test_fn(test_args);
-            bool is_selected = test_result->as_bool();
-            if constexpr (is_reject) is_selected = !is_selected;
-            if (is_selected) out->push_back(item);
-        }
-        return out;
-    } else {
-        throw raised_exception("selectattr: invalid number of arguments");
+        if constexpr (is_reject) is_selected = !is_selected;
+        if (is_selected) out->push_back(item);
     }
-
     return out;
 }
 
@@ -1095,10 +1075,10 @@ const func_builtins & value_array_t::get_builtins() const {
             auto arr = slice(val->as_array(), start, stop, step);
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
-        {"selectattr", selectattr<false>},
-        {"select", selectattr<false>},
-        {"rejectattr", selectattr<true>},
-        {"reject", selectattr<true>},
+        {"selectattr", select_or_reject<false, true>},
+        {"select", select_or_reject<false, false>},
+        {"rejectattr", select_or_reject<true, true>},
+        {"reject", select_or_reject<true, false>},
         {"join", [](const func_args & args) -> value {
             args.ensure_count(1, 3);
             if (!is_val<value_array>(args.get_pos(0))) {
@@ -1460,7 +1440,8 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const common_json & j, bool mark_input) {
+// the runtime walks values with recursion, a deeper input overflows the stack
+static value from_json(const common_json & j, bool mark_input, int depth = 0) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1475,16 +1456,18 @@ static value from_json(const common_json & j, bool mark_input) {
             str->mark_input();
         }
         return str;
+    } else if ((j.is_array() || j.is_object()) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (j.is_array()) {
         auto arr = mk_val<value_array>();
         for (const auto & item : j) {
-            arr->push_back(from_json(item, mark_input));
+            arr->push_back(from_json(item, mark_input, depth + 1));
         }
         return arr;
     } else if (j.is_object()) {
         auto obj = mk_val<value_object>();
         for (auto it = j.begin(); it != j.end(); ++it) {
-            obj->insert(it.key(), from_json(it.value(), mark_input));
+            obj->insert(it.key(), from_json(it.value(), mark_input, depth + 1));
         }
         return obj;
     } else {
@@ -1679,6 +1662,8 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
             }
         }
         oss << "\"";
+    } else if ((is_val<value_array>(val) || is_val<value_object>(val)) && curr_lvl >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (is_val<value_array>(val)) {
         const auto & arr = val->as_array();
         oss << "[";
@@ -1744,17 +1729,20 @@ std::string value_to_string_repr(const value & val) {
 }
 
 // stats utility
-void value_t::stats_t::mark_used(value & val, bool deep) {
+void value_t::stats_t::mark_used(value & val, bool deep, int depth) {
     val->stats.used = true;
+    if (deep && (is_val<value_array>(val) || is_val<value_object>(val)) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+    }
     if (deep) {
         if (is_val<value_array>(val)) {
             for (auto & item : val->val_arr) {
-                mark_used(item, deep);
+                mark_used(item, deep, depth + 1);
             }
         } else if (is_val<value_object>(val)) {
             for (auto & pair : val->val_obj) {
-                mark_used(pair.first, deep);
-                mark_used(pair.second, deep);
+                mark_used(pair.first, deep, depth + 1);
+                mark_used(pair.second, deep, depth + 1);
             }
         }
     }

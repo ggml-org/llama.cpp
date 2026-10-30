@@ -29,31 +29,25 @@
 struct naive_trie {
     naive_trie() : has_value(false), value(0) {
     }
+    // no recursion: a token from the GGUF can be long
     void insert(const char * key, size_t len, int32_t value = 0) {
-        if (len == 0) {
-            this->has_value = true;
-            this->value = value;
-            return;
+        naive_trie * node = this;
+        for (size_t i = 0; i < len; i++) {
+            node = &node->children[key[i]];
         }
-        char c = key[0];
-        auto res = children.find(c);
-        if (res != children.end()) {
-            res->second.insert(key + 1, len - 1, value);
-        } else {
-            auto res = children.insert(std::make_pair(c, naive_trie()));
-            res.first->second.insert(key + 1, len - 1, value);
-        }
+        node->has_value = true;
+        node->value = value;
     }
     std::pair<const char *, size_t> get_longest_prefix(const char * key, size_t len, size_t offset = 0) const {
-        if (len == 0 || offset == len) {
-            return std::make_pair(key, offset);
+        const naive_trie * node = this;
+        while (offset < len) {
+            auto res = node->children.find(key[offset]);
+            if (res == node->children.end()) {
+                break;
+            }
+            node = &res->second;
+            offset++;
         }
-        char c = key[offset];
-        auto res = children.find(c);
-        if (res != children.end()) {
-            return res->second.get_longest_prefix(key, len, offset + 1);
-        }
-
         return std::make_pair(key, offset);
     }
     const struct naive_trie * traverse(const char c) const {
@@ -174,30 +168,37 @@ struct llm_tokenizer_spm_session {
     }
 
 private:
+    // no recursion: the merges of a long token can be deep
     void resegment(llm_symbol & symbol, std::vector<llama_token> & output) {
-        auto text = std::string(symbol.text, symbol.n);
-        auto token = vocab.text_to_token(text);
+        std::vector<const llm_symbol *> todo = { &symbol };
+        while (!todo.empty()) {
+            const llm_symbol & cur = *todo.back();
+            todo.pop_back();
 
-        // Do we need to support is_unused?
-        if (token != LLAMA_TOKEN_NULL) {
-            output.push_back(token);
-            return;
-        }
+            auto text = std::string(cur.text, cur.n);
+            auto token = vocab.text_to_token(text);
 
-        const auto p = rev_merge.find(text);
-
-        if (p == rev_merge.end()) {
-            // output any symbols that did not form tokens as bytes.
-            output.reserve(output.size() + symbol.n);
-            for (int j = 0; j < (int)symbol.n; ++j) {
-                llama_token id = vocab.byte_to_token(symbol.text[j]);
-                output.push_back(id);
+            // Do we need to support is_unused?
+            if (token != LLAMA_TOKEN_NULL) {
+                output.push_back(token);
+                continue;
             }
-            return;
-        }
 
-        resegment(symbols[p->second.first], output);
-        resegment(symbols[p->second.second], output);
+            const auto p = rev_merge.find(text);
+
+            if (p == rev_merge.end()) {
+                // output any symbols that did not form tokens as bytes.
+                output.reserve(output.size() + cur.n);
+                for (int j = 0; j < (int)cur.n; ++j) {
+                    llama_token id = vocab.byte_to_token(cur.text[j]);
+                    output.push_back(id);
+                }
+                continue;
+            }
+
+            todo.push_back(&symbols[p->second.second]);
+            todo.push_back(&symbols[p->second.first]);
+        }
     }
 
     void try_add_bigram(int left, int right) {
@@ -427,6 +428,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 // "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
                 regex_exprs = {
                     "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
+            case LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3:
+                // same as tekken, but numbers are split into right-aligned groups of 3 digits
+                // "...|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))|\\p{N}{1,2}|..."
+                regex_exprs = {
+                    "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))|\\p{N}{1,2}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
             case LLAMA_VOCAB_PRE_TYPE_CHAMELEON:
@@ -2615,6 +2623,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "tekken" ||
                 tokenizer_pre == "pixtral") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_TEKKEN;
+                clean_spaces = false;
+                ignore_merges = true;
+                add_bos = true;
+            } else if (
+                tokenizer_pre == "tekken-num3") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3;
                 clean_spaces = false;
                 ignore_merges = true;
                 add_bos = true;

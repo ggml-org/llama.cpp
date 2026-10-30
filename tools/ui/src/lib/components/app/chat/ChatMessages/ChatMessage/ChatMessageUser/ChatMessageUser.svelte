@@ -6,7 +6,7 @@
 		ChatMessageUserBubble
 	} from '$lib/components/app/chat';
 	import { getChatMessageEditContext } from '$lib/contexts';
-	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
+	import { ChatMessageStatisticsMode } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, settingsStore } from '$lib/stores';
 
@@ -29,7 +29,11 @@
 	const processingState = useProcessingState();
 
 	const currentConfig = $derived(settingsStore.config);
-	const isActivelyProcessing = $derived(isLastUserMessage && chatStore.isLoading);
+	// A compaction summary reports its own progress on the compaction row, so
+	// the summarized turn does not show live reading stats while it runs.
+	const isActivelyProcessing = $derived(
+		isLastUserMessage && chatStore.isLoading && !chatStore.isCompacting(message.convId)
+	);
 
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {
@@ -107,7 +111,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
+				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}
 	{/if}

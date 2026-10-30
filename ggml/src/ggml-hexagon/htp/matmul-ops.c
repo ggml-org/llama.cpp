@@ -16,6 +16,7 @@
 #include "hvx-dump.h"
 #include "hvx-arith.h"
 #include "hvx-reduce.h"
+#include "hvx-copy.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -1413,7 +1414,7 @@ static void hvx_mv_id_tiled(unsigned int nth, unsigned int ith, void * data) {
 
     for (uint32_t ie1 = 0; ie1 < n_aids; ++ie1) {  // for each expert
         const int32_t eid = *(const int32_t *) ((const uint8_t *) src2->data + ie1 * src2->nb[0]);
-        if (eid == -1) {
+        if (eid < 0) {
             continue;
         }
         assert(eid >= 0 && eid < (int32_t) n_ids);
@@ -3775,16 +3776,6 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
     return HTP_STATUS_OK;
 }
 
-static inline void htp_mm_tensor_collapse_rows(struct htp_tensor * c, const struct htp_tensor * t, uint32_t stride) {
-    *c = *t;
-    c->ne[1] = t->ne[1] * t->ne[2] * t->ne[3];
-    c->ne[2] = 1;
-    c->ne[3] = 1;
-    c->nb[1] = stride;
-    c->nb[2] = c->nb[1] * c->ne[1];
-    c->nb[3] = c->nb[2];
-}
-
 static int op_matmul_impl(struct htp_ops_context * octx) {
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
 
@@ -3801,36 +3792,6 @@ static int op_matmul_impl(struct htp_ops_context * octx) {
 }
 
 int op_matmul(struct htp_ops_context * octx) {
-    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
-
-    if (kparams->collapse) {
-        const struct htp_tensor * act  = octx->src[1];
-        const struct htp_tensor * dst  = octx->dst;
-        const uint32_t s_act = (act->ne[1] > 1) ? act->nb[1] : ((act->ne[2] > 1) ? act->nb[2] : act->nb[3]);
-        const uint32_t sd    = (dst->ne[1] > 1) ? dst->nb[1] : ((dst->ne[2] > 1) ? dst->nb[2] : dst->nb[3]);
-        struct htp_tensor act_collapsed, dst_collapsed;
-        htp_mm_tensor_collapse_rows(&act_collapsed, act, s_act);
-        htp_mm_tensor_collapse_rows(&dst_collapsed, dst, sd);
-        octx->src[1] = &act_collapsed;
-        octx->dst    = &dst_collapsed;
-
-        struct htp_tensor src2_collapsed;
-        const struct htp_tensor * src2 = octx->src[2];
-        if (src2 && (src2->ne[1] * src2->ne[2] * src2->ne[3] > 1)) {
-            const uint32_t s2 = (src2->ne[1] > 1) ? src2->nb[1] : ((src2->ne[2] > 1) ? src2->nb[2] : src2->nb[3]);
-            htp_mm_tensor_collapse_rows(&src2_collapsed, src2, s2);
-            octx->src[2] = &src2_collapsed;
-        }
-
-        const int status = op_matmul_impl(octx);
-        octx->src[1] = act;
-        octx->dst    = dst;
-        if (src2) {
-            octx->src[2] = src2;
-        }
-        return status;
-    }
-
     return op_matmul_impl(octx);
 }
 
@@ -4151,7 +4112,7 @@ static int hvx_mm_matmul_id_nx(
     return HTP_STATUS_OK;
 }
 
-static inline void scan_expert_ids_n(
+static __attribute__((noinline)) uint32_t scan_expert_ids_n(
     const struct htp_tensor * ids,
     const uint32_t n_ids,
     uint32_t n_as,
@@ -4161,15 +4122,17 @@ static inline void scan_expert_ids_n(
 ) {
     const size_t ids_nb1 = ids->nb[1];
     const uint8_t * ids_data = (const uint8_t *) ids->data;
+    uint32_t n_skipped = 0;
 
     for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
         const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
         for (uint32_t id = 0; id < n_ids; ++id) {
             const int32_t i02 = row_ptr[id];
-            if (i02 == -1) {
+            if (i02 < 0) {
+                n_skipped++;
                 continue;
             }
-            assert(i02 >= 0 && i02 < n_as);
+            assert(i02 >= 0 && i02 < (int32_t) n_as);
 
             if (matrix_rows) {
                 matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
@@ -4177,31 +4140,10 @@ static inline void scan_expert_ids_n(
             counts[i02] += 1;
         }
     }
+    return n_skipped;
 }
 
-// the matmuls only write the rows that an expert owns, so the rows of the skipped slots are zeroed here
-static inline void zero_skipped_dst_rows(
-    const struct htp_tensor * ids,
-    uint32_t n_ids,
-    const struct htp_tensor * dst,
-    uint32_t ne0,
-    size_t nb1,
-    size_t nb2
-) {
-    const uint8_t * ids_data = (const uint8_t *) ids->data;
-
-    for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
-        for (uint32_t id = 0; id < n_ids; ++id) {
-            const int32_t i02 = *(const int32_t *) (ids_data + iid1 * ids->nb[1] + id * ids->nb[0]);
-            if (i02 != -1) {
-                continue;
-            }
-            memset((uint8_t *) (dst->data + id * nb1 + iid1 * nb2), 0, ne0 * sizeof(float));
-        }
-    }
-}
-
-static inline void scan_expert_ids(
+static __attribute__((noinline)) uint32_t scan_expert_ids(
     const struct htp_tensor * ids,
     uint32_t n_ids,
     uint32_t n_as,
@@ -4213,23 +4155,25 @@ static inline void scan_expert_ids(
 
     if (ids_nb0 == 4) {
         switch (n_ids) {
-            case 8:  scan_expert_ids_n(ids, 8,     n_as, counts, matrix_rows, mapping_stride); break;
-            case 4:  scan_expert_ids_n(ids, 4,     n_as, counts, matrix_rows, mapping_stride); break;
-            case 2:  scan_expert_ids_n(ids, 2,     n_as, counts, matrix_rows, mapping_stride); break;
-            default: scan_expert_ids_n(ids, n_ids, n_as, counts, matrix_rows, mapping_stride); break;
+            case 8:  return scan_expert_ids_n(ids, 8,     n_as, counts, matrix_rows, mapping_stride);
+            case 4:  return scan_expert_ids_n(ids, 4,     n_as, counts, matrix_rows, mapping_stride);
+            case 2:  return scan_expert_ids_n(ids, 2,     n_as, counts, matrix_rows, mapping_stride);
+            default: return scan_expert_ids_n(ids, n_ids, n_as, counts, matrix_rows, mapping_stride);
         }
     } else {
         // Strided fallback
         const size_t ids_nb1 = ids->nb[1];
         const uint8_t * ids_data = (const uint8_t *) ids->data;
+        uint32_t n_skipped = 0;
         for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
             const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
             for (uint32_t id = 0; id < n_ids; ++id) {
                 const int32_t i02 = *(const int32_t *) ((const uint8_t *) row_ptr + id * ids_nb0);
-                if (i02 == -1) {
+                if (i02 < 0) {
+                    n_skipped++;
                     continue;
                 }
-                assert(i02 >= 0 && i02 < n_as);
+                assert(i02 >= 0 && i02 < (int32_t) n_as);
 
                 if (matrix_rows) {
                     matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
@@ -4237,7 +4181,122 @@ static inline void scan_expert_ids(
                 counts[i02] += 1;
             }
         }
+        return n_skipped;
     }
+}
+
+static __attribute__((noinline)) uint32_t count_skipped_ids_single(const struct htp_tensor * ids, uint32_t n_ids) {
+    const uint8_t * ids_data = (const uint8_t *) ids->data;
+    const size_t ids_nb0 = ids->nb[0];
+    uint32_t n_skipped = 0;
+    for (uint32_t id = 0; id < n_ids; ++id) {
+        const int32_t i02 = *(const int32_t *) (ids_data + id * ids_nb0);
+        if (i02 < 0) {
+            n_skipped++;
+        }
+    }
+    return n_skipped;
+}
+
+// Zero rows for skipped slots (ids < 0). Matmuls only write rows that an expert owns.
+static void zero_skipped_dst_rows(
+    struct htp_ops_context * octx,
+    const struct htp_tensor * ids,
+    uint32_t n_ids,
+    const struct htp_tensor * dst
+) {
+    const uint32_t elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    uint32_t col_start = 0;
+    uint32_t col_count = dst->ne[0];
+
+    if (octx->ctx->mdev.count > 1) {
+        const bool can_split = htp_tensor_can_row_partition(dst, elem_size);
+        const uint32_t chunk_elems = (dst->type == HTP_TYPE_F16) ? 64 : 32;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            dst->ne[0], can_split ? chunk_elems : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        col_start = range.start;
+        col_count = range.count;
+    }
+
+    if (col_count == 0) {
+        return;
+    }
+
+    const uint8_t * ids_data = (const uint8_t *) ids->data;
+    const size_t ids_nb0 = ids->nb[0];
+    const size_t ids_nb1 = ids->nb[1];
+    const size_t dst_nb1 = dst->nb[1];
+    const size_t dst_nb2 = dst->nb[2];
+    const uint32_t col_offset_bytes = col_start * elem_size;
+
+    for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+        const uint8_t * ids_row = ids_data + iid1 * ids_nb1;
+        uint8_t * dst_row_group = (uint8_t *) dst->data + iid1 * dst_nb2 + col_offset_bytes;
+        for (uint32_t id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) (ids_row + id * ids_nb0);
+            if (i02 < 0) {
+                hvx_splat_u(dst_row_group + id * dst_nb1, Q6_V_vzero(), col_count, elem_size);
+            }
+        }
+    }
+}
+
+static int htp_mmid_prepare_mapping(
+    struct htp_ops_context * octx,
+    const struct htp_tensor * ids,
+    uint32_t n_ids,
+    uint32_t n_as,
+    uint32_t act_nrows,
+    uint8_t ** out_mapping_buf,
+    uint32_t ** out_matrix_row_counts,
+    struct mmid_row_mapping ** out_matrix_rows,
+    uint32_t * out_mapping_stride,
+    uint32_t * out_n_skipped
+) {
+    uint8_t  * mapping_buf       = octx->ctx->ddr_spad_base;
+    uint32_t   mapping_stride    = 1;
+    uint32_t * matrix_row_counts = (uint32_t *) mapping_buf;
+    struct mmid_row_mapping * matrix_rows = NULL;
+    uint32_t n_skipped = 0;
+
+    if (act_nrows > 1) {
+        const size_t matrix_row_counts_size = n_as * sizeof(uint32_t);
+        assert(octx->ctx->ddr_spad_size >= matrix_row_counts_size);
+
+        hex_l2fetch_block((const void *) ids->data, ids->ne[1] * ids->nb[1]);
+
+        hvx_splat_u(matrix_row_counts, Q6_V_vzero(), n_as, sizeof(uint32_t));
+        n_skipped = scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, NULL, 0);
+
+        uint32_t max_count = hvx_reduce_max_i32((const uint8_t *) matrix_row_counts, n_as);
+        mapping_stride = max_count > 0 ? max_count : 1;
+
+        size_t matrix_row_map_size  = n_as * mapping_stride * sizeof(struct mmid_row_mapping);
+        const size_t total_map_size = matrix_row_counts_size + matrix_row_map_size;
+
+        if (total_map_size > octx->ctx->ddr_spad_size) {
+            mapping_buf = memalign(128, total_map_size);
+            if (!mapping_buf) {
+                return HTP_STATUS_INTERNAL_ERR;
+            }
+        }
+
+        matrix_row_counts = (uint32_t *) mapping_buf;
+        matrix_rows       = (struct mmid_row_mapping *) (mapping_buf + matrix_row_counts_size);
+
+        hvx_splat_u(matrix_row_counts, Q6_V_vzero(), n_as, sizeof(uint32_t));
+        scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, matrix_rows, mapping_stride);
+    } else {
+        n_skipped = count_skipped_ids_single(ids, n_ids);
+    }
+
+    *out_mapping_buf       = mapping_buf;
+    *out_matrix_row_counts = matrix_row_counts;
+    *out_matrix_rows       = matrix_rows;
+    *out_mapping_stride    = mapping_stride;
+    *out_n_skipped         = n_skipped;
+
+    return HTP_STATUS_OK;
 }
 
 int op_matmul_id(struct htp_ops_context * octx) {
@@ -4275,41 +4334,22 @@ int op_matmul_id(struct htp_ops_context * octx) {
     const int n_ids = ids->ne[0];  // n_expert_used
     const int n_as  = ne02;        // n_expert
 
-    uint8_t  * mapping_buf       = octx->ctx->ddr_spad_base;
-    uint32_t   mapping_stride    = 1;
-    uint32_t * matrix_row_counts = (uint32_t *) mapping_buf;
+    uint8_t  * mapping_buf       = NULL;
+    uint32_t * matrix_row_counts = NULL;
     struct mmid_row_mapping * matrix_rows = NULL;
+    uint32_t   mapping_stride    = 1;
+    uint32_t   n_skipped         = 0;
 
-    if (act_nrows > 1) {
-        const size_t matrix_row_counts_size = n_as * sizeof(uint32_t);
-        assert(octx->ctx->ddr_spad_size >= matrix_row_counts_size);
-
-        hex_l2fetch_block((const void *) ids->data, ids->ne[1] * ids->nb[1]);
-
-        memset(matrix_row_counts, 0, matrix_row_counts_size);
-        scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, NULL, 0);
-
-        uint32_t max_count = hvx_reduce_max_i32((const uint8_t *) matrix_row_counts, n_as);
-        mapping_stride = max_count > 0 ? max_count : 1;
-
-        size_t matrix_row_map_size  = n_as * mapping_stride * sizeof(struct mmid_row_mapping);
-        const size_t total_map_size = matrix_row_counts_size + matrix_row_map_size;
-
-        if (total_map_size > octx->ctx->ddr_spad_size) {
-            mapping_buf = memalign(128, total_map_size);
-            if (!mapping_buf) {
-                return HTP_STATUS_INTERNAL_ERR;
-            }
-        }
-
-        matrix_row_counts = (uint32_t *) mapping_buf;
-        matrix_rows       = (struct mmid_row_mapping *) (mapping_buf + matrix_row_counts_size);
-
-        memset(matrix_row_counts, 0, n_as * sizeof(uint32_t));
-        scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, matrix_rows, mapping_stride);
+    int map_status = htp_mmid_prepare_mapping(octx, ids, n_ids, n_as, act_nrows,
+                                              &mapping_buf, &matrix_row_counts, &matrix_rows,
+                                              &mapping_stride, &n_skipped);
+    if (map_status != HTP_STATUS_OK) {
+        return map_status;
     }
 
-    zero_skipped_dst_rows(ids, n_ids, dst, ne0, nb1, nb2);
+    if (n_skipped > 0) {
+        zero_skipped_dst_rows(octx, ids, n_ids, dst);
+    }
 
     mmctx->matrix_row_counts    = matrix_row_counts;
     mmctx->matrix_rows          = matrix_rows;
@@ -4400,38 +4440,26 @@ int op_matmul_id_nx(struct htp_ops_context * octx) {
     const int n_ids = ids->ne[0];
     const int n_as  = src0->ne[2];
 
-    uint8_t  * mapping_buf       = octx->ctx->ddr_spad_base;
-    uint32_t   mapping_stride    = 1;
-    uint32_t * matrix_row_counts = (uint32_t *) mapping_buf;
+    uint8_t  * mapping_buf       = NULL;
+    uint32_t * matrix_row_counts = NULL;
     struct mmid_row_mapping * matrix_rows = NULL;
+    uint32_t   mapping_stride    = 1;
+    uint32_t   n_skipped         = 0;
 
-    if (act_nrows > 1) {
-        const size_t matrix_row_counts_size = n_as * sizeof(uint32_t);
-        assert(octx->ctx->ddr_spad_size >= matrix_row_counts_size);
+    int map_status = htp_mmid_prepare_mapping(octx, ids, n_ids, n_as, act_nrows,
+                                              &mapping_buf, &matrix_row_counts, &matrix_rows,
+                                              &mapping_stride, &n_skipped);
+    if (map_status != HTP_STATUS_OK) {
+        return map_status;
+    }
 
-        hex_l2fetch_block((const void *) ids->data, ids->ne[1] * ids->nb[1]);
-
-        memset(matrix_row_counts, 0, matrix_row_counts_size);
-        scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, NULL, 0);
-
-        uint32_t max_count = hvx_reduce_max_i32((const uint8_t *) matrix_row_counts, n_as);
-        mapping_stride = max_count > 0 ? max_count : 1;
-
-        size_t matrix_row_map_size  = n_as * mapping_stride * sizeof(struct mmid_row_mapping);
-        const size_t total_map_size = matrix_row_counts_size + matrix_row_map_size;
-
-        if (total_map_size > octx->ctx->ddr_spad_size) {
-            mapping_buf = memalign(128, total_map_size);
-            if (!mapping_buf) {
-                return HTP_STATUS_INTERNAL_ERR;
+    if (n_skipped > 0) {
+        for (uint32_t p = 0; p < n_weights; ++p) {
+            const struct htp_tensor * restrict d = octx->dsts[p];
+            if (d) {
+                zero_skipped_dst_rows(octx, ids, n_ids, d);
             }
         }
-
-        matrix_row_counts = (uint32_t *) mapping_buf;
-        matrix_rows       = (struct mmid_row_mapping *) (mapping_buf + matrix_row_counts_size);
-
-        memset(matrix_row_counts, 0, n_as * sizeof(uint32_t));
-        scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, matrix_rows, mapping_stride);
     }
 
     mmctx->matrix_row_counts    = matrix_row_counts;
@@ -4562,35 +4590,5 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
 }
 
 int op_matmul_nx(struct htp_ops_context * octx) {
-    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
-
-    if (kparams->collapse) {
-        const uint32_t n_weights = kparams->n_weights;
-        const struct htp_tensor * act = octx->src[n_weights];
-        const uint32_t s1 = (act->ne[1] > 1) ? act->nb[1] : ((act->ne[2] > 1) ? act->nb[2] : act->nb[3]);
-        struct htp_tensor act_collapsed;
-        struct htp_tensor dsts_collapsed[HTP_OP_MAX_OUTPUTS];
-        const struct htp_tensor * orig_dsts[HTP_OP_MAX_OUTPUTS];
-
-        htp_mm_tensor_collapse_rows(&act_collapsed, act, s1);
-        octx->src[n_weights] = &act_collapsed;
-
-        for (uint32_t p = 0; p < n_weights; p++) {
-            orig_dsts[p] = octx->dsts[p];
-            const struct htp_tensor * d = octx->dsts[p];
-            const uint32_t sd = (d->ne[1] > 1) ? d->nb[1] : ((d->ne[2] > 1) ? d->nb[2] : d->nb[3]);
-            htp_mm_tensor_collapse_rows(&dsts_collapsed[p], d, sd);
-            octx->dsts[p] = &dsts_collapsed[p];
-        }
-
-        const int status = op_matmul_nx_impl(octx);
-
-        octx->src[n_weights] = act;
-        for (uint32_t p = 0; p < n_weights; p++) {
-            octx->dsts[p] = orig_dsts[p];
-        }
-        return status;
-    }
-
     return op_matmul_nx_impl(octx);
 }

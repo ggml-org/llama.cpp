@@ -1984,29 +1984,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 int op_unary(struct htp_ops_context * octx) {
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
-        case HTP_TYPE_F16: {
-            if (!htp_unary_is_elementwise(octx->op)) {
-                return execute_op_unary(octx);
-            }
-
-            const struct htp_unary_kernel_params * kparams = (const struct htp_unary_kernel_params *) octx->kernel_params;
-
-            struct htp_tensor src0_c = *octx->src[0];
-            struct htp_tensor dst_c  = *octx->dst;
-            memcpy(src0_c.ne, kparams->ne,      sizeof(src0_c.ne));
-            memcpy(dst_c.ne,  kparams->ne,      sizeof(dst_c.ne));
-            memcpy(src0_c.nb, kparams->src0_nb, sizeof(src0_c.nb));
-            memcpy(dst_c.nb,  kparams->dst_nb,  sizeof(dst_c.nb));
-
-            const struct htp_tensor * orig_src0 = octx->src[0];
-            const struct htp_tensor * orig_dst  = octx->dst;
-            octx->src[0] = &src0_c;
-            octx->dst    = &dst_c;
-            const int status = execute_op_unary(octx);
-            octx->src[0] = orig_src0;
-            octx->dst    = orig_dst;
-            return status;
-        }
+        case HTP_TYPE_F16:
+            return execute_op_unary(octx);
 
         default:
             return HTP_STATUS_NO_SUPPORT;

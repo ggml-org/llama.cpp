@@ -8,9 +8,11 @@
 		gaugePopup,
 		gaugePopupClose
 	} from './gauge-popup.svelte';
+	import { FoldVertical, Loader2 } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { deviceStore } from '$lib/stores';
+	import { agenticStore, chatStore, conversationsStore, deviceStore } from '$lib/stores';
 	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();
@@ -53,6 +55,25 @@
 			gauge.contextTotal > 0 &&
 			(gauge.activeModelId !== null || gauge.isActiveModelLoaded)
 	);
+
+	const showCompactButton = $derived(chatStore.canCompact(conversationsStore.activeMessages));
+
+	const activeConvId = $derived(conversationsStore.activeConversation?.id ?? null);
+
+	// A summary in flight keeps the card open for the numbers, so the action
+	// reports the run instead of inviting a second one.
+	const isCompacting = $derived(activeConvId !== null && chatStore.isCompacting(activeConvId));
+
+	const isCompactDisabled = $derived.by(() => {
+		if (!activeConvId) return true;
+
+		return chatStore.isChatLoading(activeConvId) || agenticStore.isRunning(activeConvId);
+	});
+
+	function handleCompact() {
+		gaugePopupClose();
+		chatStore.compactConversation();
+	}
 </script>
 
 {#snippet usage()}
@@ -60,6 +81,26 @@
 		{formatParameters(gauge.contextUsed)}
 		/ {gauge.contextTotal !== null ? formatParameters(gauge.contextTotal) : '-'}
 	</span>
+{/snippet}
+
+{#snippet compactAction()}
+	{#if showCompactButton}
+		<Button
+			class="my-1 mt-3 w-full gap-1.5"
+			disabled={isCompactDisabled}
+			onclick={handleCompact}
+			size="sm"
+			variant="tertiary"
+		>
+			{#if isCompacting}
+				<Loader2 class="h-3.5 w-3.5 animate-spin" />
+				Compacting...
+			{:else}
+				<FoldVertical class="h-3.5 w-3.5" />
+				Compact conversation
+			{/if}
+		</Button>
+	{/if}
 {/snippet}
 
 {#snippet body()}
@@ -123,19 +164,21 @@
 				{@render usage()}
 
 				{@render body()}
+
+				{@render compactAction()}
 			</div>
 		</Drawer.Content>
 	</Drawer.Root>
 {:else if gaugePopup.open}
 	<div
 		bind:this={cardEl}
-		class="absolute z-50 w-64 -translate-x-1/2 rounded-lg border border-border/50 bg-popover p-3 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"
+		class="absolute z-50 w-64 -translate-x-1/2 rounded-xl border border-border bg-popover p-1.5 text-sm text-popover-foreground shadow-md dark:border-border/20"
 		onpointerenter={gaugeCardEnter}
 		onpointerleave={gaugeCardLeave}
 		role="status"
 		style="left: {gaugePopup.centerX}px; bottom: {gaugePopup.bottom}px"
 	>
-		<div class="flex flex-col gap-2">
+		<div class="flex flex-col gap-2 px-2 py-1.5">
 			<div class="flex items-center gap-2">
 				<span class="font-medium">Context</span>
 
@@ -145,6 +188,8 @@
 			</div>
 
 			{@render body()}
+
+			{@render compactAction()}
 		</div>
 	</div>
 {/if}

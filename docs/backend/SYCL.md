@@ -784,6 +784,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_TARGET   | INTEL *(default)*                     | Set the SYCL target device type.            |
 | GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. [1.](#sycl-f16-footnote) |
+| GGML_SYCL_SUPPORT_XMX | ON *(default)* \|OFF *(Optional)* | Build the code paths that use XMX (DPAS) instructions. Set OFF for AOT builds targeting iGPUs without XMX, which otherwise fail to compile. |
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
@@ -812,6 +813,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_ENABLE_DNN | 0 or 1 (default)| Enable running computations through oneDNN and always use oneMKL. |
 | GGML_SYCL_FA_ONEDNN | 1 (default) or 0 | Enable the oneDNN fused SDPA (flash-attention) path on supported GPUs. Set to 0 to always use the native SYCL flash-attention kernel. |
 | GGML_SYCL_FA_ONEDNN_MAX_KV | 0 (default, disabled) or positive integer | By default (0), all sequences are handled by the oneDNN fused SDPA path, regardless of KV length; a positive value caps that length, past which sequences fall back to the native kernel. If GPU driver watchdog resets (DEVICE_LOST) occur during long-context inference, set this near the context depth where they start, e.g. 24576. |
+| GGML_SYCL_FA_DPAS | 1 (default) or 0 | Enable the XMX flash-attention kernel for a q4_0 or q8_0 KV cache (`-ctk q4_0 -ctv q4_0` or `-ctk q8_0 -ctv q8_0`) on Xe2 or newer GPUs (Arc B-series, Lunar Lake, Panther Lake, Wildcat Lake). It reads the quantized cache directly for decode and batches of up to 31 tokens, head sizes 64, 96, 128, 256 and 512, up to 32 query heads per KV head. Set to 0 to use the native SYCL flash-attention kernels. |
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | GGML_SYCL_ENABLE_MKL_FA | 1 (default) or 0 | Enable oneMKL GEMM flash attention for XMX-accelerated prompt processing with quantized KV cache. Automatically activates during prefill (prompt processing) when all conditions are met: (1) flash-attn enabled (`-fa` or `--flash-attn on`), (2) KV cache quantized (`--cache-type-k q8_0 --cache-type-v q8_0` or other `*_0/*_1` types), (3) batch size ≥ 1024 (`--batch-size 1024`), (4) prompt length ≥ 1024 tokens. Set to 0 to force the TILE kernel for A/B testing. Example minimum command: `llama-cli -m model.gguf -fa -ngl 99 --cache-type-k q8_0 --cache-type-v q8_0 --batch-size 1024 -p "your prompt"` |
 | GGML_SYCL_MKL_FA_DEBUG | 0 (default) or 1 | Enable per-call diagnostic logging for MKL flash attention: GEMM/softmax timings, interleaved-head detection, and buffer memory usage. |
@@ -845,6 +847,18 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 
    Then benchmark with your preferred tool, such as `llama-bench`.
    For graph activity details (including reuse), set `GGML_SYCL_DEBUG=1` and look for `[SYCL-GRAPH]` messages.
+
+### Flash-attention kernels
+
+Attention dispatches on shape and hardware.
+
+DPAS is the quantized path. q4_0 or q8_0 KV cache, decode and batches up to 31 tokens, Xe2 and newer only. It issues dpas straight on the quantized blocks and never materialises an f16 copy. vISA gets used here because joint_matrix has no s4 type.
+
+oneDNN does XMX through SDPA but converts KV to f16 first, so it ends up on prefill: 32+ tokens and 1K+ keys. MKL is the prompt processing equivalent through oneMKL GEMM, also f16.
+
+VEC/TILE are plain kernels with no XMX in them. They run when DPAS is off or the hardware doesn't support it.
+
+joint_matrix belongs to the matmul GEMMs. Attention doesn't use it.
 
 ## Compile-time Flags
 

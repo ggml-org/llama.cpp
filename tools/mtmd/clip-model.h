@@ -175,6 +175,12 @@ struct clip_hparams {
     // name of the weight variant, some pipelines tune themselves on it
     std::string gen_model_variant;
 
+    // sampling defaults of the generated audio: greedy, no top-k, no repetition penalty
+    float   gen_temp           = 0.0f;
+    int32_t gen_top_k          = 0;
+    float   gen_penalty_repeat = 1.0f;
+    int32_t gen_penalty_last_n = 0;
+
     // pocket-tts
     static constexpr int32_t pockettts_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
@@ -195,6 +201,7 @@ struct clip_hparams {
     int32_t wav_dac_n_block      = 0;
     int32_t wav_dac_n_res        = 0;
     int32_t wav_tfm_swa          = 0; // pre_transformer's KV cache size, in frames
+    int32_t wav_frame_stack      = 0; // lfm3a codec: decoder positions per frame
 
     // mimo-v2.5: LLM-side connector (input_local_transformer)
     int32_t audio_local_n_layer = 0;
@@ -286,6 +293,9 @@ struct clip_layer {
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
 
+    // lfm3: per-head sigmoid gate on the attention output
+    ggml_tensor * attn_gate_w = nullptr;
+
     ggml_tensor * attn_post_norm_w = nullptr;
 
     ggml_tensor * ff_up_w = nullptr;
@@ -324,6 +334,11 @@ struct clip_layer {
     ggml_tensor * deepstack_fc1_b = nullptr;
     ggml_tensor * deepstack_fc2_w = nullptr;
     ggml_tensor * deepstack_fc2_b = nullptr;
+
+    // lfm3vl conv layers
+    ggml_tensor * conv2d_in_proj_w  = nullptr;
+    ggml_tensor * conv2d_spatial_w  = nullptr; // may be nullptr
+    ggml_tensor * conv2d_out_proj_w = nullptr;
 
     // sam rel_pos
     ggml_tensor * rel_pos_w = nullptr;
@@ -561,6 +576,7 @@ struct clip_code2wav {
     // quantizer: RVQ codebook decode
     ggml_tensor * quant_first_in_w  = nullptr; // semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     ggml_tensor * quant_first_out_w = nullptr;
+    ggml_tensor * quant_first_out_b = nullptr;
     ggml_tensor * quant_first_cb_w  = nullptr; // codebook (1 layer)
     ggml_tensor * quant_rest_in_w   = nullptr; // acoustic RVQ
     ggml_tensor * quant_rest_out_w  = nullptr;
@@ -786,6 +802,9 @@ struct clip_model {
     ggml_tensor * yasa_vision_pos_embed = nullptr;
     std::vector<yasa2_stage> yasa_stages;
 
+    // lfm3vl
+    ggml_tensor * lfm3vl_embedding_norm_w = nullptr;
+
     // pixtral, glm4v
     ggml_tensor * token_embd_img_break = nullptr;
 
@@ -843,6 +862,10 @@ struct clip_model {
     ggml_tensor * gen_code_head_w     = nullptr; // per-codebook output head, merged 3D
     ggml_tensor * gen_code_out_embd_w = nullptr; // codebook-0 embedding, fed back into the talker
     ggml_tensor * gen_code_norm_w     = nullptr; // final norm
+
+    // lfm3a depthformer (MaskGIT)
+    ggml_tensor * gen_code_head_norm_w = nullptr; // per-codebook norm before the tied head, merged 2D
+    ggml_tensor * gen_code_mask_embd   = nullptr;
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
