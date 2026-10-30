@@ -15,5 +15,5 @@ ExtraQuantType ggml_openvino_get_npu_requant_type();
 // token_embd.weight on NPU. nullopt: no NPU-specific rule, use the common default.
 std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const ggml_tensor * tensor);
 
-// Any other weight on NPU. nullopt: keep the GGUF layout (no requantization).
+// Any other weight on NPU.
 std::optional<ExtraQuantType> ggml_openvino_npu_weight_requant_type(const ggml_tensor * tensor);
