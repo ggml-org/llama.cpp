@@ -360,6 +360,10 @@ llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
 llama_build_and_test(test-autorelease.cpp       LABEL "model behavior")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
 
+# Test speculative decoding API
+llama_build_and_test(test-speculative.cpp LABEL "model" ARGS "${MODEL_DEST}")
+set_tests_properties(test-speculative PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 if (APPLE)
     llama_build(test-rset-release.cpp)
 endif()
