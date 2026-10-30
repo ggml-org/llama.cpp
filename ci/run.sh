@@ -304,8 +304,7 @@ function gg_run_test_llama_archs_models {
     set -e
 
     # TODO: fix and re-enable `test-llama-archs` on OpenVINO
-    # TODO: the `test-llama-archs` currently does not build on Windows, so we check if the binary exists
-    if [ -z ${GG_BUILD_OPENVINO} ] && [ -f ./build-ci-release/bin/test-llama-archs ]; then
+    if [ -z ${GG_BUILD_OPENVINO} ]; then
         rm -rf build-ci-models && mkdir -p build-ci-models
 
         # generate the dummy models used by the model-dependent tests
