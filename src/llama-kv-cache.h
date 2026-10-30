@@ -98,6 +98,7 @@ public:
     //       likely through `struct llama_memory_params`
     llama_kv_cache(
             const llama_model & model,
+                         bool   no_alloc,
           const llama_hparams & hparams,
                     ggml_type   type_k,
                     ggml_type   type_v,
@@ -106,7 +107,6 @@ public:
                          bool   unified,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
-                     uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
                llama_memory_t   mem_other,
@@ -275,9 +275,6 @@ private:
     const uint32_t n_seq_max = 1;
     const uint32_t n_stream  = 1;
 
-    // required padding
-    const uint32_t n_pad = 1;
-
     // SWA
     const uint32_t n_swa = 0;
 
@@ -308,7 +305,7 @@ private:
     bool ref_latch_enabled = true;
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    llama_memory_bufs ctxs_bufs;
 
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method

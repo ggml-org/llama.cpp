@@ -1,0 +1,162 @@
+name: Behavior Check
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/behavior-check.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.py',
+      '**/requirements*.txt',
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/behavior-check.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.py',
+      '**/requirements*.txt',
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-26.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: Build Dependencies
+        id: build_depends
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential libssl-dev git-lfs libjpeg-dev python3 python3-venv python3-pip
+
+      - name: Python Dependencies
+        id: python_depends
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements/requirements-convert_hf_to_gguf.txt
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: behavior-check-ubuntu-26.04-arm
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DGGML_NATIVE=OFF \
+            -DGGML_BACKEND_DL=OFF \
+            -DLLAMA_FATAL_WARNINGS=ON
+          time cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: behavior-check-ubuntu-26.04-arm
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      - name: Test
+        id: cmake_test
+        run: |
+          source .venv/bin/activate
+          cd build
+          ctest -L behavior -LE 'model|backend' --verbose --timeout 900
+
+  windows:
+    runs-on: windows-2025
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: behavior-check-windows-2025
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Python Dependencies
+        id: python_depends
+        shell: bash
+        run: |
+          python3 -m venv .venv
+          source .venv/Scripts/activate
+          pip install -r requirements/requirements-convert_hf_to_gguf.txt
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=OFF
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS%
+
+      - name: Test
+        id: cmake_test
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          cd build
+          ctest -C Release -L behavior -LE 'model|backend' --verbose --timeout 900

@@ -42,6 +42,7 @@ extern "C" {
     #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) neon_compute_fp32_to_fp16(x)
 
     #define GGML_CPU_FP16_TO_FP32(x) GGML_CPU_COMPUTE_FP16_TO_FP32(x)
+    #define GGML_CPU_FP32_TO_FP16(x) GGML_CPU_COMPUTE_FP32_TO_FP16(x)
 
     static inline float neon_compute_fp16_to_fp32(ggml_fp16_t h) {
         __fp16 tmp;
@@ -126,6 +127,8 @@ extern float ggml_table_f32_e8m0_half[1 << 8];
 // defined in ggml-cpu.c, initialized in ggml_cpu_init()
 extern float ggml_table_f32_ue4m3[1 << 8];
 
+extern float ggml_table_f32_f8_e4m3[1 << 8];
+
 // Use lookup table for E8M0 on x86 (faster than bit manipulation)
 #if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
 #define GGML_CPU_E8M0_TO_FP32_HALF(x) ggml_table_f32_e8m0_half[(uint8_t)(x)]
@@ -150,9 +153,15 @@ extern float ggml_table_f32_ue4m3[1 << 8];
 #define GGML_CPU_FP32_TO_FP16(x) GGML_CPU_COMPUTE_FP32_TO_FP16(x)
 #endif
 
-// On ARM NEON, it's quicker to directly convert x -> x instead of calling into ggml_lookup_fp16_to_fp32,
-// so we define GGML_CPU_FP16_TO_FP32 and GGML_CPU_FP32_TO_FP16 elsewhere for NEON.
-// This is also true for POWER9.
+// a branch that defines a GGML_CPU_COMPUTE_* macro must also select it, or the fallback takes over silently
+#if defined(GGML_CPU_COMPUTE_FP16_TO_FP32) && !defined(GGML_CPU_FP16_TO_FP32) && !defined(__F16C__) // see: https://github.com/ggml-org/llama.cpp/issues/30342
+#error "a branch defined GGML_CPU_COMPUTE_FP16_TO_FP32 without selecting it as GGML_CPU_FP16_TO_FP32"
+#endif
+#if defined(GGML_CPU_COMPUTE_FP32_TO_FP16) && !defined(GGML_CPU_FP32_TO_FP16)
+#error "a branch defined GGML_CPU_COMPUTE_FP32_TO_FP16 without selecting it as GGML_CPU_FP32_TO_FP16"
+#endif
+
+// fall back to the lookup table / the portable software conversion for whichever direction no branch selected
 #if !defined(GGML_CPU_FP16_TO_FP32)
 inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
     uint16_t s;

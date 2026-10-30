@@ -12,6 +12,8 @@ Simple usage:
 llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF -p "Hello world" --output out.wav
 ```
 
+Note: it's highly recommended to always provide a speaker reference voice (via `--tts-speaker-file`); otherwise, the model's performance may be degraded.
+
 Common params:
 - Sampling params such as `--top-k`, `--top-p`, `--temp`, etc.
 - `-n <number_of_frames>` limits the output length, e.g. `-n 500`. Note that how many milliseconds each frame represents varies by model
@@ -56,4 +58,55 @@ The [upstream repository](https://huggingface.co/kyutai/pocket-tts) holds one co
 ```sh
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --outfile pocket-tts.gguf
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --mmproj --outfile mmproj-pocket-tts.gguf
+```
+
+## Soprano
+
+Available params:
+- `--tts-speaker-file` is not supported; the model uses a fixed voice
+- Note: `lang` is not used. Supply normalized English text
+
+Example usage:
+
+```sh
+llama-tts -m soprano.gguf \
+    -mm mmproj-soprano.gguf \
+    -p "Hello world" \
+    --temp 0 \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+Both [Soprano-80M](https://huggingface.co/ekwek/Soprano-80M) and [Soprano-1.1-80M](https://huggingface.co/ekwek/Soprano-1.1-80M) are supported. Convert both files from the same model directory, including `decoder.pth`:
+
+```sh
+python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --outtype f32 --outfile soprano.gguf
+python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --outtype f16 --outfile mmproj-soprano.gguf
+```
+
+## LFM3-Audio
+
+Available params:
+- `--tts-lang` can be `ar`, `da`, `de`, `el`, `en`, `en-gb`, `es`, `fi`, `fr`, `he`, `it`, `ja`, `ko`, `nl`, `pl`, `pt`, `sv`, `tr`, `zh` (default: `en`), other values are used as the language name
+- `--tts-voice` can be `female` (default) or `male`
+- Note: `--tts-speaker-file` is not used, the model has no voice cloning
+- Note: `--top-k` and `--top-p` are not used, audio frames are sampled with the settings of the model card (LFM3-Audio: temperature 1.0, top-k 128, repetition penalty 1.1 over 4096 frames; LFM3-Omni: temperature 0.4, repetition penalty 1.2 over 64 frames), the `audio_*` keys of `generation_config.json` override them at conversion
+- Each frame is 80 ms, generation stops at the end-of-audio frame
+
+Example usage:
+
+```sh
+llama-tts -m lfm3-audio.gguf \
+    -mm mmproj-lfm3-audio.gguf \
+    -p "Hello world" \
+    --tts-voice male \
+    --output out.wav
+```
+
+The mmproj holds the audio encoder (for ASR), the depthformer and the codec decoder, the latter two are exported when the checkpoint has an `audio_tokenizer` directory:
+
+```sh
+python convert_hf_to_gguf.py path/to/lfm3-audio --outfile lfm3-audio.gguf
+python convert_hf_to_gguf.py path/to/lfm3-audio --mmproj --outfile mmproj-lfm3-audio.gguf
 ```

@@ -99,6 +99,7 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatPerformanceTime,
+	formatRelativeTime,
 	formatAttachmentText
 } from './formatters';
 
@@ -215,6 +216,8 @@ export {
 	type PathQuery
 } from './working-directory';
 
+export { resolveTabTarget, resolveTabView, type TabView } from './chat-tabs';
+
 // Shared `file_glob_search` runner with a short-lived result cache
 export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
 
@@ -282,6 +285,7 @@ export {
 	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
+	isSectionExpandedByDefault,
 	classifyToolResult,
 	classifyContinueIntent
 } from './agentic';
@@ -352,6 +356,13 @@ export { getToolUi } from './tool-ui';
 // Chat command picker
 
 export { getChatCommands } from './chat-commands';
+export {
+	canCompactMessages,
+	compactionCut,
+	compactionTokensBefore,
+	lastContextBearingMessage,
+	sliceAtLastCompaction
+} from './compaction';
 
 // Sandbox tool definition
 // SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.

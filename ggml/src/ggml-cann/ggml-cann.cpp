@@ -920,7 +920,7 @@ static void * ggml_backend_cann_buffer_get_base(ggml_backend_buffer_t buffer) {
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform_q4_0(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform_q4_0(const ggml_tensor * tensor, const void * src, void * dst) {
     int64_t n_elems     = ggml_nelements(tensor);
     int64_t groups      = n_elems / QK4_0;
     size_t  quant_bytes = n_elems * sizeof(uint8_t) / 2;
@@ -1014,7 +1014,7 @@ static void ggml_backend_cann_transform_back_q4_0(const ggml_tensor * tensor, vo
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform_q8_0(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform_q8_0(const ggml_tensor * tensor, const void * src, void * dst) {
     int64_t n_elems     = ggml_nelements(tensor);
     int64_t groups      = n_elems / QK8_0;
     size_t  quant_bytes = n_elems * sizeof(uint8_t);
@@ -1075,7 +1075,7 @@ static void ggml_backend_cann_transform_back_q8_0(const ggml_tensor * tensor, co
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform(const ggml_tensor * tensor, const void * src, void * dst) {
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             ggml_backend_cann_transform_q4_0(tensor, src, dst);
@@ -1478,6 +1478,9 @@ static const ggml_backend_buffer_i ggml_backend_cann_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_cann_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cann_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 /**
