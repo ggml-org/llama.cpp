@@ -11,6 +11,13 @@
 	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
 	import { untrack } from 'svelte';
 
+	interface Props {
+		/** Sizes and places the trigger, the inline dial size by default. */
+		class?: string;
+	}
+
+	let { class: className = 'h-5 w-5 max-md:h-6 max-md:w-6' }: Props = $props();
+
 	const gauge = useContextGauge();
 
 	$effect(() => {
@@ -43,7 +50,7 @@
 
 <div
 	aria-label="Context usage"
-	class="flex h-5 w-5 cursor-default items-center justify-center max-md:h-6 max-md:w-6"
+	class={['flex cursor-default items-center justify-center', className]}
 	data-context-gauge-trigger
 	onclick={gaugeTriggerClick}
 	onkeydown={gaugeTriggerKeydown}

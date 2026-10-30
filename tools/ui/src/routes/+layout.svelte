@@ -334,7 +334,10 @@
 				deviceStore.isMobile && 'relative z-10 min-h-dvh bg-background',
 				deviceStore.isMobile &&
 					sidebarReveal.dragOffset === null &&
-					'transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]'
+					'transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+				// slid aside: nothing inside scrolls or takes a tap, which lands on the page itself and
+				// closes the sidebar; forced on every descendant, as the fixed bars opt back into events
+				sidebarReveal.isRevealed && 'touch-none [&_*]:pointer-events-none!'
 			]}
 			onclickcapture={sidebarReveal.handleClickCapture}
 			onpointercancel={sidebarReveal.handlePointerUp}
@@ -346,7 +349,7 @@
 			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH)}
 				<ActionIcon
 					ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
-					class="fixed top-4 left-4 z-20 h-10 w-10 rounded-full bg-muted!"
+					class="fixed top-4 left-4 z-20 h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
 					icon={MenuIcon}
 					iconSize="size-6"
 					onclick={() => (uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded)}

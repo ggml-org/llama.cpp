@@ -97,6 +97,15 @@ export function useSidebarReveal() {
 		syncThemeColor(value);
 	});
 
+	// the page stays locked from the moment it starts sliding aside until it is fully back
+	const isRevealed = $derived(
+		deviceStore.isMobile && (uiStore.isSidebarExpanded || progress.current > 0)
+	);
+
+	$effect(() => {
+		document.documentElement.style.overflow = isRevealed ? 'hidden' : '';
+	});
+
 	function handlePointerDown(event: PointerEvent) {
 		suppressClick = false;
 
@@ -184,6 +193,10 @@ export function useSidebarReveal() {
 		handlePointerCancel: (event: PointerEvent) => handlePointerEnd(event),
 		handlePointerDown,
 		handlePointerMove,
-		handlePointerUp: (event: PointerEvent) => handlePointerEnd(event)
+		handlePointerUp: (event: PointerEvent) => handlePointerEnd(event),
+		/** The page is slid aside, even partly: its contents take no scrolling or taps. */
+		get isRevealed() {
+			return isRevealed;
+		}
 	};
 }

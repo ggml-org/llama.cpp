@@ -5,6 +5,7 @@
 	import { disableScrollHandling, onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
+		ChatFormContextGauge,
 		ChatMessages,
 		ChatScreenDragOverlay,
 		ChatScreenForm,
@@ -25,6 +26,7 @@
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
 	import { useChatScreenFileUpload } from '$lib/hooks/use-chat-screen-file-upload.svelte';
+	import { useShowContextGauge } from '$lib/hooks/use-context-gauge.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
 	import {
@@ -66,6 +68,7 @@
 	// The page is the scroller: it follows new content while the reader sits at
 	// the bottom, and otherwise leaves their position alone.
 	const stick = createStickToBottom();
+	const showContextGauge = useShowContextGauge();
 	let stickPin: HTMLDivElement | undefined = $state();
 	const activeModel = useChatScreenActiveModel();
 	const fileUpload = useChatScreenFileUpload({
@@ -241,6 +244,13 @@
 		ondrop={dragAndDrop.dragHandlers.drop}
 		role="main"
 	>
+		<!-- a phone pins the gauge to the top right, across from the menu toggle -->
+		{#if deviceStore.isMobile && showContextGauge.current}
+			<ChatFormContextGauge
+				class="fixed top-4 right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
+			/>
+		{/if}
+
 		{#if !isEmpty}
 			<ChatMessages
 				messages={conversationsStore.activeMessages}
