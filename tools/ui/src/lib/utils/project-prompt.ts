@@ -12,15 +12,17 @@ const CHARS_PER_TOKEN = 4;
 /** The parts of a project, saved or still a draft, that its chats start with. */
 type ProjectPromptSource = Pick<Project, 'contextItems' | 'instructions' | 'name'>;
 
+/**
+ * The project's instructions go in as the user wrote them, with no heading or
+ * preamble around them; the context list follows, labelled, when there is one.
+ */
 export function buildProjectSystemPrompt(project: ProjectPromptSource | undefined): string {
 	if (!project) return '';
 
 	const sections: string[] = [];
 	const instructions = project.instructions.trim();
 
-	if (instructions) {
-		sections.push(`Instructions for this project:\n${instructions}`);
-	}
+	if (instructions) sections.push(instructions);
 
 	if (project.contextItems.length > 0) {
 		const items = project.contextItems.map((item) => {
@@ -33,12 +35,10 @@ export function buildProjectSystemPrompt(project: ProjectPromptSource | undefine
 			return `- ${item.name} (uploaded file)`;
 		});
 
-		sections.push(`Context the user added to this project:\n${items.join('\n')}`);
+		sections.push(`Context the user added to the project "${project.name}":\n${items.join('\n')}`);
 	}
 
-	if (sections.length === 0) return '';
-
-	return `You are working in the project "${project.name}".\n\n${sections.join('\n\n')}`;
+	return sections.join('\n\n');
 }
 
 /**
