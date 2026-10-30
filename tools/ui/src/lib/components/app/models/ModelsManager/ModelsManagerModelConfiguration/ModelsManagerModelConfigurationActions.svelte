@@ -63,18 +63,18 @@
 		<div class="flex gap-3">
 			<Button class="flex-1 gap-1.5" onclick={onToggleDownload} {size} variant="outline">
 				{#if isDownloadPaused}
-					<Play class="h-3.5 w-3.5" />
+					<Play class="size-icon-md" />
 
 					Resume downloading
 				{:else}
-					<Pause class="h-3.5 w-3.5" />
+					<Pause class="size-icon-md" />
 
 					Pause downloading
 				{/if}
 			</Button>
 
 			<Button class="flex-1 gap-1.5" onclick={onRequestCancelDownload} {size} variant="outline">
-				<Trash2 class="h-3.5 w-3.5" />
+				<Trash2 class="size-icon-md" />
 
 				Cancel download
 			</Button>
@@ -82,7 +82,7 @@
 
 		{#if onSeeInDiscover && discoverEnabled}
 			<Button class="gap-1.5" onclick={onSeeInDiscover} {size} variant="secondary">
-				<Compass class="h-3.5 w-3.5" />
+				<Compass class="size-icon-md" />
 
 				See in Discover
 			</Button>
@@ -92,11 +92,11 @@
 			<!-- a phone picks its model in the manager, so pointing this chat at it leads -->
 			<Button class="w-full gap-1.5" onclick={hasChat ? onUseInChat : onUseInNewChat} {size}>
 				{#if hasChat}
-					<MessageSquare class="h-3.5 w-3.5" />
+					<MessageSquare class="size-icon-md" />
 
 					Use in this chat
 				{:else}
-					<SquarePen class="h-3.5 w-3.5" />
+					<SquarePen class="size-icon-md" />
 
 					Start a new chat
 				{/if}
@@ -106,7 +106,7 @@
 		<div class="flex gap-3 mt-2">
 			{#if !isMobile}
 				<Button class="flex-1 gap-1.5" onclick={onUseInNewChat} {size}>
-					<SquarePen class="h-3.5 w-3.5" />
+					<SquarePen class="size-icon-md" />
 
 					Start a new chat
 				</Button>
@@ -121,15 +121,15 @@
 					variant="outline"
 				>
 					{#if isLoading}
-						<Loader2 class="h-3.5 w-3.5 animate-spin" />
+						<Loader2 class="size-icon-md animate-spin" />
 
 						Loading...
 					{:else if isLoaded}
-						<Eject class="h-3.5 w-3.5" />
+						<Eject class="size-icon-md" />
 
 						Unload model
 					{:else}
-						<Power class="h-3.5 w-3.5" />
+						<Power class="size-icon-md" />
 
 						Load model
 					{/if}
@@ -138,7 +138,7 @@
 
 			{#if onSeeInDiscover && discoverEnabled}
 				<Button class="flex-1 gap-1.5" onclick={onSeeInDiscover} {size} variant="secondary">
-					<Compass class="h-3.5 w-3.5" />
+					<Compass class="size-icon-md" />
 
 					See in Discover
 				</Button>

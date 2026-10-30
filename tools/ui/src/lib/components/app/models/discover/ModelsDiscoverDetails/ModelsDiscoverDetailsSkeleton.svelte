@@ -8,7 +8,7 @@
 	<div class="space-y-3">
 		<div class="flex items-start justify-between gap-3">
 			<div class="flex min-w-0 items-center gap-2">
-				<Skeleton class="h-12 w-12 rounded-md" />
+				<Skeleton class="size-12 rounded-md" />
 
 				<div class="min-w-0 space-y-1.5">
 					<Skeleton class="h-5 w-56 max-w-full" />

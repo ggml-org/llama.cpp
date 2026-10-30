@@ -6,7 +6,7 @@
 <Card.Root class="grid gap-3 p-4">
 	<div class="flex items-center justify-between gap-4">
 		<div class="flex items-center gap-2">
-			<Skeleton class="h-5 w-5 rounded" />
+			<Skeleton class="size-5 rounded" />
 
 			<Skeleton class="h-5 w-28" />
 
@@ -33,10 +33,10 @@
 	<Skeleton class="h-3.5 w-36" />
 
 	<div class="flex justify-end gap-2">
-		<Skeleton class="h-8 w-8 rounded" />
+		<Skeleton class="size-8 rounded" />
 
-		<Skeleton class="h-8 w-8 rounded" />
+		<Skeleton class="size-8 rounded" />
 
-		<Skeleton class="h-8 w-8 rounded" />
+		<Skeleton class="size-8 rounded" />
 	</div>
 </Card.Root>

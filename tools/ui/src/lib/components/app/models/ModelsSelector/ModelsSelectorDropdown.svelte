@@ -97,7 +97,7 @@
 </script>
 
 {#snippet selectorTriggerInner()}
-	<ModelsSelectorTriggerIcon class="mr-0.375 size-3.5 shrink-0" option={selectedOption} />
+	<ModelsSelectorTriggerIcon class="mr-0.375 size-icon-sm shrink-0" option={selectedOption} />
 
 	<span class="flex min-w-0 items-center gap-0.5">
 		{#if selectedOption}
@@ -208,7 +208,7 @@
 			{#snippet footer()}
 				<DropdownMenu.Group class="px-2">
 					<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
-						<MODEL_ICON class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+						<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
 
 						Manage models
 					</DropdownMenu.Item>

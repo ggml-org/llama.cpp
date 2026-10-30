@@ -36,9 +36,9 @@
 					class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
 				>
 					{#if isExpanded}
-						<ChevronDown class="h-3.5 w-3.5 shrink-0" />
+						<ChevronDown class="size-icon-sm shrink-0" />
 					{:else}
-						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
+						<ChevronRight class="size-icon-sm shrink-0" />
 					{/if}
 
 					{@const groupToggleKey =

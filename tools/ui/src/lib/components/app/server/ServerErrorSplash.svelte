@@ -129,9 +129,9 @@
 	<div class="w-full max-w-md px-4 text-center">
 		<div in:fade={{ duration: 300 }} class="mb-6">
 			<div
-				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10"
+				class="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-destructive/10"
 			>
-				<AlertTriangle class="h-8 w-8 text-destructive" />
+				<AlertTriangle class="size-8 text-destructive" />
 			</div>
 
 			<h2 class="mb-2 text-xl font-semibold">Server Connection Error</h2>

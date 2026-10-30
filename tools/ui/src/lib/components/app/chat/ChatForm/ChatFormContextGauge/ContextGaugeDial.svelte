@@ -15,7 +15,7 @@
 	const CIRCUMFERENCE = $derived(2 * Math.PI * RADIUS);
 
 	const strokeLevelClass = $derived(colorLevelTextClass(level));
-	const dimensions = $derived(size === 'md' ? 'h-6 w-6' : 'h-5 w-5');
+	const dimensions = $derived(size === 'md' ? 'size-6' : 'size-5');
 	const strokeWidth = $derived(size === 'md' ? 4 : 3);
 </script>
 

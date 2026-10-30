@@ -40,7 +40,7 @@
 	{/if}
 
 	{#if state === ModelRowDownloadState.DOWNLOADED}
-		<Check class="ml-auto h-4 w-4 shrink-0 text-green-500" />
+		<Check class="ml-auto size-icon-md shrink-0 text-green-500" />
 	{:else}
 		<span class="ml-auto flex shrink-0 items-center">
 			{#if percent !== null}

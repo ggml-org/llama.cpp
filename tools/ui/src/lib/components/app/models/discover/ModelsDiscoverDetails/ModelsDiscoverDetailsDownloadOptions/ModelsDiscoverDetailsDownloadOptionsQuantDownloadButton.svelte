@@ -90,7 +90,7 @@
 			{companion.kind}{companion.quant ? `:${companion.quant}` : ''}
 
 			{#if companion.onDisk}
-				<Check class="h-2.5 w-2.5" />
+				<Check class="size-2.5" />
 			{/if}
 		</span>
 	{/if}
@@ -131,13 +131,13 @@
 		<span>{HuggingFaceService.formatFileSize(downloadBytes)}</span>
 
 		<!-- icon slot: crossfade check -> x; touch devices show the delete affordance directly -->
-		<span class="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+		<span class="relative inline-flex size-3.5 shrink-0 items-center justify-center">
 			<Check
-				class="absolute h-3.5 w-3.5 text-green-500 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-75 group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
+				class="absolute size-icon-sm text-green-500 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-75 group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
 			/>
 
 			<X
-				class="absolute h-3.5 w-3.5 scale-75 text-destructive opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+				class="absolute size-icon-sm scale-75 text-destructive opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
 			/>
 		</span>
 	</button>
@@ -167,25 +167,25 @@
 		{#if entry.isDownloading}
 			<!-- spinner fades into the pause affordance on hover; opacity only, the
 			     spin keyframes own the transform so scale would fight them -->
-			<span class="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+			<span class="relative inline-flex size-3.5 shrink-0 items-center justify-center">
 				<Loader2
-					class="absolute h-3.5 w-3.5 animate-spin text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
+					class="absolute size-icon-sm animate-spin text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
 				/>
 
 				<Pause
-					class="absolute h-3.5 w-3.5 opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+					class="absolute size-icon-sm opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
 				/>
 			</span>
 		{:else}
 			<!-- paused: the state at rest, the resume affordance taking its place on
 			     hover, the way the spinner gives way to the pause action above -->
-			<span class="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+			<span class="relative inline-flex size-3.5 shrink-0 items-center justify-center">
 				<Pause
-					class="absolute h-3.5 w-3.5 text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
+					class="absolute size-icon-sm text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
 				/>
 
 				<Play
-					class="absolute h-3.5 w-3.5 opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+					class="absolute size-icon-sm opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
 				/>
 			</span>
 		{/if}
@@ -198,12 +198,12 @@
 	<button
 		{...props}
 		aria-label="Cancel downloading"
-		class="relative grid h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/70"
+		class="relative grid size-3.5 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/70"
 		onclick={() => onRequestCancel?.(entry.repoWithTag)}
 		type="button"
 	>
 		<X
-			class="h-3.5 w-3.5 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] text-destructive [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+			class="size-icon-sm transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] text-destructive [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
 		/>
 	</button>
 {/snippet}
@@ -231,12 +231,12 @@
 
 		<span>{HuggingFaceService.formatFileSize(downloadBytes)}</span>
 
-		<span class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+		<span class="inline-flex size-3.5 shrink-0 items-center justify-center">
 			{#if entry.isFailed}
-				<RotateCw class="h-3.5 w-3.5 text-destructive" />
+				<RotateCw class="size-icon-sm text-destructive" />
 			{:else}
 				<Download
-					class="h-3.5 w-3.5 text-muted-foreground transition-colors duration-150 group-hover:text-foreground"
+					class="size-icon-sm text-muted-foreground transition-colors duration-150 group-hover:text-foreground"
 				/>
 			{/if}
 		</span>

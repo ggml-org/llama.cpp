@@ -54,7 +54,7 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<Pencil class="h-5 w-5" />
+				<Pencil class="size-icon-lg" />
 				Rename conversation
 			</AlertDialog.Title>
 

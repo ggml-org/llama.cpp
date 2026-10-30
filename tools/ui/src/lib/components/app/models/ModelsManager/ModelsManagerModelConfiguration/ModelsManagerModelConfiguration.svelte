@@ -136,7 +136,7 @@
 					size="sm"
 					variant="ghost"
 				>
-					<Trash2 class="h-4 w-4" />
+					<Trash2 class="size-icon-md" />
 					Delete this model from disk
 				</Button>
 			</div>

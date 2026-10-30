@@ -79,7 +79,7 @@
 
 	<span class="justify-self-center max-md:hidden">
 		<span
-			class="block h-2.5 w-2.5 rounded-full {anyLoaded
+			class="block size-2.5 rounded-full {anyLoaded
 				? 'status-lamp orb-success'
 				: 'border border-muted-foreground/50'}"
 		></span>
@@ -87,9 +87,9 @@
 
 	<span class="flex justify-center {MODEL_ROW_TRAILING_CELL_CLASS}">
 		{#if expanded}
-			<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
+			<ChevronUp class="size-icon-sm text-muted-foreground" />
 		{:else}
-			<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+			<ChevronDown class="size-icon-sm text-muted-foreground" />
 		{/if}
 	</span>
 </div>

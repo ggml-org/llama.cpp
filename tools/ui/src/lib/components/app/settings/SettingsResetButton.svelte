@@ -26,7 +26,7 @@
 
 {#if settingsStore.hasCustomSettings}
 	<Button onclick={handleResetClick} variant="outline">
-		<RotateCcw class="h-3 w-3" />
+		<RotateCcw class="size-icon-md" />
 
 		Reset to default
 	</Button>

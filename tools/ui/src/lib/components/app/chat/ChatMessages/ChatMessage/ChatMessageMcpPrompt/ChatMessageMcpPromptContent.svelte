@@ -100,7 +100,7 @@
 					{#if serverFavicon}
 						<img
 							alt=""
-							class="h-3.5 w-3.5 shrink-0 rounded-sm"
+							class="size-3.5 shrink-0 rounded-sm"
 							onerror={(e) => {
 								(e.currentTarget as HTMLImageElement).style.display = 'none';
 							}}

@@ -97,7 +97,7 @@
 
 			<div class="mt-2 flex justify-end gap-2">
 				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
-					<X class="mr-1 h-3 w-3" />
+					<X class="mr-1 size-icon-md" />
 
 					Cancel
 				</Button>
@@ -108,7 +108,7 @@
 					onclick={editCtx.save}
 					size="sm"
 				>
-					<Check class="mr-1 h-3 w-3" />
+					<Check class="mr-1 size-icon-md" />
 
 					Save
 				</Button>

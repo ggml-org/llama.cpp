@@ -35,9 +35,9 @@
 
 	<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 		<ActionIcon
-			class="h-5 w-5 hover:text-foreground"
+			class="size-icon-lg hover:text-foreground"
 			icon={isPaused ? MODEL_DOWNLOAD_ICONS.resume : MODEL_DOWNLOAD_ICONS.pause}
-			iconSize="h-4 w-4"
+			iconSize="size-icon-md"
 			onclick={() => void modelsStore.status.toggleDownload(option.model)}
 			stopPropagationOnClick
 			tooltip={isPaused ? 'Resume downloading' : 'Pause downloading'}

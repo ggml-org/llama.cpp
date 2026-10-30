@@ -3,23 +3,25 @@
 	import type { VariantProps } from 'tailwind-variants';
 
 	export const toggleVariants = tv({
-		base: "focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive gap-1 rounded-md text-sm font-medium outline-none transition-all focus-visible:ring-[3px] inline-flex items-center justify-center whitespace-nowrap disabled:pointer-events-none disabled:opacity-50 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 group/toggle",
+		base: "focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive gap-2 rounded-control text-label font-medium outline-none transition-all focus-visible:ring-[3px] inline-flex items-center justify-center whitespace-nowrap disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*='size-'])]:size-icon-md [&_svg]:pointer-events-none [&_svg]:shrink-0 group/toggle hover:text-(--toggle-text) hover:bg-(--toggle-background-hover) data-[state=on]:bg-(--toggle-background-on) data-[state=on]:hover:bg-(--toggle-background-on) data-[state=on]:text-(--toggle-text)",
 		defaultVariants: {
 			size: 'default',
 			variant: 'default'
 		},
+		// the same heights, padding and corners as button; icon sizes are square
 		variants: {
 			size: {
-				default:
-					'h-8 min-w-8 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2',
-				lg: 'h-9 min-w-9 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2',
-				sm: "h-7 min-w-7 rounded-md px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5"
+				default: 'h-control-md px-4 has-[>svg]:px-3',
+				icon: 'size-(--height-control-md)',
+				'icon-lg': 'size-(--height-control-lg) rounded-panel',
+				'icon-sm': 'size-(--height-control-sm)',
+				lg: 'h-control-lg rounded-panel px-6 has-[>svg]:px-4',
+				sm: 'h-control-sm gap-1.5 px-3 has-[>svg]:px-2.5'
 			},
 			variant: {
-				default:
-					'bg-transparent hover:bg-muted-foreground/10 hover:text-accent-foreground backdrop-blur-sm data-[state=on]:bg-accent data-[state=on]:text-accent-foreground',
+				default: 'bg-transparent backdrop-blur-sm',
 				outline:
-					'border bg-background shadow-sm hover:bg-muted-foreground/10 hover:text-accent-foreground backdrop-blur-sm data-[state=on]:bg-accent data-[state=on]:text-accent-foreground dark:border-input'
+					'matte-key border border-(--button-outline-border) bg-(--button-outline-background)'
 			}
 		}
 	});

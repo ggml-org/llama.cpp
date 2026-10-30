@@ -20,7 +20,7 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<FileX class="h-5 w-5 text-destructive" />
+				<FileX class="size-icon-lg text-destructive" />
 
 				Empty Files Detected
 			</AlertDialog.Title>

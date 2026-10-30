@@ -20,7 +20,7 @@
 	let {
 		displayName,
 		faviconUrl = null,
-		iconClass = 'h-5 w-5',
+		iconClass = 'size-icon-lg',
 		iconRounded = 'rounded-sm',
 		nameClass,
 		serverInfo,
@@ -57,7 +57,7 @@
 			rel="noopener noreferrer"
 			target="_blank"
 		>
-			<ExternalLink class="h-3 w-3" />
+			<ExternalLink class="size-icon-xs" />
 		</a>
 	{/if}
 </span>

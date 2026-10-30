@@ -74,7 +74,7 @@
 			size="sm"
 			variant="ghost"
 		>
-			<X class="h-3.5 w-3.5" />
+			<X class="size-icon-md" />
 
 			Clear filters
 		</Button>

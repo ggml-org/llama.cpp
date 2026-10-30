@@ -187,7 +187,7 @@
 	<div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
 		<ChatAttachmentsPreviewNavButtons onNext={next} onPrev={prev} show={allItems.length > 1} />
 
-		<div class="flex h-full w-full flex-col items-center justify-start overflow-auto py-4">
+		<div class="flex size-full flex-col items-center justify-start overflow-auto py-4">
 			{#if currentItem}
 				<ChatAttachmentsPreviewFileInfo {displayName} {fileSize} />
 

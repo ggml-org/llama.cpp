@@ -139,7 +139,7 @@
 			stickyClass="sticky z-10 bg-background"
 		>
 			{#snippet icon()}
-				<Download class="h-3.5 w-3.5 shrink-0" />
+				<Download class="size-icon-sm shrink-0" />
 			{/snippet}
 
 			{#each downloadEntries as entry (entry.repoWithTag)}

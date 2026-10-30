@@ -38,9 +38,9 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if isTimeout}
-					<TimerOff class={`h-5 w-5 ${iconClass}`} />
+					<TimerOff class={`size-icon-lg ${iconClass}`} />
 				{:else}
-					<AlertTriangle class={`h-5 w-5 ${iconClass}`} />
+					<AlertTriangle class={`size-icon-lg ${iconClass}`} />
 				{/if}
 
 				{title}

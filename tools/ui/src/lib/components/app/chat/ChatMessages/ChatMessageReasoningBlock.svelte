@@ -126,7 +126,7 @@
 <CollapsibleContentBlock
 	class="my-2"
 	icon={Lightbulb}
-	iconClass="h-3.5 w-3.5"
+	iconClass="size-icon-sm"
 	{onToggle}
 	{open}
 	{shimmerTitle}

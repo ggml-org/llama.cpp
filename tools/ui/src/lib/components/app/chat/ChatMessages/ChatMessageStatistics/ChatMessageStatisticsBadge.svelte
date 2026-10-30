@@ -25,7 +25,7 @@
 			{#snippet child({ props })}
 				<BadgeInfo {...props} class={className} onclick={handleClick}>
 					{#snippet icon()}
-						<IconComponent class="h-3 w-3" />
+						<IconComponent class="size-icon-xs" />
 					{/snippet}
 
 					{value}
@@ -40,7 +40,7 @@
 {:else}
 	<BadgeInfo class={className} onclick={handleClick}>
 		{#snippet icon()}
-			<IconComponent class="h-3 w-3" />
+			<IconComponent class="size-icon-xs" />
 		{/snippet}
 
 		{value}

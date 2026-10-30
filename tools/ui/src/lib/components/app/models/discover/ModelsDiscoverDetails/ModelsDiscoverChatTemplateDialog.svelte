@@ -61,7 +61,7 @@
 				class="ml-auto inline-flex cursor-pointer items-center justify-center rounded-md p-1.5 text-muted-foreground/70 transition-colors hover:bg-muted-foreground/10 hover:text-foreground"
 				type="button"
 			>
-				<X class="h-4 w-4" />
+				<X class="size-icon-md" />
 			</Dialog.Close>
 		</Dialog.Header>
 

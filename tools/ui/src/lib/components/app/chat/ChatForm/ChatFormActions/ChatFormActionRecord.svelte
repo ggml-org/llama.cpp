@@ -27,7 +27,7 @@
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<Button
-				class="h-8 w-8 max-md:h-9 max-md:w-9 rounded-full p-0 {isRecording
+				class="size-8 max-md:size-9 rounded-full p-0 {isRecording
 					? 'matte-orb orb-danger animate-pulse text-white! hover:bg-transparent'
 					: ''}"
 				disabled={disabled || isLoading || !hasAudioModality}

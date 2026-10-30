@@ -5,7 +5,6 @@
 	import {
 		CAPABILITY_ICONS,
 		CAPABILITY_LABELS,
-		FILTER_TOGGLE_GROUP_CLASS,
 		FILTER_TOGGLE_ITEM_CLASS,
 		FILTER_TRIGGER_CLASS,
 		MODALITY_FLAG_KEYS,
@@ -118,8 +117,8 @@
 	</Select.Root>
 
 	<ToggleGroup.Root
-		class={FILTER_TOGGLE_GROUP_CLASS}
 		onValueChange={setToggles}
+		size="icon-sm"
 		type="multiple"
 		value={[...capabilities, ...modalities]}
 	>
@@ -130,7 +129,7 @@
 				title={toggle.label}
 				value={toggle.value}
 			>
-				<toggle.icon class="h-3.5 w-3.5" />
+				<toggle.icon class="size-icon-md" />
 			</ToggleGroup.Item>
 		{/each}
 	</ToggleGroup.Root>

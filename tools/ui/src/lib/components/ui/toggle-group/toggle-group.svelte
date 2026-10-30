@@ -1,12 +1,19 @@
 <script lang="ts" module>
-	import { toggleVariants } from '$lib/components/ui/toggle/index.js';
+	import type { ToggleSize } from '$lib/components/ui/toggle/index.js';
 	import { getContext, setContext } from 'svelte';
-	import type { VariantProps } from 'tailwind-variants';
 
-	type ToggleVariants = VariantProps<typeof toggleVariants>;
+	/** A group is as tall as a control of its size; its keys fill it. */
+	const GROUP_HEIGHT: Record<NonNullable<ToggleSize>, string> = {
+		default: 'data-[orientation=horizontal]:h-control-md',
+		icon: 'data-[orientation=horizontal]:h-control-md',
+		'icon-lg': 'data-[orientation=horizontal]:h-control-lg',
+		'icon-sm': 'data-[orientation=horizontal]:h-control-sm',
+		lg: 'data-[orientation=horizontal]:h-control-lg',
+		sm: 'data-[orientation=horizontal]:h-control-sm'
+	};
 
-	interface ToggleGroupContext extends ToggleVariants {
-		spacing?: number;
+	interface ToggleGroupContext {
+		size?: ToggleSize;
 		orientation?: 'horizontal' | 'vertical';
 	}
 
@@ -27,16 +34,13 @@
 		class: className,
 		orientation = 'horizontal',
 		ref = $bindable(null),
-		size = 'default',
-		spacing = 0,
+		size = 'sm',
 		value = $bindable(),
-		variant = 'default',
 		...restProps
-	}: ToggleGroupPrimitive.RootProps &
-		ToggleVariants & {
-			spacing?: number;
-			orientation?: 'horizontal' | 'vertical';
-		} = $props();
+	}: ToggleGroupPrimitive.RootProps & {
+		size?: ToggleSize;
+		orientation?: 'horizontal' | 'vertical';
+	} = $props();
 
 	setToggleGroupCtx({
 		get orientation() {
@@ -44,16 +48,11 @@
 		},
 		get size() {
 			return size;
-		},
-		get spacing() {
-			return spacing;
-		},
-		get variant() {
-			return variant;
 		}
 	});
 </script>
 
+<!-- a row of keys like a secondary button, an outline-coloured seam between them -->
 <!--
 Discriminated Unions + Destructing (required for bindable) do not
 get along, so we shut typescript up by casting `value` to `never`.
@@ -62,14 +61,12 @@ get along, so we shut typescript up by casting `value` to `never`.
 	bind:ref
 	bind:value={value as never}
 	class={cn(
-		'rounded-md group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-vertical:flex-col data-vertical:items-stretch',
+		'group/toggle-group flex w-fit flex-row items-stretch overflow-hidden rounded-control border border-(--toggle-group-border) bg-(--toggle-group-background) shadow-(--toggle-group-shadow) matte-key data-vertical:flex-col',
+		GROUP_HEIGHT[size ?? 'sm'],
 		className
 	)}
 	data-size={size}
 	data-slot="toggle-group"
-	data-spacing={spacing}
-	data-variant={variant}
 	{orientation}
-	style={`--gap: ${spacing}`}
 	{...restProps}
 />

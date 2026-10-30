@@ -23,9 +23,9 @@
 		class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 	>
 		{#if isExpanded}
-			<ChevronDown class="h-3.5 w-3.5" />
+			<ChevronDown class="size-icon-sm" />
 		{:else}
-			<ChevronRight class="h-3.5 w-3.5" />
+			<ChevronRight class="size-icon-sm" />
 		{/if}
 
 		<span>{toolsCount} tools available · Show details</span>

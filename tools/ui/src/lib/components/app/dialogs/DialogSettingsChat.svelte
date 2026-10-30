@@ -26,7 +26,7 @@
 	>
 		<Dialog.Header class="md:p-0 p-4" showCloseButton={false}>
 			<Dialog.Title class="flex items-center gap-2">
-				<Settings class="h-5 w-5" />
+				<Settings class="size-icon-lg" />
 
 				<span>Settings</span>
 			</Dialog.Title>

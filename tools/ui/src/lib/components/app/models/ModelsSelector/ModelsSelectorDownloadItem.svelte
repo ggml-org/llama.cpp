@@ -81,8 +81,8 @@
 					org={fetchedBaseModelOrg ?? orgName}
 					quantOrg={orgName}
 					quantPositionClass="-bottom-1 -right-1"
-					quantSize="h-3 w-3"
-					size="h-6 w-6"
+					quantSize="size-3"
+					size="size-6"
 				/>
 			{/if}
 
@@ -107,30 +107,30 @@
 		     when paused; opacity only for the spinner, the spin owns the transform -->
 		<button
 			aria-label={actionText}
-			class="relative inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center"
+			class="relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center"
 			onclick={() => void modelsStore.status.toggleDownload(entry.repoWithTag)}
 			type="button"
 		>
 			{#if entry.isPaused}
 				<Play
-					class="absolute h-4 w-4 scale-75 opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+					class="absolute size-icon-md scale-75 opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
 				/>
 			{:else}
 				<Loader2
-					class="absolute h-4 w-4 animate-spin text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
+					class="absolute size-icon-md animate-spin text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
 				/>
 
 				<Pause
-					class="absolute h-4 w-4 opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+					class="absolute size-icon-md opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
 				/>
 			{/if}
 		</button>
 
 		<!-- the row actions keep the sizing and reveal of the other selector rows -->
 		<ActionIcon
-			class="pointer-events-none h-5 w-5 shrink-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 hover:text-foreground [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
+			class="pointer-events-none size-icon-lg shrink-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 hover:text-foreground [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
 			icon={Info}
-			iconSize="h-4 w-4"
+			iconSize="size-icon-md"
 			onclick={() => uiStore.openModelDetails(entry.repoWithTag)}
 			tooltip="Manage model"
 			tooltipAsTitle
@@ -138,9 +138,9 @@
 
 		<ActionIcon
 			ariaLabel="Cancel downloading"
-			class="pointer-events-none h-5 w-5 shrink-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 hover:text-destructive [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
+			class="pointer-events-none size-icon-lg shrink-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 hover:text-destructive [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
 			icon={X}
-			iconSize="h-4 w-4"
+			iconSize="size-icon-md"
 			onclick={() => onRequestCancel?.(entry.repoWithTag)}
 		/>
 	</div>

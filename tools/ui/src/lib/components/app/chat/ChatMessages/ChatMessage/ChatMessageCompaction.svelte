@@ -126,7 +126,7 @@
 			collapsible={hasContent}
 			flushBody
 			icon={isSummarizing ? Loader2 : FoldVertical}
-			iconClass={isSummarizing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
+			iconClass={isSummarizing ? 'size-icon-sm animate-spin' : 'size-icon-sm'}
 			onToggle={handleToggle}
 			shimmerTitle={isSummarizing || !hasContent}
 			{title}

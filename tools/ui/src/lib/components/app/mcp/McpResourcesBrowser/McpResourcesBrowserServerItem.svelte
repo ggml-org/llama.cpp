@@ -91,12 +91,12 @@
 				class="flex w-full items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted/50"
 			>
 				{#if isFolderExpanded}
-					<ChevronDown class="h-3 w-3" />
+					<ChevronDown class="size-icon-xs" />
 				{:else}
-					<ChevronRight class="h-3 w-3" />
+					<ChevronRight class="size-icon-xs" />
 				{/if}
 
-				<FolderOpen class="h-3.5 w-3.5 text-muted-foreground" />
+				<FolderOpen class="size-icon-sm text-muted-foreground" />
 
 				<span class="font-medium">{node.name}</span>
 
@@ -136,7 +136,7 @@
 				onclick={(e: MouseEvent) => handleResourceClick(resource, e)}
 				title={resourceDisplayName}
 			>
-				<ResourceIcon class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+				<ResourceIcon class="size-icon-sm shrink-0 text-muted-foreground" />
 
 				<span class="min-w-0 flex-1 truncate text-left">
 					{resourceDisplayName}
@@ -151,9 +151,9 @@
 		class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
 	>
 		{#if isExpanded}
-			<ChevronDown class="h-3.5 w-3.5" />
+			<ChevronDown class="size-icon-sm" />
 		{:else}
-			<ChevronRight class="h-3.5 w-3.5" />
+			<ChevronRight class="size-icon-sm" />
 		{/if}
 
 		<span class="inline-flex flex-col items-start gap-1 text-left">
@@ -177,7 +177,7 @@
 		</span>
 
 		{#if serverRes.loading}
-			<Loader2 class="ml-auto h-3 w-3 animate-spin text-muted-foreground" />
+			<Loader2 class="ml-auto size-icon-xs animate-spin text-muted-foreground" />
 		{/if}
 	</Collapsible.Trigger>
 
@@ -217,7 +217,7 @@
 							onclick={() => onTemplateSelect(template)}
 							title={template.uriTemplate}
 						>
-							<Braces class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+							<Braces class="size-icon-sm shrink-0 text-muted-foreground" />
 
 							<span class="min-w-0 flex-1 truncate text-left">
 								{template.title || template.name}

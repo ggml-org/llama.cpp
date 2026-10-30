@@ -39,8 +39,8 @@
 				org={avatarOrg}
 				{quantOrg}
 				quantPositionClass="-bottom-1.5 -right-1.5"
-				quantSize="h-6 w-6"
-				size="h-12 w-12"
+				quantSize="size-6"
+				size="size-12"
 			/>
 
 			<div class="min-w-0">
@@ -49,7 +49,7 @@
 
 					<ModelCapabilityIcons
 						gapClass="gap-2"
-						iconSize="h-4 w-4"
+						iconSize="size-icon-md"
 						modalities={{ audio: false, video: false, vision: hasVision }}
 						supportsThinking={hasReasoning}
 						supportsToolUse={hasTools}
@@ -67,7 +67,7 @@
 							rel="noopener noreferrer"
 							target="_blank"
 						>
-							<ExternalLink class="h-3 w-3" />
+							<ExternalLink class="size-icon-xs" />
 						</a>
 					</div>
 				{/if}
@@ -82,7 +82,7 @@
 			target="_blank"
 			variant="secondary"
 		>
-			<img alt="" class="h-3.5 w-3.5" src="{base}/recommended-mcp/huggingface.ico" />
+			<img alt="" class="size-3.5" src="{base}/recommended-mcp/huggingface.ico" />
 
 			View on Hugging Face
 

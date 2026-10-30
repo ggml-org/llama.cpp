@@ -66,17 +66,8 @@ export const FILTER_TRIGGER_CLASS = `
     ${INPUT_CLASSES}
 `;
 
-/** The filter toggles' shared box: the same fill, border and shadow as a filter trigger. */
-export const FILTER_TOGGLE_GROUP_CLASS = `
-    h-8
-    overflow-hidden
-    divide-x divide-border/30 dark:divide-border/20
-    ${INPUT_CLASSES}
-`;
-
-/** One filter toggle of the models manager toolbar; its group draws the box. */
-export const FILTER_TOGGLE_ITEM_CLASS =
-	'h-full rounded-none hover:bg-muted/80 dark:hover:bg-muted data-[state=on]:bg-muted-foreground/15 data-[state=on]:text-foreground dark:data-[state=on]:bg-muted-foreground/25';
+/** One filter toggle of the models manager toolbar: a 32px wide key in the 32px tall group. */
+export const FILTER_TOGGLE_ITEM_CLASS = 'w-8';
 
 /** Column grid shared by every row of the models manager table. Below md the context,
  *  status and actions columns are dropped, so a phone gives the whole width to the
@@ -98,13 +89,13 @@ export const MODEL_VARIANT_BADGE_CLASS =
 	'matte-chip inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
 
 /** Default Tailwind size class for inline icon components (lucide, etc.). */
-export const ICON_CLASS_DEFAULT = 'h-4 w-4';
+export const ICON_CLASS_DEFAULT = 'size-icon-md';
 
 /** Small Tailwind size class for inline icons. */
-export const ICON_CLASS_SM = 'h-3.5 w-3.5';
+export const ICON_CLASS_SM = 'size-icon-sm';
 
 /** Extra-small Tailwind size class for inline icons. */
-export const ICON_CLASS_XS = 'h-3 w-3';
+export const ICON_CLASS_XS = 'size-icon-xs';
 
 /** Icon size + spinning animation; used for live-streaming tool indicators. */
-export const ICON_CLASS_SPIN = 'h-4 w-4 animate-spin';
+export const ICON_CLASS_SPIN = 'size-icon-md animate-spin';

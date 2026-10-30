@@ -140,7 +140,7 @@
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
 			<div
-				class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"
+				class="mx-auto mb-4 size-8 animate-spin rounded-full border-4 border-white border-t-transparent"
 			></div>
 
 			<p class="text-white/70">Converting PDF to images...</p>
@@ -149,7 +149,7 @@
 {:else if pdfImagesError}
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
-			<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
+			<FileText class="mx-auto mb-4 size-16 text-white/50" />
 
 			<p class="mb-4 text-white/70">Failed to load PDF images</p>
 
@@ -167,7 +167,7 @@
 {:else}
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
-			<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
+			<FileText class="mx-auto mb-4 size-16 text-white/50" />
 
 			<p class="text-white/70">No PDF pages available</p>
 		</div>
