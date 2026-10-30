@@ -243,9 +243,9 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
+                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid[il], indexer_q);
                 cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
+                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid[il], indexer_k);
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache
