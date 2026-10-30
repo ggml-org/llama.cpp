@@ -408,7 +408,7 @@ server_models::server_models(
 
     // set binary path
     try {
-        bin_path = fs_path_to_utf8(get_server_exec_path());
+        bin_path = get_server_exec_path().string();
     } catch (const std::exception & e) {
         bin_path = argv[0];
         SRV_WRN("failed to get server executable path: %s\n", e.what());

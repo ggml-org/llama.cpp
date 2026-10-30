@@ -63,7 +63,7 @@ static fs::path get_cache_directory() {
 }
 
 std::string get_cache_path() {
-    return fs_path_to_utf8(get_cache_directory());
+    return get_cache_directory().string();
 }
 
 static std::string folder_name_to_repo(const std::string & folder) {
@@ -340,11 +340,11 @@ hf_files get_repo_files(const std::string & repo_id,
             file.url = endpoint + repo_id + "/resolve/" + commit + "/" + file.path;
 
             fs::path final_path = commit_path / subpath;
-            file.final_path = fs_path_to_utf8(final_path);
+            file.final_path = final_path.string();
 
             if (!file.oid.empty() && !fs::exists(final_path)) {
                 fs::path local_path = blobs_path / file.oid;
-                file.local_path = fs_path_to_utf8(local_path);
+                file.local_path = local_path.string();
             } else {
                 file.local_path = file.final_path;
             }
@@ -411,7 +411,7 @@ hf_files get_cached_files(const std::string & repo_id) {
         if (!fs::exists(snapshots_path)) {
             continue;
         }
-        std::string _repo_id = folder_name_to_repo(fs_path_to_utf8(repo.path().filename()));
+        std::string _repo_id = folder_name_to_repo(repo.path().filename().string());
 
         if (!is_valid_repo_id(_repo_id)) {
             continue;
@@ -436,7 +436,7 @@ hf_files get_cached_files(const std::string & repo_id) {
                 file.repo_id = _repo_id;
                 const auto generic_path = path.generic_u8string();
                 file.path = std::string(generic_path.begin(), generic_path.end());
-                file.local_path = fs_path_to_utf8(entry.path());
+                file.local_path = entry.path().string();
                 file.final_path = file.local_path;
                 files.push_back(std::move(file));
             }
@@ -516,7 +516,7 @@ bool remove_cached_repo(const std::string & repo_id) {
     std::error_code ec;
     auto removed = fs::remove_all(repo_path, ec);
     if (ec) {
-        LOG_ERR("%s: failed to remove repo cache %s: %s\n", __func__, fs_path_to_utf8(repo_path).c_str(), ec.message().c_str());
+        LOG_ERR("%s: failed to remove repo cache %s: %s\n", __func__, repo_path.string().c_str(), ec.message().c_str());
         return false;
     }
     return removed > 0;
