@@ -69,7 +69,7 @@ typedef int (*fastrpc_munmap_pfn_t)(int domain, int fd, void *addr, size_t lengt
 
 typedef int (*remote_handle64_open_pfn_t)(const char* name, remote_handle64 *ph);
 typedef int (*remote_handle64_invoke_pfn_t)(remote_handle64 h, uint32_t dwScalars, remote_arg *pra);
-typedef int (*remote_handle64_close_pfn_t)(remote_handle h);
+typedef int (*remote_handle64_close_pfn_t)(remote_handle64 h);
 typedef int (*remote_handle_control_pfn_t)(uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_handle64_control_pfn_t)(remote_handle64 h, uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_session_control_pfn_t)(uint32_t req, void *data, uint32_t datalen);
