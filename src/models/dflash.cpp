@@ -1380,10 +1380,11 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 //   * embd batch  -> writes every stage's kv_norm(wkv(main_proj(target features))) into its window ring
 //   * token batch -> [anchor, noise...] block through the stages, single-pass mHC, no per-head q norm
 // window of a block = window of its first query, see n_swa
+// TODO: move this to a new type of `llm_graph_input` and implement this in `set_input` [TAG_ATTN_MASK_CNV]
 static void build_dspark_block_mask(llm_graph_context & g, llm_graph_input_attn_k_iswa * inp_attn) {
     ggml_context * ctx0 = g.ctx0;
 
-    ggml_tensor * m = inp_attn->self_kq_mask_swa_cnv;
+    ggml_tensor * m = inp_attn->self_attn_mask_swa.cnv;
     const int64_t n_tokens = g.n_tokens;
     const int64_t n_blocks = g.ubatch.n_seqs_unq;
     const int64_t bd       = n_blocks > 0 ? n_tokens / n_blocks : 0;
@@ -1391,8 +1392,8 @@ static void build_dspark_block_mask(llm_graph_context & g, llm_graph_input_attn_
         ggml_tensor * m4 = ggml_reshape_4d(ctx0, m, m->ne[0], bd, m->ne[1]/bd, m->ne[3]);
         ggml_tensor * r0 = ggml_view_4d(ctx0, m4, m4->ne[0], 1, m4->ne[2], m4->ne[3], m4->nb[1], m4->nb[2], m4->nb[3], 0);
         m4 = ggml_repeat(ctx0, r0, m4);
-        inp_attn->self_kq_mask_swa_cnv = ggml_reshape_4d(ctx0, m4, m->ne[0], m->ne[1], 1, m->ne[3]);
-        g.cb(inp_attn->self_kq_mask_swa_cnv, "dspark_block_mask", -1);
+        inp_attn->self_attn_mask_swa.cnv = ggml_reshape_4d(ctx0, m4, m->ne[0], m->ne[1], 1, m->ne[3]);
+        g.cb(inp_attn->self_attn_mask_swa.cnv, "dspark_block_mask", -1);
     }
 }
 
