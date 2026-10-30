@@ -159,6 +159,7 @@ void top_k_select(
     }
 }
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 kernel void kernel_top_k_f32(
         global const char * src,
         ulong offset0,
@@ -191,7 +192,9 @@ kernel void kernel_top_k_f32(
     }
     top_k_select(src, dst, candidates, nb00, n, k, base, 0, hist);
 }
+#endif // GGML_CL_ONLY == 1
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 kernel void kernel_top_k_merge_f32(
         global const uint2 * candidates,
         global int * dst,
@@ -205,3 +208,4 @@ kernel void kernel_top_k_merge_f32(
     dst = (global int *) ((global char *) dst + offsetd) + row*k;
     top_k_select((global const char *) candidates, dst, 0, sizeof(uint2), n_candidates, k, 0, 1, hist);
 }
+#endif // GGML_CL_ONLY == 2

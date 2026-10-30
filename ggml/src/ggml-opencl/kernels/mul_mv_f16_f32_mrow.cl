@@ -31,6 +31,7 @@
 
 #define MROW 16
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -127,6 +128,7 @@ kernel void kernel_mul_mat_f16_f32_mrow(
         }
     }
 }
+#endif
 
 // Register-blocked variant: each 64-lane subgroup accumulates RPT consecutive
 // output rows instead of one. The staged activation is reused across all RPT rows,
@@ -237,6 +239,7 @@ kernel void kernel_mul_mat_f16_f32_mrow(
         }                                                                                 \
     }
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -253,7 +256,9 @@ kernel void kernel_mul_mat_f16_f32_mrow_h8(
 ) {
     MROW_H8_BODY(1)
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 3
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -270,7 +275,9 @@ kernel void kernel_mul_mat_f16_f32_mrow_h8r2(
 ) {
     MROW_H8_BODY(2)
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 4
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -287,7 +294,9 @@ kernel void kernel_mul_mat_f16_f32_mrow_r2(
 ) {
     MROW_RB_BODY(2)
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 5
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -304,3 +313,4 @@ kernel void kernel_mul_mat_f16_f32_mrow_r4(
 ) {
     MROW_RB_BODY(4)
 }
+#endif
