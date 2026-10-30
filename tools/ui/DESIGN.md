@@ -739,6 +739,23 @@ the sidebar, and `surface` (24px) for the chat form and message bubbles, rising 
 `surface-lg` (32px) for the chat form on small screens. Status lamps, avatars and the round
 icon buttons in the chat form are fully round.
 
+## Brand
+
+- **Logo:** the llama.cpp mark, one inline SVG (`Logo`) filled with the current text colour,
+  so it follows the theme with no light and dark copies. It is sized by `--size`, 1rem by
+  default: 14px in model rows, 16px in the sidebar. Colour it with a text token such as
+  `fg-default` or `fg-muted`, never a raw colour.
+- **App icons:** the mark in `#111111` on white, or `#fafafa` on `#111111` in dark mode
+  (`FAVICON_COLORS`, `THEME_COLORS`). The favicon keeps a 4% margin (`FAVICON_PADDING`), so
+  the logo spans 96% of it. The maskable and Apple touch icons are white squares with the
+  logo at 67% (the generator's 30% padding); its farthest point reaches 73%, inside the 80%
+  maskable safe zone. The PWA icons are white circles with the logo at 57%
+  (`make-icons-circular.js`, 85% of the square icon).
+- **Splash screens:** white, or `#111111` in dark mode, with the logo centred at 24% of the
+  screen's shorter side (`SPLASH_PADDING`).
+- The icons and splash screens in `static/` are build output of `npm run build-pwa-assets`,
+  drawn from `logo.svg`; change the source or the constants, never the generated files.
+
 ## Components
 
 - **Buttons:** six variants.
