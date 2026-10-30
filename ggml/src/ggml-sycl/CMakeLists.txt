@@ -202,10 +202,10 @@ endif()
 
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
+    # With AOT the option goes to ocloc inside -options (see GGML_SYCL_DEVICE_ARCH below): a bare
+    # -Xs hands it to ocloc as a command-line flag, which fails the device link.
     if (NOT GGML_SYCL_DEVICE_ARCH)
         target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
-    else()
-        message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
     endif()
 
     # Link against Intel oneMKL
@@ -232,10 +232,18 @@ endif()
 
 if (GGML_SYCL_DEVICE_ARCH)
     message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} (AOT via spir64_gen)")
+    # AOT (oneAPI 2026.2) ignores the grf_size<256> kernel property on ESIMD kernels and builds them
+    # with 128 registers, which made the ESIMD MoE GEMM 1.7-3.9x slower than under JIT; SPMD kernels
+    # keep honouring the property. A module-wide -doubleGRF also moves the ESIMD kernels that ask for
+    # 128 to 256, and a server built with it hung on its first request, so IGC picks the size per
+    # kernel from its register pressure instead (ESIMD kernels too; -ze-opt-large-grf-kernel does not
+    # reach them).
+    set(_ggml_sycl_aot_backend
+        "-device ${GGML_SYCL_DEVICE_ARCH} -options '-ze-intel-greater-than-4GB-buffer-required -ze-opt-enable-auto-large-GRF-mode'")
     target_compile_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"${_ggml_sycl_aot_backend}\""
     )
 
     # Pass through parallel job (process) count for parallelising the
@@ -250,7 +258,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"${_ggml_sycl_aot_backend}\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 
