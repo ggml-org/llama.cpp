@@ -4391,8 +4391,6 @@ int ggml_metal_op_l2_norm(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
-    GGML_ASSERT(ggml_is_contiguous_rows(op->src[0]));
-
     ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
     ggml_metal_buffer_id bid_dst  = ggml_metal_get_buffer_id(op);
 
@@ -4520,9 +4518,13 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
     ggml_metal_buffer_id bid_dst  = ggml_metal_get_buffer_id(op);
 
+    // non-contiguous rows are processed with the scalar kernel
+    const bool is_c4 = ne00 % 4 == 0 && ggml_is_contiguous_rows(op->src[0]);
+
     ggml_metal_kargs_norm args = {
         /*.ne00   =*/ ne00,
-        /*.ne00_t =*/ ne00 % 4 == 0 ? ne00/4 : ne00,
+        /*.ne00_t =*/ is_c4 ? ne00/4 : ne00,
+        /*.nb00   =*/ nb00,
         /*.nb1    =*/ nb1,
         /*.nb2    =*/ nb2,
         /*.nb3    =*/ nb3,

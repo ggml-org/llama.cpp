@@ -2196,17 +2196,24 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_l2_norm(ggml_met
     char base[256];
     char name[256];
 
-    const bool is_c4 = op->src[0]->ne[0] % 4 == 0;
+    const bool is_nc = !ggml_is_contiguous_rows(op->src[0]);
+    const bool is_c4 = op->src[0]->ne[0] % 4 == 0 && !is_nc;
 
     const char * t0_str = ggml_type_name(op->src[0]->type);
     const char * t_str  = ggml_type_name(op->type);
 
     snprintf(base, 256, "kernel_l2_norm_%s_%s%s", t0_str, t_str, is_c4 ? "_4" : "");
-    snprintf(name, 256, "%s", base);
+    snprintf(name, 256, "%s_nc=%d", base, is_nc);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        ggml_metal_cv_set_bool(cv, is_nc, FC_NORM + 1);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
     }
 
     res.c4   = is_c4;
@@ -2239,13 +2246,16 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_group_norm(ggml_
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm(ggml_metal_library_t lib, const ggml_tensor * op, int n_fuse) {
     assert(op->op == GGML_OP_NORM || op->op == GGML_OP_RMS_NORM);
 
-    GGML_ASSERT(ggml_is_contiguous_rows(op->src[0]));
+    const bool is_nc = !ggml_is_contiguous_rows(op->src[0]);
+
+    // TODO: RMS_NORM with non-contiguous rows (needs CPU support first)
+    GGML_ASSERT(!is_nc || op->op == GGML_OP_NORM);
 
     char base[256];
     char name[256];
 
     const char * suffix = "";
-    if (op->ne[0] % 4 == 0) {
+    if (op->ne[0] % 4 == 0 && !is_nc) {
         suffix = "_4";
     }
 
@@ -2267,12 +2277,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm(ggml_metal_
         default: GGML_ABORT("fatal error");
     }
 
-    snprintf(name, 256, "%s", base);
+    snprintf(name, 256, "%s_nc=%d", base, is_nc);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
         ggml_metal_cv_set_bool(cv, false, FC_NORM + 0);
+        ggml_metal_cv_set_bool(cv, is_nc, FC_NORM + 1);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
@@ -2287,13 +2298,16 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm(ggml_metal_
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm_scale(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_NORM || op->op == GGML_OP_RMS_NORM);
 
-    GGML_ASSERT(ggml_is_contiguous_rows(op->src[0]));
+    const bool is_nc = !ggml_is_contiguous_rows(op->src[0]);
+
+    // TODO: RMS_NORM with non-contiguous rows (needs CPU support first)
+    GGML_ASSERT(!is_nc || op->op == GGML_OP_NORM);
 
     char base[256];
     char name[256];
 
     const char * suffix = "";
-    if (op->ne[0] % 4 == 0) {
+    if (op->ne[0] % 4 == 0 && !is_nc) {
         suffix = "_4";
     }
 
@@ -2303,12 +2317,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm_scale(ggml_
         default: GGML_ABORT("fatal error");
     }
 
-    snprintf(name, 256, "%s_use_scale", base);
+    snprintf(name, 256, "%s_use_scale_nc=%d", base, is_nc);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
-        ggml_metal_cv_set_bool(cv, true, FC_NORM + 0);
+        ggml_metal_cv_set_bool(cv, true,  FC_NORM + 0);
+        ggml_metal_cv_set_bool(cv, is_nc, FC_NORM + 1);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
