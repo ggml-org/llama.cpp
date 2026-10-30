@@ -1637,8 +1637,8 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
     bool use_mat_vec = (dst->ne[1] <= 4);
 
     // use MMVQ path for mat-vec
-    bool use_mmvq = ggml_webgpu_can_use_mmvq(src0, src1, ctx->global_ctx->capabilities.supports_dot_product,
-                                             ctx->global_ctx->vendor);
+    bool use_mmvq = ggml_webgpu_can_use_mmvq(
+        src0, src1, src1->ne[1], ctx->global_ctx->capabilities.supports_dot_product, ctx->global_ctx->vendor);
 
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
 
@@ -1965,7 +1965,8 @@ struct ggml_webgpu_flash_attn_op {
 static bool ggml_webgpu_flash_attn_use_vec_path(const webgpu_global_context & global_ctx,
                                                 const ggml_tensor *           Q,
                                                 const ggml_tensor *           K,
-                                                const ggml_tensor *           V) {
+                                                const ggml_tensor *           V,
+                                                int64_t                       n_q) {
     const size_t storage_offset_alignment = global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
 
     const bool k_float_vec4_aligned = (K->type != GGML_TYPE_F16 && K->type != GGML_TYPE_F32) ||
@@ -1979,7 +1980,7 @@ static bool ggml_webgpu_flash_attn_use_vec_path(const webgpu_global_context & gl
         ggml_is_quantized(V->type) ? ggml_blck_size(V->type) : GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH;
     const bool kv_vec_head_dims_aligned = Q->ne[0] % k_vec_head_align == 0 && V->ne[0] % v_vec_head_align == 0;
 
-    return global_ctx->capabilities.supports_subgroups && (Q->ne[1] < GGML_WEBGPU_FLASH_ATTN_VEC_MAX_SEQ_LEN) &&
+    return global_ctx->capabilities.supports_subgroups && (n_q < GGML_WEBGPU_FLASH_ATTN_VEC_MAX_SEQ_LEN) &&
            kv_vec_head_dims_aligned && k_float_vec4_aligned && v_float_vec4_aligned;
 }
 
@@ -2288,7 +2289,7 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
                                                 ggml_tensor *    sinks,
                                                 ggml_tensor *    dst) {
     ggml_webgpu_flash_attn_op op = ggml_webgpu_flash_attn_prepare(ctx, Q, K, V, mask, sinks, dst);
-    if (ggml_webgpu_flash_attn_use_vec_path(ctx->global_ctx, Q, K, V)) {
+    if (ggml_webgpu_flash_attn_use_vec_path(ctx->global_ctx, Q, K, V, Q->ne[1])) {
         return ggml_webgpu_flash_attn_vec(ctx, Q, K, V, mask, sinks, dst, std::move(op));
     }
     return ggml_webgpu_flash_attn_direct(ctx, op);
@@ -4012,7 +4013,10 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                 const ggml_tensor * V            = tensor->src[2];
                 const ggml_tensor * mask         = tensor->src[3];
                 const auto &        capabilities = ctx->webgpu_global_ctx->capabilities;
-                if (ggml_webgpu_flash_attn_use_vec_path(ctx->webgpu_global_ctx, Q, K, V)) {
+                // the vec path scratch grows with the query rows, so a longer batch reserves the scratch of the
+                // longest vec batch and the size stays monotonic in the batch length
+                const int64_t       n_q = std::min<int64_t>(Q->ne[1], GGML_WEBGPU_FLASH_ATTN_VEC_MAX_SEQ_LEN - 1);
+                if (ggml_webgpu_flash_attn_use_vec_path(ctx->webgpu_global_ctx, Q, K, V, n_q)) {
                     const bool kv_direct =
                         ggml_webgpu_flash_attn_k_direct(Q, K, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH) ||
                         ggml_webgpu_flash_attn_v_direct(Q, V, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH);
@@ -4024,7 +4028,7 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                     uint32_t       nwg = ggml_webgpu_flash_attn_vec_nwg(vec_nwg_cap, kv_tile, (uint32_t) K->ne[1]);
 
                     const size_t   align = capabilities.limits.minStorageBufferOffsetAlignment;
-                    const uint64_t nrows = (uint64_t) Q->ne[1] * Q->ne[2] * Q->ne[3];
+                    const uint64_t nrows = (uint64_t) n_q * Q->ne[2] * Q->ne[3];
                     if (nwg > 1u) {
                         const uint64_t tmp_data_elems  = nrows * (uint64_t) V->ne[0] * nwg;
                         const uint64_t tmp_stats_elems = nrows * 2u * nwg;
@@ -4036,7 +4040,7 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                     }
                     if (mask != nullptr) {
                         const uint32_t blk_nblk0       = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
-                        const uint32_t blk_nblk1       = CEIL_DIV((uint32_t) Q->ne[1], 1u);
+                        const uint32_t blk_nblk1       = (uint32_t) n_q;
                         const uint32_t stride_mask3    = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
                         const uint32_t blk_batch_count = stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u;
                         const uint64_t blk_elems       = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
@@ -4052,11 +4056,15 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
             {
                 const ggml_tensor * src0 = tensor->src[0];
                 const ggml_tensor * src1 = tensor->src[1];
-                bool                use_mmvq =
-                    ggml_webgpu_can_use_mmvq(src0, src1, ctx->webgpu_global_ctx->capabilities.supports_dot_product,
-                                             ctx->webgpu_global_ctx->vendor);
+
+                // the q8 copy of src1 grows with its rows, so a longer batch reserves the copy of the longest
+                // mmvq batch and the size stays monotonic in the batch length
+                const int64_t n_rows   = std::min<int64_t>(src1->ne[1], GGML_WEBGPU_MMVQ_MAX_ROWS);
+                const bool    use_mmvq = ggml_webgpu_can_use_mmvq(
+                    src0, src1, n_rows, ctx->webgpu_global_ctx->capabilities.supports_dot_product,
+                    ctx->webgpu_global_ctx->vendor);
                 if (use_mmvq) {
-                    const size_t q8_src1_size = src1->ne[3] * src1->ne[2] * src1->ne[1] *
+                    const size_t q8_src1_size = src1->ne[3] * src1->ne[2] * n_rows *
                                                 (36 /* sizeof(q8_1) */ * (src1->ne[0] / /* block_size */ 32));
                     res = ROUNDUP_POW2(res + q8_src1_size +
                                            ctx->webgpu_global_ctx->capabilities.limits.minStorageBufferOffsetAlignment,
