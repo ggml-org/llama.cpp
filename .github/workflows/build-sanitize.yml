@@ -49,7 +49,7 @@ jobs:
         - sanitizer: THREAD
           machine: ubuntu-24.04
         - sanitizer: UNDEFINED
-          machine: [self-hosted, X64, Linux, CPU]
+          machine: hf-jobs-cpu-upgrade
 
     runs-on: ${{ matrix.machine }}
 
@@ -57,6 +57,12 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libssl-dev
 
       # - name: ccache
       #   uses: ggml-org/ccache-action@v1.2.24
