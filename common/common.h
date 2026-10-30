@@ -592,6 +592,8 @@ struct common_params {
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
+    int32_t cache_warmup    = 0;
+    std::string cache_warmup_prompt = "Explain a practical topic in detail, with examples and a short summary.";
     bool check_tensors     = false; // validate tensor data
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
@@ -996,6 +998,7 @@ struct common_init_result {
 
     common_sampler * sampler(llama_seq_id seq_id);
     void reset_samplers();
+    bool warmup_cache(int32_t n_tokens, const std::string & prompt);
 
     std::vector<llama_adapter_lora_ptr> & lora();
 

@@ -448,27 +448,8 @@ static void start_doorbell_worker(llama_context * ctx) {
                 };
                 auto fail_ci = [&](int ci) {
                     if (done[(size_t) ci]) return;
-                    // drop the mapping and make this expert read the sentinel
-                    // row instead of stale pool bytes
-                    const int e = misses[(size_t) ci];
-                    const int cslot = pl->copy_slot[ci];
-                    ctx->moe.slot_of[(size_t) il * n_exp + e] = -1;
-                    if (cslot >= 0 && cslot < s_pl) {
-                        ctx->moe.slot_key[(size_t) cslot + (size_t) base] = -1;
-                    }
-                    for (int j = 0; j < n; ++j) {
-                        if (sel[(size_t) j] == e) pl->assigned[j] = s_pl;
-                    }
-                    pl->copy_slot[ci] = -1;
-#if defined(__x86_64__) || defined(_M_X64)
-                    _mm_clflush((const void *) &pl->copy_slot[ci]);
-                    for (int j = 0; j < n; ++j) {
-                        if (sel[(size_t) j] == e) _mm_clflush((const void *) &pl->assigned[j]);
-                    }
-                    _mm_sfence();
-#endif
                     failed++;
-                    publish_ready(ci);
+                    GGML_ABORT("demand expert read failed: layer=%d expert=%d; refusing incomplete weights", il, misses[(size_t) ci]);
                 };
 
                 // validate and fill the per-expert geometry first, so a bad
@@ -674,8 +655,6 @@ static void start_doorbell_worker(llama_context * ctx) {
                         if (ci < 0 || ci >= ncopy) continue;
                         if (left[(size_t) ci] == 0) continue;
                         if (res != (int) exp_len[(size_t) ci * 3 + (size_t) r]) {
-                            // rare short read: retry this range synchronously
-                            // once before dropping the expert to the sentinel
                             bool ok = false;
                             const size_t want = exp_len[(size_t) ci * 3 + (size_t) r];
                             char * dst = stage_host + (size_t) ci * stride;
@@ -850,7 +829,6 @@ static void start_doorbell_worker(llama_context * ctx) {
 }
 
 static void stop_doorbell_worker() {
-    if (!g_doorbell_running.load()) return;
     g_doorbell_running.store(false);
     if (g_doorbell_thread.joinable()) {
         g_doorbell_thread.join();
@@ -1851,6 +1829,9 @@ llama_context::llama_context(
         // Metadata-only ggml_new_tensor calls create nothing; physical VRAM is
         // claimed below on the GPU backend and its size is verified.
         if (cparams.moe_direct_io && cparams.moe_gguf_path) {
+            if (g_moe_resolve_ctx && g_moe_resolve_ctx != this) {
+                throw std::runtime_error("only one paged MoE context is supported per process");
+            }
             const int n_layer = (int) model.hparams.n_layer();
             const int n_exp   = (int) model.hparams.n_expert;
             const int n_used  = (int) model.hparams.n_expert_used();
@@ -1874,13 +1855,13 @@ llama_context::llama_context(
                                        __func__, n_layer, n_exp);
                         const char * wp = getenv("MOE_WARM_PACK");
                         const char * wi = getenv("MOE_WARM_INDEX");
-                        std::string wbin = wp && wp[0] ? wp : "/home/zyxciss/moe_warm_btrfs.bin";
-                        std::string widx = wi && wi[0] ? wi : "/home/zyxciss/moe_warm_btrfs.idx";
-                        std::string e3;
-                        if (pager.use_warm_pack(wbin.c_str(), widx.c_str(), e3)) {
-                            LLAMA_LOG_INFO("%s: moe warm pack ON: %s\n", __func__, wbin.c_str());
-                        } else {
-                            LLAMA_LOG_WARN("%s: moe warm pack OFF: %s\n", __func__, e3.c_str());
+                        if (wp && wp[0] && wi && wi[0]) {
+                            std::string e3;
+                            if (pager.use_warm_pack(wp, wi, e3)) {
+                                LLAMA_LOG_INFO("%s: moe warm pack ON: %s\n", __func__, wp);
+                            } else {
+                                LLAMA_LOG_WARN("%s: moe warm pack OFF: %s\n", __func__, e3.c_str());
+                            }
                         }
                     }
                 }
@@ -2083,21 +2064,20 @@ llama_context::llama_context(
                             const char * pred_on = getenv("MOE_PRED");
                             if (pred_on && atoi(pred_on)) {
                                 const char * p_bin = getenv("MOE_PREDICTOR_BIN");
-                                std::string pred_bin = p_bin ? p_bin : "/home/zyxciss/llama.cpp/data/router_predictor_v2.bin";
+                                std::string pred_bin = p_bin ? p_bin : "data/router_predictor_v2.bin";
                                 if (moe_predictor_init(pred_bin.c_str(), moe.n_layer, 2048, 512, 512)) {
                                     LLAMA_LOG_INFO("%s: RouterPredictorV2 (60M) armed from %s\n", __func__, pred_bin.c_str());
                                 }
                             } else {
                                 LLAMA_LOG_WARN("%s: RouterPredictorV2 skipped (MOE_PRED=0), +120 MiB for slots\n", __func__);
                             }
+                            moe_slot_resolve_register_ctx(this);
                             if (moe_doorbell_on(this)) {
                                 if (moe_doorbell_init(moe.n_layer, moe.n_expert, moe.s_per_layer)) {
                                     LLAMA_LOG_INFO("%s: Zero-Split Stream-Ordered Doorbell armed (%d layers, n_splits = 1)\n",
                                                    __func__, moe.n_layer);
                                     start_doorbell_worker(this);
                                 }
-                            } else {
-                                moe_slot_resolve_register_ctx(this);
                             }
                             moe_oracle_start(this);
                             io_run.store(true);
@@ -2250,17 +2230,18 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
-    stop_doorbell_worker();
-    if (moe_doorbell_is_active()) {
-        moe_doorbell_free();
+    synchronize();
+    if (g_moe_resolve_ctx == this) {
+        stop_doorbell_worker();
+        if (moe_doorbell_is_active()) {
+            moe_doorbell_free();
+        }
     }
     moe_oracle_stop(this);
     io_run.store(false);
     io_cv.notify_all();
     for (auto & th : io_thr) if (th.joinable()) th.join();
     io_thr.clear();
-    // wait for any pending asynchronous copies into the output buffers before they are freed
-    synchronize();
     if (g_moe_resolve_ctx == this) {
         g_moe_resolve_ctx = nullptr;
     }
@@ -6760,10 +6741,7 @@ void llama_context::moe_seed_hot() {
     std::vector<uint16_t> file_hot;
     int file_nt = 0;
     const char * learned = getenv("MOE_HOT_PROFILE");
-    const char * lpath = (learned && learned[0]) ? learned : "/home/zyxciss/llama.cpp/data/moe_hot_profile.bin";
-    FILE * test_f = fopen(lpath, "rb");
-    if (test_f) { fclose(test_f); }
-    else { lpath = "/home/zyxciss/fluxaeros-data/data/moe_hot_profile.bin"; }
+    const char * lpath = (learned && learned[0]) ? learned : "data/moe_hot_profile.bin";
     if ((!cparams.moe_profile_path || !cparams.moe_profile_path[0])) {
         FILE * lf = fopen(lpath, "rb");
         if (lf) {

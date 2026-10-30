@@ -2532,6 +2532,10 @@ common_params common_base_params_to_speculative(const common_params & params) {
 
     result.embedding    = false;
     result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
+    result.moe_direct_io = false;
+    result.moe_pack_dir.clear();
+    result.moe_profile.clear();
+    result.cache_warmup = 0;
 
     if (has_draft) {
         // default to global devices value

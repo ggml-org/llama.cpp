@@ -157,6 +157,9 @@
 | `-st, --single-turn` | run conversation for a single turn only, then exit when done<br/>will not be interactive if first turn is predefined with --prompt<br/>(default: false) |
 | `-mli, --multiline-input` | allows you to write or paste multiple lines without ending each in '\' |
 | `--warmup, --no-warmup` | whether to perform warmup with an empty run (default: enabled) |
+| `--auto-warm` | generate up to 256 cache-warmup tokens and replay the sequence before user generation (opt-in) |
+| `--cache-warmup N` | cache-warmup token budget; 0 disables, maximum 8192, bounded by context size (env: `LLAMA_ARG_CACHE_WARMUP`) |
+| `--cache-warmup-prompt TEXT` | representative cache-warmup prompt; startup cost is separate from request timings |
 | `-mm, --mmproj FILE` | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ) |
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
 | `--mmproj-auto, --no-mmproj, --no-mmproj-auto` | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO) |

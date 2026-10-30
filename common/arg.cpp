@@ -1967,14 +1967,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
-        {"--moe-direct-io"},
-        string_format("stream routed-expert weights with O_DIRECT into a VRAM slot pool instead of mmap (default: %s)", params.moe_direct_io ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.moe_direct_io = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION}));
-
-    add_opt(common_arg(
         {"--moe-slots"},
         "N",
         string_format("total number of VRAM expert slots shared across layers (default: %d)", params.moe_slots),
@@ -2018,6 +2010,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.warmup = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_DEBUG}));
+    add_opt(common_arg(
+        {"--auto-warm"},
+        "warm the model cache with a generated sequence of up to 256 tokens and one replay before serving requests",
+        [](common_params & params) {
+            params.cache_warmup = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--cache-warmup"}, "N",
+        "generate up to N cache-warmup tokens and replay the sequence once (0 disables; maximum 8192; bounded by context size)",
+        [](common_params & params, int value) {
+            if (value < 0 || value > 8192) {
+                throw std::invalid_argument("cache warmup must be between 0 and 8192 tokens");
+            }
+            params.cache_warmup = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_WARMUP"));
+    add_opt(common_arg(
+        {"--cache-warmup-prompt"}, "TEXT",
+        "representative prompt for cache warmup; startup cost is separate from request timings",
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("cache warmup prompt must not be empty");
+            }
+            params.cache_warmup_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(

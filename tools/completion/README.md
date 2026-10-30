@@ -246,6 +246,9 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `--in-prefix STRING` | string to prefix user inputs with (default: empty) |
 | `--in-suffix STRING` | string to suffix after user inputs with (default: empty) |
 | `--warmup, --no-warmup` | whether to perform warmup with an empty run (default: enabled) |
+| `--auto-warm` | generate up to 256 cache-warmup tokens and replay the sequence before user generation (opt-in) |
+| `--cache-warmup N` | cache-warmup token budget; 0 disables, maximum 8192, bounded by context size (env: `LLAMA_ARG_CACHE_WARMUP`) |
+| `--cache-warmup-prompt TEXT` | representative cache-warmup prompt; startup cost is separate from request timings |
 | `-gan, --grp-attn-n N` | group-attention factor (default: 1)<br/>(env: LLAMA_ARG_GRP_ATTN_N) |
 | `-gaw, --grp-attn-w N` | group-attention width (default: 512)<br/>(env: LLAMA_ARG_GRP_ATTN_W) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: disabled)<br/>(env: LLAMA_ARG_JINJA) |

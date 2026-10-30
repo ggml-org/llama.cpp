@@ -171,6 +171,9 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-r, --reverse-prompt PROMPT` | halt generation at PROMPT, return control in interactive mode |
 | `-sp, --special` | special tokens output enabled (default: false) |
 | `--warmup, --no-warmup` | whether to perform warmup with an empty run (default: enabled) |
+| `--auto-warm` | generate up to 256 cache-warmup tokens and replay the sequence before accepting requests (opt-in) |
+| `--cache-warmup N` | cache-warmup token budget; 0 disables, maximum 8192, bounded by context size (env: `LLAMA_ARG_CACHE_WARMUP`) |
+| `--cache-warmup-prompt TEXT` | representative cache-warmup prompt; startup cost is separate from request timings |
 | `--spm-infill` | use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled) |
 | `--pooling {none,mean,cls,last,rank}` | pooling type for embeddings, use model default if unspecified<br/>(env: LLAMA_ARG_POOLING) |
 | `-np, --parallel N` | number of server slots (default: -1, -1 = auto)<br/>(env: LLAMA_ARG_N_PARALLEL) |
