@@ -1,11 +1,16 @@
-import { MODEL_ICON } from './icons.constants';
+import { MODEL_ICON, PROJECT_ICON } from './icons.constants';
 import {
 	SHORTCUT_MODELS,
 	SHORTCUT_NEW_CHAT,
 	SHORTCUT_SEARCH,
 	SHORTCUT_SETTINGS
 } from './keyboard-shortcuts.constants';
-import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
+import {
+	MCP_SERVERS_ROUTE_ID,
+	MODELS_ROUTE_ID,
+	PROJECTS_ROUTE_ID,
+	SETTINGS_ROUTE_ID
+} from './routes.constants';
 import { Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
@@ -165,7 +170,13 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		keys: SHORTCUT_NEW_CHAT,
 		tooltip: 'New chat'
 	},
-	{ action: SidebarAction.SEARCH, icon: Search, keys: SHORTCUT_SEARCH, tooltip: 'Search' }
+	{ action: SidebarAction.SEARCH, icon: Search, keys: SHORTCUT_SEARCH, tooltip: 'Search' },
+	{
+		action: SidebarAction.PROJECTS,
+		activeRouteId: PROJECTS_ROUTE_ID,
+		icon: PROJECT_ICON,
+		tooltip: 'Projects'
+	}
 ];
 
 /** The sidebar's footer: managing the app around the chats. */

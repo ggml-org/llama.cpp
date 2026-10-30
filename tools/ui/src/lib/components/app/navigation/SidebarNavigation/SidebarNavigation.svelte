@@ -534,6 +534,10 @@
 				openSearch();
 
 				break;
+			case SidebarAction.PROJECTS:
+				afterMobileClose(() => void goto(ROUTES.PROJECTS));
+
+				break;
 			case SidebarAction.MANAGE_MODELS:
 				openDialog(() => uiStore.openModelsManager());
 

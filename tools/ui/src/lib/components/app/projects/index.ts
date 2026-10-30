@@ -25,6 +25,14 @@ export { default as DialogProject } from './DialogProject.svelte';
 export { default as DialogProjectPicker } from './DialogProjectPicker.svelte';
 
 /**
+ * **ProjectCard** - One project on the Projects page
+ *
+ * Opens the project dialog on click; its right-click menu and "more actions"
+ * dropdown edit, hide or delete the project.
+ */
+export { default as ProjectCard } from './ProjectCard.svelte';
+
+/**
  * **ProjectContextList** - Context items of a project draft
  *
  * Uploads files, references server files or MCP resources, and removes items.
