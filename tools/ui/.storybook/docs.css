@@ -1,0 +1,82 @@
+@reference '../src/app.css';
+
+/*
+ * MDX pages that wrap their content in <Unstyled><div className="ds-docs"> drop
+ * Storybook's docs theme and take colours, font and type roles from the design system.
+ */
+.sbdocs-wrapper:has(.ds-docs) {
+	background: var(--surface-page);
+}
+
+.ds-docs {
+	@apply mx-auto max-w-3xl font-sans text-body text-fg-default;
+
+	& :where(h1) {
+		@apply mb-4 text-heading;
+	}
+
+	& :where(h2) {
+		@apply mt-10 mb-3 border-b border-line-default pb-2 text-title;
+	}
+
+	& :where(h3) {
+		@apply mt-6 mb-2 text-body font-semibold;
+	}
+
+	& :where(h4, h5, h6) {
+		@apply mt-4 mb-2 text-label;
+	}
+
+	& :where(p, ul, ol, blockquote, table, pre) {
+		@apply my-3;
+	}
+
+	& :where(ul) {
+		@apply list-disc pl-6;
+	}
+
+	& :where(ol) {
+		@apply list-decimal pl-6;
+	}
+
+	& :where(li) {
+		@apply my-1;
+	}
+
+	& :where(strong) {
+		@apply font-semibold;
+	}
+
+	& :where(a) {
+		@apply underline underline-offset-2 hover:text-fg-muted;
+	}
+
+	& :where(blockquote) {
+		@apply border-l-2 border-line-default pl-4 text-fg-muted;
+	}
+
+	& :where(hr) {
+		@apply my-8 border-line-default;
+	}
+
+	/* inline code only, with a selector that outranks the code the Markdown block renders */
+	& :not(pre) > code {
+		@apply rounded-control border-0 bg-surface-code px-1 py-0.5 font-mono text-[0.875em] text-(--fg-code);
+	}
+
+	& :where(pre) {
+		@apply overflow-x-auto rounded-panel bg-surface-code p-4 text-body-sm;
+	}
+
+	& :where(table) {
+		@apply w-full border-collapse text-body-sm;
+	}
+
+	& :where(th, td) {
+		@apply border-b border-line-default px-3 py-2 text-left align-top;
+	}
+
+	& :where(th) {
+		@apply text-label;
+	}
+}
