@@ -39,9 +39,25 @@ namespace fs = std::filesystem;
 // internal helpers
 //
 
-// a child process writes in the OEM code page, so accented output would reach
-// the JSON layer as invalid bytes. run() spawns without a console, so the
-// console code page never applies
+#if defined(_WIN32)
+// code page of the system locale, read once at first use
+static UINT legacy_oem_code_page() {
+    static const UINT cp = [] {
+        DWORD value = 0;
+        const int ret = GetLocaleInfoEx(LOCALE_NAME_SYSTEM_DEFAULT, LOCALE_IDEFAULTCODEPAGE | LOCALE_RETURN_NUMBER,
+                                        reinterpret_cast<LPWSTR>(&value), sizeof(value) / sizeof(WCHAR));
+        if (ret > 0 && value && value != CP_OEMCP) {
+            return static_cast<UINT>(value);
+        }
+        return GetOEMCP();
+    }();
+    return cp;
+}
+#endif
+
+// a child process writes in the legacy console code page, so accented output would reach
+// the JSON layer as invalid bytes. run() spawns without a console, so the console
+// code page never applies
 static std::string console_output_to_utf8(const std::string & text) {
 #if defined(_WIN32)
     // a chunk can end mid sequence, so the incomplete tail is dropped first
@@ -50,7 +66,7 @@ static std::string console_output_to_utf8(const std::string & text) {
         return text;
     }
 
-    const UINT cp = GetOEMCP();
+    const UINT cp = legacy_oem_code_page();
 
     // fail rather than emit replacement characters when the code page is wrong
     const int wide_len = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, text.data(), (int) text.size(), nullptr, 0);
