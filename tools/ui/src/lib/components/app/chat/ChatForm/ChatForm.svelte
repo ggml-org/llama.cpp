@@ -151,9 +151,8 @@
 
 	// the project the chat is in, or the one picked for the chat about to start
 	let project = $derived.by(() => {
-		const projectId =
-			conversationsStore.activeConversation?.projectId ??
-			conversationsStore.preferences.pendingProjectId;
+		const active = conversationsStore.activeConversation;
+		const projectId = active ? active.projectId : conversationsStore.preferences.pendingProjectId;
 
 		return projectId ? projectsStore.get(projectId) : undefined;
 	});

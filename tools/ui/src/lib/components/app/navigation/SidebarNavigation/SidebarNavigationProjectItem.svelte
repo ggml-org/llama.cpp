@@ -7,6 +7,7 @@
 		ChevronRight,
 		Download,
 		FolderInput,
+		FolderOpen,
 		MoreHorizontal,
 		Pencil,
 		Pin,
@@ -16,6 +17,7 @@
 		Trash2,
 		Unlink
 	} from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import {
 		ActionIcon,
 		CollapsibleRegion,
@@ -34,6 +36,7 @@
 		UI_DATA_ATTRS
 	} from '$lib/constants';
 	import type { MenuKind } from '$lib/enums';
+	import { RouterService } from '$lib/services';
 	import {
 		conversationsStore,
 		groupsStore,
@@ -93,9 +96,9 @@
 		project.groupId && groupsStore.get(project.groupId) ? project.groupId : null
 	);
 
-	async function startChat() {
-		await conversationsStore.openNewChat();
-		await conversationsStore.assignActiveConversationProject(project);
+	// the project's page is where its new chats start
+	function startChat() {
+		void goto(RouterService.project(project.id));
 	}
 
 	async function handleDelete() {
@@ -133,7 +136,8 @@
 
 	// the "more actions" dropdown and the right-click menu offer the same actions
 	let actions = $derived<MenuAction[]>([
-		{ icon: SquarePen, label: 'New chat', onclick: () => void startChat() },
+		{ icon: FolderOpen, label: 'Open project', onclick: startChat },
+		{ icon: SquarePen, label: 'New chat', onclick: startChat },
 		{
 			icon: project.pinned ? PinOff : Pin,
 			label: project.pinned ? 'Unpin' : 'Pin',
@@ -229,7 +233,7 @@
 							class="h-6 w-6"
 							icon={Plus}
 							iconSize="h-3 w-3"
-							onclick={() => void startChat()}
+							onclick={startChat}
 							tooltip="New chat in project"
 						/>
 
@@ -258,7 +262,7 @@
 				<li>
 					<button
 						class="w-full rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-						onclick={() => void startChat()}
+						onclick={startChat}
 						type="button"
 					>
 						Start a chat in this project

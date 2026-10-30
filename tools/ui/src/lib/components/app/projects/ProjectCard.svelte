@@ -8,8 +8,10 @@
 		PinOff,
 		Trash2
 	} from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import { ContextMenuActions, DialogConfirmation, DropdownMenuActions } from '$lib/components/app';
 	import * as Card from '$lib/components/ui/card';
+	import { RouterService } from '$lib/services';
 	import { projectsStore, uiStore } from '$lib/stores';
 	import type { MenuAction, Project } from '$lib/types';
 
@@ -27,6 +29,10 @@
 	let confirmDeleteOpen = $state(false);
 
 	function open() {
+		void goto(RouterService.project(project.id));
+	}
+
+	function edit() {
 		uiStore.openProjectDialog({ projectId: project.id });
 	}
 
@@ -37,7 +43,7 @@
 
 	// the "more actions" dropdown and the right-click menu offer the same actions
 	const actions = $derived<MenuAction[]>([
-		{ icon: Pencil, label: 'Edit project', onclick: open },
+		{ icon: Pencil, label: 'Edit project', onclick: edit },
 		// pinning places the sidebar row, which an archived project does not have
 		...(project.archived
 			? []
