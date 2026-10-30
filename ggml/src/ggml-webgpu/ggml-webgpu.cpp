@@ -1634,7 +1634,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
                                              ggml_tensor *    src1,
                                              ggml_tensor *    dst) {
     // Determine if this is a mat-vec operation
-    bool use_mat_vec = (dst->ne[1] <= 4);
+    bool use_mat_vec = (dst->ne[1] <= GGML_WEBGPU_MUL_MAT_VEC_MAX_ROWS);
 
     // use MMVQ path for mat-vec
     bool use_mmvq = ggml_webgpu_can_use_mmvq(
@@ -4059,7 +4059,7 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
 
                 // the q8 copy of src1 grows with its rows, so a longer batch reserves the copy of the longest
                 // mmvq batch and the size stays monotonic in the batch length
-                const int64_t n_rows   = std::min<int64_t>(src1->ne[1], GGML_WEBGPU_MMVQ_MAX_ROWS);
+                const int64_t n_rows   = std::min<int64_t>(src1->ne[1], GGML_WEBGPU_MUL_MAT_VEC_MAX_ROWS);
                 const bool    use_mmvq = ggml_webgpu_can_use_mmvq(
                     src0, src1, n_rows, ctx->webgpu_global_ctx->capabilities.supports_dot_product,
                     ctx->webgpu_global_ctx->vendor);
