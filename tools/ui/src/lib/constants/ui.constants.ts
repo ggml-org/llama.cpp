@@ -132,6 +132,12 @@ export const SIDEBAR_REVEAL_MS = 300;
 export const SIDEBAR_REVEAL_EDGE_PX = 24;
 /** Movement before a reveal swipe locks to a horizontal drag. */
 export const SIDEBAR_REVEAL_SLOP_PX = 8;
+/** A rightward swipe this long from anywhere on the page opens the phone sidebar too. */
+export const SIDEBAR_REVEAL_SWIPE_PX = 16;
+/** Share of the reveal a drag must cover to open or close the phone sidebar when let go slowly. */
+export const SIDEBAR_REVEAL_COMMIT_RATIO = 0.3;
+/** Release speed past which a drag opens or closes the phone sidebar the way it was heading. */
+export const SIDEBAR_REVEAL_FLING_PX_PER_MS = 0.3;
 
 /** Hold time before a phone conversation row opens its action menu. */
 export const ROW_LONG_PRESS_MS = 450;

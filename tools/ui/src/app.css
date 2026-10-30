@@ -321,6 +321,15 @@
 		scale: calc(0.98 + 0.02 * var(--sidebar-reveal-ease));
 	}
 
+	/* the slid page's fixed bars, held where they sit on screen, see useSidebarReveal */
+	.sidebar-reveal-pin-top {
+		translate: 0 var(--sidebar-reveal-pin-top, 0px);
+	}
+
+	.sidebar-reveal-pin-bottom {
+		translate: 0 calc(-1 * var(--sidebar-reveal-pin-bottom, 0px));
+	}
+
 	@media (prefers-reduced-motion: reduce) {
 		.sidebar-reveal-content {
 			scale: none;

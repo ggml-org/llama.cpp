@@ -247,7 +247,7 @@
 		<!-- a phone pins the gauge to the top right, across from the menu toggle -->
 		{#if deviceStore.isMobile && showContextGauge.current}
 			<ChatFormContextGauge
-				class="fixed top-4 right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
+				class="sidebar-reveal-pin-top fixed top-4 right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
 			/>
 		{/if}
 
@@ -270,6 +270,8 @@
 				// (the padding stays, the desktop greeting floats above the form),
 				// so the messages never shift while it moves
 				'pointer-events-none md:sticky fixed mt-auto',
+				// a phone holds it in place on screen while the page is slid aside
+				deviceStore.isMobile && 'sidebar-reveal-pin-bottom',
 				deviceStore.isStandalone
 					? 'bottom-6 right-4 left-4'
 					: deviceStore.isIOSSafari
