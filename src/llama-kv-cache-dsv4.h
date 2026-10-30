@@ -155,7 +155,7 @@ public:
 
     uint32_t get_n_rs_seq() const;
     const std::vector<uint32_t> & get_rs_idx() const;
-    void reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches);
+    void update_rs_for_ubatches(const std::vector<llama_ubatch> & ubatches);
 
 private:
     llama_hparams hparams_raw;
@@ -167,6 +167,10 @@ private:
     const uint32_t n_rs_seq;
 
     std::vector<uint32_t> rs_idx;
+
+    // [n_seq_max] largest rollback whose snapshot the last ubatch of the seq wrote: snapshot d is
+    // exact for d <= n tokens of the seq in that ubatch (d == n is the state before the ubatch)
+    std::vector<uint32_t> rs_max;
 
     // [n_layer] storage layer -> layer whose rows it holds (itself, or the source of a mirror)
     std::vector<int32_t> comp_il_src;
