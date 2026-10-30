@@ -43,7 +43,7 @@
 
 <div
 	aria-label="Context usage"
-	class="flex h-5 w-5 cursor-default items-center justify-center max-md:h-6 max-md:w-6"
+	class="flex size-5 cursor-default items-center justify-center max-md:size-6"
 	data-context-gauge-trigger
 	onclick={gaugeTriggerClick}
 	onkeydown={gaugeTriggerKeydown}

@@ -26,7 +26,7 @@
 		disabled = false,
 		href = '',
 		icon,
-		iconSize = 'h-3 w-3',
+		iconSize = 'size-icon-md',
 		onclick,
 		size = 'sm',
 		stopPropagationOnClick = false,
@@ -44,7 +44,7 @@
 	<Button
 		{...props}
 		aria-label={ariaLabel || tooltip}
-		class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
+		class="size-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
 		{disabled}
 		{href}
 		onclick={(e: MouseEvent) => {

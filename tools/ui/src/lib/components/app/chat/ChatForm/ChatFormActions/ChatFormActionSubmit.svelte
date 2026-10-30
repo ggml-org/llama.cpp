@@ -18,7 +18,7 @@
 {#snippet submitButton(props = {})}
 	<Button
 		class={[
-			'md:h-8 md:w-8 h-9 w-9 rounded-full p-0',
+			'md:size-8 size-9 rounded-full p-0',
 			showErrorState &&
 				'bg-red-400/10 text-red-400 hover:bg-red-400/20 hover:text-red-400 disabled:opacity-100'
 		]}
@@ -28,7 +28,7 @@
 	>
 		<span class="sr-only">Send</span>
 
-		<ArrowUp class="h-12 w-12" />
+		<ArrowUp class="size-icon-md" />
 	</Button>
 {/snippet}
 

@@ -22,7 +22,7 @@
 			className
 		]}
 	>
-		<ModalityIcon class="h-3 w-3" />
+		<ModalityIcon class="size-icon-xs" />
 
 		{MODALITY_LABELS[modality]}
 	</span>

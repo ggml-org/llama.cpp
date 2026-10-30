@@ -245,12 +245,12 @@
 	{#snippet children(_meta, ctx)}
 		{#if (ctx.isPending && !commandStreaming) || (isLive && !section.toolResult)}
 			<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
-				<Loader2 class="h-3 w-3 animate-spin" />
+				<Loader2 class="size-icon-xs animate-spin" />
 				Executing command...
 			</div>
 		{:else if execShellError}
 			<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
-				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{execShellError}</span>
 			</div>
@@ -277,7 +277,7 @@
 				{#if isExitCodeFinalLine && execShellExitStatus}
 					<div class={exitBadgeClass}>
 						{#if execShellExitStatus.timedOut}
-							<AlertTriangle class="h-3 w-3" />
+							<AlertTriangle class="size-icon-xs" />
 
 							<span>timed out</span>
 
@@ -285,11 +285,11 @@
 
 							<span>exit {execShellExitStatus.code}</span>
 						{:else if execShellExitStatus.code === 0}
-							<Check class="h-3 w-3" />
+							<Check class="size-icon-xs" />
 
 							<span>exit 0</span>
 						{:else}
-							<XCircle class="h-3 w-3" />
+							<XCircle class="size-icon-xs" />
 
 							<span>exit {execShellExitStatus.code}</span>
 						{/if}

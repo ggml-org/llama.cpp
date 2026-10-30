@@ -598,14 +598,14 @@
 							: 'Go to start'}
 					class="{uiStore.isSidebarExpanded
 						? 'bg-muted! md:bg-foreground/5!'
-						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
+						: 'bg-transparent!'} md:size-9 size-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
 					href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
 					icon={isLogoToggle && logoHovered
 						? uiStore.isSidebarExpanded
 							? PanelLeftClose
 							: PanelLeftOpen
 						: Logo}
-					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+					iconSize="size-4.5 md:size-4"
 					onclick={!uiStore.isSidebarExpanded || isLogoToggle ? toggleExpandedMode : undefined}
 					size="lg"
 					tooltip={!uiStore.isSidebarExpanded
@@ -627,9 +627,9 @@
 				>
 					<ActionIcon
 						ariaLabel="Collapse navigation"
-						class="backdrop-blur-none h-10 w-10 rounded-full -mr-1 -mt-1 hover:bg-accent!"
+						class="backdrop-blur-none size-10 rounded-full -mr-1 -mt-1 hover:bg-accent!"
 						icon={X}
-						iconSize="h-4 w-4"
+						iconSize="size-icon-md"
 						onclick={toggleExpandedMode}
 						size="lg"
 						tooltip="Close Sidebar"

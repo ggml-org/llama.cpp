@@ -34,11 +34,11 @@
 		baseImageClass = '',
 		class: className = '',
 		org,
-		quantImageClass = 'h-full w-full',
+		quantImageClass = 'size-full',
 		quantOrg,
 		quantPositionClass = '-bottom-0.75 -right-0.75',
-		quantSize = 'h-4.25 w-4.25',
-		size = 'h-9 w-9'
+		quantSize = 'size-4.25',
+		size = 'size-9'
 	}: Props = $props();
 
 	// With the Hub metadata setting off there is nothing to fetch and nothing to
@@ -107,7 +107,7 @@
 				{#if quantAvatarFailed}
 					<span
 						aria-hidden="true"
-						class="flex h-full w-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
+						class="flex size-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
 						style="background-color: hsl({quantHue} 60% 45%)"
 					>
 						{quantOrg.charAt(0).toUpperCase()}

@@ -51,7 +51,7 @@
 			<div
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
-				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{editFileBody.errorMessage}</span>
 			</div>

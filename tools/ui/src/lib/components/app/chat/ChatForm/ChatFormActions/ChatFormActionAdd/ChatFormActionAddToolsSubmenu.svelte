@@ -90,9 +90,9 @@
 				class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
 			>
 				{#if isExpanded}
-					<ChevronDown class="h-3.5 w-3.5 shrink-0" />
+					<ChevronDown class="size-icon-sm shrink-0" />
 				{:else}
-					<ChevronRight class="h-3.5 w-3.5 shrink-0" />
+					<ChevronRight class="size-icon-sm shrink-0" />
 				{/if}
 
 				<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">

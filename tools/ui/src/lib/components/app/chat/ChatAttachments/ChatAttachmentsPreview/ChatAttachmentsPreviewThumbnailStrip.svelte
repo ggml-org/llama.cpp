@@ -47,10 +47,10 @@
 					onclick={() => onNavigate(index)}
 				>
 					{#if item.isImage && item.preview}
-						<img alt={item.name} class="h-12 w-12 object-cover" src={item.preview} />
+						<img alt={item.name} class="size-12 object-cover" src={item.preview} />
 					{:else}
 						<div
-							class="bg-foreground-muted/50 flex h-12 w-12 flex-col items-center justify-center gap-0.5 py-1"
+							class="bg-foreground-muted/50 flex size-12 flex-col items-center justify-center gap-0.5 py-1"
 						>
 							{#if item.isAudio}
 								<Music class="{ICON_CLASS_DEFAULT} text-white/70" />

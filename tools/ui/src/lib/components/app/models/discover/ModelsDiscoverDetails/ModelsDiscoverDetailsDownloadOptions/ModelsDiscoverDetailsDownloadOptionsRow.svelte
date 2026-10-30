@@ -87,7 +87,7 @@
 				{/if}
 
 				<ChevronDown
-					class="h-3 w-3 shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {commandOpen
+					class="size-icon-xs shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {commandOpen
 						? 'rotate-180'
 						: ''}"
 				/>

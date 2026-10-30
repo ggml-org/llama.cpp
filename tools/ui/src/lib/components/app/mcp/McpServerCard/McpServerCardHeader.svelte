@@ -38,7 +38,7 @@
 				<McpServerIdentity
 					{displayName}
 					{faviconUrl}
-					iconClass="h-5 w-5"
+					iconClass="size-icon-lg"
 					iconRounded="rounded"
 					nameClass="leading-6 font-medium"
 					{serverInfo}
@@ -51,7 +51,7 @@
 						{@const TransportIcon = MCP_TRANSPORT_ICONS[transportType]}
 						<Badge class="h-5 gap-1 px-1.5 text-[10px]" variant="outline">
 							{#if TransportIcon}
-								<TransportIcon class="h-3 w-3" />
+								<TransportIcon class="size-icon-xs" />
 							{/if}
 
 							{MCP_TRANSPORT_LABELS[transportType] || transportType}

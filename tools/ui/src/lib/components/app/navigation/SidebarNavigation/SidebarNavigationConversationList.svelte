@@ -73,7 +73,7 @@
 			<div
 				class="text-muted-foreground inline-flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium gap-1"
 			>
-				<Pin class="h-3.5 w-3.5" />
+				<Pin class="size-icon-sm" />
 
 				<span>Pinned</span>
 			</div>

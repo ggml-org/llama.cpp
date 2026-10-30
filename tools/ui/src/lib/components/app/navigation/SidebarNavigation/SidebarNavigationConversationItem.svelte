@@ -228,7 +228,7 @@
 							class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
 							href={RouterService.chat(conversation.forkedFromConversationId)}
 						>
-							<GitBranch class="h-3.5 w-3.5" />
+							<GitBranch class="size-icon-sm" />
 						</a>
 					{/snippet}
 				</Tooltip.Trigger>
@@ -250,9 +250,9 @@
 						role="button"
 						tabindex="0"
 					>
-						<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
+						<Loader2 class="loading-icon size-icon-sm animate-spin" />
 
-						<Square class="stop-icon hidden h-3 w-3 fill-current text-destructive" />
+						<Square class="stop-icon hidden size-icon-xs fill-current text-destructive" />
 					</div>
 				</Tooltip.Trigger>
 

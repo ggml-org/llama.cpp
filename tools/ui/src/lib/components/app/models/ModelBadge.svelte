@@ -29,7 +29,7 @@
 {#snippet badgeContent(triggerProps?: Record<string, unknown>)}
 	<BadgeInfo {...triggerProps ?? {}} class={className} {onclick}>
 		{#snippet icon()}
-			<MODEL_ICON class="h-3 w-3" />
+			<MODEL_ICON class="size-icon-xs" />
 		{/snippet}
 
 		{#if model}

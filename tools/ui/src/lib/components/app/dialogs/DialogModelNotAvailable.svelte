@@ -34,7 +34,7 @@
 	<AlertDialog.Content class="max-w-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<AlertTriangle class="h-5 w-5 text-amber-500" />
+				<AlertTriangle class="size-icon-lg text-amber-500" />
 				Model Not Available
 			</AlertDialog.Title>
 

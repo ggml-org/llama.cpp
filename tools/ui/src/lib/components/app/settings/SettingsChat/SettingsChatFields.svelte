@@ -7,7 +7,12 @@
 	import * as RadioGroup from '$lib/components/ui/radio-group';
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { ICON_CLASS_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
+	import {
+		ICON_CLASS_DEFAULT,
+		ICON_CLASS_SM,
+		SETTING_CONFIG_INFO,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { SettingsFieldType } from '$lib/enums/settings.enums';
 	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
@@ -77,7 +82,7 @@
 						{field.label}
 
 						{#if field.isExperimental}
-							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+							<FlaskConical class="size-icon-sm text-muted-foreground" />
 						{/if}
 					</Label>
 
@@ -109,7 +114,7 @@
 					{#if isCustomRealTime}
 						<button
 							aria-label="Reset to default"
-							class="absolute top-1/2 right-2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
+							class="absolute top-1/2 right-2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 							onclick={() => {
 								settingsStore.resetParameterToServerDefault(field.key);
 								onConfigChange(field.key, '');
@@ -117,7 +122,7 @@
 							title="Reset to default"
 							type="button"
 						>
-							<RotateCcw class="h-3 w-3" />
+							<RotateCcw class="size-icon-xs" />
 						</button>
 					{/if}
 				</div>
@@ -133,7 +138,7 @@
 						{field.label}
 
 						{#if field.isExperimental}
-							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+							<FlaskConical class="size-icon-sm text-muted-foreground" />
 						{/if}
 					</Label>
 				{/if}
@@ -186,7 +191,7 @@
 						{field.label}
 
 						{#if field.isExperimental}
-							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+							<FlaskConical class="size-icon-sm text-muted-foreground" />
 						{/if}
 					</Label>
 
@@ -211,7 +216,7 @@
 							<div class="flex items-center gap-2">
 								{#if selectedOption?.icon}
 									{@const IconComponent = selectedOption.icon}
-									<IconComponent class={ICON_CLASS_DEFAULT} />
+									<IconComponent class={ICON_CLASS_SM} />
 								{/if}
 
 								{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
@@ -221,7 +226,7 @@
 						{#if isCustomRealTime}
 							<button
 								aria-label="Reset to default"
-								class="absolute top-1/2 right-8 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
+								class="absolute top-1/2 right-8 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 								onclick={() => {
 									settingsStore.resetParameterToServerDefault(field.key);
 									onConfigChange(field.key, '');
@@ -229,7 +234,7 @@
 								title="Reset to default"
 								type="button"
 							>
-								<RotateCcw class="h-3 w-3" />
+								<RotateCcw class="size-icon-xs" />
 							</button>
 						{/if}
 					</div>
@@ -266,7 +271,7 @@
 					{field.label}
 
 					{#if field.isExperimental}
-						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+						<FlaskConical class="size-icon-sm text-muted-foreground" />
 					{/if}
 				</Label>
 
@@ -291,7 +296,7 @@
 								{opt.label}
 
 								{#if opt.isExperimental}
-									<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+									<FlaskConical class="size-icon-sm text-muted-foreground" />
 								{/if}
 							</Label>
 						</div>
@@ -325,7 +330,7 @@
 							{field.label}
 
 							{#if field.isExperimental}
-								<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+								<FlaskConical class="size-icon-sm text-muted-foreground" />
 							{/if}
 						</label>
 

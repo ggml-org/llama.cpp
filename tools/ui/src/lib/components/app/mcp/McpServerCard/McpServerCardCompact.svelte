@@ -31,7 +31,7 @@
 		{#if activeIconUrl}
 			<img
 				alt=""
-				class="h-5 w-5 shrink-0 rounded"
+				class="size-5 shrink-0 rounded"
 				decoding="async"
 				loading="lazy"
 				src={activeIconUrl}

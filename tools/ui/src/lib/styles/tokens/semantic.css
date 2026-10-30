@@ -9,6 +9,8 @@
 	--surface-emphasis: var(--neutral-150);
 	--surface-selected: var(--neutral-150);
 	--surface-raised: var(--neutral-0);
+	--surface-lifted: var(--neutral-0);
+	--surface-pressed: var(--neutral-0);
 	--surface-glass: color-mix(in oklch, var(--neutral-100) 60%, transparent);
 	--surface-code: var(--neutral-50);
 	--surface-overlay: var(--black-a40);
@@ -24,6 +26,7 @@
 	/* lines: borders, dividers and focus */
 	--line-default: var(--neutral-300);
 	--line-field: var(--neutral-200);
+	--line-control: var(--neutral-300);
 	--line-focus: var(--neutral-400);
 	--line-danger: var(--red-600);
 
@@ -74,6 +77,7 @@
 	--elevation-control: 0 1px 3px var(--black-a10), 0 1px 2px -1px var(--black-a10);
 	--elevation-raised: 0 1px 3px var(--black-a6), 0 12px 32px -12px var(--black-a18);
 	--elevation-inset: inset 0 1px 2px var(--field-shade);
+	--elevation-pressed: inset 0 1px 2px var(--black-a12);
 	--elevation-tooltip: 0 4px 12px -4px var(--black-a30);
 	--blur-surface: var(--length-24);
 	--blur-control: var(--length-12);
@@ -85,6 +89,8 @@
 	--surface-emphasis: var(--neutral-750);
 	--surface-selected: var(--neutral-800);
 	--surface-raised: var(--neutral-900);
+	--surface-lifted: color-mix(in oklch, var(--neutral-700) 80%, transparent);
+	--surface-pressed: color-mix(in oklch, var(--neutral-50) 14%, transparent);
 	--surface-glass: color-mix(in oklch, var(--neutral-800) 75%, transparent);
 	--surface-code: var(--neutral-900);
 
@@ -96,6 +102,7 @@
 
 	--line-default: var(--white-a30);
 	--line-field: var(--white-a30);
+	--line-control: var(--white-a12);
 	--line-focus: var(--neutral-500);
 	--line-danger: var(--red-400);
 
@@ -128,6 +135,7 @@
 		0 1px 3px var(--black-a30), 0 1px 2px -1px var(--black-a25), 0 6px 16px -10px var(--black-a35);
 	--elevation-control: 0 1px 2px var(--black-a30);
 	--elevation-raised: 0 1px 3px var(--black-a40), 0 16px 40px -12px var(--black-a60);
+	--elevation-pressed: inset 0 1px 2px var(--black-a40);
 }
 
 /* roles that do not change with the theme, exposed as Tailwind utilities */
@@ -178,6 +186,7 @@
 	--background-color-surface-emphasis: var(--surface-emphasis);
 	--background-color-surface-selected: var(--surface-selected);
 	--background-color-surface-raised: var(--surface-raised);
+	--background-color-surface-lifted: var(--surface-lifted);
 	--background-color-surface-glass: var(--surface-glass);
 	--background-color-surface-code: var(--surface-code);
 	--background-color-surface-overlay: var(--surface-overlay);
@@ -187,6 +196,7 @@
 	--text-color-fg-danger: var(--fg-danger);
 	--border-color-line-default: var(--line-default);
 	--border-color-line-field: var(--line-field);
+	--border-color-line-control: var(--line-control);
 	--border-color-line-focus: var(--line-focus);
 	--border-color-line-danger: var(--line-danger);
 	--color-status-danger: var(--status-danger);

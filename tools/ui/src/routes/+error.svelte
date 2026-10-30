@@ -39,10 +39,10 @@
 		<div class="w-full max-w-md px-4 text-center">
 			<div class="mb-6">
 				<div
-					class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10"
+					class="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-destructive/10"
 				>
 					<svg
-						class="h-8 w-8 text-destructive"
+						class="size-8 text-destructive"
 						fill="none"
 						stroke="currentColor"
 						viewBox="0 0 24 24"

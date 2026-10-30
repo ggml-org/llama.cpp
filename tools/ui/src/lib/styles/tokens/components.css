@@ -53,9 +53,11 @@
 	--button-primary-background: var(--action-primary);
 	--button-primary-background-hover: var(--action-primary-hover);
 	--button-primary-text: var(--fg-on-action);
+	--button-primary-seam: color-mix(in oklch, var(--fg-on-action) 25%, transparent);
 	--button-danger-background: var(--action-danger);
 	--button-danger-background-hover: var(--action-danger-hover);
 	--button-danger-text: var(--fg-on-danger);
+	--button-danger-seam: color-mix(in oklch, var(--fg-on-danger) 25%, transparent);
 	--button-secondary-background: var(--surface-glass);
 	--button-secondary-background-hover: color-mix(in oklch, var(--surface-muted) 80%, transparent);
 	--button-secondary-border: color-mix(in oklch, var(--line-default) 30%, transparent);
@@ -63,11 +65,48 @@
 	--button-tertiary-background-hover: var(--action-quiet-hover);
 	--button-tertiary-border: var(--surface-muted);
 	--button-ghost-background-hover: var(--action-ghost-hover);
-	--button-outline-border: var(--line-default);
+	--button-outline-background: var(--field-background);
+	--button-outline-border: var(--line-control);
 	--button-text: var(--fg-default);
 	--button-shadow: var(--elevation-control);
 
-	/* fields: input, textarea, checkbox, switch track */
+	/* toggles; the outline variant borrows the button outline */
+	--toggle-background-hover: var(--action-ghost-hover);
+	--toggle-background-on: var(--surface-selected);
+	--toggle-text: var(--fg-default);
+
+	/* toggle group: a row of keys like a secondary button; a pressed key turns white and sinks in */
+	--toggle-group-background: var(--button-secondary-background);
+	--toggle-group-border: var(--button-secondary-border);
+	--toggle-group-seam: var(--line-control);
+	--toggle-group-shadow: var(--elevation-control);
+	--toggle-group-key-text: var(--fg-default);
+	--toggle-group-key-text-muted: color-mix(in oklch, var(--fg-default) 70%, transparent);
+	--toggle-group-key-background-hover: var(--action-ghost-hover);
+	/* while a key is pressed, the others turn grey so the white one stands out */
+	--toggle-group-key-background-idle: var(--surface-muted);
+	--toggle-group-key-background-idle-hover: var(--surface-emphasis);
+	--toggle-group-key-background-on: var(--surface-pressed);
+	--toggle-group-key-shadow-on: var(--elevation-pressed);
+
+	/* tabs: the segmented track, the active tab raised on it; the line variant underlines instead */
+	--tabs-track: var(--surface-muted);
+	--tabs-track-shadow: var(--elevation-inset);
+	--tabs-text: color-mix(in oklch, var(--fg-default) 70%, transparent);
+	--tabs-text-active: var(--fg-default);
+	--tabs-background-active: var(--surface-lifted);
+	--tabs-shadow-active: var(--elevation-control);
+	--tabs-line-active: var(--fg-default);
+
+	/* switch: the same recessed track and raised thumb; on, the track takes the primary colour */
+	--switch-track: var(--surface-muted);
+	--switch-track-on: var(--action-primary);
+	--switch-track-shadow: var(--elevation-inset);
+	--switch-thumb: var(--surface-lifted);
+	--switch-thumb-on: var(--surface-lifted);
+	--switch-thumb-shadow: var(--elevation-control);
+
+	/* fields: input, textarea, checkbox */
 	--input-background: var(--field-background);
 	--input-text: var(--fg-default);
 	--input-placeholder: var(--fg-muted);
@@ -102,10 +141,13 @@
 .dark {
 	--button-secondary-background-hover: var(--surface-muted);
 	--button-secondary-border: color-mix(in oklch, var(--line-default) 20%, transparent);
-	--button-outline-border: var(--line-field);
 	--badge-secondary-background: color-mix(in oklch, var(--fg-default) 10%, transparent);
 	--badge-danger-background: color-mix(in oklch, var(--fg-danger) 70%, transparent);
 	--badge-danger-background-hover: var(--badge-danger-background);
+	--toggle-group-key-background-idle: transparent;
+	--toggle-group-key-background-idle-hover: var(--action-ghost-hover);
+	/* on the near-white track the thumb stays dark and opaque */
+	--switch-thumb-on: var(--surface-raised);
 }
 
 /* the user bubble is a card with an even, fainter edge */

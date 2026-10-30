@@ -91,12 +91,12 @@
 	<div class="ml-auto flex items-center gap-0.75">
 		<ActionIcon
 			ariaLabel={pinTooltip}
-			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent! {pinDisabled
+			class="size-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent! {pinDisabled
 				? 'cursor-not-allowed'
 				: ''} {!pinDisabled ? 'opacity-100' : 'opacity-40'}"
 			disabled={pinDisabled}
 			icon={someSelectedPinned ? PinOff : Pin}
-			iconSize="h-3.5 w-3.5"
+			iconSize="size-icon-sm"
 			onclick={onBulkPinToggle}
 			size="sm"
 			tooltip={pinTooltip}
@@ -105,12 +105,12 @@
 
 		<ActionIcon
 			ariaLabel="Export selected"
-			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent! {hasSelection
+			class="size-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent! {hasSelection
 				? 'opacity-100'
 				: 'opacity-40'}"
 			disabled={!hasSelection}
 			icon={Download}
-			iconSize="h-3.5 w-3.5"
+			iconSize="size-icon-sm"
 			onclick={onBulkExport}
 			size="sm"
 			tooltip={hasSelection ? 'Export' : 'Export'}
@@ -119,12 +119,12 @@
 
 		<ActionIcon
 			ariaLabel="Delete selected"
-			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-destructive/10! dark:hover:bg-destructive/20! disabled:hover:bg-transparent {hasSelection
+			class="size-7 rounded-md bg-transparent backdrop-blur-none hover:bg-destructive/10! dark:hover:bg-destructive/20! disabled:hover:bg-transparent {hasSelection
 				? 'opacity-100'
 				: 'opacity-40'}"
 			disabled={!hasSelection}
 			icon={Trash2}
-			iconSize="h-3.5 w-3.5 text-destructive"
+			iconSize="size-icon-sm text-destructive"
 			onclick={handleDeleteClick}
 			size="sm"
 			tooltip="Delete selected"
@@ -135,9 +135,9 @@
 
 		<ActionIcon
 			ariaLabel="Exit bulk selection mode"
-			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent!"
+			class="size-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent!"
 			icon={X}
-			iconSize="h-3.5 w-3.5"
+			iconSize="size-icon-sm"
 			onclick={onClose}
 			size="sm"
 			tooltip="Exit bulk selection mode"

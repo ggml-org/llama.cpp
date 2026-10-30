@@ -78,7 +78,7 @@
 >
 	<button
 		class={cn(
-			'absolute z-10 flex h-6 w-6 items-center justify-center rounded-full shadow-md transition-opacity',
+			'absolute z-10 flex size-6 items-center justify-center rounded-full shadow-md transition-opacity',
 			isCenter
 				? 'top-1/2 left-4 -translate-y-1/2 bg-background/25 backdrop-blur-xs hover:bg-background/45 disabled:pointer-events-none disabled:opacity-0'
 				: 'left-2 bg-muted backdrop-blur-sm hover:bg-accent',
@@ -111,7 +111,7 @@
 
 	<button
 		class={cn(
-			'absolute z-10 flex h-6 w-6 items-center justify-center rounded-full shadow-md transition-opacity',
+			'absolute z-10 flex size-6 items-center justify-center rounded-full shadow-md transition-opacity',
 			isCenter
 				? 'top-1/2 right-4 -translate-y-1/2 bg-background/25 backdrop-blur-xs hover:bg-background/45 disabled:pointer-events-none disabled:opacity-0'
 				: 'right-2 bg-muted backdrop-blur-sm hover:bg-accent',

@@ -13,7 +13,7 @@
 	class="h-5 bg-orange-100 px-1.5 py-0.5 text-xs text-orange-800 dark:bg-orange-900 dark:text-orange-200 {className}"
 	variant="secondary"
 >
-	<Wrench class="mr-1 h-3 w-3" />
+	<Wrench class="mr-1 size-icon-xs" />
 
 	Custom
 </Badge>

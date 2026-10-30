@@ -123,9 +123,9 @@
 		type="button"
 	>
 		{#if copied}
-			<Check class="h-3.5 w-3.5 text-green-500" />
+			<Check class="size-icon-sm text-green-500" />
 		{:else}
-			<Copy class="h-3.5 w-3.5" />
+			<Copy class="size-icon-sm" />
 		{/if}
 	</button>
 </div>

@@ -41,7 +41,7 @@
 				<span>Input</span>
 
 				{#if ctx.isStreaming}
-					<Loader2 class="h-3 w-3 animate-spin" />
+					<Loader2 class="size-icon-xs animate-spin" />
 				{/if}
 			</div>
 
@@ -86,7 +86,7 @@
 				<span>Output</span>
 
 				{#if ctx.isPending}
-					<Loader2 class="h-3 w-3 animate-spin" />
+					<Loader2 class="size-icon-xs animate-spin" />
 				{/if}
 			</div>
 

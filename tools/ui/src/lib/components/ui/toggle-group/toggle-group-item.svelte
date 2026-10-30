@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getToggleGroupCtx } from './toggle-group.svelte';
-	import { type ToggleVariants, toggleVariants } from '$lib/components/ui/toggle/index.js';
+	import { type ToggleSize, toggleVariants } from '$lib/components/ui/toggle/index.js';
 	import { cn } from '$lib/components/ui/utils.js';
 	import { ToggleGroup as ToggleGroupPrimitive } from 'bits-ui';
 
@@ -9,27 +9,28 @@
 		ref = $bindable(null),
 		size,
 		value = $bindable(),
-		variant,
 		...restProps
-	}: ToggleGroupPrimitive.ItemProps & ToggleVariants = $props();
+	}: ToggleGroupPrimitive.ItemProps & { size?: ToggleSize } = $props();
 
 	const ctx = getToggleGroupCtx();
 </script>
 
+<!--
+	a key: pressed, it turns white and sinks in, its label a pixel lower; while any key is
+	pressed, the others turn grey and mute their labels
+-->
 <ToggleGroupPrimitive.Item
 	bind:ref
 	class={cn(
-		'group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-end]:pr-1.5 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-start]:pl-1.5 group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-md group-data-vertical/toggle-group:data-[spacing=0]:first:rounded-t-md group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-md group-data-vertical/toggle-group:data-[spacing=0]:last:rounded-b-md shrink-0 focus:z-10 focus-visible:z-10 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0 group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:border-t-0 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-t',
-		toggleVariants({
-			size: ctx.size || size,
-			variant: ctx.variant || variant
-		}),
+		toggleVariants({ size: ctx.size || size, variant: 'default' }),
+		'h-auto shrink-0 rounded-none text-(--toggle-group-key-text) backdrop-blur-none hover:bg-(--toggle-group-key-background-hover) hover:text-(--toggle-group-key-text) focus:z-10 focus-visible:z-10',
+		'border-(--toggle-group-seam) group-data-[orientation=horizontal]/toggle-group:not-first:border-l group-data-[orientation=vertical]/toggle-group:not-first:border-t',
+		'group-has-[[data-state=on]]/toggle-group:data-[state=off]:bg-(--toggle-group-key-background-idle) group-has-[[data-state=on]]/toggle-group:data-[state=off]:text-(--toggle-group-key-text-muted) group-has-[[data-state=on]]/toggle-group:data-[state=off]:hover:bg-(--toggle-group-key-background-idle-hover) group-has-[[data-state=on]]/toggle-group:data-[state=off]:hover:text-(--toggle-group-key-text)',
+		'data-[state=on]:bg-(--toggle-group-key-background-on) data-[state=on]:text-(--toggle-group-key-text) data-[state=on]:shadow-(--toggle-group-key-shadow-on) data-[state=on]:hover:bg-(--toggle-group-key-background-on) data-[state=on]:*:translate-y-px',
 		className
 	)}
 	data-size={ctx.size || size}
 	data-slot="toggle-group-item"
-	data-spacing={ctx.spacing}
-	data-variant={ctx.variant || variant}
 	{value}
 	{...restProps}
 />

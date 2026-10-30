@@ -203,7 +203,7 @@
 
 {#snippet selectorTriggerInner()}
 	<ModelsSelectorTriggerIcon
-		class="mr-0.375 size-3.5 max-md:size-4 shrink-0"
+		class="mr-0.375 size-icon-sm max-md:size-icon-md shrink-0"
 		option={selectedOption}
 	/>
 
@@ -297,7 +297,7 @@
 
 {#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 	<div class="flex items-center gap-2 text-xs text-muted-foreground">
-		<Loader2 class="h-3.5 w-3.5 animate-spin" />
+		<Loader2 class="size-icon-sm animate-spin" />
 
 		Loading models...
 	</div>
@@ -307,7 +307,7 @@
 			class="inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground"
 			style="max-width: min(calc(100cqw - 10rem), 48rem)"
 		>
-			<MODEL_ICON class="h-3.5 w-3.5 shrink-0" />
+			<MODEL_ICON class="size-icon-sm shrink-0" />
 		</span>
 	{:else}
 		<span class="text-xs text-muted-foreground">No models yet.</span>
@@ -394,7 +394,10 @@
 					onclick={() => ms.handleOpenChange(true)}
 					style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 				>
-					<ModelsSelectorTriggerIcon class="mr-0.375 size-3.5 shrink-0" option={selectedOption} />
+					<ModelsSelectorTriggerIcon
+						class="mr-0.375 size-icon-sm shrink-0"
+						option={selectedOption}
+					/>
 
 					{#if selectedOption}
 						<ModelId

@@ -39,7 +39,7 @@
 	{#if onclick}
 		<button
 			aria-label="Preview {name}"
-			class="block h-full w-full rounded-lg focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none"
+			class="block size-full rounded-lg focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none"
 			{onclick}
 			type="button"
 		>
