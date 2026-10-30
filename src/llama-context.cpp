@@ -156,6 +156,7 @@ static void start_doorbell_worker(llama_context * ctx) {
         std::vector<char>    pinned;
         std::vector<int32_t> old_keys, misses, sel;
         std::vector<moe_pager::moe_pack_loc> locs;
+        std::vector<const char *> cached_sources;
         std::vector<int>     left;
         std::vector<uint32_t> exp_len;
         std::vector<char>    read_fail, done;
@@ -185,6 +186,10 @@ static void start_doorbell_worker(llama_context * ctx) {
         long spec_submitted = 0, spec_reused = 0;
         const char * io_diag_env = getenv("MOE_IO_DIAG");
         const bool io_diag = io_diag_env && atoi(io_diag_env) != 0;
+        const char * victim_env = getenv("MOE_VICTIM_CACHE");
+        const char * predictor_env = getenv("MOE_PRED");
+        const bool victim_cache = (!victim_env || atoi(victim_env) != 0) && ctx->pager.pack_mode() && ctx->pager.cache_bytes() > 0 && (!predictor_env || atoi(predictor_env) == 0);
+        uint64_t victim_saved = 0, victim_hits = 0, victim_bytes = 0;
         const char * spec_async_env = getenv("MOE_PREKICK_ASYNC");
         const bool spec_async = !spec_async_env || atoi(spec_async_env) != 0;
         uint64_t logical_bytes = 0, demand_bytes = 0, spec_bytes = 0;
@@ -205,6 +210,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                     spec_submitted ? spec_submit_ms / spec_submitted : 0.0);
             if (moe_doorbell_dma_enabled()) fprintf(stderr, "[moe_dma_io] copies=%llu h2d_bytes=%llu\n",
                 (unsigned long long) dma_copies, (unsigned long long) dma_bytes);
+            if (victim_cache) fprintf(stderr, "[moe_victim_cache] saved=%llu hits=%llu bytes=%llu cache_evict=%ld\n", (unsigned long long) victim_saved, (unsigned long long) victim_hits, (unsigned long long) victim_bytes, ctx->pager.stats_cache_evict());
         };
         auto drain_spec = [&]() {
             if (!spec_ok) return;
@@ -329,6 +335,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                 // pick victims and publish the read plan before the reads start,
                 // so the kernel can copy each expert as soon as its read lands
                 locs.clear();
+                cached_sources.assign(misses.size(), nullptr);
                 int ncopy = 0;
                 const int warm_pad = ctx->hot_k;
                 const bool rank_ok = warm_pad > 0 &&
@@ -342,6 +349,13 @@ static void start_doorbell_worker(llama_context * ctx) {
                     if (v == (size_t) -1) break;
                     pinned[v - (size_t) base] = 1;
                     const int old_key = ctx->moe.slot_key[v];
+                    if (victim_cache && moe_doorbell_dma_enabled() && pl->pad0 && old_key >= 0) {
+                        char * destination = ctx->pager.cache_reserve(il, old_key % n_exp, sel.data(), (size_t) n);
+                        if (destination) {
+                            if (!moe_doorbell_dma_store(il, (int) (v - (size_t) base), destination)) GGML_ABORT("victim DMA submission failed");
+                            victim_saved++;
+                        }
+                    }
                     if (old_key >= 0) ctx->moe.slot_of[(size_t) old_key] = -1;
                     ctx->moe.slot_of[(size_t) il * n_exp + e] = (int) v;
                     ctx->moe.slot_key[v] = il * n_exp + e;
@@ -366,6 +380,10 @@ static void start_doorbell_worker(llama_context * ctx) {
                         locs.push_back(moe_pager::moe_pack_loc{-1, 0, 0, 0});
                         pl->copy_pre[ncopy] = 0;
                         rfd.push_back(fd_gguf);
+                    }
+                    if (victim_cache) {
+                        cached_sources[(size_t) ncopy] = ctx->pager.cache_find(il, e);
+                        if (cached_sources[(size_t) ncopy]) pl->copy_pre[ncopy] = 0;
                     }
                     ncopy++;
                 }
@@ -402,10 +420,11 @@ static void start_doorbell_worker(llama_context * ctx) {
                 read_fail.assign((size_t) ncopy, 0);
                 done.assign((size_t) ncopy, 0);
 
-                auto publish_ready = [&](int ci) {
+                auto publish_ready = [&](int ci, const char * cached = nullptr) {
                     std::atomic_thread_fence(std::memory_order_seq_cst);
                     if (moe_doorbell_dma_enabled() && pl->pad0 && pl->copy_slot[ci] >= 0) {
-                        if (!moe_doorbell_dma_submit(il, ci)) GGML_ABORT("demand DMA submission failed");
+                        const bool submitted = cached ? moe_doorbell_dma_submit_from(il, ci, cached) : moe_doorbell_dma_submit(il, ci);
+                        if (!submitted) GGML_ABORT("demand DMA submission failed");
                         if (io_diag) {
                             dma_copies++;
                             dma_bytes += gb + ub + db;
@@ -420,7 +439,7 @@ static void start_doorbell_worker(llama_context * ctx) {
                     // The expert now lives in the VRAM pool, so its page-cache
                     // copy is a duplicate. Drop it to keep the two tiers
                     // exclusive and leave the RAM for the warm tail.
-                    if (ctx->pager.pack_mode() && ctx->hot_k > 0) {
+                    if (ctx->pager.pack_mode() && (ctx->hot_k > 0 || (victim_cache && pl->pad0 && moe_doorbell_dma_enabled()))) {
                         const moe_pager::moe_pack_loc & l = locs[(size_t) ci];
                         if (l.fd >= 0) {
                             posix_fadvise(l.fd, (off_t) l.off, (off_t) l.len, POSIX_FADV_DONTNEED);
@@ -473,6 +492,23 @@ static void start_doorbell_worker(llama_context * ctx) {
                 }
 
                 const auto t_read0 = std::chrono::high_resolution_clock::now();
+                if (victim_cache) {
+                    for (int ci = 0; ci < ncopy; ++ci) {
+                        if (read_fail[(size_t) ci] || left[(size_t) ci] == 0) continue;
+                        const char * cached = cached_sources[(size_t) ci];
+                        if (!cached) continue;
+                        if (!moe_doorbell_dma_enabled() || !pl->pad0) {
+                            memcpy(stage_host + (size_t) ci * stride, cached, gb + ub + db);
+                            publish_ready(ci);
+                        } else {
+                            publish_ready(ci, cached);
+                        }
+                        if (pl->pad0 && moe_doorbell_dma_enabled()) ctx->pager.cache_remove(il, misses[(size_t) ci]);
+                        left[(size_t) ci] = 0;
+                        victim_hits++;
+                        victim_bytes += gb + ub + db;
+                    }
+                }
                 drain_spec();
                 int spec_copy = -1, spec_read = -1;
                 DoorbellPrekick * prediction = moe_doorbell_prekick_host(il);
@@ -1937,11 +1973,15 @@ llama_context::llama_context(
                         moe.exp_rank.assign((size_t) n_layer * n_exp, 0);
                         moe.step_sel.assign((size_t) n_layer * n_used, -1);
                         moe.step_topk.assign((size_t) n_layer, nullptr);
-                        const char * cm = getenv("MOE_CACHE_MIB");
-                        const size_t cache_bytes = cm ? (size_t) atoi(cm) * 1048576u : 0u;
                         const char * doorbell_env = getenv("MOE_DOORBELL");
                         const char * predictor_env = getenv("MOE_PRED");
                         const bool demand_only = pager.pack_mode() && (!doorbell_env || atoi(doorbell_env) != 0) && (!predictor_env || atoi(predictor_env) == 0);
+                        const char * victim_env = getenv("MOE_VICTIM_CACHE");
+                        const char * dma_env = getenv("MOE_DMA");
+                        const bool victim_cache = demand_only && (!victim_env || atoi(victim_env) != 0) && (!dma_env || atoi(dma_env) != 0) && !getenv("GGML_CUDA_DISABLE_GRAPHS");
+                        const char * cm = getenv("MOE_CACHE_MIB");
+                        const int cache_mib = cm ? std::max(0, atoi(cm)) : (victim_cache ? 8192 : 0);
+                        const size_t cache_bytes = (size_t) cache_mib * 1048576u;
                         const char * stage_env = getenv("MOE_PAGER_STAGES");
                         const int pager_stages = stage_env && atoi(stage_env) > 0 ? std::max(64, std::min(384, atoi(stage_env))) : (demand_only ? 64 : 384);
                         LLAMA_LOG_INFO("%s: moe pager staging %d slots (64 demand)\n", __func__, pager_stages);
@@ -3319,6 +3359,27 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
     }
 
+    const char * verify_path = getenv("MOE_VERIFY_ROUTER");
+    if (verify_path && verify_path[0]) {
+        static FILE * verify_file = fopen(verify_path, "wb");
+        if (!verify_file) GGML_ABORT("router verification output unavailable");
+        ggml_backend_sched_synchronize(sched.get());
+        for (int index = 0; index < ggml_graph_n_nodes(gf); ++index) {
+            ggml_tensor * tensor = ggml_graph_node(gf, index);
+            const char * name = ggml_get_name(tensor);
+            if (strncmp(name, "ffn_moe_logits-", 15) != 0) continue;
+            GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+            const int32_t header[3] = { atoi(name + 15), (int32_t) tensor->ne[0], (int32_t) tensor->ne[1] };
+            std::vector<float> logits((size_t) ggml_nelements(tensor));
+            ggml_backend_tensor_get(tensor, logits.data(), 0, logits.size() * sizeof(float));
+            if (fwrite(header, sizeof(header), 1, verify_file) != 1 ||
+                fwrite(logits.data(), sizeof(float), logits.size(), verify_file) != logits.size()) {
+                GGML_ABORT("router verification write failed");
+            }
+        }
+        if (fflush(verify_file) != 0) GGML_ABORT("router verification flush failed");
+    }
+
     ret = GGML_STATUS_SUCCESS;
 
     return res;
@@ -4502,6 +4563,10 @@ llm_graph_cb llama_context::graph_get_cb() const {
         }
         if (moe_ready && strcmp(name, "ffn_moe_topk") == 0 && il >= 0 && il < moe.n_layer) {
             const_cast<llama_context*>(this)->moe.step_topk[(size_t) il] = cur;
+        }
+        const char * verify_path = getenv("MOE_VERIFY_ROUTER");
+        if (verify_path && verify_path[0] && strcmp(name, "ffn_moe_logits") == 0) {
+            ggml_set_output(cur);
         }
 
         // - norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
@@ -7158,20 +7223,6 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     const char * nm = ggml_get_name(t);
     if (!nm) {
         return false;
-    }
-    const char * verify_path = getenv("MOE_VERIFY_ROUTER");
-    if (verify_path && verify_path[0] && strncmp(nm, "ffn_moe_logits-", 15) == 0) {
-        if (ask) return true;
-        static FILE * verify_file = fopen(verify_path, "wb");
-        if (!verify_file) return false;
-        GGML_ASSERT(t->type == GGML_TYPE_F32);
-        const int32_t header[3] = { atoi(nm + 15), (int32_t) t->ne[0], (int32_t) t->ne[1] };
-        std::vector<float> logits((size_t) ggml_nelements(t));
-        ggml_backend_tensor_get(t, logits.data(), 0, logits.size() * sizeof(float));
-        fwrite(header, sizeof(header), 1, verify_file);
-        fwrite(logits.data(), sizeof(float), logits.size(), verify_file);
-        fflush(verify_file);
-        return true;
     }
     // MOE_TRACE_LOGITS: dump the continuous router scores (the tensor feeding
     // argsort_top_k) so a logit-space transition model can be trained offline.

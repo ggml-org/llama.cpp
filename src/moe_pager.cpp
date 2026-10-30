@@ -21,6 +21,7 @@
 #include <limits>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <time.h>
 
 static double now_s() {
@@ -31,6 +32,15 @@ static double now_s() {
 moe_pager::~moe_pager() {
     if (ring_) { io_uring_queue_exit((struct io_uring *) ring_); ring_ = nullptr; }
     if (stage_) { cudaFreeHost(stage_); stage_ = nullptr; }
+    if (cache_) {
+        if (cache_registered_) {
+            cudaHostUnregister(cache_);
+            munmap(cache_, cache_bytes_ * (size_t) cache_slots_);
+        } else {
+            cudaFreeHost(cache_);
+        }
+        cache_ = nullptr;
+    }
     if (fd_ >= 0) { close(fd_); fd_ = -1; }
     if (fd_pack_ >= 0) { close(fd_pack_); fd_pack_ = -1; }
     if (fd_pack_buf_ >= 0) { close(fd_pack_buf_); fd_pack_buf_ = -1; }
@@ -444,18 +454,107 @@ bool moe_pager::init_cache(size_t bytes) {
         per = s[0].len + s[1].len + s[2].len;
     }
     if (per == 0) return false;
+    const size_t slots = bytes / per;
+    if (slots == 0 || slots > (size_t) std::numeric_limits<int>::max()) return false;
     cache_bytes_ = per;
-    cache_slots_ = (int) (bytes / per);
-    if (cache_slots_ <= 0) return false;
-    if (cudaHostAlloc(&cache_, cache_bytes_ * (size_t) cache_slots_, cudaHostAllocDefault) != cudaSuccess) {
-        cache_ = nullptr; cache_slots_ = 0; return false;
+    cache_slots_ = (int) slots;
+    const size_t total_bytes = cache_bytes_ * (size_t) cache_slots_;
+    const char * anonymous_env = getenv("MOE_CACHE_ANON");
+    const char * victim_env = getenv("MOE_VICTIM_CACHE");
+    const bool anonymous = anonymous_env ? atoi(anonymous_env) != 0 : (!victim_env || atoi(victim_env) != 0);
+    if (anonymous) {
+        void * memory = mmap(nullptr, total_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (memory == MAP_FAILED) {
+            cache_slots_ = 0;
+            return false;
+        }
+        cache_ = (char *) memory;
+        if (cudaHostRegister(cache_, total_bytes, cudaHostRegisterDefault) != cudaSuccess) {
+            munmap(cache_, total_bytes);
+            cache_ = nullptr;
+            cache_slots_ = 0;
+            return false;
+        }
+        cache_registered_ = true;
+    } else if (cudaHostAlloc(&cache_, total_bytes, cudaHostAllocDefault) != cudaSuccess) {
+        cache_ = nullptr;
+        cache_slots_ = 0;
+        return false;
     }
+    fprintf(stderr, "moe_pager: host cache anonymous=%d\n", anonymous ? 1 : 0);
     fprintf(stderr, "moe_pager: Tier 1 host cache %.2f GiB, %d slots x %zu B\n",
             (double) bytes / (1024.0*1024.0*1024.0), cache_slots_, cache_bytes_);
     cache_idx_.assign((size_t) n_layer_ * n_expert_, -1);
     cache_used_.assign((size_t) cache_slots_, 0);
     cache_stamp_.assign((size_t) cache_slots_, 0);
     return true;
+}
+
+const char * moe_pager::cache_find(int il, int expert) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!cache_ || il < 0 || il >= n_layer_ || expert < 0 || expert >= n_expert_) return nullptr;
+    const int slot = cache_idx_[(size_t) il * n_expert_ + expert];
+    if (slot < 0) {
+        n_cache_miss_++;
+        return nullptr;
+    }
+    cache_stamp_[(size_t) slot] = ++cache_tick_;
+    n_cache_hit_++;
+    return cache_ + (size_t) slot * cache_bytes_;
+}
+
+char * moe_pager::cache_reserve(int il, int expert, const int32_t * selected, size_t count) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!cache_ || il < 0 || il >= n_layer_ || expert < 0 || expert >= n_expert_) return nullptr;
+    const size_t key = (size_t) il * n_expert_ + expert;
+    int slot = cache_idx_[key];
+    if (slot < 0) {
+        std::vector<char> pinned((size_t) cache_slots_, 0);
+        for (size_t index = 0; index < count; ++index) {
+            const int current = selected[index];
+            if (current < 0 || current >= n_expert_) continue;
+            const int cached = cache_idx_[(size_t) il * n_expert_ + current];
+            if (cached >= 0) pinned[(size_t) cached] = 1;
+        }
+        long oldest = std::numeric_limits<long>::max();
+        for (int current = 0; current < cache_slots_; ++current) {
+            if (pinned[(size_t) current]) continue;
+            if (!cache_used_[(size_t) current]) {
+                slot = current;
+                break;
+            }
+            if (cache_stamp_[(size_t) current] < oldest) {
+                oldest = cache_stamp_[(size_t) current];
+                slot = current;
+            }
+        }
+        if (slot < 0) return nullptr;
+        if (cache_used_[(size_t) slot]) {
+            for (int & cached : cache_idx_) {
+                if (cached == slot) {
+                    cached = -1;
+                    break;
+                }
+            }
+            n_cache_evict_++;
+        }
+        cache_idx_[key] = slot;
+        cache_used_[(size_t) slot] = 1;
+        n_cache_fill_++;
+    }
+    cache_stamp_[(size_t) slot] = ++cache_tick_;
+    return cache_ + (size_t) slot * cache_bytes_;
+}
+
+void moe_pager::cache_remove(int il, int expert) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!cache_ || il < 0 || il >= n_layer_ || expert < 0 || expert >= n_expert_) return;
+    const size_t key = (size_t) il * n_expert_ + expert;
+    const int slot = cache_idx_[key];
+    if (slot < 0) return;
+    cache_idx_[key] = -1;
+    cache_used_[(size_t) slot] = 0;
+    cache_stamp_[(size_t) slot] = 0;
 }
 
 bool moe_pager::prefetch(int il, int e) {

@@ -106,7 +106,10 @@ public:
     // A cold expert read once is kept in host memory and served from there over
     // PCIe (~20 GB/s) instead of the NVMe (~2.8 GB/s). Sized by `bytes`; 0 off.
     bool init_cache(size_t bytes);
-    size_t cache_bytes() const { return cache_bytes_; }
+    const char * cache_find(int il, int expert);
+    char * cache_reserve(int il, int expert, const int32_t * selected, size_t count);
+    void cache_remove(int il, int expert);
+    size_t cache_bytes() const { return cache_ ? cache_bytes_ : 0; }
     long stats_cache_hit()   const { return n_cache_hit_; }
     long stats_cache_miss()  const { return n_cache_miss_; }
     long stats_cache_fill()  const { return n_cache_fill_; }
@@ -185,6 +188,7 @@ private:
 
     // Tier 1: pinned host arena holding whole experts, indexed by (il,e)
     char * cache_ = nullptr;
+    bool cache_registered_ = false;
     size_t cache_bytes_ = 0;             // per-expert bytes in the arena
     int    cache_slots_ = 0;
     std::vector<int>  cache_idx_;        // il*n_expert+e -> slot, -1 = absent

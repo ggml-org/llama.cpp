@@ -530,7 +530,7 @@ const uint64_t * moe_doorbell_lru_host(int il) {
     return g_lru_host && il >= 0 && il < g_n_layer ? g_lru_host + (size_t) il * g_n_expert : nullptr;
 }
 
-bool moe_doorbell_dma_submit(int il, int copy_index) {
+bool moe_doorbell_dma_submit_from(int il, int copy_index, const char * source) {
     std::atomic_thread_fence(std::memory_order_seq_cst);
     if (!g_dma_done || il < 0 || il >= g_n_layer || copy_index < 0 ||
         copy_index >= g_stage_cap || copy_index >= MOE_DOORBELL_PLAN_MAX) return false;
@@ -539,7 +539,7 @@ bool moe_doorbell_dma_submit(int il, int copy_index) {
     const int slot = plan.copy_slot[copy_index];
     if (slot < 0 || (uint32_t) slot >= plan.s_pl) return false;
     if (cudaSetDevice(g_device) != cudaSuccess) return false;
-    const char * source = g_stage_host + (size_t) copy_index * g_stage_stride + plan.copy_pre[copy_index];
+    if (!source) return false;
     const uint64_t destinations[3] = {plan.dst_gate, plan.dst_up, plan.dst_down};
     const size_t lengths[3] = {plan.gate_bytes, plan.up_bytes, plan.down_bytes};
     size_t offset = 0;
@@ -552,6 +552,30 @@ bool moe_doorbell_dma_submit(int il, int copy_index) {
     if (error == cudaSuccess) error = cudaMemcpyAsync(g_dma_done + il * MOE_DOORBELL_PLAN_MAX + copy_index,
         g_dma_one, sizeof(uint32_t), cudaMemcpyHostToDevice, g_stream_h2d);
     if (error != cudaSuccess) fprintf(stderr, "[moe_dma] submission failed: %s\n", cudaGetErrorString(error));
+    return error == cudaSuccess;
+}
+
+bool moe_doorbell_dma_submit(int il, int copy_index) {
+    if (il < 0 || il >= g_n_layer || copy_index < 0 || copy_index >= g_stage_cap || copy_index >= MOE_DOORBELL_PLAN_MAX) return false;
+    const char * source = g_stage_host + (size_t) copy_index * g_stage_stride + g_plans_host[il].copy_pre[copy_index];
+    return moe_doorbell_dma_submit_from(il, copy_index, source);
+}
+
+bool moe_doorbell_dma_store(int il, int slot, char * destination) {
+    if (!g_dma_done || !g_stream_h2d || il < 0 || il >= g_n_layer || slot < 0 || !destination) return false;
+    const DoorbellPlan & plan = g_plans_host[il];
+    if (!plan.pad0 || (uint32_t) slot >= plan.s_pl) return false;
+    if (cudaSetDevice(g_device) != cudaSuccess) return false;
+    const uint64_t sources[3] = {plan.dst_gate, plan.dst_up, plan.dst_down};
+    const size_t lengths[3] = {plan.gate_bytes, plan.up_bytes, plan.down_bytes};
+    size_t offset = 0;
+    cudaError_t error = cudaSuccess;
+    for (int role = 0; role < 3 && error == cudaSuccess; ++role) {
+        const char * source = (const char *) (uintptr_t) sources[role] + (size_t) slot * lengths[role];
+        error = cudaMemcpyAsync(destination + offset, source, lengths[role], cudaMemcpyDeviceToHost, g_stream_h2d);
+        offset += lengths[role];
+    }
+    if (error != cudaSuccess) fprintf(stderr, "[moe_dma] cache store failed: %s\n", cudaGetErrorString(error));
     return error == cudaSuccess;
 }
 
