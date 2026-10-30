@@ -39,7 +39,7 @@ llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF \
 
 Available params:
 - `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3). It is required, the model produces almost no audio without it
-- `--tts-voice` selects one of the predefined voices shipped with the weights (e.g. `giovanni`), when the GGUF holds them
+- `--tts-voice` selects one of the predefined voices shipped with the weights (e.g. `giovanni`), when the GGUF holds them. The converter reads them from `embeddings/*.safetensors` next to the weights, of both repositories, and logs how closely each one is reproduced (some packs ship voice states computed with other weights, the converter warns above 5% and skips a voice only when it does not belong to the model at all)
 - Note: `lang` is not used, the language is a property of the weights
 
 Example usage:

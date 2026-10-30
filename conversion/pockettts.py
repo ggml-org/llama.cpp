@@ -63,15 +63,28 @@ def _load_safetensors(path: Path, prefixes: tuple[str, ...]) -> dict[str, Tensor
                 for name in part.keys() if name.startswith(prefixes)}
 
 
-def _voice_prompt_embd(weights: dict[str, Tensor], kv0: Tensor, v1: Tensor,
-                       n_head: int, rope_theta: float) -> tuple[Tensor, float]:
-    # a voice prompt is bos_before_voice, then one frame speaker_proj @ latent per 80 ms of audio,
-    # the voice state only keeps its keys and values, this takes those of layer 0 [k/v, pos, n_embd] and the values of layer 1:
+def _rope_pairs(x: Tensor, n_head: int, rope_theta: float) -> Tensor:
+    # rotary embedding over adjacent pairs (ggml NORM mode), x: [n_pos, n_embd]
+    n_pos, n_embd = x.shape
+    head_dim = n_embd // n_head
+    angle = torch.arange(n_pos, dtype=x.dtype)[:, None, None] * \
+        rope_theta ** (-torch.arange(0, head_dim, 2, dtype=x.dtype) / head_dim)
+    x = x.view(n_pos, n_head, head_dim // 2, 2)
+    return torch.stack([x[..., 0] * angle.cos() - x[..., 1] * angle.sin(),
+                        x[..., 0] * angle.sin() + x[..., 1] * angle.cos()], -1).reshape(n_pos, n_embd)
+
+
+def _voice_prompt_embd(weights: dict[str, Tensor], kv: list[Tensor], n_head: int, rope_theta: float) -> tuple[Tensor, float]:
+    # a voice prompt is bos_before_voice, then one frame speaker_proj @ latent per 80 ms of audio, the voice state
+    # only keeps the keys and values of every layer, kv[il] is [k/v, pos, n_embd]:
     # - layer 0: v = Wv @ norm1(x) gives norm1(x), so each frame up to its scale (its mean is lost, no norm sees it)
     # - layer 1: the values set the scale of each frame, found by a 1-D search
-    # returns the frames without the leading bos_before_voice, which is added in front of any voice prompt
+    # returns the frames without the leading bos_before_voice, which is added in front of any voice prompt, and the
+    # distance of the state the backbone gives for them from the given one: the largest, over layers, median relative
+    # error of the keys and values
     w = {name: t.double() for name, t in weights.items()}
-    k0, v0, v1 = kv0[0].double(), kv0[1].double(), v1.double()
+    kv = [t.double() for t in kv]
+    k0, v0, v1 = kv[0][0], kv[0][1], kv[1][1]
     n_pos, n_embd = v0.shape
     head_dim = n_embd // n_head
 
@@ -81,38 +94,35 @@ def _voice_prompt_embd(weights: dict[str, Tensor], kv0: Tensor, v1: Tensor,
     def norm(x: Tensor, il: int, name: str) -> Tensor:
         return F.layer_norm(x, (n_embd,), p(il, f"{name}.weight"), p(il, f"{name}.bias"), 1e-5)
 
-    wq, _, wv = p(0, "self_attn.in_proj.weight").chunk(3)
-    h = torch.linalg.solve(wv, v0.T).T                 # norm1(x)
-    z = (h - p(0, "norm1.bias")) / p(0, "norm1.weight")  # (x - mean(x)) / std(x)
+    def heads(t: Tensor) -> Tensor:
+        return t.reshape(n_pos, n_head, head_dim).transpose(0, 1)
 
-    bos = w["flow_lm.bos_before_voice"].reshape(-1)
-    bos_err = ((z[0] - (bos - bos.mean()) / bos.std(unbiased=False)).norm() / z[0].norm()).item()
-    if bos_err > 0.05:
-        raise ValueError(f"the voice state does not start with bos_before_voice (error {bos_err:.2e})")
+    def rows(t: Tensor) -> Tensor:
+        return t.transpose(0, 1).reshape(n_pos, n_embd)
+
+    def attn(il: int, h: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        q = _rope_pairs(h @ p(il, "self_attn.in_proj.weight").chunk(3)[0].T, n_head, rope_theta)
+        return rows(F.scaled_dot_product_attention(heads(q), heads(k), heads(v), is_causal=True)) @ p(il, "self_attn.out_proj.weight").T
+
+    def ffn(il: int, x: Tensor) -> Tensor:
+        return F.gelu(norm(x, il, "norm2") @ p(il, "linear1.weight").T) @ p(il, "linear2.weight").T
+
+    wv = p(0, "self_attn.in_proj.weight").chunk(3)[2]
+    h = torch.linalg.solve(wv, v0.T).T                   # norm1(x)
+    z = (h - p(0, "norm1.bias")) / p(0, "norm1.weight")  # (x - mean(x)) / std(x)
 
     # z[i] = (speaker_proj @ latent - mean) / std, the latent direction is the fit on [speaker_proj, 1]
     proj = w["flow_lm.speaker_proj_weight"]
     fit = torch.linalg.lstsq(torch.cat([proj, torch.ones(n_embd, 1, dtype=proj.dtype)], 1), z[1:].T).solution
     frames = (proj @ fit[:-1]).T
 
-    # layer 0 attention output from the stored keys, rotated by adjacent pairs
-    angle = torch.arange(n_pos, dtype=torch.float64)[:, None, None] * \
-        rope_theta ** (-torch.arange(0, head_dim, 2, dtype=torch.float64) / head_dim)
-    q = (h @ wq.T).view(n_pos, n_head, head_dim // 2, 2)
-    q = torch.stack([q[..., 0] * angle.cos() - q[..., 1] * angle.sin(),
-                     q[..., 0] * angle.sin() + q[..., 1] * angle.cos()], -1)
-
-    def heads(t: Tensor) -> Tensor:
-        return t.reshape(n_pos, n_head, head_dim).transpose(0, 1)
-
-    attn = F.scaled_dot_product_attention(heads(q), heads(k0), heads(v0), is_causal=True)
-    attn = attn.transpose(0, 1).reshape(n_pos, n_embd)[1:] @ p(0, "self_attn.out_proj.weight").T
-
+    # layer 0 attention output from the stored keys and values
+    a0 = attn(0, h, k0, v0)[1:]
     wv1 = p(1, "self_attn.in_proj.weight").chunk(3)[2]
 
     def err(scale: Tensor) -> Tensor:  # relative error on the layer 1 values, per frame
-        x = scale[:, None] * frames + attn
-        x = x + F.gelu(norm(x, 0, "norm2") @ p(0, "linear1.weight").T) @ p(0, "linear2.weight").T
+        x = scale[:, None] * frames + a0
+        x = x + ffn(0, x)
         return (norm(x, 1, "norm1") @ wv1.T - v1[1:]).norm(dim=1) / v1[1:].norm(dim=1)
 
     grid = torch.logspace(-3, 3, 49, dtype=torch.float64)
@@ -122,8 +132,20 @@ def _voice_prompt_embd(weights: dict[str, Tensor], kv0: Tensor, v1: Tensor,
         m1, m2 = hi - 0.618 * (hi - lo), lo + 0.618 * (hi - lo)
         left = err(m1) < err(m2)
         lo, hi = torch.where(left, lo, m1), torch.where(left, m2, hi)
-    scale = (lo + hi) / 2
-    return scale[:, None] * frames, err(scale).max().item()
+    frames = (lo + hi)[:, None] / 2 * frames
+
+    # prompt the backbone again and compare its state with the given one, layer by layer
+    x = torch.cat([w["flow_lm.bos_before_voice"].reshape(1, n_embd), frames])
+    drift = 0.0
+    for il, (k_ref, v_ref) in enumerate(kv):
+        h = norm(x, il, "norm1")
+        _, wk, wv = p(il, "self_attn.in_proj.weight").chunk(3)
+        k, v = _rope_pairs(h @ wk.T, n_head, rope_theta), h @ wv.T
+        for a, b in ((k, k_ref), (v, v_ref)):
+            drift = max(drift, ((a - b).norm(dim=1) / b.norm(dim=1)).median().item())
+        x = x + attn(il, h, k, v)
+        x = x + ffn(il, x)
+    return frames, drift
 
 
 @ModelBase.register_hparams_loader(lambda dir_model: "flow_lm.bos_emb" in _tensor_shapes(dir_model))
@@ -329,22 +351,33 @@ class PocketTTSMmprojModel(MmprojModel):
         if not paths:
             return
         weights = _load_safetensors(self.dir_model / "model.safetensors",
-                                    ("flow_lm.transformer.layers.0.", "flow_lm.transformer.layers.1.",
-                                     "flow_lm.speaker_proj_weight", "flow_lm.bos_before_voice"))
+                                    ("flow_lm.transformer.layers.", "flow_lm.speaker_proj_weight", "flow_lm.bos_before_voice"))
+        n_layer = self.global_config["num_hidden_layers"]
         for path in paths:
-            state = _load_safetensors(path, ("transformer.layers.0.", "transformer.layers.1."))
+            state = _load_safetensors(path, ("transformer.layers.",))
             kv = []
-            for il in range(2):
+            for il in range(n_layer):
                 prefix = f"transformer.layers.{il}.self_attn/"
+                if any(prefix + k not in state for k in ("cache", "offset", "pad")):
+                    break
                 n_pos = int(state[prefix + "offset"].item())
                 if int(state[prefix + "pad"].item()) != 0:
-                    raise ValueError(f"{path}: padded voice prompts are not supported")
+                    break
                 kv.append(state[prefix + "cache"][:, 0, :n_pos].flatten(2))  # [k/v, pos, n_embd]
-            embd, err = _voice_prompt_embd(weights, kv[0], kv[1][1], self.global_config["num_attention_heads"],
-                                           self.global_config["rope_theta"])
-            if err > 0.02:  # the released voices stay within 0.006, the rounding of the bf16 weights
-                raise ValueError(f"{path}: the voice state does not match the backbone (error {err:.2e})")
-            logger.info(f"voice {path.stem}: {embd.shape[0]} frames, max error on the layer 1 values {err:.2e}")
+            if len(kv) != n_layer or any(t.shape != kv[0].shape for t in kv) or kv[0].shape[1] < 2 or \
+                    kv[0].shape[2] != self.global_config["hidden_size"]:
+                logger.warning(f"voice {path.stem}: skipped, not an unpadded voice state of this backbone")
+                continue
+            embd, drift = _voice_prompt_embd(weights, kv, self.global_config["num_attention_heads"],
+                                             self.global_config["rope_theta"])
+            # the shipped state is not always the one these weights give for the prompt: it is exact within the
+            # rounding of the bf16 weights for most packs, 2% for english_2026-04 and 20% for french, which the
+            # reference loads as is and which still sounds like the same voice
+            if drift > 0.5:
+                logger.warning(f"voice {path.stem}: skipped, its state does not belong to these weights (error {drift:.1e})")
+                continue
+            log = logger.warning if drift > 0.05 else logger.info
+            log(f"voice {path.stem}: {embd.shape[0]} frames, prompting them again gives the shipped state within {drift:.1e}")
             yield (f"voice.{path.stem}", embd.float())
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
