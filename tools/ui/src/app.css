@@ -98,6 +98,16 @@
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
 
+/* iOS 26 gives an installed app with viewport-fit=cover and a translucent status bar a
+   viewport short of that bar (WebKit bug 301108), but only while the page is shorter than
+   the screen. A page that reaches past it gets the full screen, after which this is 100%,
+   capped at the screen so it never scrolls; elsewhere the inset is 0 and it is 100% too. */
+@media (display-mode: standalone) {
+	html {
+		min-height: min(100lvh, calc(100% + var(--safe-area-top)));
+	}
+}
+
 @media (min-width: 640px) {
 	:root {
 		--chat-form-area-height: 24rem;
