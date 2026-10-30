@@ -192,7 +192,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     // KV-shared layers do not write to the KV cache, so prune non-output token rows before the first KV-shared layer
     bool prune_shared = crop_before_nextn(inp_out_ids) && n_outputs < n_tokens && cparams.causal_attn &&
                         hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
-                        !cparams.embeddings && inp_attn->get_kq_mask()->ne[3] == 1;
+                        !cparams.embeddings && (cparams.kv_unified || cparams.n_seq_max == 1);
     for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
         prune_shared = !cparams.embeddings_layer_inp[il];
     }
