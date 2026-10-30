@@ -69,7 +69,7 @@ using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
 
 // Directory of the HTP skel as an ASCII path with a trailing '\', or empty if it cannot be resolved.
-// The skel is next to this module or in ../lib.
+// The skel is next to this module or in ../lib. Non-ASCII directories use the 8.3 short name.
 static std::string htp_skel_dir(unsigned int arch) {
 #ifdef _WIN32
     namespace fs = std::filesystem;
@@ -80,7 +80,7 @@ static std::string htp_skel_dir(unsigned int arch) {
         return {};
     }
 
-    std::wstring buf(MAX_PATH, L'\0');
+    std::wstring buf(32768, L'\0');
     DWORD        n = GetModuleFileNameW(hm, &buf[0], (DWORD) buf.size());
     if (n == 0 || n >= buf.size()) {
         return {};
@@ -100,9 +100,18 @@ static std::string htp_skel_dir(unsigned int arch) {
             continue;
         }
 
-        const std::wstring dir = d.lexically_normal().wstring();
+        std::wstring dir = d.lexically_normal().wstring();
         if (!is_ascii(dir)) {
+            std::wstring sp(32768, L'\0');
+            DWORD        m = GetShortPathNameW(dir.c_str(), &sp[0], (DWORD) sp.size());
+            if (m == 0 || m >= sp.size()) {
             return {};
+            }
+            sp.resize(m);
+            if (!is_ascii(sp)) {
+                return {};
+            }
+            dir = sp;
         }
         return std::string(dir.begin(), dir.end()) + "\\";
     }
@@ -2161,31 +2170,31 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
 
     // Open a session for the skel at `prefix` ("file:///" or "file:///<dir>")
     auto open_session = [&](const std::string & prefix, std::string & uri_out) -> int {
-        char session_uri[1024];
-        char htp_uri[512];
-        snprintf(htp_uri, sizeof(htp_uri), "%slibggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0",
-                 prefix.c_str(), opt_arch);
+        const std::string htp_uri = prefix + "libggml-htp-v" + std::to_string(opt_arch) +
+                                    ".so?htp_iface_skel_handle_invoke&_modver=1.0";
+
+        std::vector<char> session_uri(htp_uri.size() + 256);
 
         struct remote_rpc_get_uri u = {};
         u.session_id      = this->session_id;
         u.domain_name     = const_cast<char *>(dom_name.c_str());
         u.domain_name_len = dom_name.size();
-        u.module_uri      = const_cast<char *>(htp_uri);
-        u.module_uri_len  = strlen(htp_uri);
-        u.uri             = session_uri;
-        u.uri_len         = sizeof(session_uri);
+        u.module_uri      = const_cast<char *>(htp_uri.c_str());
+        u.module_uri_len  = htp_uri.size();
+        u.uri             = session_uri.data();
+        u.uri_len         = session_uri.size();
 
         int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
-            snprintf(session_uri, sizeof(session_uri), "%s&_dom=%s&_session=%u",
-                     htp_uri, dom_name.c_str(), this->session_id);
+            snprintf(session_uri.data(), session_uri.size(), "%s&_dom=%s&_session=%u",
+                     htp_uri.c_str(), dom_name.c_str(), this->session_id);
 
             GGML_LOG_WARN("ggml-hex: %s failed to get URI (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n",
-                          this->c_name(), phys_idx, virt_idx, err, session_uri);
+                          this->c_name(), phys_idx, virt_idx, err, session_uri.data());
         }
 
-        uri_out = session_uri;
-        return htp_iface_open(session_uri, &this->handle);
+        uri_out = session_uri.data();
+        return htp_iface_open(session_uri.data(), &this->handle);
     };
 
     // Open session
