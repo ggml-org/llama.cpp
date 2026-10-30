@@ -772,10 +772,16 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
     switch (kernel) {
         case BEST_FATTN_KERNEL_TILE:
-        case BEST_FATTN_KERNEL_MMA_F16:
             need_f16_K = true;
             need_f16_V = true;
             break;
+        case BEST_FATTN_KERNEL_MMA_F16: {
+            // The fused q8_0 dequant path reads the raw cache, no f16 scratch needed:
+            const int cc = ggml_cuda_info().devices[device].cc;
+            const bool fused_q8 = ggml_cuda_fattn_mma_f16_fused_q8_applies(cc, dst);
+            need_f16_K = !fused_q8;
+            need_f16_V = !fused_q8;
+        } break;
         case BEST_FATTN_KERNEL_VEC: {
             const bool f16_fallback = ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) == nullptr;
             need_f16_K = K->type == GGML_TYPE_F32 || f16_fallback;
