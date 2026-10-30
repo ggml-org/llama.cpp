@@ -357,7 +357,8 @@ void * ggml_aligned_malloc(size_t size) {
     void * aligned_memory = NULL;
   #ifdef GGML_USE_CPU_HBM
     int result = hbw_posix_memalign(&aligned_memory, alignment, size);
-  #elif TARGET_OS_OSX && !defined(GGML_TSAN_ENABLED)
+  #elif (TARGET_OS_OSX || TARGET_OS_IOS) && !defined(GGML_TSAN_ENABLED)
+    // libmalloc can keep freed pages in the process footprint, vm_deallocate returns them at once
     GGML_UNUSED(alignment);
     kern_return_t alloc_status = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t *) &aligned_memory, size, VM_FLAGS_ANYWHERE);
     int result = EFAULT;
@@ -404,7 +405,7 @@ void ggml_aligned_free(void * ptr, size_t size) {
     if (ptr != NULL) {
         hbw_free(ptr);
     }
-#elif TARGET_OS_OSX && !defined(GGML_TSAN_ENABLED)
+#elif (TARGET_OS_OSX || TARGET_OS_IOS) && !defined(GGML_TSAN_ENABLED)
     if (ptr != NULL) {
         vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)ptr, size);
     }

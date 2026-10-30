@@ -362,6 +362,7 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
 
 if (APPLE)
     llama_build(test-rset-release.cpp)
+    llama_build(test-host-buffer-release.cpp LINK ggml)
 endif()
 
 if (NOT GGML_BACKEND_DL AND GGML_CPU)
