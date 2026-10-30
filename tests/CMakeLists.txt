@@ -183,6 +183,12 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
+
+    # Deterministic draft tests
+    # Requires DETERMINISTIC_SPEC_ENABLED=ON for the spec loader library and headers
+    if (DETERMINISTIC_SPEC_ENABLED)
+        llama_build_and_test(test-deterministic-draft.cpp  LABEL behavior)
+    endif()
     llama_build_and_test(test-reasoning-budget.cpp  LABEL behavior)
     llama_build_and_test(test-grammar-parser.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-grammar-integration.cpp  LABEL behavior)
