@@ -71,15 +71,6 @@
 		if (created) onCreate?.(created);
 	}
 
-	async function handleToggleHidden() {
-		if (!project) return;
-
-		const { hidden, id } = project;
-
-		close();
-		await projectsStore.setHidden(id, !hidden);
-	}
-
 	async function handleDelete() {
 		const id = project?.id;
 
@@ -161,10 +152,6 @@
 			<Dialog.Footer class="gap-2 sm:justify-between">
 				{#if project}
 					<div class="flex gap-2">
-						<Button onclick={handleToggleHidden} size="sm" variant="ghost">
-							{project.hidden ? 'Show in sidebar' : 'Hide'}
-						</Button>
-
 						<Button
 							class="text-destructive hover:text-destructive"
 							onclick={() => (confirmDeleteOpen = true)}

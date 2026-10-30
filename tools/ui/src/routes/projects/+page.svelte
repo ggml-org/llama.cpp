@@ -10,10 +10,8 @@
 	/** Placeholder cards while the projects table is read. */
 	const PROJECT_CARD_SKELETONS = [0, 1, 2];
 
-	// the most recently edited first; hidden ones apart, below
+	// the most recently edited first
 	let projects = $derived([...projectsStore.projects].sort((a, b) => b.updatedAt - a.updatedAt));
-	let shownProjects = $derived(projects.filter((project) => !project.hidden));
-	let hiddenProjects = $derived(projects.filter((project) => project.hidden));
 </script>
 
 <svelte:head>
@@ -65,24 +63,10 @@
 			</Empty.Content>
 		</Empty.Root>
 	{:else}
-		{#if shownProjects.length > 0}
-			<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-				{#each shownProjects as project (project.id)}
-					<ProjectCard {project} />
-				{/each}
-			</div>
-		{/if}
-
-		{#if hiddenProjects.length > 0}
-			<div class="flex flex-col gap-3">
-				<h2 class="text-sm font-medium text-muted-foreground">Hidden from the sidebar</h2>
-
-				<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-					{#each hiddenProjects as project (project.id)}
-						<ProjectCard {project} />
-					{/each}
-				</div>
-			</div>
-		{/if}
+		<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+			{#each projects as project (project.id)}
+				<ProjectCard {project} />
+			{/each}
+		</div>
 	{/if}
 </div>

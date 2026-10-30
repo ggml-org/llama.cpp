@@ -11,13 +11,15 @@
 import { uiStore } from '$lib/stores/ui.svelte';
 import { tick } from 'svelte';
 
-/** A section that takes dropped chats, registered by its drop zone. */
+/** A section or project that takes dropped rows, registered by its drop zone. */
 export interface SidebarDropZone {
-	/** Whether the chat is in the section already; dropping it there would change nothing. */
-	holds: (convId: string) => boolean;
-	onDrop: (convId: string) => Promise<void> | void;
+	/** Whether the dragged chat or project is there already, or cannot go there. */
+	holds: (dragId: string) => boolean;
+	onDrop: (dragId: string) => Promise<void> | void;
 }
 
+/** Drag ids of project rows; a chat's drag id is its own id. */
+const PROJECT_DRAG_PREFIX = 'project:';
 /** Pointer travel before a press becomes a drag, so a click stays a click. */
 const DRAG_THRESHOLD_PX = 4;
 /** How long a dropped element takes to glide into its place. */
@@ -59,7 +61,10 @@ function findScroller(element: HTMLElement): HTMLElement | null {
 }
 
 class SidebarDragStore {
-	/** Chat being dragged, out of its section while a copy of its row follows the pointer. */
+	/**
+	 * Chat or project being dragged (see `projectDragId`), out of its section
+	 * while a copy of its row follows the pointer.
+	 */
 	convId = $state<string | null>(null);
 	/** Chat whose row is hidden while its copy glides into it. */
 	landingConvId = $state<string | null>(null);
@@ -160,6 +165,16 @@ class SidebarDragStore {
 		);
 
 		if (slot) this.#press(event, 'section', sectionId, slot);
+	}
+
+	/** The id a project row is dragged by, told apart from chat ids by `projectIdOf`. */
+	projectDragId(projectId: string): string {
+		return `${PROJECT_DRAG_PREFIX}${projectId}`;
+	}
+
+	/** The project a drag id stands for, or null for a chat. */
+	projectIdOf(dragId: string): string | null {
+		return dragId.startsWith(PROJECT_DRAG_PREFIX) ? dragId.slice(PROJECT_DRAG_PREFIX.length) : null;
 	}
 
 	registerZone(sectionId: string, zone: SidebarDropZone): () => void {
@@ -365,9 +380,15 @@ class SidebarDragStore {
 			}px)`;
 		}
 
-		const section = document
+		let section = document
 			.elementFromPoint(gesture.x, gesture.y)
 			?.closest<HTMLElement>(`[${SECTION_ATTR}]`);
+
+		// a project row takes chats only: a project goes to the section around it
+		if (this.projectIdOf(gesture.id)) {
+			section = section?.parentElement?.closest<HTMLElement>(`[${SECTION_ATTR}]`) ?? section;
+		}
+
 		const sectionId = section?.getAttribute(SECTION_ATTR) ?? null;
 		const zone = sectionId ? this.#zones[sectionId] : undefined;
 

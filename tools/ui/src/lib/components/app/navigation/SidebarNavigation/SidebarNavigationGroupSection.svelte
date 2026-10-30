@@ -20,10 +20,11 @@
 		conversationsStore,
 		deviceStore,
 		groupsStore,
+		projectsStore,
 		sidebarDragStore,
 		uiStore
 	} from '$lib/stores';
-	import type { DatabaseConversation, Group, MenuAction } from '$lib/types';
+	import type { DatabaseConversation, Group, MenuAction, Project } from '$lib/types';
 	import type { ConversationTreeItem } from '$lib/utils';
 	import type { Snippet } from 'svelte';
 	import { slide } from 'svelte/transition';
@@ -33,11 +34,22 @@
 		group: Group;
 		/** The group's chats, forks nested under their parents. */
 		items: ConversationTreeItem[];
+		/** Projects in the group, listed above its chats. */
+		projects: Project[];
 		/** Row renderer from the list, which owns the per-chat actions. */
 		conversationRow: Snippet<[DatabaseConversation, number]>;
+		/** Project row renderer from the list. */
+		projectRow: Snippet<[Project]>;
 	}
 
-	let { class: className = '', conversationRow, group, items }: Props = $props();
+	let {
+		class: className = '',
+		conversationRow,
+		group,
+		items,
+		projectRow,
+		projects
+	}: Props = $props();
 
 	let contextMenuOpen = $state(false);
 	let dropdownOpen = $state(false);
@@ -53,6 +65,13 @@
 		return expanded ? shown : shown.slice(0, SIDEBAR_SECTION_PREVIEW_COUNT);
 	});
 
+	// a dragged project leaves its section until it is dropped somewhere
+	let shownProjects = $derived(
+		projects.filter(
+			(project) => sidebarDragStore.projectDragId(project.id) !== sidebarDragStore.convId
+		)
+	);
+
 	async function startChat() {
 		await conversationsStore.openNewChat({ inNewTab: true });
 		await conversationsStore.assignActiveConversationGroup(group.id);
@@ -63,9 +82,33 @@
 		await groupsStore.remove(group.id);
 	}
 
-	/** A chat dropped on the section joins the group, and leaves Pinned. */
-	async function handleDrop(convId: string) {
-		await conversationsStore.setConversationGroup(convId, group.id);
+	/**
+	 * A chat or project dropped on the section joins the group, and leaves
+	 * Pinned; a chat leaves its project too, which would keep it under itself.
+	 */
+	async function handleDrop(dragId: string) {
+		const projectId = sidebarDragStore.projectIdOf(dragId);
+
+		if (projectId) {
+			await projectsStore.setPinned(projectId, false);
+			await projectsStore.setGroup(projectId, group.id);
+
+			return;
+		}
+
+		const conversation = conversationsStore.conversations.find((item) => item.id === dragId);
+
+		if (conversation?.projectId) await conversationsStore.setConversationProject(dragId, null);
+
+		await conversationsStore.setConversationGroup(dragId, group.id);
+	}
+
+	function holds(dragId: string): boolean {
+		const projectId = sidebarDragStore.projectIdOf(dragId);
+
+		return projectId
+			? projects.some((project) => project.id === projectId)
+			: items.some(({ conversation }) => conversation.id === dragId);
 	}
 
 	// the heading's "more actions" dropdown and its right-click menu offer the same actions
@@ -91,7 +134,7 @@
      and a chat dropped anywhere on it joins the group -->
 <SidebarNavigationDropZone
 	class="flex min-w-0 flex-col gap-4 md:gap-0"
-	holds={(convId) => items.some(({ conversation }) => conversation.id === convId)}
+	{holds}
 	onDrop={handleDrop}
 	{sectionId}
 >
@@ -136,20 +179,28 @@
 
 	<CollapsibleRegion {open}>
 		<ul class="flex w-full min-w-0 flex-col md:gap-0.5 {className}">
+			{#each shownProjects as project (project.id)}
+				<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="relative p-0">
+					{@render projectRow(project)}
+				</li>
+			{/each}
+
 			{#each shownItems as { conversation, depth } (conversation.id)}
 				<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
 					{@render conversationRow(conversation, depth)}
 				</li>
 			{:else}
-				<li>
-					<button
-						class="w-full rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-						onclick={() => void startChat()}
-						type="button"
-					>
-						Start a chat in this group
-					</button>
-				</li>
+				{#if projects.length === 0}
+					<li>
+						<button
+							class="w-full rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+							onclick={() => void startChat()}
+							type="button"
+						>
+							Start a chat in this group
+						</button>
+					</li>
+				{/if}
 			{/each}
 
 			{#if items.length > SIDEBAR_SECTION_PREVIEW_COUNT}

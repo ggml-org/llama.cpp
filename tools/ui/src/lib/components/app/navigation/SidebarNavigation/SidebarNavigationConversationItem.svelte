@@ -151,6 +151,9 @@
 
 	function setGroup(groupId: string | null) {
 		void conversationsStore.setConversationGroup(conversation.id, groupId);
+
+		// a chat shows under its project: moved to a group, it leaves the project
+		if (groupId && conversation.projectId) setProject(null);
 	}
 
 	// a group the chat points at may be gone; then it is in none

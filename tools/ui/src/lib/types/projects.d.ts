@@ -27,11 +27,13 @@ export interface Project {
 	cwd: string | null;
 	/** Answer to "What are you trying to achieve?" */
 	description: string;
-	/** Off the sidebar, kept with its chats until shown again. */
-	hidden: boolean;
+	/** Sidebar group the project sits in, like a chat's. */
+	groupId?: string;
 	id: string;
 	instructions: string;
 	name: string;
+	/** Shown in Pinned, wherever its group is. */
+	pinned?: boolean;
 	updatedAt: number;
 }
 

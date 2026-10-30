@@ -358,13 +358,18 @@ export class DatabaseService {
 	static async deleteGroup(id: string): Promise<void> {
 		await db.transaction(
 			'rw',
-			[db[IDXDB_TABLES.groups], db[IDXDB_TABLES.conversations]],
+			[db[IDXDB_TABLES.groups], db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.projects]],
 			async () => {
 				await db[IDXDB_TABLES.groups].delete(id);
 				await db[IDXDB_TABLES.conversations]
 					.filter((conversation) => conversation.groupId === id)
 					.modify((conversation) => {
 						delete conversation.groupId;
+					});
+				await db[IDXDB_TABLES.projects]
+					.filter((project) => project.groupId === id)
+					.modify((project) => {
+						delete project.groupId;
 					});
 			}
 		);

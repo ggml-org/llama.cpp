@@ -51,7 +51,6 @@ class ProjectsStore {
 		const project: Project = {
 			...normalize(draft),
 			createdAt: now,
-			hidden: false,
 			id: uuid(),
 			name,
 			updatedAt: now
@@ -97,6 +96,13 @@ class ProjectsStore {
 			console.error('Failed to export project:', error);
 			toast.error('Failed to export project');
 		}
+	}
+
+	/** Takes the projects of a deleted group out of it; the database did so already. */
+	forgetGroup(groupId: string): void {
+		this.projects = this.projects.map((project) =>
+			project.groupId === groupId ? { ...project, groupId: undefined } : project
+		);
 	}
 
 	get(id: string): Project | undefined {
@@ -149,9 +155,19 @@ class ProjectsStore {
 		);
 	}
 
-	/** Takes the project off the sidebar, or brings it back. Its chats stay. */
-	async setHidden(id: string, hidden: boolean): Promise<void> {
-		await this.apply(id, { hidden });
+	/**
+	 * Moves the project's sidebar row into a group, or out of one with null.
+	 *
+	 * @param id - Project ID
+	 * @param groupId - Target group, null for none
+	 */
+	async setGroup(id: string, groupId: string | null): Promise<void> {
+		await this.apply(id, { groupId: groupId ?? undefined });
+	}
+
+	/** Pins the project's sidebar row, or unpins it. */
+	async setPinned(id: string, pinned: boolean): Promise<void> {
+		await this.apply(id, { pinned: pinned || undefined });
 	}
 
 	/**

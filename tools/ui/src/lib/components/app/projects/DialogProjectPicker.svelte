@@ -9,10 +9,7 @@
 
 	const projects = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
-		// a hidden project would take the chat off the sidebar with it
-		const all = projectsStore.projects
-			.filter((project) => !project.hidden)
-			.sort((a, b) => a.name.localeCompare(b.name));
+		const all = [...projectsStore.projects].sort((a, b) => a.name.localeCompare(b.name));
 
 		return needle ? all.filter((project) => project.name.toLowerCase().includes(needle)) : all;
 	});

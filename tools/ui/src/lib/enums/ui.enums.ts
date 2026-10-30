@@ -35,7 +35,6 @@ export enum SidebarAction {
 export enum SidebarSectionKind {
 	GROUP = 'group',
 	PINNED = 'pinned',
-	PROJECT = 'project',
 	RECENT = 'recent'
 }
 

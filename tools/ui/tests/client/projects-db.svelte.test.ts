@@ -9,7 +9,6 @@ function makeProject(id: string): Project {
 		createdAt: 0,
 		cwd: null,
 		description: '',
-		hidden: false,
 		id,
 		instructions: '',
 		name: `Project ${id}`,

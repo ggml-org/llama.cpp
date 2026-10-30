@@ -278,7 +278,7 @@ class UiStore {
 	 * @param ids - The sections as the sidebar shows them now
 	 */
 	setSidebarSectionOrder(ids: string[]): void {
-		// sections not shown right now (an empty Pinned, a hidden project) keep their place
+		// sections not shown right now (an empty Pinned, a deleted group) keep their place
 		this.sidebarSectionOrder = [
 			...ids,
 			...this.sidebarSectionOrder.filter((id) => !ids.includes(id))

@@ -431,9 +431,13 @@
 	}
 
 	/* While something is dragged, what it passes over takes no hover: only the
-	   sections themselves stay targets, for the drop */
+	   sections themselves, and the projects in them, stay targets, for the drop */
 	body[data-sidebar-dragging] [data-sidebar-section] * {
 		pointer-events: none;
+	}
+
+	body[data-sidebar-dragging] [data-sidebar-section] [data-sidebar-section] {
+		pointer-events: auto;
 	}
 
 	.sidebar-drag-overlay {

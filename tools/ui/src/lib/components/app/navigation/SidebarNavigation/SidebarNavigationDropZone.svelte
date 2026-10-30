@@ -6,12 +6,12 @@
 
 	interface Props {
 		class?: ClassValue;
-		/** Receives the id of the conversation dropped on the zone. */
-		onDrop: (convId: string) => Promise<void> | void;
-		/** The section this zone is. */
+		/** Receives the drag id of the chat or project dropped on the zone. */
+		onDrop: (dragId: string) => Promise<void> | void;
+		/** The section, or project, this zone is. */
 		sectionId: string;
-		/** Whether the chat is in this section already; dropping it here would change nothing. */
-		holds: (convId: string) => boolean;
+		/** Whether the chat or project is here already, or cannot go here. */
+		holds: (dragId: string) => boolean;
 		heading: Snippet;
 		children: Snippet;
 	}

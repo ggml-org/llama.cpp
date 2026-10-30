@@ -11,7 +11,7 @@
  * **DialogProject** - Create or edit a project
  *
  * Name, goal, working directory, instructions and context in one form. When
- * editing, the footer also hides or deletes the project. Opened through
+ * editing, the footer also deletes the project. Opened through
  * `uiStore.openProjectDialog`.
  */
 export { default as DialogProject } from './DialogProject.svelte';
@@ -28,7 +28,7 @@ export { default as DialogProjectPicker } from './DialogProjectPicker.svelte';
  * **ProjectCard** - One project on the Projects page
  *
  * Opens the project dialog on click; its right-click menu and "more actions"
- * dropdown edit, hide or delete the project.
+ * dropdown edit, pin or delete the project.
  */
 export { default as ProjectCard } from './ProjectCard.svelte';
 
