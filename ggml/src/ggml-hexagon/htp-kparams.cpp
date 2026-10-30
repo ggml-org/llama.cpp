@@ -50,6 +50,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_ROPE:            return HTP_OP_ROPE;
         case GGML_OP_REPEAT:          return HTP_OP_REPEAT;
         case GGML_OP_CUMSUM:          return HTP_OP_CUMSUM;
+        case GGML_OP_TOP_K_MASK:      return HTP_OP_TOP_K_MASK;
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
         case GGML_OP_SOLVE_TRI:       return HTP_OP_SOLVE_TRI;
@@ -3402,6 +3403,132 @@ static bool htp_kparams_solve_cumsum(
     return true;
 }
 
+// Shrink until the layout fits: halve tile_cols down to 1024 columns, then drop threads. False below the VTCM floor.
+static bool htp_top_k_mask_search(struct htp_top_k_mask_vtcm_layout * L, const struct htp_top_k_mask_shape * S, uint32_t kernel_type,
+                                  size_t vtcm_size, uint32_t * n_threads, uint32_t * tile_cols) {
+    const uint32_t min_cols = 1024;
+    while (true) {
+        if (htp_top_k_mask_vtcm_layout_build(L, S, kernel_type, *n_threads, *tile_cols) && L->total_bytes <= vtcm_size) {
+            return true;
+        }
+        if (*tile_cols > min_cols) {
+            *tile_cols = (std::max)(min_cols, (uint32_t) hex_round_up(*tile_cols / 2, 64));
+        } else if (*n_threads > 1) {
+            (*n_threads)--;
+        } else {
+            return false;
+        }
+    }
+}
+
+static bool htp_kparams_solve_top_k_mask(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_top_k_mask_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * mask   = op->src[0];
+    const struct ggml_tensor * top_k  = op->src[1];
+    const struct ggml_tensor * score  = op->src[2];
+    const struct ggml_tensor * blocks = op->src[3];
+    const struct ggml_tensor * extra  = op->src[4];
+    const struct ggml_tensor * dst    = op;
+
+    if ((mask->type != GGML_TYPE_F16 && mask->type != GGML_TYPE_F32) || dst->type != mask->type) {
+        return false;
+    }
+    const size_t elem_size = ggml_type_size(dst->type);
+    if (mask->nb[0] != elem_size || dst->nb[0] != elem_size || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    if (top_k->type != GGML_TYPE_I32 || top_k->nb[0] != 4) {
+        return false;
+    }
+    if (score && (score->type != GGML_TYPE_F32 || score->nb[0] != 4)) {
+        return false;
+    }
+    if (extra && (extra->type != GGML_TYPE_I32 || extra->nb[0] != 4)) {
+        return false;
+    }
+    // the kernel scales block ids by blocks->nb[1] with a 16-bit vector multiply
+    if (blocks && (blocks->type != GGML_TYPE_I32 || blocks->nb[0] != 4 || blocks->nb[1] != (size_t) blocks->ne[0] * 4 || blocks->nb[1] > INT16_MAX)) {
+        return false;
+    }
+
+    struct htp_top_k_mask_shape S = {};
+    S.n_kv          = (uint32_t) dst->ne[0];
+    S.elem_size     = (uint32_t) elem_size;
+    S.n_top         = (uint32_t) top_k->ne[0];
+    S.n_blk         = blocks ? (uint32_t) blocks->ne[0] : 0;
+    S.n_pick        = (uint32_t) (blocks ? blocks->ne[1] : score ? score->ne[0] : dst->ne[0]);
+    S.n_extra       = extra ? (uint32_t) extra->ne[0] : 0;
+    S.total_rows    = (uint32_t) ggml_nrows(dst);
+    S.has_score     = score  ? 1 : 0;
+    S.has_blocks    = blocks ? 1 : 0;
+    S.mask_resident = ggml_nrows(mask) == 1 ? 1 : 0;
+
+    // empty inputs would give out-of-range gathers and zero-length DMA rows: leave them to the CPU
+    if (S.n_kv == 0 || S.total_rows == 0 || S.n_pick == 0 || S.n_top == 0 || (blocks && S.n_blk == 0) || (extra && S.n_extra == 0)) {
+        return false;
+    }
+
+    // PICKS for one row, COLS for fewer rows than threads, ROWS otherwise or when the others do not fit
+    const uint32_t sess_threads = (std::max)(1u, htp_session_n_threads(sess));
+    const size_t   vtcm_size    = htp_session_vtcm_size(sess);
+
+    uint32_t kernel_type = HTP_TOP_K_MASK_KERNEL_COLS;
+    uint32_t n_threads   = sess_threads;
+    uint32_t tile_cols   = 0;
+
+    struct htp_top_k_mask_vtcm_layout L;
+    bool found = false;
+    // one row with a resident mask: PICKS when its single row tile fits
+    if (S.total_rows == 1 && S.mask_resident && sess_threads > 1) {
+        kernel_type = HTP_TOP_K_MASK_KERNEL_PICKS;
+        tile_cols   = hex_round_up(S.n_kv, 64);
+        found       = htp_top_k_mask_vtcm_layout_build(&L, &S, kernel_type, n_threads, tile_cols) && L.total_bytes <= vtcm_size;
+    }
+    if (!found && S.total_rows < sess_threads) {
+        kernel_type = HTP_TOP_K_MASK_KERNEL_COLS;
+        const uint32_t split = (sess_threads + S.total_rows - 1) / S.total_rows;
+        tile_cols = hex_round_up((S.n_kv + split - 1) / split, 64);
+        found     = htp_top_k_mask_search(&L, &S, kernel_type, vtcm_size, &n_threads, &tile_cols);
+    }
+    if (!found) {
+        kernel_type = HTP_TOP_K_MASK_KERNEL_ROWS;
+        n_threads   = (std::max)(1u, (std::min)(sess_threads, S.total_rows));
+        tile_cols   = hex_round_up(S.n_kv, 64);
+        found       = htp_top_k_mask_search(&L, &S, kernel_type, vtcm_size, &n_threads, &tile_cols);
+    }
+    if (!found) {
+        return false;
+    }
+
+    kparams->n_threads   = n_threads;
+    kparams->kernel_type = kernel_type;
+    kparams->tile_cols   = tile_cols;
+    kparams->n_col_tiles = (S.n_kv + tile_cols - 1) / tile_cols;
+    kparams->vtcm_size   = (uint32_t) L.total_bytes;
+    kparams->rowin_bytes = (uint32_t) L.rowin_bytes;
+    kparams->tile_bytes  = (uint32_t) L.tile_bytes;
+    kparams->off_blocks  = (uint32_t) L.off_blocks;
+    kparams->off_mask    = (uint32_t) L.off_mask;
+    kparams->off_rowin   = (uint32_t) L.off_rowin;
+    kparams->off_tiles   = (uint32_t) L.off_tiles;
+    kparams->off_mtiles  = (uint32_t) L.off_mtiles;
+    kparams->off_scratch = (uint32_t) L.off_scratch;
+
+    kparams->div_ne1         = init_fastdiv_values((uint32_t) dst->ne[1]);
+    kparams->div_ne12        = init_fastdiv_values((uint32_t) (dst->ne[1] * dst->ne[2]));
+    kparams->div_m1          = init_fastdiv_values((uint32_t) mask->ne[1]);
+    kparams->div_m2          = init_fastdiv_values((uint32_t) mask->ne[2]);
+    kparams->div_m3          = init_fastdiv_values((uint32_t) mask->ne[3]);
+    kparams->div_n_col_tiles = init_fastdiv_values(kparams->n_col_tiles);
+
+    return true;
+}
+
 static bool htp_kparams_solve_fill(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -4806,6 +4933,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_CUMSUM:
             return htp_kparams_invoke<htp_kparams_solve_cumsum>(sess, op, kparams);
+
+        case HTP_OP_TOP_K_MASK:
+            return htp_kparams_invoke<htp_kparams_solve_top_k_mask>(sess, op, kparams);
 
         case HTP_OP_FILL:
             return htp_kparams_invoke<htp_kparams_solve_fill>(sess, op, kparams);

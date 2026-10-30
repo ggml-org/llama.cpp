@@ -19,6 +19,7 @@
 #include "htp/solve-tri-ops.h"
 #include "htp/ssm-conv.h"
 #include "htp/sum-rows-ops.h"
+#include "htp/top-k-mask-ops.h"
 #include "htp/unary-ops.h"
 #include "htp/upscale-ops.h"
 
@@ -224,6 +225,15 @@ static std::string format_kernel_params(const htp_opnode & node) {
     } else if (node.opcode == HTP_OP_CUMSUM) {
         const auto * kparams = node.kparams<htp_cumsum_kernel_params>();
         snprintf(str, max_size, "%s nth %d vtcm %u", kparams->use_dma ? "dma" : "hvx", (int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_TOP_K_MASK) {
+        const auto * kparams = node.kparams<htp_top_k_mask_kernel_params>();
+        const char * ktype_str = "?";
+        switch (kparams->kernel_type) {
+            case HTP_TOP_K_MASK_KERNEL_ROWS:  ktype_str = "rows"; break;
+            case HTP_TOP_K_MASK_KERNEL_COLS:  ktype_str = "cols"; break;
+            case HTP_TOP_K_MASK_KERNEL_PICKS: ktype_str = "picks"; break;
+        }
+        snprintf(str, max_size, "%s nth %d tile %u x%u vtcm %u", ktype_str, (int) kparams->n_threads, (unsigned int) kparams->tile_cols, (unsigned int) kparams->n_col_tiles, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_FILL) {
         const auto * kparams = node.kparams<htp_fill_kernel_params>();
         snprintf(str, max_size, "%s nth %d", kparams->kernel_type == HTP_FILL_KERNEL_CONTIGUOUS ? "contig" : "strided", (int) kparams->n_threads);
