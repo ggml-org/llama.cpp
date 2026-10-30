@@ -715,7 +715,8 @@ matches the role of the surface instead of combining raw shadows.
   those slots at one component's tokens, so each component needs a single class.
 - **`matte-float`** and **`matte-float-modal`:** menus, popovers, select lists, hover cards
   and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge
-  and a deeper shadow.
+  and a deeper shadow. In light mode dialogs are solid white instead: over the dimmed page a
+  translucent white turns grey.
 - **`matte-key`:** buttons. Adds a light blur and a small drop shadow on top of the
   button's own fill. It never changes the button colour and draws no rim of its own: every
   `matte-key` control has a border, and a rim inside it would double the edge.
