@@ -242,6 +242,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_nemotron_h(params);
         case LLM_ARCH_NEMOTRON_H_MOE:
             return new llama_model_nemotron_h_moe(params);
+        case LLM_ARCH_METIS16:
+            return new llama_model_metis16(params);
         case LLM_ARCH_EXAONE:
             return new llama_model_exaone(params);
         case LLM_ARCH_EXAONE4:
@@ -507,7 +509,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
-        if (ud->model->arch == LLM_ARCH_HRM_TEXT) {
+        if (ud->model->arch == LLM_ARCH_HRM_TEXT || ud->model->arch == LLM_ARCH_METIS16) {
             // aliased cache slots cannot satisfy the meta-split invariants, so replicate all tensors
             return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor, 0, 0};
         }
@@ -984,6 +986,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_7B:            return "7B";
         case LLM_TYPE_8B:            return "8B";
         case LLM_TYPE_9B:            return "9B";
+        case LLM_TYPE_10B:           return "10B";
         case LLM_TYPE_11B:           return "11B";
         case LLM_TYPE_12B:           return "12B";
         case LLM_TYPE_13B:           return "13B";
@@ -3556,6 +3559,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_WAVTOKENIZER_DEC:
         case LLM_ARCH_NEMOTRON_H:
         case LLM_ARCH_NEMOTRON_H_MOE:
+        case LLM_ARCH_METIS16:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_GLM5_NEXT:
