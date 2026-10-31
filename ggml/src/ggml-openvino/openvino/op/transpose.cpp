@@ -41,8 +41,27 @@ OutputVector translate_transpose(const NodeContext & context) {
 
     auto input = process_view_input_new(context, 0);
 
+    // ggml always describes tensors as rank-4, but the stateful path can deliver rank-3;
+    // project the permutation onto the surviving axes (dropped ones must be fixed points).
+    const auto & in_ps = input.get_partial_shape();
+    FRONT_END_OP_CONVERSION_CHECK(in_ps.rank().is_static(), "TRANSPOSE requires a static input rank, got ", in_ps);
+    const int64_t in_rank = in_ps.rank().get_length();
+    if (in_rank < static_cast<int64_t>(permute_order.size())) {
+        const int64_t dropped = static_cast<int64_t>(permute_order.size()) - in_rank;
+        for (int64_t i = 0; i < dropped; ++i) {
+            FRONT_END_OP_CONVERSION_CHECK(permute_order[i] == i, "TRANSPOSE: operand is rank ", in_rank,
+                                          " but leading axis ", i, " is permuted to ", permute_order[i],
+                                          "; cannot project the rank-4 ggml permutation onto it");
+        }
+        std::vector<int64_t> projected(permute_order.begin() + dropped, permute_order.end());
+        for (auto & axis : projected) {
+            axis -= dropped;
+        }
+        permute_order = std::move(projected);
+    }
+
     auto res = std::make_shared<ov::op::v1::Transpose>(
-        input, ov::op::v0::Constant::create(ov::element::i64, {4}, permute_order));
+        input, ov::op::v0::Constant::create(ov::element::i64, {permute_order.size()}, permute_order));
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

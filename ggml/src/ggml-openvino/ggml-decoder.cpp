@@ -90,9 +90,27 @@ void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
 // llama keeps separate graphs for batches with and without outputs, so a cache hit can come from a
 // graph built in other memory. The decoder then still points at the old graph's tensors.
 bool GgmlOvDecoder::is_bound_to(const ggml_cgraph * cgraph) const {
-    return m_cgraph == cgraph && cgraph->n_nodes > 0 && m_node_info_list.size() == (size_t) cgraph->n_nodes &&
-           m_node_info_list.front().node == cgraph->nodes[0] &&
-           m_node_info_list.back().node == cgraph->nodes[cgraph->n_nodes - 1];
+    if (cgraph != m_cgraph || static_cast<size_t>(cgraph->n_nodes) != m_node_info_list.size()) {
+        return false;
+    }
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const auto * node = cgraph->nodes[i];
+        const auto & info = m_node_info_list[i];
+        if (node != info.node) {
+            return false;
+        }
+        size_t k = 0;
+        for (const auto * src : node->src) {
+            if (src == nullptr) {
+                continue;
+            }
+            if (k >= info.node_inputs_names.size() || info.node_inputs.at(info.node_inputs_names[k]) != src) {
+                return false;
+            }
+            k++;
+        }
+    }
+    return true;
 }
 
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::shared_ptr<ov::Node>> & model_weights) {
@@ -1434,6 +1452,11 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
 std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
     std::map<std::string, std::string> kv_param_res_names;
     for (const auto & name : m_model_params.kv_names) {
+        // Recurrent state caches (llama-memory-recurrent's cache_r_l*/cache_s_l*) stay ggml-owned
+        // Parameter/Result pairs: ggml resets, reorders and checkpoints them itself.
+        if (name.rfind("cache_r_l", 0) == 0 || name.rfind("cache_s_l", 0) == 0) {
+            continue;
+        }
         kv_param_res_names[name] = name;
     }
     return kv_param_res_names;
@@ -1576,9 +1599,9 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     // 3. test-backend-ops. buffers in test-backend-ops does not set USAGE_WEIGHT so backend_buffer_set_tensor will not create weight node
 
     // GGML_LOG_DEBUG("%s: creating new weight node for %s\n", __func__, tensor->name);
-    static const std::set<ggml_type> weight_types = {GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_Q8_0,
-                                                     GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1, GGML_TYPE_Q4_K,
-                                                     GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_MXFP4};
+    static const std::set<ggml_type> weight_types = {
+        GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_Q8_0,  GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1,
+        GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_MXFP4, GGML_TYPE_Q1_0, GGML_TYPE_Q2_0};
     if (weight_types.find(tensor->type) == weight_types.end()) {
         throw std::runtime_error("Unexpected weight tensor type: " + std::string(tensor->name) + " with type " +
                                  ggml_type_name(tensor->type));

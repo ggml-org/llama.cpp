@@ -89,6 +89,59 @@ void extract_mxfp4_data(const ggml_tensor * tensor, ov::Tensor & weights_arr, ov
     });
 }
 
+inline void pack_i4(uint8_t * dst, size_t e, int8_t value) {
+    const uint8_t nibble = static_cast<uint8_t>(value) & 0x0F;
+    dst[e / 2] |= static_cast<uint8_t>(nibble << (4 * (e % 2)));
+}
+
+// Extracts (weight, scales) from Q1_0 tensors (1-bit, sign of scale -> +-1).
+// Data layout is: |16 bit scale|128 x 1bit weights|
+void extract_q1_0_data(const ggml_tensor * tensor, ov::Tensor & weights_arr, ov::Tensor & scales_arr) {
+    const uint64_t bytes_per_block = 18;  // 2 bytes scale, 128x1 bit weights
+    constexpr size_t weights_per_block = 128;
+
+    auto * data = static_cast<uint8_t *>(tensor->data);
+    auto * weights = static_cast<uint8_t *>(weights_arr.data());
+    auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+        const uint8_t * block = data + i * bytes_per_block;
+        scales[i] = ov::float16::from_bits(*((uint16_t *) block));
+
+        const uint8_t * qs = block + 2;
+        uint8_t * dst = weights + i * (weights_per_block / 2);
+        std::fill_n(dst, weights_per_block / 2, 0);
+        for (size_t j = 0; j < weights_per_block; ++j) {
+            const uint8_t bit = (qs[j / 8] >> (j % 8)) & 1;
+            pack_i4(dst, j, bit ? 1 : -1);
+        }
+    });
+}
+
+// Extracts (weight, scales) from Q2_0 tensors (2-bit, 4 states via (q-1)*d).
+// Data layout is: |16 bit scale|64 x 2bit weights|
+void extract_q2_0_data(const ggml_tensor * tensor, ov::Tensor & weights_arr, ov::Tensor & scales_arr) {
+    const uint64_t bytes_per_block = 18;  // 2 bytes scale, 64x2 bit weights
+    constexpr size_t weights_per_block = 64;
+
+    auto * data = static_cast<uint8_t *>(tensor->data);
+    auto * weights = static_cast<uint8_t *>(weights_arr.data());
+    auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+        const uint8_t * block = data + i * bytes_per_block;
+        scales[i] = ov::float16::from_bits(*((uint16_t *) block));
+
+        const uint8_t * qs = block + 2;
+        uint8_t * dst = weights + i * (weights_per_block / 2);
+        std::fill_n(dst, weights_per_block / 2, 0);
+        for (size_t j = 0; j < weights_per_block; ++j) {
+            const uint8_t q = (qs[j / 4] >> ((j % 4) * 2)) & 0x03;
+            pack_i4(dst, j, static_cast<int8_t>(q) - 1);
+        }
+    });
+}
+
 // Extracts (weight, scales, zp) from Q4_0 tensors.
 // Data layout is: |16 bit scale|32 x 4bit weights|.
 // When zp_arr is empty (symmetric), weights are stored as signed i4 (value - 8).
@@ -1037,6 +1090,14 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
     int64_t weights_per_block;
     bool is_u4;
     switch (tensor->type) {
+    case GGML_TYPE_Q1_0:
+        is_u4 = true;
+        weights_per_block = 128;
+        break;
+    case GGML_TYPE_Q2_0:
+        is_u4 = true;
+        weights_per_block = 64;
+        break;
     case GGML_TYPE_Q4_0:
     case GGML_TYPE_Q4_1:
     case GGML_TYPE_Q4_K:
@@ -1067,6 +1128,12 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
 
     // Extract quantized data
     switch (tensor->type) {
+    case GGML_TYPE_Q1_0:
+        extract_q1_0_data(&temp_tensor, weights, scales);
+        break;
+    case GGML_TYPE_Q2_0:
+        extract_q2_0_data(&temp_tensor, weights, scales);
+        break;
     case GGML_TYPE_Q4_0:
         extract_q4_0_data(&temp_tensor, weights, scales, zp);
         break;
