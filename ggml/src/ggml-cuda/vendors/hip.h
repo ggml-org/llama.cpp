@@ -1,6 +1,6 @@
 #pragma once
 
-#define HIP_DISABLE_WARP_SYNC_BUILTINS 1
+#include <hip/hip_version.h>
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
@@ -34,6 +34,9 @@
 #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
 #define __all_sync(mask, var) __all(var)
 #define __any_sync(mask, var) __any(var)
+#if HIP_VERSION >= 60300000 && HIP_VERSION < 70000000
+#define HIP_ENABLE_WARP_SYNC_BUILTINS 1
+#endif
 #define cublasStrsmBatched hipblasStrsmBatched
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
