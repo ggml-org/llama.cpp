@@ -174,6 +174,17 @@ static void test_dflash_independent_quota(testing & t, llama_model * model, cons
         if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(target),0,18,-1) &&
                 llama_memory_seq_rm(llama_get_memory(child),0,18,-1))) return false;
         history.resize(18);
+        auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(target));
+        auto * recurrent=hybrid ? hybrid->get_mem_recr() : nullptr;
+        if (!t.assert_true(recurrent && recurrent->rs_idx[0]==7)) return false;
+        const auto generation=recurrent->spill_generation();
+        proposed.clear(); request.drafting=true; request.n_max=3; request.pos0=18;
+        request.id_last=seed[18%seed.size()]; request.prompt=&history; request.result=&proposed;
+        common_speculative_draft(spec.get()); llama_synchronize(child);
+        if (!t.assert_equal(size_t(3),proposed.size())) return false;
+        if (!t.assert_true("a successor draft enqueues the selected target restore before target re-entry",recurrent->rs_idx[0]==0)) return false;
+        t.assert_equal(generation,recurrent->spill_generation());
+        if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(child),0,18,-1))) return false;
         return submit(18,1,false);
     };
     size_t exact = 0;

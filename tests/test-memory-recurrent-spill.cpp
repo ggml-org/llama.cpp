@@ -1,4 +1,7 @@
 #include "../src/llama-memory-recurrent-spill.h"
+#include "../src/llama-memory-recurrent.h"
+#include "../src/llama-model.h"
+#include "../src/llama-io.h"
 #include "../ggml/src/ggml-backend-memory.h"
 #include "testing.h"
 #include "ggml-cpp.h"
@@ -42,15 +45,26 @@ struct recurrent_copy_backend_probe {
     decltype(ggml_backend_device_i::init_backend) original;
     ggml_backend_t copy = nullptr;
     decltype(ggml_backend_i::get_tensor_async) get = nullptr;
+    decltype(ggml_backend_i::set_tensor_async) set = nullptr;
     decltype(ggml_backend_i::synchronize) sync = nullptr;
+    decltype(ggml_backend_i::free) release = nullptr;
     struct read { const ggml_tensor * tensor; void * data; size_t offset,bytes; };
     std::vector<read> pending;
+    struct write { ggml_tensor * tensor; const void * data; size_t offset,bytes; };
+    std::vector<write> pending_uploads;
     bool deferred = false;
     bool fail_prepare = false;
     size_t preparations = 0;
     size_t downloads = 0;
+    size_t uploads = 0;
+    size_t fail_upload = 0;
+    size_t backend_frees = 0;
     size_t fail_download = 0;
     bool observed = false;
+    bool observed_uploads = false;
+    bool deferred_uploads = false;
+    bool watching_free = false;
+    bool undrained_on_free = false;
     explicit recurrent_copy_backend_probe(ggml_backend_dev_t device) : device(device),original(device->iface.init_backend) {
         GGML_ASSERT(!active); active=this;
         device->iface.init_backend=[](ggml_backend_dev_t dev,const char * params) {
@@ -69,6 +83,8 @@ struct recurrent_copy_backend_probe {
     void flush() {
         for (const auto & read : pending) ggml_backend_tensor_get(read.tensor,read.data,read.offset,read.bytes);
         pending.clear();
+        for (const auto & write : pending_uploads) ggml_backend_tensor_set(write.tensor,write.data,write.offset,write.bytes);
+        pending_uploads.clear();
     }
     // CPU-only deterministic queue: stage bytes are read only when its consumer is drained.
     void defer_downloads() {
@@ -92,16 +108,282 @@ struct recurrent_copy_backend_probe {
         };
         device->iface.init_backend=original;
     }
+    void observe_restores() {
+        GGML_ASSERT(copy && !observed_uploads);
+        set=copy->iface.set_tensor_async; observed_uploads=true;
+        copy->iface.set_tensor_async=[](ggml_backend_t backend,ggml_tensor * tensor,const void * data,size_t offset,size_t bytes) {
+            ++active->uploads;
+            if (active->deferred_uploads) {
+                active->pending_uploads.push_back({tensor,data,offset,bytes});
+                if (active->uploads==active->fail_upload) throw std::runtime_error("after recurrent restore submission");
+                return;
+            }
+            if (active->set) active->set(backend,tensor,data,offset,bytes);
+            else ggml_backend_tensor_set(tensor,data,offset,bytes);
+            if (active->uploads==active->fail_upload) throw std::runtime_error("after recurrent restore submission");
+        };
+        device->iface.init_backend=original;
+    }
+    void defer_restores() {
+        observe_restores(); deferred_uploads=true;
+        copy->iface.synchronize=[](ggml_backend_t) { active->flush(); };
+    }
+    void watch_teardown() {
+        GGML_ASSERT(copy && !watching_free);
+        release=copy->iface.free; watching_free=true;
+        copy->iface.free=[](ggml_backend_t backend) {
+            auto & p=*active;
+            ++p.backend_frees;
+            p.undrained_on_free=!p.pending.empty() || !p.pending_uploads.empty();
+            p.release(backend);
+            p.copy=nullptr;
+            p.deferred=p.observed=p.observed_uploads=p.deferred_uploads=p.watching_free=false;
+        };
+    }
     ~recurrent_copy_backend_probe() {
+        if (deferred_uploads) flush();
         if (deferred) { flush(); copy->iface.get_tensor_async=get; }
         if (observed) copy->iface.get_tensor_async=get;
+        if (observed_uploads) copy->iface.set_tensor_async=set;
+        if (watching_free) copy->iface.free=release;
         if (copy) copy->iface.synchronize=sync;
         device->iface.init_backend=original; active=nullptr;
     }
 };
 
+struct recurrent_bytes_writer : llama_io_write_i {
+    std::vector<uint8_t> bytes;
+    void write(const void * source,size_t size) override {
+        const size_t first=bytes.size(); bytes.resize(first+size);
+        if (size) std::memcpy(bytes.data()+first,source,size);
+    }
+    void write_tensor(ggml_tensor * tensor,size_t offset,size_t size) override {
+        const size_t first=bytes.size(); bytes.resize(first+size);
+        ggml_backend_tensor_get(tensor,bytes.data()+first,offset,size);
+    }
+    size_t n_bytes() override { return bytes.size(); }
+};
+
+struct recurrent_bytes_reader : llama_io_read_i {
+    const std::vector<uint8_t> & bytes;
+    size_t cursor=0;
+    explicit recurrent_bytes_reader(const std::vector<uint8_t> & bytes) : bytes(bytes) {}
+    void read(void * destination,size_t size) override {
+        if (cursor>bytes.size() || size>bytes.size()-cursor) throw std::runtime_error("short recurrent state");
+        if (size) std::memcpy(destination,bytes.data()+cursor,size);
+        cursor+=size;
+    }
+    void read_tensor(ggml_tensor * tensor,size_t offset,size_t size) override {
+        if (cursor>bytes.size() || size>bytes.size()-cursor) throw std::runtime_error("short recurrent tensor");
+        ggml_backend_tensor_set(tensor,bytes.data()+cursor,offset,size); cursor+=size;
+    }
+    size_t n_bytes() override { return cursor; }
+};
+
 int main(int argc, char ** argv) {
     testing t;
+    t.test("owned_restore_queue_drains_partial_submission_and_requires_explicit_recovery", [&](testing & t) {
+        const bool gpu=argc>1 && !std::strcmp(argv[1],"--cuda");
+        ggml_backend_load_all();
+        auto * device=ggml_backend_dev_by_name(gpu ? "CUDA0" : "CPU");
+        if (!t.assert_true(device != nullptr)) return;
+        for (size_t failure : {1u,2u}) {
+            ggml_backend_ptr producer(ggml_backend_dev_init(device,nullptr));
+            auto * host=ggml_backend_dev_host_buffer_type(device);
+            if (!host) host=ggml_backend_cpu_buffer_type();
+            llama_recurrent_spill_layout layout;
+            if (!t.assert_true(llama_recurrent_spill_layout_make(
+                    {{GGML_TYPE_F32,GGML_TYPE_F32,32,64,true}},1,3,layout))) return;
+            auto bank=llama_recurrent_spill_bank::create(layout,host,119,0);
+            recurrent_copy_backend_probe probe(device);
+            if (!t.assert_true(bank && bank->enable_publication(device,ggml_backend_dev_buffer_type(device),2))) return;
+            probe.observe_restores();
+            const size_t host_bytes=bank->host_bytes(),stage_bytes=bank->staged_device_bytes();
+            ggml_context_ptr ctx(ggml_init({32768,nullptr,true}));
+            auto * r=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,32);
+            auto * s=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,64);
+            auto * dr=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,32);
+            auto * ds=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,64);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),producer.get()));
+            if (!t.assert_true(bool(buffer))) return;
+            std::vector<float> expected_r(32,1.25f),expected_s(64,-2.5f),actual_r(32),actual_s(64);
+            expected_r[0]=expected_s[0]=-0.0f;
+            ggml_backend_tensor_set(r,expected_r.data(),0,ggml_nbytes(r));
+            ggml_backend_tensor_set(s,expected_s.data(),0,ggml_nbytes(s));
+            const auto capture=[&](uint64_t epoch) {
+                return bank->begin_capture({119,0,epoch}) && bank->capture(producer.get(),0,false,2,r,0) &&
+                    bank->capture(producer.get(),0,true,2,s,0) && bank->publish_capture() && bank->complete_capture();
+            };
+            if (!t.assert_true(capture(1))) return;
+            const auto * original=bank->snapshot_data(0,false,2,1);
+            if (!t.assert_true(original && bank->begin_restore({119,0,1},2))) return;
+            probe.fail_upload=failure;
+            const bool first=bank->restore(producer.get(),0,false,dr,0);
+            const bool second=first && bank->restore(producer.get(),0,true,ds,0);
+            t.assert_true(!second && !bank->publish_restore());
+            t.assert_equal(failure,probe.uploads);
+            bank->cancel();
+            t.assert_true(!bank->begin_restore({119,0,1},2) && !bank->begin_capture({119,0,2}));
+            t.assert_true(bank->snapshot_data(0,false,2,1)==original &&
+                !std::memcmp(original,expected_r.data(),ggml_nbytes(r)));
+            t.assert_equal(uint64_t(1),bank->snapshot_generation(0,true,2));
+            bank->reset(true);
+            probe.fail_upload=0;
+            if (!t.assert_true(capture(2) && !bank->snapshot_data(0,false,2,1) &&
+                    bank->begin_restore({119,0,2},2) && bank->restore(producer.get(),0,false,dr,0) &&
+                    bank->restore(producer.get(),0,true,ds,0) && bank->publish_restore() && bank->complete_restore())) return;
+            ggml_backend_tensor_get(dr,actual_r.data(),0,ggml_nbytes(dr));
+            ggml_backend_tensor_get(ds,actual_s.data(),0,ggml_nbytes(ds));
+            t.assert_true(!std::memcmp(expected_r.data(),actual_r.data(),ggml_nbytes(r)) &&
+                !std::memcmp(expected_s.data(),actual_s.data(),ggml_nbytes(s)));
+            t.assert_equal(failure+2,probe.uploads);
+            t.assert_equal(host_bytes,bank->host_bytes());
+            t.assert_equal(stage_bytes,bank->staged_device_bytes());
+        }
+    });
+    t.test("selected_restore_can_start_before_target_scheduler_and_materialization_joins_it", [](testing & t) {
+        const char * actions[]={"materialize","export","import","clear_data","clear_metadata","full_remove",
+            "next_capture","repeat_completion","destroy","no_successor","capture_abort"};
+        for (size_t action=0;action<sizeof(actions)/sizeof(actions[0]);++action) t.test(actions[action],[&](testing & t) {
+        ggml_backend_ptr producer(ggml_backend_cpu_init());
+        auto * device=ggml_backend_get_device(producer.get());
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_QWEN35,llama_model_default_params()));
+        model->hparams.n_layer_all=1;
+        model->hparams.ssm_d_conv=2; model->hparams.ssm_d_inner=8;
+        model->hparams.ssm_d_state=8; model->hparams.ssm_n_group=1;
+        std::unique_ptr<llama_memory_recurrent> memory;
+        recurrent_copy_backend_probe probe(device);
+        memory.reset(new llama_memory_recurrent(*model,GGML_TYPE_F32,GGML_TYPE_F32,false,1,1,3,{},true));
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * r=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,model->hparams.n_embd_r());
+        auto * s=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,model->hparams.n_embd_s());
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),producer.get()));
+        if (!t.assert_true(bool(buffer))) return;
+        std::vector<float> expected_r(ggml_nelements(r),1.5f),expected_s(ggml_nelements(s),-3.5f);
+        expected_r[0]=expected_s[0]=-0.0f;
+        ggml_backend_tensor_set(r,expected_r.data(),0,ggml_nbytes(r));
+        ggml_backend_tensor_set(s,expected_s.data(),0,ggml_nbytes(s));
+        auto * bank=memory->spill_bank();
+        auto * graph=ggml_new_graph_custom(ctx.get(),128,false);
+        std::vector<llm_graph_recurrent_snapshot> outputs;
+        for (bool value : {false,true}) {
+            std::vector<ggml_tensor *> copies;
+            for (uint32_t slot=1;slot<=3;++slot) {
+                auto * input=value ? s : r;
+                copies.push_back(ggml_cpy(ctx.get(),input,bank->staging_tensor(0,value,slot)));
+                outputs.push_back({input,0,slot,value,0});
+            }
+            if (!t.assert_true(bank->publish_staged(ctx.get(),graph,0,value,copies))) return;
+        }
+        auto * backend=producer.get();
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(&backend,nullptr,1,128,false,true));
+        if (!t.assert_true(memory->begin_spill_capture(4) && ggml_backend_graph_compute(backend,graph)==GGML_STATUS_SUCCESS &&
+                memory->capture_spill(sched.get(),outputs) && memory->complete_spill())) return;
+        memory->used=1; memory->cells[0].tail=0; memory->cells[0].pos=7; memory->cells[0].seq_id.insert(0);
+        std::vector<float> incoming_r(expected_r.size(),11.0f),incoming_s(expected_s.size(),-17.0f);
+        ggml_backend_tensor_set(memory->r_l[0],incoming_r.data(),0,ggml_nbytes(r));
+        ggml_backend_tensor_set(memory->s_l[0],incoming_s.data(),0,ggml_nbytes(s));
+        recurrent_bytes_writer incoming;
+        memory->state_write(incoming,0,0);
+        if (!t.assert_true(memory->seq_rm(0,6,-1))) return;
+        t.assert_equal(uint32_t(2),memory->rs_idx[0]);
+        recurrent_bytes_writer selected;
+        memory->state_write(selected,0,0);
+        probe.defer_restores();
+        if (action==9) {
+            recurrent_bytes_writer saved;
+            memory->state_write(saved,0,0);
+            t.assert_true(saved.bytes==selected.bytes && probe.uploads==0 && memory->rs_idx[0]==2);
+            return;
+        }
+        if (!t.assert_true("restore submission does not need the next target scheduler",memory->restore_spill_async(nullptr))) return;
+        t.assert_equal(size_t(2),probe.pending_uploads.size());
+        t.assert_equal(uint32_t(0),memory->rs_idx[0]);
+        t.assert_true(!memory->seq_rm(0,5,-1));
+        if (action==8) {
+            probe.watch_teardown(); memory.reset();
+            t.assert_true(probe.pending_uploads.empty() && !probe.undrained_on_free && probe.backend_frees==1);
+            return;
+        }
+        bool retained=true;
+        llama_pos position=5;
+        uint64_t generation=1;
+        if (action==0) t.assert_true("state materialization joins a pending restore even when rs_idx is zero",memory->materialize_spill_for_device_state());
+        if (action==1) {
+            recurrent_bytes_writer saved;
+            memory->state_write(saved,0,0);
+            t.assert_true(saved.bytes==selected.bytes);
+        }
+        if (action==2) {
+            recurrent_bytes_reader saved(incoming.bytes);
+            memory->state_read(saved,0,0);
+            expected_r=incoming_r; expected_s=incoming_s; retained=false;
+            t.assert_equal(llama_pos(7),memory->seq_pos_max(0));
+        }
+        if (action==3 || action==4 || action==5) {
+            if (action==5) t.assert_true(memory->seq_rm(0,0,-1));
+            else memory->clear(action==3);
+            if (action==3) {
+                std::fill(expected_r.begin(),expected_r.end(),0.0f);
+                std::fill(expected_s.begin(),expected_s.end(),0.0f);
+            }
+            retained=false;
+            t.assert_equal(llama_pos(-1),memory->seq_pos_max(0));
+            t.assert_true(!bank->snapshot_data(0,false,2,1));
+        }
+        if (action==6 || action==10) {
+            if (!t.assert_true(memory->begin_spill_capture(4))) return;
+            if (action==6) {
+                memory->cells[0].pos=9;
+                if (!t.assert_true(ggml_backend_graph_compute(backend,graph)==GGML_STATUS_SUCCESS &&
+                        memory->capture_spill(sched.get(),outputs) && memory->seq_rm(0,8,-1) &&
+                        memory->restore_spill_async(nullptr) && memory->complete_restore_spill())) return;
+                position=7; generation=2;
+            } else memory->abort_spill_capture();
+        }
+        if (action==7) t.assert_true(memory->complete_restore_spill() && memory->complete_restore_spill());
+        t.assert_true(probe.pending_uploads.empty());
+        if (retained) {
+            t.assert_true("a completed restore remains a single-use rollback until new target execution",!memory->seq_rm(0,position,-1));
+            t.assert_equal(position,memory->seq_pos_max(0));
+        }
+        std::vector<float> actual_r(expected_r.size()),actual_s(expected_s.size());
+        ggml_backend_tensor_get(memory->r_l[0],actual_r.data(),0,ggml_nbytes(r));
+        ggml_backend_tensor_get(memory->s_l[0],actual_s.data(),0,ggml_nbytes(s));
+        t.assert_true(!std::memcmp(expected_r.data(),actual_r.data(),ggml_nbytes(r)) &&
+            !std::memcmp(expected_s.data(),actual_s.data(),ggml_nbytes(s)));
+        t.assert_equal(generation,memory->spill_generation());
+        });
+    });
+    t.test("staged_restore_uses_owned_copy_queue_not_the_next_compute_queue", [](testing & t) {
+        ggml_backend_ptr producer(ggml_backend_cpu_init());
+        auto * device=ggml_backend_get_device(producer.get());
+        llama_recurrent_spill_layout layout;
+        if (!t.assert_true(llama_recurrent_spill_layout_make(
+                {{GGML_TYPE_F32,GGML_TYPE_F32,32,64,true}},1,3,layout))) return;
+        auto bank=llama_recurrent_spill_bank::create(layout,ggml_backend_cpu_buffer_type(),117,0);
+        recurrent_copy_backend_probe probe(device);
+        if (!t.assert_true(bank && bank->enable_publication(device,ggml_backend_cpu_buffer_type(),2))) return;
+        probe.observe_restores();
+        ggml_context_ptr ctx(ggml_init({32768,nullptr,true}));
+        auto * r=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,32);
+        auto * s=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,64);
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),producer.get()));
+        if (!t.assert_true(bool(buffer))) return;
+        std::vector<float> original_r(32,1.25f),original_s(64,-2.5f),actual_r(32),actual_s(64);
+        ggml_backend_tensor_set(r,original_r.data(),0,ggml_nbytes(r));
+        ggml_backend_tensor_set(s,original_s.data(),0,ggml_nbytes(s));
+        if (!t.assert_true(bank->begin_capture({117,0,1}) &&
+                bank->capture(producer.get(),0,false,2,r,0) && bank->capture(producer.get(),0,true,2,s,0) &&
+                bank->publish_capture() && bank->complete_capture() && bank->begin_restore({117,0,1},2))) return;
+        if (!t.assert_true(bank->restore(producer.get(),0,false,r,0) && bank->restore(producer.get(),0,true,s,0) &&
+                bank->publish_restore() && bank->complete_restore())) return;
+        ggml_backend_tensor_get(r,actual_r.data(),0,ggml_nbytes(r));
+        ggml_backend_tensor_get(s,actual_s.data(),0,ggml_nbytes(s));
+        t.assert_true(original_r==actual_r && original_s==actual_s);
+        t.assert_equal(uint64_t(1),bank->snapshot_generation(0,false,2));
+        t.assert_equal(size_t(2),probe.uploads);
+    });
     t.test("grouped_publication_failure_drains_and_invalidates_the_whole_submitted_plane", [](testing & t) {
         for (size_t failure : {1u,2u}) {
             ggml_backend_ptr producer(ggml_backend_cpu_init());

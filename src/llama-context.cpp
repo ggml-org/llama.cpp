@@ -2091,6 +2091,40 @@ llm_graph_result * llama_context::process_ubatch(
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
+    auto * restore_target=serial_target_ctx ? serial_target_ctx : cparams.mtp_publish_host ? mtp_target_ctx : nullptr;
+    auto * restore=restore_target && restore_target->get_cparams().kv_streaming() ? restore_target->kv_resources.recurrent : nullptr;
+    llama_memory_recurrent * deferred_restore=nullptr;
+    if (restore && restore->staged_publication_enabled() && !restore->rs_idx.empty() && restore->rs_idx[0]) {
+        const auto disjoint=[&](ggml_backend_buffer_t scratch) {
+            if (!scratch) return false;
+            const size_t bytes=ggml_backend_buffer_get_size(scratch);
+            if (!bytes) return true;
+            const auto start=reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(scratch));
+            if (!start || bytes>UINTPTR_MAX-start) return false;
+            for (size_t layer=0;layer<restore->r_l.size();++layer) {
+                if (!restore->r_l[layer]) continue;
+                for (auto * state : {restore->r_l[layer],restore->s_l[layer]}) {
+                    if (!state || !state->buffer) return false;
+                    const auto data=reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(state->buffer));
+                    const size_t size=ggml_backend_buffer_get_size(state->buffer);
+                    if (!data || size>UINTPTR_MAX-data || (start<data+size && data<start+bytes)) return false;
+                }
+            }
+            return true;
+        };
+        bool isolated=compute_memory && restore_target->compute_memory &&
+            disjoint(restore_target->compute_memory->shared_parent());
+        if (compute_memory) for (auto * lease : compute_memory->workspace_leases())
+            isolated=isolated && lease && disjoint(ggml_backend_memory_lease_buffer(lease));
+        // Live recurrent state is outside the serial arena used by the draft.
+        if (isolated) restore_target->synchronize();
+        if (!isolated) {
+            LLAMA_LOG_ERROR("%s: target recurrent restore overlaps draft storage\n",__func__);
+            ret=GGML_STATUS_FAILED;
+            return nullptr;
+        }
+        deferred_restore=restore;
+    }
     if (cparams.kv_shared_read && !prepare_shared_kv_read()) {
         LLAMA_LOG_ERROR("%s: failed to acquire shared target KV sources\n",__func__);
         ret=GGML_STATUS_FAILED; return nullptr;
@@ -2192,6 +2226,21 @@ llm_graph_result * llama_context::process_ubatch(
         return nullptr;
     }
 
+    struct restore_submission_guard {
+        ggml_backend_sched_t scheduler;
+        ~restore_submission_guard() { if (scheduler) ggml_backend_sched_set_pre_compute_callback(scheduler,nullptr,nullptr); }
+    } restore_submission{deferred_restore ? sched.get() : nullptr};
+    if (deferred_restore) {
+        ggml_backend_sched_set_pre_compute_callback(sched.get(),[](ggml_backend_t backend,ggml_cgraph *,void * opaque) {
+            auto * memory=static_cast<llama_memory_recurrent *>(opaque);
+            if (memory->rs_idx.empty() || !memory->rs_idx[0]) return true;
+            for (auto * state : memory->r_l) if (state) {
+                if (ggml_backend_get_device(backend) != ggml_backend_buft_get_device(ggml_backend_buffer_get_type(state->buffer))) return true;
+                return memory->restore_spill_async(nullptr);
+            }
+            return false;
+        },deferred_restore);
+    }
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (rs_spill && !rs_spill->complete_restore_spill()) {
         LLAMA_LOG_ERROR("%s: failed to complete recurrent restore\n",__func__);
@@ -2645,6 +2694,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     output_swaps.clear();
     embd_batch_idxs.clear();
 
+    if (kv_resources.recurrent && !kv_resources.recurrent->complete_restore_spill()) {
+        LLAMA_LOG_ERROR("%s: failed to complete recurrent restore before target handoff\n",__func__);
+        return -2;
+    }
     const bool reservation_was_pending = sched_reserve_state.begin();
     const uint64_t serial_transitions = compute_memory ? compute_memory->phase_transition_count() : 0;
     // Drain the other scheduler before reservation can discard or rewrite shared scratch.

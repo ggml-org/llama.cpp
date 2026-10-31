@@ -218,11 +218,17 @@ llama_memory_recurrent::llama_memory_recurrent(
     }
 }
 
+llama_memory_recurrent::~llama_memory_recurrent() {
+    // Drain transfers before the live destination buffers are freed.
+    spill.reset();
+}
+
 void llama_memory_recurrent::clear(bool data) {
     if (spill) {
         spill->reset(data);
         spill_pending=false;
         spill_restore_pending=false;
+        spill_rollback_pending=false;
     }
 
     for (int32_t i = 0; i < (int32_t) size; ++i) {
@@ -266,6 +272,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             spill->reset(false);
             spill_pending=false;
             spill_restore_pending=false;
+            spill_rollback_pending=false;
         }
         if (seq_id >= 0) {
             set_rs_idx(seq_id, 0);
@@ -298,10 +305,11 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 }
                 const llama_pos rollback = cell.pos - (p0 - 1);
                 // pending rollback is single-use
-                const bool pending = rs_idx[seq_id] != 0;
+                const bool pending = rs_idx[seq_id] != 0 || spill_restore_pending || spill_rollback_pending;
                 if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
                     if (spill && !spill_slot_valid(uint32_t(rollback))) return false;
                     set_rs_idx(seq_id, (uint32_t) rollback);
+                    spill_rollback_pending=bool(spill);
                     cell.pos = p0 - 1;
                     return true;
                 }
@@ -586,15 +594,15 @@ bool llama_memory_recurrent::complete_spill() {
 
 bool llama_memory_recurrent::restore_spill_async(ggml_backend_sched_t sched) {
     if (!spill || rs_idx.empty() || rs_idx[0] == 0) return true;
-    if (!sched || spill_restore_pending) return false;
+    if ((!sched && !staged_publication_enabled()) || spill_restore_pending) return false;
     const uint32_t slot=rs_idx[0];
     if (!spill_slot_valid(slot) || !spill->begin_restore({spill_cache_id,0,spill_epoch},slot)) return false;
     for (size_t layer=0;layer<r_l.size();++layer) {
         if (!r_l[layer]) continue;
         for (bool value : {false,true}) {
             auto * tensor=value ? s_l[layer] : r_l[layer];
-            auto * backend=ggml_backend_sched_get_tensor_backend(sched,tensor);
-            if (!backend || !spill->restore(backend,layer,value,tensor,0)) {
+            auto * backend=sched ? ggml_backend_sched_get_tensor_backend(sched,tensor) : nullptr;
+            if ((!backend && sched) || !spill->restore(backend,layer,value,tensor,0)) {
                 spill->cancel();
                 return false;
             }
@@ -617,8 +625,9 @@ bool llama_memory_recurrent::complete_restore_spill() {
 }
 
 bool llama_memory_recurrent::materialize_spill_for_device_state() {
+    if (!complete_restore_spill()) return false;
     if (!spill || rs_idx.empty() || rs_idx[0] == 0) return true;
-    if (!complete_restore_spill() || !restore_spill_slot(rs_idx[0])) return false;
+    if (!restore_spill_slot(rs_idx[0])) return false;
     set_rs_idx(0,0);
     return true;
 }
@@ -644,6 +653,7 @@ bool llama_memory_recurrent::capture_spill(ggml_backend_sched_t sched,
         if (!sched || outputs.empty() || spill_epoch == UINT64_MAX || !spill->publish_capture()) return false;
         ++spill_epoch;
         spill_pending=true;
+        spill_rollback_pending=false;
         return true;
     }
 
@@ -661,6 +671,7 @@ bool llama_memory_recurrent::capture_spill(ggml_backend_sched_t sched,
     if (!spill->publish_capture()) { spill->cancel(); return false; }
     spill_epoch=next;
     spill_pending=true;
+    spill_rollback_pending=false;
     return true;
 }
 
@@ -1034,6 +1045,8 @@ size_t llama_memory_recurrent::size_p_bytes() const {
 
 void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
+    if (!const_cast<llama_memory_recurrent *>(this)->complete_restore_spill())
+        throw std::runtime_error("failed to complete recurrent restore before saving state");
 
     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges_data; // logical source row ranges
@@ -1115,6 +1128,7 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
 
 void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     GGML_UNUSED(flags);
+    if (!complete_restore_spill()) throw std::runtime_error("failed to complete recurrent restore before loading state");
 
     uint32_t cell_count;
     io.read(&cell_count, sizeof(cell_count));
@@ -1143,6 +1157,7 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
         spill->reset(true);
         spill_pending=false;
         spill_restore_pending=false;
+        spill_rollback_pending=false;
     }
     if (n_rs_seq != 0) {
         set_rs_idx(seq_id, 0);

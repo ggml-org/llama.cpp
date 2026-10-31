@@ -6,6 +6,7 @@
 #include "ggml-cpu.h"
 
 #include <stdexcept>
+#include <cstring>
 
 using arena_ptr = std::unique_ptr<ggml_backend_memory_arena, decltype(&ggml_backend_memory_arena_free)>;
 using status = llama_memory_transition_status;
@@ -123,8 +124,73 @@ struct fixture {
     }
 };
 
-int main() {
+int main(int argc, char ** argv) {
     testing t;
+    t.test("scheduler_pre_compute_runs_after_input_copies_and_can_reject_without_output", [&](testing & t) {
+        const bool gpu=argc>1 && !std::strcmp(argv[1],"--cuda");
+        ggml_backend_ptr cpu(ggml_backend_cpu_init()),device;
+        if (gpu) {
+            ggml_backend_load_all();
+            auto * dev=ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            device.reset(ggml_backend_dev_init(dev,nullptr));
+        }
+        auto * compute=gpu ? device.get() : cpu.get();
+        std::vector<ggml_backend_t> backends=gpu ? std::vector<ggml_backend_t>{compute,cpu.get()} : std::vector<ggml_backend_t>{compute};
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(),nullptr,int(backends.size()),128,false,true));
+        ggml_context_ptr source(ggml_init({16384,nullptr,true})),ctx(ggml_init({16384,nullptr,true}));
+        auto * input=ggml_new_tensor_1d(source.get(),GGML_TYPE_F32,4);
+        auto * weights=ggml_new_tensor_2d(source.get(),GGML_TYPE_F32,4,4);
+        ggml_set_input(input);
+        ggml_set_input(weights);
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(source.get(),cpu.get()));
+        auto * output=ggml_mul_mat(ctx.get(),weights,input);
+        auto * graph=ggml_new_graph_custom(ctx.get(),32,false);
+        ggml_build_forward_expand(graph,output);
+        ggml_backend_sched_set_tensor_backend(sched.get(),input,cpu.get());
+        ggml_backend_sched_set_tensor_backend(sched.get(),output,compute);
+        if (!t.assert_true(sched && buffer && ggml_backend_sched_alloc_graph(sched.get(),graph))) return;
+        const float data[4]={1,2,3,4},sentinel[4]={-9,-9,-9,-9};
+        float matrix[16]={};
+        for (size_t i=0;i<4;++i) matrix[5*i]=2.0f;
+        ggml_backend_tensor_set(weights,matrix,0,sizeof(matrix));
+        ggml_backend_tensor_set(input,data,0,sizeof(data));
+        ggml_backend_tensor_set(output,sentinel,0,sizeof(sentinel));
+        struct state {
+            testing * test;
+            ggml_backend_t backend;
+            ggml_tensor * input;
+            ggml_tensor * output;
+            size_t calls=0;
+            bool allow=false;
+            bool gpu=false;
+        } state{&t,compute,input,output,0,false,gpu};
+        const auto callback=[](ggml_backend_t backend,ggml_cgraph * split,void * opaque) {
+            auto & s=*static_cast<struct state *>(opaque);
+            ++s.calls;
+            s.test->assert_true(backend==s.backend && ggml_graph_n_nodes(split)==1);
+            auto * copied=ggml_graph_node(split,0)->src[1];
+            s.test->assert_true(!s.gpu || copied!=s.input);
+            s.test->assert_true(s.output->data!=copied->data);
+            float values[4];
+            ggml_backend_tensor_get(copied,values,0,sizeof(values));
+            for (size_t i=0;i<4;++i) s.test->assert_equal(float(i+1),values[i]);
+            ggml_backend_tensor_get(s.output,values,0,sizeof(values));
+            for (float value : values) s.test->assert_equal(-9.0f,value);
+            return s.allow;
+        };
+        ggml_backend_sched_set_pre_compute_callback(sched.get(),callback,&state);
+        t.assert_true(ggml_backend_sched_graph_compute_async(sched.get(),graph)==GGML_STATUS_FAILED);
+        t.assert_equal(size_t(1),state.calls);
+        state.allow=true;
+        t.assert_true(ggml_backend_sched_graph_compute(sched.get(),graph)==GGML_STATUS_SUCCESS);
+        t.assert_equal(size_t(2),state.calls);
+        ggml_backend_sched_set_pre_compute_callback(sched.get(),nullptr,nullptr);
+        t.assert_true(ggml_backend_sched_graph_compute(sched.get(),graph)==GGML_STATUS_SUCCESS);
+        t.assert_equal(size_t(2),state.calls);
+        float result[4];ggml_backend_tensor_get(output,result,0,sizeof(result));
+        for (size_t i=0;i<4;++i) t.assert_equal(2.0f*data[i],result[i]);
+    });
     t.test("registers_phase_maximum_once_for_aliased_slots", [](testing & t) {
         fixture f;
         t.assert_true(f.workspace->register_resources(f.target.plan, {10, 20}));

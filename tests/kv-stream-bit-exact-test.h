@@ -289,6 +289,7 @@ struct kv_stream_exact_config {
     size_t prefill = 16381, rounds = 8, pool_mib = 32;
     size_t batch_rows = 256, length = 0;
     ggml_type key = GGML_TYPE_Q8_0, value = GGML_TYPE_Q4_0;
+    std::filesystem::path control_export, control_import;
     std::filesystem::path corpus = std::filesystem::path(__FILE__).parent_path().parent_path()/"benchmarks/data/online-articles-262144-words.txt";
 };
 
@@ -308,10 +309,16 @@ static kv_stream_exact_config kv_stream_exact_arguments(int argc, char ** argv) 
         if (name == "--mtp-bit-exact") continue;
         if (name != "--exact-prefill" && name != "--exact-rounds" && name != "--exact-pool-mib" && name != "--exact-prefill-file" &&
                 name != "--test-cache-k" && name != "--test-cache-v" &&
-                name != "--exact-batch-size" && name != "--exact-length")
+                name != "--exact-batch-size" && name != "--exact-length" &&
+                name != "--exact-control-export" && name != "--exact-control-import")
             throw std::runtime_error("unknown bit-exact test option: " + name);
         if (++i == argc) throw std::runtime_error("missing bit-exact option value");
         if (name == "--exact-prefill-file") { cfg.corpus = argv[i]; continue; }
+        if (name == "--exact-control-export" || name == "--exact-control-import") {
+            if (!*argv[i]) throw std::runtime_error("empty exact control path");
+            (name == "--exact-control-export" ? cfg.control_export : cfg.control_import)=argv[i];
+            continue;
+        }
         if (name == "--test-cache-k") { cfg.key = kv_stream_exact_cache_type(argv[i]); continue; }
         if (name == "--test-cache-v") { cfg.value = kv_stream_exact_cache_type(argv[i]); continue; }
         size_t parsed = 0;
@@ -329,6 +336,9 @@ static kv_stream_exact_config kv_stream_exact_arguments(int argc, char ** argv) 
     }
     if (cfg.prefill < 512 || cfg.rounds < 4) throw std::runtime_error("bit-exact test needs at least 512 prefill tokens and four rounds");
     if (cfg.batch_rows < 5) throw std::runtime_error("bit-exact test needs more than four batch rows for recurrent rollback");
+    if ((!cfg.control_export.empty() && !cfg.control_import.empty()) ||
+            ((!cfg.control_export.empty() || !cfg.control_import.empty()) && !cfg.length))
+        throw std::runtime_error("exact control needs one direction and one explicit MTP length");
     return cfg;
 }
 
@@ -359,7 +369,17 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
         if (cfg.length && length != cfg.length) continue;
         t.test("strict_mtp_length_" + std::to_string(length), [&](testing & t) {
         kv_stream_bit_oracle oracle;
+        const std::array<uint64_t,16> profile{0x4d545031,cfg.prefill,cfg.rounds,cfg.pool_mib,cfg.batch_rows,length,
+            uint64_t(cfg.key),uint64_t(cfg.value),vocabulary,uint64_t(llama_model_n_embd(model)),
+            uint64_t(llama_model_n_layer(model)),uint64_t(llama_model_n_layer_nextn(model)),
+            (cfg.prefill+cfg.rounds*4+255)/256*256,3,1,0};
+        if (!cfg.control_import.empty()) {
+            std::unique_ptr<FILE,kv_stream_exact_file_free> source(std::fopen(cfg.control_import.string().c_str(),"rb"));
+            if (!source) throw std::runtime_error("cannot open native MTP control");
+            oracle.load_control(source.get(),profile);
+        }
         for (bool streaming : {false, true}) {
+            if (!streaming && !cfg.control_import.empty()) continue;
             if (streaming) oracle.compare();
             llama_tokens history = prompt;
             kv_stream_exact_trace target_trace{oracle, "target"}, draft_trace{oracle, "draft"};
@@ -534,6 +554,11 @@ static void test_kv_stream_mtp_bit_exact(testing & t, llama_model * model, const
             }
             if (!llama_kv_stream_mtp_release(target.get())) throw std::runtime_error("cannot release final strict MTP lease");
             phase("");
+            if (!streaming && !cfg.control_export.empty()) {
+                std::unique_ptr<FILE,kv_stream_exact_file_free> output(std::fopen(cfg.control_export.string().c_str(),"wb"));
+                if (!output) throw std::runtime_error("cannot create native MTP control");
+                oracle.save_control(output.get(),profile);
+            }
             t.out << (streaming ? "streamed" : "control") << " MTP=" << length << " prefix=" << cfg.prefill
                   << " rounds=" << cfg.rounds << " records=" << oracle.records() << " spool MiB="
                   << double(oracle.byte_count())/1048576 << " target_ring=" << target_streamed
@@ -623,6 +648,30 @@ static void test_kv_stream_bit_exact_comparator(testing & t) {
         t.assert_true(ggml_kv_stream_layout_make({config.key,config.value,256,256,4,256,128},capacity,layer).status ==
             ggml_kv_stream_status::success);
         t.assert_true(config.pool_mib*1048576 >= layer.bytes);
+    });
+    t.test("MTP_control_files_require_one_explicit_profile_and_one_direction", [&](testing & t) {
+        const auto parse=[](std::vector<std::string> fields) {
+            std::vector<char *> args;
+            for (auto & field:fields) args.push_back(field.data());
+            return kv_stream_exact_arguments(int(args.size()),args.data());
+        };
+        const auto out=parse({"test","--model","model","--mtp-bit-exact","--exact-length","3",
+            "--exact-control-export","native.bin"});
+        t.assert_equal(std::string("native.bin"),out.control_export.string());
+        const auto in=parse({"test","--model","model","--mtp-bit-exact","--exact-length","3",
+            "--exact-control-import","native.bin"});
+        t.assert_equal(std::string("native.bin"),in.control_import.string());
+        for (const auto & tail:std::vector<std::vector<std::string>>{
+                {"--exact-control-export","native.bin"},
+                {"--exact-length","3","--exact-control-export",""},
+                {"--exact-length","3","--exact-control-export","native.bin","--exact-control-import","native.bin"},
+                {"--exact-length","3","--exact-control-import"}}) {
+            std::vector<std::string> fields{"test","--model","model","--mtp-bit-exact"};
+            fields.insert(fields.end(),tail.begin(),tail.end());
+            bool rejected=false;
+            try { parse(fields); } catch (const std::exception &) { rejected=true; }
+            t.assert_true(rejected);
+        }
     });
     t.test("bit_exact_arguments_accept_explicit_cache_formats", [&](testing & t) {
         std::vector<std::string> fields{"test", "--model", "model", "--mtp-bit-exact",

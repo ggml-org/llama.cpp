@@ -789,6 +789,12 @@ bool llama_recurrent_spill_bank::begin_restore(llama_recurrent_spill_identity id
 bool llama_recurrent_spill_bank::restore(ggml_backend_t backend, size_t layer, bool value,
         ggml_tensor * destination, size_t destination_offset) {
     auto & s=*impl;
+    auto * copy=s.publication ? s.publication->copy_backend : backend;
+    auto * type=destination && destination->buffer ? ggml_backend_buffer_get_type(destination->buffer) : nullptr;
+    auto * device=copy ? ggml_backend_get_device(copy) : nullptr;
+    const bool compatible=type && device && ggml_backend_dev_supports_buft(device,type) &&
+        (ggml_backend_buft_get_device(type) ? ggml_backend_buft_get_device(type)==device :
+            ggml_backend_buft_is_host(type) && ggml_backend_dev_type(device)==GGML_BACKEND_DEVICE_TYPE_CPU);
     size_t offset=0,bytes=0;
     if (s.state != spill_transfer_state::restoring || s.submission_failed ||
             !s.region(layer,value,s.selected_slot,offset,bytes) ||
@@ -796,12 +802,15 @@ bool llama_recurrent_spill_bank::restore(ggml_backend_t backend, size_t layer, b
                 (value ? s.layout.layers[layer].type_s : s.layout.layers[layer].type_r) ||
             destination_offset > ggml_nbytes(destination) ||
             bytes > ggml_nbytes(destination)-destination_offset ||
-            s.touched[s.index(layer,value,s.selected_slot)] || !s.bind(backend)) return false;
+            s.touched[s.index(layer,value,s.selected_slot)] || !copy ||
+            (backend && ggml_backend_get_device(backend) != ggml_backend_get_device(copy)) ||
+            !compatible ||
+            !s.bind(copy)) return false;
     const auto * host=static_cast<const uint8_t *>(ggml_backend_buffer_get_base(s.host));
     s.touched[s.index(layer,value,s.selected_slot)]=1;
     ++s.submitted;
     // A queued partial restore poisons current state even when the backend reports failure afterwards.
-    try { ggml_backend_tensor_set_async(backend,destination,host+offset,destination_offset,bytes); }
+    try { ggml_backend_tensor_set_async(copy,destination,host+offset,destination_offset,bytes); }
     catch (...) { s.submission_failed=true; return false; }
     return true;
 }
