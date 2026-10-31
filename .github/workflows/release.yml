@@ -178,12 +178,8 @@ jobs:
             os: ubuntu-22.04
           - build: '26.04-x64'
             os: ubuntu-26.04
-          - build: 'arm64'
-            os: ubuntu-24.04-arm
           - build: '26.04-arm64'
             os: ubuntu-26.04-arm
-          - build: 's390x'
-            os: ubuntu-24.04-s390x
           - build: '26.04-s390x'
             os: ubuntu-26.04-s390x
 
@@ -209,7 +205,7 @@ jobs:
           sudo apt-get install -y build-essential libssl-dev
 
       - name: Toolchain workaround (GCC 14)
-        if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
+        if: ${{ !contains(matrix.os, 'ubuntu-26.04') }}
         run: |
           sudo apt-get install -y gcc-14 g++-14
           echo "CC=gcc-14" >> "$GITHUB_ENV"
@@ -263,7 +259,7 @@ jobs:
           - build: 'x64'
             os: ubuntu-22.04
           - build: 'arm64'
-            os: ubuntu-24.04-arm
+            os: ubuntu-26.04-arm
 
     runs-on: ${{ matrix.os }}
 
@@ -290,9 +286,7 @@ jobs:
             sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libssl-dev
           else
             sudo apt-get update -y
-            sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
-            echo "CC=gcc-14" >> "$GITHUB_ENV"
-            echo "CXX=g++-14" >> "$GITHUB_ENV"
+            sudo apt-get install -y build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
           fi
 
       - name: ccache
