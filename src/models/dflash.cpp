@@ -142,6 +142,13 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     // optional interleaved sliding-window attention with per-layer pattern array.
     if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
+        if (ml.get_tensor_meta("markov_w1.weight") != nullptr) {
+            if (hparams.n_swa >= INT32_MAX) {
+                throw std::runtime_error("DSpark sliding window is too large to include the anchor");
+            }
+            // As in DSV4.1 DSpark, include the anchor after the configured history window.
+            hparams.n_swa += 1;
+        }
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
