@@ -1470,12 +1470,40 @@ static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, stru
     }
 }
 
+// Grow the scheduler context buffer (used for the auxiliary tensors created while splitting:
+// input/dep view tensors and tensor copies) so that it can hold at least `n_tensors` tensors.
+// The buffer is sized from the actual graph instead of reserving the worst-case graph capacity
+// upfront in ggml_backend_sched_new, which would otherwise be counted towards the commit charge
+// on Windows without ever being used: https://github.com/ggml-org/llama.cpp/issues/30406
+static void ggml_backend_sched_context_reserve(ggml_backend_sched_t sched, size_t n_tensors) {
+    const size_t min_size = n_tensors * (sizeof(struct ggml_tensor) + GGML_MEM_ALIGN);
+    if (sched->context_buffer_size >= min_size) {
+        return;
+    }
+    const size_t new_size = min_size + min_size/8; // 12.5% headroom
+    GGML_LOG_DEBUG("%s: growing scheduler context buffer from %zu to %zu bytes\n",
+            __func__, sched->context_buffer_size, new_size);
+    free(sched->context_buffer);
+    sched->context_buffer = (char *) malloc(new_size);
+    GGML_ASSERT(sched->context_buffer != NULL);
+    sched->context_buffer_size = new_size;
+}
+
 // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
 void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     // reset splits
     sched->n_splits = 0;
     sched->n_graph_inputs = 0;
     sched->is_reset = false;
+
+    // reserve the context buffer based on the actual graph size instead of the worst-case capacity:
+    // - each tensor can be copied to each backend (each copy creating n_copies tensors)
+    // - each node/leaf can get input dependency views
+    // - allocation dependency nodes hold up to GGML_MAX_SRC kept tensors, and each node/leaf
+    //   registers at most GGML_MAX_SRC of them, so they are bounded by the number of tensors
+    const size_t n_tensors = 3*(size_t)(graph->n_nodes + graph->n_leafs) + 16
+        + (size_t)(graph->n_nodes + graph->n_leafs) * sched->n_backends * sched->n_copies;
+    ggml_backend_sched_context_reserve(sched, n_tensors);
 
     struct ggml_init_params params = {
         /* .mem_size =   */ sched->context_buffer_size,
@@ -2248,7 +2276,10 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->graph_size      = 0;
     sched->prev_graph_size = 0;
 
-    sched->context_buffer_size = ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false);
+    // the context buffer is grown on demand in ggml_backend_sched_split_graph based on the
+    // actual graph, instead of being reserved here for the worst-case graph capacity
+    // (which would be counted towards the commit charge on Windows without being used)
+    sched->context_buffer_size = 64*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(64, false);
     sched->context_buffer = (char *) malloc(sched->context_buffer_size);
 
     const int initial_splits_capacity = 16;
