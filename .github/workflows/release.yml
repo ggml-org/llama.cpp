@@ -204,13 +204,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Toolchain workaround (GCC 14)
-        if: ${{ !contains(matrix.os, 'ubuntu-26.04') }}
-        run: |
-          sudo apt-get install -y gcc-14 g++-14
-          echo "CC=gcc-14" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
-
       - name: ccache
         if: ${{ !contains(matrix.os, 's390x') }}
         uses: ggml-org/ccache-action@v1.2.24
