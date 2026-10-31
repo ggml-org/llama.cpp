@@ -7,7 +7,9 @@
 //     namespace xmx = ggml_sycl_xmx::esimd;    // instead of sycl::ext::intel::esimd::xmx
 //     namespace mx  = ggml_sycl_xmx::matrix;   // instead of sycl::ext::oneapi::experimental::matrix
 //
-// and is written as against the SYCL namespaces. A joint_matrix kernel of sub-group size SG also
+// and is written as against the SYCL namespaces. A 2D block load is xmx::load_2d<Arch, ...>, the ESIMD
+// load_2d with the architecture the kernel is built for first (ggml_sycl_xmx::xe2, xehpg): it does not
+// compile for an architecture without 2D block messages. A joint_matrix kernel of sub-group size SG also
 // takes its sub-group and barrier from here (sub_group_of<SG>, group_barrier) and is launched with
 // reqd_sub_group_size(hw_sub_group_size(SG)).
 //
@@ -31,9 +33,23 @@ inline constexpr bool emulated = true;
 inline constexpr bool emulated = false;
 #endif
 
+// The features of the architecture a kernel is built for: the width of one dpas (the columns of its B
+// operand, the sub-group size of the matching joint_matrix combinations) and whether 2D block messages
+// exist. A kernel templated on one of these takes its dpas width from it and its 2D loads through
+// xmx::load_2d<Arch, ...>.
+template <int DpasWidth, bool Block2D> struct arch {
+    static constexpr int  dpas_width = DpasWidth;
+    static constexpr bool block_2d   = Block2D;
+};
+
+using xe2   = arch<16, true>;  // Xe2, Xe3, Xe-HPC
+using xehpg = arch<8, false>;  // Xe-HPG: Arc A-series, ARL-H
+
 #if !defined(GGML_SYCL_XMX_EMULATION)
 
-namespace esimd  = sycl::ext::intel::esimd::xmx;
+namespace esimd {
+using sycl::ext::intel::esimd::xmx::dpas;
+}  // namespace esimd
 namespace matrix = sycl::ext::oneapi::experimental::matrix;
 
 // The sub-group of a joint_matrix kernel of sub-group size SG: launched with
@@ -239,6 +255,52 @@ inline void joint_matrix_mad(G, joint_matrix<Group, Td, use::accumulator, M, N, 
 } // namespace matrix
 
 #endif // GGML_SYCL_XMX_EMULATION
+
+namespace esimd {
+namespace detail {
+// load_2d computed with masked gathers: BH rows of NB adjacent BW-element blocks from the surface at p
+// (sw + 1 bytes wide, sh + 1 rows, rows sp + 1 bytes apart) at element column x and row y, zero where
+// the block leaves the surface. Transposed (one block) returns the block column major.
+template <typename T, int BW, int BH, int NB, bool Transposed>
+ESIMD_INLINE sycl::ext::intel::esimd::simd<T, BW * BH * NB> load_2d_soft(const T * p,
+                                                                         unsigned  sw,
+                                                                         unsigned  sh,
+                                                                         unsigned  sp,
+                                                                         int       x,
+                                                                         int       y) {
+    using namespace sycl::ext::intel::esimd;
+    static_assert(!Transposed || NB == 1, "a transposed 2D load reads one block");
+    constexpr int    N = BW * BH * NB;
+    simd<int32_t, N> e(0, 1);
+    simd<int32_t, N> c, r, b = 0;
+    if constexpr (Transposed) {
+        r = e % BH;
+        c = e / BH;
+    } else {
+        c = e % BW;
+        r = (e / BW) % BH;
+        b = e / (BW * BH);
+    }
+    const simd<int32_t, N> xe  = x + b * BW + c;
+    const simd<int32_t, N> yr  = y + r;
+    const simd_mask<N>     ok  = (xe >= 0) & (xe * (int) sizeof(T) <= (int) sw) & (yr >= 0) & (yr <= (int) sh);
+    simd<uint32_t, N>      off = simd<uint32_t, N>(yr) * (sp + 1) + simd<uint32_t, N>(xe) * (uint32_t) sizeof(T);
+    off.merge(simd<uint32_t, N>(0), !ok);
+    return gather<T, N>(p, off, ok, simd<T, N>(0));
+}
+}  // namespace detail
+
+template <typename Arch, typename T, int BW, int BH = 1, int NB = 1, bool Transposed = false, bool Transformed = false>
+ESIMD_INLINE auto load_2d(const T * p, unsigned sw, unsigned sh, unsigned sp, int x, int y) {
+    static_assert(Arch::block_2d, "2D block load in a kernel built for an architecture without 2D block messages");
+    if constexpr (emulated) {
+        static_assert(!Transformed, "the emulated 2D load does not transform (VNNI)");
+        return detail::load_2d_soft<T, BW, BH, NB, Transposed>(p, sw, sh, sp, x, y);
+    } else {
+        return sycl::ext::intel::esimd::load_2d<T, BW, BH, NB, Transposed, Transformed>(p, sw, sh, sp, x, y);
+    }
+}
+}  // namespace esimd
 
 } // namespace ggml_sycl_xmx
 
