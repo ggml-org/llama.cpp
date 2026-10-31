@@ -370,6 +370,8 @@ extern "C" {
         uint32_t n_ubatch;              // physical maximum batch size
         uint32_t n_seq_max;             // max number of sequences (i.e. distinct states for recurrent models)
         uint32_t n_rs_seq;              // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
+        bool     rs_replay;             // with n_rs_seq: delta-net layers roll back from recorded updates instead of state
+                                        // snapshots (ReplaySSM, one sequence) [EXPERIMENTAL]
         uint32_t n_outputs_max;         // max outputs in a ubatch (0 = n_batch)
         uint32_t n_outputs_max_per_seq; // max outputs per sequence (0 = n_outputs_max)
         int32_t  n_threads;             // number of threads to use for generation
@@ -398,6 +400,13 @@ extern "C" {
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
+
+        size_t kv_resident_size; // KV streaming: device bytes for resident K/V pages, the rest of the context is kept in host memory, 0 = disabled [EXPERIMENTAL]
+        size_t kv_resident_size_decode; // KV streaming: device bytes for the resident pages and the streaming slots between prefills (batches
+                                        // of at most n_tokens_decode tokens), when the compute buffers shrink to decode size; also shrinks a
+                                        // draft (MTP) context's compute buffers then, 0 = disabled [EXPERIMENTAL]
+        uint32_t n_tokens_decode;       // with kv_resident_size_decode: the largest batch that runs with the decode buffers, e.g. the slots
+                                        // times (draft length + 1); 0 = 4
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted

@@ -134,7 +134,7 @@ bool llama_batch_allocr::init(
     }
 
     if (has_state) {
-        state_vec = batch_inp.state;
+        state_data = batch_inp.state.data(); // the batch outlives the decode call: no copy of the (large) MTP rows
     }
 
     //
@@ -305,7 +305,7 @@ bool llama_batch_allocr::init(
             /*.n_pos        =*/ n_pos_per_embd,
             /*.token        =*/ batch.token,
             /*.embd         =*/ batch.embd,
-            /*.embd_state   =*/ state_vec.empty() ? nullptr : state_vec.data(),
+            /*.embd_state   =*/ const_cast<float *>(state_data), // read only
             /*.pos          =*/ batch.pos,
             /*.n_seq_id     =*/ batch.n_seq_id,
             /*.seq_id       =*/ batch.seq_id,
@@ -837,7 +837,7 @@ void llama_batch_allocr::clear() {
     token_vec   .clear();
     embd_vec    .clear();
     is_embd_vec .clear();
-    state_vec   .clear();
+    state_data = nullptr;
     seq_id_data .clear();
     pos         .clear();
     n_seq_id    .clear();
@@ -880,7 +880,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     const bool mixed     = mixed_batch && n_embd_rows > 0 && n_embd_rows < n_tokens;
     const bool use_token = batch.token && !(mixed_batch && n_embd_rows == n_tokens);
     const bool use_embd  = batch.embd  && !(mixed_batch && n_embd_rows == 0);
-    const bool has_state = !state_vec.empty();
+    const bool has_state = state_data != nullptr;
 
     const int64_t n_embd_all  = use_embd  ? (int64_t) n_tokens*n_embd       : 0;
     const int64_t n_state_all = has_state ? (int64_t) n_tokens*n_embd_state : 0;
@@ -917,7 +917,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         }
 
         if (has_state) {
-            memcpy(udata->embd_state.data() + i*n_embd_state, state_vec.data() + (int64_t) idxs[i]*n_embd_state, n_embd_state*sizeof(float));
+            memcpy(udata->embd_state.data() + i*n_embd_state, state_data + (int64_t) idxs[i]*n_embd_state, n_embd_state*sizeof(float));
         }
 
         for (size_t j = 0; j < (size_t)n_pos_per_embd; ++j) {

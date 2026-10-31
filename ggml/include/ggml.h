@@ -2506,6 +2506,9 @@ extern "C" {
     //   n_head % ne32      == 0
     //   ne3    % ne33      == 0
     //
+    // A mask with fewer than n_kv columns covers the last mask->ne[0] K/V rows; the rows before them are visible (as a
+    // mask value of 0). Supported by the CPU and CUDA/HIP backends.
+    //
     GGML_API struct ggml_tensor * ggml_flash_attn_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -2533,6 +2536,47 @@ extern "C" {
     GGML_API void ggml_flash_attn_ext_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
+
+    // Paged K/V: k and v hold a pool of pages of page_size rows ([n_embd, n_pool_rows, n_head_kv, 1]), and the attended
+    // sequence is pages->ne[0]*page_size rows long (n_kv for the mask). pages (I32 [n_pages, n_tables]) holds page
+    // tables, of which row `table` is used (e.g. one table per layer in one input). In it, entry i >= 0 is the pool page
+    // that holds logical page i, and entry i < 0 means logical page i is page -1 - entry of ring_k/ring_v (same row
+    // layout as k/v). ring_k and ring_v may be NULL if no entry is negative.
+    GGML_API void ggml_flash_attn_ext_set_pages(
+            struct ggml_tensor * a,
+            struct ggml_tensor * pages,
+            int32_t              table,
+            int32_t              page_size,
+            struct ggml_tensor * ring_k,
+            struct ggml_tensor * ring_v);
+
+    // A run of consecutive logical pages that are also consecutive in the pool (pool != 0) or in the ring
+    struct ggml_fa_page_run {
+        int32_t page; // first logical page
+        int32_t pos;  // its page in the pool or the ring
+        int32_t n;    // pages
+        int32_t pool;
+    };
+
+    struct ggml_fa_page_runs {
+        int32_t                   n;
+        struct ggml_fa_page_run * runs;
+    };
+
+    // Paged K/V: the page table as runs, in host memory that the caller keeps current until the graph is computed.
+    // Lets a backend split the attention into contiguous parts (and keeps the graph from being captured).
+    GGML_API void ggml_flash_attn_ext_set_page_runs(
+            struct ggml_tensor             * a,
+            const struct ggml_fa_page_runs * runs);
+
+    // K/V written by another queue (e.g. a copy engine): the op waits until *ready >= tag[0] before it reads them (only
+    // the ring when pages are set) and stores *consumed = tag[0] once it no longer needs them. ready and consumed must be
+    // visible to the host and the backend (e.g. pinned host memory). tag: I32 [1].
+    GGML_API void ggml_flash_attn_ext_set_sync(
+            struct ggml_tensor * a,
+            struct ggml_tensor * tag,
+            const uint32_t     * ready,
+            uint32_t           * consumed);
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
@@ -2681,6 +2725,30 @@ extern "C" {
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
             int64_t               K);
+
+    // gated delta net with recorded updates (ReplaySSM), scalar gate only. An update is s = exp(g) * s + k * delta^T,
+    // with delta = (v - exp(g) * s^T k) * beta. rec holds the updates of the last recording batch of each sequence, R
+    // at most (S_k = S_v, H_k = k->ne[1]):
+    //   rec      : [R * (S_v * H + 2 * S_v * H_k + 2 * H), n_seqs] F32 -- per sequence, R rows of delta_t (S_v * H
+    //              floats, every value head), then two halves of R rows of k_t (S_v * H_k, every key head), then two
+    //              halves of R rows of exp(g_t) (H)
+    //   n_commit : [2, n_seqs] I32 -- the first n_commit[0, s] updates (k and exp(g) from half n_commit[1, s]) are
+    //              applied to state before the tokens
+    // the output packs the attention scores and one state. With record (n_tokens <= R) this batch writes its updates
+    // in place, delta over the committed ones (a value column reads its own first) and k and exp(g) into the other
+    // half (several value columns read them), and the state is the committed one (s0 with the n_commit updates), not
+    // the state after the tokens: a later batch commits the tokens it keeps.
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_rec(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * rec,
+            struct ggml_tensor  * n_commit,
+            bool                  record);
 
     // DSA lightning indexer
     //

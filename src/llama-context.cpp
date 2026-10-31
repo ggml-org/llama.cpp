@@ -7,6 +7,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-kv-stream.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -14,6 +15,7 @@
 #include "llama-sampler.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -200,6 +202,8 @@ llama_context::llama_context(
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
     }
+    cparams.n_rs_rec = params.rs_replay && cparams.n_rs_seq > 0 && llm_arch_supports_rs_replay(model.arch) ?
+        cparams.n_rs_seq + 1 : 0;
 
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
@@ -369,6 +373,13 @@ llama_context::llama_context(
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
+    cparams.kv_resident_size = params.kv_resident_size;
+    cparams.kv_resident_size_decode = params.kv_resident_size_decode;
+    cparams.n_tokens_decode         = std::min(params.n_tokens_decode > 0 ? params.n_tokens_decode : 4u, cparams.n_ubatch);
+
+    if (cparams.kv_resident_size > 0 && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+        throw std::runtime_error("KV streaming requires Flash Attention to be enabled explicitly");
+    }
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -413,6 +424,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+    LLAMA_LOG_INFO("%s: n_rs_rec              = %u\n",   __func__, cparams.n_rs_rec);
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 
@@ -563,6 +575,27 @@ llama_context::llama_context(
             moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size);
         }
 
+        // KV streaming: page moves are queued on the stream of the backend that computes the graphs
+        if (llama_kv_stream * kv_stream = memory ? memory->get_kv_stream() : nullptr) {
+            for (auto & backend : backends) {
+                if (ggml_backend_get_device(backend.get()) == kv_stream->device()) {
+                    kv_stream->set_backend(backend.get(), model.hparams.n_head());
+                }
+            }
+            if (cparams.kv_resident_size_decode > 0 && cparams.kv_resident_size_decode < cparams.kv_resident_size) {
+                LLAMA_LOG_WARN("%s: the decode KV budget (%zu MiB) is smaller than the prefill budget (%zu MiB): decode has "
+                        "the smaller compute buffers, so this only keeps fewer pages resident between prefills\n", __func__,
+                        cparams.kv_resident_size_decode/(1024*1024), cparams.kv_resident_size/(1024*1024));
+            }
+        } else if (cparams.kv_resident_size > 0 && cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP) {
+            throw std::runtime_error("KV streaming is not supported by this model's memory");
+        }
+
+        if (cparams.kv_resident_size_decode > 0 && params.ctx_other) {
+            phase_leader = params.ctx_other;
+            phase_leader->phase_followers.push_back(this);
+        }
+
         sched_reserve();
 
         if (!cparams.flash_attn) {
@@ -586,6 +619,11 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
+
+    if (phase_leader) {
+        auto & f = phase_leader->phase_followers;
+        f.erase(std::remove(f.begin(), f.end(), this), f.end());
+    }
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.no_alloc() && !opt_ctx) {
@@ -729,14 +767,44 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
 }
 
-void llama_context::sched_reserve() {
+bool llama_context::switch_phase(bool decode, uint32_t n_tokens_next) {
+    if (decode == phase_decode) {
+        return true;
+    }
+    synchronize();
+    const bool streams = memory && memory->get_kv_stream();
+    if (decode) {
+        // the followers' compute buffers shrink first, then ours, then the pool grows into what they freed
+        for (llama_context * f : phase_followers) {
+            f->switch_phase(true, n_tokens_next);
+        }
+    } else if (streams) {
+        // the pool shrinks before the prefill buffers come back (a follower grows its own on its next prefill)
+        if (!memory->resize_kv_stream(cparams.kv_resident_size, false)) {
+            // without a pool the graphs cannot be reserved: the batch that retries the pool reserves them
+            phase_decode       = decode;
+            sched_need_reserve = true;
+            return false;
+        }
+    }
+    phase_decode       = decode;
+    sched_need_reserve = true;
+    sched_reserve(true);
+    if (decode && streams) {
+        return memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_next);
+    }
+    return true;
+}
+
+void llama_context::sched_reserve(bool quiet) {
     if (!sched_need_reserve) {
         return;
     }
+    const ggml_log_level log_level = quiet ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
 
     sched_need_reserve = false;
 
-    LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
+    llama_log_internal(log_level, "%s: reserving ...\n", __func__);
 
     synchronize();
 
@@ -749,10 +817,19 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
+    // keep the arenas of an unchanged node budget (phase switches): a new one zero-fills its graph metadata
     for (auto & res : gf_res_prev) {
-        res.reset();
+        if (res && res->get_max_nodes() == (int64_t) max_nodes) {
+            res->reset();
+        } else {
+            res.reset();
+        }
     }
-    gf_res_reserve.reset(new llm_graph_result(max_nodes));
+    if (gf_res_reserve && gf_res_reserve->get_max_nodes() == (int64_t) max_nodes) {
+        gf_res_reserve->reset();
+    } else {
+        gf_res_reserve.reset(new llm_graph_result(max_nodes));
+    }
     gf_res_prev_active = nullptr;
 
     sched_new(max_nodes, cparams.pipeline_parallel);
@@ -772,6 +849,26 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
     resolve_fused_ops(mctx.get(), n_seqs);
+
+    // between prefills (kv_resident_size_decode): buffers for decode batches only; decode() switches back to the
+    // prefill buffers before a larger batch
+    if (phase_decode) {
+        const uint32_t n_tokens_dec = std::min(n_tokens, cparams.n_tokens_decode);
+        if (!graph_reserve(n_tokens_dec, n_seqs, n_tokens_dec, mctx.get(), model.hparams.no_alloc)) {
+            throw std::runtime_error("failed to allocate compute decode buffers");
+        }
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            if (!model.hparams.no_alloc) {
+                backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
+            }
+            if (backend_buf_exp_size[i] > 1) {
+                llama_log_internal(log_level, "%s: %10s compute buffer size = %8.2f MiB (decode)\n", __func__,
+                        ggml_backend_buft_name(backend_buft[i]), backend_buf_exp_size[i] / 1024.0 / 1024.0);
+            }
+        }
+        llama_log_internal(log_level, "%s: reserve took %.2f ms\n", __func__, (ggml_time_us() - t_start_us)/1000.0);
+        return;
+    }
 
     // reserve worst-case graph
     int n_splits_pp        = -1;
@@ -856,7 +953,7 @@ void llama_context::sched_reserve() {
             backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend);
         }
         if (backend_buf_exp_size[i] > 1) {
-            LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
+            llama_log_internal(log_level, "%s: %10s compute buffer size = %8.2f MiB\n", __func__,
                     ggml_backend_buft_name(buft),
                     backend_buf_exp_size[i] / 1024.0 / 1024.0);
         }
@@ -870,7 +967,7 @@ void llama_context::sched_reserve() {
             return diff ? format("%d / %d", v_pp, v_tg) : format("%d", v_pp);
         };
 
-        LLAMA_LOG_INFO("%s: graph%s: nodes = %s, splits = %s, input objects = %s, input tensors = %s\n",
+        llama_log_internal(log_level, "%s: graph%s: nodes = %s, splits = %s, input objects = %s, input tensors = %s\n",
                 __func__,
                 diff ? format(" (pp bs=%d, tg bs=%d)", n_tokens, n_seqs).c_str() : "",
                 val(n_nodes_pp, n_nodes_tg).c_str(),
@@ -881,7 +978,7 @@ void llama_context::sched_reserve() {
 
     const int64_t t_end_us = ggml_time_us();
 
-    LLAMA_LOG_INFO("%s: reserve took %.2f ms, sched copies = %d\n",
+    llama_log_internal(log_level, "%s: reserve took %.2f ms, sched copies = %d\n",
             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
 }
 
@@ -1529,7 +1626,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    auto * res = get_gf_res_prev();
+    auto * res = get_gf_res_prev(ubatch.n_tokens);
     auto * gf  = res->get_gf();
 
     // the new graph parameters
@@ -1934,6 +2031,37 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     output_swaps.clear();
     embd_batch_idxs.clear();
 
+    // kv_resident_size_decode: decode batches run with decode-sized compute buffers and a larger KV stream pool. The
+    // memory is traded in the order that never needs both: the pool shrinks before the prefill buffers come back, and
+    // grows after the compute buffers shrank.
+    // The first switch waits for a prefill (or a restored state): small batches before one (a warmup) may run before a
+    // draft context has allocated its buffers, which the decode pool would take.
+    if (cparams.kv_resident_size_decode > 0) {
+        const bool decode_batch = n_tokens_all <= cparams.n_tokens_decode;
+        phase_seen_prefill = phase_seen_prefill || !decode_batch;
+        const llama_kv_stream * kv_stream = memory->get_kv_stream();
+        bool has_pool = true;
+        if (decode_batch != phase_decode && phase_seen_prefill) {
+            has_pool = switch_phase(decode_batch, n_tokens_all);
+        } else if ((kv_stream && !kv_stream->has_pool()) || (phase_decode && memory->kv_stream_needs_resize(n_tokens_all))) {
+            // a pool that could not be allocated earlier, or a context that outgrew the decode slots (split the same
+            // budget again): allocate the phase's pool, and rebuild the graphs, whose views point into the old one
+            synchronize();
+            has_pool = phase_decode ? memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_all)
+                                    : memory->resize_kv_stream(cparams.kv_resident_size, false);
+            for (auto & res : gf_res_prev) {
+                if (res) {
+                    res->reset();
+                }
+            }
+            gf_res_prev_active = nullptr;
+        }
+        if (!has_pool) {
+            // the budget does not fit (logged): nothing of this batch ran, and the cache keeps its pages in host memory
+            return -2;
+        }
+    }
+
     sched_reserve();
 
     bool did_optimize = false;
@@ -2160,7 +2288,21 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
-                ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
+                if (masked && n_rows < (int64_t) ubatch.n_tokens && t_h_nextn->ne[1] == (int64_t) ubatch.n_tokens) {
+                    // the graph captured the state before narrowing it to the output rows (some MTP heads): copy
+                    // those rows, in the order of the logits
+                    int64_t k = 0;
+                    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                        if (ubatch.output[i]) {
+                            ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out + k*n_embd,
+                                    i*t_h_nextn->nb[1], n_embd*sizeof(float));
+                            k++;
+                        }
+                    }
+                    GGML_ASSERT(k == n_rows);
+                } else {
+                    ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
+                }
                 extract_all_idxs = extract_all_idxs || !masked;
             }
         }
@@ -2576,8 +2718,8 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
     return static_cast<llm_graph_result *>(gf_res_reserve.get());
 }
 
-llm_graph_result * llama_context::get_gf_res_prev() {
-    auto & res = gf_res_prev[n_outputs > 0];
+llm_graph_result * llama_context::get_gf_res_prev(uint32_t n_tokens) {
+    auto & res = gf_res_prev[n_outputs == 0 ? 0 : (n_tokens > 1 ? 2 : 1)];
     if (!res) {
         res.reset(new llm_graph_result(gf_res_reserve->get_max_nodes()));
     }
@@ -3716,6 +3858,9 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         memory->state_read(io);
     }
 
+    // a restored context counts as a prefill for the phase switches (kv_resident_size_decode)
+    phase_seen_prefill = true;
+
     return io.n_bytes();
 }
 
@@ -3730,6 +3875,10 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     if (memory) {
         memory->state_read(io, seq_id, flags);
+    }
+
+    if (!(flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)) {
+        phase_seen_prefill = true;
     }
 
     return io.n_bytes();
@@ -3941,7 +4090,7 @@ void llama_context::opt_epoch_iter(
                 break;
             }
 
-            auto * res = get_gf_res_prev();
+            auto * res = get_gf_res_prev(ubatch.n_tokens);
 
             const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
 
@@ -4048,6 +4197,7 @@ llama_context_params llama_context_default_params() {
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
+        /*.rs_replay                   =*/ false,
         /*.n_outputs_max               =*/ 0,
         /*.n_outputs_max_per_seq       =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
@@ -4070,6 +4220,9 @@ llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.kv_resident_size            =*/ 0,
+        /*.kv_resident_size_decode     =*/ 0,
+        /*.n_tokens_decode             =*/ 0,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

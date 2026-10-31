@@ -3272,7 +3272,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
-                            /* filter_recr       */ std::move(filter_recr));
+                            /* filter_recr       */ std::move(filter_recr),
+                            /* attn_stream_size  */ params.ctx_type == LLAMA_CONTEXT_TYPE_MTP ? 0 : cparams.kv_resident_size,
+                            /* attn_stream_size_decode */ params.ctx_type == LLAMA_CONTEXT_TYPE_MTP ? 0 : cparams.kv_resident_size_decode,
+                            /* recurrent_n_rs_rec */ cparams.n_rs_rec);
                     }
                 } else {
                     llama_kv_cache::layer_filter_cb filter = nullptr;

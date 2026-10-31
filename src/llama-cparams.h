@@ -14,6 +14,7 @@ struct llama_cparams {
     uint32_t n_ubatch;
     uint32_t n_seq_max;
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
+    uint32_t n_rs_rec;        // ReplaySSM: updates recorded per seq (n_rs_seq + 1), 0 = state snapshots
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation
@@ -58,6 +59,9 @@ struct llama_cparams {
     bool training;           // set by llama_opt_init()
 
     size_t moe_cache_size;
+    size_t kv_resident_size; // KV streaming, 0 = disabled
+    size_t kv_resident_size_decode; // KV streaming: the pool between prefills, with decode-sized compute buffers; 0 = disabled
+    uint32_t n_tokens_decode;       // the largest batch that runs with the decode-sized compute buffers
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 

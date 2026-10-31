@@ -294,6 +294,17 @@ public:
     ggml_tensor * s_copy_main; // I32 [n_seqs]
     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
 
+    // ReplaySSM (llama_memory_recurrent::n_rs_rec): the SSM state source without the rollback snapshot, and the
+    // recorded updates each sequence commits first; null without
+    ggml_tensor * s_copy_s      = nullptr; // I32 [n_rs]
+    ggml_tensor * s_copy_s_main = nullptr; // I32 [n_seqs]
+    ggml_tensor * s_copy_s_tail = nullptr; // I32 [n_rs - 1]
+    ggml_tensor * rec_commit    = nullptr; // I32 [2, n_seqs]: updates to commit, and the half of the records
+    ggml_tensor * rec_conv      = nullptr; // I32 [d_conv - 1]: the conv window's columns in the conv records
+
+    // fill the inputs from a recurrent memory context (also for the hybrid memories' inputs)
+    void set_input_rs(const llama_memory_recurrent_context * mctx_rs);
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse
@@ -367,6 +378,16 @@ public:
     // note: assumes v_rot^2 == I
     std::vector<ggml_tensor *> self_k_rot;
     std::vector<ggml_tensor *> self_v_rot;
+
+    // KV streaming: page tables, I32 [n_kv/page_size, n_layer], the step tag, I32 [1], and what the graph was built for:
+    // the page layout (gathers) and whether the attention waits for streamed pages
+    ggml_tensor * self_kv_pages = nullptr;
+    ggml_tensor * self_kv_tag   = nullptr;
+    uint64_t      kv_layout     = 0;
+    bool          kv_synced     = false;
+
+    // the attended cells the graph was built for (a compact KQ mask no longer changes with them)
+    uint32_t      n_kv          = 0;
 
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed
@@ -1419,6 +1440,14 @@ struct llm_graph_context {
     llm_graph_input_rs * build_rs_inp() const;
 
     ggml_tensor * build_rs(
+            llm_graph_input_rs * inp,
+            ggml_tensor * s,
+                int32_t   state_size,
+                int32_t   n_seqs,
+            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
+
+    // the SSM state of a delta-net layer: as build_rs, but with ReplaySSM from the state without rollback snapshots
+    ggml_tensor * build_rs_s(
             llm_graph_input_rs * inp,
             ggml_tensor * s,
                 int32_t   state_size,

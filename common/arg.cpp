@@ -883,6 +883,13 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
+    if (params.kv_resident_size_decode > 0 && !params.kv_stream) {
+        throw std::invalid_argument("error: --kv-resident-mib-decode requires --kv-stream\n");
+    }
+    if (params.kv_stream && params.kv_resident_size == 0) {
+        throw std::invalid_argument("error: --kv-stream requires --kv-resident-mib\n");
+    }
+
     const bool skip_model_download =
         // server will call common_params_handle_models() later, so we skip it here
         ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
@@ -2735,6 +2742,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
     add_opt(common_arg(
+        {"--kv-stream"},
+        "[EXPERIMENTAL] keep the KV cache in host memory and only --kv-resident-mib of it on the GPU (requires -fa on, "
+        "a q8_0 K cache and a q4_0 V cache)",
+        [](common_params & params) {
+            params.kv_stream = true;
+        }
+    ).set_env("LLAMA_ARG_KV_STREAM"));
+    add_opt(common_arg(
+        {"--kv-resident-mib"}, "N",
+        "with --kv-stream: GPU memory in MiB for the resident KV pages",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.kv_resident_size = (size_t) value*1024*1024;
+        }
+    ).set_env("LLAMA_ARG_KV_RESIDENT_MIB"));
+    add_opt(common_arg(
+        {"--kv-resident-mib-decode"}, "N",
+        "with --kv-stream: GPU memory in MiB for the resident KV pages and the streaming slots between prefills, when the "
+        "compute buffers shrink to decode size (default: --kv-resident-mib, and the compute buffers keep their prefill size)",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.kv_resident_size_decode = (size_t) value*1024*1024;
+        }
+    ).set_env("LLAMA_ARG_KV_RESIDENT_MIB_DECODE"));
+    add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
         "(dense models; for MoE expert weights use --n-cpu-moe)",
@@ -4229,6 +4265,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_SAMPLING"));
+    add_opt(common_arg(
+        {"--spec-rs-replay"},
+        "delta-net models roll speculative drafts back from recorded updates instead of state snapshots, which also "
+        "covers n-gram drafts without checkpoints (ReplaySSM, one sequence) [EXPERIMENTAL]",
+        [](common_params & params) {
+            params.speculative.rs_replay = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_RS_REPLAY"));
     add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)\n"

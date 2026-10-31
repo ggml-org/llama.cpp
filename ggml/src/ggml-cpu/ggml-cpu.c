@@ -3019,6 +3019,22 @@ struct ggml_cplan ggml_graph_plan(
                         size_t decode   = sizeof(float)*(neq2*n_chunks*(2+DV) + n_tasks*(DK + 2*DV));
 
                         cur += MAX(prefill, decode);
+
+                        // paged K/V are gathered into contiguous copies at the end of the work buffer
+                        const struct ggml_tensor * pages = node->src[GGML_FA_SRC_PAGES];
+                        if (pages) {
+                            const struct ggml_tensor * k = node->src[1];
+                            const struct ggml_tensor * v = node->src[2];
+                            const int64_t n_kv = pages->ne[0]*ggml_get_op_params_i32(node, GGML_FA_PARAM_PAGE_SIZE);
+                            cur += n_kv*(ggml_row_size(k->type, k->ne[0])*k->ne[2] + ggml_row_size(v->type, v->ne[0])*v->ne[2]);
+                            cur += 2*CACHE_LINE_SIZE;
+                        }
+                        // a mask narrower than the K/V is widened at the end of the work buffer
+                        const struct ggml_tensor * mask = node->src[3];
+                        if (ggml_flash_attn_ext_mask_col0(node) > 0) {
+                            cur += ggml_flash_attn_ext_n_kv(node)*mask->ne[1]*mask->ne[2]*mask->ne[3]*sizeof(ggml_fp16_t);
+                            cur += CACHE_LINE_SIZE;
+                        }
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {
@@ -3045,7 +3061,8 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         const int64_t S_v = node->src[2]->ne[0];
                         const int64_t K   = ggml_get_op_params_i32(node, 0);
-                        const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+                        const bool record = ggml_get_op_params_i32(node, 1) != 0;
+                        const int64_t per_thread = S_v + (K > 1 || record ? S_v * S_v : 0);
                         cur = per_thread * sizeof(float) * n_tasks;
                     } break;
                 case GGML_OP_COUNT:

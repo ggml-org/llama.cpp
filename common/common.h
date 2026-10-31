@@ -400,12 +400,22 @@ struct common_params_speculative {
         return synth_len != -1.0 || !synth_rates.empty();
     }
 
+    // ReplaySSM: delta-net layers roll back from recorded updates, which are cheap enough to cover the n-gram drafts too
+    bool rs_replay = false;
+
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
+        if (!needs_rs_seq) {
+            return 0u;
+        }
 
-        return needs_rs_seq ? draft.n_max : 0u;
+        uint32_t n = draft.n_max;
+        if (rs_replay && std::find(types.begin(), types.end(), COMMON_SPECULATIVE_TYPE_NGRAM_MOD) != types.end()) {
+            n = std::max(n, (uint32_t) ngram_mod.n_max);
+        }
+        return n;
     }
 };
 
@@ -598,6 +608,10 @@ struct common_params {
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
     size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+
+    bool   kv_stream        = false; // KV streaming [EXPERIMENTAL]: keep the context in host memory, kv_resident_size of it on the GPU
+    size_t kv_resident_size = 0;     // device bytes for resident K/V pages
+    size_t kv_resident_size_decode = 0; // device bytes for resident K/V pages between prefills, 0 = kv_resident_size
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 

@@ -36,6 +36,13 @@
   useMpi ? false,
   useRocm ? config.rocmSupport,
   rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
+  # FlashAttention K-V type combinations (GGML_CUDA_FA_QUANTS), e.g. "q8_0-q8_0,q4_0-q4_0,q8_0-q4_0".
+  # null keeps the CMake default. Mixed pairs also need each side's same-type kernel (see README).
+  fattnQuants ? null,
+  # GGML CPU instruction-set options to enable, e.g. [ "GGML_AVX" "GGML_AVX2" "GGML_FMA" "GGML_F16C" ].
+  # Inside Nix (SOURCE_DATE_EPOCH set) ggml enables no x86 extensions by default and the cc-wrapper strips
+  # -march=native, so list the full set for the target CPU.
+  cpuFeatures ? [ ],
   useVulkan ? false,
   useRpc ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
@@ -195,7 +202,9 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   cmakeFlags =
     [
       (cmakeBool "LLAMA_BUILD_SERVER" true)
-      (cmakeBool "LLAMA_BUILD_WEBUI" useWebUi)
+      (cmakeBool "LLAMA_BUILD_UI" useWebUi)
+      # The sandbox has no network; the UI comes from the webui derivation copied in postPatch.
+      (cmakeBool "LLAMA_USE_PREBUILT_UI" false)
       (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
       (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
       (cmakeBool "GGML_NATIVE" false)
@@ -206,6 +215,10 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeBool "GGML_VULKAN" useVulkan)
       (cmakeBool "GGML_STATIC" enableStatic)
       (cmakeBool "GGML_RPC" useRpc)
+    ]
+    ++ map (feature: cmakeBool feature true) cpuFeatures
+    ++ optionals ((useCuda || useRocm) && fattnQuants != null) [
+      (cmakeFeature "GGML_CUDA_FA_QUANTS" fattnQuants)
     ]
     ++ optionals useCuda [
       (

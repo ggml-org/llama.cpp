@@ -9,6 +9,7 @@
 #include "vec.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <cmath>
 
@@ -9565,7 +9566,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     }
 }
 
-void ggml_compute_forward_flash_attn_ext(
+static void ggml_compute_forward_flash_attn_ext_prec(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     switch (dst->op_params[3]) {
@@ -9580,6 +9581,138 @@ void ggml_compute_forward_flash_attn_ext(
                 GGML_ABORT("fatal error");
             }
     }
+}
+
+// Paged K/V and cross-queue sync (ggml_flash_attn_ext_set_pages, ggml_flash_attn_ext_set_sync): wait for the producer,
+// gather the logical rows into the end of the work buffer, run the contiguous path on them, then release. A mask
+// narrower than the K/V is widened there too (visible columns first).
+static void ggml_compute_forward_flash_attn_ext_paged(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * k     = dst->src[1];
+    const ggml_tensor * v     = dst->src[2];
+    const ggml_tensor * pages = dst->src[GGML_FA_SRC_PAGES];
+    const ggml_tensor * tag   = dst->src[GGML_FA_SRC_TAG];
+
+    const uint32_t t = tag ? (uint32_t) *(const int32_t *) tag->data : 0;
+    if (tag && params->ith == 0) {
+        const volatile uint32_t * ready = ggml_flash_attn_ext_get_ready(dst);
+        while (*ready < t) {
+        }
+        std::atomic_thread_fence(std::memory_order_acquire);
+    }
+
+    ggml_tensor d = *dst;
+    for (int i = GGML_FA_SRC_PAGES; i <= GGML_FA_SRC_TAG; ++i) {
+        d.src[i] = nullptr;
+    }
+
+    // the end of the work buffer: [K copy][V copy] when paged, then the widened mask (ggml_graph_plan reserves the space)
+    const ggml_tensor * mask = dst->src[3];
+    const int64_t n_kv_all = ggml_flash_attn_ext_n_kv(dst);
+    const int64_t col0     = ggml_flash_attn_ext_mask_col0(dst);
+    const size_t  size_m   = col0 > 0 ? (size_t) n_kv_all*mask->ne[1]*mask->ne[2]*mask->ne[3]*sizeof(ggml_fp16_t) : 0;
+    char * mbase = (char *) (((uintptr_t) params->wdata + params->wsize - size_m) & ~(uintptr_t) (CACHE_LINE_SIZE - 1));
+
+    ggml_tensor kg;
+    ggml_tensor vg;
+    if (pages) {
+        const ggml_tensor * ring_k = dst->src[GGML_FA_SRC_RING_K];
+        const ggml_tensor * ring_v = dst->src[GGML_FA_SRC_RING_V];
+        const int64_t page_size = ggml_get_op_params_i32(dst, GGML_FA_PARAM_PAGE_SIZE);
+        const int64_t n_kv = pages->ne[0]*page_size;
+        const int32_t * table = ggml_flash_attn_ext_get_pages(dst);
+
+        // contiguous [D, n_kv, H, 1] copies at the end of the work buffer (ggml_graph_plan reserves the space)
+        const size_t row_k = ggml_row_size(k->type, k->ne[0]);
+        const size_t row_v = ggml_row_size(v->type, v->ne[0]);
+        const size_t size_k = n_kv*row_k*k->ne[2];
+        const size_t size_v = n_kv*row_v*v->ne[2];
+        char * base = (char *) (((uintptr_t) mbase - size_k - size_v) & ~(uintptr_t) (CACHE_LINE_SIZE - 1));
+
+        kg = *k;
+        vg = *v;
+        kg.view_src = vg.view_src = nullptr;
+        kg.ne[1] = vg.ne[1] = n_kv;
+        kg.nb[1] = row_k; kg.nb[2] = n_kv*row_k; kg.nb[3] = size_k;
+        vg.nb[1] = row_v; vg.nb[2] = n_kv*row_v; vg.nb[3] = size_v;
+        kg.data = base;
+        vg.data = base + size_k;
+
+        auto gather = [&](const ggml_tensor * pool, const ggml_tensor * ring, ggml_tensor & out, size_t row, int64_t r) {
+            const int64_t h = r / n_kv;
+            const int64_t i = r % n_kv;
+            const int64_t e = table[i / page_size];
+            const ggml_tensor * src_t = e >= 0 ? pool : ring;
+            const int64_t src_row = (e >= 0 ? e : -1 - e)*page_size + i % page_size;
+            GGML_ASSERT(src_t && src_row < src_t->ne[1]);
+            const char * src = (const char *) src_t->data + src_row*src_t->nb[1] + h*src_t->nb[2];
+            memcpy((char *) out.data + i*out.nb[1] + h*out.nb[2], src, row);
+        };
+
+        if (tag) {
+            ggml_barrier(params->threadpool);
+        }
+        const int64_t n_rows_k = n_kv*k->ne[2];
+        const int64_t n_rows   = n_rows_k + n_kv*v->ne[2];
+        for (int64_t r = params->ith; r < n_rows; r += params->nth) {
+            if (r < n_rows_k) {
+                gather(k, ring_k, kg, row_k, r);
+            } else {
+                gather(v, ring_v, vg, row_v, r - n_rows_k);
+            }
+        }
+        ggml_barrier(params->threadpool);
+
+        d.src[1] = &kg;
+        d.src[2] = &vg;
+    } else if (tag) {
+        ggml_barrier(params->threadpool);
+    }
+
+    ggml_tensor mg;
+    if (col0 > 0) {
+        mg = *mask;
+        mg.view_src = nullptr;
+        mg.ne[0] = n_kv_all;
+        mg.nb[1] = n_kv_all*sizeof(ggml_fp16_t);
+        mg.nb[2] = mg.nb[1]*mg.ne[1];
+        mg.nb[3] = mg.nb[2]*mg.ne[2];
+        mg.data  = mbase;
+        const int64_t n_rows = mask->ne[1]*mask->ne[2]*mask->ne[3];
+        for (int64_t r = params->ith; r < n_rows; r += params->nth) {
+            const int64_t i1 = r % mask->ne[1], i2 = (r / mask->ne[1]) % mask->ne[2], i3 = r / (mask->ne[1]*mask->ne[2]);
+            ggml_fp16_t * out = (ggml_fp16_t *) ((char *) mg.data + i1*mg.nb[1] + i2*mg.nb[2] + i3*mg.nb[3]);
+            const ggml_fp16_t zero = GGML_CPU_FP32_TO_FP16(0.0f);
+            for (int64_t j = 0; j < col0; ++j) {
+                out[j] = zero;
+            }
+            memcpy(out + col0, (const char *) mask->data + i1*mask->nb[1] + i2*mask->nb[2] + i3*mask->nb[3],
+                   mask->ne[0]*sizeof(ggml_fp16_t));
+        }
+        ggml_barrier(params->threadpool);
+        d.src[3] = &mg;
+    }
+
+    ggml_compute_forward_flash_attn_ext_prec(params, &d);
+
+    if (tag) {
+        ggml_barrier(params->threadpool);
+        if (params->ith == 0) {
+            std::atomic_thread_fence(std::memory_order_release);
+            *(volatile uint32_t *) ggml_flash_attn_ext_get_consumed(dst) = t;
+        }
+    }
+}
+
+void ggml_compute_forward_flash_attn_ext(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    if (dst->src[GGML_FA_SRC_PAGES] || dst->src[GGML_FA_SRC_TAG] || ggml_flash_attn_ext_mask_col0(dst) > 0) {
+        ggml_compute_forward_flash_attn_ext_paged(params, dst);
+        return;
+    }
+    ggml_compute_forward_flash_attn_ext_prec(params, dst);
 }
 
 // ggml_compute_forward_flash_attn_back
@@ -11158,11 +11291,17 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
-    const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+    // ReplaySSM (ggml_gated_delta_net_rec): updates to commit first, and whether this batch records its own
+    const ggml_tensor * src_rec    = dst->src[6];
+    const ggml_tensor * src_commit = dst->src[7];
+    const bool    record = ggml_get_op_params_i32(dst, 1) != 0;
+    const int64_t R      = src_rec ? ggml_get_op_params_i32(dst, 2) : 0;
+
+    const int64_t per_thread = S_v + (K > 1 || record ? S_v * S_v : 0);
     const int ith = params->ith;
 
     float * delta       = (float *)params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
-    float * state_work  = K > 1 ? (delta + S_v) : nullptr;
+    float * state_work  = K > 1 || record ? (delta + S_v) : nullptr;
 
     // output layout: [attn_scores | new_states]
     // attn_scores: S_v * H * n_tokens * n_seqs    floats
@@ -11195,15 +11334,44 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         const int64_t ik3 = iv3 / rk3;
 
         // For K=1, write directly to the single output slot to avoid an extra memcpy at the end.
-        // For K>1, work in scratch and copy out per-token when the slot is in range.
-        float * s_out = (K > 1)
-            ? state_work
-            : state_out_base + (iv3 * H + iv1) * S_v * S_v;
+        // For K>1, work in scratch and copy out per-token when the slot is in range; with record, the slot gets the
+        // committed state and the tokens run in scratch.
+        float * s_slot = state_out_base + (iv3 * H + iv1) * S_v * S_v;
+        float * s_out  = (K > 1 || record) ? state_work : s_slot;
 
         // copy input state into the working buffer and operate in-place
         // state layout [S_v, S_v, H, n_seqs]: seq iv3 starts at iv3 * state_seq_stride.
         const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
         memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+
+        // commit: the recorded updates, the same operations as the token loop below
+        float * d_out = nullptr; // this batch's delta rows (over the committed ones: this head reads its own first)
+        float * k_out = nullptr; // its k rows in the half being written, when this head writes them for its key head
+        float * g_out = nullptr; // its exp(g) rows in that half
+        if (src_rec) {
+            // per sequence: R rows of delta, two halves of R rows of k (per key head) and of exp(g)
+            const int32_t * nc      = (const int32_t *) ((const char *) src_commit->data + iv3 * src_commit->nb[1]);
+            const int32_t   m       = nc[0];
+            const int32_t   half    = nc[1];
+            float *         rec_d   = (float *) ((char *) src_rec->data + iv3 * src_rec->nb[1]);
+            float *         rec_k   = rec_d + R*S_v*H;
+            float *         rec_g   = rec_k + 2*R*S_v*nek1;
+            GGML_ASSERT(m >= 0 && m <= R && (half == 0 || half == 1));
+            for (int64_t t = 0; t < m; ++t) {
+                const float * k_r = rec_k + (half*R + t)*S_v*nek1 + ik1*S_v;
+                const float * d_r = rec_d + t*S_v*H + iv1*S_v;
+                ggml_vec_scale_f32(S_v * S_v, s_out, rec_g[(half*R + t)*H + iv1]);
+                for (int64_t j = 0; j < S_v; ++j) {
+                    ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_r, d_r[j]);
+                }
+            }
+            if (record) {
+                memcpy(s_slot, s_out, S_v * S_v * sizeof(float));
+                d_out = rec_d + iv1*S_v;
+                k_out = iv1 == ik1 ? rec_k + (1 - half)*R*S_v*nek1 + ik1*S_v : nullptr;
+                g_out = rec_g + (1 - half)*R*H + iv1;
+            }
+        }
 
         // attn output pointer for first token of this (head, seq)
         float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
@@ -11237,6 +11405,14 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
                 float sum = 0.0f;
                 ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
                 delta[j] = (v_d[j] - sum) * beta_val;
+            }
+
+            if (d_out) {
+                memcpy(d_out + t*S_v*H, delta, S_v * sizeof(float));
+                if (k_out) {
+                    memcpy(k_out + t*S_v*nek1, k_d, S_v * sizeof(float));
+                }
+                g_out[t*H] = expf(g_d[0]);
             }
 
             // outer product: S[i][j] += k[i] * delta[j] => M[j][i] += delta[j] * k[i]

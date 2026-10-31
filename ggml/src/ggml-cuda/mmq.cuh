@@ -963,11 +963,11 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
         }
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
 
         vec_dot(tile_x, tile_y, sum, 0);
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
 
         {
             const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
@@ -979,11 +979,11 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
         }
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
 
         vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
 
-        __syncthreads();
+        ggml_cuda_syncthreads_lds();
     }
 
     if (fixup) {
@@ -1655,9 +1655,15 @@ extern DECL_MMQ_CASE_W4A4(GGML_TYPE_NVFP4);
 
 // -------------------------------------------------------------------------------------------------------------------------
 
+// swiglu: src1 is that SWIGLU node's output, never written; the activations are quantized from its sources instead
+// (2-D src1, no ids).
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+<<<<<<< HEAD
         const ggml_cuda_mm_fusion_args_host * fusion = nullptr);
+=======
+        const ggml_tensor * swiglu = nullptr);
+>>>>>>> origin/feature/adaptive-kv-stream-rocm
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);
 

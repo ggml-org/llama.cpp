@@ -133,6 +133,20 @@ static __device__ __forceinline__ void ggml_cuda_syncwarp() {
 #endif // GGML_USE_HIP
 }
 
+// A workgroup barrier for code that only shares data through shared memory. On RDNA4 __syncthreads() is an
+// acquire-release fence over every address space: it waits for all outstanding global loads before the barrier and
+// invalidates the vector caches after it (global_inv). Scoping the fence to LDS keeps global loads in flight across the
+// barrier and the cached lines valid.
+static __device__ __forceinline__ void ggml_cuda_syncthreads_lds() {
+#if defined(GGML_USE_HIP) && defined(RDNA4)
+    __builtin_amdgcn_fence(__ATOMIC_RELEASE, "workgroup", "local");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, "workgroup", "local");
+#else
+    __syncthreads();
+#endif // defined(GGML_USE_HIP) && defined(RDNA4)
+}
+
 static __device__ __forceinline__ void ggml_cuda_pdl_sync() {
 #if defined(GGML_CUDA_USE_PDL) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
     cudaGridDependencySynchronize();
@@ -1207,6 +1221,28 @@ const ggml_cuda_device_info & ggml_cuda_info();
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
 
+// RDNA4: a launch whose wavefronts fall in the last 32 below a multiple of the device's wave slots (nsm counts WGPs,
+// 64 wave slots each: 2048 on a 64-CU part) runs 6-10 us longer than the same work one workgroup wider, whatever the
+// kernel does (gfx1201: 512 workgroups of 128 threads 14.3 us, 513 5.7 us; 512 x 1024 threads over 5120-float rows
+// 31.5 us, 513 26.8 us). Returns the workgroup count to launch: nblocks, or the first count past the window. The
+// extra workgroups must return without work.
+static int64_t ggml_cuda_nblocks_past_cliff(const int64_t nblocks, const int nthreads) {
+    const ggml_cuda_device_info::cuda_device_info & info = ggml_cuda_info().devices[ggml_cuda_get_device()];
+    if (!GGML_CUDA_CC_IS_RDNA4(info.cc)) {
+        return nblocks;
+    }
+    const int64_t slots = (int64_t) info.nsm * 64;
+    const int64_t waves = (nthreads + 31) / 32;
+    int64_t n = nblocks;
+    for (int i = 0; i < 64; ++i, ++n) {
+        const int64_t w = n * waves % slots;
+        if (w != 0 && w <= slots - 32) {
+            break;
+        }
+    }
+    return n;
+}
+
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
 
@@ -1452,10 +1488,176 @@ struct ggml_cuda_stream_context {
     }
 };
 
+// whether the data of a and b share memory (a tensor without data shares none)
+static inline bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    const char * a0 = (const char *) a->data;
+    const char * b0 = (const char *) b->data;
+    return a0 && b0 && a0 < b0 + ggml_nbytes(b) && b0 < a0 + ggml_nbytes(a);
+}
+
+// a*b rounded on its own, never contracted into an fma with a later add (HIP's __fmul_rn is a plain product)
+static __device__ __forceinline__ float ggml_cuda_fmul_rn(const float a, const float b) {
+#if defined(GGML_USE_HIP)
+#pragma clang fp contract(off)
+    return a * b;
+#else
+    return __fmul_rn(a, b);
+#endif // defined(GGML_USE_HIP)
+}
+
+// Element i of an mmvq q8_1 copy (rows of whole blocks, no padding) as quantize_q8_1 makes it, with lane i % QK8_1 of a
+// warp holding element i. A product as xi must be rounded on its own (ggml_cuda_fmul_rn), else the block sum differs.
+static __device__ __forceinline__ void quantize_q8_1_lane(const float xi, block_q8_1 * y, const int64_t i) {
+    float amax = fabsf(xi);
+    float sum  = xi;
+
+    amax = warp_reduce_max<QK8_1>(amax);
+    sum  = warp_reduce_sum<QK8_1>(sum);
+
+    const float  d = amax / 127.0f;
+    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+    y[i / QK8_1].qs[i % QK8_1] = q;
+    if (i % QK8_1 == 0) {
+        y[i / QK8_1].ds = make_half2(d, sum);
+    }
+}
+
+// mmvq quantizes its activations (src1) to q8_1 whatever the weight type: the matrix-vector products that follow on
+// the same activations (sibling projections such as q/k/v or gate/up) read that copy instead of quantizing again.
+// The copy is valid until a node writes over the activations; the graph evaluation invalidates it then, and at the
+// start of every graph. With CUDA graphs the reuse is captured, so the buffer is persistent (allocated once, outside a
+// capture).
+struct ggml_cuda_mmvq_q8_1_cache {
+    void *       buf      = nullptr;
+    size_t       buf_size = 0;
+    const char * src      = nullptr; // data of the activations in buf, nullptr: no valid copy
+    size_t       src_size = 0;
+    int64_t      ne[GGML_MAX_DIMS] = {};
+    size_t       nb[GGML_MAX_DIMS] = {};
+
+    bool matches(const ggml_tensor * t) const {
+        if (!src || (const char *) t->data != src) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (t->ne[i] != ne[i] || t->nb[i] != nb[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void set(const ggml_tensor * t) {
+        src      = (const char *) t->data;
+        src_size = ggml_nbytes(t);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            ne[i] = t->ne[i];
+            nb[i] = t->nb[i];
+        }
+    }
+
+    void invalidate() {
+        src = nullptr;
+    }
+
+    // a node wrote dst: the copy is stale if dst overlaps the activations it was made from
+    void written(const ggml_tensor * dst) {
+        const char * d = (const char *) dst->data;
+        if (src && d && d < src + src_size && src < d + ggml_nbytes(dst)) {
+            src = nullptr;
+        }
+    }
+
+    // buf if it can take size bytes, allocated on first use outside a CUDA graph capture (captured graphs keep its
+    // address), else nullptr
+    void * reserve(size_t size, cudaStream_t stream) {
+        if (buf == nullptr) {
+            bool capturing = false;
+#ifdef USE_CUDA_GRAPH
+            cudaStreamCaptureStatus capture_status;
+            CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
+            capturing = capture_status != cudaStreamCaptureStatusNone;
+#endif // USE_CUDA_GRAPH
+            if (!capturing) {
+                buf_size = std::max<size_t>(size, 1 << 20);
+                CUDA_CHECK(cudaMalloc(&buf, buf_size));
+            }
+        }
+        GGML_UNUSED(stream);
+        return buf != nullptr && size <= buf_size ? buf : nullptr;
+    }
+
+    // An op that writes its output and a q8_1 copy of it into buf: the copy becomes valid once the evaluator has run
+    // written() over the op's nodes, as the output of a fused op may be where an elided node's result would have been.
+    const ggml_tensor * pending = nullptr;
+
+    void set_pending(const ggml_tensor * t) {
+        src     = nullptr;
+        pending = t;
+    }
+
+    void apply_pending() {
+        if (pending) {
+            set(pending);
+            pending = nullptr;
+        }
+    }
+};
+
+// HIP: a matmul of the same activations as the matmuls run just before it (a sibling: up after gate, k and v after q)
+// does not depend on them, so it may start before they end. On RDNA4 a 4-token mmvq loses ~9-10 us per launch to its
+// ramp-up and tail, and letting siblings overlap hides most of it. A direct launch clears the AQL barrier bit
+// (hipExtAnyOrderLaunch). Stream capture drops that flag, so in a capture a sibling runs on stream 1 with the capture
+// dependencies of its group's first matmul kernel and joins back; CLR replays such a fork without a barrier only with
+// DEBUG_HIP_FORCE_ASYNC_QUEUE=1 and DEBUG_HIP_FORCE_GRAPH_QUEUES=1 (else on a second HW queue, which gained nothing), so
+// captures fork only then.
+struct ggml_cuda_mm_siblings {
+    bool sibling   = false; // the node being run is a sibling
+    bool capturing = false; // capturing a graph in which siblings fork
+
+    const ggml_tensor *          fork_node = nullptr; // the mmvq whose matmul kernel fork_deps precede
+    std::vector<cudaGraphNode_t> fork_deps;
+    cudaEvent_t                  fork_event = nullptr;
+    cudaEvent_t                  join_event = nullptr;
+
+#if defined(GGML_USE_HIP)
+    // right before the matmul kernel of an mmvq on stream 0 in a capture: its siblings fork from here
+    void mark_fork(const ggml_tensor * node, cudaStream_t stream) {
+        if (fork_event == nullptr) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&fork_event, cudaEventDisableTiming));
+            CUDA_CHECK(cudaEventCreateWithFlags(&join_event, cudaEventDisableTiming));
+        }
+        CUDA_CHECK(cudaEventRecord(fork_event, stream));
+        hipStreamCaptureStatus status;
+        const hipGraphNode_t * deps   = nullptr;
+        size_t                 n_deps = 0;
+        CUDA_CHECK(hipStreamGetCaptureInfo_v2(stream, &status, nullptr, nullptr, &deps, &n_deps));
+        fork_deps.assign(deps, deps + n_deps);
+        fork_node = node;
+    }
+
+    // s1 joins the capture with exactly fork_node's dependencies: a wait alone would keep s1's node from an earlier
+    // fork as a second dependency, and CLR only drops the barrier of a node with one
+    void fork(cudaStream_t s1) {
+        CUDA_CHECK(cudaStreamWaitEvent(s1, fork_event));
+        CUDA_CHECK(hipStreamUpdateCaptureDependencies(s1, fork_deps.data(), fork_deps.size(), hipStreamSetCaptureDependencies));
+    }
+
+    void join(cudaStream_t s1, cudaStream_t s0) {
+        CUDA_CHECK(cudaEventRecord(join_event, s1));
+        CUDA_CHECK(cudaStreamWaitEvent(s0, join_event));
+    }
+#endif // defined(GGML_USE_HIP)
+};
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
     cudaEvent_t copy_event = nullptr;
+
+    ggml_cuda_mmvq_q8_1_cache mmvq_q8_1;
+    ggml_cuda_mm_siblings     mm_siblings;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
@@ -1603,6 +1805,7 @@ struct ggml_cuda_kernel_launch_params {
     dim3 block_dims;
     size_t shmem;
     cudaStream_t stream;
+    bool any_order = false; // HIP: may start before the previous kernel on the stream ends (ggml_cuda_mm_siblings)
 
     // size_t shmem
     ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, const size_t shmem_, const cudaStream_t stream_)
@@ -1719,6 +1922,14 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     }
 #endif //defined(GGML_CUDA_USE_PDL)
 
+#if defined(GGML_USE_HIP)
+    if (launch_params.any_order) {
+        hipExtLaunchKernelGGL(kernel, launch_params.block_nums, launch_params.block_dims, (uint32_t) launch_params.shmem,
+                              launch_params.stream, nullptr, nullptr, hipExtAnyOrderLaunch, std::forward<Args>(args)...);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+#endif // defined(GGML_USE_HIP)
     kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
     CUDA_CHECK(cudaGetLastError());
 }

@@ -163,7 +163,12 @@ static int ggml_cuda_mmq_get_J_best(
 
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+<<<<<<< HEAD
         const ggml_cuda_mm_fusion_args_host * fusion) {
+=======
+        const ggml_tensor * swiglu) {
+    GGML_ASSERT(!swiglu || (!ids && src1->ne[2] == 1 && src1->ne[3] == 1));
+>>>>>>> origin/feature/adaptive-kv-stream-rocm
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
@@ -229,6 +234,7 @@ void ggml_cuda_mul_mat_q(
     const ggml_prec prec_src1 = gate ? GGML_PREC_Q8 : ggml_cuda_mmq_get_prec_src1(src0, dst, cc);
 
     const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
+    GGML_ASSERT(!swiglu || !use_native_fp4); // the fp4 quantize reads src1, which a fused SWIGLU never writes
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
@@ -250,6 +256,25 @@ void ggml_cuda_mul_mat_q(
         J_best = ggml_cuda_mmq_get_J_best(src0->type, ncols_opt, fallback, cc, smpbo, prec_src1, &nthreads_best);
     }
     GGML_ASSERT(J_best > 0);
+
+    // A weight that fits a few row tiles (the 48-row ssm_alpha/ssm_beta of a gated delta net) gets only a few tiles at
+    // the widest J and leaves most of the GPU idle. On RDNA4 the narrowest tile is then 2-3x faster (512 columns).
+    // Each output still sums its K blocks in the same order, so the result does not change.
+    if (GGML_CUDA_CC_IS_RDNA4(cc) && !ids) {
+        const int nsm = ggml_cuda_info().devices[id].nsm;
+        const ggml_cuda_mmq_config config_best = ggml_cuda_mmq_get_config(src0->type, J_best, fallback, cc, prec_src1);
+        const int64_t ntiles = (ne01 + config_best.I - 1)/config_best.I * ((ne11 + J_best - 1)/J_best) * ne12*ne13;
+        if (4*ntiles < nsm) {
+            for (int J = 8; J < J_best; J += 8) {
+                const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(src0->type, J, fallback, cc, prec_src1);
+                if (config.type != GGML_TYPE_COUNT && mmq_get_nbytes_shared(config, cc) <= smpbo) {
+                    J_best        = J;
+                    nthreads_best = config.nthreads;
+                    break;
+                }
+            }
+        }
+    }
 
     // A tile of size J can read in at most J - 1 extra columns.
     // For simplicity, round up the padding of a full tile to a multiple of the number of bytes that nthreads can load in parallel.
@@ -276,6 +301,19 @@ void ggml_cuda_mul_mat_q(
                 quantize_mmq_fp4_cuda(src1_d, nullptr, src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10, s11, s12, s13, ne10_padded,
                                         ne11, ne12, ne13, stream);
 
+            } else if (swiglu) {
+                // the GLU's gate and up: its two sources, or the two halves of one (swapped picks the gate)
+                const ggml_tensor * g0 = swiglu->src[0];
+                const ggml_tensor * g1 = swiglu->src[1];
+                const int32_t swapped = ggml_get_op_params_i32(swiglu, 1);
+                const float * gate_d  = (const float *) g0->data;
+                const float * up_d    = g1 ? (const float *) g1->data : (const float *) g0->data;
+                if (!g1) {
+                    gate_d += swapped ? ne10 : 0;
+                    up_d   += swapped ? 0 : ne10;
+                }
+                quantize_mmq_q8_1_swiglu_cuda(gate_d, up_d, g0->nb[1] / sizeof(float), (g1 ? g1->nb[1] : g0->nb[1]) / sizeof(float),
+                                              src1_q8_1.get(), src0->type, ne10, ne10_padded, ne11, stream);
             } else {
                 quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
                                        ne11, ne12, ne13, stream);

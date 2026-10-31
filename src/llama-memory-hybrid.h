@@ -39,7 +39,12 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+                            /* KV streaming of the attention layers, see llama_kv_cache */
+                   size_t   attn_stream_resident_size = 0,
+                   size_t   attn_stream_resident_size_decode = 0,
+                            /* ReplaySSM records of the recurrent layers, see llama_memory_recurrent */
+                 uint32_t   recurrent_n_rs_rec = 0);
 
     ~llama_memory_hybrid() = default;
 
@@ -70,6 +75,10 @@ public:
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+
+    llama_kv_stream * get_kv_stream() override;
+    bool resize_kv_stream(size_t resident_size, bool decode, uint32_t n_tokens) override;
+    bool kv_stream_needs_resize(uint32_t n_tokens) const override;
 
     // state write/load
 

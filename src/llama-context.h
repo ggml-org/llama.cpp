@@ -56,7 +56,7 @@ struct llama_context {
     //   - changing samplers
     //   - changing attention type
     //   - etc.
-    void sched_reserve();
+    void sched_reserve(bool quiet = false); // quiet: log at debug level (a phase switch, on every prompt)
 
     void synchronize();
 
@@ -263,7 +263,7 @@ public:
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
-    llm_graph_result * get_gf_res_prev();
+    llm_graph_result * get_gf_res_prev(uint32_t n_tokens);
 
     llm_graph_params graph_params(
                         llm_graph_result * res,
@@ -372,6 +372,20 @@ private:
     // true until then, because the first output_reserve() runs before any graph is reserved
     bool graph_has_logits = true;
 
+    // kv_resident_size_decode: the compute buffers are reserved for decode batches (n_tokens_decode) and the KV stream
+    // pool takes the decode budget; a larger batch switches back to the prefill buffers and pool first
+    bool phase_decode       = false;
+    bool phase_seen_prefill = false;
+
+    // a context created against another one (a draft context, params.ctx_other) follows its phases: the other context
+    // switches its followers to decode before it grows its pool into the memory their compute buffers free
+    llama_context *              phase_leader = nullptr;
+    std::vector<llama_context *> phase_followers;
+
+    // n_tokens_next: the batch about to run, which the decode slots must hold
+    // false: the phase's KV stream pool could not be allocated (logged); the cache has no pool until a batch retries
+    bool switch_phase(bool decode, uint32_t n_tokens_next);
+
     // state of sched_copy_experts, reset before each graph compute
     struct copy_experts_info {
         const ggml_tensor *  ids = nullptr;
@@ -411,8 +425,9 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
-    // Separate arenas give batches with and without outputs distinct CUDA graph cache keys.
-    std::array<llm_graph_result_ptr, 2> gf_res_prev;
+    // Separate arenas give batches with and without outputs distinct CUDA graph cache keys, and batches of several
+    // tokens with outputs one of their own, so single-token decodes between them (MTP draft steps) keep theirs.
+    std::array<llm_graph_result_ptr, 3> gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
 
     llm_graph_result * gf_res_prev_active = nullptr;

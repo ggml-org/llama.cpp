@@ -1,5 +1,6 @@
 #include "unary.cuh"
 #include "convert.cuh"
+#include "mmvq.cuh"
 
 static __device__ __forceinline__ float op_abs(float x) {
     return fabsf(x);
@@ -46,7 +47,7 @@ static __device__ __forceinline__ float op_relu(float x) {
 }
 
 static __device__ __forceinline__ float op_sigmoid(float x) {
-    return 1.0f / (1.0f + expf(-x));
+    return ggml_cuda_op_sigmoid_single(x);
 }
 
 static __device__ __forceinline__ float op_hardsigmoid(float x) {
@@ -91,7 +92,11 @@ static __device__ __forceinline__ float op_expm1(float x) {
 }
 
 static __device__ __forceinline__ float op_softplus(float x) {
+<<<<<<< HEAD
     return (x > 20.0f) ? x : log1pf(expf(x));
+=======
+    return ggml_cuda_op_softplus_single(x);
+>>>>>>> origin/feature/adaptive-kv-stream-rocm
 }
 
 static __device__ __forceinline__ float op_elu(float x) {
@@ -303,8 +308,9 @@ void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 }
 /* gated ops */
 
-template <float (*op)(float), typename T>
-static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1) {
+// With quantize, also the q8_1 copy of dst that mmvq would make (n a multiple of QK8_1).
+template <float (*op)(float), typename T, bool quantize>
+static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, block_q8_1 * yq) {
     ggml_cuda_pdl_lc();
     const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
 
@@ -317,14 +323,26 @@ static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, 
     const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
 
     ggml_cuda_pdl_sync();
-    dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[j0])) * ggml_cuda_cast<float>(g[j1]));
+    if constexpr (quantize) {
+        const float v = ggml_cuda_fmul_rn(op(ggml_cuda_cast<float>(x[j0])), ggml_cuda_cast<float>(g[j1]));
+        dst[i] = v;
+        quantize_q8_1_lane(v, yq, i);
+    } else {
+        dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[j0])) * ggml_cuda_cast<float>(g[j1]));
+    }
 }
 
 template <float (*op)(float), typename T>
-static void unary_gated_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, cudaStream_t stream) {
+static void unary_gated_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, cudaStream_t stream, block_q8_1 * yq = nullptr) {
     const int64_t num_blocks = (k + CUDA_GLU_BLOCK_SIZE - 1) / CUDA_GLU_BLOCK_SIZE;
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream);
-    ggml_cuda_kernel_launch(unary_gated_op_kernel<op, T>, launch_params, x, g, dst, k, n, o0, o1);
+    if constexpr (std::is_same_v<T, float>) {
+        if (yq) {
+            ggml_cuda_kernel_launch(unary_gated_op_kernel<op, T, true>, launch_params, x, g, dst, k, n, o0, o1, yq);
+            return;
+        }
+    }
+    ggml_cuda_kernel_launch(unary_gated_op_kernel<op, T, false>, launch_params, x, g, dst, k, n, o0, o1, yq);
 }
 
 template <float (*op)(float)>
@@ -386,7 +404,18 @@ void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             src1_p += swapped ? 0 : nc;
         }
 
-        unary_gated_cuda<op>(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), stream);
+        // A batch that mmvq multiplies (an FFN down projection) gets the q8_1 copy of dst too (rows of whole blocks, no
+        // padding), in the buffer where mmvq looks for it.
+        block_q8_1 * yq = nullptr;
+        const int64_t nrows = ggml_nrows(dst);
+        if (nrows <= MMVQ_MAX_BATCH_SIZE && ctx.curr_stream_no == 0 && nc % MATRIX_ROW_PADDING == 0) {
+            yq = (block_q8_1 *) ctx.mmvq_q8_1.reserve(nrows*nc/QK8_1*sizeof(block_q8_1), stream);
+        }
+
+        unary_gated_cuda<op>(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), stream, yq);
+        if (yq) {
+            ctx.mmvq_q8_1.set_pending(dst);
+        }
     }
 }
 
@@ -759,6 +788,31 @@ void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary
         default:
             GGML_ABORT("Unsupported unary op for fused unary+mul");
     }
+}
+
+/* fused add + softplus + mul (the gate of a gated delta net) */
+
+static __global__ void add_softplus_mul_f32(const float * x, const float * bias, const float * scale, float * dst,
+                                            const int64_t k, const int64_t ncols) {
+    const int64_t i = (int64_t) blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    const int64_t c = i % ncols;
+    dst[i] = op_softplus(x[i] + bias[c]) * scale[c];
+}
+
+void ggml_cuda_op_add_softplus_mul(ggml_backend_cuda_context & ctx, ggml_tensor * add_node, ggml_tensor * unary_node, ggml_tensor * mul_node) {
+    const ggml_tensor * x     = add_node->src[0];
+    const ggml_tensor * bias  = add_node->src[1];
+    const ggml_tensor * scale = (mul_node->src[0] == unary_node) ? mul_node->src[1] : mul_node->src[0];
+
+    const int64_t k     = ggml_nelements(mul_node);
+    const int64_t ncols = x->ne[0];
+    const int     num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    add_softplus_mul_f32<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>(
+        (const float *) x->data, (const float *) bias->data, (const float *) scale->data, (float *) mul_node->data, k, ncols);
+    CUDA_CHECK(cudaGetLastError());
 }
 
 /* fused relu + sqr */

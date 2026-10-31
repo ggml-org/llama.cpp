@@ -25,7 +25,8 @@ public:
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_rs_seq,
-        const layer_filter_cb & filter);
+        const layer_filter_cb & filter,
+                     uint32_t   n_rs_rec = 0);
 
     ~llama_memory_recurrent() = default;
 
@@ -79,6 +80,47 @@ public:
 
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
+    // ReplaySSM (ggml_gated_delta_net_rec): with n_rs_rec > 0 the states have no rollback snapshots. A ubatch of at
+    // most n_rs_rec tokens records its updates instead of advancing the SSM state, and the next ubatch commits the
+    // ones that were kept: all of them, or as many as a seq_rm left. The conv state is a window of d_conv - 1 columns
+    // into time-major records of the conv input (rec_conv_cols columns of every channel per cell): a ubatch starts
+    // from the window at the commit offset and writes its own conv input (a recording ubatch) or its last columns (a
+    // larger one) at the start, so that the window of the kept tokens starts as many columns in. One sequence only.
+    uint32_t n_rs_rec = 0;
+
+    // the SSM records per cell (see ggml_gated_delta_net_rec): n_rs_rec rows of delta, then two halves of n_rs_rec
+    // rows of k and of exp(g), in floats
+    uint32_t rec_d() const { return hparams.ssm_d_inner; }
+    uint32_t rec_k() const { return hparams.ssm_d_state*hparams.ssm_n_group; }
+    uint32_t rec_g() const { return hparams.ssm_dt_rank; }
+    size_t   rec_off_k(uint32_t half) const { return (size_t) n_rs_rec*(rec_d() + half*rec_k()); }
+    size_t   rec_off_g(uint32_t half) const { return (size_t) n_rs_rec*(rec_d() + 2*rec_k() + half*rec_g()); }
+    size_t   rec_size() const { return (size_t) n_rs_rec*(rec_d() + 2*rec_k() + 2*rec_g()); }
+
+    // the conv records: channels, the window's columns and all columns per cell
+    uint32_t rec_conv_channels() const { return hparams.n_embd_r()/(hparams.ssm_d_conv - 1); }
+    uint32_t rec_conv_w()        const { return hparams.ssm_d_conv - 1; }
+    uint32_t rec_conv_cols()     const { return rec_conv_w() + n_rs_rec; }
+
+    struct rec_state {
+        uint32_t  n    = 0;  // updates the last ubatch recorded
+        llama_pos p0   = -1; // the position of the first
+        uint32_t  m    = 0;  // updates the next ubatch commits
+        uint32_t  half = 0;  // the half of the records they are in (the next recording ubatch writes the other)
+    };
+    rec_state rec;
+
+    // set by apply for the ubatch being built: whether it records, and the updates it commits first and their half
+    bool     rec_recording   = false;
+    uint32_t rec_commit      = 0;
+    uint32_t rec_commit_half = 0;
+
+    bool rec_records(const llama_ubatch & ubatch) const {
+        return n_rs_rec > 0 && ubatch.n_seq_tokens <= n_rs_rec;
+    }
+
+    void rec_apply(const llama_ubatch & ubatch);
+
     // computed before each graph build
     uint32_t n = 0;
 
@@ -118,6 +160,8 @@ public:
     std::vector<ggml_tensor *> s_l;
     // a second conv history that must stay replicated across devices, so it cannot share the r row
     std::vector<ggml_tensor *> p_l;
+    // ReplaySSM records of the SSM updates, rec_size() floats per cell (see ggml_gated_delta_net_rec)
+    std::vector<ggml_tensor *> u_l;
 
 private:
     //const llama_model & model;
@@ -184,8 +228,18 @@ public:
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
     ggml_tensor * get_p_l(int32_t il) const;
+    ggml_tensor * get_u_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+
+    // ReplaySSM: the state source without the rollback snapshot (the SSM state has none), whether the ubatch records,
+    // and the updates it commits first (see llama_memory_recurrent::n_rs_rec)
+    int32_t  s_copy_s(int i) const;
+    uint32_t get_n_rs_rec() const;
+    uint32_t get_rec_conv_w() const;
+    bool     rec_records(const llama_ubatch & ubatch) const;
+    uint32_t rec_commit() const;
+    uint32_t rec_commit_half() const;
 
 private:
     const llama_memory_status status;

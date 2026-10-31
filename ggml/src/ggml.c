@@ -5645,6 +5645,64 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+void ggml_flash_attn_ext_set_pages(
+        struct ggml_tensor * a,
+        struct ggml_tensor * pages,
+        int32_t              table,
+        int32_t              page_size,
+        struct ggml_tensor * ring_k,
+        struct ggml_tensor * ring_v) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(pages->type == GGML_TYPE_I32 && ggml_is_contiguous(pages) && pages->ne[2] == 1 && pages->ne[3] == 1);
+    GGML_ASSERT(table >= 0 && table < pages->ne[1]);
+    GGML_ASSERT(page_size > 0);
+    GGML_ASSERT((ring_k == NULL) == (ring_v == NULL));
+
+    const struct ggml_tensor * k    = a->src[1];
+    const struct ggml_tensor * v    = a->src[2];
+    const struct ggml_tensor * mask = a->src[3];
+
+    GGML_ASSERT(k->ne[3] == 1 && v->ne[3] == 1);
+    GGML_ASSERT(k->ne[1] % page_size == 0 && v->ne[1] == k->ne[1]);
+    if (mask) {
+        GGML_ASSERT(mask->ne[0] <= pages->ne[0]*page_size);
+    }
+    if (ring_k) {
+        GGML_ASSERT(ring_k->type == k->type && ring_k->ne[0] == k->ne[0] && ring_k->ne[2] == k->ne[2]);
+        GGML_ASSERT(ring_v->type == v->type && ring_v->ne[0] == v->ne[0] && ring_v->ne[2] == v->ne[2]);
+        GGML_ASSERT(ring_k->ne[1] % page_size == 0 && ring_v->ne[1] == ring_k->ne[1]);
+    }
+
+    ggml_set_op_params_i32(a, GGML_FA_PARAM_PAGE_SIZE, page_size);
+    ggml_set_op_params_i32(a, GGML_FA_PARAM_PAGES_ROW, table);
+
+    a->src[GGML_FA_SRC_PAGES]  = pages;
+    a->src[GGML_FA_SRC_RING_K] = ring_k;
+    a->src[GGML_FA_SRC_RING_V] = ring_v;
+}
+
+void ggml_flash_attn_ext_set_page_runs(
+        struct ggml_tensor             * a,
+        const struct ggml_fa_page_runs * runs) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT && a->src[GGML_FA_SRC_PAGES]);
+    memcpy(a->op_params + GGML_FA_PARAM_RUNS, &runs, sizeof(runs));
+}
+
+void ggml_flash_attn_ext_set_sync(
+        struct ggml_tensor * a,
+        struct ggml_tensor * tag,
+        const uint32_t     * ready,
+        uint32_t           * consumed) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(tag->type == GGML_TYPE_I32 && ggml_nelements(tag) == 1);
+    GGML_ASSERT(ready && consumed);
+
+    memcpy(a->op_params + GGML_FA_PARAM_READY,    &ready,    sizeof(ready));
+    memcpy(a->op_params + GGML_FA_PARAM_CONSUMED, &consumed, sizeof(consumed));
+
+    a->src[GGML_FA_SRC_TAG] = tag;
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(
@@ -6476,6 +6534,60 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[3] = g;
     result->src[4] = beta;
     result->src[5] = state;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_gated_delta_net_rec(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * rec,
+        struct ggml_tensor  * n_commit,
+        bool                  record) {
+    GGML_ASSERT(ggml_is_contiguous_rows(q) && ggml_is_contiguous_rows(k) && ggml_is_contiguous_rows(v));
+    GGML_ASSERT(ggml_is_contiguous(g) && ggml_is_contiguous(beta) && ggml_is_contiguous(state));
+    GGML_ASSERT(q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F32 && v->type == GGML_TYPE_F32);
+    GGML_ASSERT(g->type == GGML_TYPE_F32 && beta->type == GGML_TYPE_F32 && state->type == GGML_TYPE_F32);
+
+    const int64_t S_v      = v->ne[0];
+    const int64_t H        = v->ne[1];
+    const int64_t n_tokens = v->ne[2];
+    const int64_t n_seqs   = v->ne[3];
+    const int64_t H_k      = k->ne[1];
+    // floats per recorded update: delta, two halves of k and of exp(g)
+    const int64_t per_rec  = S_v*H + 2*S_v*H_k + 2*H;
+    const int64_t R        = rec->ne[0] / per_rec;
+
+    GGML_ASSERT(g->ne[0] == 1 && beta->ne[0] == 1);
+    GGML_ASSERT(k->ne[0] == S_v && H % H_k == 0);
+    GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H && state->ne[3] == n_seqs);
+    GGML_ASSERT(rec->type == GGML_TYPE_F32 && n_commit->type == GGML_TYPE_I32);
+    GGML_ASSERT(rec->ne[0] == R*per_rec && R >= 1 && rec->ne[1] == n_seqs && rec->ne[2] == 1 && rec->ne[3] == 1);
+    GGML_ASSERT(rec->nb[0] == sizeof(float));
+    GGML_ASSERT(n_commit->ne[0] == 2 && n_commit->ne[1] == n_seqs && ggml_is_contiguous(n_commit));
+    GGML_ASSERT(!record || n_tokens <= R);
+
+    const int64_t ne[4] = { S_v*H, n_tokens*n_seqs + S_v*n_seqs, 1, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    ggml_set_op_params_i32(result, 0, 1);
+    ggml_set_op_params_i32(result, 1, record ? 1 : 0);
+    ggml_set_op_params_i32(result, 2, (int32_t) R);
+
+    result->op     = GGML_OP_GATED_DELTA_NET;
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = g;
+    result->src[4] = beta;
+    result->src[5] = state;
+    result->src[6] = rec;
+    result->src[7] = n_commit;
 
     return result;
 }

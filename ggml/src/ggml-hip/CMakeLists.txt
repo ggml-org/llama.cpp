@@ -46,6 +46,7 @@ endif()
 find_package(hip     REQUIRED)
 find_package(hipblas REQUIRED)
 find_package(rocblas REQUIRED)
+find_package(hsa-runtime64 REQUIRED) # copy engine (copy-engine.cu)
 
 if (GGML_HIP_RCCL)
     find_package(rccl REQUIRED)
@@ -141,4 +142,4 @@ if (GGML_HIP_RCCL)
     target_link_libraries(ggml-hip PRIVATE ggml-base roc::rccl)
 endif()
 
-target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas hsa-runtime64::hsa-runtime64)

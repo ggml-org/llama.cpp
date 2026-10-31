@@ -3,6 +3,7 @@
 #include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
+#include "llama-kv-stream.h"
 #include "llama-memory.h"
 
 #include <unordered_map>
@@ -114,7 +115,10 @@ public:
         const  layer_reuse_cb & reuse,
         const  layer_share_cb & share,
         // a model can hold more than one cache, so the tensor names have to stay unique
-                 const char *   name_tag = "");
+                 const char *   name_tag = "",
+        // KV streaming (llama-kv-stream.h): device bytes for resident pages, 0 = disabled
+                     size_t   stream_resident_size = 0,
+                     size_t   stream_resident_size_decode = 0);
 
     ~llama_kv_cache() = default;
 
@@ -145,6 +149,13 @@ public:
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+
+    llama_kv_stream * get_kv_stream() override { return stream.get(); }
+    bool resize_kv_stream(size_t resident_size, bool decode, uint32_t n_tokens) override;
+    bool kv_stream_needs_resize(uint32_t n_tokens) const override;
+
+    // KV streaming: the pages attended once a batch of n_tokens is placed (at most)
+    uint32_t kv_stream_pages_next(uint32_t n_tokens) const;
 
     // state write/load
 
@@ -192,9 +203,20 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
+    // The KQ mask columns for a ubatch: when every cell before the last ones is visible to all of its tokens (one
+    // sequence in the cache, its cells dense, the ubatch at its top positions), the mask covers only the last columns
+    // (see ggml_flash_attn_ext); otherwise n_kv. sinfo == nullptr: graph reservation (the compact width when allowed).
+    uint32_t get_n_kv_mask(uint32_t n_kv, const slot_info * sinfo, const llama_ubatch & ubatch, bool causal_attn,
+            bool flash_attn) const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+
+    // KV streaming: what layer il attends (see llama_kv_stream)
+    // ubatches the paged decode kernel takes read the pool through a page table, larger ones a gather of the pages
+    llama_kv_stream_attn get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_kv, uint32_t n_tokens,
+            const slot_info & sinfo) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
@@ -218,6 +240,9 @@ public:
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
+    // KV streaming: place the pages of an applied ubatch that is about to be computed
+    void prepare_stream(const slot_info & sinfo);
+
     //
     // input API
     //
@@ -228,12 +253,20 @@ public:
     std::vector<ggml_tensor *> get_k_rot() const;
     std::vector<ggml_tensor *> get_v_rot() const;
 
+    // KV streaming: page tables of all layers, I32 [n_kv/page_size, n_layer], and the step tag, I32 [1]
+    // nullptr without streaming
+    ggml_tensor * build_input_kv_pages(ggml_context * ctx, uint32_t n_kv) const;
+    ggml_tensor * build_input_kv_tag  (ggml_context * ctx) const;
+    void          set_input_kv_pages(ggml_tensor * dst) const;
+    void          set_input_kv_tag  (ggml_tensor * dst) const;
+
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
 
     void set_input_k_shift(ggml_tensor * dst) const;
 
-    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    // n_kv: the attended cells, when dst holds only the last columns of the mask (get_n_kv_mask)
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, int64_t n_kv = -1) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
@@ -300,6 +333,9 @@ private:
     // ggml contexts for the KV cache along with the allocated backend buffers:
     llama_memory_bufs ctxs_bufs;
 
+    // their buffer types: with KV streaming the buffers are null after a pool that could not be allocated
+    std::vector<ggml_backend_buffer_type_t> ctxs_bufts;
+
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
     std::vector<uint32_t> v_heads;
@@ -321,6 +357,12 @@ private:
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+    // KV streaming, null if disabled
+    std::unique_ptr<llama_kv_stream> stream;
+
+    // the cache's devices take KQ masks of the last columns (get_n_kv_mask); LLAMA_KQ_MASK_COMPACT=0 turns them off
+    bool kq_mask_compact = false;
 
     size_t total_size() const;
 
@@ -402,12 +444,19 @@ public:
 
     uint32_t get_n_kv() const;
 
+    // the KQ mask columns for the ubatch (llama_kv_cache::get_n_kv_mask)
+    uint32_t get_n_kv_mask(const llama_ubatch & ubatch, bool causal_attn, bool flash_attn) const;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+
+    // KV streaming (see llama_kv_cache::get_kv_stream_attn)
+    const llama_kv_stream * get_kv_stream() const;
+    llama_kv_stream_attn get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_tokens) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
@@ -426,6 +475,11 @@ public:
 
     std::vector<ggml_tensor *> get_k_rot() const;
     std::vector<ggml_tensor *> get_v_rot() const;
+
+    ggml_tensor * build_input_kv_pages(ggml_context * ctx) const;
+    ggml_tensor * build_input_kv_tag  (ggml_context * ctx) const;
+    void          set_input_kv_pages(ggml_tensor * dst) const;
+    void          set_input_kv_tag  (ggml_tensor * dst) const;
 
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -469,4 +523,7 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+    // a full-cache context (graph reservation)
+    bool full = false;
 };

@@ -16,3 +16,9 @@ void ggml_cuda_op_mul_mat_vec_q(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, cudaStream_t stream);
+
+// gate = softplus(w_alpha*x + dt) * a and beta = sigmoid(w_beta*x) for a gated delta net, Q8_0 weights, 2 to
+// MMVQ_MAX_BATCH_SIZE columns of x; bit-identical to the matmuls run as mmvq and the unfused element-wise ops
+void ggml_cuda_op_gdn_gate_beta(
+    ggml_backend_cuda_context & ctx, const ggml_tensor * w_alpha, const ggml_tensor * w_beta, const ggml_tensor * x,
+    const ggml_tensor * dt, const ggml_tensor * a, ggml_tensor * gate, ggml_tensor * beta);
