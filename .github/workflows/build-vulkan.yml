@@ -53,9 +53,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
-          echo "CC=gcc-14" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
+          sudo apt-get install -y build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -69,7 +67,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
-          key: vulkan-ubuntu-24.04-arm
+          key: vulkan-ubuntu-26.04-arm
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -92,7 +90,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: vulkan-ubuntu-24.04-arm
+          key: vulkan-ubuntu-26.04-arm
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache
@@ -137,7 +135,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
-          key: vulkan-ubuntu-24.04-llvmpipe
+          key: vulkan-ubuntu-26.04-llvmpipe
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -156,7 +154,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: vulkan-ubuntu-24.04-llvmpipe
+          key: vulkan-ubuntu-26.04-llvmpipe
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache

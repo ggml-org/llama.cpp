@@ -400,7 +400,7 @@ jobs:
   merge_arch_tags:
     name: Create shared tags from digests
     needs: [prepare_matrices, push_to_registry, create_tag]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write

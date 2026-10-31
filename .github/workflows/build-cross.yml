@@ -276,7 +276,7 @@ jobs:
 
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-24-riscv64-cpu-spacemit-ime-cross:
+  ubuntu-26-riscv64-cpu-spacemit-ime-cross:
     runs-on: ubuntu-26.04
 
     env:

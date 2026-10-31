@@ -103,7 +103,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
-          key: sycl-ubuntu-24-${{ matrix.build }}
+          key: sycl-ubuntu-26-${{ matrix.build }}
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -131,7 +131,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: sycl-ubuntu-24-${{ matrix.build }}
+          key: sycl-ubuntu-26-${{ matrix.build }}
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache

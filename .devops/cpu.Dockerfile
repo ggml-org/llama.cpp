@@ -1,4 +1,4 @@
-ARG UBUNTU_VERSION=24.04
+ARG UBUNTU_VERSION=26.04
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
@@ -22,9 +22,7 @@ FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 ARG TARGETARCH
 
 RUN apt-get update && \
-    apt-get install -y gcc-14 g++-14 build-essential git cmake libssl-dev
-
-ENV CC=gcc-14 CXX=g++-14
+    apt-get install -y build-essential git cmake libssl-dev
 
 WORKDIR /app
 
@@ -85,14 +83,20 @@ COPY --from=build /app/full /app
 
 WORKDIR /app
 
+ENV PATH="/root/.venv/bin:/root/.local/bin:${PATH}"
+
+# Flag for compatibility with pip
+ARG UV_INDEX_STRATEGY="unsafe-best-match"
 RUN apt-get update \
     && apt-get install -y \
+    build-essential \
+    curl \
     git \
-    python3 \
-    python3-pip \
-    python3-wheel \
-    && pip install --break-system-packages --upgrade setuptools \
-    && pip install --break-system-packages -r requirements.txt \
+    ca-certificates \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && uv python install 3.13 \
+    && uv venv --python 3.13 /root/.venv \
+    && uv pip install --python /root/.venv/bin/python -r requirements.txt \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \

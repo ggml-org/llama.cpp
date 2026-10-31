@@ -31,7 +31,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ubuntu-24-virtgpu:
+  ubuntu-26-virtgpu:
     runs-on: ${{ 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
 
     steps:

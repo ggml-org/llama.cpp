@@ -51,7 +51,7 @@ jobs:
   ui-checks:
     name: Checks
     needs: ui-build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -110,7 +110,7 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: ui-build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
