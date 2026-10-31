@@ -2950,6 +2950,33 @@ struct llama_model_qwen35moe : public llama_model_base {
 };
 
 
+struct llama_model_clover_moe : public llama_model_base {
+    llama_model_clover_moe(const llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llama_model & model, const llm_graph_params & params);
+    private:
+        ggml_tensor * build_layer_attn(llm_graph_input_attn_kv * inp_attn, ggml_tensor * cur, ggml_tensor * inp_pos, int il);
+        ggml_tensor * build_layer_attn_linear(llm_graph_input_rs * inp, ggml_tensor * cur, int il);
+        ggml_tensor * build_layer_ffn(ggml_tensor * cur, int il);
+        ggml_tensor * build_norm_gated(ggml_tensor * input, ggml_tensor * weights, ggml_tensor * gate);
+        std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(ggml_tensor * input, int il);
+
+        ggml_tensor * build_clover(llm_graph_input_rs * inp, ggml_tensor * qkv, ggml_tensor * gate, int il);
+        ggml_tensor * build_clover_coreset(ggml_tensor * logits);
+        ggml_tensor * build_clover_l2_norm(ggml_tensor * cur, bool round);
+        ggml_tensor * build_clover_top_k(ggml_tensor * logits, int64_t k);
+
+        ggml_tensor * build_bf16_round(ggml_tensor * cur) const;
+
+        const llama_model & model;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_mistral3 : public llama_model_base {
     llama_model_mistral3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

@@ -436,6 +436,12 @@ struct llama_layer {
     // qwen3.5
     struct ggml_tensor * ssm_alpha = nullptr;
 
+    // clover
+    struct ggml_tensor * ssm_conv1d_right   = nullptr;
+    struct ggml_tensor * ssm_bd_logit_scale = nullptr;
+    struct ggml_tensor * ssm_bd_history_b   = nullptr;
+    struct ggml_tensor * ssm_bd_history     = nullptr;
+
     // rwkv
     struct ggml_tensor * time_mix_w1         = nullptr;
     struct ggml_tensor * time_mix_w2         = nullptr;

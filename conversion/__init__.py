@@ -47,6 +47,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ChatGLMModel": "chatglm",
     "ClefModel": "clef",
     "CodeShellForCausalLM": "codeshell",
+    "CloverMoeModelLM": "clover",
     "CogVLMForCausalLM": "cogvlm",
     "Cohere2MoeForCausalLM": "command_r",
     "Cohere2ForCausalLM": "command_r",

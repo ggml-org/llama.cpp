@@ -78,6 +78,8 @@ struct llama_hparams {
     // per-token adapter selection. -1 when the model has no such layer.
     int32_t  router_layer = -1;
     uint32_t n_expert = 0;
+    bool     clover_coreset       = false;
+    float    clover_coreset_top_p = 0.9f;
     uint32_t n_rel_attn_bkts = 0;
     uint32_t n_value_expert      = 0; // MoVA value experts (K2 Horizon)
     uint32_t n_value_expert_used = 0;

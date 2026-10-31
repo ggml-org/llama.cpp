@@ -4132,6 +4132,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE"));
 
     add_opt(common_arg(
+        {"--spec-accept-ratio"}, "P",
+        "enable entropy-threshold speculative acceptance with probability cap P (0..1, greedy sampling only)",
+        [](common_params & params, const std::string & value) {
+            const float p = std::stof(value);
+            if (!std::isfinite(p) || p < 0.0f || p > 1.0f) {
+                throw std::invalid_argument("acceptance ratio must be in [0, 1]");
+            }
+            params.sampling.spec_accept_ratio = p;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
+    add_opt(common_arg(
+        {"--spec-accept-delta"}, "P",
+        "entropy-threshold speculative acceptance multiplier (0..1, default: 0.6)",
+        [](common_params & params, const std::string & value) {
+            const float p = std::stof(value);
+            if (!std::isfinite(p) || p < 0.0f || p > 1.0f) {
+                throw std::invalid_argument("acceptance delta must be in [0, 1]");
+            }
+            params.sampling.spec_accept_delta = p;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
+
+    add_opt(common_arg(
         {"--spec-draft-n-max"}, "N",
         string_format("number of tokens to draft for speculative decoding (default: %d)", params.speculative.draft.n_max),
         [](common_params & params, int value) {

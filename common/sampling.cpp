@@ -191,6 +191,23 @@ std::string common_params_sampling::print() const {
 struct common_sampler * common_sampler_init(
         const struct llama_model * model,
         struct common_params_sampling & params) {
+    if (!std::isfinite(params.spec_accept_ratio)) {
+        throw std::invalid_argument("acceptance ratio must be finite");
+    }
+    if (params.spec_accept_ratio >= 0.0f) {
+        if (params.spec_accept_ratio > 1.0f ||
+                !std::isfinite(params.spec_accept_delta) || params.spec_accept_delta < 0.0f || params.spec_accept_delta > 1.0f) {
+            throw std::invalid_argument("entropy acceptance parameters must be in [0, 1]");
+        }
+        if (params.temp != 0.0f || !params.grammar.empty() || params.backend_sampling ||
+                params.reasoning_budget_tokens >= 0 || params.reasoning_control ||
+                !params.logit_bias.empty() || params.ignore_eos || params.dynatemp_range != 0.0f ||
+                params.xtc_probability != 0.0f || params.typ_p != 1.0f || params.mirostat != 0 ||
+                params.adaptive_target >= 0.0f || params.penalty_repeat != 1.0f ||
+                params.penalty_freq != 0.0f || params.penalty_present != 0.0f || params.dry_multiplier != 0.0f) {
+            throw std::invalid_argument("entropy acceptance requires unconstrained greedy host sampling");
+        }
+    }
     if (!std::isfinite(params.penalty_repeat) ||
         params.penalty_repeat <= 0.0f ||
         !std::isfinite(1.0f/params.penalty_repeat)) {
@@ -687,6 +704,23 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     return id;
 }
 
+// Use raw target probabilities, before temperature, truncation or penalties.
+static bool common_sampler_accept_entropy(const float * logits, int n_vocab, llama_token token, float ratio, float delta) {
+    GGML_ASSERT(logits && token >= 0 && token < n_vocab);
+    const float maximum = *std::max_element(logits, logits + n_vocab);
+    float sum = 0.0f;
+    for (int i = 0; i < n_vocab; ++i) {
+        sum += std::exp(logits[i] - maximum);
+    }
+    float entropy = 0.0f;
+    for (int i = 0; i < n_vocab; ++i) {
+        const float p = std::exp(logits[i] - maximum) / sum;
+        entropy -= p * std::log(std::max(p, 1e-12f));
+    }
+    const float p = std::exp(logits[token] - maximum) / sum;
+    return p >= std::min(ratio, delta * std::exp(-entropy));
+}
+
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
     GGML_ASSERT(idxs.size() == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
 
@@ -697,7 +731,10 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
     size_t i = 0;
     for (; i < draft.size(); i++) {
-        const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
+        const bool accept = gsmpl->params.spec_accept_ratio >= 0.0f &&
+                common_sampler_accept_entropy(llama_get_logits_ith(ctx, idxs[i]), llama_vocab_n_tokens(vocab),
+                        draft[i], gsmpl->params.spec_accept_ratio, gsmpl->params.spec_accept_delta);
+        const llama_token id = accept ? draft[i] : common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
 
         common_sampler_accept(gsmpl, id, true);
 
@@ -736,6 +773,9 @@ static float prob_of(const llama_token_data * data, size_t n, llama_token id) {
 std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first) {
     GGML_ASSERT(idxs.size()    == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
     GGML_ASSERT(draft_q.size() == draft.size() && "draft_q must have one entry per draft token");
+    if (gsmpl->params.spec_accept_ratio >= 0.0f) {
+        return common_sampler_sample_and_accept_n(gsmpl, ctx, idxs, draft, grammar_first);
+    }
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());

@@ -69,7 +69,8 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
 // generalized version of common_sampler_sample
 //
-// will cross-reference the sampled tokens with a batch of draft tokens and accept those that match
+// With spec_accept_ratio >= 0, accept a contiguous draft prefix using raw-logit entropy thresholds.
+// Otherwise, cross-reference sampled tokens with the draft and accept those that match.
 // if the sampler disagrees at some point, we stop and return the accepted tokens up to now
 //
 //      common_sampler_sample_n(gsmpl, ctx, { idx }, {});
