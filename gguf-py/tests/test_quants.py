@@ -144,6 +144,24 @@ def compare_tensors(t1: np.ndarray, t2: np.ndarray, qtype: GGMLQuantizationType)
         return False
 
 
+def test_mxfp4_round_to_even():
+    inputs = np.array([
+         0.25,  0.75,  1.25,  1.75,  2.5,  3.5,
+        -0.25, -0.75, -1.25, -1.75, -2.5, -3.5,
+    ], dtype=np.float32)
+    expected = np.array([
+         0.0,  1.0,  1.0,  2.0,  2.0,  4.0,
+         0.0, -1.0, -1.0, -2.0, -2.0, -4.0,
+    ], dtype=np.float32)
+    data = np.zeros(32, dtype=np.float32)
+    data[:inputs.size] = inputs
+    data[-1] = 6.0
+
+    quantized = gguf.quantize(data, GGMLQuantizationType.MXFP4)
+    actual = gguf.dequantize(quantized, GGMLQuantizationType.MXFP4)
+    np.testing.assert_array_equal(actual[:inputs.size], expected)
+
+
 def do_test(libggml_path: Path, quick: bool = False, user_type: GGMLQuantizationType | None = None):
     ggml_quants = GGMLQuants(libggml_path)
 
@@ -260,4 +278,5 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG)
 
+    test_mxfp4_round_to_even()
     do_test(args.libggml, args.quick, GGMLQuantizationType[args.type.upper()] if args.type is not None else None)
