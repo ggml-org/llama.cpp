@@ -5,6 +5,31 @@
 #include <algorithm>
 #include <numeric>
 
+class llm_graph_input_clover_selection : public llm_graph_input_i {
+public:
+    explicit llm_graph_input_clover_selection(ggml_cgraph * gf) {
+        for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+            auto * node = ggml_graph_node(gf, i);
+            if (!(node->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+                inactive.push_back(node);
+                node->flags |= GGML_TENSOR_FLAG_COMPUTE;
+            }
+        }
+    }
+
+    void set_input(const llama_ubatch *) override {
+        for (auto * node : inactive) {
+            node->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+        }
+    }
+
+    // Shared graph parameters already check the causal mode and output shape.
+    bool can_reuse(const llm_graph_params &) override { return true; }
+
+private:
+    std::vector<ggml_tensor *> inactive;
+};
+
 void llama_model_clover_moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
@@ -144,9 +169,10 @@ ggml_tensor * llama_model_clover_moe::graph::build_clover(
                ggml_tensor * qkv,
                ggml_tensor * gate,
                        int   il) {
-    const int64_t nseq     = ubatch.n_seqs;
+    // One sequence gives the largest inactive block score matrix for the same token count.
+    const int64_t nseq     = cparams.causal_attn ? 1 : ubatch.n_seqs;
     const auto &  layer    = model.layers[il];
-    const int64_t width    = ubatch.n_seq_tokens;
+    const int64_t width    = n_tokens / nseq;
     const int64_t nk       = hparams.ssm_n_group;
     const int64_t nv       = hparams.ssm_dt_rank;
     const int64_t dk       = hparams.ssm_d_state;
@@ -192,7 +218,7 @@ ggml_tensor * llama_model_clover_moe::graph::build_clover(
     local_weights = build_bf16_round(ggml_cont(ctx0, local_weights));
     auto * local          = ggml_mul_mat(ctx0, ggml_cast(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v)), GGML_TYPE_BF16), local_weights);
     auto * history_weight = ggml_view_4d(ctx0, probs, 1, width, nv, nseq, probs->nb[1], probs->nb[2], probs->nb[3], width * probs->nb[0]);
-    auto * decay          = ggml_cont(ctx0, ggml_permute(ctx0, gate, 0, 2, 1, 3));
+    auto * decay          = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_4d(ctx0, gate, 1, nv, width, nseq), 0, 2, 1, 3));
     decay = ggml_scale(ctx0, ggml_exp(ctx0, decay), 1.0f / std::sqrt(float(dk)));
     remembered = ggml_mul(ctx0, remembered, ggml_mul(ctx0, decay, history_weight));
     auto * output = build_bf16_round(ggml_add(ctx0, remembered, local));
@@ -209,6 +235,10 @@ ggml_tensor * llama_model_clover_moe::graph::build_clover_coreset(ggml_tensor * 
     auto * shaped   = ggml_reshape_3d(ctx0, probs, 1, n_expert, width);
     auto * mass     = ggml_get_rows(ctx0, shaped, ids);
     auto * zero     = ggml_fill(ctx0, shaped, 0.0f);
+    // Empty rows still need nonzero index batch dimensions in set_rows.
+    zero = ggml_reshape_3d(ctx0, zero, width ? 1 : 0, n_expert, width ? width : 1);
+    mass = ggml_reshape_3d(ctx0, mass, width ? 1 : 0, width ? n_expert_used : 0, width ? width : 1);
+    ids  = ggml_view_2d(ctx0, ids, width ? n_expert_used : 0, width ? width : 1, ids->nb[1], 0);
     auto * selected = ggml_set_rows(ctx0, zero, mass, ids);
     selected = ggml_reshape_2d(ctx0, selected, n_expert, width);
     auto * totals = ggml_sum_rows(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, selected)));
@@ -223,7 +253,7 @@ ggml_tensor * llama_model_clover_moe::graph::build_clover_coreset(ggml_tensor * 
             ggml_reshape_2d(ctx0, keep, 1, n_expert), order);
     allowed = ggml_reshape_2d(ctx0, allowed, n_expert, 1);
     auto * mask = ggml_scale_bias(ctx0, allowed, 1e30f, -1e30f);
-    return ggml_add(ctx0, logits, mask);
+    return ggml_add_inplace(ctx0, logits, mask);
 }
 
 std::unique_ptr<llm_graph_context> llama_model_clover_moe::build_arch_graph(const llm_graph_params & params) const {
@@ -316,6 +346,10 @@ llama_model_clover_moe::graph::graph(const llama_model & model, const llm_graph_
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
+
+    // Plan both branches with the same fusion order, then select computation when inputs are set.
+    ggml_build_forward_expand(gf, cur);
+    res->add_input(std::make_unique<llm_graph_input_clover_selection>(gf));
 }
 
 std::pair<ggml_tensor *, ggml_tensor *> llama_model_clover_moe::graph::build_qkvz(
@@ -338,7 +372,6 @@ ggml_tensor * llama_model_clover_moe::graph::build_norm_gated(
         ggml_tensor * input,
         ggml_tensor * weights,
         ggml_tensor * gate) {
-    input = build_bf16_round(input);
     auto * normalized = ggml_mul(ctx0, ggml_rms_norm(ctx0, input, hparams.f_norm_rms_eps), weights);
     return build_bf16_round(ggml_mul(ctx0, normalized, ggml_silu(ctx0, gate)));
 }
@@ -449,10 +482,9 @@ ggml_tensor * llama_model_clover_moe::graph::build_layer_attn_linear(
     beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
     cb(beta, "beta", il);
 
+    ggml_build_forward_order(gf, qkv_mixed);
+    const int causal_begin = ggml_graph_n_nodes(gf);
     beta = ggml_sigmoid(ctx0, beta);
-    if (n_tokens != n_outputs) {
-        beta = build_bf16_round(beta);
-    }
     cb(beta, "beta_sigmoid", il);
 
     alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
@@ -475,71 +507,101 @@ ggml_tensor * llama_model_clover_moe::graph::build_layer_attn_linear(
     const int64_t conv_kernel_size = conv_kernel->ne[0];
     const int64_t conv_channels    = d_inner + 2 * hparams.ssm_n_group * hparams.ssm_d_state;
 
-    ggml_tensor * output;
-    if (!cparams.causal_attn) {
-        output = build_clover(inp, qkv_mixed, gate, il);
-    } else {
-        ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
+    ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
 
-        ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
-        state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
-        cb(state, "state_predelta", il);
+    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
+    state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+    cb(state, "state_predelta", il);
 
-        ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
-        cb(conv_output_proper, "conv_output_raw", il);
+    ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
+    cb(conv_output_proper, "conv_output_raw", il);
 
-        ggml_tensor * conv_output_silu = build_bf16_round(ggml_silu(ctx0, conv_output_proper));
-        cb(conv_output_silu, "conv_output_silu", il);
+    ggml_tensor * conv_output_silu = build_bf16_round(ggml_silu(ctx0, conv_output_proper));
+    cb(conv_output_silu, "conv_output_silu", il);
 
-        ggml_tensor * conv_qkv_mix = conv_output_silu;
+    ggml_tensor * conv_qkv_mix = conv_output_silu;
 
-        // Calculate the total conv dimension
-        int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
-        int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, qkv_dim);
+    // Calculate the total conv dimension
+    int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
+    int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, qkv_dim);
 
-        // Extract the convolved Q, K, V from conv_output
-        ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-                ggml_row_size(conv_qkv_mix->type, head_k_dim),
-                nb1_qkv,
-                nb1_qkv * n_seq_tokens,
-                0);
+    // Extract the convolved Q, K, V from conv_output
+    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_k_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            0);
 
-        ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-                ggml_row_size(conv_qkv_mix->type, head_k_dim),
-                nb1_qkv,
-                nb1_qkv * n_seq_tokens,
-                head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
+    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_k_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
 
-        ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
-                ggml_row_size(conv_qkv_mix->type, head_v_dim),
-                nb1_qkv,
-                nb1_qkv * n_seq_tokens,
-                ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
+    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_v_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
 
-        cb(q_conv, "q_conv", il);
-        cb(k_conv, "k_conv", il);
-        cb(v_conv, "v_conv", il);
+    cb(q_conv, "q_conv", il);
+    cb(k_conv, "k_conv", il);
+    cb(v_conv, "v_conv", il);
 
-        const bool prefill = n_tokens != n_outputs;
-        q_conv = build_clover_l2_norm(q_conv, prefill);
-        k_conv = build_clover_l2_norm(k_conv, prefill);
+    const bool prefill = n_tokens != n_outputs;
+    q_conv = build_clover_l2_norm(q_conv, false);
+    k_conv = build_clover_l2_norm(k_conv, false);
 
-
-        // if head keys and value keys are different, repeat to force tensors into matching shapes
-        // note: need explicit repeat only if we are not using the fused GDN.
-        if (num_k_heads != num_v_heads && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch ||
-                (n_tokens != n_outputs))) {
-            GGML_ASSERT(num_v_heads % num_k_heads == 0);
-            q_conv = ggml_repeat_4d(ctx0, q_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-            k_conv = ggml_repeat_4d(ctx0, k_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-        }
-
-        cb(q_conv, "q_conv_predelta", il);
-        cb(k_conv, "k_conv_predelta", il);
-        cb(v_conv, "v_conv_predelta", il);
-
-        output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il);
+    const bool repeat_heads = num_k_heads != num_v_heads;
+    const bool fused_gdn = cparams.fused_gdn_ar && cparams.fused_gdn_ch;
+    if (repeat_heads) {
+        GGML_ASSERT(num_v_heads % num_k_heads == 0);
     }
+
+    auto build_gdn = [&](bool is_prefill) {
+        auto * q = q_conv;
+        auto * k = k_conv;
+        if (is_prefill) {
+            q = build_bf16_round(q);
+            k = build_bf16_round(k);
+        }
+        if (repeat_heads && (is_prefill || !fused_gdn)) {
+            q = ggml_repeat_4d(ctx0, q, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
+            k = ggml_repeat_4d(ctx0, k, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
+        }
+        return build_recurrent_attn(inp, ssm_states_all, q, k, v_conv, gate, is_prefill ? build_bf16_round(beta) : beta, state, il);
+    };
+
+    // Keep decode and prefill allocations fixed, including host conversion copies.
+    for (auto * shared : { q_conv, k_conv, v_conv, gate, beta }) {
+        ggml_build_forward_order(gf, shared);
+    }
+    const int decode_begin = ggml_graph_n_nodes(gf);
+    auto * decode = build_gdn(false);
+    const int prefill_begin = ggml_graph_n_nodes(gf);
+    auto * prompt = build_gdn(true);
+    const int gdn_begin = prefill ? decode_begin : prefill_begin;
+    const int gdn_end = prefill ? prefill_begin : ggml_graph_n_nodes(gf);
+    for (int i = gdn_begin; i < gdn_end; ++i) {
+        ggml_graph_node(gf, i)->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+    }
+
+    const int block_begin = ggml_graph_n_nodes(gf);
+    ggml_tensor * branches[] = { decode, prompt, build_clover(inp, qkv_mixed, gate, il) };
+    // The state helpers mark their own nodes for compute; leave the inactive branch for allocation only.
+    const int inactive_begin = cparams.causal_attn ? block_begin : causal_begin;
+    const int inactive_end   = cparams.causal_attn ? ggml_graph_n_nodes(gf) : block_begin;
+    for (int i = inactive_begin; i < inactive_end; ++i) {
+        ggml_graph_node(gf, i)->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+    }
+    ggml_build_forward_expand(gf, gate);
+    // All three paths reuse the BF16 rounding before gated normalization.
+    auto * rounded = ggml_new_tensor_4d(ctx0, GGML_TYPE_BF16, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
+    for (auto * & branch : branches) {
+        branch = ggml_cpy(ctx0, branch, rounded);
+    }
+    auto * output = ggml_build_forward_select(gf, branches, 3, cparams.causal_attn ? (prefill ? 1 : 0) : 2);
+    output = ggml_cast(ctx0, output, GGML_TYPE_F32);
 
     // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
     ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
@@ -568,9 +630,11 @@ ggml_tensor * llama_model_clover_moe::graph::build_layer_ffn(ggml_tensor * cur, 
     ggml_tensor * selected_experts = nullptr;
     router_logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
     cb(router_logits, "ffn_moe_logits", il);
-    if (!cparams.causal_attn && hparams.clover_coreset) {
+    if (hparams.clover_coreset) {
         cb(router_logits, "clover_router_raw", il);
-        router_logits = build_clover_coreset(router_logits);
+        auto * raw = ggml_view_2d(ctx0, router_logits, router_logits->ne[0], router_logits->ne[1], router_logits->nb[1], 0);
+        ggml_tensor * branches[] = { raw, build_clover_coreset(router_logits) };
+        router_logits = ggml_build_forward_select(gf, branches, 2, cparams.causal_attn || router_logits->ne[1] == 0 ? 0 : 1);
         cb(router_logits, "clover_router_masked", il);
     }
     selected_experts = build_clover_top_k(router_logits, n_expert_used);
