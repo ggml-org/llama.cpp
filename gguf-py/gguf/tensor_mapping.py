@@ -3002,6 +3002,9 @@ class TensorNameMap:
             "perception.encoder.diar_norm", # nemotron-transcribe
         ),
 
+        # generated in conversion code (nemotron-transcribe)
+        MODEL_TENSOR.A_FUSION_SPK_KERNEL: (),
+
         MODEL_TENSOR.A_MM_EMBEDDING: (
             "model.embed_audio.embedding", # gemma3n
         ),

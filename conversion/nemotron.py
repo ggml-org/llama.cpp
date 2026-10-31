@@ -976,9 +976,6 @@ class NemotronTranscribeAudioModel(MmprojModel):
         return name, gen
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == self.format_tensor_name(gguf.MODEL_TENSOR.A_FUSION_SPK_KERNEL, suffix=""):  # generate_extra_tensors
-            yield name, data_torch
-            return
         if name == "perception.preprocessor.featurizer.fb":
             data_torch = data_torch.squeeze(0)
         yield from super().modify_tensors(data_torch, name, bid)
