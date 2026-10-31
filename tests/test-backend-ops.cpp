@@ -9157,9 +9157,10 @@ struct test_lightning_indexer : public test_case {
     const int64_t nm; // ne[3] of mask
 
     const ggml_type type_K;
+    const int pad;
 
     std::string vars() override {
-        return VARS_TO_STR7(hsk, nh, kv, nb, ns, nm, type_K);
+        return VARS_TO_STR7(hsk, nh, kv, nb, ns, nm, type_K) + (pad ? ",pad=" + std::to_string(pad) : "");
     }
 
     double max_nmse_err() override {
@@ -9171,16 +9172,24 @@ struct test_lightning_indexer : public test_case {
         return ((2 * hsk + 2) * nh + 1) * kv * nb * ns;
     }
 
-    test_lightning_indexer(int64_t hsk = 128, int64_t nh = 64, int64_t kv = 256, int64_t nb = 128, int64_t ns = 1, int64_t nm = 1, ggml_type type_K = GGML_TYPE_F16)
-        : hsk(hsk), nh(nh), kv(kv), nb(nb), ns(ns), nm(nm), type_K(type_K) {}
+    test_lightning_indexer(int64_t hsk = 128, int64_t nh = 64, int64_t kv = 256, int64_t nb = 128, int64_t ns = 1, int64_t nm = 1, ggml_type type_K = GGML_TYPE_F16, int pad = 0)
+        : hsk(hsk), nh(nh), kv(kv), nb(nb), ns(ns), nm(nm), type_K(type_K), pad(pad) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hsk, nh, nb, ns);
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hsk + pad, nh, nb, ns);
         ggml_set_param(q);
+        if (pad) {
+            ggml_set_name(q, "q_base");
+            q = ggml_view_4d(ctx, q, hsk, nh, nb, ns, q->nb[1], q->nb[2], q->nb[3], pad * sizeof(float));
+        }
         ggml_set_name(q, "q");
 
-        ggml_tensor * k = ggml_new_tensor_4d(ctx, type_K, hsk, 1, kv, ns);
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, type_K, hsk + pad, 1, kv, ns);
         ggml_set_param(k);
+        if (pad) {
+            ggml_set_name(k, "k_base");
+            k = ggml_view_4d(ctx, k, hsk, 1, kv, ns, k->nb[1], k->nb[2], k->nb[3], pad * ggml_type_size(type_K));
+        }
         ggml_set_name(k, "k");
 
         ggml_tensor * w = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, nh, nb, 1, ns);
@@ -12610,6 +12619,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Token and key tails of the vector (batch < 8) and XMX indexer kernels; 129 tokens span two work-groups.
+    for (int kv : { 255, 4097 }) {
+        for (int bs : { 1, 7, 8, 33, 129 }) {
+            for (int ns : { 1, 2 }) {
+                test_cases.emplace_back(new test_lightning_indexer(128, 4, kv, bs, ns, ns, GGML_TYPE_F32));
+            }
+        }
+    }
+    for (ggml_type type_K : { GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_lightning_indexer(128, 4, 1000, 33, 2, 1, type_K));
+        test_cases.emplace_back(new test_lightning_indexer(128, 4, 4097, 33, 1, 1, type_K));
+    }
+
+    // Aligned strided views use the fast kernels; unaligned views use the fallback.
+    test_cases.emplace_back(new test_lightning_indexer(128, 4, 65, 1, 2, 1, GGML_TYPE_F32, 16));
+    for (ggml_type type_K : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_lightning_indexer(128, 4, 65, 33, 2, 1, type_K, 16));
+    }
+    test_cases.emplace_back(new test_lightning_indexer(128, 4, 65, 33, 2, 1, GGML_TYPE_F32, 1));
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -13137,6 +13166,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                         test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, ns, type_K));
                     }
                 }
+            }
+        }
+    }
+
+    for (int kv : { 512, 2048, 4096, 8192, 16384, 26112 }) {
+        for (int bs : { 1, 512, 1024 }) {
+            for (ggml_type type_K : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+                test_cases.emplace_back(new test_lightning_indexer(128, 4, kv, bs, 1, 1, type_K));
             }
         }
     }
