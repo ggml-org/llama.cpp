@@ -357,6 +357,10 @@ llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 
 llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK ggml)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
+add_executable(test-model-offload test-model-offload.cpp)
+target_compile_features(test-model-offload PRIVATE cxx_std_17)
+target_include_directories(test-model-offload PRIVATE ${PROJECT_SOURCE_DIR}/src)
+llama_test(test-model-offload LABEL behavior)
 llama_build_and_test(test-autorelease.cpp       LABEL "model behavior")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
 
