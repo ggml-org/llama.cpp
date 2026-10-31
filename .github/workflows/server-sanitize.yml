@@ -68,7 +68,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential cmake python3-full
+          sudo apt install -y software-properties-common
+          sudo add-apt-repository ppa:deadsnakes/ppa
+          sudo apt update
+          sudo apt install -y build-essential cmake python3.12 python3.12-venv
+          sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+          sudo update-alternatives --config python3
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
