@@ -7733,6 +7733,25 @@ struct test_mul_mat_pos : public test_mul_mat {
     }
 };
 
+// mul_mat with src1 beyond the F16 range (65504): catches a backend that stores src1 as F16
+struct test_mul_mat_big : public test_mul_mat {
+    using test_mul_mat::test_mul_mat;
+
+    std::string vars() override {
+        return test_mul_mat::vars() + ",src1=[-1e5,1e5]";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -1e5f, 1e5f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 enum mul_mat_add_mode {
     MUL_MAT_ADD_MM_RES,     // mm + res
     MUL_MAT_ADD_RES_MM,     // res + mm
@@ -11377,6 +11396,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 1, 256, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 1, 256, {3, 2}, {2, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 8, 256, {1, 1}, {1, 1}));
+    // BF16 src1 with k >= 64 and n > 8, the shape that selects mul_mm on Metal
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_BF16, 64, 17, 64, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_BF16, 64, 17, 64, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_big(GGML_TYPE_BF16, GGML_TYPE_BF16, 64, 17, 64, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_big(GGML_TYPE_F32,  GGML_TYPE_BF16, 64, 17, 64, {1, 1}, {1, 1}));
 
     // token-tile boundary coverage. With n_used == n_mats every token routes to every expert, so
     // each expert receives exactly n rows, with no dependence on the random draw. mul_mm_id is used
