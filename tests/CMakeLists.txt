@@ -188,6 +188,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-integration.cpp  LABEL behavior)
     llama_build_and_test(test-llama-grammar.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-batch-alloc.cpp  LABEL behavior  LINK llama)
+    llama_build_and_test(test-kv-cache.cpp LABEL behavior)
+    target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
     llama_build_and_test(test-chat.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
@@ -235,7 +237,9 @@ if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     set_tests_properties(test-generate-fp8-models PROPERTIES FIXTURES_SETUP fp8-models)
     llama_test(test-fp8 NAME test-fp8-requantize LABEL "main behavior backend"
         ARGS --models "${FP8_MODEL_DIR}")
-    set_tests_properties(test-fp8-requantize PROPERTIES FIXTURES_REQUIRED fp8-models)
+    llama_test(test-fp8 NAME test-fp8-kv LABEL "main behavior backend"
+        ARGS --models "${FP8_MODEL_DIR}" --kv)
+    set_tests_properties(test-fp8-requantize test-fp8-kv PROPERTIES FIXTURES_REQUIRED fp8-models)
 endif()
 
 set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
@@ -293,6 +297,12 @@ llama_test_cmd(python3
     LABEL "python behavior"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     ARGS -m unittest discover -s tests -p test_conversion_fp8.py -v
+)
+llama_test_cmd(python3
+    NAME test-kv-cache-scales
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_kv_cache_scales.py -v
 )
 llama_build_and_test(test-json-schema.cpp  LABEL behavior)
 llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
