@@ -68,6 +68,22 @@ static void ggml_backend_metal_buffer_shared_get_tensor(ggml_backend_buffer_t bu
     ggml_metal_buffer_get_tensor(ctx, tensor, data, offset, size);
 }
 
+static void ggml_backend_metal_buffer_shared_set_tensor_n(ggml_backend_buffer_t buffer, struct ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_set_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
+static void ggml_backend_metal_buffer_shared_get_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * tensors, void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_get_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
 static bool ggml_backend_metal_buffer_shared_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
     ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
 
@@ -78,6 +94,20 @@ static bool ggml_backend_metal_buffer_shared_cpy_tensor(ggml_backend_buffer_t bu
     }
 
     return ggml_metal_buffer_cpy_tensor(ctx, src, dst);
+}
+
+static bool ggml_backend_metal_buffer_shared_cpy_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(ggml_metal_buffer_is_shared(ctx));
+
+    for (size_t i = 0; i < n_tensors; ++i) {
+        if (!ggml_backend_buffer_is_metal(srcs[i]->buffer)) {
+            return false;
+        }
+    }
+
+    return ggml_metal_buffer_cpy_tensor_n(ctx, srcs, dsts, n_tensors);
 }
 
 static void ggml_backend_metal_buffer_shared_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -100,6 +130,9 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_shared_i = {
     /* .cpy_tensor    = */ ggml_backend_metal_buffer_shared_cpy_tensor,
     /* .clear         = */ ggml_backend_metal_buffer_shared_clear,
     /* .reset         = */ NULL,
+    /* .set_tensor_n  = */ ggml_backend_metal_buffer_shared_set_tensor_n,
+    /* .get_tensor_n  = */ ggml_backend_metal_buffer_shared_get_tensor_n,
+    /* .cpy_tensor_n  = */ ggml_backend_metal_buffer_shared_cpy_tensor_n,
 };
 
 // private buffer
@@ -144,6 +177,22 @@ static void ggml_backend_metal_buffer_private_get_tensor(ggml_backend_buffer_t b
     ggml_metal_buffer_get_tensor(ctx, tensor, data, offset, size);
 }
 
+static void ggml_backend_metal_buffer_private_set_tensor_n(ggml_backend_buffer_t buffer, struct ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(!ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_set_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
+static void ggml_backend_metal_buffer_private_get_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * tensors, void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(!ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_get_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
 static bool ggml_backend_metal_buffer_private_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
     ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
 
@@ -154,6 +203,20 @@ static bool ggml_backend_metal_buffer_private_cpy_tensor(ggml_backend_buffer_t b
     }
 
     return ggml_metal_buffer_cpy_tensor(ctx, src, dst);
+}
+
+static bool ggml_backend_metal_buffer_private_cpy_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(!ggml_metal_buffer_is_shared(ctx));
+
+    for (size_t i = 0; i < n_tensors; ++i) {
+        if (!ggml_backend_buffer_is_metal(srcs[i]->buffer)) {
+            return false;
+        }
+    }
+
+    return ggml_metal_buffer_cpy_tensor_n(ctx, srcs, dsts, n_tensors);
 }
 
 static void ggml_backend_metal_buffer_private_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -176,6 +239,9 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_private_i = {
     /* .cpy_tensor    = */ ggml_backend_metal_buffer_private_cpy_tensor,
     /* .clear         = */ ggml_backend_metal_buffer_private_clear,
     /* .reset         = */ NULL,
+    /* .set_tensor_n  = */ ggml_backend_metal_buffer_private_set_tensor_n,
+    /* .get_tensor_n  = */ ggml_backend_metal_buffer_private_get_tensor_n,
+    /* .cpy_tensor_n  = */ ggml_backend_metal_buffer_private_cpy_tensor_n,
 };
 
 static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer) {
@@ -226,7 +292,6 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             {
                 res += ggml_metal_op_mul_mat_id_extra_tpe(tensor);
                 res += ggml_metal_op_mul_mat_id_extra_ids(tensor);
-                res += ggml_metal_op_mul_mat_id_extra_amax(tensor);
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
@@ -244,6 +309,10 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
         case GGML_OP_TOP_K:
             {
                 res = 2*sizeof(int32_t)*ggml_nelements(tensor->src[0]);
+            } break;
+        case GGML_OP_ARGMAX:
+            {
+                res += ggml_metal_op_argmax_extra(tensor);
             } break;
         default:
             break;

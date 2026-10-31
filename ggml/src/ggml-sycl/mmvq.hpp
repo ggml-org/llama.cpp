@@ -80,6 +80,24 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(
     dpct::queue_ptr    stream);
 
 
+// Fused dense-FFN GEMV on the XMX engines for reordered weights of one type, up * act(gate) for up to
+// GGML_SYCL_XMX_GLU_MAX_COLS (at most) activation columns. Returns false if it does not apply, the caller falls back.
+// vy: src1 quantized with quantize_and_reorder_q8_1_soa.
+bool ggml_sycl_mul_mat_vec_q_glu_xmx(
+    int                device,
+    enum ggml_type     src0_type,
+    enum ggml_glu_op   glu_op,
+    const void *       vx,                   // up weights
+    const void *       vgate,                // gate weights
+    const void *       vy,
+    float *            dst,
+    int                ncols,                // K, shared by both weights
+    int                nrows,                // output rows, i.e. weight ne[1]
+    int                ncols_dst,            // activation columns
+    int                stride_col_y_bytes,   // bytes between activation columns in vy
+    int                stride_col_dst,       // floats between output columns in dst
+    dpct::queue_ptr    stream);
+
 // Fused dense-FFN GEMV + GLU over the standard (non-reorder) layout; the gate and up
 // weights may carry different block types (q5_K / iq4_xs, mixed included).
 // vy: src1 quantized with plain quantize_q8_1 (padded rows). stride_col_y is in

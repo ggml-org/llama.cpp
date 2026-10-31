@@ -14,7 +14,8 @@
 #define N_MM_SIMD_GROUP_X 2
 #define N_MM_SIMD_GROUP_Y 2
 
-#define N_MM_NPART_AMAX 256
+#define N_ARGMAX_NPART_MAX 256
+#define N_ARGMAX_CHUNK 4096
 
 // kernel parameters for mat-vec threadgroups
 //
@@ -124,6 +125,7 @@
 #define FC_FLASH_ATTN_EXT_TENSOR       2200
 #define FC_LIGHTNING_INDEXER           2200
 #define FC_MUL_MV_MMA                  2300
+#define FC_TOP_K_MASK                  2400
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -570,12 +572,11 @@ typedef struct {
 } ggml_metal_kargs_mul_mm_id_map0;
 
 typedef struct {
-    int32_t  ne00;
-    int32_t  ne01;
-    int32_t  ne02;
-    uint64_t nb01;
-    uint64_t nb02;
-} ggml_metal_kargs_mul_mm_id_amax;
+    int32_t  ne0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb21;
+} ggml_metal_kargs_mul_mm_id_zero;
 
 typedef struct {
     int32_t  ne00;
@@ -1296,6 +1297,38 @@ typedef struct {
 } ggml_metal_kargs_lightning_indexer;
 
 typedef struct {
+    int32_t  n_kv;
+    int32_t  m1;
+    int32_t  m2;
+    int32_t  m3;
+    int32_t  n_top;
+    int32_t  n_pick;
+    int32_t  n_blk;
+    int32_t  n_extra;
+    int64_t  n_elems;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    uint64_t nbm1;
+    uint64_t nbm2;
+    uint64_t nbm3;
+    uint64_t nbk0;
+    uint64_t nbk1;
+    uint64_t nbk2;
+    uint64_t nbk3;
+    uint64_t nbs0;
+    uint64_t nbs1;
+    uint64_t nbs2;
+    uint64_t nbs3;
+    uint64_t nbb0;
+    uint64_t nbb1;
+    uint64_t nbe0;
+    uint64_t nbe1;
+    uint64_t nbe2;
+    uint64_t nbe3;
+} ggml_metal_kargs_top_k_mask;
+
+typedef struct {
     int32_t  n_tokens;
     int32_t  n_iter;
     uint64_t nb_m0;
@@ -1379,8 +1412,10 @@ typedef struct {
 } ggml_metal_kargs_pool_1d;
 
 typedef struct {
-     int64_t ne00;
+    int64_t ne00;
     uint64_t nb01;
+    int64_t npart;
+    int64_t ne01;
 } ggml_metal_kargs_argmax;
 
 typedef struct {

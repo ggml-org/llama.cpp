@@ -1,0 +1,142 @@
+name: CI (wasi)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-wasi.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.wgsl',
+      '**/*.tmpl',
+      'ggml/src/ggml-webgpu/wgsl-shaders/embed_wgsl.py'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-wasi.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.wgsl',
+      '**/*.tmpl',
+      'ggml/src/ggml-webgpu/wgsl-shaders/embed_wgsl.py'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  WASI_SDK_VERSION: 34
+  DAWN_VERSION: v20260908.214631
+  DAWN_COMMIT: 94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655
+  WASI_WEBGPU_HEADERS_COMMIT: 917765edd7cb8f8cf95bda1217514c78f71b582b
+
+jobs:
+  ubuntu-webgpu:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: Install wasi-sdk
+        uses: bytecodealliance/setup-wasi-sdk-action@77d09f3df1e8da344d8403cf8631af8977938b4c # v1.0.0
+        with:
+          version: ${{ env.WASI_SDK_VERSION }}
+          add-to-path: false
+
+      - name: wasi:webgpu Dependency
+        run: |
+          mkdir -p wasi-webgpu/dawn-headers
+          curl -fL "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/dawn-headers-${DAWN_COMMIT}.tar.gz" |
+            tar -xz -C wasi-webgpu/dawn-headers --strip-components=1
+
+          git init -q wasi-webgpu/wasi-webgpu-headers
+          cd wasi-webgpu/wasi-webgpu-headers
+          git fetch -q --depth 1 https://github.com/wasi-gfx/wasi-webgpu-headers.git ${WASI_WEBGPU_HEADERS_COMMIT}
+          git checkout -q FETCH_HEAD
+          git submodule update -q --init --depth 1
+          cd ../..
+
+          # ggml-webgpu does find_package(Dawn) and links dawn::webgpu_dawn. There is no Dawn on WASI,
+          # so this target instead compiles wasi-webgpu-headers (webgpu.h over wasi:webgpu imports)
+          # and exposes Dawn's webgpu_cpp.h on top of it.
+          cat > wasi-webgpu/DawnConfig.cmake << 'EOF'
+          set(_wasi_webgpu "${CMAKE_CURRENT_LIST_DIR}/wasi-webgpu-headers")
+          add_library(dawn::webgpu_dawn INTERFACE IMPORTED)
+          set_target_properties(dawn::webgpu_dawn PROPERTIES
+              INTERFACE_SOURCES "${_wasi_webgpu}/webgpu.c;${_wasi_webgpu}/async_futures.c;${_wasi_webgpu}/imports.c;${_wasi_webgpu}/imports_component_type.o"
+              INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/dawn-headers/include/webgpu_upstream;${_wasi_webgpu}")
+          EOF
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: webgpu-ubuntu-24.04-arm-wasi
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      # llama-common does not build for WASI, so the executables are linked by hand
+      - name: Build
+        id: cmake_build
+        run: |
+          WASI_FLAGS="-msimd128 -D_WASI_EMULATED_SIGNAL -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"
+          cmake -B build-wasi \
+            -G "Ninja" \
+            -DCMAKE_TOOLCHAIN_FILE=${WASI_SDK_PATH}/share/cmake/wasi-sdk-p3.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="${WASI_FLAGS}" \
+            -DCMAKE_CXX_FLAGS="${WASI_FLAGS}" \
+            -DCMAKE_HAVE_LIBC_PTHREAD=1 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_WEBGPU=ON \
+            -DDawn_DIR=$PWD/wasi-webgpu \
+            -DLLAMA_BUILD_COMMON=OFF
+
+          time cmake --build build-wasi --config Release --target llama -j $(nproc)
+
+          LIBS="build-wasi/ggml/src/libggml.a build-wasi/ggml/src/ggml-webgpu/libggml-webgpu.a build-wasi/ggml/src/libggml-cpu.a build-wasi/ggml/src/libggml-base.a"
+          LDFLAGS="-lunwind -ldl -Wl,-z,stack-size=8388608"
+          CXX="${WASI_SDK_PATH}/bin/clang++ --target=wasm32-wasip3 -O3 -std=c++17 ${WASI_FLAGS} -I include -I ggml/include"
+
+          $CXX examples/simple/simple.cpp build-wasi/src/libllama.a $LIBS $LDFLAGS -o build-wasi/llama-simple.wasm
+          $CXX tests/test-backend-ops.cpp $LIBS $LDFLAGS -o build-wasi/test-backend-ops.wasm
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: webgpu-ubuntu-24.04-arm-wasi
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
