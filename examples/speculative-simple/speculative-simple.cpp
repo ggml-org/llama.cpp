@@ -5,6 +5,8 @@
 #include "log.h"
 #include "llama.h"
 
+#include "../../src/llama-ext.h"
+
 #include <algorithm>
 #include <clocale>
 #include <cstdio>
@@ -64,6 +66,7 @@ int main(int argc, char ** argv) {
     }
 
     llama_context * ctx_dft = params.speculative.draft.ctx_dft;
+    const bool is_mtp_mem_shared = ctx_dft && llama_get_ctx_other(ctx_dft) == ctx_tgt;
 
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = common_context_can_seq_rm(ctx_tgt) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
@@ -130,6 +133,9 @@ int main(int argc, char ** argv) {
             batch_prompt.add(inp[i], i, seq_id, false);
         }
 
+        if (is_mtp_mem_shared && batch_prompt.size() > 0) {
+            batch_prompt.set_output(batch_prompt.size() - 1, true);
+        }
         llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_prompt.get());
 
         if (!common_speculative_process(spec, batch_prompt)) {
@@ -227,7 +233,6 @@ int main(int argc, char ** argv) {
             for (size_t i = 0; i < draft.size(); ++i) {
                 batch_tgt.add(draft[i], n_past + i, seq_id, true);
             }
-
 
             llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_tgt.get());
         }
