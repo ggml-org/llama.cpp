@@ -27,6 +27,7 @@
 #define GGML_WEBGPU_KV_SEQ_PAD                       256u
 
 #define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE 512u
+#define GGML_WEBGPU_COUNT_EQUAL_WG_SIZE       256u
 
 // Matrix multiplication parameters
 
@@ -1228,6 +1229,7 @@ class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
+    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap
     std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;       // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> argmax_pipelines;         // key is vec4
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
@@ -1317,6 +1319,20 @@ class ggml_webgpu_shader_lib {
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
+
+    webgpu_pipeline get_count_equal_pipeline(bool src_overlap) {
+        auto it = count_equal_pipelines.find(src_overlap);
+        if (it != count_equal_pipelines.end()) {
+            return it->second;
+        }
+        std::vector<std::string> defines = { "WG_SIZE=" + std::to_string(GGML_WEBGPU_COUNT_EQUAL_WG_SIZE) };
+        if (src_overlap) {
+            defines.push_back("SRC_OVERLAP");
+        }
+        auto processed                     = preprocessor.preprocess(wgsl_count_equal, defines);
+        count_equal_pipelines[src_overlap] = ggml_webgpu_create_pipeline(device, processed, "count_equal");
+        return count_equal_pipelines[src_overlap];
+    }
 
     webgpu_pipeline get_sum_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         auto it = sum_rows_pipelines.find(1);
