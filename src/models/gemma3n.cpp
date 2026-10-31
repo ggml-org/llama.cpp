@@ -100,6 +100,15 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
     inpL = build_inp_embd(model.tok_embd, sqrtf(n_embd));
     cb(inpL, "inp_scaled", -1);
 
+    // with F16 activations only attention and the FFN up to the down projection
+    // use act_type: the residual stream overflows F16 as in Gemma 3, and the
+    // AltUp / LAuReL / per-layer-input arithmetic uses ops that are F32 only
+    if (inpL->type != GGML_TYPE_F32) {
+        type_res = GGML_TYPE_F32;
+        inpL     = ggml_cast(ctx0, inpL, GGML_TYPE_F32);
+    }
+
+
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
@@ -210,7 +219,9 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
         // feed-forward network
         {
             ggml_tensor * up_proj   = build_lora_mm(model.layers[il].ffn_up, cur);
-            ggml_tensor * gate_proj = build_lora_mm(model.layers[il].ffn_gate, cur);
+            // gaussian_topk needs F32 (mean, sum_rows)
+            ggml_tensor * gate_proj = build_lora_mm(model.layers[il].ffn_gate, cur, nullptr,
+                                                    il < n_layer_sparsity ? GGML_TYPE_F32 : GGML_TYPE_COUNT);
 
             if (il < n_layer_sparsity) {
                 // apply activation sparsity
@@ -219,7 +230,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
             gate_proj = ggml_gelu(ctx0, gate_proj);
 
             cur = ggml_mul(ctx0, up_proj, gate_proj);
-            cur = build_lora_mm(model.layers[il].ffn_down, cur);
+            cur = build_lora_mm(model.layers[il].ffn_down, cur, nullptr, type_res);
             cb(cur, "ffn_out", il);
         }
         cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, -1);
@@ -234,7 +245,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
         {
             first_prediction = gemma3n_view_2d_slice(ctx0, corrected, i_altup_act);       // [n_embd, n_tokens]
             first_prediction = ggml_mul(ctx0, first_prediction, model.layers[il].altup_correct_scale);
-            first_prediction = build_lora_mm(model.layers[il].per_layer_inp_gate, first_prediction);
+            first_prediction = build_lora_mm(model.layers[il].per_layer_inp_gate, first_prediction, nullptr, GGML_TYPE_F32);
             first_prediction = ggml_gelu(ctx0, first_prediction);                 // [n_embd_altup, n_tokens]
             cb(first_prediction, "first_prediction_gated", il);
 
@@ -242,7 +253,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
             first_prediction = ggml_mul(ctx0, first_prediction, inp_this_layer);  // [n_embd_altup, n_tokens]
             cb(first_prediction, "first_prediction_scaled", il);
 
-            first_prediction = build_lora_mm(model.layers[il].per_layer_proj, first_prediction);  // [n_embd, n_tokens]
+            first_prediction = build_lora_mm(model.layers[il].per_layer_proj, first_prediction, nullptr, GGML_TYPE_F32);  // [n_embd, n_tokens]
             first_prediction =
                 build_norm(first_prediction, model.layers[il].per_layer_post_norm, NULL, LLM_NORM_RMS, il);
             cb(first_prediction, "first_prediction_out", il);
@@ -299,7 +310,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur, model.output_s, GGML_TYPE_F32);
 
     {
         // final logit soft-capping
@@ -376,8 +387,8 @@ ggml_tensor * llama_model_gemma3n::graph::project_per_layer_inputs(ggml_tensor *
 // output    shape: [n_altup, n_tokens]
 ggml_tensor * llama_model_gemma3n::graph::laurel(ggml_tensor * cur, int il) {
     ggml_tensor * tmp = cur;
-    tmp               = build_lora_mm(model.layers[il].laurel_l, tmp);
-    tmp               = build_lora_mm(model.layers[il].laurel_r, tmp);
+    tmp               = build_lora_mm(model.layers[il].laurel_l, tmp, nullptr, GGML_TYPE_F32);
+    tmp               = build_lora_mm(model.layers[il].laurel_r, tmp, nullptr, GGML_TYPE_F32);
     tmp               = build_norm(tmp, model.layers[il].laurel_post_norm, NULL, LLM_NORM_RMS, il);
     tmp               = ggml_add(ctx0, tmp, cur);
     cb(tmp, "laurel_out", il);
@@ -418,7 +429,7 @@ ggml_tensor * llama_model_gemma3n::graph::altup_predict(ggml_tensor * cur, int i
     ggml_tensor * modalities = altup_compute_router_modalities(activated, il);  // [n_altup, n_tokens]
     cb(modalities, "modalities", il);
 
-    ggml_tensor * all_coefs = build_lora_mm(model.layers[il].altup_predict_coef, modalities);
+    ggml_tensor * all_coefs = build_lora_mm(model.layers[il].altup_predict_coef, modalities, nullptr, GGML_TYPE_F32);
     cb(all_coefs, "all_coefs", il);
     // first dim now having n_altup^2 elements, we reshape it to 2D (so we end up with 3D tensor)
     all_coefs = ggml_reshape_3d(ctx0, all_coefs, n_altup, n_altup, n_tokens);
@@ -446,7 +457,7 @@ ggml_tensor * llama_model_gemma3n::graph::altup_correct(ggml_tensor * prediction
     ggml_tensor * innovation        = ggml_sub(ctx0, activated, active_prediction);  // [n_embd, n_tokens]
     cb(innovation, "innovation", il);
 
-    ggml_tensor * all_coefs = build_lora_mm(model.layers[il].altup_correct_coef, modalities);  // [n_altup, n_tokens]
+    ggml_tensor * all_coefs = build_lora_mm(model.layers[il].altup_correct_coef, modalities, nullptr, GGML_TYPE_F32);  // [n_altup, n_tokens]
     all_coefs               = ggml_scale_bias(ctx0, all_coefs, 1.0f, 1.0f);                    // + 1.0
     cb(all_coefs, "all_coefs", il);
     all_coefs = ggml_transpose(ctx0, all_coefs);                                               // [n_tokens, n_altup]
