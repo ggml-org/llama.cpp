@@ -9,7 +9,7 @@
 // only enabled on DGX Spark, where it is a gain on every type below. On the higher-bandwidth parts the kernel
 // has little exposed latency left to hide and the extra requests cost more than they save.
 // For perf data, see https://github.com/ggml-org/llama.cpp/pull/26705#issuecomment-5569335031
-#if __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#if __CUDA_ARCH__ == GGML_CUDA_CC_GB10
 // returns true only for those quants that benefit from prefetch and false otherwise
 static constexpr __host__ __device__ bool mmvq_should_prefetch(ggml_type type) {
     switch (type) {
@@ -114,7 +114,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
     return MMVQ_PARAMETERS_GCN;
 #elif __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA && __CUDA_ARCH__ < GGML_CUDA_CC_AMPERE
     return MMVQ_PARAMETERS_TURING;
-#elif __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#elif __CUDA_ARCH__ == GGML_CUDA_CC_GB10
     return MMVQ_PARAMETERS_GB10;
 #else
     return MMVQ_PARAMETERS_GENERIC;
@@ -137,7 +137,7 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA && ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_AMPERE) {
         return MMVQ_PARAMETERS_TURING;
     }
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_DGX_SPARK) {
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_GB10) {
         return MMVQ_PARAMETERS_GB10;
     }
     return MMVQ_PARAMETERS_GENERIC;
@@ -345,7 +345,7 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
     }
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK) {
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_GB10) {
         switch (type) { // tuned on DGX Spark GB10
             case GGML_TYPE_Q2_K:
                 return ne11 <= 6;
@@ -746,7 +746,7 @@ static __global__ void mul_mat_vec_q(
         // x block quant index when casting the quants to int
         const int kqs = vdr * (tid % (qi/vdr));
 
-#if __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#if __CUDA_ARCH__ == GGML_CUDA_CC_GB10
         // start the next iterations' weight loads early
         if constexpr (mmvq_should_prefetch(type)) {
             // loop iterations, not blocks; q3_K and q6_K keep the distance in blocks they had with vdr 1
