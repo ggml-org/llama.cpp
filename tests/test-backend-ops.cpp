@@ -3118,9 +3118,10 @@ struct test_repeat : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const std::array<int, 4> nr;
+    const bool view;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, nr);
+        return VARS_TO_STR3(type, ne, nr) + (view ? ",view=1" : "");
     }
 
     size_t op_size(ggml_tensor * t) override {
@@ -3129,21 +3130,52 @@ struct test_repeat : public test_case {
 
     test_repeat(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 5, 4, 3},
-            std::array<int, 4> nr = {2, 2, 2, 2})
-        : type(type), ne(ne), nr(nr) {}
+            std::array<int, 4> nr = {2, 2, 2, 2},
+            bool view = false)
+        : type(type), ne(ne), nr(nr), view(view) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * target = ggml_new_tensor_4d(ctx, type, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
         ggml_set_name(target, "target");
 
-        ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(src);
+        ggml_tensor * src;
+        if (view) {
+            ggml_tensor * base = ggml_new_tensor_4d(ctx, type, ne[0] + 1, 2*ne[1], ne[2], ne[3]);
+            ggml_set_param(base);
+            src = ggml_view_4d(ctx, base, ne[0], ne[1], ne[2], ne[3], 2*base->nb[1], base->nb[2], base->nb[3], ggml_type_size(type));
+        } else {
+            src = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_param(src);
+        }
         ggml_set_name(src, "src");
 
         ggml_tensor * out = ggml_repeat(ctx, src, target);
         ggml_set_name(out, "out");
 
         return out;
+    }
+};
+
+// GGML_OP_REPEAT + GGML_OP_CPY + GGML_OP_REPEAT
+struct test_repeat_reuse : public test_repeat {
+    using test_repeat::test_repeat;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "REPEAT_REUSE";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * a = ggml_scale(ctx, x, 2.0f);
+        ggml_tensor * r = ggml_repeat_4d(ctx, a, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
+        // Read a, overwrite its storage, then read it again in the same graph.
+        ggml_tensor * v = ggml_view_4d(ctx, r, ne[0], ne[1], ne[2], ne[3], r->nb[1], r->nb[2], r->nb[3], 0);
+        ggml_tensor * b = ggml_cpy(ctx, ggml_scale(ctx, ggml_cont(ctx, v), 1.5f), a);
+        ggml_tensor * s = ggml_repeat_4d(ctx, b, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
+        return ggml_add(ctx, r, s);
     }
 };
 
@@ -10679,6 +10711,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_repeat(GGML_TYPE_I32, {10, 5, 4, ne3}, {2, 1, 1, 1}));
         test_cases.emplace_back(new test_repeat(GGML_TYPE_I16, {10, 5, 4, ne3}, {1, 1, 1, 2}));
         test_cases.emplace_back(new test_repeat(GGML_TYPE_BF16, {10, 5, 4, ne3}, {2, 1, 1, 1}));
+    }
+
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (int64_t ne0 : {1, 3, 33}) {
+            for (bool view : {false, true}) {
+                test_cases.emplace_back(new test_repeat(type, {ne0, 257, 2, 1}, {3, 2, 1, 2}, view));
+            }
+        }
+    }
+
+    for (int heads : {1, 16}) {
+        test_cases.emplace_back(new test_repeat_reuse(GGML_TYPE_F32, {128, 1, heads, 1}, {1, 2, 1, 1}));
     }
 
     for (bool view : {false, true}) {
