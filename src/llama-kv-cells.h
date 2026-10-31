@@ -389,26 +389,39 @@ public:
     void get_seq_cells(const std::vector<llama_seq_id> & seq_ids, int32_t * data, int64_t n_per_seq) const {
         assert(seq_ids.size() >= 1);
 
-        const int64_t n_slices = (int64_t) seq_ids.size();
+        const int32_t n_slices = (int32_t) seq_ids.size();
 
-        std::vector<int32_t> n_cells(n_slices, 0);
+        std::vector<int32_t *> dp(n_slices);
+        std::vector<seq_set_t> ss(n_slices);
+        for (int32_t s = 0; s < n_slices; ++s) {
+            dp[s] = data + s*n_per_seq;
+            ss[s].set(seq_ids[s]);
+        }
 
-        const uint32_t i_max = used_max_p1();
-        for (uint32_t i = 0; i < i_max; ++i) {
+        const int32_t i_max = used_max_p1();
+
+        for (int32_t i = 0; i < i_max; ++i) {
             if (is_empty(i)) {
                 continue;
             }
 
-            for (int64_t s = 0; s < n_slices; ++s) {
-                if (seq_has(i, seq_ids[s])) {
-                    assert(n_cells[s] < n_per_seq);
-                    data[s*n_per_seq + n_cells[s]++] = (int32_t) i;
+            for (int32_t s = 0; s < n_slices; ++s) {
+                if (seq[i] == ss[s]) {
+                    int32_t k = i + 1;
+                    while (k < i_max && seq[k] == ss[s]) {
+                        ++k;
+                    }
+                    for (; i < k; ++i) {
+                        *dp[s]++ = i;
+                    }
+                    --i;
+                    break;
                 }
             }
         }
 
         for (int64_t s = 0; s < n_slices; ++s) {
-            std::fill(data + s*n_per_seq + n_cells[s], data + (s+1)*n_per_seq, -1);
+            std::fill(dp[s], data + (s+1)*n_per_seq, -1);
         }
     }
 
