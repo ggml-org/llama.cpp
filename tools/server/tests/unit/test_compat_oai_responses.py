@@ -9,6 +9,35 @@ def create_server():
     global server
     server = ServerPreset.tinyllama2()
 
+@pytest.mark.parametrize("text_format,n_predicted,re_content", [
+    ({"type": "json_schema", "name": "test", "schema": {"const": "foooooo"}}, 10, "\"foooooo\""),
+    ({"type": "json_object"}, 10, "(\\{|Suddenly)+"),
+    ({"type": "text"}, 10, None),
+    # invalid: json_schema without a schema (expected to fail)
+    ({"type": "json_schema", "name": "test"}, 0, None),
+])
+def test_responses_with_text_format(text_format: dict, n_predicted: int, re_content: str | None):
+    global server
+    server.start()
+    res = server.make_request("POST", "/responses", data={
+        "input": "Write an example",
+        "max_output_tokens": n_predicted,
+        "text": {
+            "format": text_format,
+        },
+    })
+    if re_content is not None:
+        assert res.status_code == 200
+        output_message = next(o for o in res.body["output"] if o["type"] == "message")
+        output_text = output_message["content"][0]["text"]
+        assert match_regex(re_content, output_text)
+    elif text_format.get("type") == "text":
+        assert res.status_code == 200
+    else:
+        assert res.status_code == 400
+        assert "error" in res.body
+
+
 def test_responses_with_openai_library():
     global server
     server.start()
